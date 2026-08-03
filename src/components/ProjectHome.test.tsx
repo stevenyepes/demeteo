@@ -346,7 +346,7 @@ describe('ProjectHome — persistent Start Session affordance', () => {
 
     await waitFor(() => expect(screen.getByTestId('start-session-button')).toBeInTheDocument());
     // No repo selector for a single-repo project.
-    expect(screen.queryByText('Repository:')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('project-home-repo-select')).not.toBeInTheDocument();
   });
 
   it('renders the StartSessionButton for a remote project on the default (pipelines) tab', async () => {
@@ -423,7 +423,7 @@ describe('ProjectHome — persistent Start Session affordance', () => {
     mount(baseProject({ compute_type: 'local' }));
 
     await waitFor(() => expect(screen.getByTestId('start-session-button')).toBeInTheDocument());
-    expect(screen.getByText('Repository:')).toBeInTheDocument();
+    expect(screen.getByTestId('project-home-repo-select')).toBeInTheDocument();
     expect(screen.getByText('/repo/one')).toBeInTheDocument();
     expect(screen.getByText('/repo/two')).toBeInTheDocument();
   });
@@ -438,7 +438,7 @@ describe('ProjectHome — persistent Start Session affordance', () => {
     });
 
     await waitFor(() => expect(screen.getByText('Opening the Terminals view…')).toBeInTheDocument());
-    expect(screen.getAllByText('Repository:')).toHaveLength(1);
+    expect(screen.getAllByTestId('project-home-repo-select')).toHaveLength(1);
   });
 
   it('starts a terminal session scoped to the resolved repo path for a local project', async () => {
@@ -491,7 +491,7 @@ describe('ProjectHome — persistent Start Session affordance', () => {
 
     await waitFor(() => expect(screen.getByTestId('start-session-button')).toBeInTheDocument());
     // Defaults to the first repo returned by the backend.
-    const select = screen.getByText('Repository:').closest('div')!.querySelector('select')!;
+    const select = screen.getByTestId('project-home-repo-select') as HTMLSelectElement;
     expect(select.value).toBe('proj-multi-repo-0');
 
     await act(async () => {

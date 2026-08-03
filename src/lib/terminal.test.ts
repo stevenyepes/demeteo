@@ -11,16 +11,20 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  CreatedTerminalWorktree,
   CreateTerminalWorktreeRequest,
   SessionInfo,
+  TerminalBranchOptions,
   TerminalWorktree,
 } from "../types";
 import {
   attachTerminalSession,
   createTerminalWorktree,
   detachTerminalSession,
+  listTerminalBranches,
   listTerminalWorktrees,
   listTerminalSessions,
+  removeTerminalWorktree,
   renameTerminalSession,
 } from "./terminal";
 
@@ -140,28 +144,76 @@ describe("listTerminalWorktrees", () => {
   });
 });
 
+describe("listTerminalBranches", () => {
+  it("maps the wire flags that say whether a base can be refreshed", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({
+      default_branch: "main",
+      branches: [
+        { name: "main", has_local: true, has_remote: true },
+        { name: "scratch", has_local: true, has_remote: false },
+      ],
+    });
+
+    const result = await listTerminalBranches("project_1", "repository_1");
+
+    expect(invoke).toHaveBeenCalledWith("list_terminal_branches", {
+      projectId: "project_1",
+      repositoryId: "repository_1",
+    });
+    expect(result).toEqual({
+      defaultBranch: "main",
+      branches: [
+        { name: "main", hasLocal: true, hasRemote: true },
+        { name: "scratch", hasLocal: true, hasRemote: false },
+      ],
+    } satisfies TerminalBranchOptions);
+  });
+});
+
 describe("createTerminalWorktree", () => {
   it("forwards only the create request fields and maps the result", async () => {
     const request = {
       projectId: "project_1",
       repositoryId: "repository_1",
       branch: "feature/terminal",
+      baseBranch: "main",
       worktreeName: "terminal-feature",
     } satisfies CreateTerminalWorktreeRequest;
     vi.mocked(invoke).mockResolvedValueOnce({
-      path: "/repos/app/.worktrees/terminal-feature",
-      branch: "feature/terminal",
-      is_locked: false,
+      worktree: {
+        path: "/repos/app/.worktrees/terminal-feature",
+        branch: "feature/terminal",
+        is_locked: false,
+      },
+      base_ref: "origin/main",
     });
 
     const result = await createTerminalWorktree(request);
 
     expect(invoke).toHaveBeenCalledWith("create_terminal_worktree", request);
     expect(result).toEqual({
-      path: "/repos/app/.worktrees/terminal-feature",
-      branch: "feature/terminal",
-      isLocked: false,
-    } satisfies TerminalWorktree);
+      worktree: {
+        path: "/repos/app/.worktrees/terminal-feature",
+        branch: "feature/terminal",
+        isLocked: false,
+      },
+      baseRef: "origin/main",
+    } satisfies CreatedTerminalWorktree);
+  });
+});
+
+describe("removeTerminalWorktree", () => {
+  it("forwards the path and the force decision verbatim", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(null);
+
+    await removeTerminalWorktree("project_1", "repository_1", "/repos/app/.worktrees/gone", true);
+
+    expect(invoke).toHaveBeenCalledWith("remove_terminal_worktree", {
+      projectId: "project_1",
+      repositoryId: "repository_1",
+      worktreePath: "/repos/app/.worktrees/gone",
+      force: true,
+    });
   });
 });
 

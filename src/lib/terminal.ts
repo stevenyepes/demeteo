@@ -1,8 +1,10 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 
 import type {
+  CreatedTerminalWorktree,
   CreateTerminalWorktreeRequest,
   SessionInfo,
+  TerminalBranchOptions,
   TerminalWorktree,
 } from "../types";
 
@@ -11,6 +13,18 @@ interface TerminalWorktreeWire {
   path: string;
   branch: string | null;
   is_locked: boolean;
+}
+
+/** Rust's `TerminalWorktreeCreated` IPC shape. */
+interface CreatedTerminalWorktreeWire {
+  worktree: TerminalWorktreeWire;
+  base_ref: string;
+}
+
+/** Rust's `TerminalBranchOptions` IPC shape. */
+interface TerminalBranchOptionsWire {
+  default_branch: string;
+  branches: { name: string; has_local: boolean; has_remote: boolean }[];
 }
 
 function toTerminalWorktree(worktree: TerminalWorktreeWire): TerminalWorktree {
@@ -162,20 +176,65 @@ export async function listTerminalWorktrees(
   return worktrees.map(toTerminalWorktree);
 }
 
+/** Lists the branches a new worktree for this repository may be based on. */
+export async function listTerminalBranches(
+  projectId: string,
+  repositoryId: string,
+): Promise<TerminalBranchOptions> {
+  const options = await invoke<TerminalBranchOptionsWire>("list_terminal_branches", {
+    projectId,
+    repositoryId,
+  });
+  return {
+    defaultBranch: options.default_branch,
+    branches: options.branches.map((branch) => ({
+      name: branch.name,
+      hasLocal: branch.has_local,
+      hasRemote: branch.has_remote,
+    })),
+  };
+}
+
 /** Creates a linked worktree using a project-owned repository destination. */
 export async function createTerminalWorktree(
   request: CreateTerminalWorktreeRequest,
-): Promise<TerminalWorktree> {
-  const worktree = await invoke<TerminalWorktreeWire>(
+): Promise<CreatedTerminalWorktree> {
+  const created = await invoke<CreatedTerminalWorktreeWire>(
     "create_terminal_worktree",
     {
       projectId: request.projectId,
       repositoryId: request.repositoryId,
       branch: request.branch,
+      baseBranch: request.baseBranch,
       worktreeName: request.worktreeName,
     },
   );
-  return toTerminalWorktree(worktree);
+  return {
+    worktree: toTerminalWorktree(created.worktree),
+    baseRef: created.base_ref,
+  };
+}
+
+/**
+ * Removes one linked worktree of a project-owned repository.
+ *
+ * `force` is git's own `--force`, needed for a worktree holding modified or
+ * untracked files. Never pass it to retry a plain failure — the refusal is the
+ * user's to answer, and the backend refuses any path outside the repository's
+ * terminal area either way.
+ */
+export async function removeTerminalWorktree(
+  projectId: string,
+  repositoryId: string,
+  worktreePath: string,
+  force: boolean,
+): Promise<void> {
+  await invoke<null>("remove_terminal_worktree", {
+    projectId,
+    repositoryId,
+    worktreePath,
+    force,
+  });
 }
 
 /**

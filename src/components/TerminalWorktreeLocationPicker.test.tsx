@@ -3,12 +3,20 @@ import userEvent from '@testing-library/user-event';
 import { StrictMode, type ComponentProps } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createTerminalWorktree, listTerminalWorktrees } from '../lib/terminal';
+import type { CreatedTerminalWorktree } from '../types';
+import {
+  createTerminalWorktree,
+  listTerminalBranches,
+  listTerminalWorktrees,
+  removeTerminalWorktree,
+} from '../lib/terminal';
 import { TerminalWorktreeLocationPicker, type TerminalWorktreeLocation } from './TerminalWorktreeLocationPicker';
 
 vi.mock('../lib/terminal', () => ({
   createTerminalWorktree: vi.fn(),
+  listTerminalBranches: vi.fn(),
   listTerminalWorktrees: vi.fn(),
+  removeTerminalWorktree: vi.fn(),
 }));
 
 const onChange = vi.fn<(location: TerminalWorktreeLocation) => void>();
@@ -17,10 +25,25 @@ function mount(props: Partial<ComponentProps<typeof TerminalWorktreeLocationPick
   return render(<TerminalWorktreeLocationPicker projectId="project-a" repositoryId="repository-a" onChange={onChange} {...props} />);
 }
 
+/** Open the menu and expand the create form, which is where branches load. */
+async function openCreateForm() {
+  await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+  await userEvent.click(await screen.findByTestId('terminal-location-new'));
+}
+
 beforeEach(() => {
   onChange.mockReset();
   vi.mocked(listTerminalWorktrees).mockReset();
+  vi.mocked(listTerminalBranches).mockReset();
   vi.mocked(createTerminalWorktree).mockReset();
+  vi.mocked(removeTerminalWorktree).mockReset();
+  vi.mocked(listTerminalBranches).mockResolvedValue({
+    defaultBranch: 'main',
+    branches: [
+      { name: 'main', hasLocal: true, hasRemote: true },
+      { name: 'scratch', hasLocal: true, hasRemote: false },
+    ],
+  });
 });
 
 describe('TerminalWorktreeLocationPicker', () => {
@@ -31,8 +54,7 @@ describe('TerminalWorktreeLocationPicker', () => {
     await userEvent.click(screen.getByTestId('terminal-location-trigger'));
     expect(screen.getByTestId('terminal-location-loading')).toBeInTheDocument();
     expect(screen.getByTestId('terminal-location-main')).toBeDisabled();
-    expect(screen.getByTestId('terminal-location-create')).toBeDisabled();
-    expect(screen.getByLabelText('Branch name')).toBeDisabled();
+    expect(screen.getByTestId('terminal-location-new')).toBeDisabled();
   });
 
   it('lazily renders main and typed existing worktrees, returning the backend target', async () => {
@@ -53,15 +75,51 @@ describe('TerminalWorktreeLocationPicker', () => {
     expect(onChange).toHaveBeenLastCalledWith({ kind: 'main', workDir: null, workBranch: null });
   });
 
-  it('creates once synchronously, selects the backend result, and disables location actions while pending', async () => {
+  it('derives the folder from the branch and cuts from the default base', async () => {
     vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
-    let resolveCreate: ((value: { path: string; branch: string; isLocked: boolean }) => void) | undefined;
+    vi.mocked(createTerminalWorktree).mockResolvedValue({
+      worktree: { path: '/repos/demo-feature-x', branch: 'feature/x', isLocked: false },
+      baseRef: 'origin/main',
+    } satisfies CreatedTerminalWorktree);
+    mount();
+    await openCreateForm();
+
+    await userEvent.type(screen.getByLabelText('Branch name'), 'feature/x');
+    expect(screen.getByTestId('terminal-location-folder')).toHaveTextContent('feature-x');
+    expect(screen.getByLabelText('Base branch')).toHaveValue('main');
+
+    await userEvent.click(screen.getByTestId('terminal-location-create'));
+
+    expect(createTerminalWorktree).toHaveBeenCalledWith({
+      projectId: 'project-a',
+      repositoryId: 'repository-a',
+      branch: 'feature/x',
+      baseBranch: 'main',
+      worktreeName: 'feature-x',
+    });
+    expect(onChange).toHaveBeenLastCalledWith({ kind: 'worktree', workDir: '/repos/demo-feature-x', workBranch: 'feature/x' });
+    // The ref git was actually given, not the one that was asked for.
+    expect(await screen.findByTestId('terminal-location-notice')).toHaveTextContent('from origin/main');
+  });
+
+  it('states whether the chosen base will be refreshed from origin', async () => {
+    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    mount();
+    await openCreateForm();
+
+    expect(await screen.findByTestId('terminal-location-base-note')).toHaveTextContent('origin/main');
+
+    await userEvent.selectOptions(screen.getByLabelText('Base branch'), 'scratch');
+    expect(screen.getByTestId('terminal-location-base-note')).toHaveTextContent('No origin copy');
+  });
+
+  it('creates once synchronously and disables location actions while pending', async () => {
+    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    let resolveCreate: ((value: CreatedTerminalWorktree) => void) | undefined;
     vi.mocked(createTerminalWorktree).mockImplementation(() => new Promise((resolve) => { resolveCreate = resolve; }));
     mount();
-    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
-    await screen.findByText('No linked worktrees');
-    await userEvent.type(screen.getByLabelText('Branch name'), 'feature/terminal');
-    await userEvent.type(screen.getByLabelText('Worktree name'), 'terminal');
+    await openCreateForm();
+    await userEvent.type(screen.getByLabelText('Branch name'), 'terminal');
 
     const create = screen.getByTestId('terminal-location-create');
     await act(async () => {
@@ -69,12 +127,71 @@ describe('TerminalWorktreeLocationPicker', () => {
       await userEvent.click(create);
     });
     expect(createTerminalWorktree).toHaveBeenCalledTimes(1);
-    expect(createTerminalWorktree).toHaveBeenCalledWith({ projectId: 'project-a', repositoryId: 'repository-a', branch: 'feature/terminal', worktreeName: 'terminal' });
     expect(screen.getByTestId('terminal-location-main')).toBeDisabled();
     expect(screen.getByLabelText('Branch name')).toBeDisabled();
 
-    await act(async () => { resolveCreate?.({ path: '/repos/demo-terminal', branch: 'feature/terminal', isLocked: false }); });
-    expect(onChange).toHaveBeenLastCalledWith({ kind: 'worktree', workDir: '/repos/demo-terminal', workBranch: 'feature/terminal' });
+    await act(async () => {
+      resolveCreate?.({
+        worktree: { path: '/repos/demo-terminal', branch: 'terminal', isLocked: false },
+        baseRef: 'main',
+      });
+    });
+    expect(onChange).toHaveBeenLastCalledWith({ kind: 'worktree', workDir: '/repos/demo-terminal', workBranch: 'terminal' });
+  });
+
+  it('removes a worktree behind a confirmation and drops it from the list', async () => {
+    vi.mocked(listTerminalWorktrees).mockResolvedValue([{ path: '/repos/demo-done', branch: 'done', isLocked: false }]);
+    vi.mocked(removeTerminalWorktree).mockResolvedValue(undefined);
+    mount();
+
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await userEvent.click(await screen.findByTestId('terminal-location-remove-/repos/demo-done'));
+    expect(removeTerminalWorktree).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByTestId('terminal-location-remove-confirm-/repos/demo-done'));
+
+    expect(removeTerminalWorktree).toHaveBeenCalledWith('project-a', 'repository-a', '/repos/demo-done', false);
+    expect(screen.queryByTestId('terminal-location-worktree-/repos/demo-done')).not.toBeInTheDocument();
+  });
+
+  it('offers force only after git has refused, never on the first attempt', async () => {
+    vi.mocked(listTerminalWorktrees).mockResolvedValue([{ path: '/repos/demo-dirty', branch: 'dirty', isLocked: false }]);
+    vi.mocked(removeTerminalWorktree)
+      .mockRejectedValueOnce({ kind: 'validation', message: 'contains modified or untracked files' })
+      .mockResolvedValueOnce(undefined);
+    mount();
+
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await userEvent.click(await screen.findByTestId('terminal-location-remove-/repos/demo-dirty'));
+    await userEvent.click(screen.getByTestId('terminal-location-remove-confirm-/repos/demo-dirty'));
+
+    expect(await screen.findByTestId('terminal-location-remove-error-/repos/demo-dirty')).toHaveTextContent(
+      'contains modified or untracked files',
+    );
+    expect(vi.mocked(removeTerminalWorktree).mock.calls[0][3]).toBe(false);
+    // Still listed, still confirming: a refusal leaves the row exactly where it
+    // was rather than optimistically dropping it.
+    expect(screen.getByTestId('terminal-location-confirm-/repos/demo-dirty')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('terminal-location-remove-confirm-/repos/demo-dirty'));
+    expect(vi.mocked(removeTerminalWorktree).mock.calls[1][3]).toBe(true);
+    expect(screen.queryByTestId('terminal-location-worktree-/repos/demo-dirty')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the main checkout when the selected worktree is removed', async () => {
+    vi.mocked(listTerminalWorktrees).mockResolvedValue([{ path: '/repos/demo-picked', branch: 'picked', isLocked: false }]);
+    vi.mocked(removeTerminalWorktree).mockResolvedValue(undefined);
+    mount();
+
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await userEvent.click(await screen.findByTestId('terminal-location-worktree-/repos/demo-picked'));
+    expect(onChange).toHaveBeenLastCalledWith({ kind: 'worktree', workDir: '/repos/demo-picked', workBranch: 'picked' });
+
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await userEvent.click(await screen.findByTestId('terminal-location-remove-/repos/demo-picked'));
+    await userEvent.click(screen.getByTestId('terminal-location-remove-confirm-/repos/demo-picked'));
+
+    expect(onChange).toHaveBeenLastCalledWith({ kind: 'main', workDir: null, workBranch: null });
   });
 
   it('formats failures and clears stale selection/error when its repository changes', async () => {
@@ -85,9 +202,8 @@ describe('TerminalWorktreeLocationPicker', () => {
     expect(onChange).toHaveBeenLastCalledWith({ kind: 'worktree', workDir: '/repos/demo-old', workBranch: 'old' });
 
     vi.mocked(createTerminalWorktree).mockRejectedValueOnce({ kind: 'validation', message: 'repository unavailable' });
-    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await openCreateForm();
     await userEvent.type(screen.getByLabelText('Branch name'), 'bad');
-    await userEvent.type(screen.getByLabelText('Worktree name'), 'bad');
     await userEvent.click(screen.getByTestId('terminal-location-create'));
     expect(await screen.findByTestId('terminal-location-error')).toHaveTextContent('repository unavailable');
 
@@ -98,15 +214,14 @@ describe('TerminalWorktreeLocationPicker', () => {
     expect(onChange).toHaveBeenLastCalledWith({ kind: 'main', workDir: null, workBranch: null });
   });
 
-  it('formats create failures and keeps the picker available for correction', async () => {
+  it('formats create failures and keeps the form available for correction', async () => {
     vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
     vi.mocked(createTerminalWorktree).mockRejectedValue({ kind: 'validation', message: 'branch is invalid' });
     mount();
-    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
-    await screen.findByText('No linked worktrees');
-    await userEvent.type(screen.getByLabelText('Branch name'), 'bad branch');
-    await userEvent.type(screen.getByLabelText('Worktree name'), 'ticket');
+    await openCreateForm();
+    await userEvent.type(screen.getByLabelText('Branch name'), 'bad');
     await userEvent.click(screen.getByTestId('terminal-location-create'));
+
     expect(await screen.findByTestId('terminal-location-error')).toHaveTextContent('branch is invalid');
     expect(screen.getByTestId('terminal-location-create')).not.toBeDisabled();
   });
@@ -138,6 +253,17 @@ describe('TerminalWorktreeLocationPicker', () => {
     expect(listTerminalWorktrees).toHaveBeenCalledTimes(1);
   });
 
+  it('reads branches only when the create form is opened', async () => {
+    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    mount();
+
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    expect(listTerminalBranches).not.toHaveBeenCalled();
+
+    await userEvent.click(await screen.findByTestId('terminal-location-new'));
+    expect(listTerminalBranches).toHaveBeenCalledWith('project-a', 'repository-a');
+  });
+
   it('refetches on every open so a worktree removed while closed stops being offered', async () => {
     vi.mocked(listTerminalWorktrees)
       .mockResolvedValueOnce([{ path: '/repos/demo-gone', branch: 'gone', isLocked: false }])
@@ -151,7 +277,6 @@ describe('TerminalWorktreeLocationPicker', () => {
     await userEvent.click(screen.getByTestId('terminal-location-trigger'));
 
     expect(listTerminalWorktrees).toHaveBeenCalledTimes(2);
-    expect(await screen.findByText('No linked worktrees')).toBeInTheDocument();
     expect(screen.queryByTestId('terminal-location-worktree-/repos/demo-gone')).not.toBeInTheDocument();
   });
 
@@ -160,10 +285,8 @@ describe('TerminalWorktreeLocationPicker', () => {
     const { rerender } = render(
       <TerminalWorktreeLocationPicker projectId="project-a" repositoryId="repository-a" onChange={(location) => onChange(location)} />,
     );
-    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
-    await screen.findByText('No linked worktrees');
+    await openCreateForm();
     await userEvent.type(screen.getByLabelText('Branch name'), 'feature/keep');
-    await userEvent.type(screen.getByLabelText('Worktree name'), 'keep');
 
     await act(async () => {
       rerender(
@@ -172,7 +295,6 @@ describe('TerminalWorktreeLocationPicker', () => {
     });
 
     expect(screen.getByLabelText('Branch name')).toHaveValue('feature/keep');
-    expect(screen.getByLabelText('Worktree name')).toHaveValue('keep');
     expect(screen.getByTestId('terminal-location-menu')).toBeInTheDocument();
   });
 
@@ -183,10 +305,8 @@ describe('TerminalWorktreeLocationPicker', () => {
       () => new Promise((_, reject) => { rejectCreate = reject; }),
     );
     const { rerender } = mount();
-    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
-    await screen.findByText('No linked worktrees');
+    await openCreateForm();
     await userEvent.type(screen.getByLabelText('Branch name'), 'old-request');
-    await userEvent.type(screen.getByLabelText('Worktree name'), 'old-request');
     await userEvent.click(screen.getByTestId('terminal-location-create'));
     expect(screen.getByTestId('terminal-location-create')).toBeDisabled();
 
@@ -196,11 +316,9 @@ describe('TerminalWorktreeLocationPicker', () => {
     expect(screen.getByTestId('terminal-location-trigger')).not.toBeDisabled();
 
     await act(async () => { rejectCreate?.({ kind: 'validation', message: 'old repository failed' }); });
-    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
-    expect(await screen.findByText('No linked worktrees')).toBeInTheDocument();
+    await openCreateForm();
     expect(screen.queryByTestId('terminal-location-error')).not.toBeInTheDocument();
     await userEvent.type(screen.getByLabelText('Branch name'), 'new-request');
-    await userEvent.type(screen.getByLabelText('Worktree name'), 'new-request');
     expect(screen.getByTestId('terminal-location-create')).not.toBeDisabled();
   });
 });

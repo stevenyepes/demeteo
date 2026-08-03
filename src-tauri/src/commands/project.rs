@@ -1,8 +1,9 @@
-use crate::application::projects::{ProjectConfig, RepoDirtyStatus};
+use crate::application::projects::{ProjectConfig, RepoDirtyStatus, TerminalBranchOptions};
 use crate::domain::ids::ProjectId;
 use crate::domain::models::{EffortLevel, Project, RepoHealthStatus, Repository, WorktreeInfo};
 use crate::error::AppError;
 use crate::paths;
+use crate::ports::worktree_ops::{TerminalWorktreeCreated, TerminalWorktreeRequest};
 use crate::state::AppContext;
 use tauri::State;
 
@@ -161,10 +162,23 @@ pub async fn list_terminal_worktrees(
         .map_err(AppError::from)
 }
 
+/// The branches a new terminal worktree may be based on, plus the project's
+/// default.
+#[tauri::command]
+pub async fn list_terminal_branches(
+    ctx: State<'_, AppContext>,
+    project_id: String,
+    repository_id: String,
+) -> Result<TerminalBranchOptions, AppError> {
+    crate::application::projects::list_terminal_branches(&ctx, project_id, repository_id)
+        .await
+        .map_err(AppError::from)
+}
+
 /// Create a linked worktree for a repository owned by a project.
 ///
 /// Callers supply only the project/repository identities and user-facing
-/// branch/name inputs. The application policy derives the machine and
+/// branch/base/name inputs. The application policy derives the machine and
 /// destination; validation and Git I/O remain behind `WorktreeOpsPort`.
 #[tauri::command]
 pub async fn create_terminal_worktree(
@@ -172,14 +186,41 @@ pub async fn create_terminal_worktree(
     project_id: String,
     repository_id: String,
     branch: String,
+    base_branch: Option<String>,
     worktree_name: String,
-) -> Result<WorktreeInfo, AppError> {
+) -> Result<TerminalWorktreeCreated, AppError> {
     crate::application::projects::create_terminal_worktree(
         &ctx,
         project_id,
         repository_id,
-        branch,
-        worktree_name,
+        TerminalWorktreeRequest {
+            branch,
+            base_branch,
+            worktree_name,
+        },
+    )
+    .await
+    .map_err(AppError::from)
+}
+
+/// Remove a linked worktree from a repository owned by a project.
+///
+/// `force` is the user's answer to git's own refusal to discard modified or
+/// untracked files, so it is passed through rather than decided here.
+#[tauri::command]
+pub async fn remove_terminal_worktree(
+    ctx: State<'_, AppContext>,
+    project_id: String,
+    repository_id: String,
+    worktree_path: String,
+    force: bool,
+) -> Result<(), AppError> {
+    crate::application::projects::remove_terminal_worktree(
+        &ctx,
+        project_id,
+        repository_id,
+        worktree_path,
+        force,
     )
     .await
     .map_err(AppError::from)

@@ -290,9 +290,25 @@ impl WorktreeOpsPort for RecordingWorktrees {
         _: Option<&str>,
         _: &str,
         _: &str,
+        _: &crate::ports::worktree_ops::TerminalWorktreeRequest,
+    ) -> Result<crate::ports::worktree_ops::TerminalWorktreeCreated, String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn remove_terminal_worktree(
+        &self,
+        _: Option<&str>,
         _: &str,
         _: &str,
-    ) -> Result<crate::domain::models::WorktreeInfo, String> {
+        _: &str,
+        _: bool,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn list_terminal_branches(
+        &self,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<Vec<crate::domain::branch_listing::BranchOption>, String> {
         panic!("unexpected WorktreeOpsPort call")
     }
     async fn list_terminal_worktrees(

@@ -1,10 +1,12 @@
 use super::*;
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::branch_listing::BranchOption;
 use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
 use crate::domain::models::{Project, Repository, WorktreeInfo, WorktreeStrategy};
 use crate::ports::worktree_ops::{
-    CommitMessageRejected, SquashOutcome, SyncFailure, SyncOutcome, WorktreeOpsPort,
+    CommitMessageRejected, SquashOutcome, SyncFailure, SyncOutcome, TerminalWorktreeCreated,
+    TerminalWorktreeRequest, WorktreeOpsPort,
 };
 use crate::state::AppContext;
 use async_trait::async_trait;
@@ -27,11 +29,23 @@ enum WorktreeCall {
         repo_dir: String,
         project_root: String,
         branch: String,
+        base: Option<String>,
         name: String,
+    },
+    Remove {
+        machine: Option<String>,
+        repo_dir: String,
+        project_root: String,
+        path: String,
+        force: bool,
+    },
+    ListBranches {
+        machine: Option<String>,
+        repo_dir: String,
     },
 }
 
-/// Strictly records the two calls this policy is allowed to make. Every other
+/// Strictly records the calls this policy is allowed to make. Every other
 /// WorktreeOpsPort operation panics, making accidental Git-policy expansion
 /// visible without constructing an ExecutionDriver.
 struct RecordingWorktrees {
@@ -101,21 +115,59 @@ impl WorktreeOpsPort for RecordingWorktrees {
         machine: Option<&str>,
         repo_dir: &str,
         project_root: &str,
-        branch: &str,
-        name: &str,
-    ) -> Result<WorktreeInfo, String> {
+        request: &TerminalWorktreeRequest,
+    ) -> Result<TerminalWorktreeCreated, String> {
         self.record(WorktreeCall::Create {
             machine: machine.map(str::to_string),
             repo_dir: repo_dir.to_string(),
             project_root: project_root.to_string(),
-            branch: branch.to_string(),
-            name: name.to_string(),
+            branch: request.branch.clone(),
+            base: request.base_branch.clone(),
+            name: request.worktree_name.clone(),
         })?;
-        Ok(WorktreeInfo {
-            path: format!("{repo_dir}-{name}"),
-            branch: Some(branch.to_string()),
-            is_locked: false,
+        Ok(TerminalWorktreeCreated {
+            worktree: WorktreeInfo {
+                path: format!("{repo_dir}-{}", request.worktree_name),
+                branch: Some(request.branch.clone()),
+                is_locked: false,
+            },
+            base_ref: request
+                .base_branch
+                .as_ref()
+                .map(|base| format!("origin/{base}"))
+                .unwrap_or_else(|| "HEAD".to_string()),
         })
+    }
+    async fn remove_terminal_worktree(
+        &self,
+        machine: Option<&str>,
+        repo_dir: &str,
+        project_root: &str,
+        worktree_path: &str,
+        force: bool,
+    ) -> Result<(), String> {
+        self.record(WorktreeCall::Remove {
+            machine: machine.map(str::to_string),
+            repo_dir: repo_dir.to_string(),
+            project_root: project_root.to_string(),
+            path: worktree_path.to_string(),
+            force,
+        })
+    }
+    async fn list_terminal_branches(
+        &self,
+        machine: Option<&str>,
+        repo_dir: &str,
+    ) -> Result<Vec<BranchOption>, String> {
+        self.record(WorktreeCall::ListBranches {
+            machine: machine.map(str::to_string),
+            repo_dir: repo_dir.to_string(),
+        })?;
+        Ok(vec![BranchOption {
+            name: "main".to_string(),
+            has_local: true,
+            has_remote: true,
+        }])
     }
     async fn cleanup_legacy_terminal_worktrees(
         &self,
@@ -313,20 +365,28 @@ async fn create_resolves_a_remote_project_machine_and_repository_before_calling_
         repo_dir: repo_dir.clone(),
         project_root: project_root.clone(),
         branch: "terminal/new".to_string(),
+        base: Some("main".to_string()),
         name: "new".to_string(),
     });
 
-    let worktree = create_terminal_worktree(
+    let created = create_terminal_worktree(
         &ctx,
         "p-remote".to_string(),
         "r-remote".to_string(),
-        "terminal/new".to_string(),
-        "new".to_string(),
+        TerminalWorktreeRequest {
+            branch: "terminal/new".to_string(),
+            base_branch: Some("main".to_string()),
+            worktree_name: "new".to_string(),
+        },
     )
     .await
     .unwrap();
 
-    assert_eq!(worktree.branch.as_deref(), Some("terminal/new"));
+    assert_eq!(created.worktree.branch.as_deref(), Some("terminal/new"));
+    assert_eq!(
+        created.base_ref, "origin/main",
+        "the caller learns which ref the branch was actually cut from"
+    );
     assert_eq!(
         *calls.lock().unwrap(),
         [WorktreeCall::Create {
@@ -334,8 +394,96 @@ async fn create_resolves_a_remote_project_machine_and_repository_before_calling_
             repo_dir,
             project_root,
             branch: "terminal/new".to_string(),
+            base: Some("main".to_string()),
             name: "new".to_string()
-        }]
+        }],
+        "the chosen base must reach the port unaltered"
+    );
+}
+
+#[tokio::test]
+async fn removal_resolves_the_same_repository_identity_the_listing_does() {
+    let (ctx, worktree_port, calls) = context();
+    add_project(&ctx, "p-local", "local", None);
+    add_repo(&ctx, "r-local", "p-local", "org/local-repo");
+    let project_root = ctx
+        .workspace_dir
+        .join("projects/p-local")
+        .to_string_lossy()
+        .to_string();
+    let repo_dir = format!("{project_root}/repos/local-repo");
+    worktree_port.expect(WorktreeCall::Remove {
+        machine: None,
+        repo_dir: repo_dir.clone(),
+        project_root: project_root.clone(),
+        path: "/physical/wt/gone".to_string(),
+        force: true,
+    });
+
+    remove_terminal_worktree(
+        &ctx,
+        "p-local".to_string(),
+        "r-local".to_string(),
+        "/physical/wt/gone".to_string(),
+        true,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [WorktreeCall::Remove {
+            machine: None,
+            repo_dir,
+            project_root,
+            path: "/physical/wt/gone".to_string(),
+            force: true
+        }],
+        "the port needs the project root to prove the path is one of its own"
+    );
+}
+
+#[tokio::test]
+async fn branch_options_carry_the_projects_configured_default() {
+    let (ctx, worktree_port, _calls) = context();
+    add_project(&ctx, "p-local", "local", None);
+    add_repo(&ctx, "r-local", "p-local", "org/local-repo");
+    let project_root = ctx
+        .workspace_dir
+        .join("projects/p-local")
+        .to_string_lossy()
+        .to_string();
+    let defaults = crate::adapters::step_executor::setup::fetch_default_settings();
+    ctx.projects
+        .save_settings(crate::domain::models::ProjectSettings {
+            project_id: ProjectId::from("p-local"),
+            worktree_strategy: WorktreeStrategy {
+                default_branch: "trunk".to_string(),
+                ..defaults.worktree_strategy.clone()
+            },
+            ..defaults
+        })
+        .unwrap();
+    worktree_port.expect(WorktreeCall::ListBranches {
+        machine: None,
+        repo_dir: format!("{project_root}/repos/local-repo"),
+    });
+
+    let options = list_terminal_branches(&ctx, "p-local".to_string(), "r-local".to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        options.default_branch, "trunk",
+        "a picker cannot read the integration branch out of refs/heads"
+    );
+    assert_eq!(
+        options
+            .branches
+            .iter()
+            .map(|branch| branch.name.as_str())
+            .collect::<Vec<_>>(),
+        ["main"],
     );
 }
 
@@ -390,11 +538,24 @@ async fn unknown_project_or_repository_is_rejected_before_port_io() {
         &ctx,
         "p-known".to_string(),
         "r-missing".to_string(),
-        "terminal/new".to_string(),
-        "new".to_string(),
+        TerminalWorktreeRequest {
+            branch: "terminal/new".to_string(),
+            base_branch: Some("main".to_string()),
+            worktree_name: "new".to_string(),
+        },
     )
     .await
     .unwrap_err();
+    let missing_removal_repo = remove_terminal_worktree(
+        &ctx,
+        "p-known".to_string(),
+        "r-missing".to_string(),
+        "/physical/wt/anything".to_string(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(missing_removal_repo.contains("does not belong"));
 
     assert!(missing_project.contains("Project not found"));
     assert!(missing_repo.contains("does not belong"));

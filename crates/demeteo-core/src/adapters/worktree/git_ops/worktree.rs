@@ -1,6 +1,8 @@
 use super::GitOpsHelper;
+use crate::domain::branch_listing::BranchOption;
 use crate::domain::models::WorktreeInfo;
 use crate::paths;
+use crate::ports::worktree_ops::{TerminalWorktreeCreated, TerminalWorktreeRequest};
 use std::path::{Component, Path, PathBuf};
 
 impl GitOpsHelper {
@@ -45,23 +47,34 @@ impl GitOpsHelper {
     ///
     /// Unlike subtask provisioning, this path never removes an existing
     /// worktree, resets a branch, or falls back to an existing branch. `git
-    /// worktree add -b` creates the requested branch from the current
-    /// primary-checkout HEAD; an existing requested branch is rejected rather
-    /// than reused. The caller owns both names, so a collision is an error the
-    /// user must resolve rather than stale pipeline state to reclaim.
+    /// worktree add -b` creates the requested branch at the start point
+    /// [`GitOpsHelper::terminal_start_point`] resolved; an existing requested
+    /// branch is rejected rather than reused. The caller owns both names, so a
+    /// collision is an error the user must resolve rather than stale pipeline
+    /// state to reclaim.
     pub async fn create_terminal_worktree(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         project_root: &str,
-        branch: &str,
-        worktree_name: &str,
-    ) -> Result<WorktreeInfo, String> {
+        request: &TerminalWorktreeRequest,
+    ) -> Result<TerminalWorktreeCreated, String> {
+        let branch = request.branch.as_str();
         validate_terminal_branch(branch)?;
-        let destination = terminal_worktree_dir(repo_dir, project_root, worktree_name)?;
+        let destination = terminal_worktree_dir(repo_dir, project_root, &request.worktree_name)?;
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let command =
-            terminal_worktree_create_cmd(repo_dir, project_root, branch, &destination, "")?;
+        let base_ref = self
+            .terminal_start_point(machine_str, repo_dir, request.base_branch.as_deref())
+            .await?;
+        let start_point = request.base_branch.as_ref().map(|_| base_ref.as_str());
+        let command = terminal_worktree_create_cmd(
+            repo_dir,
+            project_root,
+            branch,
+            &destination,
+            start_point,
+            "",
+        )?;
         let output = self
             .exec
             .run_command(machine_str, &command)
@@ -77,11 +90,193 @@ impl GitOpsHelper {
         // from `worktree list`, so returning the logical form would hand the
         // caller a path that never equals the one it lists back — on macOS
         // `/var` and `/private/var` name the same directory and compare unequal.
-        Ok(WorktreeInfo {
-            path: created_terminal_worktree_path(&output, &destination),
-            branch: Some(branch.to_string()),
-            is_locked: false,
+        Ok(TerminalWorktreeCreated {
+            worktree: WorktreeInfo {
+                path: created_terminal_worktree_path(&output, &destination),
+                branch: Some(branch.to_string()),
+                is_locked: false,
+            },
+            base_ref,
         })
+    }
+
+    /// Resolve what `git worktree add -b` should branch from, refreshing it
+    /// from origin first.
+    ///
+    /// `None` answers `HEAD` without touching the network — the caller then
+    /// omits the start point entirely and Git uses the primary checkout's HEAD,
+    /// which is the pre-base-selection behaviour.
+    ///
+    /// With a base, the fetch is best-effort and the *probe after it* decides:
+    /// `origin/<base>` when that ref resolves, the local `<base>` when only it
+    /// does. So an unreachable origin degrades to a named local ref rather than
+    /// to whatever the primary checkout is sitting on, and the caller learns
+    /// which of the two it got. A base that resolves neither way is an error —
+    /// silently falling through to HEAD is how a session starts on a branch
+    /// nobody chose.
+    async fn terminal_start_point(
+        &self,
+        machine_str: &str,
+        repo_dir: &str,
+        base_branch: Option<&str>,
+    ) -> Result<String, String> {
+        let Some(base) = base_branch else {
+            return Ok("HEAD".to_string());
+        };
+        validate_git_branch_name(base).map_err(|_| {
+            format!("create_terminal_worktree: base branch '{base}' is not a safe Git branch name")
+        })?;
+        let safe_dir = paths::shell_escape_posix(repo_dir);
+
+        let _ = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} fetch origin {}",
+                    safe_dir,
+                    paths::shell_escape_posix(base)
+                ),
+            )
+            .await;
+
+        for (reference, start_point) in [
+            (
+                format!("refs/remotes/origin/{base}"),
+                format!("origin/{base}"),
+            ),
+            (format!("refs/heads/{base}"), base.to_string()),
+        ] {
+            if self
+                .exec
+                .run_command(
+                    machine_str,
+                    &format!(
+                        "git -C {} rev-parse --verify --quiet {}",
+                        safe_dir,
+                        paths::shell_escape_posix(&reference)
+                    ),
+                )
+                .await
+                .is_ok()
+            {
+                return Ok(start_point);
+            }
+        }
+
+        Err(format!(
+            "create_terminal_worktree: base branch '{base}' exists neither on origin nor locally"
+        ))
+    }
+
+    /// Remove one terminal worktree, having first proved it is one.
+    ///
+    /// The path is re-derived, never trusted: the listing is taken again here
+    /// and the request has to name something in it. A UI holding a stale list,
+    /// or any caller at all, therefore cannot aim this at the primary checkout
+    /// or at the worktree a pipeline step is mid-run in — the two directories
+    /// `git worktree remove --force` would take with it silently.
+    ///
+    /// The prune afterwards is what makes the name reusable: a `remove` that
+    /// leaves an administrative entry behind fails the next `add` of the same
+    /// destination with "already used by worktree".
+    pub async fn remove_terminal_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        project_root: &str,
+        worktree_path: &str,
+        force: bool,
+    ) -> Result<(), String> {
+        let owned = self
+            .list_terminal_worktrees(machine_id, repo_dir, project_root)
+            .await?;
+        let target = owned
+            .into_iter()
+            .find(|worktree| Path::new(&worktree.path) == Path::new(worktree_path))
+            .ok_or_else(|| {
+                format!(
+                    "remove_terminal_worktree: {worktree_path} is not a terminal worktree of {repo_dir}"
+                )
+            })?;
+
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let safe_dir = paths::shell_escape_posix(repo_dir);
+        self.exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} worktree remove {}{}",
+                    safe_dir,
+                    if force { "--force " } else { "" },
+                    paths::shell_escape_posix(&target.path)
+                ),
+            )
+            .await
+            .map_err(|e| format!("remove_terminal_worktree: git worktree remove failed: {e}"))?;
+        let _ = self
+            .exec
+            .run_command(machine_str, &format!("git -C {safe_dir} worktree prune"))
+            .await;
+
+        Ok(())
+    }
+
+    /// Restate a terminal-worktree failure when the repository it names is not
+    /// checked out at all.
+    ///
+    /// Cloning belongs to `application::bootstrap` and runs when a project is
+    /// set up; every operation here assumes it already has. When it has not — a
+    /// workspace cleared out from under a project, a moved `workspace_base_dir`
+    /// — Git answers in its own terms, `fatal: cannot change to '<dir>'`, which
+    /// reads as a damaged repository rather than one that was never cloned and
+    /// names nothing the user can act on. Choosing a base branch makes it worse:
+    /// [`GitOpsHelper::terminal_start_point`] probes first and blames the base
+    /// for a directory that is not there.
+    ///
+    /// Probed only after a failure, so the extra round trip never lands on a
+    /// call that worked — the one that counts over SSH.
+    pub(super) async fn explain_missing_checkout(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        error: String,
+    ) -> String {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let checked_out = self
+            .exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} rev-parse --is-inside-work-tree",
+                    paths::shell_escape_posix(repo_dir)
+                ),
+            )
+            .await
+            .is_ok();
+        if checked_out {
+            return error;
+        }
+        format!(
+            "{repo_dir} is not a Git checkout — this project's repository has not been cloned \
+             there. Re-run Bootstrap from the project's Settings › Workspace Health, then try \
+             again. ({error})"
+        )
+    }
+
+    /// The branches this repository can cut a terminal worktree from.
+    pub async fn list_terminal_branches(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+    ) -> Result<Vec<BranchOption>, String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let output = self
+            .exec
+            .run_command(machine_str, &branch_list_cmd(repo_dir))
+            .await?;
+
+        Ok(crate::domain::branch_listing::parse(&output))
     }
 
     /// The linked worktrees a terminal session may be opened in.
@@ -879,6 +1074,17 @@ pub(super) fn worktree_list_cmd(repo_dir: &str) -> String {
     )
 }
 
+/// Ask for full ref names, not `%(refname:short)`: shortening is what makes
+/// `origin/main` and a local branch someone literally named `origin/main`
+/// arrive as the same string, and [`crate::domain::branch_listing`] tells the
+/// two apart by prefix.
+fn branch_list_cmd(repo_dir: &str) -> String {
+    format!(
+        "git -C {} for-each-ref --format='%(refname)' refs/heads refs/remotes/origin",
+        paths::shell_escape_posix(repo_dir)
+    )
+}
+
 /// Resolve a terminal worktree beneath a directory controlled by Demeteo, not
 /// by the interactive caller. A relative name may contain normal path
 /// components, but it may never select the repository root, an absolute path,
@@ -973,6 +1179,10 @@ fn has_path_component(path: &str, name: &str) -> bool {
 /// basename, so a later rename-and-symlink substitution cannot redirect it by
 /// causing another pathname resolution of that parent.
 ///
+/// `start_point` is the committish the new branch is cut at, already resolved
+/// by [`GitOpsHelper::terminal_start_point`]. `None` omits it so Git falls back
+/// to the primary checkout's HEAD.
+///
 /// `interlude` is shell run after the destination parent has been entered and
 /// before Git is invoked. Production passes `""`; only a test that has to act
 /// inside that check-to-use window passes anything else, so the string this
@@ -982,6 +1192,7 @@ fn terminal_worktree_create_cmd(
     project_root: &str,
     branch: &str,
     destination: &str,
+    start_point: Option<&str>,
     interlude: &str,
 ) -> Result<String, String> {
     let destination_path = Path::new(destination);
@@ -1030,6 +1241,9 @@ fn terminal_worktree_create_cmd(
     let destination_name = paths::shell_escape_posix(&destination_name.to_string_lossy());
     let work_tree = paths::shell_escape_posix(repo_dir);
     let branch = paths::shell_escape_posix(branch);
+    let start_point = start_point
+        .map(|start| format!(" {}", paths::shell_escape_posix(start)))
+        .unwrap_or_default();
 
     // `rev-parse` rather than a literal `<repo_dir>/.git`. Not because the
     // literal is known to break — Git resolves a `.git` *file* handed to
@@ -1042,7 +1256,7 @@ fn terminal_worktree_create_cmd(
         "set -eu; git_dir=$(git -C {work_tree} rev-parse --absolute-git-dir); \\
          cd {trusted_parent}; expected_parent=$(pwd -P); {prepare}; \\
          {interlude}if [ -e ./{destination_name} ] || [ -L ./{destination_name} ]; then echo 'terminal worktree destination already exists' >&2; exit 1; fi; \\
-         git --git-dir=\"$git_dir\" --work-tree={work_tree} worktree add -b {branch} ./{destination_name}; \\
+         git --git-dir=\"$git_dir\" --work-tree={work_tree} worktree add -b {branch} ./{destination_name}{start_point}; \\
          printf '%s\\n' \"${{expected_parent}}\"/{destination_name}",
     ))
 }
@@ -1064,19 +1278,31 @@ fn created_terminal_worktree_path(output: &str, derived: &str) -> String {
         .unwrap_or_else(|| derived.to_string())
 }
 
-/// Validate the user branch before it is handed to Git. This is the
-/// `check-ref-format --branch` safety subset: it rejects ambiguous refs and
-/// command-like names while allowing ordinary slash-separated branch names.
+/// Validate the branch a terminal worktree will be created *on*.
 ///
-/// It also refuses the pipeline's own subtask infix, which Git would happily
-/// accept. `domain::terminal_worktree` withholds any branch carrying it, so
-/// accepting one here would hand back a worktree that then never appears in the
-/// listing again — created, on disk, and invisible, with nothing said. A refusal
-/// at creation is the same rule, stated where the user can act on it.
+/// [`validate_git_branch_name`] plus a refusal of the pipeline's own subtask
+/// infix, which Git would happily accept. `domain::terminal_worktree` withholds
+/// any branch carrying it, so accepting one here would hand back a worktree that
+/// then never appears in the listing again — created, on disk, and invisible,
+/// with nothing said. A refusal at creation is the same rule, stated where the
+/// user can act on it.
+///
+/// The infix is not refused for a *base* branch: reading a subtask branch is
+/// harmless, and the listing already withholds them from the picker.
 fn validate_terminal_branch(branch: &str) -> Result<(), String> {
+    if branch.contains(crate::domain::ids::SUBTASK_BRANCH_INFIX) {
+        return Err(format!(
+            "create_terminal_worktree: branch '{branch}' is not a safe Git branch name"
+        ));
+    }
+    validate_git_branch_name(branch)
+}
+
+/// The `check-ref-format --branch` safety subset: it rejects ambiguous refs and
+/// command-like names while allowing ordinary slash-separated branch names.
+fn validate_git_branch_name(branch: &str) -> Result<(), String> {
     let invalid = branch.is_empty()
         || branch == "@"
-        || branch.contains(crate::domain::ids::SUBTASK_BRANCH_INFIX)
         || branch.starts_with('-')
         || branch.starts_with('/')
         || branch.ends_with('/')

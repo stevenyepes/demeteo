@@ -3,8 +3,42 @@
 //! Provides abstract access to Git worktree operations such as cloning,
 //! provisioning worktrees, checking repository state, and syncing with upstream.
 
+use crate::domain::branch_listing::BranchOption;
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+/// The caller-controlled half of a terminal-worktree creation.
+///
+/// Bundled rather than passed positionally: all three travel together from the
+/// Tauri command through application policy into the adapter, and every one of
+/// them is a `String` the user typed or picked. Two adjacent untrusted strings
+/// of the same type is a swap the compiler cannot see.
+#[derive(Debug, Clone)]
+pub struct TerminalWorktreeRequest {
+    /// The new branch to create. Must not already exist.
+    pub branch: String,
+    /// The branch to cut from. `None` leaves the start point at the primary
+    /// checkout's HEAD, which is whatever the user last left it on.
+    pub base_branch: Option<String>,
+    /// The directory name below the repository's terminal area.
+    pub worktree_name: String,
+}
+
+/// A terminal worktree that now exists, and where its branch came from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalWorktreeCreated {
+    pub worktree: WorktreeInfo,
+    /// The start point Git was actually given: `origin/<base>` once the fetch
+    /// reached origin, the local `<base>` when it did not, `HEAD` when the
+    /// request named no base.
+    ///
+    /// Reported rather than inferred, because it is the whole answer to "am I
+    /// starting from something stale" — and the fallback to a local ref happens
+    /// exactly when the network was the thing that failed, which is when a
+    /// caller assuming `origin/<base>` would be most wrong.
+    pub base_ref: String,
+}
 
 /// Result of a successful feature branch sync.
 #[derive(Debug, Clone)]
@@ -74,22 +108,67 @@ pub trait WorktreeOpsPort: Send + Sync {
     /// Create a user-requested linked worktree without altering or reclaiming
     /// any existing worktree state.
     ///
-    /// This creates a **new** branch from the current primary-checkout HEAD.
-    /// Supplying a branch that already exists is an error; implementations
-    /// must not reuse, reset, or check out that branch in a new worktree.
+    /// This creates a **new** branch. Supplying a branch that already exists is
+    /// an error; implementations must not reuse, reset, or check out that
+    /// branch in a new worktree.
+    ///
+    /// When the request names a base, implementations fetch it from origin
+    /// first and cut from `origin/<base>`, falling back to the local `<base>`
+    /// only when origin has no such ref. The primary checkout's HEAD is never
+    /// silently used as the start point in that case: a session started from a
+    /// stale base is the failure this is here to prevent, so the ref actually
+    /// used comes back in [`TerminalWorktreeCreated::base_ref`].
     ///
     /// `project_root` is the Demeteo-owned root of the project and must
     /// already exist on the target host; implementations derive the worktree
-    /// destination *below* it. `branch` and `worktree_name` stay untrusted —
-    /// the caller never gets to choose an absolute destination.
+    /// destination *below* it. Every field of `request` stays untrusted — the
+    /// caller never gets to choose an absolute destination.
     async fn create_terminal_worktree(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         project_root: &str,
-        branch: &str,
-        worktree_name: &str,
-    ) -> Result<WorktreeInfo, String>;
+        request: &TerminalWorktreeRequest,
+    ) -> Result<TerminalWorktreeCreated, String>;
+
+    /// Retire one terminal worktree the user is done with.
+    ///
+    /// `worktree_path` is untrusted — it arrives from a UI holding a listing
+    /// that may be seconds out of date, and this method is one `git worktree
+    /// remove --force` away from deleting a pipeline's checkout or the primary
+    /// one. Implementations must therefore re-derive the terminal area from
+    /// `project_root` and refuse any path
+    /// [`list_terminal_worktrees`](Self::list_terminal_worktrees) would not
+    /// have offered, rather than trusting the caller's path.
+    ///
+    /// The branch is deliberately left behind: the worktree is a directory the
+    /// user can recreate, and the commits in it are not.
+    ///
+    /// `force` maps to git's own `--force`, which is what a worktree holding
+    /// modified or untracked files needs. Without it, git's refusal comes back
+    /// as the error — a caller is expected to surface that and let the user
+    /// decide, never to retry with `force` on its own.
+    async fn remove_terminal_worktree(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        project_root: &str,
+        worktree_path: &str,
+        force: bool,
+    ) -> Result<(), String>;
+
+    /// The branches a new terminal worktree may be based on.
+    ///
+    /// Read from refs already on the target host — no fetch. Opening a picker
+    /// must not block on the network, and the fetch that makes a base current
+    /// happens inside
+    /// [`create_terminal_worktree`](Self::create_terminal_worktree), where the
+    /// user has already committed to a base.
+    async fn list_terminal_branches(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+    ) -> Result<Vec<BranchOption>, String>;
 
     /// The linked worktrees of `repo_dir` that belong to the terminal area
     /// below `project_root`, and nothing else.

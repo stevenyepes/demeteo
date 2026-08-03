@@ -862,7 +862,34 @@ export interface CreateTerminalWorktreeRequest {
   projectId: string;
   repositoryId: string;
   branch: string;
+  /** The branch to cut from. The backend fetches it from origin first; `null`
+   *  leaves the start point at whatever the main checkout is sitting on. */
+  baseBranch: string | null;
   worktreeName: string;
+}
+
+/** A branch offered as a base, and where it exists. `hasRemote` is what says a
+ *  fetch can refresh it — a `false` there means the base is only as current as
+ *  the local copy. */
+export interface TerminalBranchOption {
+  name: string;
+  hasLocal: boolean;
+  hasRemote: boolean;
+}
+
+/** Base candidates plus the branch this project integrates into, which the
+ *  picker preselects. */
+export interface TerminalBranchOptions {
+  defaultBranch: string;
+  branches: TerminalBranchOption[];
+}
+
+/** A created worktree and the ref its branch actually started at —
+ *  `origin/<base>` when the fetch reached origin, a bare `<base>` when it did
+ *  not. Reported so the UI can say which, rather than promising the first. */
+export interface CreatedTerminalWorktree {
+  worktree: TerminalWorktree;
+  baseRef: string;
 }
 
 /**
