@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, type RenderResult } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { type ReactElement } from 'react';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
@@ -7,6 +7,8 @@ import { invoke, type InvokeArgs } from '@tauri-apps/api/core';
 import { TerminalPanelProvider } from '../context/TerminalPanelProvider';
 import { ProjectProvider } from '../context/ProjectContext';
 import { useTerminalPanel } from '../hooks/useTerminalPanel';
+import { MIN_PLAUSIBLE_COLS, setLastTerminalSize } from '../lib/terminalViewport';
+import { resizeObserverStubs, setFitGeometry } from '../test/setup';
 import { TerminalsView } from './TerminalsView';
 
 let nextSessionId = 0;
@@ -31,6 +33,9 @@ function commandsOf(name: string): Array<unknown[]> {
 
 interface Harness {
   readonly panel: ReturnType<typeof useTerminalPanel>;
+  readonly view: RenderResult;
+  /** Re-render the same tree on the other side of the route toggle. */
+  setActive(active: boolean): void;
 }
 
 function mount(active = true): Harness {
@@ -40,20 +45,79 @@ function mount(active = true): Harness {
     ref.current = panel;
     return <span data-testid="dbg">{panel.state.tabs.length}</span>;
   }
-  render(
+  const tree = (isActive: boolean): ReactElement => (
     <ProjectProvider>
       <TerminalPanelProvider>
         <Capture />
-        <TerminalsView active={active} />
+        <TerminalsView active={isActive} />
       </TerminalPanelProvider>
-    </ProjectProvider>,
+    </ProjectProvider>
   );
+  const view = render(tree(active));
   return {
     get panel() {
       if (!ref.current) throw new Error('panel did not mount');
       return ref.current;
     },
+    view,
+    setActive: (next) => view.rerender(tree(next)),
   };
+}
+
+// jsdom lays nothing out, so every element answers `hasLayoutBox` the way a
+// `display:none` subtree does. Driving the border box by hand is the only way
+// to say "the route is on screen now" — `offsetParent` is not writable
+// per-element and stays null under jsdom whatever the `display` is.
+function layoutBox(view: RenderResult): { show(): void; hide(): void } {
+  const el = view.container.querySelector<HTMLElement>(
+    '[data-testid="terminal-surface"] .w-full.h-full',
+  );
+  if (!el) throw new Error('terminal container not found');
+  let onScreen = false;
+  el.getBoundingClientRect = () =>
+    ({
+      width: onScreen ? 800 : 0,
+      height: onScreen ? 400 : 0,
+      top: 0,
+      left: 0,
+      right: onScreen ? 800 : 0,
+      bottom: onScreen ? 400 : 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  return {
+    show: () => {
+      onScreen = true;
+    },
+    hide: () => {
+      onScreen = false;
+    },
+  };
+}
+
+/** The observer the surface bound to its own container, not one of the ones
+ *  other components in the view register. */
+function surfaceObserver(view: RenderResult): (typeof resizeObserverStubs)[number] {
+  const el = view.container.querySelector('[data-testid="terminal-surface"] .w-full.h-full');
+  const stub = resizeObserverStubs.find((o) =>
+    o.observe.mock.calls.some(([target]) => target === el),
+  );
+  if (!stub) throw new Error('no ResizeObserver bound to the terminal container');
+  return stub;
+}
+
+function isSize(v: unknown): v is { cols: number; rows: number } {
+  if (typeof v !== 'object' || v === null) return false;
+  const rec = v as Record<string, unknown>;
+  return typeof rec.cols === 'number' && typeof rec.rows === 'number';
+}
+
+function resizedSizes(): Array<{ cols: number; rows: number }> {
+  return commandsOf('resize_terminal_session')
+    .map(([, args]) => args)
+    .filter(isSize)
+    .map(({ cols, rows }) => ({ cols, rows }));
 }
 
 describe('TerminalsView', () => {
@@ -160,5 +224,45 @@ describe('TerminalsView', () => {
     // sessions must NOT be torn down (invariant 1).
     // A simple way to assert: closing is never invoked by hiding.
     expect(commandsOf('close_terminal_session')).toHaveLength(0);
+  });
+
+  it('emits no degenerate resize when the view is hidden and shown', async () => {
+    // The route journey end to end: the surface stays mounted behind the
+    // `hidden` class, so every fit taken while off-route measures a boxless
+    // container and lands on ~11 × 5. Nothing below the floor may reach the
+    // PTY, and the surface must still come back at the size the viewport has
+    // now — the window may have been resized while the route was away.
+    setLastTerminalSize(100, 30);
+    setFitGeometry(100, 30);
+
+    const h = mount(true);
+    await act(async () => {
+      await h.panel.open({ machineId: 'local', machineLabel: 'local', repoPath: '/a' });
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+
+    const box = layoutBox(h.view);
+    const observer = surfaceObserver(h.view);
+    box.show();
+    await act(async () => {
+      observer.trigger();
+    });
+
+    setFitGeometry(11, 5);
+    box.hide();
+    await act(async () => {
+      h.setActive(false);
+      observer.trigger();
+    });
+
+    setFitGeometry(132, 44);
+    box.show();
+    await act(async () => {
+      h.setActive(true);
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+
+    expect(resizedSizes().filter((s) => s.cols < MIN_PLAUSIBLE_COLS)).toEqual([]);
+    expect(resizedSizes()).toEqual([{ cols: 132, rows: 44 }]);
   });
 });
