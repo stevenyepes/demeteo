@@ -69,6 +69,22 @@ pub fn parse(refs: &str) -> Vec<BranchOption> {
         .collect()
 }
 
+/// The branch a checkout is sitting on, from `rev-parse --abbrev-ref HEAD`.
+///
+/// `None` for a detached HEAD, which that command answers with the literal
+/// `HEAD` — a string that looks exactly like a branch name to anything
+/// rendering it. The same reasoning drops `origin/HEAD` from [`parse`]: what
+/// the user is being shown is a branch they could name, and on a detached HEAD
+/// there is no such name. Saying nothing is the honest answer; saying `HEAD`
+/// reads as a branch called HEAD.
+pub fn head_branch(raw: &str) -> Option<String> {
+    let name = raw.trim();
+    if name.is_empty() || name == "HEAD" {
+        return None;
+    }
+    Some(name.to_string())
+}
+
 #[cfg(test)]
 #[path = "../../tests/domain/branch_listing.rs"]
 mod tests;

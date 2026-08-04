@@ -5,7 +5,7 @@ import type { TerminalBranchOption, TerminalWorktree } from '../types';
 import {
   createTerminalWorktree,
   listTerminalBranches,
-  listTerminalWorktrees,
+  listTerminalLocations,
   removeTerminalWorktree,
 } from '../lib/terminal';
 import { formatError } from '../lib/errors';
@@ -15,7 +15,12 @@ import { WorktreeRow } from './worktree/WorktreeRow';
 /** A terminal target selected by a user. Worktree paths always come from the
  * backend; `main` deliberately leaves directory resolution to the launcher,
  * and `home` carries no repository scope at all — a launcher receiving it must
- * open at the machine's own root rather than anywhere inside the project. */
+ * open at the machine's own root rather than anywhere inside the project.
+ *
+ * `main` carries a null `workBranch` on purpose, and the branch shown beside it
+ * is a *report*, not a request: the main checkout is shared with anything else
+ * using this project, so a session opening there takes the branch it finds
+ * rather than checking one out under whoever else is working in it. */
 export type TerminalWorktreeLocation =
   | { kind: 'main'; workDir: null; workBranch: null }
   | { kind: 'home'; workDir: null; workBranch: null }
@@ -80,6 +85,7 @@ export function TerminalWorktreeLocationPicker({
 }: TerminalWorktreeLocationPickerProps): ReactElement {
   const [menuOpen, setMenuOpen] = useState(false);
   const [worktrees, setWorktrees] = useState<TerminalWorktree[]>([]);
+  const [mainBranch, setMainBranch] = useState<string | null>(null);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [selected, setSelected] = useState<TerminalWorktreeLocation | null>(
     requireSelection ? null : MAIN_LOCATION,
@@ -130,6 +136,7 @@ export function TerminalWorktreeLocationPicker({
     const next = requireSelectionRef.current ? null : MAIN_LOCATION;
     setMenuOpen(false);
     setWorktrees([]);
+    setMainBranch(null);
     setLoadedFor(null);
     setSelected(next);
     setCreatingOpen(false);
@@ -145,10 +152,11 @@ export function TerminalWorktreeLocationPicker({
     setError(null);
     const requestedTarget = `${projectId}:${repositoryId}`;
     try {
-      const result = await listTerminalWorktrees(projectId, repositoryId);
+      const result = await listTerminalLocations(projectId, repositoryId);
       // Changes to props may race the request. Its eventual response is stale.
       if (requestedTarget === currentTargetKey.current) {
-        setWorktrees(result);
+        setWorktrees(result.worktrees);
+        setMainBranch(result.mainBranch);
         setLoadedFor(requestedTarget);
       }
     } catch (err) {
@@ -284,11 +292,16 @@ export function TerminalWorktreeLocationPicker({
     [projectId, repositoryId, targetKey],
   );
 
+  // Only the main checkout's label is conditional on a fetch: the worktrees
+  // name their own branch, and this one is a directory whose branch nothing
+  // here chose. Before the first open there is nothing truthful to add, so it
+  // reads exactly as it did — never a placeholder branch.
+  const mainLabel = mainBranch ? `Main checkout · ${mainBranch}` : 'Main checkout';
   const selectedLabel =
     selected === null
       ? 'Choose a location'
       : selected.kind === 'main'
-        ? 'Main checkout'
+        ? mainLabel
         : selected.kind === 'home'
           ? 'Machine home'
           : (selected.workBranch ?? selected.workDir);
@@ -333,9 +346,22 @@ export function TerminalWorktreeLocationPicker({
             className="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] font-mono text-slate-300 hover:bg-white/5 disabled:opacity-40"
             data-testid="terminal-location-main"
           >
-            <FolderGit2 className="w-3 h-3 text-slate-400" />
-            <span className="flex-1">Main checkout</span>
-            {selected?.kind === 'main' && <Check className="w-3 h-3 text-cyan-400" />}
+            <FolderGit2 className="w-3 h-3 shrink-0 text-slate-400" />
+            <span className="shrink-0">Main checkout</span>
+            {/* Reported, not chosen — see `TerminalWorktreeLocation`. This is
+                the branch the session inherits, and the only place the user
+                can see it before the shell draws its first prompt. */}
+            <span
+              className="min-w-0 flex-1 truncate text-right text-slate-600"
+              data-testid="terminal-location-main-branch"
+            >
+              {mainBranch ? (
+                <>
+                  on <span className="text-slate-400">{mainBranch}</span>
+                </>
+              ) : null}
+            </span>
+            {selected?.kind === 'main' && <Check className="w-3 h-3 shrink-0 text-cyan-400" />}
           </button>
 
           {allowHome && (

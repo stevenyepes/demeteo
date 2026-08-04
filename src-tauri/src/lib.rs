@@ -445,7 +445,7 @@ pub fn run() {
             commands::project::get_workspace_health,
             commands::project::get_project_by_id,
             commands::project::resolve_repo_dir,
-            commands::project::list_terminal_worktrees,
+            commands::project::list_terminal_locations,
             commands::project::list_terminal_branches,
             commands::project::create_terminal_worktree,
             commands::project::remove_terminal_worktree,

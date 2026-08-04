@@ -15,14 +15,14 @@ import type {
   CreateTerminalWorktreeRequest,
   SessionInfo,
   TerminalBranchOptions,
-  TerminalWorktree,
+  TerminalLocations,
 } from "../types";
 import {
   attachTerminalSession,
   createTerminalWorktree,
   detachTerminalSession,
   listTerminalBranches,
-  listTerminalWorktrees,
+  listTerminalLocations,
   listTerminalSessions,
   removeTerminalWorktree,
   renameTerminalSession,
@@ -124,23 +124,38 @@ describe("listTerminalSessions", () => {
   });
 });
 
-describe("listTerminalWorktrees", () => {
+describe("listTerminalLocations", () => {
   it("lists a project repository's worktrees and maps the wire lock field", async () => {
-    vi.mocked(invoke).mockResolvedValueOnce([
-      { path: "/repos/app", branch: "main", is_locked: false },
-      { path: "/repos/app/feature", branch: null, is_locked: true },
-    ]);
+    vi.mocked(invoke).mockResolvedValueOnce({
+      main_branch: "chore/left-here",
+      worktrees: [
+        { path: "/repos/app", branch: "main", is_locked: false },
+        { path: "/repos/app/feature", branch: null, is_locked: true },
+      ],
+    });
 
-    const result = await listTerminalWorktrees("project_1", "repository_1");
+    const result = await listTerminalLocations("project_1", "repository_1");
 
-    expect(invoke).toHaveBeenCalledWith("list_terminal_worktrees", {
+    expect(invoke).toHaveBeenCalledWith("list_terminal_locations", {
       projectId: "project_1",
       repositoryId: "repository_1",
     });
-    expect(result).toEqual([
-      { path: "/repos/app", branch: "main", isLocked: false },
-      { path: "/repos/app/feature", branch: null, isLocked: true },
-    ] satisfies TerminalWorktree[]);
+    expect(result).toEqual({
+      mainBranch: "chore/left-here",
+      worktrees: [
+        { path: "/repos/app", branch: "main", isLocked: false },
+        { path: "/repos/app/feature", branch: null, isLocked: true },
+      ],
+    } satisfies TerminalLocations);
+  });
+
+  it("carries a detached main checkout through as no branch at all", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ main_branch: null, worktrees: [] });
+
+    expect(await listTerminalLocations("project_1", "repository_1")).toEqual({
+      mainBranch: null,
+      worktrees: [],
+    } satisfies TerminalLocations);
   });
 });
 

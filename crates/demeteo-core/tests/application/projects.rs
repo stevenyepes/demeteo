@@ -43,6 +43,10 @@ enum WorktreeCall {
         machine: Option<String>,
         repo_dir: String,
     },
+    HeadBranch {
+        machine: Option<String>,
+        repo_dir: String,
+    },
 }
 
 /// Strictly records the calls this policy is allowed to make. Every other
@@ -51,11 +55,18 @@ enum WorktreeCall {
 struct RecordingWorktrees {
     calls: Arc<Mutex<Vec<WorktreeCall>>>,
     expected_calls: Mutex<Vec<WorktreeCall>>,
+    /// What `get_head_branch` answers — raw, exactly as `rev-parse` would, so
+    /// a test can hand over the detached-HEAD spelling git actually emits.
+    head: Mutex<Option<String>>,
 }
 
 impl RecordingWorktrees {
     fn expect(&self, call: WorktreeCall) {
         self.expected_calls.lock().unwrap().push(call);
+    }
+
+    fn answer_head(&self, raw: Option<&str>) {
+        *self.head.lock().unwrap() = raw.map(str::to_string);
     }
 
     fn record(&self, call: WorktreeCall) -> Result<(), String> {
@@ -81,8 +92,15 @@ impl WorktreeOpsPort for RecordingWorktrees {
     async fn check_repo_dirty(&self, _: Option<&str>, _: &str) -> Result<(bool, bool), String> {
         panic!("unexpected WorktreeOpsPort call")
     }
-    async fn get_head_branch(&self, _: Option<&str>, _: &str) -> Option<String> {
-        panic!("unexpected WorktreeOpsPort call")
+    async fn get_head_branch(&self, machine: Option<&str>, repo_dir: &str) -> Option<String> {
+        // Returns an answer, never a failure, so an unexpected call has to
+        // panic rather than degrade into the `None` a detached HEAD produces.
+        self.record(WorktreeCall::HeadBranch {
+            machine: machine.map(str::to_string),
+            repo_dir: repo_dir.to_string(),
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
+        self.head.lock().unwrap().clone()
     }
     async fn list_worktrees(&self, _: Option<&str>, _: &str) -> Result<Vec<WorktreeInfo>, String> {
         // The terminal listing must not reach for the unfiltered one: its
@@ -285,6 +303,7 @@ fn context() -> (
     let worktrees = Arc::new(RecordingWorktrees {
         calls: calls.clone(),
         expected_calls: Mutex::new(Vec::new()),
+        head: Mutex::new(Some("chore/left-here-yesterday".to_string())),
     });
     ctx.worktree_ops = worktrees.clone();
     (ctx, worktrees, calls)
@@ -333,20 +352,98 @@ async fn list_resolves_a_local_project_repository_before_calling_the_port() {
         repo_dir: repo_dir.clone(),
         project_root: project_root.clone(),
     });
+    worktree_port.expect(WorktreeCall::HeadBranch {
+        machine: None,
+        repo_dir: repo_dir.clone(),
+    });
 
-    let worktrees = list_terminal_worktrees(&ctx, "p-local".to_string(), "r-local".to_string())
+    let locations = list_terminal_locations(&ctx, "p-local".to_string(), "r-local".to_string())
         .await
         .unwrap();
 
-    assert_eq!(worktrees[0].branch.as_deref(), Some("terminal/existing"));
+    assert_eq!(
+        locations.worktrees[0].branch.as_deref(),
+        Some("terminal/existing")
+    );
     assert_eq!(
         *calls.lock().unwrap(),
-        [WorktreeCall::ListTerminal {
-            machine: None,
-            repo_dir,
-            project_root
-        }],
+        [
+            WorktreeCall::ListTerminal {
+                machine: None,
+                repo_dir: repo_dir.clone(),
+                project_root
+            },
+            WorktreeCall::HeadBranch {
+                machine: None,
+                repo_dir
+            }
+        ],
         "the port needs the project root to anchor the area it classifies against"
+    );
+}
+
+#[tokio::test]
+async fn the_listing_names_the_branch_the_main_checkout_is_on() {
+    let (ctx, worktree_port, _calls) = context();
+    add_project(&ctx, "p-local", "local", None);
+    add_repo(&ctx, "r-local", "p-local", "org/local-repo");
+    let project_root = ctx
+        .workspace_dir
+        .join("projects/p-local")
+        .to_string_lossy()
+        .to_string();
+    let repo_dir = format!("{project_root}/repos/local-repo");
+    worktree_port.expect(WorktreeCall::ListTerminal {
+        machine: None,
+        repo_dir: repo_dir.clone(),
+        project_root,
+    });
+    worktree_port.expect(WorktreeCall::HeadBranch {
+        machine: None,
+        repo_dir,
+    });
+    worktree_port.answer_head(Some("chore/left-here-yesterday\n"));
+
+    let locations = list_terminal_locations(&ctx, "p-local".to_string(), "r-local".to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        locations.main_branch.as_deref(),
+        Some("chore/left-here-yesterday"),
+        "a session opened at the main checkout starts on this branch, and nothing else in the listing says so"
+    );
+}
+
+#[tokio::test]
+async fn a_detached_main_checkout_names_no_branch() {
+    let (ctx, worktree_port, _calls) = context();
+    add_project(&ctx, "p-local", "local", None);
+    add_repo(&ctx, "r-local", "p-local", "org/local-repo");
+    let project_root = ctx
+        .workspace_dir
+        .join("projects/p-local")
+        .to_string_lossy()
+        .to_string();
+    let repo_dir = format!("{project_root}/repos/local-repo");
+    worktree_port.expect(WorktreeCall::ListTerminal {
+        machine: None,
+        repo_dir: repo_dir.clone(),
+        project_root,
+    });
+    worktree_port.expect(WorktreeCall::HeadBranch {
+        machine: None,
+        repo_dir,
+    });
+    worktree_port.answer_head(Some("HEAD"));
+
+    let locations = list_terminal_locations(&ctx, "p-local".to_string(), "r-local".to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        locations.main_branch, None,
+        "git's own word for a detached HEAD would render as a branch by that name"
     );
 }
 
@@ -501,13 +598,18 @@ async fn the_listing_is_the_ports_answer_and_is_not_filtered_again() {
         .join("projects/p-local")
         .to_string_lossy()
         .to_string();
+    let repo_dir = format!("{project_root}/repos/local-repo");
     worktree_port.expect(WorktreeCall::ListTerminal {
         machine: None,
-        repo_dir: format!("{project_root}/repos/local-repo"),
+        repo_dir: repo_dir.clone(),
         project_root,
     });
+    worktree_port.expect(WorktreeCall::HeadBranch {
+        machine: None,
+        repo_dir,
+    });
 
-    let worktrees = list_terminal_worktrees(&ctx, "p-local".to_string(), "r-local".to_string())
+    let locations = list_terminal_locations(&ctx, "p-local".to_string(), "r-local".to_string())
         .await
         .unwrap();
 
@@ -515,12 +617,14 @@ async fn the_listing_is_the_ports_answer_and_is_not_filtered_again() {
     // workspace, as git would after resolving symlinks. Anything comparing it
     // against a locally-derived area would drop it.
     assert_eq!(
-        worktrees
+        locations
+            .worktrees
             .iter()
             .map(|worktree| worktree.branch.as_deref())
             .collect::<Vec<_>>(),
         [Some("terminal/existing")],
-        "the port's answer must reach the caller intact: {worktrees:?}"
+        "the port's answer must reach the caller intact: {:?}",
+        locations.worktrees
     );
 }
 
@@ -531,7 +635,7 @@ async fn unknown_project_or_repository_is_rejected_before_port_io() {
     add_repo(&ctx, "r-known", "p-known", "org/repo");
 
     let missing_project =
-        list_terminal_worktrees(&ctx, "p-missing".to_string(), "r-known".to_string())
+        list_terminal_locations(&ctx, "p-missing".to_string(), "r-known".to_string())
             .await
             .unwrap_err();
     let missing_repo = create_terminal_worktree(
@@ -569,7 +673,7 @@ async fn repository_owned_by_another_project_is_rejected_before_port_io() {
     add_project(&ctx, "p-two", "local", None);
     add_repo(&ctx, "r-two", "p-two", "org/other-repo");
 
-    let error = list_terminal_worktrees(&ctx, "p-one".to_string(), "r-two".to_string())
+    let error = list_terminal_locations(&ctx, "p-one".to_string(), "r-two".to_string())
         .await
         .unwrap_err();
 
