@@ -23,6 +23,10 @@
 //      for a machine you are not sitting at is legitimate; the gate stays at
 //      launch, where which machine will run it is known.
 //
+//   6. A machine with no POSIX shell names the install that is broken and
+//      claims nothing about the commands it never got to ask about. The user
+//      has a working git, so a bare "no shell" would send them auditing PATH.
+//
 // `invoke` is mocked globally in `src/test/setup.ts`; each test scripts it with
 // a per-command router (the `scriptIpc` / `callsTo` idiom from
 // `OverridesTab.test.tsx`).
@@ -54,6 +58,21 @@ const PROBE: CommandProbeReport = {
   ],
   detail: "The project's configured commands name a binary the login shell cannot find: cargo.\nCheck with:\n  bash -l -i -c 'command -v cargo'",
   guidance: 'Run the command below in a *fresh* checkout — that is what this step gets, with no `node_modules` and no `target/`.',
+  blocks_launch: true,
+};
+
+/**
+ * What the engine reports on a Windows machine carrying a MinGit-shaped git:
+ * no shell answered, so no command carries an answer.
+ */
+const NO_SHELL: CommandProbeReport = {
+  machine: 'local',
+  commands: [],
+  detail:
+    'Git is installed on this machine, but Git Bash is not — so there is no POSIX shell to run ' +
+    'the project’s commands with. A MinGit install ships git.exe without it. Install Git for ' +
+    'Windows, or set DEMETEO_BASH_PATH to an existing bash.exe.',
+  guidance: 'Run the command below in a *fresh* checkout.',
   blocks_launch: true,
 };
 
@@ -279,6 +298,23 @@ describe('gating validation', () => {
     await mount({ validationGates: ['lint', 'ghost'] });
     await save();
     expect(lastSavedStrategy()?.validation_gates).toEqual(['lint']);
+  });
+});
+
+describe('a machine with no POSIX shell', () => {
+  it('names the broken install and claims nothing about the commands', async () => {
+    await mount({ probe: NO_SHELL });
+
+    const block = await screen.findByText(/MinGit install/);
+    expect(block).toHaveTextContent(/Git Bash is not/);
+    expect(block).toHaveTextContent(/DEMETEO_BASH_PATH/);
+    // Ruby, because this stops a launch (AGENTS.md §4).
+    expect(block.className).toContain('ruby');
+
+    // Nothing was asked, so nothing is claimed. A row of green ticks beside
+    // commands that cannot run at all is the one lie this panel must not tell.
+    expect(screen.queryByText('resolved')).not.toBeInTheDocument();
+    expect(within(harnessRow('lint')).getByText('not checked')).toBeInTheDocument();
   });
 });
 

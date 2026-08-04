@@ -22,7 +22,7 @@ use std::time::Duration;
 /// The shared strict double, keyed on the command a test *authored* rather than
 /// the `( … ) 2>&1` shape the adapter is handed.
 fn scripted(answers: &[(&str, Result<&str, &str>)]) -> ScriptedExec {
-    ScriptedExec::new(answers).map_keys(|c| wrapped(c))
+    ScriptedExec::new(answers).map_keys(wrapped)
 }
 
 /// The `( … ) 2>&1` shape every baseline command is wrapped in.

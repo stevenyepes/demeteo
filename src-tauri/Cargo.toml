@@ -43,6 +43,12 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Windows-only: reading the two `Environment` keys in `env_path`, because a
+# GUI process's inherited PATH is the one Explorer captured at logon. Same
+# crate and version demeteo-core already depends on; only the feature differs.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

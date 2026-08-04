@@ -11,3 +11,7 @@ pub mod ports;
 pub mod shared;
 pub mod ssh_util;
 pub mod state;
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod support;

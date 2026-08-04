@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufReader, Read, Write};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -111,6 +112,17 @@ impl InteractiveHandle for LocalChildProcess {
 #[cfg(windows)]
 struct WindowsJob(HANDLE);
 
+// SAFETY: a Win32 `HANDLE` is a process-wide kernel-object reference, not a
+// pointer into this process's address space; every operation performed on it
+// here (`SetInformationJobObject`, `TerminateJobObject`, `CloseHandle`) is
+// documented as thread-safe. The wrapper owns it exclusively and closes it
+// exactly once, in `Drop`. Needed because `LocalChildProcess` is handed out as
+// a `Box<dyn InteractiveHandle>`, which the port requires to be `Send + Sync`.
+#[cfg(windows)]
+unsafe impl Send for WindowsJob {}
+#[cfg(windows)]
+unsafe impl Sync for WindowsJob {}
+
 #[cfg(windows)]
 impl WindowsJob {
     fn attach(process: HANDLE) -> Result<Self, String> {
@@ -189,6 +201,17 @@ impl WindowsJob {
     }
 }
 
+/// `tokio::process::Child` exposes its handle as an `Option` rather than
+/// implementing `AsRawHandle`: the handle is gone once the child has been
+/// reaped. Nothing can be confined after that point, and nothing needs to be.
+#[cfg(windows)]
+fn tokio_child_handle(child: &tokio::process::Child) -> Result<HANDLE, String> {
+    child
+        .raw_handle()
+        .map(|handle| handle as HANDLE)
+        .ok_or_else(|| "the child exited before it could be confined to a job".to_string())
+}
+
 #[cfg(windows)]
 impl Drop for WindowsJob {
     fn drop(&mut self) {
@@ -198,17 +221,26 @@ impl Drop for WindowsJob {
     }
 }
 
-/// The `(program, args)` a set of [`ShellOptions`] resolves to. Shared by the
-/// sync and async run paths so the two can never drift into invoking different
-/// shells for the same options.
+/// The `(program, args)` a set of [`ShellOptions`] resolves to.
+///
+/// Split in two because only one half varies by platform: [`shell_args`] is
+/// the program text and is composed by identical code everywhere, while
+/// [`shell_program`] is the file that interprets it. That is the entire
+/// Windows difference — see `docs/WINDOWS_PARITY.md`.
+fn shell_invocation(cmd: &str, opts: &ShellOptions) -> Result<(PathBuf, Vec<String>), String> {
+    Ok((shell_program(opts.login_shell)?, shell_args(cmd, opts)))
+}
+
+/// The argv for one user-authored script body.
 ///
 /// * login shell ⇒ `bash -l -c <body>` (profile sourced), else `sh -c <body>`;
 /// * `env` is exported *inside* the body so it wins over a login profile,
 ///   matching the SSH construction exactly (D2).
 ///
 /// `cwd` is deliberately not baked into the body: the local adapter has a
-/// `current_dir` channel the SSH one lacks.
-fn shell_invocation(cmd: &str, opts: &ShellOptions) -> (&'static str, Vec<String>) {
+/// `current_dir` channel the SSH one lacks. On Windows that is also what keeps
+/// a `C:\…` path out of a body where `\` is an escape character.
+fn shell_args(cmd: &str, opts: &ShellOptions) -> Vec<String> {
     let exports = shell::export_prefix(&opts.env);
     let body = format!(
         "{}{}",
@@ -226,10 +258,64 @@ fn shell_invocation(cmd: &str, opts: &ShellOptions) -> (&'static str, Vec<String
         }
         args.push("-c".to_string());
         args.push(body);
-        ("bash", args)
+        args
     } else {
-        ("sh", vec!["-c".to_string(), body])
+        vec!["-c".to_string(), body]
     }
+}
+
+/// The interpreter that runs the body: bash for a login shell, sh otherwise.
+///
+/// On Unix these stay the bare names `execvp` resolves through `PATH`, exactly
+/// as before. On Windows they are absolute paths inside the Git for Windows
+/// installation [`crate::shared::win::posix_shell`] located, because a bare
+/// `bash` there is `C:\Windows\System32\bash.exe` — the WSL launcher, which
+/// resolves none of the paths Demeteo passes.
+///
+/// The bash/sh split is mirrored rather than collapsed so a local `sh -c` and
+/// a remote `sh -c` remain the same interpreter family.
+#[cfg(not(windows))]
+fn shell_program(login_shell: bool) -> Result<PathBuf, String> {
+    Ok(PathBuf::from(if login_shell { "bash" } else { "sh" }))
+}
+
+#[cfg(windows)]
+fn shell_program(login_shell: bool) -> Result<PathBuf, String> {
+    let shell =
+        crate::shared::win::posix_shell::posix_shell().map_err(|e| no_posix_shell_error(&e))?;
+    Ok(if login_shell {
+        shell.bash.clone()
+    } else {
+        shell.sh.clone()
+    })
+}
+
+/// Marks the one `ExecutionPort` failure that is neither a verdict nor a
+/// broken connection: this machine has no interpreter to run a user-authored
+/// script with.
+///
+/// It travels inside the D3 transport class because the alternative — a bare
+/// `Err` — reads as a non-zero exit, i.e. as the project's own command having
+/// been run and found wanting. But it is not a blip either: every remaining
+/// command on this machine will fail the same way until something is
+/// installed, which is why `adapters::step_executor::preflight` singles it out
+/// instead of treating it as no evidence.
+pub(crate) const NO_POSIX_SHELL_ERROR: &str = "no POSIX shell on this machine: ";
+
+/// Render a failed resolution as that error. Kept out of the `#[cfg(windows)]`
+/// arm above so the Linux host can assert the round trip against the preflight
+/// that has to recognise it — no Windows toolchain exists here to observe it
+/// any other way.
+#[cfg(any(windows, test))]
+pub(crate) fn no_posix_shell_error(
+    missing: &crate::shared::win::posix_shell::ShellMissing,
+) -> String {
+    format!(
+        "{}{}{}",
+        crate::ports::execution::TRANSPORT_ERROR_PREFIX,
+        NO_POSIX_SHELL_ERROR,
+        missing
+    )
 }
 
 /// Apply the non-argument half of `opts` to a spawned child.
@@ -291,7 +377,7 @@ async fn local_run_program(request: ProgramRequest) -> Result<String, String> {
         .spawn()
         .map_err(|e| format!("Failed to execute '{}': {}", request.executable, e))?;
     #[cfg(windows)]
-    let _job = WindowsJob::attach(child.as_raw_handle() as HANDLE)?;
+    let _job = WindowsJob::attach(tokio_child_handle(&child)?)?;
     let mut stdout = child
         .stdout
         .take()
@@ -340,6 +426,14 @@ async fn local_run_program(request: ProgramRequest) -> Result<String, String> {
 /// still gets `kill_on_drop`'s direct-child kill, which is the correct floor.
 struct KillGroupOnDrop {
     pid: Option<u32>,
+    #[cfg_attr(
+        not(unix),
+        expect(
+            dead_code,
+            reason = "the group kill it arms is the Unix arm of Drop; Windows takes the tree \
+                      through the job object instead"
+        )
+    )]
     own_session: bool,
 }
 
@@ -378,7 +472,7 @@ impl Drop for KillGroupOnDrop {
 async fn local_run_command_async(cmd: &str, opts: &ShellOptions) -> Result<String, String> {
     use tokio::io::AsyncReadExt;
 
-    let (program, args) = shell_invocation(cmd, opts);
+    let (program, args) = shell_invocation(cmd, opts)?;
     let mut command = tokio::process::Command::new(program);
     command.args(&args);
     configure_child(command.as_std_mut(), opts);
@@ -393,7 +487,7 @@ async fn local_run_command_async(cmd: &str, opts: &ShellOptions) -> Result<Strin
         .spawn()
         .map_err(|e| format!("Failed to execute command: {}", e))?;
     #[cfg(windows)]
-    let _job = WindowsJob::attach(child.as_raw_handle() as HANDLE)?;
+    let _job = WindowsJob::attach(tokio_child_handle(&child)?)?;
     let mut guard = KillGroupOnDrop {
         pid: child.id(),
         own_session: opts.interactive,
@@ -775,11 +869,12 @@ impl ExecutionPort for LocalSubprocessAdapter {
 
     async fn resolve_home(&self, _machine_id: &str) -> Result<String, String> {
         #[cfg(windows)]
-        let home = std::env::var("USERPROFILE").or_else(|_| {
-            let drive = std::env::var("HOMEDRIVE")?;
-            let path = std::env::var("HOMEPATH")?;
-            Ok(format!("{}{}", drive, path))
-        });
+        let home =
+            std::env::var("USERPROFILE").or_else(|_| -> Result<String, std::env::VarError> {
+                let drive = std::env::var("HOMEDRIVE")?;
+                let path = std::env::var("HOMEPATH")?;
+                Ok(format!("{}{}", drive, path))
+            });
         #[cfg(not(windows))]
         let home = std::env::var("HOME");
         let home =

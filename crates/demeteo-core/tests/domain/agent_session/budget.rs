@@ -46,8 +46,10 @@ fn the_documented_role_ceilings_hold_at_the_engine_default() {
 /// is the only one at full base.
 #[test]
 fn the_bounded_roles_stay_below_the_coding_turn() {
-    assert!(BUDGET_FRACTION_TRIAGE < BUDGET_FRACTION_FINALIZE);
-    assert!(BUDGET_FRACTION_FINALIZE < BUDGET_FRACTION_VERIFIER);
-    assert!(BUDGET_FRACTION_VERIFIER < BUDGET_FRACTION_PLANNER);
-    assert!(BUDGET_FRACTION_PLANNER < 1.0);
+    const {
+        assert!(BUDGET_FRACTION_TRIAGE < BUDGET_FRACTION_FINALIZE);
+        assert!(BUDGET_FRACTION_FINALIZE < BUDGET_FRACTION_VERIFIER);
+        assert!(BUDGET_FRACTION_VERIFIER < BUDGET_FRACTION_PLANNER);
+        assert!(BUDGET_FRACTION_PLANNER < 1.0);
+    }
 }

@@ -24,9 +24,14 @@ pub struct TrustedWorktreeTarget {
 impl TrustedWorktreeTarget {
     /// Construct a target after project/repository ownership and host selection
     /// have been resolved by application policy.
-    #[expect(
-        dead_code,
-        reason = "the port is a designed contract with no production caller yet"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the port is a designed contract with no production caller yet; a \
+                      cfg(test) caller fulfils it under --all-targets and would make the \
+                      expectation itself the lint"
+        )
     )]
     pub(crate) fn from_resolved(
         machine_id: Option<String>,

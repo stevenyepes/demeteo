@@ -2,13 +2,13 @@
 // (mirrored-tests convention). `super` resolves to that module.
 
 use super::*;
+use crate::adapters::local::execution::no_posix_shell_error;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::models::WorktreeStrategy;
 use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
+use crate::shared::win::posix_shell::ShellMissing;
 
-#[path = "../../support/preflight_strategy.rs"]
-mod preflight_strategy;
-use preflight_strategy::strategy;
+use crate::support::preflight_strategy::strategy;
 
 // ── probe_configured_commands ────────────────────────────────────────────────
 
@@ -135,6 +135,74 @@ async fn a_transport_failure_never_blocks_the_launch() {
     assert!(
         v.permits_launch(),
         "a transport failure is not evidence about the binary; got {v:?}"
+    );
+}
+
+/// The MinGit machine: a working `git.exe`, no `bash.exe`, so the probe cannot
+/// be asked at all. Built through the adapter's own constructor rather than a
+/// hand-written string, which is what makes this a round trip: the producer and
+/// the classifier are in different modules and only the two together are the
+/// behaviour.
+fn no_shell_error() -> String {
+    no_posix_shell_error(&ShellMissing::GitWithoutBash {
+        git_roots: vec!["C:/Program Files/Git".into()],
+        searched: vec!["C:/Program Files/Git/bin/bash.exe".into()],
+    })
+}
+
+#[tokio::test]
+async fn a_machine_with_no_posix_shell_blocks_instead_of_accusing_the_toolchain() {
+    let err = no_shell_error();
+    let exec = ScriptedExec::new(&[
+        ("command -v npm", Err(&err)),
+        ("command -v cargo", Err(&err)),
+    ]);
+    let v = probe_configured_commands(
+        &exec,
+        "local",
+        "/repo",
+        &test_only("npm test && cargo test"),
+        T,
+    )
+    .await;
+
+    assert_eq!(v, PreflightVerdict::MissingPosixShell);
+    assert!(!v.permits_launch());
+    assert_eq!(v.phase_status(), "failed");
+    assert_eq!(
+        exec.commands(),
+        vec!["command -v npm".to_string()],
+        "the second probe asks the same absent shell the same question"
+    );
+    assert_ne!(
+        v,
+        PreflightVerdict::MissingBinaries {
+            missing: vec!["npm".into(), "cargo".into()]
+        },
+        "naming the tools would send the user installing things they have"
+    );
+}
+
+#[tokio::test]
+async fn the_settings_panel_marks_a_shell_less_machine_without_reporting_binaries() {
+    let err = no_shell_error();
+    let exec = ScriptedExec::new(&[
+        ("command -v npm", Err(&err)),
+        ("command -v cargo", Err(&err)),
+    ]);
+    let report = probe_project_commands(
+        &exec,
+        "local",
+        &strategy(Some("npm ci"), Some("cargo test"), &[]),
+        T,
+    )
+    .await;
+
+    assert!(report.blocks_launch);
+    assert!(
+        report.commands.is_empty(),
+        "nothing was asked, so no command may render as checked: {:?}",
+        report.commands
     );
 }
 

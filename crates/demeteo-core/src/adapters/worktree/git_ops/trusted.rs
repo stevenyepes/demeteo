@@ -5,7 +5,9 @@
 //! race. On Unix the directory file descriptor stays open through `exec`, and
 //! the child changes directory by descriptor immediately before Git starts.
 
-use super::{git_request_vec, GitOpsHelper};
+#[cfg(unix)]
+use super::git_request_vec;
+use super::GitOpsHelper;
 use crate::ports::worktree_ops::{
     CreateTrustedTerminalWorktreeRequest, DependencyCacheMaterialization,
     MaterializeDependencyCacheRequest, RemoveTrustedTerminalWorktreeRequest,

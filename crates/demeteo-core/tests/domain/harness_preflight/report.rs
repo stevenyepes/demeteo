@@ -7,9 +7,7 @@
 use super::*;
 use crate::domain::harness_preflight::commands::configured_commands;
 
-#[path = "../../support/preflight_strategy.rs"]
-mod preflight_strategy;
-use preflight_strategy::strategy;
+use crate::support::preflight_strategy::strategy;
 
 #[test]
 fn every_probed_command_is_attributed_to_the_setting_it_came_from() {
@@ -145,6 +143,25 @@ fn the_report_carries_the_launch_blocking_string_verbatim() {
     let report = attribute_verdict(&s, "local", &verdict);
     assert_eq!(report.detail, verdict.detail());
     assert!(report.detail.unwrap().contains("bash -l -i -c"));
+}
+
+#[test]
+fn no_posix_shell_claims_nothing_about_any_command() {
+    // Every other verdict's empty `missing` set means "all resolved". Here it
+    // means the shell that would have answered is not there, and painting three
+    // green ticks beside commands that cannot run at all is the one lie this
+    // panel must never tell.
+    let s = strategy(
+        Some("npm ci"),
+        Some("npm test"),
+        &[("lint", "npm run lint")],
+    );
+    let verdict = PreflightVerdict::MissingPosixShell;
+    let report = attribute_verdict(&s, "local", &verdict);
+
+    assert!(report.commands.is_empty());
+    assert!(report.blocks_launch);
+    assert_eq!(report.detail, verdict.detail());
 }
 
 #[test]

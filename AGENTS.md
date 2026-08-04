@@ -259,6 +259,29 @@ Run them when you touch an `ExecutionPort` impl, the step executor, or anything 
 transport observes. **The e2e suite will not catch this** — it drives a per-test
 `FakeExec` that passes while masking exactly the drift these suites exist to find.
 
+### Windows is invisible to every gate above
+
+`checks.sh` compiles for the host only, so nothing it runs ever parses a
+`#[cfg(windows)]` body past name resolution. That is how the first native-Windows
+commit reached this tree carrying six Windows compile errors while local checks
+were green. When you touch anything behind a `cfg(windows)`:
+
+```bash
+scripts/check-windows.sh        # cargo check, x86_64-pc-windows-gnu, via mingw-w64
+```
+
+It skips with exit 0 when mingw-w64 or the rustup target is absent, so a green run
+on a machine without them means *nothing was checked* — read its output, not just
+its status. It uses the `gnu` target because MSVC's C dependencies do not
+cross-compile from Linux; that shares the whole `cfg(windows)` surface but not MSVC
+linkage, so it proves the source is coherent, not that the shipped artifact links.
+`windows-latest` in `pr-checks.yml` stays the authority.
+
+The deeper rule this enforces: **a decision behind a `cfg` is a decision no local
+test can reach.** Keep candidate ordering, path derivation, and probe interpretation
+in `cfg`-free functions covered on Linux, and leave only the syscall behind the
+`cfg` — see `shared/win/` for the shape.
+
 Fix any failure before handing back.
 
 When your change has UI or runtime surface, smoke-test with `npm run dev:tauri` — **not**

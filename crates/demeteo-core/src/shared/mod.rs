@@ -18,6 +18,7 @@ pub mod proc;
 pub mod secret_scrub;
 pub mod shell;
 pub mod time;
+pub mod win;
 
 // `paths.rs` lives at the crate root for now (Phase A migration).
 // During Phase D it will move here as a sibling.

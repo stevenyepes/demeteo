@@ -9,12 +9,17 @@
 //! process can tell you whether it died.
 
 use super::*;
-use crate::ports::execution::{ProgramRequest, TIMEOUT_ERROR_PREFIX};
+use crate::ports::execution::{ProgramRequest, TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
+use crate::shared::win::posix_shell::ShellMissing;
 use std::time::{Duration, Instant};
 
 /// `interactive` is what makes the child a session leader (`setsid`), which is
 /// what makes the process-group kill safe — and it is what every `command`
 /// node uses, via `harness_shell_options`.
+///
+/// Every caller is a `#[cfg(unix)]` test that spawns a real shell, so on
+/// Windows this has none.
+#[cfg(unix)]
 fn harness_opts(timeout: Option<Duration>) -> ShellOptions {
     ShellOptions {
         timeout,
@@ -104,7 +109,7 @@ async fn a_windows_program_request_preserves_argv_cwd_and_environment_with_space
 
     let _ = std::fs::remove_dir_all(&cwd);
     assert!(out.starts_with("value with spaces|present|"), "got: {out}");
-    assert!(out.contains(&cwd.to_string_lossy()), "got: {out}");
+    assert!(out.contains(cwd.to_string_lossy().as_ref()), "got: {out}");
 }
 
 #[cfg(windows)]
@@ -332,6 +337,94 @@ async fn output_larger_than_a_pipe_buffer_does_not_deadlock() {
         .await
         .expect("a chatty command still completes");
     assert!(out.len() > 100_000, "got {} bytes", out.len());
+}
+
+// ── what the shell is invoked as ─────────────────────────────────────────────
+//
+// `shell_args` carries no `#[cfg]` and these tests carry none either: the body
+// and its argv are the part that must be byte-identical on all three desktop
+// targets and on the always-Linux runner, so a platform-conditional assertion
+// about them would be asserting the wrong thing. Only the program half varies,
+// and only its Unix answer is assertable from here — no Windows toolchain runs
+// on the development host.
+
+#[test]
+fn an_interactive_login_shell_is_l_i_c_with_job_control_off_and_env_inside_the_body() {
+    let mut opts = ShellOptions::login_interactive();
+    opts.env.insert("TOKEN".to_string(), "s'quote".to_string());
+
+    assert_eq!(
+        shell_args("npm test", &opts),
+        vec![
+            "-l",
+            "-i",
+            "-c",
+            "set +m; export TOKEN='s'\\''quote'; npm test"
+        ]
+    );
+}
+
+#[test]
+fn a_non_interactive_login_shell_drops_the_i_and_the_job_control_prefix() {
+    assert_eq!(
+        shell_args("npm test", &ShellOptions::login()),
+        vec!["-l", "-c", "npm test"]
+    );
+}
+
+#[test]
+fn a_plain_shell_is_c_and_the_body_alone() {
+    assert_eq!(
+        shell_args("npm test", &ShellOptions::default()),
+        vec!["-c", "npm test"]
+    );
+}
+
+#[test]
+fn the_working_directory_never_reaches_the_body() {
+    // `current_dir` carries it instead. A Windows path in the body would be a
+    // string of escape sequences to bash, and the SSH adapter — which has no
+    // such channel — is the reason the two constructions are shared at all.
+    let opts = ShellOptions {
+        cwd: Some(r"C:\work\demeteo".to_string()),
+        ..ShellOptions::login_interactive()
+    };
+    assert_eq!(
+        shell_args("npm test", &opts),
+        vec!["-l", "-i", "-c", "set +m; npm test"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn on_unix_the_program_is_the_bare_name_execvp_resolves() {
+    let (program, args) = shell_invocation("npm test", &ShellOptions::login_interactive())
+        .expect("a Unix host always has a shell to name");
+    assert_eq!(program, PathBuf::from("bash"));
+    assert_eq!(args, vec!["-l", "-i", "-c", "set +m; npm test"]);
+
+    let (program, args) = shell_invocation("npm test", &ShellOptions::default())
+        .expect("a Unix host always has a shell to name");
+    assert_eq!(program, PathBuf::from("sh"));
+    assert_eq!(args, vec!["-c", "npm test"]);
+}
+
+#[test]
+fn an_unresolvable_shell_reads_as_a_transport_failure_never_as_an_exit_code() {
+    // D3: the command did not run, so it has no verdict. Anything unprefixed
+    // here would be read as the project's own command having failed, and the
+    // rework loop would hand an agent code to fix that was never executed.
+    let err = no_posix_shell_error(&ShellMissing::NoGitForWindows { searched: vec![] });
+
+    assert!(err.starts_with(TRANSPORT_ERROR_PREFIX), "got: {err}");
+    assert!(
+        err[TRANSPORT_ERROR_PREFIX.len()..].starts_with(NO_POSIX_SHELL_ERROR),
+        "the preflight matches on this position; got: {err}"
+    );
+    assert!(
+        err.contains("no Git for Windows"),
+        "which of the several failures happened must survive: {err}"
+    );
 }
 
 #[tokio::test]

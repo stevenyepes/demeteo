@@ -636,7 +636,8 @@ impl GitOpsHelper {
                 },
             )
             .await
-            .map_err(|error| format!("scope: restore Windows ACL snapshot failed: {}", error))
+            .map_err(|error| format!("scope: restore Windows ACL snapshot failed: {}", error))?;
+        Ok(())
     }
 }
 
