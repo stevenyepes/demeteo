@@ -18,7 +18,7 @@
  * opened after an app restart still spawns at the right width (the in-memory
  * singleton resets on restart; the persisted value survives).
  *
- * Why a plausibility floor guards every write *and* every read: a surface that
+ * Why plausibility bounds guard every write *and* every read: a surface that
  * measures itself from inside a `display:none` subtree still measures. There,
  * `getComputedStyle` hands back the *computed* value of a `w-full`/`h-full`
  * box — the literal string `"100%"` — which FitAddon's `proposeDimensions()`
@@ -32,19 +32,44 @@ const STORAGE_KEY = 'demeteo.terminal.lastSize';
 
 type Size = { cols: number; rows: number };
 
-/** Smallest (cols, rows) a genuinely-laid-out Demeteo terminal can fit to. */
+/**
+ * Smallest (cols, rows) a genuinely-laid-out Demeteo terminal can fit to.
+ * Each dimension has to bind on its own: the boxless measurement is 11 × 5, so
+ * a row floor at 5 would admit it and leave the column bound doing all the
+ * work — a floor that cannot reject anything the other one doesn't.
+ *
+ * Same values as `MIN_PTY_COLS`/`MIN_PTY_ROWS` in
+ * src-tauri/src/terminal/model.rs, and they have to stay that way. A size this
+ * side admits but the backend refuses is cached here, persisted, and spawned
+ * at 80x24 while xterm renders the size it measured.
+ */
 export const MIN_PLAUSIBLE_COLS = 20;
-export const MIN_PLAUSIBLE_ROWS = 5;
+export const MIN_PLAUSIBLE_ROWS = 10;
+
+/**
+ * Largest either dimension may be. Mirrors `MAX_PTY_DIM` in
+ * src-tauri/src/terminal/model.rs, where the ceiling is what makes the `as u16`
+ * narrowing a PTY resize requires lossless. Without the same ceiling on this
+ * side a size the frontend considers legal to *spawn* at — cached here,
+ * persisted, and handed to `start_terminal_session` — is one the backend then
+ * refuses to resize to, leaving the PTY at whatever geometry it already had.
+ */
+export const MAX_PLAUSIBLE_DIM = 1000;
 
 /**
  * The single rule for "is this a real fit?" — synchronous and DOM-free so it
  * is reachable from anywhere a size is about to be trusted.
  *
- * Stated as two positive bounds rather than a negated comparison: `NaN` fails
- * both, where `!(cols < MIN)` would accept it.
+ * Each dimension is stated as two positive bounds rather than a negated
+ * comparison: `NaN` fails both, where `!(cols < MIN)` would accept it.
  */
 export function isPlausibleTerminalSize(cols: number, rows: number): boolean {
-  return cols >= MIN_PLAUSIBLE_COLS && rows >= MIN_PLAUSIBLE_ROWS;
+  return (
+    cols >= MIN_PLAUSIBLE_COLS &&
+    cols <= MAX_PLAUSIBLE_DIM &&
+    rows >= MIN_PLAUSIBLE_ROWS &&
+    rows <= MAX_PLAUSIBLE_DIM
+  );
 }
 
 /**

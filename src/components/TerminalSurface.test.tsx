@@ -6,6 +6,7 @@ import { TerminalSurface, type TerminalSurfaceProps } from './TerminalSurface';
 import { getLastTerminalSize, setLastTerminalSize } from '../lib/terminalViewport';
 import {
   DEFAULT_FIT_COLS,
+  DEFAULT_FIT_ROWS,
   fitAddonStubs,
   resizeObserverStubs,
   setFitGeometry,
@@ -111,6 +112,86 @@ describe('TerminalSurface geometry', () => {
     expect(resizeInvokes()).toHaveLength(0);
     expect(getLastTerminalSize()).toEqual(cachedBefore);
     expect(localStorage.getItem('demeteo.terminal.lastSize')).toBe(persistedBefore);
+  });
+
+  it('leaves the buffer alone when the proposed fit is implausible', async () => {
+    setLastTerminalSize(120, 40);
+    // The 11 × 5 a boxless surface proposes, reached here with a layout box so
+    // the boxless guard is not what refuses it. Asserting on the *buffer*, not
+    // on the PTY message: `fit()` reflows the terminal itself, so a size caught
+    // only after the fit has already been applied to what the user is looking at.
+    setFitGeometry(11, 5);
+
+    const view = await act(async () => renderSurface({ visible: true }));
+    giveContainerLayoutBox(view);
+
+    await act(async () => {
+      resizeObserverStubs[0]?.trigger();
+    });
+
+    const term = terminalStubs[0];
+    expect(fitAddonStubs[0]?.fit).not.toHaveBeenCalled();
+    expect(term.cols).toBe(DEFAULT_FIT_COLS);
+    expect(term.rows).toBe(DEFAULT_FIT_ROWS);
+    expect(resizeInvokes()).toHaveLength(0);
+  });
+
+  it('retries a geometry the backend refused', async () => {
+    setLastTerminalSize(100, 30);
+    setFitGeometry(100, 30);
+
+    const view = await act(async () => renderSurface({ visible: true }));
+    giveContainerLayoutBox(view);
+
+    // `checked_pty_size` refuses a geometry outside the backend's bounds. The
+    // surface must not remember a refused size as delivered: the equality skip
+    // would then swallow every later fit that lands on it again.
+    vi.mocked(invoke).mockImplementationOnce((cmd: string) =>
+      cmd === 'resize_terminal_session'
+        ? Promise.reject(new Error('Refused: implausible terminal size'))
+        : Promise.reject(new Error(`unexpected command: ${cmd}`)),
+    );
+
+    setFitGeometry(132, 44);
+    await act(async () => {
+      resizeObserverStubs[0]?.trigger();
+    });
+    await act(async () => {
+      resizeObserverStubs[0]?.trigger();
+    });
+
+    expect(resizeInvokes()).toEqual([
+      ['resize_terminal_session', { sessionId: 'sess-1', cols: 132, rows: 44 }],
+      ['resize_terminal_session', { sessionId: 'sess-1', cols: 132, rows: 44 }],
+    ]);
+  });
+});
+
+describe('TerminalSurface reconnect', () => {
+  it('pushes the geometry back onto the rebuilt PTY', async () => {
+    // Steady state before the drop: the session was spawned at the size this
+    // surface fits to, so nothing has ever been sent.
+    setLastTerminalSize(120, 40);
+    setFitGeometry(120, 40);
+
+    const view = await act(async () => renderSurface({ phase: 'disconnected', visible: true }));
+    giveContainerLayoutBox(view);
+
+    await act(async () => {
+      resizeObserverStubs[0]?.trigger();
+    });
+    expect(resizeInvokes()).toHaveLength(0);
+
+    // `reconnect_terminal_session` built a fresh PTY at the backend's 80 × 24
+    // fallback and reported the session running again. Same surface, same
+    // session id, nothing remounts.
+    await act(async () => {
+      view.rerender(surface({ phase: 'running', visible: true }));
+    });
+
+    expect(resizeInvokes()).toEqual([
+      ['resize_terminal_session', { sessionId: 'sess-1', cols: 120, rows: 40 }],
+    ]);
   });
 });
 

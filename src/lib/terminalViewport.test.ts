@@ -33,6 +33,28 @@ describe('isPlausibleTerminalSize', () => {
     expect(isPlausibleTerminalSize(-5, 10)).toBe(false);
     expect(isPlausibleTerminalSize(Number.NaN, 24)).toBe(false);
   });
+
+  it('rejects a wide geometry too short to lay out', async () => {
+    const { isPlausibleTerminalSize, MIN_PLAUSIBLE_ROWS } = await freshModule();
+    // Plenty of columns, so the column bound cannot be what rejects these —
+    // without a row floor above the boxless 5 this passes and the backend then
+    // refuses the resize it produces.
+    expect(isPlausibleTerminalSize(200, 5)).toBe(false);
+    expect(isPlausibleTerminalSize(200, MIN_PLAUSIBLE_ROWS - 1)).toBe(false);
+    expect(isPlausibleTerminalSize(200, MIN_PLAUSIBLE_ROWS)).toBe(true);
+    expect(MIN_PLAUSIBLE_ROWS).toBe(10);
+  });
+
+  it('rejects a size the backend would refuse to resize a PTY to', async () => {
+    const { isPlausibleTerminalSize, MAX_PLAUSIBLE_DIM } = await freshModule();
+    // The ceiling is the backend's `MAX_PTY_DIM`. A size accepted here is one
+    // `open()` spawns at and `resize_terminal_session` is then asked for, so
+    // the two rules have to agree or the PTY silently keeps its old geometry.
+    expect(MAX_PLAUSIBLE_DIM).toBe(1000);
+    expect(isPlausibleTerminalSize(MAX_PLAUSIBLE_DIM, MAX_PLAUSIBLE_DIM)).toBe(true);
+    expect(isPlausibleTerminalSize(MAX_PLAUSIBLE_DIM + 1, 40)).toBe(false);
+    expect(isPlausibleTerminalSize(120, MAX_PLAUSIBLE_DIM + 1)).toBe(false);
+  });
 });
 
 describe('setLastTerminalSize', () => {
@@ -43,6 +65,7 @@ describe('setLastTerminalSize', () => {
     const persisted = localStorage.getItem(STORAGE_KEY);
 
     setLastTerminalSize(11, 5);
+    setLastTerminalSize(4000, 40);
 
     expect(getLastTerminalSize()).toEqual({ cols: 120, rows: 40 });
     expect(localStorage.getItem(STORAGE_KEY)).toBe(persisted);

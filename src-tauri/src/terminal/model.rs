@@ -124,19 +124,29 @@ pub(crate) const SCROLLBACK_MAX_BYTES: usize = 256 * 1024;
 pub(crate) const DEFAULT_TERM_COLS: u16 = 80;
 pub(crate) const DEFAULT_TERM_ROWS: u16 = 24;
 
-/// Bounds a geometry must sit inside before it reaches a live PTY.
+/// Bounds a geometry must sit inside before it reaches a PTY — one already
+/// live, or one about to be spawned. Both commands that set PTY geometry are
+/// held to them: `resize_terminal_session` through [`checked_pty_size`],
+/// `start_terminal_session` through [`spawn_pty_size`]. One decision, so the
+/// two cannot drift apart into a size resize refuses but spawn accepts.
 ///
-/// The floor sits above the degenerate sizes a frontend surface can measure
+/// Each floor sits above the degenerate sizes a frontend surface can measure
 /// while it has no layout box (an 11x5 has been observed) and below any
-/// viewport a user can actually see, so a resize a human did not ask for is
-/// refused rather than repainting the agent's TUI into eleven columns. The
-/// ceiling is what makes the `as u16` narrowing that [`PtySize`] requires
+/// viewport a user can actually see — every Demeteo terminal is a `flex-1`
+/// pane hundreds of pixels tall, so a real fit clears both by an order of
+/// magnitude. Each dimension has to bind on its own: a floor the observed
+/// degenerate size already satisfies is inert, and leaves the other dimension
+/// as the only thing between a boxless measurement and the agent's TUI. Ten
+/// rows is roughly the shortest pane a full-screen program (vim, less) can
+/// still lay out, and twice the height a boxless fit reports.
+///
+/// The ceiling is what makes the `as u16` narrowing that [`PtySize`] requires
 /// lossless: without it a 100_000-column request wraps to 34_464 and the PTY
 /// is resized to a geometry nobody asked for.
 ///
 /// [`PtySize`]: portable_pty::PtySize
 pub(crate) const MIN_PTY_COLS: u32 = 20;
-pub(crate) const MIN_PTY_ROWS: u32 = 5;
+pub(crate) const MIN_PTY_ROWS: u32 = 10;
 pub(crate) const MAX_PTY_DIM: u32 = 1000;
 
 /// `Some((cols, rows))` when the geometry is plausible for a live PTY, `None`
@@ -146,6 +156,21 @@ pub fn checked_pty_size(cols: u32, rows: u32) -> Option<(u16, u16)> {
     let in_range = (MIN_PTY_COLS..=MAX_PTY_DIM).contains(&cols)
         && (MIN_PTY_ROWS..=MAX_PTY_DIM).contains(&rows);
     in_range.then_some((cols as u16, rows as u16))
+}
+
+/// The geometry a session starts at: the caller's measurement when it clears
+/// [`checked_pty_size`], the 80x24 fallback otherwise.
+///
+/// Spawn falls back where resize refuses, because the two failures are not the
+/// same event: a refused resize leaves a session drawing at the good geometry
+/// it already had, while a refused spawn is a terminal the user asked for and
+/// did not get. A half-supplied size takes the fallback too — a geometry is a
+/// pair, and one plausible dimension says nothing about the surface the other
+/// was measured from.
+pub fn spawn_pty_size(cols: Option<u16>, rows: Option<u16>) -> (u16, u16) {
+    cols.zip(rows)
+        .and_then(|(c, r)| checked_pty_size(c as u32, r as u32))
+        .unwrap_or((DEFAULT_TERM_COLS, DEFAULT_TERM_ROWS))
 }
 
 /// Per-session output fan-out with a bounded scrollback buffer, all
@@ -399,5 +424,37 @@ mod tests {
     #[test]
     fn rejects_a_geometry_that_would_wrap_the_u16_narrowing() {
         assert_eq!(checked_pty_size(100_000, 40), None);
+    }
+
+    /// Pins the row floor on its own. `rejects_a_boxless_measurement` cannot:
+    /// its column count fails first, so the row bound could be anything.
+    #[test]
+    fn rejects_a_wide_geometry_too_short_to_lay_out() {
+        assert_eq!(checked_pty_size(200, 5), None);
+    }
+
+    #[test]
+    fn spawns_at_a_real_viewport() {
+        assert_eq!(spawn_pty_size(Some(120), Some(40)), (120, 40));
+    }
+
+    #[test]
+    fn spawns_at_the_default_for_a_boxless_measurement() {
+        assert_eq!(
+            spawn_pty_size(Some(11), Some(5)),
+            (DEFAULT_TERM_COLS, DEFAULT_TERM_ROWS)
+        );
+    }
+
+    #[test]
+    fn spawns_at_the_default_when_unmeasured() {
+        assert_eq!(
+            spawn_pty_size(None, None),
+            (DEFAULT_TERM_COLS, DEFAULT_TERM_ROWS)
+        );
+        assert_eq!(
+            spawn_pty_size(Some(120), None),
+            (DEFAULT_TERM_COLS, DEFAULT_TERM_ROWS)
+        );
     }
 }

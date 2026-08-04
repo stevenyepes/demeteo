@@ -41,6 +41,28 @@ const XTERM_THEME = {
   white: '#f8fafc',
 } as const;
 
+/**
+ * Fit, but only when the geometry the fit *would* land on is one we would be
+ * willing to keep. Reports whether the terminal was fitted.
+ *
+ * The check has to happen on the proposal: `FitAddon.fit()` calls
+ * `terminal.resize()` itself, so a size rejected after `fit()` returns has
+ * already reflowed the buffer to the bogus geometry, and refusing to forward it
+ * to the PTY hides none of the visible damage. `proposeDimensions()` is the
+ * same computation with no side effect; it answers `undefined` before the
+ * renderer has measured a cell.
+ */
+function fitIfPlausible(fit: FitAddon): boolean {
+  const proposed = fit.proposeDimensions();
+  if (!proposed) return false;
+  if (!isPlausibleTerminalSize(proposed.cols, proposed.rows)) {
+    console.warn('[TerminalSurface] implausible fit, ignoring:', proposed.cols, proposed.rows);
+    return false;
+  }
+  fit.fit();
+  return true;
+}
+
 export interface TerminalSurfaceProps {
   /** Frontend-minted stable id (spec §7 Q1). Surfaced via
    *  `data-tab-id` so tests can target the surface without coupling to
@@ -117,6 +139,7 @@ export function TerminalSurface({
   // prompt startup is what duplicated the command line (see terminalViewport).
   const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const wasVisibleRef = useRef<boolean>(visible);
+  const wasRunningRef = useRef<boolean>(phase === 'running');
 
   // The first byte after a fresh attach can race the layout flush;
   // show a transient status badge so the user sees the panel has work
@@ -139,13 +162,9 @@ export function TerminalSurface({
     // Terminals route is hidden.
     if (!hasLayoutBox(containerRef.current)) return;
     try {
-      fit.fit();
+      if (!fitIfPlausible(fit)) return;
       const cols = term.cols;
       const rows = term.rows;
-      if (!isPlausibleTerminalSize(cols, rows)) {
-        console.warn('[TerminalSurface] implausible fit, ignoring:', cols, rows);
-        return;
-      }
       // Cache the fitted size so the next session `open()` can spawn its PTY
       // at the real width, drawing its first prompt at the correct size.
       setLastTerminalSize(cols, rows);
@@ -158,6 +177,14 @@ export function TerminalSurface({
       lastSentSizeRef.current = { cols, rows };
       resizeTerminalSession(sessionIdRef.current, cols, rows).catch((err) => {
         console.warn('[TerminalSurface] resize_terminal_session failed:', err);
+        // The backend refuses a geometry outside its own bounds, so the
+        // optimistic write above can describe a size the PTY never took —
+        // and the equality skip would then never retry it. Roll back, unless
+        // a later fit already succeeded on top of this one.
+        const current = lastSentSizeRef.current;
+        if (current && current.cols === cols && current.rows === rows) {
+          lastSentSizeRef.current = last;
+        }
       });
     } catch (err) {
       console.warn('[TerminalSurface] fit failed:', err);
@@ -218,7 +245,7 @@ export function TerminalSurface({
     }
 
     try {
-      if (hasLayoutBox(containerRef.current)) fitAddon.fit();
+      if (hasLayoutBox(containerRef.current)) fitIfPlausible(fitAddon);
     } catch (err) {
       console.warn('[TerminalSurface] initial fit failed:', err);
     }
@@ -305,6 +332,22 @@ export function TerminalSurface({
     handleResize();
     term.refresh(0, term.rows - 1);
   }, [visible, handleResize]);
+
+  // `reconnect_terminal_session` builds a *new* PTY, and it has no surface to
+  // measure, so it builds it at the backend's 80x24 fallback. Nothing about
+  // this surface changes across that: same tabId, same sessionId, no remount —
+  // only the phase flipping back to `running`. So `lastSentSizeRef` still
+  // describes the PTY that was just replaced, and every fit from here on would
+  // match it and return at the equality check, leaving a 120-column xterm
+  // wrapping at 80 for the rest of the session. Forget the old PTY's size and
+  // push the current geometry at the new one.
+  useEffect(() => {
+    const wasRunning = wasRunningRef.current;
+    wasRunningRef.current = phase === 'running';
+    if (phase !== 'running' || wasRunning) return;
+    lastSentSizeRef.current = null;
+    handleResize();
+  }, [phase, handleResize]);
 
   // On-screen "needs a decision" recognition (Phase 3) lives in the
   // always-mounted `TerminalApprovalRecognizer`, not here: only the focused tab
