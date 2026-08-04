@@ -54,51 +54,6 @@ pub(crate) fn resolve_project_info(
     })
 }
 
-#[allow(dead_code)]
-pub(crate) async fn resolve_path_probe(
-    exec: &dyn ExecutionPort,
-    project_info: &ProjectInfo,
-    _project_id: &ProjectId,
-    target_dir: &str,
-) -> Result<(), String> {
-    let machine_id_for_check = if project_info.compute_type.to_lowercase() == "local" {
-        crate::domain::ids::LOCAL_MACHINE.to_string()
-    } else {
-        project_info
-            .remote_host
-            .clone()
-            .unwrap_or_else(|| crate::domain::ids::LOCAL_MACHINE.to_string())
-    };
-
-    let parent_dir = std::path::Path::new(target_dir)
-        .parent()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let probe = format!(
-        "echo __DEMETEO_DIAG__ home=\\\"$HOME\\\" pwd=\\\"$PWD\\\"; \
-         ls -la {} 2>&1; \
-         test -d {} && echo __DEMETEO_DIAG__ exists || echo __DEMETEO_DIAG__ missing",
-        paths::shell_escape_posix(&parent_dir),
-        paths::shell_escape_posix(target_dir),
-    );
-    let probe_output = exec
-        .run_command(&machine_id_for_check, &probe)
-        .await
-        .unwrap_or_else(|e| format!("probe failed: {}", e));
-    let path_ok = probe_output.contains("__DEMETEO_DIAG__ exists");
-    if !path_ok {
-        return Err(format!(
-            "Repository target dir does not exist on '{}': {}\n\
-             Remote diagnostic probe output:\n{}\n\n\
-             If the parent dir listing is empty, the bootstrap clone \
-             did not actually run for this project — re-save the \
-             workspace settings to trigger a fresh bootstrap.",
-            machine_id_for_check, target_dir, probe_output
-        ));
-    }
-    Ok(())
-}
-
 /// The three commands a project configures for its own gates.
 ///
 /// Bundled because they are three adjacent `&str`s that mean different things:

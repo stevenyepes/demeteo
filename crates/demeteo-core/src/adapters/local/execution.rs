@@ -8,6 +8,7 @@ use async_trait::async_trait;
 
 use crate::ports::execution::SftpEntry;
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, ProgramRequest, ShellOptions};
+use crate::shared::fs_remove;
 use crate::shared::proc::{harden_child_spawn, sanitize_child_env};
 use crate::shared::shell;
 
@@ -802,11 +803,13 @@ impl ExecutionPort for LocalSubprocessAdapter {
         .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
+    /// The SFTP arm of this method deletes a Git checkout on any target;
+    /// `std::fs::remove_dir_all` does not delete one on Windows at all. The
+    /// walk in [`fs_remove`] is what closes that gap — see its module doc.
     async fn remove_dir_all(&self, _machine_id: &str, path: &str) -> Result<(), String> {
         let path = path.to_string();
         tokio::task::spawn_blocking(move || {
-            std::fs::remove_dir_all(&path)
-                .map_err(|e| format!("Failed to remove directory '{}': {}", path, e))
+            fs_remove::remove_dir_all(std::path::Path::new(&path)).into_result()
         })
         .await
         .map_err(|e| format!("blocking task panicked: {}", e))?

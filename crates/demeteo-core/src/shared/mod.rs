@@ -13,6 +13,7 @@
 //! the codebase compiling during the migration. Those re-exports will
 //! be removed in Phase F.
 
+pub mod fs_remove;
 pub mod ids;
 pub mod proc;
 pub mod secret_scrub;

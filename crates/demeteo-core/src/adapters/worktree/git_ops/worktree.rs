@@ -355,16 +355,8 @@ impl GitOpsHelper {
             .exec
             .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
             .await;
-        let _ = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "rm -rf {}",
-                    paths::shell_escape_posix(&area.to_string_lossy())
-                ),
-            )
-            .await;
+        let _ =
+            delete_worktree_residue(self.exec.as_ref(), machine_str, &area.to_string_lossy()).await;
 
         Ok(stale.len())
     }
@@ -453,19 +445,12 @@ impl GitOpsHelper {
     /// Provision a linked worktree for a subtask branched off the main feature branch.
     /// Returns the absolute path to the provisioned worktree.
     ///
-    /// Robust against the "already exists" failure mode: handles three
-    /// leftover-state cases in order — registered worktree (interrupted run
-    /// left it in `.git/worktrees/`), orphan directory (cleanup never
-    /// happened but git metadata is clean), and stale branch metadata
-    /// (`worktree prune` cleans up). Each cleanup step's error is logged
-    /// but non-fatal so a partially-set-up state still makes forward
-    /// progress; `git worktree add --force` is the final safety net.
-    ///
-    /// IMPORTANT: the artifact-scope fence (`apply_artifact_scope`) chmods
-    /// protected paths in the worktree to `a-w`. `unlink()` (which `rm`
-    /// uses) needs write permission on the **parent directory**, so an
-    /// `a-w` `src/` blocks `rm -rf` from cleaning up the worktree. We
-    /// restore `u+w` before the `rm -rf` step.
+    /// Robust against the "already exists" failure mode: an interrupted run
+    /// can leave a registered worktree in `.git/worktrees/`, an orphan
+    /// directory with clean git metadata, stale branch metadata, or a scope
+    /// fence that blocks the removal of all three, and `reclaim_worktree_path`
+    /// takes them off in the one order that works. `git worktree add --force`
+    /// is the final safety net after it.
     pub async fn provision_subtask_worktree(
         &self,
         machine_id: Option<&str>,
@@ -474,72 +459,20 @@ impl GitOpsHelper {
         subtask_id: &str,
     ) -> Result<String, String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let wt_dir = worktree_dir(repo_dir, subtask_id);
+        let wt_dir = worktree_dir_on(repo_dir, subtask_id, machine_str);
         let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
 
-        let _ = self.restore_artifact_scope(machine_id, &wt_dir).await;
-
-        // 1. If a previous run registered this worktree with git,
-        //    `git worktree remove --force` is the only reliable way
-        //    to detach it. `rm -rf` alone leaves stale metadata
-        //    behind, which makes the subsequent `add` fail with
-        //    "'<path>' is already used by worktree at '<other>'".
-        let _ = self
-            .exec
-            .run_program(
-                machine_str,
-                git_request(repo_dir, ["worktree", "remove", "--force", &wt_dir]),
-            )
-            .await;
-
-        // 2. Restore write permissions. The artifact-scope fence may
-        //    have chmod'd protected paths to `a-w` in a previous
-        //    run; `rm -rf` needs `+w` on each parent directory it
-        //    traverses, so a leftover a-w `src/` blocks cleanup.
-        //    Best-effort: if chmod itself fails (rare; e.g. the dir
-        //    no longer exists), the subsequent rm still works.
-        let _ = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "chmod -R u+w {} 2>/dev/null || true",
-                    paths::shell_escape_posix(&wt_dir)
-                ),
-            )
-            .await;
-
-        // 3. Belt-and-suspenders: if the dir exists but isn't a
-        //    registered worktree (orphan from a crashed run), remove
-        //    it. Propagate failures now — silently continuing made the
-        //    previous bug where the next `git worktree add` failed
-        //    with "'<path>' already exists" and the user had no idea
-        //    why. If rm really can't remove the dir (locked file,
-        //    permission, read-only mount), return a clear error so the
-        //    caller can surface it.
-        self.exec
-            .run_command(
-                machine_str,
-                &format!("rm -rf {}", paths::shell_escape_posix(&wt_dir)),
-            )
+        // 1. Whatever an interrupted run left at this path — a registered
+        //    worktree, an orphan directory, stale metadata, a fence that
+        //    blocks all three — comes off in one ordered pass. The error is
+        //    propagated because the path is about to be created: silently
+        //    continuing produced the bug where `git worktree add` failed with
+        //    "'<path>' already exists" and the user had no idea why.
+        self.clear_worktree_path(machine_str, repo_dir, &wt_dir)
             .await
-            .map_err(|e| {
-                format!(
-                    "provision_subtask_worktree: rm -rf {} failed: {}. \
-                     The directory may be locked or owned by another user; \
-                     manual cleanup required before this feature can retry.",
-                    wt_dir, e
-                )
-            })?;
+            .map_err(|e| format!("provision_subtask_worktree: {e}"))?;
 
-        // 4. Prune any stale worktree metadata left over from
-        //    crashed runs.
-        let _ = self
-            .exec
-            .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
-            .await;
-
-        // 5. Create the worktree. `--force` lets git overwrite any
+        // 2. Create the worktree. `--force` lets git overwrite any
         //    remaining state (e.g. a missing-but-registered dir) so
         //    this last step is the safety net.
         match self
@@ -591,27 +524,14 @@ impl GitOpsHelper {
             }
         }
 
-        // 6. `git worktree add` gives the subtask a clean checkout — it does
-        //    not carry over gitignored dependency caches (`node_modules/`,
-        //    `target/`, `.venv/`, …). Build/test harnesses run in this
-        //    worktree during agent and verify steps and fail with missing
-        //    dependencies otherwise. Symlink the well-known cache dirs from
-        //    the primary checkout when present there, so the harness sees
-        //    the same install without re-running `npm ci` / `cargo fetch`
-        //    per subtask. Best-effort: a failed link here shouldn't block
-        //    worktree provisioning — the step will simply see the missing
-        //    dependency and the harness fails as before.
-        let _ = self
-            .exec
-            .run_command(
-                machine_str,
-                &link_dependency_caches_cmd(
-                    repo_dir,
-                    &wt_dir,
-                    &paths::feature_cache_dir(repo_dir, feature_branch),
-                ),
-            )
-            .await;
+        share_dependency_caches(
+            self.exec.as_ref(),
+            machine_str,
+            repo_dir,
+            &wt_dir,
+            &paths::feature_cache_dir(repo_dir, feature_branch),
+        )
+        .await;
 
         Ok(wt_dir)
     }
@@ -664,7 +584,7 @@ impl GitOpsHelper {
         cache_dir: Option<&str>,
     ) -> Result<String, String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let wt_dir = worktree_dir(repo_dir, worktree_id);
+        let wt_dir = worktree_dir_on(repo_dir, worktree_id, machine_str);
 
         self.clear_worktree_path(machine_str, repo_dir, &wt_dir)
             .await
@@ -686,12 +606,7 @@ impl GitOpsHelper {
             })?;
 
         if let Some(cache) = cache_dir {
-            let _ = self
-                .exec
-                .run_command(
-                    machine_str,
-                    &link_dependency_caches_cmd(repo_dir, &wt_dir, cache),
-                )
+            share_dependency_caches(self.exec.as_ref(), machine_str, repo_dir, &wt_dir, cache)
                 .await;
         }
 
@@ -716,22 +631,22 @@ impl GitOpsHelper {
         worktree_id: &str,
     ) -> Result<(), String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let wt_dir = worktree_dir(repo_dir, worktree_id);
+        let wt_dir = worktree_dir_on(repo_dir, worktree_id, machine_str);
         let _ = self
             .clear_worktree_path(machine_str, repo_dir, &wt_dir)
             .await;
         Ok(())
     }
 
-    /// Get a worktree path back to "nothing is here": deregister it with git,
-    /// restore write permissions the artifact-scope fence may have stripped,
-    /// remove the directory, and prune stale metadata.
+    /// Get a worktree path back to "nothing is here": restore the write access
+    /// the artifact-scope fence stripped, deregister it with git, prune the
+    /// administrative entry, and delete whatever is still on disk.
     ///
-    /// Only the `rm -rf` propagates its error — the rest are best-effort for
-    /// the reasons `provision_subtask_worktree` documents at length (each
-    /// handles a *leftover* state that usually isn't there). A failed `rm`
-    /// is different: it means the path is still occupied, so whatever the
-    /// caller was about to create there cannot be created.
+    /// Only the final delete propagates its error — the rest are best-effort
+    /// for the reasons `provision_subtask_worktree` documents at length (each
+    /// handles a *leftover* state that usually isn't there). A failed delete is
+    /// different: it means the path is still occupied, so whatever the caller
+    /// was about to create there cannot be created.
     async fn clear_worktree_path(
         &self,
         machine_str: &str,
@@ -748,55 +663,26 @@ impl GitOpsHelper {
                 wt_dir,
             )
             .await;
-        let _ = self
-            .exec
-            .run_program(
-                machine_str,
-                git_request(repo_dir, ["worktree", "remove", "--force", wt_dir]),
-            )
-            .await;
-        let _ = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "chmod -R u+w {} 2>/dev/null || true",
-                    paths::shell_escape_posix(wt_dir)
-                ),
-            )
-            .await;
-        self.exec
-            .run_command(
-                machine_str,
-                &format!("rm -rf {}", paths::shell_escape_posix(wt_dir)),
-            )
-            .await
-            .map_err(|e| {
-                format!(
-                    "rm -rf {wt_dir} failed: {e}. The directory may be locked or owned by \
-                     another user; manual cleanup is required."
-                )
-            })?;
-        let _ = self
-            .exec
-            .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
-            .await;
-        Ok(())
+        reclaim_worktree_path(self.exec.as_ref(), machine_str, repo_dir, wt_dir).await
     }
 
     /// Clean up a linked worktree for a subtask, including its branch.
     ///
-    /// IMPORTANT: the artifact-scope fence (`apply_artifact_scope`) chmods
-    /// protected paths in the worktree to `a-w` for Verify/Artifacts/ReadOnly
-    /// steps. `unlink()` (which both `git worktree remove` and `rm -rf` rely
-    /// on) needs write permission on the **parent directory**, so an `a-w`
-    /// `src/` left over from the step's own run silently blocks this cleanup
-    /// — `git worktree remove --force` and `rm -rf` each fail partway
-    /// through, and since every command here is best-effort (`let _ = ...`),
-    /// the failure is swallowed and a gutted, git-disconnected directory
-    /// skeleton is left on disk. Restore `u+w` first, exactly as
-    /// [`Self::provision_subtask_worktree`]'s leftover-state cleanup already
-    /// does.
+    /// The branch delete comes last and is unconditional: a branch still
+    /// checked out in a worktree cannot be deleted, so it has to follow the
+    /// removal, and a detached-or-already-gone branch makes it a harmless
+    /// no-op.
+    ///
+    /// # This returns `Err` and every caller ignores it
+    ///
+    /// Deliberately. A teardown runs on the step's success path as well as its
+    /// failure path and must never change the step's own outcome, so the
+    /// callers are right to drop it — but the directory that survived, and the
+    /// reason it did, are the two things
+    /// [`WorktreeCleanupQueuePort`](crate::ports::worktree_cleanup::WorktreeCleanupQueuePort)
+    /// needs to retry it at the next start, and losing them here would leave
+    /// the leak with no record anywhere. The queue is not reachable from this
+    /// type yet; until it is, the `Err` and the log line are the record.
     pub async fn cleanup_subtask_worktree(
         &self,
         machine_id: Option<&str>,
@@ -805,39 +691,13 @@ impl GitOpsHelper {
         subtask_id: &str,
     ) -> Result<(), String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let wt_dir = worktree_dir(repo_dir, subtask_id);
+        let wt_dir = worktree_dir_on(repo_dir, subtask_id, machine_str);
         let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
 
-        let _ = self.restore_artifact_scope(machine_id, &wt_dir).await;
+        let cleared = self
+            .clear_worktree_path(machine_str, repo_dir, &wt_dir)
+            .await;
 
-        let _ = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "chmod -R u+w {} 2>/dev/null || true",
-                    paths::shell_escape_posix(&wt_dir)
-                ),
-            )
-            .await;
-        let _ = self
-            .exec
-            .run_program(
-                machine_str,
-                git_request(repo_dir, ["worktree", "remove", "--force", &wt_dir]),
-            )
-            .await;
-        let _ = self
-            .exec
-            .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
-            .await;
-        let _ = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!("rm -rf {}", paths::shell_escape_posix(&wt_dir)),
-            )
-            .await;
         let _ = self
             .exec
             .run_program(
@@ -845,7 +705,16 @@ impl GitOpsHelper {
                 git_request(repo_dir, ["branch", "-D", &subtask_branch]),
             )
             .await;
-        Ok(())
+
+        if let Err(error) = &cleared {
+            tracing::error!(
+                machine = %machine_str,
+                worktree = %wt_dir,
+                error = %error,
+                "cleanup_subtask_worktree: worktree survived teardown",
+            );
+        }
+        cleared
     }
 
     /// Delete a branch, all of its subtask branches, remove matching worktrees,
@@ -880,33 +749,8 @@ impl GitOpsHelper {
             for wt in &worktrees {
                 let is_match = wt.branch.as_deref().is_some_and(|b| b.starts_with(&prefix));
                 if is_match {
-                    // Restore write perms the artifact-scope fence may have
-                    // stripped during the step's run — see the doc comment
-                    // on `cleanup_subtask_worktree` for why this must come
-                    // before both `worktree remove` and `rm -rf`.
                     let _ = self
-                        .exec
-                        .run_command(
-                            machine_str,
-                            &format!(
-                                "chmod -R u+w {} 2>/dev/null || true",
-                                paths::shell_escape_posix(&wt.path)
-                            ),
-                        )
-                        .await;
-                    let _ = self
-                        .exec
-                        .run_program(
-                            machine_str,
-                            git_request(repo_dir, ["worktree", "remove", "--force", &wt.path]),
-                        )
-                        .await;
-                    let _ = self
-                        .exec
-                        .run_command(
-                            machine_str,
-                            &format!("rm -rf {}", paths::shell_escape_posix(&wt.path)),
-                        )
+                        .clear_worktree_path(machine_str, repo_dir, &wt.path)
                         .await;
                 }
             }
@@ -938,16 +782,12 @@ impl GitOpsHelper {
         //    `paths::feature_cache_dir`), so nothing else can be using it once
         //    the feature is gone — and it holds a whole `node_modules` /
         //    `target`, which would otherwise leak once per feature, forever.
-        let _ = self
-            .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "rm -rf {}",
-                    paths::shell_escape_posix(&paths::feature_cache_dir(repo_dir, branch))
-                ),
-            )
-            .await;
+        let _ = delete_worktree_residue(
+            self.exec.as_ref(),
+            machine_str,
+            &paths::feature_cache_dir(repo_dir, branch),
+        )
+        .await;
 
         // 5. Delete the feature branch itself.
         self.exec
@@ -1028,8 +868,139 @@ impl GitOpsHelper {
 /// stops `git status` and every glob in the project from seeing them. Every
 /// provisioner and every cleanup must agree on this string or a teardown
 /// silently misses its target, so it is written once.
-fn worktree_dir(repo_dir: &str, worktree_id: &str) -> String {
-    format!("{}_wt_{}", repo_dir, worktree_id)
+///
+/// # `shorten`, and the limit it is actually about
+///
+/// `worktree_id` is `{feature_id}-step-{step_id}` — around 32 characters before
+/// a repo-relative path exists at all. On Windows the binding ceiling is not
+/// the filesystem: `std::fs` goes through `maybe_verbatim` and is long-path
+/// safe, but `std`'s process spawning strips the `\\?\` prefix before handing
+/// `lpCurrentDirectory` to `CreateProcessW`, which fails past `MAX_PATH`
+/// **whatever `core.longpaths` or the registry key say**. The agent spawn
+/// therefore dies before `node_modules` does, and shortening the segment is the
+/// only thing that moves that limit.
+///
+/// Only this segment is shortened, and only for a Windows-local target
+/// ([`paths::windows_host_target`]). The clone's own path
+/// (`projects/<project_id>/repos/<name>`) is left exactly as it is on every
+/// platform: **nothing persists it**, so bootstrap, the workspace health check
+/// and the step executor all re-derive it from `workspace_dir` and the
+/// `projects.id` column — change the derivation and every already-cloned
+/// project on that host becomes "not cloned", including on Windows, where the
+/// desktop app has shipped since before this branch. A worktree directory has
+/// no such problem: it is ephemeral, re-derived and re-created by the step that
+/// uses it, and `git worktree prune` retires whatever registration an older
+/// spelling left behind.
+fn worktree_dir(repo_dir: &str, worktree_id: &str, shorten: bool) -> String {
+    if shorten {
+        format!("{}_wt_{}", repo_dir, paths::short_path_segment(worktree_id))
+    } else {
+        format!("{}_wt_{}", repo_dir, worktree_id)
+    }
+}
+
+/// [`worktree_dir`] for a target machine.
+fn worktree_dir_on(repo_dir: &str, worktree_id: &str, machine_id: &str) -> String {
+    worktree_dir(
+        repo_dir,
+        worktree_id,
+        paths::targets_windows_host(machine_id),
+    )
+}
+
+/// Take a worktree path apart, in the one order in which each step can
+/// succeed.
+///
+/// The order **is** the content of this function, and every step of it exists
+/// because the step before it would otherwise fail:
+///
+/// 1. **Restore write access.** `unlink()` needs write on the *parent*
+///    directory, so an `a-w src/` left by the artifact-scope fence blocks both
+///    the `git worktree remove` below and the delete after it, each of which
+///    then fails partway through and leaves a gutted directory skeleton.
+/// 2. **`git worktree remove --force --force`.** The doubled force is not a
+///    typo: a single `-f` **refuses a locked worktree**, and a lock is exactly
+///    what a crashed or killed step leaves behind — so single-`-f` fails
+///    precisely when teardown matters. `-f -f` also covers the dirty-*and*-
+///    locked worktree, which is the same run.
+/// 3. **`git worktree prune`.** What makes the *name* reusable: a `remove` that
+///    left an administrative entry behind fails the next `add` of the same
+///    destination with "already used by worktree". This runs whether or not
+///    the remove worked, since the remove failing is when there is an entry to
+///    prune.
+/// 4. **Delete the residue.** Git leaves the directory behind when it declines
+///    to remove it, and a directory the fence or a still-running descendant
+///    held is the whole reason this is retried at all.
+///
+/// The one thing this cannot do is drop the step's process guard first: a
+/// descendant still holding a handle keeps the directory undeletable on
+/// Windows, and that guard belongs to the step executor, not here.
+pub(crate) async fn reclaim_worktree_path(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+    repo_dir: &str,
+    wt_dir: &str,
+) -> Result<(), String> {
+    if let Some(command) = restore_write_access_cmd(wt_dir, paths::targets_windows_host(machine_id))
+    {
+        let _ = exec.run_command(machine_id, &command).await;
+    }
+    let _ = exec
+        .run_program(
+            machine_id,
+            git_request(
+                repo_dir,
+                ["worktree", "remove", "--force", "--force", wt_dir],
+            ),
+        )
+        .await;
+    let _ = exec
+        .run_program(machine_id, git_request(repo_dir, ["worktree", "prune"]))
+        .await;
+    delete_worktree_residue(exec, machine_id, wt_dir).await
+}
+
+/// Undo the Unix half of the artifact-scope fence.
+///
+/// `None` for a Windows-local target: there the fence is an ACL that
+/// `GitOpsHelper::restore_artifact_scope` has already lifted, and a POSIX
+/// `chmod` sent to Git Bash would walk the whole tree to change nothing.
+fn restore_write_access_cmd(wt_dir: &str, windows_target: bool) -> Option<String> {
+    (!windows_target).then(|| {
+        format!(
+            "chmod -R u+w {} 2>/dev/null || true",
+            paths::shell_escape_posix(wt_dir)
+        )
+    })
+}
+
+/// Delete what git left behind, and decide whether a failure to do so matters.
+///
+/// [`ExecutionPort::remove_dir_all`](crate::ports::execution::ExecutionPort::remove_dir_all)
+/// reports an absent path as an error — deliberately, so the contract reads the
+/// same over SFTP as it does locally — and a teardown reaches this with the
+/// directory already gone often enough that the error alone cannot be the
+/// verdict. Rather than matching on the message, the path is asked about
+/// directly: still there is a failure, gone is done, whatever the delete said.
+///
+/// The message names the path first so a
+/// [`LeakedWorktree`](crate::ports::worktree_cleanup::LeakedWorktree) row and
+/// the log line that produced it can be lined up without parsing it.
+pub(crate) async fn delete_worktree_residue(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+    wt_dir: &str,
+) -> Result<(), String> {
+    let Err(error) = exec.remove_dir_all(machine_id, wt_dir).await else {
+        return Ok(());
+    };
+    if exec.get_metadata(machine_id, wt_dir).await.is_err() {
+        return Ok(());
+    }
+    Err(format!(
+        "{wt_dir} could not be deleted: {error}. Something still holds it open, or it is \
+         owned by another user; deleting it by hand is what frees the name."
+    ))
 }
 
 /// The one reading every worktree listing in this crate is built from. Shared
@@ -1280,20 +1251,204 @@ fn validate_git_branch_name(branch: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Build the shell command that symlinks each entry in
-/// [`paths::DEPENDENCY_CACHE_DIRS`] from `repo_dir` into `wt_dir`, but
-/// only when the entry exists as a real path in `repo_dir` *and* git
-/// considers it ignored there. The `check-ignore` gate is the safety
-/// net: if a project genuinely tracks a directory that happens to share
-/// one of these names (unusual, but possible), it will not be ignored,
-/// so we leave the worktree's own (correct) checkout of it alone rather
-/// than shadowing it with a symlink to a different branch's copy.
 /// Give `wt_dir` a working dependency install, without letting it share one
-/// with any *other* feature.
+/// with any *other* feature — and without letting the mechanics of that
+/// sharing reach a commit.
 ///
-/// For each well-known cache dir present and gitignored in the primary
-/// checkout: seed this feature's own cache root from the primary (once — the
-/// feature's later steps reuse it), then symlink the worktree at it.
+/// Three steps, in an order that is the point:
+///
+/// 1. **Ask the primary checkout which caches it has.** A name qualifies when
+///    it exists there *and* git ignores it there. The ignore gate is the safety
+///    net: a project that genuinely tracks a directory sharing one of these
+///    names (Go's vendored `vendor/`) is left with its own correct checkout
+///    rather than shadowed by another branch's copy. The answer comes from the
+///    clone, not from the platform, so every host resolves the same set.
+/// 2. **Record those names in the clone's `.git/info/exclude`.** See
+///    [`exclude_file_with`] for why an exclude entry and not a `git add`
+///    pathspec.
+/// 3. **Link.** Only after step 2 has actually landed. A link whose exclusion
+///    was not written puts an absolute host path in the feature branch, so a
+///    failure at step 2 must degrade to *no sharing* — a slower harness — and
+///    never to a committed symlink.
+///
+/// Step 3 is skipped for a Windows-local target. `ln -s` under Git for Windows
+/// only produces a real link with Developer Mode or `SeCreateSymbolicLink`, and
+/// silently copies otherwise, which would duplicate a whole `node_modules` per
+/// step; a junction is worse, because git's walk follows its reparse tag
+/// transparently, inverting the assumption steps 1–2 are built on. Cache
+/// sharing is therefore **off on Windows** until that has a real answer — the
+/// harness installs into the worktree, which is slower and already isolated.
+/// Steps 1 and 2 still run there, so the exclusions a commit sees are the same
+/// on every platform.
+///
+/// Best-effort throughout: a failure here costs a re-install, not the step.
+async fn share_dependency_caches(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+    repo_dir: &str,
+    wt_dir: &str,
+    cache_dir: &str,
+) {
+    let probed = exec
+        .run_command(machine_id, &shareable_cache_probe_cmd(repo_dir))
+        .await
+        .unwrap_or_default();
+    let names = shareable_cache_names(&probed);
+    if names.is_empty() {
+        return;
+    }
+
+    if let Err(error) = record_cache_exclusions(exec, machine_id, repo_dir, &names).await {
+        tracing::warn!(
+            machine = %machine_id,
+            repo = %repo_dir,
+            error = %error,
+            "dependency caches are not shared into this worktree: the exclusion could not be written",
+        );
+        return;
+    }
+
+    if paths::targets_windows_host(machine_id) {
+        return;
+    }
+    let _ = exec
+        .run_command(
+            machine_id,
+            &link_dependency_caches_cmd(repo_dir, wt_dir, cache_dir, &names),
+        )
+        .await;
+}
+
+/// One round trip that prints the [`paths::DEPENDENCY_CACHE_DIRS`] entries the
+/// primary checkout both has and ignores.
+///
+/// `; true` at the end for the reason `artifacts::add_exclusions` records: the
+/// loop's exit status would otherwise be the last `if`'s, and a non-zero exit
+/// makes `run_command` discard the whole answer.
+fn shareable_cache_probe_cmd(repo_dir: &str) -> String {
+    let repo = paths::shell_escape_posix(repo_dir);
+    format!(
+        "for d in {dirs}; do \
+         if [ -e {repo}/\"$d\" ] && git -C {repo} check-ignore -q \"$d\" 2>/dev/null; then \
+         echo \"$d\"; \
+         fi; \
+         done; true",
+        dirs = paths::DEPENDENCY_CACHE_DIRS.join(" "),
+        repo = repo,
+    )
+}
+
+/// Read the probe's answer back as entries of [`paths::DEPENDENCY_CACHE_DIRS`]
+/// rather than as strings.
+///
+/// The names go straight into a shell command and a git exclude file, and the
+/// only thing standing between the transport's stdout and both of those is this
+/// function. Matching against the constant means an unexpected line — a shell
+/// banner, a git warning, anything a login profile prints — is dropped rather
+/// than quoted, so no output can name a path the caller did not compile in.
+fn shareable_cache_names(probe_output: &str) -> Vec<&'static str> {
+    probe_output
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| {
+            paths::DEPENDENCY_CACHE_DIRS
+                .iter()
+                .find(|known| **known == line)
+                .copied()
+        })
+        .collect()
+}
+
+/// Write the shared cache names into the clone's own `.git/info/exclude`.
+///
+/// `info/exclude` is per-*repository*, not per-worktree — git resolves it
+/// through the common directory — so this is written once for the clone and
+/// every linked worktree inherits it, which is the same shape
+/// `git_ops::clone` uses for `core.autocrlf`.
+async fn record_cache_exclusions(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+    repo_dir: &str,
+    names: &[&str],
+) -> Result<(), String> {
+    let git_dir = exec
+        .run_program(
+            machine_id,
+            git_request(repo_dir, ["rev-parse", "--absolute-git-dir"]),
+        )
+        .await?;
+    let exclude_path = target_path_join(git_dir.trim(), "info/exclude");
+    let existing = exec
+        .read_file(machine_id, &exclude_path)
+        .await
+        .unwrap_or_default();
+    let Some(updated) = exclude_file_with(&existing, names) else {
+        return Ok(());
+    };
+    exec.write_file(machine_id, &exclude_path, &updated).await
+}
+
+/// Append the entries `existing` does not already carry, or `None` when it
+/// carries them all.
+///
+/// # Why an exclude entry rather than a `git add` pathspec
+///
+/// A symlink standing in for a directory is not matched by a trailing-slash
+/// `.gitignore` pattern — `node_modules/` matches a real directory and not a
+/// symlink named `node_modules` — so a linked cache reads as untracked and
+/// `git add -A` stages an absolute host path onto the feature branch. That used
+/// to be answered at `git add` time with `':!node_modules'`, which needs its own
+/// gate: naming a path in a pathspec makes git treat it as explicitly
+/// requested, so the same pathspec fails outright ("paths are ignored by one of
+/// your .gitignore files") on the projects that *do* ignore it slashlessly.
+///
+/// The slashless exclude entry matches the symlink and the directory alike, so
+/// there is nothing left for a pathspec to say and the gate disappears with it.
+/// It also survives the platform question: a host that shares no caches links
+/// nothing, and a worktree with a real installed `node_modules` and one with a
+/// symlink to one then commit exactly the same files.
+///
+/// Names only, never a path: an entry is scoped to this clone's
+/// `.git/info/exclude`, which is not committed, and appending is what keeps a
+/// user's own entries in a repository Demeteo cloned but does not own the
+/// contents of.
+fn exclude_file_with(existing: &str, names: &[&str]) -> Option<String> {
+    let missing: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|name| !existing.lines().any(|line| line.trim() == *name))
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let mut out = existing.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(CACHE_EXCLUDE_HEADER);
+    for name in missing {
+        out.push('\n');
+        out.push_str(name);
+    }
+    out.push('\n');
+    Some(out)
+}
+
+/// What a human finds when they wonder who wrote to their exclude file.
+const CACHE_EXCLUDE_HEADER: &str = "# demeteo: dependency caches shared into linked worktrees";
+
+/// Join a path *on the target machine*, which is not necessarily this one.
+///
+/// [`std::path::Path::join`] uses the **host's** separator, so a Windows
+/// desktop driving a Linux machine would build `…\info\exclude` and hand it to
+/// SFTP. Forward slashes are accepted by Win32 and by git on every platform, so
+/// one spelling serves both directions.
+fn target_path_join(base: &str, relative: &str) -> String {
+    format!("{}/{}", base.trim_end_matches(['/', '\\']), relative)
+}
+
+/// Seed this feature's cache root from the primary checkout, once, then point
+/// the worktree at it.
 ///
 /// The seeding copy tries the cheap options first. On APFS (`cp -c`) and on
 /// btrfs/xfs (`--reflink=auto`) this is a copy-on-write clone: near-instant and
@@ -1301,18 +1456,18 @@ fn validate_git_branch_name(branch: &str) -> Result<(), String> {
 /// still correct. Deliberately *not* hardlinks: a tool that rewrites a file in
 /// place would write straight through a hardlink into every other feature's
 /// tree, which is the exact bug this replaces.
-///
-/// When the primary has no copy of a dir, nothing is linked and the harness
-/// installs into the worktree directly — already isolated, so that is fine.
-fn link_dependency_caches_cmd(repo_dir: &str, wt_dir: &str, cache_dir: &str) -> String {
+fn link_dependency_caches_cmd(
+    repo_dir: &str,
+    wt_dir: &str,
+    cache_dir: &str,
+    names: &[&str],
+) -> String {
     let repo = paths::shell_escape_posix(repo_dir);
     let wt = paths::shell_escape_posix(wt_dir);
     let cache = paths::shell_escape_posix(cache_dir);
-    let dirs = paths::DEPENDENCY_CACHE_DIRS.join(" ");
     format!(
         "mkdir -p {cache} 2>/dev/null; \
          for d in {dirs}; do \
-         if [ -e {repo}/\"$d\" ] && git -C {repo} check-ignore -q \"$d\" 2>/dev/null; then \
          if [ ! -e {cache}/\"$d\" ]; then \
          cp -cR {repo}/\"$d\" {cache}/\"$d\" 2>/dev/null \
          || cp -R --reflink=auto {repo}/\"$d\" {cache}/\"$d\" 2>/dev/null \
@@ -1321,9 +1476,8 @@ fn link_dependency_caches_cmd(repo_dir: &str, wt_dir: &str, cache_dir: &str) -> 
          if [ -e {cache}/\"$d\" ] && [ ! -e {wt}/\"$d\" ]; then \
          ln -sfn {cache}/\"$d\" {wt}/\"$d\"; \
          fi; \
-         fi; \
-         done",
-        dirs = dirs,
+         done; true",
+        dirs = names.join(" "),
         repo = repo,
         wt = wt,
         cache = cache,

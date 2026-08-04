@@ -16,3 +16,4 @@ pub mod step_attempts;
 pub mod subtask_run;
 pub mod thread;
 pub mod workflow;
+pub mod worktree_cleanup;

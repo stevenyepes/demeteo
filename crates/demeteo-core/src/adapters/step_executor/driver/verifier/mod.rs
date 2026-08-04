@@ -37,6 +37,23 @@ pub(crate) struct VerifierTarget<'a> {
     pub override_model: Option<&'a str>,
 }
 
+/// Whether the pre-harness write-restore applies to `machine_id`.
+///
+/// The restore is the inverse of the Unix scope fence
+/// (`adapters/worktree/git_ops/scope.rs`), which is `chmod`. Windows has no
+/// equivalent yet — the ACL fence is Phase 4 of `docs/WINDOWS_PARITY.md` — so
+/// on a Windows host's own machine nothing has been made read-only and there
+/// is nothing to restore. Skipping is the honest answer; a `chmod` shimmed
+/// into an `icacls` call would claim to undo a fence that was never applied.
+///
+/// **A remote machine is always Linux**, fence and all, so the host's OS must
+/// not decide this alone. `cfg!(windows)` is passed in rather than read here
+/// so the pairing is reachable from a test on the platform this is developed
+/// on, where `cfg(windows)` code is never compiled.
+fn restores_write_access(host_is_windows: bool, machine_id: &str) -> bool {
+    !(host_is_windows && crate::domain::ids::MachineId::from(machine_id).is_local())
+}
+
 impl ExecutionDriver {
     /// Persist complete harness logs for the validator without making its argv
     /// exceed the prompt budget. A failed artifact write leaves the bounded
@@ -142,7 +159,9 @@ impl ExecutionDriver {
 
         // Idempotent write-restore. Fresh worktrees are writable, but a
         // retried step may run in a worktree the fence already touched.
-        if prepare_command.is_some() || !resolved.is_empty() {
+        if (prepare_command.is_some() || !resolved.is_empty())
+            && restores_write_access(cfg!(windows), machine_str)
+        {
             let _ = self
                 .exec
                 .run_command(
@@ -600,3 +619,7 @@ impl ExecutionDriver {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/infrastructure/step_executor/verifier/write_restore.rs"]
+mod tests;

@@ -39,11 +39,11 @@ pub(crate) async fn materialize_user_attachments_to_worktree(
     // (works for both local and remote via the exec port). Fail loud
     // here so the caller surfaces the error instead of silently
     // shipping a prompt that points at files the agent can't read.
-    let mkdir_cmd = format!(
-        "mkdir -p {}",
-        crate::paths::shell_escape_posix(&dest_root_str)
-    );
-    if exec.run_command(machine_id, &mkdir_cmd).await.is_err() {
+    if exec
+        .create_dir_all(machine_id, &dest_root_str)
+        .await
+        .is_err()
+    {
         tracing::warn!(
             dest_root = %dest_root_str,
             machine_id = machine_id,
@@ -197,11 +197,7 @@ pub(crate) async fn materialize_external_artifact_paths(
                 // the remote worktree's path string) for remote steps
                 // — see AGENTS.md / docs for the regression writeup.
                 if let Ok(content) = std::fs::read_to_string(path) {
-                    let mkdir_cmd = format!(
-                        "mkdir -p {}",
-                        crate::paths::shell_escape_posix(&dest_dir_str)
-                    );
-                    if exec.run_command(machine_id, &mkdir_cmd).await.is_ok()
+                    if exec.create_dir_all(machine_id, &dest_dir_str).await.is_ok()
                         && exec
                             .write_file(machine_id, &dest_str, &content)
                             .await

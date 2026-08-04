@@ -39,13 +39,20 @@ impl WorktreeSnapshot {
     /// [`git_status_porcelain`]). A vanished worktree means the writes
     /// are unrecoverable, so the caller must fail the step rather than
     /// capture an empty delta and report success.
+    ///
+    /// Asked as a metadata lookup rather than `test -d`, because a shell
+    /// that will not start answers non-zero and would report every
+    /// worktree on the machine as vanished — losing each step's writes
+    /// to a message about the wrong thing.
     pub async fn worktree_is_missing(
         exec: &dyn ExecutionPort,
         machine_id: &str,
         worktree_root: &str,
     ) -> bool {
-        let cmd = format!("test -d {}", paths::shell_escape_posix(worktree_root),);
-        exec.run_command(machine_id, &cmd).await.is_err()
+        !matches!(
+            exec.get_metadata(machine_id, worktree_root).await,
+            Ok(entry) if entry.is_dir
+        )
     }
 
     /// Compute the file-level delta between this snapshot and the
