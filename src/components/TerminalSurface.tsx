@@ -13,7 +13,12 @@ import {
   resizeTerminalSession,
   writeTerminalSession,
 } from '../lib/terminal';
-import { getLastTerminalSize, setLastTerminalSize } from '../lib/terminalViewport';
+import {
+  getLastTerminalSize,
+  hasLayoutBox,
+  isPlausibleTerminalSize,
+  setLastTerminalSize,
+} from '../lib/terminalViewport';
 import { MachineDot } from './ui/MachineDot';
 import { AgentBadge } from './ui/AgentBadge';
 import { ActivityIndicator } from './ui/ActivityIndicator';
@@ -60,6 +65,11 @@ export interface TerminalSurfaceProps {
   /** Live activity of the agent in the focused session, or null when there
    *  is no signal. Renders the same mark shown on the session-list row. */
   activity?: TerminalActivity;
+  /** False while the surface sits in a `display:none` subtree — i.e. the
+   *  Terminals route is not the active view and the surface stays mounted
+   *  behind it. Defaults to true so every existing caller keeps its current
+   *  behaviour. */
+  visible?: boolean;
 }
 
 /**
@@ -93,6 +103,7 @@ export function TerminalSurface({
   machineId,
   agentKind,
   activity,
+  visible = true,
 }: TerminalSurfaceProps): React.ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -105,6 +116,7 @@ export function TerminalSurface({
   // entirely. Sending a redundant `SIGWINCH` during P10k's instant/transient
   // prompt startup is what duplicated the command line (see terminalViewport).
   const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const wasVisibleRef = useRef<boolean>(visible);
 
   // The first byte after a fresh attach can race the layout flush;
   // show a transient status badge so the user sees the panel has work
@@ -119,11 +131,21 @@ export function TerminalSurface({
     const term = terminalRef.current;
     const fit = fitAddonRef.current;
     if (!term || !fit) return;
+    // A fit taken with no layout box measures the *computed* value of the
+    // `w-full`/`h-full` container — the literal string "100%", which FitAddon's
+    // `proposeDimensions()` parseInts into 100 pixels. At `fontSize: 13` that is
+    // a plausible-looking 11 × 5 which would then be cached and pushed to the
+    // PTY. Silent, not warned: the observer keeps ticking the whole time the
+    // Terminals route is hidden.
+    if (!hasLayoutBox(containerRef.current)) return;
     try {
       fit.fit();
       const cols = term.cols;
       const rows = term.rows;
-      if (cols <= 0 || rows <= 0) return;
+      if (!isPlausibleTerminalSize(cols, rows)) {
+        console.warn('[TerminalSurface] implausible fit, ignoring:', cols, rows);
+        return;
+      }
       // Cache the fitted size so the next session `open()` can spawn its PTY
       // at the real width, drawing its first prompt at the correct size.
       setLastTerminalSize(cols, rows);
@@ -196,7 +218,7 @@ export function TerminalSurface({
     }
 
     try {
-      fitAddon.fit();
+      if (hasLayoutBox(containerRef.current)) fitAddon.fit();
     } catch (err) {
       console.warn('[TerminalSurface] initial fit failed:', err);
     }
@@ -264,6 +286,25 @@ export function TerminalSurface({
       fitAddonRef.current = null;
     };
   }, [sessionId, handleResize]);
+
+  // Returning from a `display:none` subtree is the same class of renderer
+  // discontinuity as the lost WebGL context above: nothing dirties the rows, so
+  // the stale frame stays until unrelated output happens to touch each one.
+  // The repaint belongs here and not in `handleResize`, which returns at the
+  // `lastSentSizeRef` equality check precisely when the size did *not* change —
+  // the common case on the way back. So: always re-fit and repaint locally on
+  // the edge, still resize the PTY only on a genuine change. Resizing
+  // unconditionally on show puts a `SIGWINCH` back into P10k's startup and
+  // duplicates the command line again (see terminalViewport).
+  useEffect(() => {
+    const wasVisible = wasVisibleRef.current;
+    wasVisibleRef.current = visible;
+    if (!visible || wasVisible) return;
+    const term = terminalRef.current;
+    if (!term) return;
+    handleResize();
+    term.refresh(0, term.rows - 1);
+  }, [visible, handleResize]);
 
   // On-screen "needs a decision" recognition (Phase 3) lives in the
   // always-mounted `TerminalApprovalRecognizer`, not here: only the focused tab
