@@ -92,3 +92,27 @@ fn candidates_come_out_sorted_by_the_collapsed_name() {
         "git sorts by refname, so every local ref would otherwise precede every remote one"
     );
 }
+
+// ── The branch a checkout is on ──────────────────────────────────────────────
+
+#[test]
+fn a_checked_out_branch_comes_back_named() {
+    assert_eq!(
+        head_branch("feature/login\n").as_deref(),
+        Some("feature/login")
+    );
+}
+
+#[test]
+fn a_detached_head_names_no_branch() {
+    assert_eq!(
+        head_branch("HEAD"),
+        None,
+        "`rev-parse --abbrev-ref` answers the literal HEAD when detached, and a picker would render it as a branch by that name"
+    );
+}
+
+#[test]
+fn an_empty_answer_names_no_branch() {
+    assert_eq!(head_branch("  \n"), None);
+}

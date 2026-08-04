@@ -11,6 +11,9 @@ afterEach(() => {
   vi.clearAllMocks();
   webglAddonStubs.length = 0;
   terminalStubs.length = 0;
+  fitAddonStubs.length = 0;
+  resizeObserverStubs.length = 0;
+  setFitGeometry(DEFAULT_FIT_COLS, DEFAULT_FIT_ROWS);
 });
 
 // --- Tauri IPC -------------------------------------------------------------
@@ -109,26 +112,62 @@ vi.mock("@monaco-editor/react", () => ({
 
 export const terminalStubs: TerminalStub[] = [];
 
-class TerminalStub {
+/** xterm's own defaults, and the geometry every fit lands on unless a test
+ *  asks for another one. */
+export const DEFAULT_FIT_COLS = 80;
+export const DEFAULT_FIT_ROWS = 24;
+
+// The size a `fit()` resolves to is the one thing a terminal test needs to
+// control and the one thing a real `FitAddon` derives from a layout box jsdom
+// never computes. A `fit()` that measures nothing and reports 80x24 forever
+// answers identically whether or not the surface has a box — so a fit taken
+// inside a `display:none` subtree is indistinguishable from a correct one, and
+// no test written against these doubles can observe it. Geometry is therefore
+// injected, and defaults to xterm's own size so it stays opt-in per test.
+export const fitGeometry = { cols: DEFAULT_FIT_COLS, rows: DEFAULT_FIT_ROWS };
+
+/** Geometry the next `FitAddonStub.fit()` writes into its `Terminal`. */
+export function setFitGeometry(cols: number, rows: number): void {
+  fitGeometry.cols = cols;
+  fitGeometry.rows = rows;
+}
+
+export class TerminalStub {
   write = vi.fn();
   clear = vi.fn();
   dispose = vi.fn();
   reset = vi.fn();
   refresh = vi.fn();
   onData = vi.fn();
-  loadAddon = vi.fn();
+  // Real xterm hands the addon an `ITerminalAddon` activation context carrying
+  // the terminal; the fit double needs the same association to have something
+  // to resize.
+  loadAddon = vi.fn((addon: unknown) => {
+    if (addon instanceof FitAddonStub) addon.terminal = this;
+  });
   open = vi.fn();
-  cols = 80;
-  rows = 24;
+  cols = DEFAULT_FIT_COLS;
+  rows = DEFAULT_FIT_ROWS;
 
   constructor() {
     terminalStubs.push(this);
   }
 }
 
-class FitAddonStub {
-  fit = vi.fn();
-  proposeDimensions = vi.fn();
+export const fitAddonStubs: FitAddonStub[] = [];
+
+export class FitAddonStub {
+  terminal: TerminalStub | null = null;
+  fit = vi.fn(() => {
+    if (!this.terminal) return;
+    this.terminal.cols = fitGeometry.cols;
+    this.terminal.rows = fitGeometry.rows;
+  });
+  proposeDimensions = vi.fn(() => ({ cols: fitGeometry.cols, rows: fitGeometry.rows }));
+
+  constructor() {
+    fitAddonStubs.push(this);
+  }
 }
 
 // WebglAddon reaches for a real WebGL context, which jsdom does not provide.
@@ -194,11 +233,40 @@ Object.defineProperty(globalThis, "localStorage", {
   value: localStorageStub,
 });
 
-globalThis.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
+// jsdom lays nothing out, so no observer here ever fires on its own: a resize
+// tick has to be driven by hand, which is only possible while the callback is
+// kept. Installed unconditionally rather than with `??=`, since a host that did
+// provide an observer would take the slot and put the callback back out of
+// reach — silently, and only on that host.
+export const resizeObserverStubs: ResizeObserverStub[] = [];
+
+class ResizeObserverStub implements ResizeObserver {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+
+  constructor(readonly callback: ResizeObserverCallback) {
+    resizeObserverStubs.push(this);
+  }
+
+  /** Fire one resize tick. The entry list is empty: observers under test read
+   *  the element, not the entry, because jsdom fills in no `contentRect`. */
+  trigger(): void {
+    this.callback([], this);
+  }
+}
+
+globalThis.ResizeObserver = ResizeObserverStub;
+
+// jsdom implements no CSS Font Loading API. Reading `document.fonts.ready`
+// throws, and where that read sits inside a promise continuation the rejection
+// lands in an unrelated `.catch` — the continuation is skipped and the test
+// still passes (src/components/TerminalSurface.tsx waits for fonts before its
+// reconciling fit).
+Object.defineProperty(document, "fonts", {
+  configurable: true,
+  value: { ready: Promise.resolve({}) },
+});
 
 globalThis.matchMedia ??= ((query: string) => ({
   matches: false,

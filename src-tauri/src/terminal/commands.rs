@@ -8,7 +8,8 @@ use tauri::{ipc::Channel, AppHandle, Emitter, Runtime, State};
 use super::activity::report_screen_activity_inner;
 use super::drain::{emit_ended, spawn_drain};
 use super::model::{
-    SessionInfo, SessionKeepalive, SessionState, WriteSink, DEFAULT_TERM_COLS, DEFAULT_TERM_ROWS,
+    checked_pty_size, SessionInfo, SessionKeepalive, SessionState, WriteSink, DEFAULT_TERM_COLS,
+    DEFAULT_TERM_ROWS,
 };
 use super::transport::{start_local_pty, start_ssh_session};
 
@@ -69,6 +70,11 @@ pub fn write_terminal_session(
     }
 }
 
+/// Push a new geometry to a session's PTY. [`checked_pty_size`] runs once,
+/// before the transport match, so an implausible size is refused identically
+/// on SSH and on a local PTY (AGENTS.md §2 — a feature behaves the same
+/// regardless of which transport ran it). Validating inside either arm would
+/// let them diverge.
 #[tauri::command]
 pub fn resize_terminal_session(
     session_state: State<'_, SessionState>,
@@ -76,6 +82,8 @@ pub fn resize_terminal_session(
     cols: u32,
     rows: u32,
 ) -> Result<(), String> {
+    let (cols, rows) = checked_pty_size(cols, rows)
+        .ok_or_else(|| format!("Implausible terminal size: {}x{}", cols, rows))?;
     let sessions = session_state
         .sessions
         .lock()
@@ -86,7 +94,7 @@ pub fn resize_terminal_session(
                 let mut chan = ch
                     .lock()
                     .map_err(|_| "Failed to lock channel".to_string())?;
-                chan.request_pty_size(cols, rows, None, None)
+                chan.request_pty_size(cols as u32, rows as u32, None, None)
                     .map_err(|e| format!("Failed to resize terminal: {}", e))?;
             }
             WriteSink::LocalPty(_) => {
@@ -94,8 +102,8 @@ pub fn resize_terminal_session(
                     if let SessionKeepalive::LocalPty { master, .. } = &*keepalive {
                         master
                             .resize(PtySize {
-                                rows: rows as u16,
-                                cols: cols as u16,
+                                rows,
+                                cols,
                                 pixel_width: 0,
                                 pixel_height: 0,
                             })

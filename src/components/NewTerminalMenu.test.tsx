@@ -3,8 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { invoke } from '@tauri-apps/api/core';
-import { createTerminalWorktree, listTerminalBranches, listTerminalWorktrees } from '../lib/terminal';
+import type { TerminalLocations, TerminalWorktree } from '../types';
+import { createTerminalWorktree, listTerminalBranches, listTerminalLocations } from '../lib/terminal';
 import { NewTerminalMenu } from './NewTerminalMenu';
+
+function locations(worktrees: TerminalWorktree[]): TerminalLocations {
+  return { mainBranch: 'chore/left-here', worktrees };
+}
 
 const open = vi.fn();
 const useProject = vi.fn();
@@ -15,7 +20,7 @@ vi.mock('../context/ProjectContext', () => ({ useProject: () => useProject() }))
 vi.mock('../lib/terminal', () => ({
   createTerminalWorktree: vi.fn(),
   listTerminalBranches: vi.fn(),
-  listTerminalWorktrees: vi.fn(),
+  listTerminalLocations: vi.fn(),
   removeTerminalWorktree: vi.fn(),
 }));
 
@@ -39,7 +44,7 @@ beforeEach(() => {
     if (command === 'get_machines' || command === 'get_agent_configs') return Promise.resolve([]);
     return Promise.resolve(undefined);
   });
-  vi.mocked(listTerminalWorktrees).mockReset();
+  vi.mocked(listTerminalLocations).mockReset();
   vi.mocked(createTerminalWorktree).mockReset();
   vi.mocked(listTerminalBranches).mockReset();
   vi.mocked(listTerminalBranches).mockResolvedValue({
@@ -59,7 +64,7 @@ beforeEach(() => {
 
 describe('NewTerminalMenu terminal worktree locations', () => {
   it('requires an explicit project location before enabling shell or agent launch', async () => {
-    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    vi.mocked(listTerminalLocations).mockResolvedValue(locations([]));
     mount();
 
     await openProjectLocations();
@@ -71,7 +76,7 @@ describe('NewTerminalMenu terminal worktree locations', () => {
   });
 
   it('routes the primary local-shell action through the location chooser', async () => {
-    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    vi.mocked(listTerminalLocations).mockResolvedValue(locations([]));
     mount();
 
     await userEvent.click(screen.getByTestId('new-terminal-trigger'));
@@ -82,7 +87,7 @@ describe('NewTerminalMenu terminal worktree locations', () => {
   });
 
   it('does not let Enter bypass an unselected project location', async () => {
-    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    vi.mocked(listTerminalLocations).mockResolvedValue(locations([]));
     mount();
 
     await userEvent.click(screen.getByTestId('new-terminal-caret'));
@@ -93,7 +98,7 @@ describe('NewTerminalMenu terminal worktree locations', () => {
   });
 
   it('opens the current project primary checkout for the main-branch location', async () => {
-    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    vi.mocked(listTerminalLocations).mockResolvedValue(locations([]));
     mount();
 
     await openProjectLocations();
@@ -110,7 +115,7 @@ describe('NewTerminalMenu terminal worktree locations', () => {
   });
 
   it('opens the machine root unscoped for the machine-home location and records it', async () => {
-    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    vi.mocked(listTerminalLocations).mockResolvedValue(locations([]));
     mount();
 
     await openProjectLocations();
@@ -141,15 +146,15 @@ describe('NewTerminalMenu terminal worktree locations', () => {
         },
       },
     });
-    vi.mocked(listTerminalWorktrees).mockImplementation(async (_projectId, repositoryId) =>
+    vi.mocked(listTerminalLocations).mockImplementation(async (_projectId, repositoryId) =>
       repositoryId === 'repository-2'
-        ? [{ path: '/repos/other-ticket', branch: 'other/ticket', isLocked: false }]
-        : [],
+        ? locations([{ path: '/repos/other-ticket', branch: 'other/ticket', isLocked: false }])
+        : locations([]),
     );
     mount();
 
     await openProjectLocations();
-    expect(listTerminalWorktrees).toHaveBeenCalledWith('project-1', 'repository-1');
+    expect(listTerminalLocations).toHaveBeenCalledWith('project-1', 'repository-1');
     await screen.findByTestId('terminal-location-new');
 
     await userEvent.selectOptions(screen.getByTestId('new-terminal-repo-select'), 'repository-2');
@@ -157,7 +162,7 @@ describe('NewTerminalMenu terminal worktree locations', () => {
     await userEvent.click(await screen.findByTestId('terminal-location-worktree-/repos/other-ticket'));
     await userEvent.click(screen.getByText('New shell'));
 
-    expect(listTerminalWorktrees).toHaveBeenCalledWith('project-1', 'repository-2');
+    expect(listTerminalLocations).toHaveBeenCalledWith('project-1', 'repository-2');
     expect(open).toHaveBeenCalledWith(expect.objectContaining({
       projectId: 'project-1',
       repoPath: '/repos/other',
@@ -167,9 +172,9 @@ describe('NewTerminalMenu terminal worktree locations', () => {
   });
 
   it('opens a selected worktree shell with the exact backend path and branch', async () => {
-    vi.mocked(listTerminalWorktrees).mockResolvedValue([
-      { path: '/repos/demo-ticket', branch: 'feature/ticket', isLocked: false },
-    ]);
+    vi.mocked(listTerminalLocations).mockResolvedValue(
+      locations([{ path: '/repos/demo-ticket', branch: 'feature/ticket', isLocked: false }]),
+    );
     mount();
 
     await openProjectLocations();
@@ -188,7 +193,7 @@ describe('NewTerminalMenu terminal worktree locations', () => {
   });
 
   it('opens a created worktree with an agent using the returned target', async () => {
-    vi.mocked(listTerminalWorktrees).mockResolvedValue([]);
+    vi.mocked(listTerminalLocations).mockResolvedValue(locations([]));
     vi.mocked(createTerminalWorktree).mockResolvedValue({
       worktree: { path: '/repos/demo-new', branch: 'feature/new', isLocked: false },
       baseRef: 'origin/main',

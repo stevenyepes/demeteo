@@ -15,7 +15,7 @@ beforeEach(() => {
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockImplementation((cmd: string, _args?: InvokeArgs) => {
     if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
-    if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
+    if (cmd === 'list_terminal_locations') return Promise.resolve({ main_branch: 'chore/left-here', worktrees: [] });
     if (cmd === 'resolve_repo_dir') return Promise.resolve('/tmp/repo');
     if (cmd === 'start_terminal_session') {
       return Promise.resolve({ session_id: `sess_${++nextSessionId}`, launch_command: null });
@@ -109,7 +109,7 @@ describe('StartSessionButton', () => {
     let resolveStart: (() => void) | null = null;
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
-      if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
+      if (cmd === 'list_terminal_locations') return Promise.resolve({ main_branch: 'chore/left-here', worktrees: [] });
       if (cmd === 'resolve_repo_dir') return Promise.resolve('/tmp/repo');
       if (cmd === 'start_terminal_session') {
         return new Promise((resolve) => {
@@ -140,7 +140,7 @@ describe('StartSessionButton', () => {
     let resolveStart: (() => void) | null = null;
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
-      if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
+      if (cmd === 'list_terminal_locations') return Promise.resolve({ main_branch: 'chore/left-here', worktrees: [] });
       if (cmd === 'resolve_repo_dir') return Promise.resolve('/tmp/repo');
       if (cmd === 'start_terminal_session') {
         return new Promise((resolve) => {
@@ -203,7 +203,7 @@ describe('StartSessionButton', () => {
   it('disables shell and agent actions while location discovery is pending and displays a list failure', async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
-      if (cmd === 'list_terminal_worktrees') return new Promise(() => {});
+      if (cmd === 'list_terminal_locations') return new Promise(() => {});
       return Promise.resolve(undefined);
     });
     mount();
@@ -215,7 +215,7 @@ describe('StartSessionButton', () => {
     // A separate mount gives the rejected request a chance to settle visibly.
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
-      if (cmd === 'list_terminal_worktrees') return Promise.reject({ kind: 'io_error', message: 'cannot list locations' });
+      if (cmd === 'list_terminal_locations') return Promise.reject({ kind: 'io_error', message: 'cannot list locations' });
       return Promise.resolve(undefined);
     });
     mount();
@@ -289,8 +289,11 @@ describe('StartSessionButton', () => {
   it('forwards an existing worktree unchanged for shell and agent launches', async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
-      if (cmd === 'list_terminal_worktrees') {
-        return Promise.resolve([{ path: '/worktrees/ticket-42', branch: 'feature/ticket-42', is_locked: false }]);
+      if (cmd === 'list_terminal_locations') {
+        return Promise.resolve({
+          main_branch: 'chore/left-here',
+          worktrees: [{ path: '/worktrees/ticket-42', branch: 'feature/ticket-42', is_locked: false }],
+        });
       }
       if (cmd === 'start_terminal_session') return Promise.resolve({ session_id: `sess_${++nextSessionId}`, launch_command: null });
       return Promise.resolve(undefined);
@@ -319,7 +322,7 @@ describe('StartSessionButton', () => {
   it('selects a created worktree and shows create failures without launching', async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
-      if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
+      if (cmd === 'list_terminal_locations') return Promise.resolve({ main_branch: 'chore/left-here', worktrees: [] });
       if (cmd === 'list_terminal_branches') return Promise.resolve({ default_branch: 'main', branches: [{ name: 'main', has_local: true, has_remote: true }] });
       if (cmd === 'create_terminal_worktree') return Promise.reject({ kind: 'validation', message: 'branch already exists' });
       return Promise.resolve(undefined);
@@ -346,7 +349,7 @@ describe('StartSessionButton', () => {
   it('launches a newly-created backend target unchanged', async () => {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       if (cmd === 'list_terminal_sessions') return Promise.resolve([]);
-      if (cmd === 'list_terminal_worktrees') return Promise.resolve([]);
+      if (cmd === 'list_terminal_locations') return Promise.resolve({ main_branch: 'chore/left-here', worktrees: [] });
       if (cmd === 'list_terminal_branches') return Promise.resolve({ default_branch: 'main', branches: [{ name: 'main', has_local: true, has_remote: true }] });
       if (cmd === 'create_terminal_worktree') return Promise.resolve({ worktree: { path: '/worktrees/new', branch: 'feature/new', is_locked: false }, base_ref: 'origin/main' });
       if (cmd === 'start_terminal_session') return Promise.resolve({ session_id: 'sess_new', launch_command: null });

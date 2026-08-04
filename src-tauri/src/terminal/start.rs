@@ -11,8 +11,8 @@ use super::hooks::{
     write_activity_settings_file,
 };
 use super::model::{
-    session_counter_next, ActiveSession, Broadcast, SessionInfo, SessionState, StartedSession,
-    DEFAULT_TERM_COLS, DEFAULT_TERM_ROWS,
+    session_counter_next, spawn_pty_size, ActiveSession, Broadcast, SessionInfo, SessionState,
+    StartedSession,
 };
 use super::transport::{start_local_pty, start_ssh_session};
 
@@ -42,10 +42,8 @@ pub fn start_terminal_session(
     )?;
     let machine_name = machine.name.clone();
     // Resolve the initial PTY size so the shell draws its very first prompt at
-    // (near) the real terminal width. `0` is treated as "unset" defensively —
-    // a zero-column PTY would make prompts render incoherently.
-    let cols = cols.filter(|c| *c > 0).unwrap_or(DEFAULT_TERM_COLS);
-    let rows = rows.filter(|r| *r > 0).unwrap_or(DEFAULT_TERM_ROWS);
+    // (near) the real terminal width.
+    let (cols, rows) = spawn_pty_size(cols, rows);
 
     let session_id = format!("sess_{}", session_counter_next());
     let created_at = std::time::SystemTime::now()

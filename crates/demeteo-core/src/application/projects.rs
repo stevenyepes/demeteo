@@ -89,7 +89,24 @@ pub async fn resolve_target_dir(
     }
 }
 
-/// List the linked worktrees belonging to one repository of a project.
+/// The places a terminal session may open inside one repository.
+///
+/// The main checkout is a *directory*, not a branch: a session opened there
+/// inherits whatever HEAD it was last left on, which nothing in the app has
+/// chosen and no listing of worktrees would reveal. So the two travel together
+/// — the branch is the only part of that choice a picker cannot show on its
+/// own, and a picker that cannot show it offers "main checkout" as if it named
+/// a branch.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TerminalLocations {
+    /// The branch the main checkout is on, or `None` when it is detached or
+    /// unreadable. Absent rather than guessed: naming the wrong branch here is
+    /// worse than naming none, since the whole point is to be believed.
+    pub main_branch: Option<String>,
+    pub worktrees: Vec<WorktreeInfo>,
+}
+
+/// List the terminal locations of one repository of a project.
 ///
 /// The project and repository IDs are the only authority accepted at this
 /// boundary. Resolving the machine and checkout path here prevents a terminal
@@ -99,19 +116,33 @@ pub async fn resolve_target_dir(
 /// [`crate::domain::terminal_worktree`], not here. The listing must exclude the
 /// checkouts a running pipeline step owns — those are torn down with
 /// `worktree remove --force` under whoever opened a shell in one.
-pub async fn list_terminal_worktrees(
+pub async fn list_terminal_locations(
     ctx: &AppContext,
     project_id: String,
     repository_id: String,
-) -> Result<Vec<WorktreeInfo>, String> {
+) -> Result<TerminalLocations, String> {
     let resolved = resolve_terminal_repository(ctx, &project_id, &repository_id).await?;
-    ctx.worktree_ops
+    let worktrees = ctx
+        .worktree_ops
         .list_terminal_worktrees(
             resolved.machine_id.as_deref(),
             &resolved.repo_dir,
             &resolved.project_root,
         )
+        .await?;
+    // After the listing, so a repository the port refuses to read fails as
+    // that refusal rather than as a missing branch name.
+    let main_branch = ctx
+        .worktree_ops
+        .get_head_branch(resolved.machine_id.as_deref(), &resolved.repo_dir)
         .await
+        .as_deref()
+        .and_then(crate::domain::branch_listing::head_branch);
+
+    Ok(TerminalLocations {
+        main_branch,
+        worktrees,
+    })
 }
 
 /// The base branches a terminal worktree may be cut from, and which one this
@@ -528,6 +559,8 @@ pub async fn health_check(
             ctx.worktree_ops
                 .get_head_branch(machine_id, &target_dir)
                 .await
+                .as_deref()
+                .and_then(crate::domain::branch_listing::head_branch)
         } else {
             None
         };

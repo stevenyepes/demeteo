@@ -5,6 +5,7 @@ import type {
   CreateTerminalWorktreeRequest,
   SessionInfo,
   TerminalBranchOptions,
+  TerminalLocations,
   TerminalWorktree,
 } from "../types";
 
@@ -13,6 +14,12 @@ interface TerminalWorktreeWire {
   path: string;
   branch: string | null;
   is_locked: boolean;
+}
+
+/** Rust's `TerminalLocations` IPC shape. */
+interface TerminalLocationsWire {
+  main_branch: string | null;
+  worktrees: TerminalWorktreeWire[];
 }
 
 /** Rust's `TerminalWorktreeCreated` IPC shape. */
@@ -164,16 +171,20 @@ export async function resolveRepoDir(
   });
 }
 
-/** Lists linked worktrees available for a repository owned by a project. */
-export async function listTerminalWorktrees(
+/** Lists the locations a session may open in a repository owned by a project:
+ *  its linked worktrees, and the branch the main checkout is on. */
+export async function listTerminalLocations(
   projectId: string,
   repositoryId: string,
-): Promise<TerminalWorktree[]> {
-  const worktrees = await invoke<TerminalWorktreeWire[]>("list_terminal_worktrees", {
+): Promise<TerminalLocations> {
+  const locations = await invoke<TerminalLocationsWire>("list_terminal_locations", {
     projectId,
     repositoryId,
   });
-  return worktrees.map(toTerminalWorktree);
+  return {
+    mainBranch: locations.main_branch,
+    worktrees: locations.worktrees.map(toTerminalWorktree),
+  };
 }
 
 /** Lists the branches a new worktree for this repository may be based on. */

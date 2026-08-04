@@ -96,8 +96,8 @@ function mockBackend(repoPaths: string[] | Record<string, string[]>) {
         return Promise.resolve([]);
       case 'list_terminal_sessions':
         return Promise.resolve([]);
-      case 'list_terminal_worktrees':
-        return Promise.resolve([]);
+      case 'list_terminal_locations':
+        return Promise.resolve({ main_branch: 'chore/left-here', worktrees: [] });
       case 'resolve_repo_dir': {
         const { repoPath } = (args ?? {}) as { repoPath?: string };
         return Promise.resolve(`/resolved${repoPath}`);
