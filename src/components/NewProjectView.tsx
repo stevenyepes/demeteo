@@ -3,7 +3,7 @@ import { Search, Plus, GitBranch, GitPullRequest, Check, X, Box, HardDrive, Serv
 import { formatError } from '../lib/errors';
 import type { Machine, Project, WorktreeStrategy } from '../types';
 import { useErrorBus } from '../lib/errorBus';
-import { saveProjectSettings, scriptText, scriptVariants } from '../lib/project';
+import { saveProjectSettings } from '../lib/project';
 import { listMachines, setMachineSecret, testMachineConnection } from '../lib/machines';
 import { fetchProviderRepos } from '../lib/providers';
 import { bootstrapProject, createProject } from '../lib/createProjectWizard';
@@ -187,7 +187,7 @@ const NewProjectView = () => {
                 // 3. Set strategy proposal state
                 setDefaultBranch(strategy.default_branch);
                 setBranchPrefix(strategy.branch_prefix);
-                setTestCommand(scriptText(strategy.test_command));
+                setTestCommand(strategy.test_command || '');
                 setPrTemplate(strategy.pr_template || '');
                 setDetected(strategy);
                 setBootstrapStep('strategy_proposal');
@@ -211,7 +211,7 @@ const NewProjectView = () => {
             await saveProjectSettings(projectId, {
                 default_branch: defaultBranch,
                 branch_prefix: branchPrefix,
-                test_command: scriptVariants(testCommand),
+                test_command: testCommand || null,
                 pr_template: prTemplate || null,
                 conflict_policy: conflictPolicy,
                 feature_lifecycle: featureLifecycle,
@@ -654,13 +654,13 @@ const NewProjectView = () => {
                                             {detected.validation_gates.map(name => (
                                                 <div key={name} className="flex gap-2 items-center p-2 rounded-lg border bg-emerald-500/5 border-emerald-500/20">
                                                     <span className="text-[11px] font-mono text-emerald-400">{name}</span>
-                                                    <span className="text-[11px] font-mono text-slate-400 truncate">{scriptText(detected.harnesses?.[name])}</span>
+                                                    <span className="text-[11px] font-mono text-slate-400 truncate">{detected.harnesses?.[name]}</span>
                                                 </div>
                                             ))}
                                         </div>
                                         {detected.prepare_command ? (
                                             <p className="mt-1.5 text-[11px] text-slate-500">
-                                                Prepare step: <span className="font-mono text-slate-400">{scriptText(detected.prepare_command)}</span>
+                                                Prepare step: <span className="font-mono text-slate-400">{detected.prepare_command}</span>
                                             </p>
                                         ) : null}
                                     </div>

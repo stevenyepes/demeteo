@@ -202,7 +202,11 @@ pub(super) fn set_file_mode(
             Path::new(path),
             FileStat {
                 perm: Some(mode),
-                ..FileStat::default()
+                size: None,
+                uid: None,
+                gid: None,
+                atime: None,
+                mtime: None,
             },
         )
         .map_err(|e| format!("Failed to set permissions on '{path}': {e}"))

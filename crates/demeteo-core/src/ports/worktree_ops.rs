@@ -24,6 +24,10 @@ pub struct TrustedWorktreeTarget {
 impl TrustedWorktreeTarget {
     /// Construct a target after project/repository ownership and host selection
     /// have been resolved by application policy.
+    #[expect(
+        dead_code,
+        reason = "the port is a designed contract with no production caller yet"
+    )]
     pub(crate) fn from_resolved(
         machine_id: Option<String>,
         repository_dir: String,
@@ -106,7 +110,10 @@ pub struct DependencyCacheMaterialization {
 ///
 /// This is intentionally separate from [`WorktreeOpsPort`]. It is the narrow
 /// future contract for operations whose safety depends on trusted-root and
-/// no-follow handling; no implementation or caller uses it yet. Its complete
+/// no-follow handling. The two adapters that implement it are not reached from
+/// any production path: the local one is Unix-only and launches Git directly
+/// rather than through [`ExecutionPort`](crate::ports::execution::ExecutionPort),
+/// so wiring it would make a step behave differently by transport. Its complete
 /// security and transport requirements are in `docs/TRUSTED_WORKTREE.md`.
 #[async_trait]
 pub trait TrustedWorktreePort: Send + Sync {

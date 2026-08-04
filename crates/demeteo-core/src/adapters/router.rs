@@ -5,9 +5,7 @@ use async_trait::async_trait;
 
 use crate::ports::db::MachineRepository;
 use crate::ports::execution::SftpEntry;
-use crate::ports::execution::{
-    ExecutionPort, InteractiveHandle, ProgramRequest, ScriptRequest, ShellOptions,
-};
+use crate::ports::execution::{ExecutionPort, InteractiveHandle, ProgramRequest, ShellOptions};
 
 pub struct RouterExecutionPort {
     machines: Arc<dyn MachineRepository>,
@@ -59,11 +57,6 @@ impl ExecutionPort for RouterExecutionPort {
             .await
     }
 
-    async fn run_script(&self, machine_id: &str, request: ScriptRequest) -> Result<String, String> {
-        self.resolve(machine_id)?
-            .run_script(machine_id, request)
-            .await
-    }
     async fn run_command_with(
         &self,
         machine_id: &str,

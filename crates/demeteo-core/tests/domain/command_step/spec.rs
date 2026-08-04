@@ -81,6 +81,52 @@ fn cwd_may_not_escape_the_worktree() {
     .is_ok());
 }
 
+// The suite that runs these is the ubuntu one, and every assertion below is
+// about a path Unix has no opinion on. That is the point: the same workflow is
+// linted on a Windows desktop and executed by the Linux runner, so a cwd that
+// escapes on either host has to be refused on both.
+#[test]
+fn windows_rooted_forms_do_not_escape_by_being_read_on_unix() {
+    for bad in [
+        "C:\\Windows",
+        "C:/Windows",
+        "c:\\Users\\me",
+        // No separator, so not a path Unix would call rooted — Windows
+        // resolves it against C:'s own working directory all the same.
+        "C:build",
+        "\\\\server\\share",
+        "//server/share",
+        // Rooted on the current drive.
+        "\\Windows",
+    ] {
+        let err = validate_relative_cwd(bad).expect_err("must be refused");
+        assert!(
+            err.contains("worktree-relative"),
+            "'{bad}' should be refused as rooted, got: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_parent_segment_escapes_whichever_separator_spells_it() {
+    for bad in [
+        "..\\sibling",
+        "..\\..\\..",
+        "src\\..\\..\\out",
+        "src/..\\out",
+    ] {
+        let err = validate_relative_cwd(bad).expect_err("must be refused");
+        assert!(
+            err.contains("must not escape"),
+            "'{bad}' should be refused as escaping, got: {err}"
+        );
+    }
+    // Backslashes alone are not an escape: on Unix that is one oddly named
+    // directory, on Windows a nested one, and neither leaves the worktree.
+    assert!(validate_relative_cwd("src\\core").is_ok());
+    assert!(validate_relative_cwd("src\\..hidden").is_ok());
+}
+
 #[test]
 fn a_zero_timeout_is_refused_rather_than_meaning_forever() {
     let err = parse_spec(&step_from(

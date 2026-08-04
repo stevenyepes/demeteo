@@ -50,7 +50,7 @@ impl TrustedWorktreePort for GitOpsHelper {
         #[cfg(unix)]
         {
             let terminal = request.terminal;
-            validate_branch(&terminal.branch)?;
+            super::worktree::validate_terminal_branch(&terminal.branch)?;
             let names = relative_name(&terminal.worktree_name)?;
             let repo_name = Path::new(request.target.repository_dir())
                 .file_name()
@@ -82,6 +82,7 @@ impl TrustedWorktreePort for GitOpsHelper {
             let repo = request.target.repository_dir().to_string();
             let branch = terminal.branch;
             let start = terminal.base_branch.map(|_| base_ref.clone());
+            let requested_branch = branch.clone();
             let created = tokio::task::spawn_blocking(move || {
                 let root_fd = open_root(Path::new(&root))?;
                 let mut components = vec![
@@ -94,7 +95,14 @@ impl TrustedWorktreePort for GitOpsHelper {
                     .last()
                     .ok_or_else(|| "trusted worktree: empty destination".to_string())?;
                 ensure_absent(&parent, leaf)?;
-                run_git_in(&parent, &git_dir, &repo, &branch, leaf, start.as_deref())?;
+                run_git_in(
+                    &parent,
+                    &git_dir,
+                    &repo,
+                    &requested_branch,
+                    leaf,
+                    start.as_deref(),
+                )?;
                 let physical_parent = fd_path(&parent)?;
                 Ok::<_, String>(physical_parent.join(leaf).to_string_lossy().into_owned())
             })
@@ -179,27 +187,6 @@ fn relative_name(raw: &str) -> Result<Vec<std::ffi::OsString>, String> {
     } else {
         Ok(parts)
     }
-}
-
-#[cfg(unix)]
-fn validate_branch(branch: &str) -> Result<(), String> {
-    if branch.is_empty()
-        || branch == "@"
-        || branch.starts_with('-')
-        || branch.contains("..")
-        || branch.contains("@{")
-        || branch.contains('\\')
-        || branch.chars().any(|c| {
-            c.is_ascii_control()
-                || c.is_whitespace()
-                || matches!(c, '~' | '^' | ':' | '?' | '*' | '[')
-        })
-    {
-        return Err(format!(
-            "trusted worktree: branch '{branch}' is not a safe Git branch name"
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(unix)]

@@ -10,14 +10,7 @@
 //! `#[path]`-included by each caller rather than declared once, because the
 //! three callers live under different parent modules.
 
-use crate::domain::models::{ScriptVariants, WorktreeStrategy};
-
-fn posix(command: &str) -> ScriptVariants {
-    ScriptVariants {
-        posix: Some(command.to_string()),
-        powershell: None,
-    }
-}
+use crate::domain::models::WorktreeStrategy;
 
 /// A `WorktreeStrategy` carrying only what the preflight reads.
 ///
@@ -32,7 +25,7 @@ pub(crate) fn strategy(
     WorktreeStrategy {
         default_branch: "main".to_string(),
         branch_prefix: "demeteo/features/".to_string(),
-        test_command: test.map(posix),
+        test_command: test.map(str::to_string),
         build_command: None,
         coverage_command: None,
         conventions_file: None,
@@ -40,11 +33,11 @@ pub(crate) fn strategy(
         harnesses: (!harnesses.is_empty()).then(|| {
             harnesses
                 .iter()
-                .map(|(name, cmd)| (name.to_string(), posix(cmd)))
+                .map(|(name, cmd)| (name.to_string(), cmd.to_string()))
                 .collect()
         }),
         validation_gates: None,
-        prepare_command: prepare.map(posix),
+        prepare_command: prepare.map(str::to_string),
         extra_writable_paths: Vec::new(),
     }
 }

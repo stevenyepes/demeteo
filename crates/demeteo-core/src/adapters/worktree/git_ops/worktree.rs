@@ -1,40 +1,11 @@
-use super::{git_request, GitOpsHelper};
+use super::{git_request, git_request_vec, GitOpsHelper};
 use crate::domain::branch_listing::BranchOption;
 use crate::domain::models::WorktreeInfo;
 use crate::paths;
-use crate::ports::worktree_ops::{
-    CreateTrustedTerminalWorktreeRequest, MaterializeDependencyCacheRequest,
-    TerminalWorktreeCreated, TerminalWorktreeRequest, TrustedWorktreePort, TrustedWorktreeTarget,
-};
+use crate::ports::worktree_ops::{TerminalWorktreeCreated, TerminalWorktreeRequest};
 use std::path::{Component, Path, PathBuf};
 
 impl GitOpsHelper {
-    fn trusted_target(
-        &self,
-        machine_id: Option<&str>,
-        repo_dir: &str,
-    ) -> Result<TrustedWorktreeTarget, String> {
-        Self::trusted_target_is_local(machine_id)?;
-        let repo = Path::new(repo_dir);
-        let repos = repo.parent().ok_or_else(|| {
-            "trusted worktree: repository path has no containing repos directory".to_string()
-        })?;
-        if repos.file_name() != Some(std::ffi::OsStr::new(paths::REPOS_SUBDIR)) {
-            return Err(
-                "trusted worktree: repository is not below the controlled repos directory"
-                    .to_string(),
-            );
-        }
-        let project_root = repos.parent().ok_or_else(|| {
-            "trusted worktree: controlled repos directory has no project root".to_string()
-        })?;
-        Ok(TrustedWorktreeTarget::from_resolved(
-            machine_id.map(str::to_string),
-            repo_dir.to_string(),
-            project_root.to_string_lossy().into_owned(),
-        ))
-    }
-
     /// Get the current HEAD branch for a repo directory
     pub async fn get_head_branch(
         &self,
@@ -63,10 +34,7 @@ impl GitOpsHelper {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let output = self
             .exec
-            .run_program(
-                machine_str,
-                git_request(repo_dir, ["worktree", "list", "--porcelain"]),
-            )
+            .run_program(machine_str, worktree_list_request(repo_dir))
             .await?;
 
         Ok(crate::domain::worktree_listing::parse(&output).linked)
@@ -88,22 +56,44 @@ impl GitOpsHelper {
         project_root: &str,
         request: &TerminalWorktreeRequest,
     ) -> Result<TerminalWorktreeCreated, String> {
-        let created = TrustedWorktreePort::create_terminal_worktree(
-            self,
-            CreateTrustedTerminalWorktreeRequest {
-                target: TrustedWorktreeTarget::from_resolved(
-                    machine_id.map(str::to_string),
-                    repo_dir.to_string(),
-                    project_root.to_string(),
-                ),
-                terminal: request.clone(),
-            },
-        )
-        .await?;
+        let branch = request.branch.as_str();
+        validate_terminal_branch(branch)?;
+        let destination = terminal_worktree_dir(repo_dir, project_root, &request.worktree_name)?;
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let base_ref = self
+            .terminal_start_point(machine_str, repo_dir, request.base_branch.as_deref())
+            .await?;
+        let start_point = request.base_branch.as_ref().map(|_| base_ref.as_str());
+        let command = terminal_worktree_create_cmd(
+            repo_dir,
+            project_root,
+            branch,
+            &destination,
+            start_point,
+            "",
+        )?;
+        let output = self
+            .exec
+            .run_command(machine_str, &command)
+            .await
+            .map_err(|e| {
+                format!(
+                    "create_terminal_worktree: git worktree add for branch '{branch}' failed: {e}"
+                )
+            })?;
 
+        // The path the command resolved, not the one derived from
+        // configuration. Git records the physical destination and replays it
+        // from `worktree list`, so returning the logical form would hand the
+        // caller a path that never equals the one it lists back — on macOS
+        // `/var` and `/private/var` name the same directory and compare unequal.
         Ok(TerminalWorktreeCreated {
-            worktree: created.worktree,
-            base_ref: created.base_ref,
+            worktree: WorktreeInfo {
+                path: created_terminal_worktree_path(&output, &destination),
+                branch: Some(branch.to_string()),
+                is_locked: false,
+            },
+            base_ref,
         })
     }
 
@@ -121,7 +111,7 @@ impl GitOpsHelper {
     /// which of the two it got. A base that resolves neither way is an error —
     /// silently falling through to HEAD is how a session starts on a branch
     /// nobody chose.
-    async fn terminal_start_point(
+    pub(super) async fn terminal_start_point(
         &self,
         machine_str: &str,
         repo_dir: &str,
@@ -185,8 +175,34 @@ impl GitOpsHelper {
         worktree_path: &str,
         force: bool,
     ) -> Result<(), String> {
-        let _ = (machine_id, repo_dir, project_root, worktree_path, force);
-        Err("terminal worktree removal is unavailable until TrustedWorktreePort can retire a Git registration without re-resolving the destination pathname".to_string())
+        let owned = self
+            .list_terminal_worktrees(machine_id, repo_dir, project_root)
+            .await?;
+        let target = owned
+            .into_iter()
+            .find(|worktree| Path::new(&worktree.path) == Path::new(worktree_path))
+            .ok_or_else(|| {
+                format!(
+                    "remove_terminal_worktree: {worktree_path} is not a terminal worktree of {repo_dir}"
+                )
+            })?;
+
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let mut args = vec!["worktree".to_string(), "remove".to_string()];
+        if force {
+            args.push("--force".to_string());
+        }
+        args.push(target.path);
+        self.exec
+            .run_program(machine_str, git_request_vec(repo_dir, args))
+            .await
+            .map_err(|e| format!("remove_terminal_worktree: git worktree remove failed: {e}"))?;
+        let _ = self
+            .exec
+            .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
+            .await;
+
+        Ok(())
     }
 
     /// Restate a terminal-worktree failure when the repository it names is not
@@ -229,6 +245,11 @@ impl GitOpsHelper {
     }
 
     /// The branches this repository can cut a terminal worktree from.
+    ///
+    /// Full ref names, not `%(refname:short)`: shortening is what makes
+    /// `origin/main` and a local branch someone literally named `origin/main`
+    /// arrive as the same string, and [`crate::domain::branch_listing`] tells
+    /// the two apart by prefix.
     pub async fn list_terminal_branches(
         &self,
         machine_id: Option<&str>,
@@ -269,10 +290,7 @@ impl GitOpsHelper {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let output = self
             .exec
-            .run_program(
-                machine_str,
-                git_request(repo_dir, ["worktree", "list", "--porcelain"]),
-            )
+            .run_program(machine_str, worktree_list_request(repo_dir))
             .await?;
         let listing = crate::domain::worktree_listing::parse(&output);
         let primary = listing.primary.ok_or_else(|| {
@@ -583,15 +601,17 @@ impl GitOpsHelper {
         //    per subtask. Best-effort: a failed link here shouldn't block
         //    worktree provisioning — the step will simply see the missing
         //    dependency and the harness fails as before.
-        TrustedWorktreePort::materialize_dependency_cache(
-            self,
-            MaterializeDependencyCacheRequest {
-                target: self.trusted_target(machine_id, repo_dir)?,
-                worktree_dir: wt_dir.clone(),
-                feature_cache_dir: paths::feature_cache_dir(repo_dir, feature_branch),
-            },
-        )
-        .await?;
+        let _ = self
+            .exec
+            .run_command(
+                machine_str,
+                &link_dependency_caches_cmd(
+                    repo_dir,
+                    &wt_dir,
+                    &paths::feature_cache_dir(repo_dir, feature_branch),
+                ),
+            )
+            .await;
 
         Ok(wt_dir)
     }
@@ -666,15 +686,13 @@ impl GitOpsHelper {
             })?;
 
         if let Some(cache) = cache_dir {
-            TrustedWorktreePort::materialize_dependency_cache(
-                self,
-                MaterializeDependencyCacheRequest {
-                    target: self.trusted_target(machine_id, repo_dir)?,
-                    worktree_dir: wt_dir.clone(),
-                    feature_cache_dir: cache.to_string(),
-                },
-            )
-            .await?;
+            let _ = self
+                .exec
+                .run_command(
+                    machine_str,
+                    &link_dependency_caches_cmd(repo_dir, &wt_dir, cache),
+                )
+                .await;
         }
 
         Ok(wt_dir)
@@ -1017,26 +1035,68 @@ fn worktree_dir(repo_dir: &str, worktree_id: &str) -> String {
 /// The one reading every worktree listing in this crate is built from. Shared
 /// so the terminal listing and merge-back cannot end up asking git a
 /// differently-shaped question than [`GitOpsHelper::list_worktrees`] does.
-pub(super) fn worktree_list_cmd(repo_dir: &str) -> String {
-    format!(
-        "git -C {} worktree list --porcelain",
-        paths::shell_escape_posix(repo_dir)
-    )
+pub(super) fn worktree_list_request(dir: &str) -> crate::ports::execution::ProgramRequest {
+    super::git_request(dir, ["worktree", "list", "--porcelain"])
 }
 
-/// Ask for full ref names, not `%(refname:short)`: shortening is what makes
-/// `origin/main` and a local branch someone literally named `origin/main`
-/// arrive as the same string, and [`crate::domain::branch_listing`] tells the
-/// two apart by prefix.
-fn branch_list_cmd(repo_dir: &str) -> String {
-    format!(
-        "git -C {} for-each-ref --format='%(refname)' refs/heads refs/remotes/origin",
-        paths::shell_escape_posix(repo_dir)
-    )
+/// Resolve a terminal worktree beneath a directory controlled by Demeteo, not
+/// by the interactive caller. A relative name may contain normal path
+/// components, but it may never select the repository root, an absolute path,
+/// or an ancestor of that directory.
+fn terminal_worktree_dir(
+    repo_dir: &str,
+    project_root: &str,
+    worktree_name: &str,
+) -> Result<String, String> {
+    let name = Path::new(worktree_name);
+    if worktree_name.trim().is_empty()
+        || name.is_absolute()
+        // A remote repository may use POSIX paths while the desktop host is
+        // Windows (or vice versa), so reject the other platform's absolute
+        // path forms instead of trusting this host's `Path` parser alone.
+        || worktree_name.contains('\\')
+        || worktree_name.contains(':')
+        || name.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir
+                    | Component::RootDir
+                    | Component::Prefix(_)
+                    | Component::CurDir
+            )
+        })
+    {
+        return Err("create_terminal_worktree: worktree name must be a non-empty relative path without traversal".to_string());
+    }
+
+    let worktree_area = terminal_worktree_area(repo_dir, project_root)?;
+    let destination: PathBuf = worktree_area.join(name);
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+/// `<project_root>/terminal-worktrees/<repo_name>` — a sibling of the project's
+/// `repos/`, never a child of it.
+///
+/// These worktrees hold the user's uncommitted interactive work, and
+/// `application::bootstrap` prunes `repos/` down to the configured repository
+/// names on every re-bootstrap. Inside `repos/` the area is destroyed, and
+/// destroyed *asymmetrically*: the local prune walks `read_dir`, which yields
+/// dot-entries, while the remote prune globs `"$dir"/*`, which does not match a
+/// leading dot — so a hidden sibling of the checkout survived remotely and
+/// vanished locally. Keeping the area out of `repos/` is what makes the two
+/// transports agree.
+fn terminal_worktree_area(repo_dir: &str, project_root: &str) -> Result<PathBuf, String> {
+    let repo_name = Path::new(repo_dir).file_name().ok_or_else(|| {
+        "create_terminal_worktree: repository path has no directory name".to_string()
+    })?;
+    Ok(Path::new(project_root)
+        .join(paths::TERMINAL_WORKTREES_SUBDIR)
+        .join(repo_name))
 }
 
 /// `<repos>/.<repo_name>.demeteo-terminal-worktrees` — where terminal
-/// worktrees lived before they moved out of `repos/`. Retained only so
+/// worktrees lived before [`paths::TERMINAL_WORKTREES_SUBDIR`] moved them out
+/// of `repos/`. Retained only so
 /// [`GitOpsHelper::cleanup_legacy_terminal_worktrees`] can find and retire
 /// them; nothing creates this path any more.
 fn legacy_terminal_worktree_area(repo_dir: &str) -> Option<PathBuf> {
@@ -1183,7 +1243,7 @@ fn created_terminal_worktree_path(output: &str, derived: &str) -> String {
 ///
 /// The infix is not refused for a *base* branch: reading a subtask branch is
 /// harmless, and the listing already withholds them from the picker.
-fn validate_terminal_branch(branch: &str) -> Result<(), String> {
+pub(super) fn validate_terminal_branch(branch: &str) -> Result<(), String> {
     if branch.contains(crate::domain::ids::SUBTASK_BRANCH_INFIX) {
         return Err(format!(
             "create_terminal_worktree: branch '{branch}' is not a safe Git branch name"

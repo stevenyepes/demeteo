@@ -369,11 +369,11 @@ pub async fn delete_workspace(ctx: &AppContext, id: String) -> Result<(), String
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct CommandProbeDraft {
     #[serde(default)]
-    pub prepare_command: Option<crate::domain::models::ScriptVariants>,
+    pub prepare_command: Option<String>,
     #[serde(default)]
-    pub test_command: Option<crate::domain::models::ScriptVariants>,
+    pub test_command: Option<String>,
     #[serde(default)]
-    pub harnesses: Option<std::collections::HashMap<String, crate::domain::models::ScriptVariants>>,
+    pub harnesses: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Probe a project's configured commands on **the project's own machine**

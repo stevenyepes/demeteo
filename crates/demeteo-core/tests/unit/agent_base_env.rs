@@ -163,12 +163,11 @@ impl ExecutionPort for FakeExec {
     }
 }
 
-fn local_home() -> String {
-    // `agent_base_env` / `resolve_agent_home` fall back to
-    // `std::env::var("HOME")` for local runs. Pin the value here so
-    // the test doesn't depend on the test runner's environment.
-    std::env::var("HOME").unwrap_or_default()
-}
+/// The identity of the local machine, spelled as a value the port has to be
+/// asked for. A test that compared against `std::env::var("HOME")` would pass
+/// whether the function consulted the port or read the environment behind its
+/// back, which is the distinction these tests exist to hold.
+const GUI_HOME: &str = "/home/gui-user";
 
 #[tokio::test]
 async fn agent_base_env_uses_remote_home_for_remote_machine() {
@@ -182,45 +181,42 @@ async fn agent_base_env_uses_remote_home_for_remote_machine() {
 }
 
 #[tokio::test]
-async fn agent_base_env_uses_local_home_for_empty_machine_id() {
-    let exec = Arc::new(FakeExec::new());
+async fn agent_base_env_asks_the_port_for_an_empty_machine_id() {
+    let exec = Arc::new(FakeExec::new().with_home("", GUI_HOME));
     let env = agent_base_env(exec.as_ref(), "").await;
-    let expected = local_home();
-    if expected.is_empty() {
-        // No HOME in the test runner — function should not invent one.
-        assert!(!env.contains_key("HOME"));
-    } else {
-        assert_eq!(env.get("HOME").map(String::as_str), Some(expected.as_str()));
-    }
+    assert_eq!(env.get("HOME").map(String::as_str), Some(GUI_HOME));
 }
 
 #[tokio::test]
-async fn agent_base_env_uses_local_home_for_literal_local() {
+async fn agent_base_env_asks_the_port_for_the_literal_local_machine() {
+    let exec = Arc::new(FakeExec::new().with_home("local", GUI_HOME));
+    let env = agent_base_env(exec.as_ref(), "local").await;
+    assert_eq!(env.get("HOME").map(String::as_str), Some(GUI_HOME));
+}
+
+#[tokio::test]
+async fn agent_base_env_invents_no_home_when_the_local_machine_cannot_name_one() {
+    // Windows reaches its home through `USERPROFILE`, so an unset `HOME` is
+    // not proof of a broken machine and must not be forged into one.
     let exec = Arc::new(FakeExec::new());
     let env = agent_base_env(exec.as_ref(), "local").await;
-    let expected = local_home();
-    if expected.is_empty() {
-        assert!(!env.contains_key("HOME"));
-    } else {
-        assert_eq!(env.get("HOME").map(String::as_str), Some(expected.as_str()));
-    }
+    assert!(!env.contains_key("HOME"));
 }
 
 #[tokio::test]
 async fn agent_base_env_falls_back_to_local_home_on_remote_resolution_failure() {
-    let exec = Arc::new(FakeExec::new().failing_for("m-flaky"));
+    let exec = Arc::new(
+        FakeExec::new()
+            .with_home("local", GUI_HOME)
+            .failing_for("m-flaky"),
+    );
     let env = agent_base_env(exec.as_ref(), "m-flaky").await;
     // Graceful degradation: the agent at least sees *some* HOME
     // rather than crashing on a missing `~`. The real fix is the
     // SSH adapter's `home_cache`, but the port may legitimately be
     // down at agent-spawn time and the agent shouldn't fail the
     // whole run for it.
-    let expected = local_home();
-    if expected.is_empty() {
-        assert!(!env.contains_key("HOME"));
-    } else {
-        assert_eq!(env.get("HOME").map(String::as_str), Some(expected.as_str()));
-    }
+    assert_eq!(env.get("HOME").map(String::as_str), Some(GUI_HOME));
 }
 
 #[tokio::test]
@@ -298,15 +294,15 @@ async fn resolve_agent_home_remote_uses_exec() {
 }
 
 #[tokio::test]
-async fn resolve_agent_home_local_uses_parent() {
-    let exec = Arc::new(FakeExec::new());
+async fn resolve_agent_home_local_uses_exec() {
+    let exec = Arc::new(FakeExec::new().with_home("local", GUI_HOME));
     let home = resolve_agent_home(exec.as_ref(), "local").await;
-    assert_eq!(home, local_home());
+    assert_eq!(home, GUI_HOME);
 }
 
 #[tokio::test]
-async fn resolve_agent_home_empty_uses_parent() {
-    let exec = Arc::new(FakeExec::new());
+async fn resolve_agent_home_empty_uses_exec() {
+    let exec = Arc::new(FakeExec::new().with_home("", GUI_HOME));
     let home = resolve_agent_home(exec.as_ref(), "").await;
-    assert_eq!(home, local_home());
+    assert_eq!(home, GUI_HOME);
 }

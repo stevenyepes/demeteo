@@ -8,9 +8,7 @@
 
 use super::*;
 use crate::domain::ids::{FeatureId, ProjectId, StepId, WorkflowId};
-use crate::domain::models::{
-    Feature, ProjectSettings, ScriptVariants, StepConfig, WorktreeStrategy,
-};
+use crate::domain::models::{Feature, ProjectSettings, StepConfig, WorktreeStrategy};
 use crate::domain::verifier::VerifierConfig;
 use crate::ports::db::ProjectRepository;
 
@@ -89,7 +87,7 @@ fn strategy(test_command: Option<&str>) -> WorktreeStrategy {
     WorktreeStrategy {
         default_branch: "main".to_string(),
         branch_prefix: "demeteo/features/".to_string(),
-        test_command: test_command.map(posix),
+        test_command: test_command.map(str::to_string),
         build_command: None,
         coverage_command: None,
         conventions_file: None,
@@ -98,13 +96,6 @@ fn strategy(test_command: Option<&str>) -> WorktreeStrategy {
         validation_gates: None,
         prepare_command: None,
         extra_writable_paths: Vec::new(),
-    }
-}
-
-fn posix(command: &str) -> ScriptVariants {
-    ScriptVariants {
-        posix: Some(command.to_string()),
-        powershell: None,
     }
 }
 
@@ -192,8 +183,8 @@ fn unreadable_settings_yield_no_block_rather_than_a_guess() {
 #[test]
 fn gates_are_collected_from_every_step_that_carries_a_verifier() {
     let mut harnesses = std::collections::HashMap::new();
-    harnesses.insert("lint".to_string(), posix("npm run lint"));
-    harnesses.insert("unit".to_string(), posix("npm run unit"));
+    harnesses.insert("lint".to_string(), "npm run lint".to_string());
+    harnesses.insert("unit".to_string(), "npm run unit".to_string());
     let projects = SettingsDouble::readable(WorktreeStrategy {
         harnesses: Some(harnesses),
         ..strategy(Some("npm test"))
@@ -220,7 +211,7 @@ fn gates_are_collected_from_every_step_that_carries_a_verifier() {
 #[test]
 fn a_gate_declared_by_two_steps_is_named_once() {
     let mut harnesses = std::collections::HashMap::new();
-    harnesses.insert("unit".to_string(), posix("npm run unit"));
+    harnesses.insert("unit".to_string(), "npm run unit".to_string());
     let projects = SettingsDouble::readable(WorktreeStrategy {
         harnesses: Some(harnesses),
         ..strategy(None)

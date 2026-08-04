@@ -45,9 +45,7 @@ pub use super::session::SftpSession;
 use super::{command, control_rpc, interactive, sftp};
 use crate::ports::db::MachineRepository;
 use crate::ports::execution::SftpEntry;
-use crate::ports::execution::{
-    ExecutionPort, InteractiveHandle, ProgramRequest, ScriptRequest, ShellOptions,
-};
+use crate::ports::execution::{ExecutionPort, InteractiveHandle, ProgramRequest, ShellOptions};
 use crate::ports::worktree_ops::{
     CreateTrustedTerminalWorktreeRequest, DependencyCacheMaterialization,
     MaterializeDependencyCacheRequest, RemoveTrustedTerminalWorktreeRequest,
@@ -127,23 +125,6 @@ impl ExecutionPort for SshClientAdapter {
         .await
     }
 
-    async fn run_script(&self, machine_id: &str, request: ScriptRequest) -> Result<String, String> {
-        let script = request.variants.posix.ok_or_else(|| {
-            "configuration error: this Linux remote has no POSIX script variant".to_string()
-        })?;
-        self.run_command_with(
-            machine_id,
-            &script,
-            ShellOptions {
-                login_shell: false,
-                interactive: false,
-                cwd: request.cwd,
-                env: request.env,
-                timeout: request.timeout,
-            },
-        )
-        .await
-    }
     async fn run_command_with(
         &self,
         machine_id: &str,

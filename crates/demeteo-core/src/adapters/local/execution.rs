@@ -6,9 +6,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use crate::ports::execution::SftpEntry;
-use crate::ports::execution::{
-    ExecutionPort, InteractiveHandle, ProgramRequest, ScriptRequest, ShellOptions,
-};
+use crate::ports::execution::{ExecutionPort, InteractiveHandle, ProgramRequest, ShellOptions};
 use crate::shared::proc::sanitize_child_env;
 use crate::shared::shell;
 
@@ -473,60 +471,6 @@ impl ExecutionPort for LocalSubprocessAdapter {
         local_run_program(request).await
     }
 
-    async fn run_script(
-        &self,
-        _machine_id: &str,
-        request: ScriptRequest,
-    ) -> Result<String, String> {
-        #[cfg(windows)]
-        let (executable, args) =
-            match request.variants.powershell {
-                Some(script) => (
-                    "pwsh".to_string(),
-                    vec![
-                        "-NoProfile".to_string(),
-                        "-NonInteractive".to_string(),
-                        "-Command".to_string(),
-                        script,
-                    ],
-                ),
-                None => return Err(
-                    "configuration error: this Windows project has no PowerShell script variant"
-                        .to_string(),
-                ),
-            };
-        #[cfg(not(windows))]
-        let (executable, args) = match request.variants.posix {
-            Some(script) => ("sh".to_string(), vec!["-c".to_string(), script]),
-            None => {
-                return Err(
-                    "configuration error: this POSIX target has no POSIX script variant"
-                        .to_string(),
-                )
-            }
-        };
-        let result = local_run_program(ProgramRequest {
-            executable,
-            args,
-            cwd: request.cwd,
-            env: request.env,
-            timeout: request.timeout,
-        })
-        .await;
-        #[cfg(windows)]
-        return result.map_err(|error| {
-            if error.starts_with("Failed to execute 'pwsh':") {
-                format!(
-                    "configuration error: PowerShell 7 is required for local Windows scripts; install pwsh and ensure it is on PATH ({})",
-                    error
-                )
-            } else {
-                error
-            }
-        });
-        #[cfg(not(windows))]
-        result
-    }
     async fn run_command_with(
         &self,
         _machine_id: &str,
@@ -588,26 +532,32 @@ impl ExecutionPort for LocalSubprocessAdapter {
 
     async fn create_dir_all(&self, _machine_id: &str, path: &str) -> Result<(), String> {
         let path = path.to_string();
-        tokio::task::spawn_blocking(move || std::fs::create_dir_all(&path))
-            .await
-            .map_err(|e| format!("blocking task panicked: {}", e))?
-            .map_err(|e| format!("Failed to create directory '{}': {}", path, e))
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&path)
+                .map_err(|e| format!("Failed to create directory '{}': {}", path, e))
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
     async fn remove_dir_all(&self, _machine_id: &str, path: &str) -> Result<(), String> {
         let path = path.to_string();
-        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&path))
-            .await
-            .map_err(|e| format!("blocking task panicked: {}", e))?
-            .map_err(|e| format!("Failed to remove directory '{}': {}", path, e))
+        tokio::task::spawn_blocking(move || {
+            std::fs::remove_dir_all(&path)
+                .map_err(|e| format!("Failed to remove directory '{}': {}", path, e))
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
     async fn remove_file(&self, _machine_id: &str, path: &str) -> Result<(), String> {
         let path = path.to_string();
-        tokio::task::spawn_blocking(move || std::fs::remove_file(&path))
-            .await
-            .map_err(|e| format!("blocking task panicked: {}", e))?
-            .map_err(|e| format!("Failed to remove file '{}': {}", path, e))
+        tokio::task::spawn_blocking(move || {
+            std::fs::remove_file(&path)
+                .map_err(|e| format!("Failed to remove file '{}': {}", path, e))
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
     async fn set_file_mode(&self, _machine_id: &str, path: &str, mode: u32) -> Result<(), String> {

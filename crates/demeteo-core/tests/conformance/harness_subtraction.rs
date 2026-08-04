@@ -146,25 +146,12 @@ struct GateConfig {
 fn set_project(ctx: &AppContext, project_id: &ProjectId, config: &GateConfig) {
     let mut settings = crate::adapters::step_executor::setup::fetch_default_settings();
     settings.project_id = project_id.clone();
-    settings.worktree_strategy.test_command = config.test_command.as_deref().map(posix_script);
+    settings.worktree_strategy.test_command = config.test_command.clone();
     if !config.harnesses.is_empty() {
-        settings.worktree_strategy.harnesses = Some(
-            config
-                .harnesses
-                .iter()
-                .map(|(name, command)| (name.clone(), posix_script(command)))
-                .collect(),
-        );
+        settings.worktree_strategy.harnesses = Some(config.harnesses.iter().cloned().collect());
     }
     settings.worktree_strategy.validation_gates = config.validation_gates.clone();
     ctx.projects.save_settings(settings).expect("save settings");
-}
-
-fn posix_script(command: &str) -> crate::domain::models::ScriptVariants {
-    crate::domain::models::ScriptVariants {
-        posix: Some(command.to_string()),
-        powershell: None,
-    }
 }
 
 /// Seed a real local git repo so `bootstrap_project` skips its network clone.

@@ -149,11 +149,12 @@ pub fn no_permission_env(_p: &PermissionProfile) -> HashMap<String, String> {
 /// read their config out of `$HOME`, and a wrong value causes the
 /// agent to exit with code 1 and no useful diagnostic. Worse, a
 /// split identity (`HOME=<remote>` but `USER=<gui>`) confuses some
-/// provider auth flows. For local runs we keep the parent
-/// process's values; for remote runs we ask the execution port —
-/// `resolve_home` (cached by the SSH adapter's first
-/// `printf %s "$HOME"` probe) and `resolve_user` (the
-/// `Machine.username` the SSH channel authenticates as).
+/// provider auth flows. Both are asked of the execution port for
+/// every machine, local included — `resolve_home` (the GUI process's
+/// own home locally; on the SSH adapter, the value cached by its
+/// first `printf %s "$HOME"` probe) and `resolve_user` (locally the
+/// GUI's user; remotely the `Machine.username` the SSH channel
+/// authenticates as).
 ///
 /// SHELL and TMPDIR are inherited from the parent process for both
 /// local and remote runs; neither has a per-machine meaning.
@@ -183,10 +184,10 @@ pub async fn agent_base_env(
         env.insert("USER".to_string(), u.clone());
         env.insert("LOGNAME".to_string(), u);
     } else {
-        // Local runs may not need a forced USER override (the parent
-        // process already has it), but if the GUI process happens to
-        // launch without USER set we still try to pull it from the
-        // exec port's view of the local machine identity.
+        // The port could not name the user (an unreachable remote, or a
+        // GUI process launched without one). Forward whatever the parent
+        // has rather than nothing: a POSIX agent with no `$USER` is worse
+        // off than one carrying the desktop's.
         for key in ["USER", "LOGNAME"] {
             if let Ok(val) = std::env::var(key) {
                 env.insert(key.to_string(), val);
@@ -197,26 +198,28 @@ pub async fn agent_base_env(
 }
 
 /// Resolve the (HOME, USER) identity to forward to an agent process
-/// spawned against `machine_id`. Local runs (`""` or `"local"`)
-/// return the GUI process's HOME and no forced USER (the parent's
-/// `$USER` is inherited via `agent_base_env`'s `std::env::var`
-/// loop); remote runs return the values already cached by the SSH
-/// adapter — `home_cache` (probed via `printf %s "$HOME"` over the
-/// SSH channel) and the `Machine.username` the SSH channel
-/// authenticates as. Falls back to the parent process's HOME and
-/// skips the USER override if the remote resolution fails, so the
-/// agent at least has *some* HOME rather than crashing on a
-/// missing `~`.
+/// spawned against `machine_id`, always through the execution port.
+/// The local adapter reads the GUI process's own identity — and on
+/// Windows that is `USERPROFILE` / `HOMEDRIVE`+`HOMEPATH` and
+/// `USERNAME`, none of which a direct `std::env::var("HOME")` would
+/// find; the SSH adapter returns its `home_cache` (probed via
+/// `printf %s "$HOME"` over the channel) and the `Machine.username`
+/// the channel authenticates as.
+///
+/// A remote machine that fails to resolve degrades to the *local*
+/// home and no USER override: wrong, but the agent at least has some
+/// `$HOME` rather than exiting 1 on a missing `~`. A local machine
+/// that fails to resolve yields an empty home, which `agent_base_env`
+/// drops rather than forwarding as `HOME=`.
 pub async fn resolve_agent_identity(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
 ) -> (String, Option<String>) {
-    if machine_id.is_empty() || machine_id == "local" {
-        return (std::env::var("HOME").unwrap_or_default(), None);
-    }
+    let is_local = machine_id.is_empty() || machine_id == "local";
     let home = match exec.resolve_home(machine_id).await {
         Ok(h) if !h.is_empty() => h,
-        _ => std::env::var("HOME").unwrap_or_default(),
+        _ if is_local => String::new(),
+        _ => exec.resolve_home("local").await.unwrap_or_default(),
     };
     let user = exec.resolve_user(machine_id).await.ok();
     (home, user)

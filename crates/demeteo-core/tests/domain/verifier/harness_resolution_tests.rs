@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use super::{resolve_harnesses, ResolvedHarness, VerifierConfig, DEFAULT_HARNESS_NAME};
-use crate::domain::models::{ScriptVariants, WorktreeStrategy};
+use crate::domain::models::WorktreeStrategy;
 
 const CEILING_S: u64 = 600;
 
@@ -22,7 +22,7 @@ fn strategy(
     WorktreeStrategy {
         default_branch: "main".to_string(),
         branch_prefix: "demeteo/features/".to_string(),
-        test_command: test_command.map(posix),
+        test_command: test_command.map(str::to_string),
         build_command: None,
         coverage_command: None,
         conventions_file: None,
@@ -30,19 +30,12 @@ fn strategy(
         harnesses: (!harnesses.is_empty()).then(|| {
             harnesses
                 .iter()
-                .map(|(n, c)| (n.to_string(), posix(c)))
+                .map(|(n, c)| (n.to_string(), c.to_string()))
                 .collect::<HashMap<_, _>>()
         }),
         validation_gates: gates.map(|g| g.iter().map(|s| s.to_string()).collect()),
         prepare_command: None,
         extra_writable_paths: Vec::new(),
-    }
-}
-
-fn posix(command: &str) -> ScriptVariants {
-    ScriptVariants {
-        posix: Some(command.to_string()),
-        powershell: None,
     }
 }
 

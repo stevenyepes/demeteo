@@ -1,8 +1,6 @@
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
-
-pub use crate::domain::models::ScriptVariants;
 
 /// Prefix on the `Err` string of an [`ExecutionPort`] method when the
 /// failure is a **transport/connection** problem (the machine could not be
@@ -21,21 +19,18 @@ pub const TRANSPORT_ERROR_PREFIX: &str = "transport: ";
 /// never finished being tested. Both prefixes classify as an *environment*
 /// failure; only an actual non-zero exit is a verdict.
 pub const TIMEOUT_ERROR_PREFIX: &str = "timeout: ";
+
 /// A Demeteo-owned process invocation. Commands are structured argv so they
-/// never depend on shell quoting or a POSIX shell on Windows.
+/// never depend on shell quoting or a POSIX shell being present.
+///
+/// This is the counterpart to [`ExecutionPort::run_command_with`], split by
+/// **authorship** rather than by platform (`docs/WINDOWS_PARITY.md`): what
+/// Demeteo itself invokes — git, probes, filesystem tools — is argv with no
+/// shell, while a *user-authored* body keeps the shell it was written for.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProgramRequest {
     pub executable: String,
     pub args: Vec<String>,
-    pub cwd: Option<String>,
-    pub env: BTreeMap<String, String>,
-    pub timeout: Option<std::time::Duration>,
-}
-
-/// Explicit user-authored shell bodies. Demeteo never translates between them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ScriptRequest {
-    pub variants: ScriptVariants,
     pub cwd: Option<String>,
     pub env: BTreeMap<String, String>,
     pub timeout: Option<std::time::Duration>,
@@ -209,15 +204,6 @@ pub trait ExecutionPort: Send + Sync {
         _request: ProgramRequest,
     ) -> Result<String, String> {
         Err("structured program execution is not implemented by this transport".to_string())
-    }
-
-    /// Executes an explicitly selected user-authored script variant.
-    async fn run_script(
-        &self,
-        _machine_id: &str,
-        _request: ScriptRequest,
-    ) -> Result<String, String> {
-        Err("script execution is not implemented by this transport".to_string())
     }
 
     /// Run `cmd` through a **non-login** POSIX shell in the adapter's

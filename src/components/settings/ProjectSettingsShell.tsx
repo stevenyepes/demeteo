@@ -91,25 +91,13 @@ function Shell() {
             {[
               { label: 'Default Branch', value: s.defaultBranch, onChange: s.setDefaultBranch },
               { label: 'Branch Prefix', value: s.branchPrefix, onChange: s.setBranchPrefix },
+              { label: 'Default Test Command', value: s.testCommand, onChange: s.setTestCommand, placeholder: 'e.g. npm test or cargo test' },
             ].map(({ label, value, onChange, placeholder }) => (
               <div key={label}>
                 <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">{label}</label>
                 <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600" />
               </div>
             ))}
-            <fieldset className="space-y-2">
-              <legend className="block text-[11px] font-mono text-slate-400 uppercase tracking-wider">Default Test Command</legend>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                <label>
-                  <span className="block text-[10px] font-mono text-slate-500 mb-1 uppercase tracking-wider">POSIX</span>
-                  <input aria-label="Default Test Command POSIX" type="text" value={s.testCommand.posix ?? ''} onChange={e => s.setTestCommand({ ...s.testCommand, posix: e.target.value })} placeholder="e.g. npm test or cargo test" className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600 font-mono" />
-                </label>
-                <label>
-                  <span className="block text-[10px] font-mono text-slate-500 mb-1 uppercase tracking-wider">PowerShell</span>
-                  <input aria-label="Default Test Command PowerShell" type="text" value={s.testCommand.powershell ?? ''} onChange={e => s.setTestCommand({ ...s.testCommand, powershell: e.target.value })} placeholder="e.g. npm test or cargo test" className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600 font-mono" />
-                </label>
-              </div>
-            </fieldset>
             <div>
               <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Conflict Resolution Policy</label>
               <select value={s.conflictPolicy} onChange={e => s.setConflictPolicy(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50">

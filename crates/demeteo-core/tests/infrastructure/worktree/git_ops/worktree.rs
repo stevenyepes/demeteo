@@ -9,6 +9,7 @@ use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::worktree_ops::{TerminalWorktreeRequest, WorktreeOpsPort};
 use rusqlite::Connection;
+use std::sync::Arc;
 
 /// A creation request that names no base, so the start point stays the primary
 /// checkout's HEAD. Tests about *where a branch is cut* set `base_branch`

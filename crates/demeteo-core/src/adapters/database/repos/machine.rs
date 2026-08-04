@@ -30,17 +30,7 @@ impl MachineRepository for SqliteAdapter {
                     agents: row.get(7)?,
                     auto_approved_rules: row.get(8)?,
                     use_login_shell: row.get(9)?,
-                    setup_commands: row
-                        .get::<_, Option<String>>(10)?
-                        .map(|raw| serde_json::from_str(&raw))
-                        .transpose()
-                        .map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                10,
-                                rusqlite::types::Type::Text,
-                                Box::new(error),
-                            )
-                        })?,
+                    setup_commands: row.get(10)?,
                     notify_webhook_url: row.get(11)?,
                 })
             })
@@ -72,17 +62,7 @@ impl MachineRepository for SqliteAdapter {
                     agents: row.get(7)?,
                     auto_approved_rules: row.get(8)?,
                     use_login_shell: row.get(9)?,
-                    setup_commands: row
-                        .get::<_, Option<String>>(10)?
-                        .map(|raw| serde_json::from_str(&raw))
-                        .transpose()
-                        .map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                10,
-                                rusqlite::types::Type::Text,
-                                Box::new(error),
-                            )
-                        })?,
+                    setup_commands: row.get(10)?,
                     notify_webhook_url: row.get(11)?,
                 })
             })
@@ -99,7 +79,7 @@ impl MachineRepository for SqliteAdapter {
         conn.execute(
             "INSERT INTO machines (id, name, host, port, username, auth_type, key_path, agents, auto_approved_rules, use_login_shell, setup_commands, notify_webhook_url)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![m.id, m.name, m.host, m.port, m.username, m.auth_type, m.key_path, m.agents, m.auto_approved_rules, m.use_login_shell, m.setup_commands.map(|scripts| serde_json::to_string(&scripts)).transpose().map_err(|error| error.to_string())?, m.notify_webhook_url],
+            params![m.id, m.name, m.host, m.port, m.username, m.auth_type, m.key_path, m.agents, m.auto_approved_rules, m.use_login_shell, m.setup_commands, m.notify_webhook_url],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -124,10 +104,7 @@ impl MachineRepository for SqliteAdapter {
                 m.agents,
                 m.auto_approved_rules,
                 m.use_login_shell,
-                m.setup_commands
-                    .map(|scripts| serde_json::to_string(&scripts))
-                    .transpose()
-                    .map_err(|error| error.to_string())?,
+                m.setup_commands,
                 m.notify_webhook_url
             ],
         )

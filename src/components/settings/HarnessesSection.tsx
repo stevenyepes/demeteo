@@ -1,7 +1,6 @@
 import { AlertTriangle, Check, ChevronDown, ChevronUp, Plus, RotateCw, Trash2, Zap } from 'lucide-react';
 import { useSettings } from './ProjectSettingsContext';
 import type { CommandProbeReport, ProbedCommand, ProbedCommandSource } from '../../lib/project';
-import type { ScriptVariants } from '../../types';
 
 // The Strategy tab's harness half, extracted (HB6): each row now carries five
 // columns — name, command, gate checkbox, order, probe status — and both
@@ -65,41 +64,6 @@ function ProbeStatus({ probe, probing }: { probe?: ProbedCommand; probing: boole
         </span>
       ))}
     </span>
-  );
-}
-
-function ScriptEditor({
-  id,
-  label,
-  value,
-  onChange,
-  compact = false,
-}: {
-  id: string;
-  label: string;
-  value: ScriptVariants;
-  onChange: (value: ScriptVariants) => void;
-  compact?: boolean;
-}) {
-  const inputClass = compact
-    ? 'bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono'
-    : 'bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono';
-  const setVariant = (variant: keyof ScriptVariants, text: string) => onChange({ ...value, [variant]: text });
-
-  return (
-    <fieldset className="space-y-2 min-w-0">
-      <legend className="block text-xs font-mono text-slate-400 uppercase tracking-wider">{label}</legend>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        <label className="min-w-0">
-          <span className="block text-[10px] font-mono text-slate-500 mb-1 uppercase tracking-wider">POSIX</span>
-          <input id={`${id}-posix`} aria-label={`${label} POSIX`} type="text" value={value.posix ?? ''} onChange={e => setVariant('posix', e.target.value)} placeholder="e.g. npm test or cargo test" className={`w-full ${inputClass}`} />
-        </label>
-        <label className="min-w-0">
-          <span className="block text-[10px] font-mono text-slate-500 mb-1 uppercase tracking-wider">PowerShell</span>
-          <input id={`${id}-powershell`} aria-label={`${label} PowerShell`} type="text" value={value.powershell ?? ''} onChange={e => setVariant('powershell', e.target.value)} placeholder="e.g. npm test or cargo test" className={`w-full ${inputClass}`} />
-        </label>
-      </div>
-    </fieldset>
   );
 }
 
@@ -173,9 +137,9 @@ export function HarnessesSection() {
       </div>
 
       <p className="text-xs text-slate-400 leading-relaxed">
-        Commands run on the project's own machine. Provide a POSIX script for Linux/macOS and a
-        PowerShell script for Windows; the runner selects the matching variant. POSIX commands use
-        an interactive login shell so <code className="text-slate-300">mise</code>/
+        The commands that judge a feature, run on the project's own machine through an interactive
+        login shell (<code className="text-slate-300">bash -l -i -c</code>) — the same shell you get
+        when you open a terminal, so <code className="text-slate-300">mise</code>/
         <code className="text-slate-300">asdf</code>/<code className="text-slate-300">nvm</code>{' '}
         shims resolve. Tick the ones that should gate validation; they run in the order below.
       </p>
@@ -190,8 +154,9 @@ export function HarnessesSection() {
       )}
 
       <div>
-        <div className="flex gap-2 items-end">
-          <div className="flex-1 min-w-0"><ScriptEditor id="prepare-command" label="Prepare Command (optional)" value={s.prepareCommand} onChange={s.setPrepareCommand} /></div>
+        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider" htmlFor="prepare-command">Prepare Command (optional)</label>
+        <div className="flex gap-2 items-center">
+          <input id="prepare-command" type="text" value={s.prepareCommand} onChange={e => s.setPrepareCommand(e.target.value)} placeholder="e.g. npm ci or cargo fetch" className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
           <ProbeStatus probe={probeFor(s.commandProbe, 'prepare')} probing={s.isProbingCommands} />
         </div>
         <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
@@ -203,8 +168,9 @@ export function HarnessesSection() {
       </div>
 
       <div>
-        <div className="flex gap-2 items-end">
-          <div className="flex-1 min-w-0"><ScriptEditor id="test-command" label="Default Test Command" value={s.testCommand} onChange={s.setTestCommand} /></div>
+        <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider" htmlFor="test-command">Default Test Command</label>
+        <div className="flex gap-2 items-center">
+          <input id="test-command" type="text" value={s.testCommand} onChange={e => s.setTestCommand(e.target.value)} placeholder="e.g. npm test or cargo test" className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
           <ProbeStatus probe={probeFor(s.commandProbe, 'test')} probing={s.isProbingCommands} />
         </div>
         <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
@@ -232,14 +198,8 @@ export function HarnessesSection() {
                 />
                 <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider hidden md:inline">gates</span>
               </label>
-              <div className="flex-1 min-w-0">
-                <ScriptEditor
-                  id={`harness-${name}`}
-                  label={`${name} command`}
-                  value={s.harnesses[name]}
-                  onChange={command => s.setHarnesses({ ...s.harnesses, [name]: command })}
-                  compact
-                />
+              <div className="flex-1 min-w-0 font-mono text-xs text-white truncate">
+                <span className="text-cyan-400">{name}</span>: <span className="text-slate-300">{s.harnesses[name]}</span>
               </div>
               <ProbeStatus probe={probeFor(s.commandProbe, 'harness', name)} probing={s.isProbingCommands} />
               {/* Order is the user's — cheap gates first, lint before
@@ -259,20 +219,15 @@ export function HarnessesSection() {
             </div>
           );
         })}
-        <div className="border-t border-white/5 pt-3 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] gap-2">
+        <div className="border-t border-white/5 pt-3 flex gap-2">
           <input type="text" placeholder="Name" id="new-harness-name" aria-label="New harness name" className="w-1/3 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono" />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            <input type="text" placeholder="POSIX command" id="new-harness-posix" aria-label="New harness POSIX command" className="w-full bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono" />
-            <input type="text" placeholder="PowerShell command" id="new-harness-powershell" aria-label="New harness PowerShell command" className="w-full bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono" />
-          </div>
+          <input type="text" placeholder="Command" id="new-harness-cmd" aria-label="New harness command" className="flex-1 bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/50 font-mono" />
           <button type="button" onClick={() => {
             const nameEl = document.getElementById('new-harness-name') as HTMLInputElement;
-            const posixEl = document.getElementById('new-harness-posix') as HTMLInputElement;
-            const powershellEl = document.getElementById('new-harness-powershell') as HTMLInputElement;
-            if (nameEl && posixEl && powershellEl) {
-              const name = nameEl.value.trim();
-              const command = { posix: posixEl.value.trim() || null, powershell: powershellEl.value.trim() || null };
-              if (name && (command.posix || command.powershell)) { s.setHarnesses({ ...s.harnesses, [name]: command }); nameEl.value = ''; posixEl.value = ''; powershellEl.value = ''; }
+            const cmdEl = document.getElementById('new-harness-cmd') as HTMLInputElement;
+            if (nameEl && cmdEl) {
+              const name = nameEl.value.trim(); const cmd = cmdEl.value.trim();
+              if (name && cmd) { s.setHarnesses({ ...s.harnesses, [name]: cmd }); nameEl.value = ''; cmdEl.value = ''; }
             }
           }} aria-label="Add harness" className="px-3 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors flex items-center gap-1 font-semibold shrink-0">
             <Plus className="w-3 h-3" /> Add

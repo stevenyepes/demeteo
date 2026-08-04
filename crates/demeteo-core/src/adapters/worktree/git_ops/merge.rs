@@ -18,10 +18,7 @@ impl GitOpsHelper {
         // Find if the feature branch is checked out in any worktree (including the main repo).
         let checked_out_path = match self
             .exec
-            .run_program(
-                machine_str,
-                git_request(wt_path, ["worktree", "list", "--porcelain"]),
-            )
+            .run_program(machine_str, super::worktree::worktree_list_request(wt_path))
             .await
         {
             Ok(worktree_list) => crate::domain::worktree_listing::parse(&worktree_list)

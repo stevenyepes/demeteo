@@ -180,18 +180,9 @@ async fn do_bootstrap_inner(
         }
 
         // Run machine-level setup commands after clone
-        if let Some(commands) = lookup_machine_setup_commands(ctx, machine_str) {
-            for variants in commands {
-                let _ = ctx
-                    .exec
-                    .run_script(
-                        machine_str,
-                        crate::ports::execution::ScriptRequest {
-                            variants,
-                            ..Default::default()
-                        },
-                    )
-                    .await;
+        if let Some(cmds_json) = lookup_machine_setup_commands(ctx, machine_str) {
+            for cmd in &cmds_json {
+                let _ = ctx.exec.run_command(machine_str, cmd).await;
             }
         }
     }
@@ -205,10 +196,7 @@ async fn do_bootstrap_inner(
     Ok(strategy)
 }
 
-fn lookup_machine_setup_commands(
-    ctx: &AppContext,
-    machine_str: &str,
-) -> Option<Vec<crate::domain::models::ScriptVariants>> {
+fn lookup_machine_setup_commands(ctx: &AppContext, machine_str: &str) -> Option<Vec<String>> {
     let machines = ctx.machines.get_machines().ok()?;
     let machine = machines.into_iter().find(|m| {
         m.id.as_ref() == machine_str
@@ -216,5 +204,6 @@ fn lookup_machine_setup_commands(
             || m.host == machine_str
             || m.name == machine_str
     })?;
-    machine.setup_commands
+    let json = machine.setup_commands.as_ref()?;
+    serde_json::from_str(json).ok()
 }

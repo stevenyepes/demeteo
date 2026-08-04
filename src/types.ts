@@ -8,11 +8,6 @@ import type { EffortLevel } from './lib/effortLevels';
  *  every consumer reaching into `lib/`. */
 export type { EffortLevel };
 
-export interface ScriptVariants {
-  posix?: string | null;
-  powershell?: string | null;
-}
-
 /** Release channel baked into the binary at build time. */
 export type ReleaseChannel = 'stable' | 'nightly';
 
@@ -54,7 +49,7 @@ export interface Machine {
   key_path?: string | null;
   agents?: string | null;
   use_login_shell?: boolean | null;
-  setup_commands?: ScriptVariants[] | null;
+  setup_commands?: string | null;
   /** "Away" notification webhook (docs/REMOTE_EXECUTION.md M6.3) — any URL
    *  accepting `{"text": "..."}`, which is the shape Slack incoming webhooks
    *  and ntfy.sh have in common. Injected into the runner's systemd unit at
@@ -786,12 +781,12 @@ export interface AppError {
 export interface WorktreeStrategy {
   default_branch: string;
   branch_prefix: string;
-  test_command: ScriptVariants | null;
-  build_command: ScriptVariants | null;
-  coverage_command: ScriptVariants | null;
+  test_command: string | null;
+  build_command: string | null;
+  coverage_command: string | null;
   conventions_file: string | null;
   pr_template: string | null;
-  harnesses?: Record<string, ScriptVariants> | null;
+  harnesses?: Record<string, string> | null;
   /**
    * The user's **ordered selection of which harnesses gate validation** —
    * tier 2 of the engine's harness resolution chain, beaten only by a step
@@ -809,7 +804,7 @@ export interface WorktreeStrategy {
    * checkout are symlinked in and after write permissions are restored.
    * `null`/unset skips this step.
    */
-  prepare_command?: ScriptVariants | null;
+  prepare_command?: string | null;
   /**
    * Project-level writability exceptions for the chmod scope fence.
    * Repo-relative paths the agent may write to even when its step
@@ -860,6 +855,16 @@ export interface TerminalWorktree {
   path: string;
   branch: string | null;
   isLocked: boolean;
+}
+
+/** Where a session may open inside one repository. `mainBranch` is what the
+ *  main checkout is currently sitting on — a session opened there inherits it,
+ *  and nothing else in this payload reveals which branch that is. `null` for a
+ *  detached or unreadable checkout, which is a reason to say nothing rather
+ *  than to name a branch. */
+export interface TerminalLocations {
+  mainBranch: string | null;
+  worktrees: TerminalWorktree[];
 }
 
 /** The only caller-controlled inputs for creating a terminal worktree. */

@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useNavigation } from '../../context';
 import { formatError } from '../../lib/errors';
 import { useErrorBus } from '../../lib/errorBus';
-import { saveProjectSettings, scriptVariants } from '../../lib/project';
+import { saveProjectSettings } from '../../lib/project';
 import { startFeature } from '../../lib/createProjectWizard';
 import type { WizardFormApi } from './useCreateZeroWizardForm';
 
@@ -33,7 +33,7 @@ export function useCreateZeroWizardActions(form: WizardFormApi) {
       await saveProjectSettings(form.projectId, {
         default_branch: form.defaultBranch,
         branch_prefix: form.branchPrefix,
-        test_command: scriptVariants(form.testCommand),
+        test_command: form.testCommand.trim() || null,
         pr_template: form.prTemplate || null,
         conflict_policy: form.conflictPolicy,
         feature_lifecycle: form.featureLifecycle,

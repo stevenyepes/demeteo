@@ -9,9 +9,7 @@
 //! process can tell you whether it died.
 
 use super::*;
-use crate::ports::execution::{
-    ProgramRequest, ScriptRequest, ScriptVariants, TIMEOUT_ERROR_PREFIX,
-};
+use crate::ports::execution::{ProgramRequest, TIMEOUT_ERROR_PREFIX};
 use std::time::{Duration, Instant};
 
 /// `interactive` is what makes the child a session leader (`setsid`), which is
@@ -67,41 +65,6 @@ async fn a_program_request_preserves_argv_cwd_and_environment() {
         .await
         .expect("structured argv request succeeds");
     assert!(out.starts_with("value with spaces|present|"), "got: {out}");
-}
-
-#[tokio::test]
-async fn a_missing_script_variant_is_a_configuration_error() {
-    let err = LocalSubprocessAdapter::new()
-        .run_script(
-            "local",
-            ScriptRequest {
-                variants: ScriptVariants::default(),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect_err("a script variant is required");
-    assert!(err.starts_with("configuration error:"), "got: {err}");
-}
-
-#[cfg(windows)]
-#[tokio::test]
-async fn a_windows_script_uses_powershell_7_without_a_profile() {
-    let out = LocalSubprocessAdapter::new()
-        .run_script(
-            "local",
-            ScriptRequest {
-                variants: ScriptVariants {
-                    posix: Some("printf wrong-shell".to_string()),
-                    powershell: Some("[Console]::Write('powershell')".to_string()),
-                },
-                timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("pwsh script succeeds");
-    assert_eq!(out, "powershell");
 }
 
 #[cfg(windows)]

@@ -4,7 +4,7 @@ import { Zap, Cpu, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check
 import { Feature, Repository } from '../types';
 import { formatTokens } from '../lib/utils';
 import { formatError } from '../lib/errors';
-import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings, scriptText, scriptVariants } from '../lib/project';
+import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } from '../lib/project';
 import { bootstrapProject } from '../lib/createProjectWizard';
 import { fetchActiveFeatures } from '../lib/features';
 import { listMirroredRuns } from '../lib/remoteRuns';
@@ -149,7 +149,7 @@ const ProjectHome = () => {
             const ext = existing?.worktree_strategy;
             setDefaultBranch(currentDefaultBranch || ext?.default_branch || strategy.default_branch);
             setBranchPrefix(currentBranchPrefix || ext?.branch_prefix || strategy.branch_prefix);
-            setTestCommand(currentTestCommand || scriptText(ext?.test_command) || scriptText(strategy.test_command));
+            setTestCommand(currentTestCommand || ext?.test_command || strategy.test_command || '');
             setPrTemplate(currentPrTemplate || ext?.pr_template || strategy.pr_template || '');
             setLocalBootstrapStep('strategy_proposal');
         } catch (err) {
@@ -165,7 +165,7 @@ const ProjectHome = () => {
             await saveProjectSettings(activeProject.id, {
                 default_branch: defaultBranch,
                 branch_prefix: branchPrefix,
-                test_command: scriptVariants(testCommand),
+                test_command: testCommand || null,
                 pr_template: prTemplate || null,
                 conflict_policy: conflictPolicy,
                 feature_lifecycle: featureLifecycle,

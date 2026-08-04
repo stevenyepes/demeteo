@@ -71,24 +71,71 @@ jobs:
           configFile: .commitlintrc.json
           failOnWarnings: false
 
-  windows-local-execution:
-    runs-on: windows-latest
+  # The other two targets the desktop app ships on (build.yml's matrix). The
+  # `verify` job runs on ubuntu only, so every `#[cfg(windows)]` item — and the
+  # whole macOS half of every `cfg` — is unreachable from it, and the breakage
+  # surfaces on master or a tag instead of on the PR. Compile coverage is the
+  # point: clippy `--all-targets` type-checks the test targets too, so a
+  # Windows-only test module that no ubuntu job can build fails here.
+  # (AGENTS.md §3 "Cross-OS", docs/WINDOWS_PARITY.md "Gates")
+  cross-os:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.platform }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      # The other jobs reach the pinned toolchain indirectly — they install
+      # `@stable`, and rust-toolchain.toml then overrides it at every cargo
+      # invocation. Installing the pinned channel directly means the toolchain
+      # rustup resolves is the one that was downloaded, and reading the channel
+      # out of the file keeps the bump in exactly one place (§7: local clippy
+      # must be CI clippy).
+      - name: Resolve pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
-      - name: Test local Windows execution and ACL scope
-        run: |
-          cargo test -p demeteo-core --lib adapters::local::execution::tests -- --test-threads=1
-          cargo test -p demeteo-core --lib tests_windows -- --test-threads=1
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: TypeScript type-check (tsc --noEmit)
+        run: npx tsc --noEmit
+
+      # demeteo-runner is excluded deliberately: it is remote-side code and the
+      # remote is always Linux, and selecting it would unify its
+      # `vendored-openssl` feature into demeteo-core, building OpenSSL from
+      # source on both runners for a binary neither one ever produces.
+      - name: Rust clippy (--all-targets -D warnings)
+        run: cargo clippy --workspace --exclude demeteo-runner --all-targets -- -D warnings
+
+      - name: Core tests
+        run: cargo test -p demeteo-core
 
   # C2.2 — proves local/SSH parity by running the byte-identical
   # `exec_contract` against `SshClientAdapter` pointed at a throwaway

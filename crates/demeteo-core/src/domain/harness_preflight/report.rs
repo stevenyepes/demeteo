@@ -75,12 +75,6 @@ pub fn attribute_verdict(
 
     let commands = labelled_commands(strategy)
         .into_iter()
-        .flat_map(|(source, harness, script)| {
-            [script.posix.as_deref(), script.powershell.as_deref()]
-                .into_iter()
-                .flatten()
-                .map(move |command| (source, harness, command))
-        })
         .map(|(source, harness, command)| ProbedCommand {
             source,
             harness: harness.map(str::to_string),

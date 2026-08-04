@@ -2,8 +2,7 @@ use rusqlite::params;
 
 use crate::domain::ids::{ProjectId, WorkflowId};
 use crate::domain::models::{
-    EffortLevel, Project, ProjectSettings, ProjectWorkflowOverride, Repository, ScriptVariants,
-    WorktreeStrategy,
+    EffortLevel, Project, ProjectSettings, ProjectWorkflowOverride, Repository, WorktreeStrategy,
 };
 use crate::ports::db::ProjectRepository;
 
@@ -16,40 +15,73 @@ fn effort_from_row(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<E
     Ok(raw.as_deref().and_then(EffortLevel::parse))
 }
 
+/// The two shapes the `project_settings.harnesses` TEXT column (V8) is allowed
+/// to hold. Both are harness *configuration*, which is why they share one
+/// column instead of costing a migration for a `Vec<String>`:
+///
+/// * `{"lint": "npm run lint"}` — the original map, and still what is written
+///   whenever no validation gates are selected. Every row written before HB5
+///   has this shape, and so does every row written after it by a project that
+///   never ticked a gate, so the column's content is unchanged for them.
+/// * `{"harnesses": {...}, "validation_gates": ["lint"]}` — written only once a
+///   selection exists.
+///
+/// Order matters, and the *map* has to be tried first. Every field of the
+/// envelope is optional, so an untagged match against it would accept any JSON
+/// object at all — including a legacy map, whose entries it would silently
+/// discard as unknown fields. The reverse cannot happen: the envelope's
+/// `harnesses` key holds an object, and a map's values are all strings, so a
+/// real envelope can never parse as a map.
 #[derive(serde::Serialize, serde::Deserialize)]
-struct HarnessesColumn {
-    harnesses: Option<std::collections::HashMap<String, ScriptVariants>>,
-    validation_gates: Option<Vec<String>>,
+#[serde(untagged)]
+enum HarnessesColumn {
+    Map(std::collections::HashMap<String, String>),
+    Envelope {
+        harnesses: Option<std::collections::HashMap<String, String>>,
+        #[serde(default)]
+        validation_gates: Option<Vec<String>>,
+    },
 }
 
+/// Split the stored column into the two `WorktreeStrategy` fields it carries.
+/// An unparseable column degrades to "nothing configured", exactly as the
+/// previous `from_str(&s).ok()` did.
 fn harnesses_from_column(
     raw: Option<String>,
-) -> rusqlite::Result<(
-    Option<std::collections::HashMap<String, ScriptVariants>>,
+) -> (
+    Option<std::collections::HashMap<String, String>>,
     Option<Vec<String>>,
-)> {
-    let Some(raw) = raw else {
-        return Ok((None, None));
-    };
-    let value = serde_json::from_str(&raw).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(12, rusqlite::types::Type::Text, Box::new(error))
-    })?;
-    Ok((value.harnesses, value.validation_gates))
+) {
+    match raw.and_then(|s| serde_json::from_str::<HarnessesColumn>(&s).ok()) {
+        Some(HarnessesColumn::Envelope {
+            harnesses,
+            validation_gates,
+        }) => (harnesses, validation_gates),
+        Some(HarnessesColumn::Map(map)) => (Some(map), None),
+        None => (None, None),
+    }
 }
 
 /// Render the column. Stays in the legacy bare-map shape unless a gate
 /// selection exists, so a project that never uses HB6's checkbox writes
 /// byte-identical rows to the ones it wrote before.
-fn harnesses_to_column(strategy: &WorktreeStrategy) -> Result<Option<String>, String> {
-    if strategy.harnesses.is_none() && strategy.validation_gates.is_none() {
-        return Ok(None);
+fn harnesses_to_column(strategy: &WorktreeStrategy) -> Option<String> {
+    let gates = strategy
+        .validation_gates
+        .as_ref()
+        .filter(|g| !g.is_empty())
+        .cloned();
+    match gates {
+        None => strategy
+            .harnesses
+            .as_ref()
+            .and_then(|h| serde_json::to_string(h).ok()),
+        Some(gates) => serde_json::to_string(&HarnessesColumn::Envelope {
+            harnesses: strategy.harnesses.clone(),
+            validation_gates: Some(gates),
+        })
+        .ok(),
     }
-    serde_json::to_string(&HarnessesColumn {
-        harnesses: strategy.harnesses.clone(),
-        validation_gates: strategy.validation_gates.clone(),
-    })
-    .map(Some)
-    .map_err(|error| error.to_string())
 }
 
 impl ProjectRepository for SqliteAdapter {
@@ -223,36 +255,24 @@ impl ProjectRepository for SqliteAdapter {
             .map_err(|e| e.to_string())?;
         let mut iter = stmt
             .query_map(params![project_id.0], |row| {
-                let (harnesses, validation_gates) = harnesses_from_column(row.get(12)?)?;
+                let (harnesses, validation_gates) = harnesses_from_column(row.get(12)?);
                 let commit_artifacts: i64 = row.get(14)?;
                 let default_loop_iterations: Option<i64> = row.get(15)?;
                 let extra_writable_paths_json: Option<String> = row.get(16)?;
-                let parse_script = |index| {
-                    row.get::<_, Option<String>>(index)?
-                        .map(|raw| {
-                            serde_json::from_str::<ScriptVariants>(&raw).map_err(|error| {
-                                rusqlite::Error::FromSqlConversionFailure(
-                                    index,
-                                    rusqlite::types::Type::Text,
-                                    Box::new(error),
-                                )
-                            })
-                        })
-                        .transpose()
-                };
+                let prepare_command: Option<String> = row.get(17)?;
                 Ok(ProjectSettings {
                     project_id: row.get(0)?,
                     worktree_strategy: WorktreeStrategy {
                         default_branch: row.get(1)?,
                         branch_prefix: row.get(2)?,
-                        test_command: parse_script(3)?,
-                        build_command: parse_script(7)?,
-                        coverage_command: parse_script(8)?,
+                        test_command: row.get(3)?,
+                        build_command: row.get(7)?,
+                        coverage_command: row.get(8)?,
                         conventions_file: row.get(9)?,
                         pr_template: row.get(4)?,
                         harnesses,
                         validation_gates,
-                        prepare_command: parse_script(17)?,
+                        prepare_command,
                         extra_writable_paths: extra_writable_paths_json
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or_default(),
@@ -278,12 +298,7 @@ impl ProjectRepository for SqliteAdapter {
 
     fn save_settings(&self, s: ProjectSettings) -> Result<(), String> {
         let conn = self.conn.lock()?;
-        let harnesses_json = harnesses_to_column(&s.worktree_strategy)?;
-        let encode_script = |script: Option<ScriptVariants>| -> Result<Option<String>, String> {
-            script
-                .map(|value| serde_json::to_string(&value).map_err(|error| error.to_string()))
-                .transpose()
-        };
+        let harnesses_json = harnesses_to_column(&s.worktree_strategy);
         let extra_writable_paths_json = if s.worktree_strategy.extra_writable_paths.is_empty() {
             None
         } else {
@@ -304,9 +319,9 @@ impl ProjectRepository for SqliteAdapter {
                 s.project_id,
                 s.worktree_strategy.default_branch,
                 s.worktree_strategy.branch_prefix,
-                encode_script(s.worktree_strategy.test_command)?,
-                encode_script(s.worktree_strategy.build_command)?,
-                encode_script(s.worktree_strategy.coverage_command)?,
+                s.worktree_strategy.test_command,
+                s.worktree_strategy.build_command,
+                s.worktree_strategy.coverage_command,
                 s.worktree_strategy.conventions_file,
                 s.worktree_strategy.pr_template,
                 s.conflict_policy,
@@ -318,7 +333,7 @@ impl ProjectRepository for SqliteAdapter {
                 s.commit_artifacts as i64,
                 s.default_loop_iterations.map(|v| v as i64),
                 extra_writable_paths_json,
-                encode_script(s.worktree_strategy.prepare_command)?,
+                s.worktree_strategy.prepare_command,
                 s.default_effort.map(|e| e.as_str()),
                 s.default_max_budget_usd,
             ],
