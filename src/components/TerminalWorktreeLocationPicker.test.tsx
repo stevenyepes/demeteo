@@ -113,6 +113,57 @@ describe('TerminalWorktreeLocationPicker', () => {
     expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent('Main checkout');
   });
 
+  it('drops the branch from the field once a launch could have moved HEAD', async () => {
+    vi.mocked(listTerminalLocations).mockResolvedValue(locations([], 'chore/left-here-yesterday'));
+    const view = mount();
+
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await userEvent.click(await screen.findByTestId('terminal-location-main'));
+    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent(
+      'chore/left-here-yesterday',
+    );
+
+    // What a launcher does while it holds the field disabled: it opens a shell
+    // in that shared checkout, and the shell may check something else out.
+    view.rerender(
+      <TerminalWorktreeLocationPicker
+        projectId="project-a"
+        repositoryId="repository-a"
+        onChange={onChange}
+        disabled
+      />,
+    );
+
+    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent('Main checkout');
+    expect(screen.getByTestId('terminal-location-trigger')).not.toHaveTextContent(
+      'chore/left-here-yesterday',
+    );
+  });
+
+  it('stops naming a branch for a checkout it can no longer read', async () => {
+    vi.mocked(listTerminalLocations).mockResolvedValueOnce(
+      locations([], 'chore/left-here-yesterday'),
+    );
+    mount();
+
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+    await userEvent.click(await screen.findByTestId('terminal-location-main'));
+    expect(screen.getByTestId('terminal-location-trigger')).toHaveTextContent(
+      'chore/left-here-yesterday',
+    );
+
+    vi.mocked(listTerminalLocations).mockRejectedValueOnce(new Error('repository directory is gone'));
+    await userEvent.click(screen.getByTestId('terminal-location-trigger'));
+
+    expect(await screen.findByTestId('terminal-location-error')).toHaveTextContent(
+      'repository directory is gone',
+    );
+    expect(screen.getByTestId('terminal-location-main-branch')).toBeEmptyDOMElement();
+    expect(screen.getByTestId('terminal-location-trigger')).not.toHaveTextContent(
+      'chore/left-here-yesterday',
+    );
+  });
+
   it('derives the folder from the branch and cuts from the default base', async () => {
     vi.mocked(listTerminalLocations).mockResolvedValue(locations([]));
     vi.mocked(createTerminalWorktree).mockResolvedValue({

@@ -39,6 +39,8 @@ export interface TerminalWorktreeLocationPickerProps {
   allowHome?: boolean;
   /** Reports list/create activity so a containing launcher can stay disabled. */
   onBusyChange?: (busy: boolean) => void;
+  /** Both launchers raise this for the duration of a launch, so its rising
+   *  edge doubles as the one HEAD-moving event this picker can observe. */
   disabled?: boolean;
   className?: string;
 }
@@ -122,6 +124,18 @@ export function TerminalWorktreeLocationPicker({
     onBusyChange?.(listing || creating);
   }, [listing, creating, onBusyChange]);
 
+  // The annotation on the closed field outlives the read that produced it, and
+  // the session this picker just launched into the main checkout is free to
+  // check something else out — nothing reports that back. A launch is
+  // therefore where the branch stops being vouchable, so it is dropped rather
+  // than left asserting the name of a branch the shell has since left. The
+  // next open re-reads it; "Main checkout" alone is never wrong.
+  const wasDisabled = useRef(disabled);
+  useEffect(() => {
+    if (disabled && !wasDisabled.current) setMainBranch(null);
+    wasDisabled.current = disabled;
+  }, [disabled]);
+
   // A response for an old project/repository must never populate the current
   // picker. Reset both selection and failures before a new target can launch.
   useEffect(() => {
@@ -160,7 +174,14 @@ export function TerminalWorktreeLocationPicker({
         setLoadedFor(requestedTarget);
       }
     } catch (err) {
-      if (requestedTarget === currentTargetKey.current) setError(formatError(err));
+      if (requestedTarget === currentTargetKey.current) {
+        setError(formatError(err));
+        // A checkout that could not be read is exactly the case the `null`
+        // contract covers, so the previous answer must not survive the failure
+        // that replaced it — it would keep naming a branch for a directory the
+        // backend just refused to reach.
+        setMainBranch(null);
+      }
     } finally {
       if (requestedTarget === currentTargetKey.current) setListing(false);
     }
@@ -199,7 +220,7 @@ export function TerminalWorktreeLocationPicker({
 
   // The list request must stay outside the state updater: StrictMode invokes
   // an updater twice, so a request inside one issues two
-  // `list_terminal_worktrees` per open.
+  // `list_terminal_locations` per open.
   //
   // Every open refetches. Worktrees appear and disappear while this menu is
   // closed — a pipeline finishing, another window, a `git worktree` in a

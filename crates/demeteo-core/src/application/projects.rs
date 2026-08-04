@@ -559,6 +559,8 @@ pub async fn health_check(
             ctx.worktree_ops
                 .get_head_branch(machine_id, &target_dir)
                 .await
+                .as_deref()
+                .and_then(crate::domain::branch_listing::head_branch)
         } else {
             None
         };

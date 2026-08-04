@@ -47,6 +47,14 @@ enum WorktreeCall {
         machine: Option<String>,
         repo_dir: String,
     },
+    ListWorktrees {
+        machine: Option<String>,
+        repo_dir: String,
+    },
+    CheckDirty {
+        machine: Option<String>,
+        repo_dir: String,
+    },
 }
 
 /// Strictly records the calls this policy is allowed to make. Every other
@@ -89,8 +97,16 @@ impl RecordingWorktrees {
 
 #[async_trait]
 impl WorktreeOpsPort for RecordingWorktrees {
-    async fn check_repo_dirty(&self, _: Option<&str>, _: &str) -> Result<(bool, bool), String> {
-        panic!("unexpected WorktreeOpsPort call")
+    async fn check_repo_dirty(
+        &self,
+        machine: Option<&str>,
+        repo_dir: &str,
+    ) -> Result<(bool, bool), String> {
+        self.record(WorktreeCall::CheckDirty {
+            machine: machine.map(str::to_string),
+            repo_dir: repo_dir.to_string(),
+        })?;
+        Ok((false, false))
     }
     async fn get_head_branch(&self, machine: Option<&str>, repo_dir: &str) -> Option<String> {
         // Returns an answer, never a failure, so an unexpected call has to
@@ -102,11 +118,20 @@ impl WorktreeOpsPort for RecordingWorktrees {
         .unwrap_or_else(|error| panic!("{error}"));
         self.head.lock().unwrap().clone()
     }
-    async fn list_worktrees(&self, _: Option<&str>, _: &str) -> Result<Vec<WorktreeInfo>, String> {
-        // The terminal listing must not reach for the unfiltered one: its
-        // result carries the primary checkout's siblings, including the
-        // worktrees a running step owns.
-        panic!("unexpected WorktreeOpsPort call")
+    async fn list_worktrees(
+        &self,
+        machine: Option<&str>,
+        repo_dir: &str,
+    ) -> Result<Vec<WorktreeInfo>, String> {
+        // Answered only where a test expects it. The terminal listing must not
+        // reach for the unfiltered one: its result carries the primary
+        // checkout's siblings, including the worktrees a running step owns —
+        // which is why an unexpected call fails rather than returning empty.
+        self.record(WorktreeCall::ListWorktrees {
+            machine: machine.map(str::to_string),
+            repo_dir: repo_dir.to_string(),
+        })?;
+        Ok(Vec::new())
     }
     async fn list_terminal_worktrees(
         &self,
@@ -444,6 +469,51 @@ async fn a_detached_main_checkout_names_no_branch() {
     assert_eq!(
         locations.main_branch, None,
         "git's own word for a detached HEAD would render as a branch by that name"
+    );
+}
+
+/// Both readers of `get_head_branch` render its answer as a branch name, so the
+/// detached spelling has to be filtered in both. Settings' branch chip is the
+/// second one, and it is reached from a different application function.
+#[tokio::test]
+async fn workspace_health_names_no_branch_for_a_detached_checkout() {
+    let (mut ctx, worktree_port, _calls) = context();
+    add_project(&ctx, "p-local", "local", None);
+    add_repo(&ctx, "r-local", "p-local", "org/local-repo");
+    let repo_dir = ctx
+        .workspace_dir
+        .join("projects/p-local/repos/local-repo")
+        .to_string_lossy()
+        .to_string();
+    ctx.exec = Arc::new(
+        crate::adapters::step_executor::scripted_exec::ScriptedExec::new(&[(
+            &format!(
+                "git -C {} rev-parse --is-inside-work-tree",
+                crate::paths::shell_escape_posix(&repo_dir)
+            ),
+            Ok("true"),
+        )]),
+    );
+    worktree_port.answer_head(Some("HEAD"));
+    worktree_port.expect(WorktreeCall::HeadBranch {
+        machine: None,
+        repo_dir: repo_dir.clone(),
+    });
+    worktree_port.expect(WorktreeCall::ListWorktrees {
+        machine: None,
+        repo_dir: repo_dir.clone(),
+    });
+    worktree_port.expect(WorktreeCall::CheckDirty {
+        machine: None,
+        repo_dir,
+    });
+
+    let health = health_check(&ctx, "p-local".to_string()).await.unwrap();
+
+    assert!(health[0].is_cloned, "the probe was scripted to succeed");
+    assert_eq!(
+        health[0].head_branch, None,
+        "a chip reading this would name a branch called HEAD"
     );
 }
 
