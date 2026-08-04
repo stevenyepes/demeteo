@@ -41,6 +41,50 @@ fn a_windows_desktop_driving_a_remote_is_not_a_windows_target() {
     assert!(!windows_host_target(false, "runner-1"));
 }
 
+/// The three producers, on one location: a `PathBuf`, git, and Git Bash.
+#[test]
+fn the_three_windows_spellings_reduce_to_the_one_the_host_uses() {
+    let native = std::path::PathBuf::from(r"C:\Users\runneradmin\demeteo");
+    for spelling in [
+        r"C:\Users\runneradmin\demeteo",
+        "C:/Users/runneradmin/demeteo",
+        "/c/Users/runneradmin/demeteo",
+    ] {
+        assert_eq!(native_path(spelling, true), native, "{spelling}");
+    }
+    assert_eq!(native_path("/c", true), std::path::PathBuf::from(r"C:\"));
+    assert_eq!(native_path("/c/", true), std::path::PathBuf::from(r"C:\"));
+}
+
+/// A drive letter is the one component that arrives in both cases — MSYS
+/// lowercases it, a `PathBuf` does not — and NTFS folds the rest of the path
+/// too.
+#[test]
+fn windows_paths_compare_case_insensitively() {
+    assert!(same_path(
+        "/c/Users/Runner/Demeteo",
+        r"c:\users\runner\demeteo",
+        true
+    ));
+    assert!(same_path(r"C:\a\b\", "C:/a/b", true));
+    assert!(!same_path(r"C:\a\b", r"C:\a\c", true));
+    assert!(!same_path(r"C:\a\b", r"D:\a\b", true));
+}
+
+/// A remote machine is Linux whatever the desktop is, so `/c/...` there is an
+/// ordinary directory: rewriting it would invent a drive, and folding case
+/// would merge two directories a case-sensitive filesystem keeps apart.
+#[test]
+fn a_non_windows_target_keeps_its_paths_verbatim() {
+    assert_eq!(
+        native_path("/c/Users/runner", false),
+        std::path::PathBuf::from("/c/Users/runner")
+    );
+    assert!(!same_path("/c/Users/runner", r"C:\Users\runner", false));
+    assert!(!same_path("/srv/Repo", "/srv/repo", false));
+    assert!(same_path("/srv/repo/", "/srv/repo", false));
+}
+
 /// Ids that share a prefix are the norm here — every id starts with a tag and
 /// the high digits of a wall clock — so the segment has to read the whole
 /// string.

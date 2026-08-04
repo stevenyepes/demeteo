@@ -1,6 +1,7 @@
 //! Windows-specific host facts, resolved once and shared.
 //!
-//! Only `discovery.rs` is `#[cfg(windows)]`. Everything else here compiles and
+//! Only `discovery.rs` and `dacl_sys.rs` are `#[cfg(windows)]` — the two files
+//! that hold nothing but calls. Everything else here compiles and
 //! is unit-tested on every platform on purpose: no Windows cross-compiler runs
 //! on the development host, so a decision reachable only from a Windows build
 //! is a decision whose first observation costs a CI round trip. The rule is
@@ -8,9 +9,12 @@
 //! an extra edge here, because the usual escape (run it locally and see) is
 //! unavailable.
 
+pub mod dacl;
 pub mod exe;
 pub mod posix_shell;
 
+#[cfg(windows)]
+pub mod dacl_sys;
 #[cfg(windows)]
 pub mod discovery;
 

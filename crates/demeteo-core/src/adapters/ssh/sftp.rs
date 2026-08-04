@@ -191,28 +191,6 @@ pub(super) fn remove_file(
     })
 }
 
-pub(super) fn set_file_mode(
-    pool: &SessionPool,
-    machine_id: &str,
-    path: &str,
-    mode: u32,
-) -> Result<(), SshFailure> {
-    with_sftp(pool, machine_id, |sftp| {
-        sftp.setstat(
-            Path::new(path),
-            FileStat {
-                perm: Some(mode),
-                size: None,
-                uid: None,
-                gid: None,
-                atime: None,
-                mtime: None,
-            },
-        )
-        .map_err(|e| format!("Failed to set permissions on '{path}': {e}"))
-    })
-}
-
 pub(super) fn is_executable(
     pool: &SessionPool,
     machine_id: &str,

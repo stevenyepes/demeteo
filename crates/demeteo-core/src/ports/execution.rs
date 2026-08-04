@@ -278,23 +278,24 @@ pub trait ExecutionPort: Send + Sync {
         Err("file removal is not implemented by this transport".to_string())
     }
 
-    /// Set the target file's POSIX permission bits. This is a filesystem
-    /// operation so callers do not need a shell (or a transport-specific
-    /// `chmod`) to protect a temporary credential helper.
-    async fn set_file_mode(
-        &self,
-        _machine_id: &str,
-        _path: &str,
-        _mode: u32,
-    ) -> Result<(), String> {
-        Err("file permission changes are not implemented by this transport".to_string())
-    }
-
-    /// Whether the target is executable according to the target platform's
-    /// hook-execution rules. Unlike metadata existence, this decides whether
-    /// Git would consider a `commit-msg` file a runnable hook.
+    /// Whether Git on the target would run `path` as a hook.
+    ///
+    /// Not a POSIX-permission question, and the two answers differ. On Unix it
+    /// is the execute bit, which is what `find_hook`'s `access(X_OK)` tests.
+    /// On Windows `mingw_access` masks `X_OK` off before calling `_waccess` —
+    /// there is no bit to test — so Git will attempt **any** file that is not
+    /// a directory, and a file it cannot spawn fails the hook rather than
+    /// skipping it. `false` for a regular file there would be the harmful
+    /// answer: the sole caller uses this to decide whether a repository's
+    /// `commit-msg` hook gets to reject a message Demeteo composed, and
+    /// skipping that check is how an unrunnable commit message reaches a
+    /// branch.
+    ///
+    /// A missing path is `Err`, not `Ok(false)` (D3). The name predates this
+    /// contract and overstates it — on Windows there is no executable bit for
+    /// it to be reading.
     async fn is_executable(&self, _machine_id: &str, _path: &str) -> Result<bool, String> {
-        Err("executable-bit inspection is not implemented by this transport".to_string())
+        Err("hook-runnability inspection is not implemented by this transport".to_string())
     }
 
     async fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String>;

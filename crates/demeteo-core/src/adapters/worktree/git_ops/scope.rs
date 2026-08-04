@@ -4,7 +4,7 @@
 //! class of bugs (e.g. a Research step modifying source code instead of
 //! producing the research report):
 //!
-//! 1. **Spawn-time chmod fence** ([`apply_artifact_scope`]) — restricts the
+//! 1. **Spawn-time OS fence** ([`apply_artifact_scope`]) — restricts the
 //!    worktree so only the step's declared artifact paths are writable.
 //!    The agent still has `edit: allow` + `bash: allow` in the
 //!    `OPENCODE_PERMISSION` env var; the OS denies writes outside the
@@ -16,10 +16,20 @@
 //!    `git checkout` / `rm`, and return the list so the caller can fail
 //!    the step. The failure surfaces in the next attempt's retry feedback.
 //!
-//! Both layers compose: chmod stops honest mistakes and most misbehavior
-//! at write time; the diff guard catches anything that bypassed chmod
-//! (e.g. via `chmod u+w .` shell escape) before it reaches the feature
-//! branch via the merge step.
+//! # What layer 1 is actually worth, on both operating systems
+//!
+//! On Unix the fence is `chmod a-w` per top-level entry; on a Windows-local
+//! worktree it is one inheritable deny ACE per top-level entry, naming the
+//! process token's user SID ([`crate::shared::win::dacl`]). The Windows half
+//! is genuinely enforced — a deny ACE sorts canonically before every allow, so
+//! no inherited grant outranks it against a process running as that user — but
+//! it is *not* stronger than the Unix half, and must not be described as
+//! though it were: the user owns a worktree Demeteo created for them, an owner
+//! holds `WRITE_DAC` implicitly whatever the DACL says, and so `icacls .
+//! /reset` lifts the fence exactly as `chmod u+w .` lifts the Unix one. Both
+//! stop honest mistakes and most misbehaviour at write time, neither is a
+//! sandbox, and [`GitOpsHelper::verify_and_revert_out_of_scope_writes`] is the
+//! gate that actually decides what reaches the feature branch.
 //!
 //! Writable paths are derived from `StepConfig::artifacts[*].capture`:
 //! - `LastWriteTo { path }` → the explicit path
@@ -32,8 +42,6 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::artifact::ArtifactCapture;
 use crate::domain::permission::WriteScope;
-#[cfg(windows)]
-use crate::ports::execution::ProgramRequest;
 
 /// Sentinel writable-path meaning "the whole worktree is writable" (no
 /// fence). Emitted for [`WriteScope::All`] / `Implement` steps.
@@ -223,7 +231,7 @@ pub(crate) fn step_declares_full_write(
 }
 
 impl GitOpsHelper {
-    /// Apply chmod-based scope fence. Strategy: first make the whole
+    /// Apply the scope fence. Strategy: first make the whole
     /// worktree writable (so newly-created files under a writable path
     /// inherit +w), then chmod `a-w` every top-level entry that isn't
     /// under any declared `writable_paths` path. Idempotent and safe
@@ -265,10 +273,8 @@ impl GitOpsHelper {
         }
 
         #[cfg(windows)]
-        if machine == crate::domain::ids::LOCAL_MACHINE {
-            return self
-                .apply_windows_artifact_scope(machine, wt, writable_paths)
-                .await;
+        if crate::domain::ids::MachineId::from(machine).is_local() {
+            return fence_windows_worktree(wt, writable_paths).await;
         }
 
         // 1. Make everything writable first. Cheap and idempotent.
@@ -368,23 +374,25 @@ impl GitOpsHelper {
         Ok(())
     }
 
-    /// Restore the ACL snapshot made by the Windows local scope fence. It is
-    /// deliberately best-effort at teardown: a missing snapshot means no
-    /// Windows fence was applied, while an actual cleanup operation still
-    /// reports its own failure.
+    /// Lift the Windows local scope fence, leaving every entry's DACL as the
+    /// fence found it.
+    ///
+    /// The Unix half has no counterpart here: its inverse is the
+    /// `chmod -R u+w` that `git_ops::worktree::restore_write_access_cmd`
+    /// already issues on the teardown path, and for a remote machine that is
+    /// still the only fence there is.
     pub(crate) async fn restore_artifact_scope(
         &self,
         machine_id: Option<&str>,
         worktree_path: &str,
     ) -> Result<(), String> {
         #[cfg(windows)]
+        if crate::domain::ids::MachineId::from(
+            machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE),
+        )
+        .is_local()
         {
-            let machine = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-            if machine == crate::domain::ids::LOCAL_MACHINE {
-                return self
-                    .restore_windows_artifact_scope(machine, Path::new(worktree_path))
-                    .await;
-            }
+            return unfence_windows_worktree(Path::new(worktree_path)).await;
         }
         let _ = (machine_id, worktree_path);
         Ok(())
@@ -453,12 +461,6 @@ impl GitOpsHelper {
             if path.is_empty() || path.contains("..") {
                 continue;
             }
-            #[cfg(windows)]
-            if path == ".demeteo" || path.starts_with(".demeteo/") {
-                // The local fence's persisted DACL snapshot must survive the
-                // post-step guard so teardown can restore the exact ACL.
-                continue;
-            }
             let rel = Path::new(&path);
             let in_scope = if deny_all {
                 // ReadOnly step: nothing is in scope.
@@ -515,130 +517,38 @@ impl GitOpsHelper {
     }
 }
 
+/// Fence a Windows-local worktree with one inheritable deny ACE per
+/// non-writable top-level entry.
+///
+/// A free function and not a method: it reaches no port. The DACL calls are
+/// in-process because they are the only implementation there is — this arm is
+/// reached for [`LOCAL_MACHINE`](crate::domain::ids::LOCAL_MACHINE) alone,
+/// and a remote machine is a Linux one that takes the `chmod` path above
+/// whatever the desktop is running on.
+///
+/// `spawn_blocking` because `SetNamedSecurityInfoW` propagates the ACE through
+/// the subtree itself, which is the whole point of it — one call for a
+/// `node_modules` tree, but a call that does not return promptly.
 #[cfg(windows)]
-impl GitOpsHelper {
-    async fn apply_windows_artifact_scope(
-        &self,
-        machine: &str,
-        worktree: &Path,
-        writable_paths: &[PathBuf],
-    ) -> Result<(), String> {
-        const SNAPSHOT_DIR: &str = ".demeteo";
-        const SNAPSHOT_FILE: &str = "scope-acl.txt";
+async fn fence_windows_worktree(worktree: &Path, writable_paths: &[PathBuf]) -> Result<(), String> {
+    let worktree = worktree.to_path_buf();
+    let writable_paths = writable_paths.to_vec();
+    tokio::task::spawn_blocking(move || {
+        crate::shared::win::dacl_sys::fence(&worktree, &writable_paths)
+    })
+    .await
+    .map_err(|error| format!("scope: fence task panicked: {}", error))?
+    .map_err(|error| format!("scope: {}", error))
+}
 
-        // A previous attempt can have been cancelled after fencing but before
-        // teardown. Restore that complete DACL first, so the new snapshot is
-        // always the worktree's unfenced ACL rather than a stack of denies.
-        let _ = self.restore_windows_artifact_scope(machine, worktree).await;
-        self.exec
-            .create_dir_all(machine, &worktree.join(SNAPSHOT_DIR).to_string_lossy())
-            .await
-            .map_err(|error| format!("scope: create ACL snapshot directory failed: {}", error))?;
-
-        self.exec
-            .run_program(
-                machine,
-                ProgramRequest {
-                    executable: "icacls".to_string(),
-                    args: vec![
-                        ".".to_string(),
-                        "/save".to_string(),
-                        format!(r"{}\{}", SNAPSHOT_DIR, SNAPSHOT_FILE),
-                        "/t".to_string(),
-                        "/c".to_string(),
-                    ],
-                    cwd: Some(worktree.to_string_lossy().into_owned()),
-                    ..ProgramRequest::default()
-                },
-            )
-            .await
-            .map_err(|error| format!("scope: save Windows ACL snapshot failed: {}", error))?;
-
-        let user = self
-            .exec
-            .run_program(
-                machine,
-                ProgramRequest {
-                    executable: "whoami".to_string(),
-                    ..ProgramRequest::default()
-                },
-            )
-            .await
-            .map_err(|error| format!("scope: resolve Windows user failed: {}", error))?
-            .trim()
-            .to_string();
-        if user.is_empty() {
-            return Err("scope: resolve Windows user returned an empty identity".to_string());
-        }
-
-        let entries = self
-            .exec
-            .list_dir(machine, &worktree.to_string_lossy())
-            .await
-            .map_err(|error| {
-                format!("scope: read_dir({}) failed: {}", worktree.display(), error)
-            })?;
-        for entry in entries {
-            let path = PathBuf::from(entry.path);
-            let rel = path.strip_prefix(worktree).unwrap_or(&path);
-            let is_writable = writable_paths
-                .iter()
-                .any(|allowed| rel.starts_with(allowed) || allowed.starts_with(rel));
-            if is_writable || path.is_symlink() {
-                continue;
-            }
-            self.exec
-                .run_program(
-                    machine,
-                    ProgramRequest {
-                        executable: "icacls".to_string(),
-                        args: vec![
-                            path.to_string_lossy().into_owned(),
-                            "/deny".to_string(),
-                            format!("{}:(WD,AD,DC)", user),
-                            "/t".to_string(),
-                            "/c".to_string(),
-                        ],
-                        ..ProgramRequest::default()
-                    },
-                )
-                .await
-                .map_err(|error| {
-                    format!("scope: deny writes on {} failed: {}", path.display(), error)
-                })?;
-        }
-        Ok(())
-    }
-
-    async fn restore_windows_artifact_scope(
-        &self,
-        machine: &str,
-        worktree: &Path,
-    ) -> Result<(), String> {
-        let snapshot = worktree.join(".demeteo").join("scope-acl.txt");
-        if !snapshot.is_file() {
-            return Ok(());
-        }
-        self.exec
-            .run_program(
-                machine,
-                ProgramRequest {
-                    executable: "icacls".to_string(),
-                    args: vec![
-                        ".".to_string(),
-                        "/restore".to_string(),
-                        r".demeteo\scope-acl.txt".to_string(),
-                        "/t".to_string(),
-                        "/c".to_string(),
-                    ],
-                    cwd: Some(worktree.to_string_lossy().into_owned()),
-                    ..ProgramRequest::default()
-                },
-            )
-            .await
-            .map_err(|error| format!("scope: restore Windows ACL snapshot failed: {}", error))?;
-        Ok(())
-    }
+/// The inverse of [`fence_windows_worktree`], for the same target.
+#[cfg(windows)]
+async fn unfence_windows_worktree(worktree: &Path) -> Result<(), String> {
+    let worktree = worktree.to_path_buf();
+    tokio::task::spawn_blocking(move || crate::shared::win::dacl_sys::unfence(&worktree))
+        .await
+        .map_err(|error| format!("scope: unfence task panicked: {}", error))?
+        .map_err(|error| format!("scope: {}", error))
 }
 
 use crate::adapters::worktree::git_ops::GitOpsHelper;

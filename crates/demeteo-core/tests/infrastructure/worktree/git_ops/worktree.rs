@@ -49,6 +49,28 @@ fn expected_area(project_root: &std::path::Path, repo_dir: &str) -> std::path::P
         )
 }
 
+/// The paths a listing replays, against the ones Demeteo built or was handed
+/// back.
+///
+/// One string each on Linux and macOS; on Windows git answers `C:/…`, a
+/// `PathBuf` builds `C:\…`, and Git Bash prints `/c/…`, so the comparison has
+/// to go through [`crate::paths::same_path`] or it is asserting a spelling.
+#[track_caller]
+fn assert_same_paths(listed: &[crate::domain::models::WorktreeInfo], expected: &[&str]) {
+    let found: Vec<&str> = listed
+        .iter()
+        .map(|worktree| worktree.path.as_str())
+        .collect();
+    assert!(
+        found.len() == expected.len()
+            && found
+                .iter()
+                .zip(expected)
+                .all(|(a, b)| crate::paths::same_path(a, b, cfg!(windows))),
+        "listed {found:?}, expected {expected:?}"
+    );
+}
+
 /// The cache root is keyed by feature branch, so two features on one repo can
 /// never resolve to the same directory — that is the whole isolation property.
 #[test]
@@ -127,8 +149,8 @@ async fn test_list_worktrees_with_one_extra_worktree() {
 
     let worktrees = helper.list_worktrees(None, &repo).await.unwrap();
     assert_eq!(worktrees.len(), 1, "Expected exactly one linked worktree");
+    assert_same_paths(&worktrees, &[wt_dir.as_str()]);
     let wt = &worktrees[0];
-    assert_eq!(wt.path, wt_dir, "Worktree path should match the added dir");
     assert_eq!(
         wt.branch.as_deref(),
         Some("feature/my-task"),
@@ -175,15 +197,9 @@ async fn terminal_worktree_creation_returns_linked_worktree_metadata() {
     assert!(std::path::Path::new(&created.worktree.path).exists());
     // What `create` returns must be what `list` replays, or nothing can match
     // a freshly created worktree against the listing it appears in.
-    assert_eq!(
-        helper
-            .list_worktrees(None, &repo)
-            .await
-            .unwrap()
-            .iter()
-            .map(|worktree| worktree.path.as_str())
-            .collect::<Vec<_>>(),
-        [created.worktree.path.as_str()]
+    assert_same_paths(
+        &helper.list_worktrees(None, &repo).await.unwrap(),
+        &[created.worktree.path.as_str()],
     );
     // The bootstrap prune sweeps `repos/` by configured repository name, so a
     // terminal worktree anywhere below it is deleted on the next re-bootstrap.
@@ -463,11 +479,9 @@ async fn a_workspace_under_a_terminal_worktrees_directory_still_withholds_a_runn
         .await
         .expect("lists terminal locations");
 
-    assert_eq!(
-        listed.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(),
-        [mine.worktree.path.as_str()],
-        "a checkout a running step owns is force-removed under whoever opened a shell in it"
-    );
+    // A checkout a running step owns is force-removed under whoever opened a
+    // shell in it, so only the terminal one may be listed.
+    assert_same_paths(&listed, &[mine.worktree.path.as_str()]);
     assert_eq!(
         helper.list_worktrees(None, &repo).await.unwrap().len(),
         3,
@@ -589,15 +603,9 @@ async fn legacy_terminal_worktrees_are_unregistered_and_current_ones_left_alone(
         !legacy_area.exists(),
         "the legacy area itself must be gone, not just its registration"
     );
+    // Git must forget the legacy worktree and keep the current-location one.
     let surviving = helper.list_worktrees(None, &repo).await.unwrap();
-    assert_eq!(
-        surviving
-            .iter()
-            .map(|worktree| worktree.path.as_str())
-            .collect::<Vec<_>>(),
-        [kept.worktree.path.as_str()],
-        "Git must forget the legacy worktree and keep the current-location one"
-    );
+    assert_same_paths(&surviving, &[kept.worktree.path.as_str()]);
 
     let _ = exec
         .run_command(
@@ -1944,9 +1952,10 @@ async fn head_sha_reports_nothing_for_a_directory_that_is_not_a_repo() {
 // Linux, and only fails on the platform none of these tests run on.
 
 use super::{
-    delete_worktree_residue, exclude_file_with, link_dependency_caches_cmd, reclaim_worktree_path,
-    restore_write_access_cmd, shareable_cache_names, shareable_cache_probe_cmd, target_path_join,
-    worktree_dir, worktree_dir_on,
+    created_terminal_worktree_path, delete_worktree_residue, exclude_file_with,
+    link_dependency_caches_cmd, reclaim_worktree_path, restore_write_access_cmd,
+    shareable_cache_names, shareable_cache_probe_cmd, target_path_join, worktree_dir,
+    worktree_dir_on,
 };
 use crate::ports::execution::{ProgramRequest, SftpEntry};
 use std::sync::Mutex;
@@ -2171,6 +2180,50 @@ async fn a_successful_delete_asks_nothing_further() {
         .await
         .unwrap();
     assert_eq!(exec.seen(), vec!["remove_dir_all /repo_wt_a".to_string()]);
+}
+
+/// The last line was printed by `pwd` inside the shell that created the
+/// worktree, so on a Windows host it arrives in MSYS form — and the caller
+/// opens a terminal at what this returns, which no Win32 call can do with
+/// `/c/…`.
+#[test]
+fn a_created_worktree_path_leaves_the_shells_msys_spelling_behind() {
+    assert_eq!(
+        created_terminal_worktree_path(
+            "Preparing worktree\n/c/Users/runneradmin/p/terminal-worktrees/app/one\n",
+            r"C:\Users\runneradmin\p\terminal-worktrees\app\one",
+            true,
+        ),
+        r"C:\Users\runneradmin\p\terminal-worktrees\app\one"
+    );
+}
+
+/// The same output on a POSIX host is already the answer, and a Windows desktop
+/// driving a remote reads a genuine `/c` directory there.
+#[test]
+fn a_created_worktree_path_is_untouched_for_a_posix_target() {
+    assert_eq!(
+        created_terminal_worktree_path("/srv/p/terminal-worktrees/app/one\n", "/derived", false),
+        "/srv/p/terminal-worktrees/app/one"
+    );
+    assert_eq!(
+        created_terminal_worktree_path("/c/checkouts/one\n", "/derived", false),
+        "/c/checkouts/one"
+    );
+}
+
+/// A silent stdout, or a last line that is not a path at all, falls back to the
+/// derived destination rather than failing the create.
+#[test]
+fn a_created_worktree_path_falls_back_when_the_shell_reported_no_path() {
+    assert_eq!(
+        created_terminal_worktree_path("", "/derived", false),
+        "/derived"
+    );
+    assert_eq!(
+        created_terminal_worktree_path("Preparing worktree\n", r"C:\derived", true),
+        r"C:\derived"
+    );
 }
 
 /// The Unix write-restore is the inverse of the Unix `chmod a-w` fence. On a

@@ -37,21 +37,31 @@ pub(crate) struct VerifierTarget<'a> {
     pub override_model: Option<&'a str>,
 }
 
-/// Whether the pre-harness write-restore applies to `machine_id`.
+/// Which inverse the pre-harness write-restore has to apply on a machine.
 ///
-/// The restore is the inverse of the Unix scope fence
-/// (`adapters/worktree/git_ops/scope.rs`), which is `chmod`. Windows has no
-/// equivalent yet — the ACL fence is Phase 4 of `docs/WINDOWS_PARITY.md` — so
-/// on a Windows host's own machine nothing has been made read-only and there
-/// is nothing to restore. Skipping is the honest answer; a `chmod` shimmed
-/// into an `icacls` call would claim to undo a fence that was never applied.
-///
-/// **A remote machine is always Linux**, fence and all, so the host's OS must
-/// not decide this alone. `cfg!(windows)` is passed in rather than read here
-/// so the pairing is reachable from a test on the platform this is developed
-/// on, where `cfg(windows)` code is never compiled.
-fn restores_write_access(host_is_windows: bool, machine_id: &str) -> bool {
-    !(host_is_windows && crate::domain::ids::MachineId::from(machine_id).is_local())
+/// Two fences exist and they are lifted by different means, so naming the means
+/// is the decision — one that would otherwise be spelled inside an `async fn`
+/// where no test can reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteRestore {
+    /// `chmod -R u+w` over the worktree, the inverse of the Unix `chmod a-w`.
+    Chmod,
+    /// Revoke the deny ACE the Windows-local fence set. A `chmod` here would
+    /// walk Git Bash over the tree to change nothing, and leave every harness
+    /// build denied its own output directory.
+    RevokeDenyAce,
+}
+
+/// Which fence is standing follows the machine, not the host: a remote machine
+/// is always Linux and always `chmod a-w`-fenced whatever the desktop runs.
+/// `cfg!(windows)` is a parameter rather than a read so both answers are
+/// reachable from a test on the platform this is developed on.
+fn write_restore(host_is_windows: bool, machine_id: &str) -> WriteRestore {
+    if paths::windows_host_target(host_is_windows, machine_id) {
+        WriteRestore::RevokeDenyAce
+    } else {
+        WriteRestore::Chmod
+    }
 }
 
 impl ExecutionDriver {
@@ -157,21 +167,30 @@ impl ExecutionDriver {
             })
             .unwrap_or_default();
 
-        // Idempotent write-restore. Fresh worktrees are writable, but a
-        // retried step may run in a worktree the fence already touched.
-        if (prepare_command.is_some() || !resolved.is_empty())
-            && restores_write_access(cfg!(windows), machine_str)
-        {
-            let _ = self
-                .exec
-                .run_command(
-                    machine_str,
-                    &format!(
-                        "chmod -R u+w {} 2>/dev/null || true",
-                        paths::shell_escape_posix(wt_path)
-                    ),
-                )
-                .await;
+        // Idempotent write-restore. Fresh worktrees are writable, but a retried
+        // step runs in a worktree the fence already touched, and the commands
+        // below have to write `target/`, `node_modules/`, ….
+        if prepare_command.is_some() || !resolved.is_empty() {
+            match write_restore(cfg!(windows), machine_str) {
+                WriteRestore::RevokeDenyAce => {
+                    let _ = self
+                        .git_ops
+                        .restore_artifact_scope(Some(machine_str), wt_path)
+                        .await;
+                }
+                WriteRestore::Chmod => {
+                    let _ = self
+                        .exec
+                        .run_command(
+                            machine_str,
+                            &format!(
+                                "chmod -R u+w {} 2>/dev/null || true",
+                                paths::shell_escape_posix(wt_path)
+                            ),
+                        )
+                        .await;
+                }
+            }
         }
 
         // Run the prepare/harness commands under an interactive login shell with

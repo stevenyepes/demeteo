@@ -477,6 +477,20 @@ fn program_path(name: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Whether Git would run a file of this shape as a hook, given its Unix mode
+/// where the platform has one.
+///
+/// `None` is Windows, and `true` for every non-directory is the answer there
+/// rather than a stand-in for one: Git's `mingw_access` masks `X_OK` off, so
+/// `find_hook` cannot test a bit and Git attempts the file regardless. See
+/// [`ExecutionPort::is_executable`], which this decides for.
+///
+/// Free and `cfg`-free so the Windows answer is reachable from a test on a
+/// host that has no Windows.
+fn git_would_run_hook(is_dir: bool, unix_mode: Option<u32>) -> bool {
+    !is_dir && unix_mode.is_none_or(|mode| mode & 0o111 != 0)
+}
+
 /// Apply the non-argument half of `opts` to a spawned child.
 fn configure_child(command: &mut Command, opts: &ShellOptions) {
     if let Some(cwd) = &opts.cwd {
@@ -825,46 +839,20 @@ impl ExecutionPort for LocalSubprocessAdapter {
         .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
-    async fn set_file_mode(&self, _machine_id: &str, path: &str, mode: u32) -> Result<(), String> {
-        let path = path.to_string();
-        tokio::task::spawn_blocking(move || -> Result<(), String> {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
-                    .map_err(|e| format!("Failed to set permissions on '{}': {}", path, e))
-            }
-            #[cfg(windows)]
-            {
-                let _ = mode;
-                std::fs::metadata(&path).map(|_| ()).map_err(|e| {
-                    format!(
-                        "Failed to stat '{}' before setting permissions: {}",
-                        path, e
-                    )
-                })
-            }
-        })
-        .await
-        .map_err(|e| format!("blocking task panicked: {}", e))?
-    }
-
     async fn is_executable(&self, _machine_id: &str, path: &str) -> Result<bool, String> {
         let path = path.to_string();
         tokio::task::spawn_blocking(move || -> Result<bool, String> {
             let metadata = std::fs::metadata(&path)
                 .map_err(|e| format!("Failed to stat '{}': {}", path, e))?;
             #[cfg(unix)]
-            {
+            let mode = {
                 use std::os::unix::fs::PermissionsExt;
 
-                Ok(!metadata.is_dir() && metadata.permissions().mode() & 0o111 != 0)
-            }
-            #[cfg(windows)]
-            {
-                Ok(!metadata.is_dir())
-            }
+                Some(metadata.permissions().mode())
+            };
+            #[cfg(not(unix))]
+            let mode = None;
+            Ok(git_would_run_hook(metadata.is_dir(), mode))
         })
         .await
         .map_err(|e| format!("blocking task panicked: {}", e))?

@@ -1,10 +1,13 @@
 # Windows Parity — The Plan, and the Decision Behind It
 
-> **Plan, not shipped.** Nothing here is implemented. The current state is
-> `feat/native-windows-local-execution` (fc8d65c), which does not compile and
-> whose central bet this document rejects. Read
+> **Phases 0–4 are implemented on `feat/native-windows-local-execution`; Phase 5
+> is not.** The tree compiles, links and unit-tests on `windows-latest`. What
+> nothing has yet observed is a Windows *run* — every claim below about DACL
+> propagation cost, Git Bash resolution on a real install, or an authenticated
+> push is reasoned and type-checked, not executed. Read
 > [`EXECUTION_PARITY.md`](EXECUTION_PARITY.md) first — the transport contract
-> this has to extend rather than contradict.
+> this has to extend rather than contradict. The rejected design this document
+> argues against is fc8d65c's, kept below because the reasoning is the point.
 
 ## The decision: one body, one shell
 
@@ -111,7 +114,7 @@ migration · the Job Object *concept* · the `TrustedWorktreePort` shape in
 | The four `project_settings` command columns' JSON encoding | `parse_script` runs `serde_json::from_str::<ScriptVariants>` against columns holding a bare `npm test`. **`get_settings()` returns `Err` on every existing install** — settings, feature launch, and the settings panel all dead. There is no migration; V38 is still the highest |
 | `HarnessesColumn`'s untagged→struct rewrite | A legacy bare-map row now parses as all-`None`, **silently dropping every configured harness** |
 | The `pwsh` requirement and `-Command` invocation | See above |
-| The icacls fence + `.demeteo/scope-acl.txt` | `/save`+`/restore` matches by relative filename, so it skips every file the agent created and leaves stale entries for every one it deleted — it is not an inverse. The mask `(WD,AD,DC)` **omits `DELETE`, so an agent can `rm src/main.rs` straight through the fence today**. The snapshot lives inside the tree the fence bounds, which is what forced the `#[cfg(windows)]` git-status filter at `scope.rs:465` — itself a transport branch in calling code |
+| The icacls fence + `.demeteo/scope-acl.txt` | `/save`+`/restore` matches by relative filename, so it skips every file the agent created and leaves stale entries for every one it deleted — it is not an inverse. The mask `(WD,AD,DC)` **omits `DELETE`, so an agent can `rm src/main.rs` straight through the fence today**. The snapshot lives inside the tree the fence bounds, which is what forced the `#[cfg(windows)]` git-status filter in `scope.rs` — itself a transport branch in calling code |
 | `WindowsJob::attach` after `spawn()` | Job membership is forward-only, so grandchildren spawned before assignment escape permanently; `AssignProcessToJobObject` returns `ERROR_ACCESS_DENIED` on an already-exited process, so a fast command fails *for succeeding*; and `attach` returns `Err`, making a best-effort teardown guarantee a precondition for running anything |
 | `set_file_mode` / `is_executable` on the port | `set_file_mode` is a documented Windows no-op whose only caller protects a file containing a provider PAT; `is_executable` returns `!is_dir()` on Windows, i.e. every regular file is a runnable git hook. A port method a transport can only no-op or lie about is a parity break *inside* the contract |
 | The two-field script editors | The UI cost of asking every user to author and forever synchronise two bodies, with nothing detecting drift |
@@ -331,7 +334,7 @@ agent's legitimate writes. Teardown is `REVOKE_ACCESS` for the same trustee — 
 true inverse, no snapshot, no `/t` walk, O(top-level entries) instead of
 O(files).
 
-Deleting the `#[cfg(windows)]` git-status filter at `scope.rs:465` is the
+Deleting the `#[cfg(windows)]` git-status filter in `scope.rs` is the
 **acceptance criterion**, not a side effect: that filter exists only because the
 snapshot lived inside the worktree, and it is itself a transport branch in
 calling code.

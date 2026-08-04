@@ -110,12 +110,6 @@ impl ExecutionPort for RouterExecutionPort {
             .await
     }
 
-    async fn set_file_mode(&self, machine_id: &str, path: &str, mode: u32) -> Result<(), String> {
-        self.resolve(machine_id)?
-            .set_file_mode(machine_id, path, mode)
-            .await
-    }
-
     async fn is_executable(&self, machine_id: &str, path: &str) -> Result<bool, String> {
         self.resolve(machine_id)?
             .is_executable(machine_id, path)

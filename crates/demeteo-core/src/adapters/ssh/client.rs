@@ -263,22 +263,6 @@ impl ExecutionPort for SshClientAdapter {
         .await
     }
 
-    async fn set_file_mode(&self, machine_id: &str, path: &str, mode: u32) -> Result<(), String> {
-        let mid = machine_id.to_string();
-        let path = path.to_string();
-        with_ssh_retry("set_file_mode", machine_id, &self.pool, None, || {
-            let pool = self.pool.clone();
-            let mid = mid.clone();
-            let path = path.clone();
-            async move {
-                tokio::task::spawn_blocking(move || sftp::set_file_mode(&pool, &mid, &path, mode))
-                    .await
-                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
-            }
-        })
-        .await
-    }
-
     async fn is_executable(&self, machine_id: &str, path: &str) -> Result<bool, String> {
         let mid = machine_id.to_string();
         let path = path.to_string();

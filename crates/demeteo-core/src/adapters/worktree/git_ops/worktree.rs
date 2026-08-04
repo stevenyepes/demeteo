@@ -89,7 +89,11 @@ impl GitOpsHelper {
         // `/var` and `/private/var` name the same directory and compare unequal.
         Ok(TerminalWorktreeCreated {
             worktree: WorktreeInfo {
-                path: created_terminal_worktree_path(&output, &destination),
+                path: created_terminal_worktree_path(
+                    &output,
+                    &destination,
+                    paths::targets_windows_host(machine_str),
+                ),
                 branch: Some(branch.to_string()),
                 is_locked: false,
             },
@@ -175,19 +179,23 @@ impl GitOpsHelper {
         worktree_path: &str,
         force: bool,
     ) -> Result<(), String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let windows_host = paths::targets_windows_host(machine_str);
         let owned = self
             .list_terminal_worktrees(machine_id, repo_dir, project_root)
             .await?;
+        // One side of this is git's spelling and the other is whatever the
+        // caller was handed; on Windows those are rarely the same string for
+        // the same directory, which is what `paths::same_path` is for.
         let target = owned
             .into_iter()
-            .find(|worktree| Path::new(&worktree.path) == Path::new(worktree_path))
+            .find(|worktree| paths::same_path(&worktree.path, worktree_path, windows_host))
             .ok_or_else(|| {
                 format!(
                     "remove_terminal_worktree: {worktree_path} is not a terminal worktree of {repo_dir}"
                 )
             })?;
 
-        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let mut args = vec!["worktree".to_string(), "remove".to_string()];
         if force {
             args.push("--force".to_string());
@@ -1192,14 +1200,20 @@ fn terminal_worktree_create_cmd(
 /// writes its progress to stderr, but that is a convention rather than a
 /// guarantee, and a transport is free to interleave. Falling back to the
 /// derived path keeps a silent stdout from failing the whole create.
-fn created_terminal_worktree_path(output: &str, derived: &str) -> String {
+///
+/// The line was printed by a shell, so on a Windows host it is `pwd`'s MSYS
+/// spelling of the destination and not a path any Win32 call would accept — and
+/// the caller opens a terminal at what this returns.
+/// [`paths::native_path`] is where that spelling stops.
+fn created_terminal_worktree_path(output: &str, derived: &str, windows_host: bool) -> String {
     output
         .lines()
         .rev()
         .map(str::trim)
         .find(|line| !line.is_empty())
-        .filter(|line| line.starts_with('/'))
-        .map(str::to_string)
+        .map(|line| paths::native_path(line, windows_host))
+        .filter(|path| path.is_absolute())
+        .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| derived.to_string())
 }
 

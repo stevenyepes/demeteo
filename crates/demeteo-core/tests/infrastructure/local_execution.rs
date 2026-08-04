@@ -450,6 +450,24 @@ fn the_job_reaps_its_tree_but_lets_a_process_that_asks_break_away() {
     );
 }
 
+/// The Windows arm, decided on a host that has no Windows. Git's
+/// `mingw_access` masks `X_OK` off, so a hook with no bit to test is still a
+/// hook Git will attempt — answering `false` here would silently stop a
+/// repository's `commit-msg` from ever vetting a message Demeteo wrote.
+#[test]
+fn a_hook_with_no_permission_bits_to_read_is_still_run() {
+    assert!(git_would_run_hook(false, None));
+    assert!(!git_would_run_hook(true, None), "a directory is not a hook");
+}
+
+#[test]
+fn a_hook_carrying_permission_bits_is_run_only_when_one_of_them_is_executable() {
+    assert!(git_would_run_hook(false, Some(0o755)));
+    assert!(git_would_run_hook(false, Some(0o100)), "owner-only counts");
+    assert!(!git_would_run_hook(false, Some(0o644)));
+    assert!(!git_would_run_hook(true, Some(0o755)));
+}
+
 #[test]
 fn an_ordinary_spawn_failure_is_left_to_read_as_it_always_did() {
     let missing = std::io::Error::from(std::io::ErrorKind::NotFound);

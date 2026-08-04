@@ -183,10 +183,6 @@ pub async fn repo_target_dir_str(
 /// still emit the POSIX form. Anything that branches on "is this Windows" needs
 /// *both* halves; branching on `cfg!(windows)` alone is the shape that sends a
 /// `chmod` to Linux or a `MAX_PATH` workaround to a machine with no `MAX_PATH`.
-///
-/// `driver/verifier/mod.rs::restores_write_access` decides the same thing for
-/// the Unix write-restore and should collapse into this once one owner holds
-/// both files.
 pub fn windows_host_target(host_is_windows: bool, machine_id: &str) -> bool {
     host_is_windows && crate::domain::ids::MachineId::from(machine_id).is_local()
 }
@@ -194,6 +190,75 @@ pub fn windows_host_target(host_is_windows: bool, machine_id: &str) -> bool {
 /// [`windows_host_target`] against this build's platform.
 pub fn targets_windows_host(machine_id: &str) -> bool {
     windows_host_target(cfg!(windows), machine_id)
+}
+
+/// `path` as the host that owns it spells it, whoever reported it.
+///
+/// # One directory, three spellings
+///
+/// On Windows the same location reaches Demeteo under three names, from three
+/// producers: `C:\Users\…` from a [`PathBuf`], `C:/Users/…` from git, which
+/// reports forward slashes on every platform, and `/c/Users/…` from anything
+/// that has been through Git Bash — `pwd` inside a shell answers in that MSYS
+/// form, and `git_ops::worktree`'s terminal-worktree creation reads a path out
+/// of one.
+///
+/// The MSYS form is not merely a third spelling to tolerate. No Win32 call
+/// accepts it, so it is a path that names nothing: a terminal opened there
+/// fails, and so does every `std::fs` call. It is converted here, at the
+/// boundary it enters through, rather than tolerated at each comparison
+/// downstream.
+///
+/// `windows_host` is the caller's [`windows_host_target`] answer, passed rather
+/// than read so both halves are reachable from a test on either platform. It
+/// must be false for a remote target even on a Windows desktop: there
+/// `/c/anything` is an ordinary directory and rewriting it would invent a drive.
+pub fn native_path(path: &str, windows_host: bool) -> PathBuf {
+    if !windows_host {
+        return PathBuf::from(path);
+    }
+    let drive = match path.as_bytes() {
+        [b'/', drive, rest @ ..]
+            if drive.is_ascii_alphabetic() && matches!(rest, [] | [b'/', ..]) =>
+        {
+            Some(drive.to_ascii_uppercase() as char)
+        }
+        _ => None,
+    };
+    let spelled = match drive {
+        Some(drive) => format!("{drive}:\\{}", path[2..].trim_start_matches('/')),
+        None => path.to_string(),
+    };
+    PathBuf::from(spelled.replace('/', "\\"))
+}
+
+/// Whether two spellings name one location.
+///
+/// Every caller of this is comparing a path git reported against one Demeteo
+/// built, so both go through [`native_path`] first and then through
+/// [`std::path::Path`]'s component equality — which a string comparison gets
+/// wrong at a trailing separator and at a doubled one.
+///
+/// Case-insensitive on a Windows host, as NTFS is. A drive letter that arrived
+/// lowercased — every MSYS path does — must not fork one directory into two.
+pub fn same_path(a: &str, b: &str, windows_host: bool) -> bool {
+    comparison_key(a, windows_host) == comparison_key(b, windows_host)
+}
+
+fn comparison_key(path: &str, windows_host: bool) -> PathBuf {
+    let native = native_path(path, windows_host);
+    if !windows_host {
+        return native;
+    }
+    // A trailing separator is folded away by [`std::path::Path`] only on a
+    // Windows *build*, and `windows_host` is a parameter precisely so the
+    // Windows answer stays reachable from a Linux test — so it cannot be left
+    // to whichever `Path` this was compiled against.
+    let mut key = native.to_string_lossy().to_ascii_lowercase();
+    while key.len() > 3 && key.ends_with('\\') {
+        key.pop();
+    }
+    PathBuf::from(key)
 }
 
 /// How many hex digits [`short_path_segment`] emits.

@@ -306,6 +306,24 @@ fn add_project(ctx: &AppContext, id: &str, compute_type: &str, machine: Option<&
         .unwrap();
 }
 
+/// The two strings this layer derives, built the way it derives them: one
+/// `join` per component.
+///
+/// A literal `"projects/p-local"` is a *single* segment to `join`, which leaves
+/// the separator inside it untouched — so on Windows the expectation carries a
+/// `/` exactly where the production path carries a `\`, and the two describe
+/// the same directory under different names.
+fn local_layout(ctx: &AppContext, project_id: &str, repo_name: &str) -> (String, String) {
+    let project_root = ctx.workspace_dir.join("projects").join(project_id);
+    let repo_dir = project_root
+        .join(crate::paths::REPOS_SUBDIR)
+        .join(repo_name);
+    (
+        project_root.to_string_lossy().into_owned(),
+        repo_dir.to_string_lossy().into_owned(),
+    )
+}
+
 fn add_repo(ctx: &AppContext, id: &str, project_id: &str, repo_path: &str) {
     ctx.projects
         .add_repository(Repository {
@@ -322,12 +340,7 @@ async fn list_resolves_a_local_project_repository_before_calling_the_port() {
     let (ctx, worktree_port, calls) = context();
     add_project(&ctx, "p-local", "local", None);
     add_repo(&ctx, "r-local", "p-local", "org/local-repo");
-    let project_root = ctx
-        .workspace_dir
-        .join("projects/p-local")
-        .to_string_lossy()
-        .to_string();
-    let repo_dir = format!("{project_root}/repos/local-repo");
+    let (project_root, repo_dir) = local_layout(&ctx, "p-local", "local-repo");
     worktree_port.expect(WorktreeCall::ListTerminal {
         machine: None,
         repo_dir: repo_dir.clone(),
@@ -355,11 +368,20 @@ async fn create_resolves_a_remote_project_machine_and_repository_before_calling_
     let (ctx, worktree_port, calls) = context();
     add_project(&ctx, "p-remote", "remote", Some("machine-remote"));
     add_repo(&ctx, "r-remote", "p-remote", "org/remote-repo");
-    let project_root = format!(
-        "{}/.demeteo/projects/p-remote",
-        std::env::var("HOME").unwrap()
-    );
-    let repo_dir = format!("{project_root}/repos/remote-repo");
+    // Resolved rather than read from `HOME`: which variable holds it is the
+    // port's business and differs per platform, and this test is about what
+    // reaches the port, not about where the home directory came from.
+    let home = ctx.exec.resolve_home("machine-remote").await.unwrap();
+    let project_root = std::path::PathBuf::from(home)
+        .join(crate::paths::DEMETEO_HOME_SUBDIR)
+        .join(crate::paths::PROJECTS_SUBDIR)
+        .join("p-remote");
+    let repo_dir = project_root
+        .join(crate::paths::REPOS_SUBDIR)
+        .join("remote-repo")
+        .to_string_lossy()
+        .into_owned();
+    let project_root = project_root.to_string_lossy().into_owned();
     worktree_port.expect(WorktreeCall::Create {
         machine: Some("machine-remote".to_string()),
         repo_dir: repo_dir.clone(),
@@ -406,12 +428,7 @@ async fn removal_resolves_the_same_repository_identity_the_listing_does() {
     let (ctx, worktree_port, calls) = context();
     add_project(&ctx, "p-local", "local", None);
     add_repo(&ctx, "r-local", "p-local", "org/local-repo");
-    let project_root = ctx
-        .workspace_dir
-        .join("projects/p-local")
-        .to_string_lossy()
-        .to_string();
-    let repo_dir = format!("{project_root}/repos/local-repo");
+    let (project_root, repo_dir) = local_layout(&ctx, "p-local", "local-repo");
     worktree_port.expect(WorktreeCall::Remove {
         machine: None,
         repo_dir: repo_dir.clone(),
@@ -448,11 +465,7 @@ async fn branch_options_carry_the_projects_configured_default() {
     let (ctx, worktree_port, _calls) = context();
     add_project(&ctx, "p-local", "local", None);
     add_repo(&ctx, "r-local", "p-local", "org/local-repo");
-    let project_root = ctx
-        .workspace_dir
-        .join("projects/p-local")
-        .to_string_lossy()
-        .to_string();
+    let (_, repo_dir) = local_layout(&ctx, "p-local", "local-repo");
     let defaults = crate::adapters::step_executor::setup::fetch_default_settings();
     ctx.projects
         .save_settings(crate::domain::models::ProjectSettings {
@@ -466,7 +479,7 @@ async fn branch_options_carry_the_projects_configured_default() {
         .unwrap();
     worktree_port.expect(WorktreeCall::ListBranches {
         machine: None,
-        repo_dir: format!("{project_root}/repos/local-repo"),
+        repo_dir,
     });
 
     let options = list_terminal_branches(&ctx, "p-local".to_string(), "r-local".to_string())
@@ -496,14 +509,10 @@ async fn the_listing_is_the_ports_answer_and_is_not_filtered_again() {
     let (ctx, worktree_port, _calls) = context();
     add_project(&ctx, "p-local", "local", None);
     add_repo(&ctx, "r-local", "p-local", "org/local-repo");
-    let project_root = ctx
-        .workspace_dir
-        .join("projects/p-local")
-        .to_string_lossy()
-        .to_string();
+    let (project_root, repo_dir) = local_layout(&ctx, "p-local", "local-repo");
     worktree_port.expect(WorktreeCall::ListTerminal {
         machine: None,
-        repo_dir: format!("{project_root}/repos/local-repo"),
+        repo_dir,
         project_root,
     });
 
