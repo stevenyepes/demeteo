@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::domain::models::{EffortLevel, WorktreeStrategy};
+use crate::domain::models::{EffortLevel, ScriptVariants, WorktreeStrategy};
 
 pub mod verdict;
 
@@ -97,9 +97,9 @@ pub const DEFAULT_HARNESS_NAME: &str = "default";
 pub struct ResolvedHarness {
     /// The gate's name, as declared. What a failure is attributed to.
     pub name: String,
-    /// The shell command to run, resolved from the project's `harnesses` map
-    /// or its `test_command`.
-    pub command: String,
+    /// The explicitly authored shell bodies resolved from the project's
+    /// `harnesses` map or its `test_command`.
+    pub script: ScriptVariants,
     /// This command's own deadline, in seconds.
     ///
     /// **Per harness, not per step** (S10). `wall_cap_s` answers "how long may
@@ -168,10 +168,14 @@ pub fn resolve_harnesses(
     }
 
     // Tier 3 — the project's `test_command`.
-    match strategy.test_command.as_deref().map(str::trim) {
-        Some(cmd) if !cmd.is_empty() => vec![ResolvedHarness {
+    match strategy
+        .test_command
+        .as_ref()
+        .filter(|script| !script.is_empty())
+    {
+        Some(script) => vec![ResolvedHarness {
             name: DEFAULT_HARNESS_NAME.to_string(),
-            command: cmd.to_string(),
+            script: script.clone(),
             deadline_s,
         }],
         _ => Vec::new(),
@@ -238,15 +242,18 @@ fn resolve_named(
             .harnesses
             .as_ref()
             .and_then(|h| h.get(name))
-            .map(|c| c.trim())
-            .filter(|c| !c.is_empty());
-        let command = match mapped {
-            Some(cmd) => cmd.to_string(),
+            .filter(|script| !script.is_empty());
+        let script = match mapped {
+            Some(script) => script.clone(),
             None if fallback_to_test_command && !used_fallback => {
-                match strategy.test_command.as_deref().map(str::trim) {
-                    Some(cmd) if !cmd.is_empty() => {
+                match strategy
+                    .test_command
+                    .as_ref()
+                    .filter(|script| !script.is_empty())
+                {
+                    Some(script) => {
                         used_fallback = true;
-                        cmd.to_string()
+                        script.clone()
                     }
                     _ => continue,
                 }
@@ -255,7 +262,7 @@ fn resolve_named(
         };
         out.push(ResolvedHarness {
             name: name.to_string(),
-            command,
+            script,
             deadline_s,
         });
     }

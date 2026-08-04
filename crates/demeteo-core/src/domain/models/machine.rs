@@ -1,4 +1,5 @@
 use crate::domain::ids::{AgentProfileId, MachineId};
+use crate::domain::models::ScriptVariants;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -15,7 +16,7 @@ pub struct Machine {
     #[serde(default)]
     pub use_login_shell: Option<bool>, // null/false = no login shell; true = bash -l -c
     #[serde(default)]
-    pub setup_commands: Option<String>, // JSON array of shell commands run after clone
+    pub setup_commands: Option<Vec<ScriptVariants>>,
     /// Optional "away" notification webhook (docs/REMOTE_EXECUTION.md
     /// M6.3) — a plain HTTP(S) endpoint receiving `{"text": "..."}`, same
     /// minimal shape Slack incoming webhooks and ntfy.sh both accept.

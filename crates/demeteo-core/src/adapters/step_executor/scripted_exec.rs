@@ -20,12 +20,13 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::ports::execution::{ExecutionPort, ShellOptions};
+use crate::ports::execution::{ExecutionPort, ScriptRequest, ShellOptions};
 
 pub(crate) struct ScriptedExec {
     answers: HashMap<String, Result<String, String>>,
     files: HashMap<String, Result<String, String>>,
     seen: Mutex<Vec<(String, ShellOptions)>>,
+    script_requests: Mutex<Vec<ScriptRequest>>,
 }
 
 fn script(entries: &[(&str, Result<&str, &str>)]) -> HashMap<String, Result<String, String>> {
@@ -49,6 +50,7 @@ impl ScriptedExec {
             answers: script(answers),
             files: HashMap::new(),
             seen: Mutex::new(Vec::new()),
+            script_requests: Mutex::new(Vec::new()),
         }
     }
 
@@ -68,6 +70,7 @@ impl ScriptedExec {
             answers: self.answers.into_iter().map(|(k, v)| (f(&k), v)).collect(),
             files: self.files,
             seen: self.seen,
+            script_requests: self.script_requests,
         }
     }
 
@@ -89,13 +92,8 @@ impl ScriptedExec {
             .collect()
     }
 
-    pub(crate) fn options(&self) -> Vec<ShellOptions> {
-        self.seen
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(_, o)| o.clone())
-            .collect()
+    pub(crate) fn script_requests(&self) -> Vec<ScriptRequest> {
+        self.script_requests.lock().unwrap().clone()
     }
 }
 
@@ -115,6 +113,22 @@ impl ExecutionPort for ScriptedExec {
             .get(cmd)
             .cloned()
             .unwrap_or_else(|| Err(format!("ScriptedExec: unscripted command `{cmd}`")))
+    }
+    async fn run_script(&self, _m: &str, request: ScriptRequest) -> Result<String, String> {
+        self.script_requests.lock().unwrap().push(request.clone());
+        let script = request
+            .variants
+            .posix
+            .or(request.variants.powershell)
+            .ok_or_else(|| "ScriptedExec: script had no variant".to_string())?;
+        self.seen
+            .lock()
+            .unwrap()
+            .push((script.clone(), ShellOptions::default()));
+        self.answers
+            .get(&script)
+            .cloned()
+            .unwrap_or_else(|| Err(format!("ScriptedExec: unscripted script `{script}`")))
     }
     async fn read_file(&self, _m: &str, p: &str) -> Result<String, String> {
         self.files

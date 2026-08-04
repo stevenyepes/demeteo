@@ -8,7 +8,17 @@ import type {
   MemoryAgentTestResult,
   Repository,
   WorkflowOverride,
+  ScriptVariants,
 } from "../types";
+
+export function scriptVariants(posix: string, powershell = ''): ScriptVariants | null {
+  const normalized = { posix: posix.trim() || null, powershell: powershell.trim() || null };
+  return normalized.posix || normalized.powershell ? normalized : null;
+}
+
+export function scriptText(script: ScriptVariants | null | undefined): string {
+  return script?.posix ?? script?.powershell ?? '';
+}
 
 // ── Project records ─────────────────────────────────────────────────────
 
@@ -233,15 +243,15 @@ export interface CommandProbeReport {
  */
 export async function probeProjectCommands(input: {
   projectId: string;
-  prepareCommand: string | null;
-  testCommand: string | null;
-  harnesses: Record<string, string> | null;
+  prepareCommand: ScriptVariants | null;
+  testCommand: ScriptVariants | null;
+  harnesses: Record<string, ScriptVariants> | null;
 }): Promise<CommandProbeReport> {
   return invoke<CommandProbeReport>('probe_project_commands', {
     projectId: input.projectId,
     draft: {
-      prepare_command: input.prepareCommand || null,
-      test_command: input.testCommand || null,
+      prepare_command: input.prepareCommand,
+      test_command: input.testCommand,
       harnesses: input.harnesses && Object.keys(input.harnesses).length > 0 ? input.harnesses : null,
     },
   });
@@ -256,19 +266,19 @@ export async function probeProjectCommands(input: {
 export interface ProjectSettingsInput {
   default_branch?: string;
   branch_prefix?: string;
-  test_command?: string | null;
-  build_command?: string | null;
-  coverage_command?: string | null;
+  test_command?: ScriptVariants | null;
+  build_command?: ScriptVariants | null;
+  coverage_command?: ScriptVariants | null;
   conventions_file?: string | null;
   pr_template?: string | null;
-  harnesses?: Record<string, string> | null;
+  harnesses?: Record<string, ScriptVariants> | null;
   /** The user's ordered selection of which harnesses gate validation — tier 2
    *  of the engine's harness resolution chain. Order is the user's (cheap
    *  gates first) and has to be stored, because `harnesses` is a map with no
    *  order to inherit. `null`/empty = no selection, which resolves exactly as
    *  it does today. */
   validation_gates?: string[] | null;
-  prepare_command?: string | null;
+  prepare_command?: ScriptVariants | null;
   extra_writable_paths?: string[] | null;
   conflict_policy?: string;
   feature_lifecycle?: string;

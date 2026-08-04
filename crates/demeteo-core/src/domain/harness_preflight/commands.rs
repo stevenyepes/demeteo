@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::models::WorktreeStrategy;
+use crate::domain::models::{ScriptVariants, WorktreeStrategy};
 
 /// Shell keywords, builtins and no-ops that either always resolve or are not
 /// commands at all. Probing them yields nothing and risks a false positive on
@@ -104,32 +104,36 @@ pub enum CommandSource {
 /// second walk of the same three sources: the set the launch probes and the set
 /// the settings panel displays have to be the same set, and deriving one from
 /// the other is what makes that structural instead of a convention.
-pub fn labelled_commands(strategy: &WorktreeStrategy) -> Vec<(CommandSource, Option<&str>, &str)> {
-    fn live(cmd: &Option<String>) -> Option<&str> {
-        cmd.as_deref().map(str::trim).filter(|c| !c.is_empty())
+pub fn labelled_commands(
+    strategy: &WorktreeStrategy,
+) -> Vec<(CommandSource, Option<&str>, &ScriptVariants)> {
+    fn live(script: &Option<ScriptVariants>) -> Option<&ScriptVariants> {
+        script.as_ref().filter(|script| !script.is_empty())
     }
 
-    let mut out: Vec<(CommandSource, Option<&str>, &str)> = Vec::new();
-    out.extend(live(&strategy.prepare_command).map(|c| (CommandSource::Prepare, None, c)));
-    out.extend(live(&strategy.test_command).map(|c| (CommandSource::Test, None, c)));
+    let mut out: Vec<(CommandSource, Option<&str>, &ScriptVariants)> = Vec::new();
+    out.extend(
+        live(&strategy.prepare_command).map(|script| (CommandSource::Prepare, None, script)),
+    );
+    out.extend(live(&strategy.test_command).map(|script| (CommandSource::Test, None, script)));
     if let Some(harnesses) = &strategy.harnesses {
-        let mut entries: Vec<(&String, &String)> = harnesses.iter().collect();
+        let mut entries: Vec<(&String, &ScriptVariants)> = harnesses.iter().collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
         out.extend(
             entries
                 .into_iter()
-                .map(|(name, cmd)| (CommandSource::Harness, Some(name.as_str()), cmd.trim()))
-                .filter(|(_, _, cmd)| !cmd.is_empty()),
+                .map(|(name, script)| (CommandSource::Harness, Some(name.as_str()), script))
+                .filter(|(_, _, script)| !script.is_empty()),
         );
     }
     out
 }
 
 /// Every configured command, in probe order. See [`labelled_commands`].
-pub fn configured_commands(strategy: &WorktreeStrategy) -> Vec<&str> {
+pub fn configured_commands(strategy: &WorktreeStrategy) -> Vec<&ScriptVariants> {
     labelled_commands(strategy)
         .into_iter()
-        .map(|(_, _, cmd)| cmd)
+        .map(|(_, _, script)| script)
         .collect()
 }
 

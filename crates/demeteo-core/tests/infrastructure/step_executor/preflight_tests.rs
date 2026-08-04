@@ -74,6 +74,58 @@ async fn all_binaries_resolving_permits_the_launch() {
 }
 
 #[tokio::test]
+async fn probes_carry_posix_and_powershell_variants_for_the_execution_port_to_select() {
+    let exec = ScriptedExec::new(&[("command -v cargo", Ok("/home/u/.cargo/bin/cargo"))]);
+    let _ = probe_configured_commands(&exec, "local", "/repo", &test_only("cargo test"), T).await;
+
+    let request = exec
+        .script_requests()
+        .pop()
+        .expect("the configured binary must be probed");
+    assert_eq!(request.variants.posix.as_deref(), Some("command -v cargo"));
+    assert!(
+        request
+            .variants
+            .powershell
+            .is_some_and(|script| script.contains("Get-Command -Name 'cargo'")),
+        "Windows must receive its own PowerShell probe variant"
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_tools_require_git_before_any_feature_work() {
+    let exec = ScriptedExec::new(&[("git --version", Ok("git version 2.50.0"))]);
+
+    validate_bootstrap_tools(&exec, "local", "/repo", T)
+        .await
+        .expect("Git and the selected script host are ready");
+
+    let request = exec
+        .script_requests()
+        .pop()
+        .expect("bootstrap must check Git through run_script");
+    assert_eq!(request.variants.posix.as_deref(), Some("git --version"));
+    assert_eq!(
+        request.variants.powershell.as_deref(),
+        Some("git --version")
+    );
+}
+
+#[tokio::test]
+async fn missing_powershell_is_an_actionable_bootstrap_configuration_error() {
+    let exec = ScriptedExec::new(&[(
+        "git --version",
+        Err("configuration error: PowerShell 7 is required for local Windows scripts; install pwsh and ensure it is on PATH"),
+    )]);
+
+    let error = validate_bootstrap_tools(&exec, "local", "/repo", T)
+        .await
+        .expect_err("PowerShell is required before Windows feature bootstrap");
+    assert!(error.contains("PowerShell 7"));
+    assert!(error.contains("pwsh"));
+}
+
+#[tokio::test]
 async fn a_missing_binary_blocks_the_launch_and_names_it() {
     // The whole point of the phase: `cargo` is absent, and today that surfaces
     // as a validate failure after the entire implement budget is spent.
@@ -102,8 +154,8 @@ async fn a_missing_binary_blocks_the_launch_and_names_it() {
     let detail = v.detail().expect("a blocking verdict must explain itself");
     assert!(detail.contains("cargo"));
     assert!(
-        detail.contains("bash -l -i -c"),
-        "must give the reproduce line in the shell that actually matters; got:\n{detail}"
+        detail.contains("Get-Command cargo") && detail.contains("command -v cargo"),
+        "must give reproduce commands for the target shell; got:\n{detail}"
     );
 }
 
@@ -327,16 +379,15 @@ async fn the_settings_probe_reads_no_repository_directory() {
     // spawn time and read as a missing toolchain.
     let exec = ScriptedExec::new(&[("command -v npm", Ok("/usr/bin/npm"))]);
     let _ = probe_project_commands(&exec, "local", &test_only("npm test"), T).await;
-    let opts = exec.options();
-    assert_eq!(opts.len(), 1, "one distinct tool, one probe");
+    let requests = exec.script_requests();
+    assert_eq!(requests.len(), 1, "one distinct tool, one probe");
     assert_eq!(
-        opts[0].cwd, None,
+        requests[0].cwd, None,
         "the settings probe must leave the working directory to the adapter"
     );
     assert!(
-        opts[0].login_shell && opts[0].interactive,
-        "and it must still be the interactive login shell the harness itself \
-         runs under, or half a developer's toolchain reads as missing"
+        requests[0].timeout.is_some(),
+        "the same bounded probe must run for settings and launch"
     );
 }
 

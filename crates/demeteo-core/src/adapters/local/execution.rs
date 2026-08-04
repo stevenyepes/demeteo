@@ -6,9 +6,23 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use crate::ports::execution::SftpEntry;
-use crate::ports::execution::{ExecutionPort, InteractiveHandle, ShellOptions};
+use crate::ports::execution::{
+    ExecutionPort, InteractiveHandle, ProgramRequest, ScriptRequest, ShellOptions,
+};
 use crate::shared::proc::sanitize_child_env;
 use crate::shared::shell;
+
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+#[cfg(windows)]
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+};
 
 pub struct LocalSubprocessAdapter;
 
@@ -29,19 +43,25 @@ struct LocalChildProcess {
     stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
     stdout: Arc<Mutex<Option<BufReader<std::process::ChildStdout>>>>,
     _stderr: Arc<Mutex<Option<BufReader<std::process::ChildStderr>>>>,
+    #[cfg(windows)]
+    job: WindowsJob,
 }
 
 impl LocalChildProcess {
-    fn new(mut child: std::process::Child) -> Self {
+    fn new(mut child: std::process::Child) -> Result<Self, String> {
+        #[cfg(windows)]
+        let job = WindowsJob::attach(child.as_raw_handle() as HANDLE)?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().map(BufReader::new);
         let stderr = child.stderr.take().map(BufReader::new);
-        Self {
+        Ok(Self {
             child: Arc::new(Mutex::new(child)),
             stdin: Arc::new(Mutex::new(stdin)),
             stdout: Arc::new(Mutex::new(stdout)),
             _stderr: Arc::new(Mutex::new(stderr)),
-        }
+            #[cfg(windows)]
+            job,
+        })
     }
 }
 
@@ -66,8 +86,14 @@ impl InteractiveHandle for LocalChildProcess {
     }
 
     fn kill(&self) -> Result<(), String> {
+        #[cfg(windows)]
+        self.job.terminate()?;
         let mut child = self.child.lock().unwrap();
-        child.kill().map_err(|e| e.to_string())
+        match child.kill() {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     fn try_wait(&self) -> Result<Option<i32>, String> {
@@ -77,6 +103,100 @@ impl InteractiveHandle for LocalChildProcess {
             Ok(None) => Ok(None),
             Err(e) => Err(e.to_string()),
         }
+    }
+}
+
+/// Owns a Windows Job Object configured to terminate every assigned process
+/// when the owner is dropped. This is the Windows equivalent of the Unix
+/// session/process-group guard below: a timeout or cancellation must not
+/// orphan grandchildren such as a compiler started by a package manager.
+#[cfg(windows)]
+struct WindowsJob(HANDLE);
+
+#[cfg(windows)]
+impl WindowsJob {
+    fn attach(process: HANDLE) -> Result<Self, String> {
+        // SAFETY: null name requests an unnamed Job Object owned by this
+        // wrapper. The returned handle is closed exactly once in Drop.
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(format!(
+                "failed to create Windows Job Object: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: limits points to a fully initialized value for the exact
+        // information class requested, and handle is valid above.
+        let configured = unsafe {
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if configured == 0 {
+            // SAFETY: handle was created by CreateJobObjectW and has not moved.
+            unsafe { CloseHandle(handle) };
+            return Err(format!(
+                "failed to configure Windows Job Object: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: process is the raw handle of the newly spawned child and
+        // handle remains owned by this wrapper for the child's lifetime.
+        if unsafe { AssignProcessToJobObject(handle, process) } == 0 {
+            // SAFETY: handle was created above and is still owned here.
+            unsafe { CloseHandle(handle) };
+            return Err(format!(
+                "failed to assign process to Windows Job Object: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(Self(handle))
+    }
+
+    fn terminate(&self) -> Result<(), String> {
+        // SAFETY: self.0 is a live Job Object handle until Drop.
+        if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1) } == 0 {
+            return Err(format!(
+                "failed to terminate Windows Job Object: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+
+    fn disarm(&self) -> Result<(), String> {
+        let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        // SAFETY: limits is the exact structure required by this information
+        // class and self.0 is valid until Drop.
+        if unsafe {
+            SetInformationJobObject(
+                self.0,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        } == 0
+        {
+            return Err(format!(
+                "failed to disarm Windows Job Object: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsJob {
+    fn drop(&mut self) {
+        // SAFETY: self.0 is exclusively owned by this wrapper. KILL_ON_JOB_CLOSE
+        // ensures all remaining descendants terminate before the handle closes.
+        unsafe { CloseHandle(self.0) };
     }
 }
 
@@ -154,6 +274,59 @@ fn command_result(
     Ok(result)
 }
 
+/// Execute an argv request directly so owned operations never depend on shell quoting.
+async fn local_run_program(request: ProgramRequest) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
+    let mut command = tokio::process::Command::new(&request.executable);
+    command.args(&request.args);
+    if let Some(cwd) = &request.cwd {
+        command.current_dir(cwd);
+    }
+    command.envs(&request.env);
+    sanitize_child_env(command.as_std_mut());
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Failed to execute '{}': {}", request.executable, e))?;
+    #[cfg(windows)]
+    let _job = WindowsJob::attach(child.as_raw_handle() as HANDLE)?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "stdout pipe was not available".to_string())?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "stderr pipe was not available".to_string())?;
+    let run = async {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let (_, _, status) = tokio::join!(
+            stdout.read_to_end(&mut out),
+            stderr.read_to_end(&mut err),
+            child.wait()
+        );
+        (out, err, status)
+    };
+    let (out, err, status) = match request.timeout {
+        Some(limit) => tokio::time::timeout(limit, run).await.map_err(|_| {
+            format!(
+                "{}program exceeded its {}s ceiling",
+                crate::ports::execution::TIMEOUT_ERROR_PREFIX,
+                limit.as_secs()
+            )
+        })?,
+        None => run.await,
+    };
+    #[cfg(windows)]
+    _job.disarm()?;
+    let status = status.map_err(|e| format!("Failed to await program: {}", e))?;
+    command_result(status.code(), status.success(), &out, &err)
+}
 /// Kill a spawned child's whole **process group** on drop.
 ///
 /// `kill_on_drop` alone is not enough for this adapter: every command runs as
@@ -221,6 +394,8 @@ async fn local_run_command_async(cmd: &str, opts: &ShellOptions) -> Result<Strin
     let mut child = command
         .spawn()
         .map_err(|e| format!("Failed to execute command: {}", e))?;
+    #[cfg(windows)]
+    let _job = WindowsJob::attach(child.as_raw_handle() as HANDLE)?;
     let mut guard = KillGroupOnDrop {
         pid: child.id(),
         own_session: opts.interactive,
@@ -257,22 +432,25 @@ async fn local_run_command_async(cmd: &str, opts: &ShellOptions) -> Result<Strin
     };
 
     guard.disarm();
+    #[cfg(windows)]
+    _job.disarm()?;
     let status = status.map_err(|e| format!("Failed to await command: {}", e))?;
     command_result(status.code(), status.success(), &stdout, &stderr)
 }
 
-/// Blocking twin of [`local_run_command_async`] for the adapter's own
-/// synchronous helpers (`setup_worktree`, `resolve_home`), which run short
-/// fixed commands and need no deadline. `opts.timeout` is not honoured here —
-/// [`ExecutionPort::run_command_with`] routes through the async path.
-fn local_run_command_with(cmd: &str, opts: &ShellOptions) -> Result<String, String> {
-    let (program, args) = shell_invocation(cmd, opts);
-    let mut command = Command::new(program);
-    command.args(&args);
-    configure_child(&mut command, opts);
+/// Blocking structured-program helper for a few short adapter-owned setup
+/// operations. User-authored scripts always go through [`local_run_program`].
+fn local_run_program_blocking(request: ProgramRequest) -> Result<String, String> {
+    let mut command = Command::new(&request.executable);
+    command.args(&request.args);
+    if let Some(cwd) = &request.cwd {
+        command.current_dir(cwd);
+    }
+    command.envs(&request.env);
+    sanitize_child_env(&mut command);
     let output = command
         .output()
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
+        .map_err(|e| format!("Failed to execute '{}': {}", request.executable, e))?;
     command_result(
         output.status.code(),
         output.status.success(),
@@ -281,19 +459,74 @@ fn local_run_command_with(cmd: &str, opts: &ShellOptions) -> Result<String, Stri
     )
 }
 
-/// Non-login, default-cwd, no-extra-env convenience used by the adapter's
-/// own internal helpers (`setup_worktree`, `resolve_home`). Equivalent to
-/// `run_command`.
-fn local_run_command(cmd: &str) -> Result<String, String> {
-    local_run_command_with(cmd, &ShellOptions::default())
-}
-
 #[async_trait]
 impl ExecutionPort for LocalSubprocessAdapter {
     async fn test_connection(&self, _machine_id: &str) -> Result<(), String> {
         Ok(())
     }
 
+    async fn run_program(
+        &self,
+        _machine_id: &str,
+        request: ProgramRequest,
+    ) -> Result<String, String> {
+        local_run_program(request).await
+    }
+
+    async fn run_script(
+        &self,
+        _machine_id: &str,
+        request: ScriptRequest,
+    ) -> Result<String, String> {
+        #[cfg(windows)]
+        let (executable, args) =
+            match request.variants.powershell {
+                Some(script) => (
+                    "pwsh".to_string(),
+                    vec![
+                        "-NoProfile".to_string(),
+                        "-NonInteractive".to_string(),
+                        "-Command".to_string(),
+                        script,
+                    ],
+                ),
+                None => return Err(
+                    "configuration error: this Windows project has no PowerShell script variant"
+                        .to_string(),
+                ),
+            };
+        #[cfg(not(windows))]
+        let (executable, args) = match request.variants.posix {
+            Some(script) => ("sh".to_string(), vec!["-c".to_string(), script]),
+            None => {
+                return Err(
+                    "configuration error: this POSIX target has no POSIX script variant"
+                        .to_string(),
+                )
+            }
+        };
+        let result = local_run_program(ProgramRequest {
+            executable,
+            args,
+            cwd: request.cwd,
+            env: request.env,
+            timeout: request.timeout,
+        })
+        .await;
+        #[cfg(windows)]
+        return result.map_err(|error| {
+            if error.starts_with("Failed to execute 'pwsh':") {
+                format!(
+                    "configuration error: PowerShell 7 is required for local Windows scripts; install pwsh and ensure it is on PATH ({})",
+                    error
+                )
+            } else {
+                error
+            }
+        });
+        #[cfg(not(windows))]
+        result
+    }
     async fn run_command_with(
         &self,
         _machine_id: &str,
@@ -348,6 +581,75 @@ impl ExecutionPort for LocalSubprocessAdapter {
                     .map_err(|e| format!("Failed to create parent directories: {}", e))?;
             }
             std::fs::write(&path, &content).map_err(|e| format!("Failed to write file: {}", e))
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
+    }
+
+    async fn create_dir_all(&self, _machine_id: &str, path: &str) -> Result<(), String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || std::fs::create_dir_all(&path))
+            .await
+            .map_err(|e| format!("blocking task panicked: {}", e))?
+            .map_err(|e| format!("Failed to create directory '{}': {}", path, e))
+    }
+
+    async fn remove_dir_all(&self, _machine_id: &str, path: &str) -> Result<(), String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&path))
+            .await
+            .map_err(|e| format!("blocking task panicked: {}", e))?
+            .map_err(|e| format!("Failed to remove directory '{}': {}", path, e))
+    }
+
+    async fn remove_file(&self, _machine_id: &str, path: &str) -> Result<(), String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || std::fs::remove_file(&path))
+            .await
+            .map_err(|e| format!("blocking task panicked: {}", e))?
+            .map_err(|e| format!("Failed to remove file '{}': {}", path, e))
+    }
+
+    async fn set_file_mode(&self, _machine_id: &str, path: &str, mode: u32) -> Result<(), String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                    .map_err(|e| format!("Failed to set permissions on '{}': {}", path, e))
+            }
+            #[cfg(windows)]
+            {
+                let _ = mode;
+                std::fs::metadata(&path).map(|_| ()).map_err(|e| {
+                    format!(
+                        "Failed to stat '{}' before setting permissions: {}",
+                        path, e
+                    )
+                })
+            }
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
+    }
+
+    async fn is_executable(&self, _machine_id: &str, path: &str) -> Result<bool, String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || -> Result<bool, String> {
+            let metadata = std::fs::metadata(&path)
+                .map_err(|e| format!("Failed to stat '{}': {}", path, e))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                Ok(!metadata.is_dir() && metadata.permissions().mode() & 0o111 != 0)
+            }
+            #[cfg(windows)]
+            {
+                Ok(!metadata.is_dir())
+            }
         })
         .await
         .map_err(|e| format!("blocking task panicked: {}", e))?
@@ -449,19 +751,54 @@ impl ExecutionPort for LocalSubprocessAdapter {
         let branch = branch.to_string();
         let sandbox_path = sandbox_path.to_string();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
-            local_run_command(&format!("mkdir -p {}/.demeteo/worktrees", repo_path))?;
+            let repo = std::path::PathBuf::from(&repo_path);
+            std::fs::create_dir_all(repo.join(".demeteo").join("worktrees"))
+                .map_err(|error| format!("Failed to create local worktree directory: {}", error))?;
 
-            let git_exclude_cmd = format!(
-                "if [ -d \"{0}/.git\" ]; then mkdir -p \"{0}/.git/info\"; if ! grep -q \".demeteo/\" \"{0}/.git/info/exclude\" 2>/dev/null; then echo \".demeteo/\" >> \"{0}/.git/info/exclude\"; fi; fi",
-                repo_path
-            );
-            let _ = local_run_command(&git_exclude_cmd);
+            let exclude = repo.join(".git").join("info").join("exclude");
+            if let Some(parent) = exclude.parent() {
+                if parent.is_dir() {
+                    let existing = match std::fs::read_to_string(&exclude) {
+                        Ok(contents) => contents,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                        Err(error) => {
+                            return Err(format!(
+                                "Failed to read Git exclude file '{}': {}",
+                                exclude.display(),
+                                error
+                            ));
+                        }
+                    };
+                    if !existing.lines().any(|line| line == ".demeteo/") {
+                        let mut updated = existing;
+                        if !updated.is_empty() && !updated.ends_with('\n') {
+                            updated.push('\n');
+                        }
+                        updated.push_str(".demeteo/\n");
+                        std::fs::write(&exclude, updated).map_err(|error| {
+                            format!(
+                                "Failed to update Git exclude file '{}': {}",
+                                exclude.display(),
+                                error
+                            )
+                        })?;
+                    }
+                }
+            }
 
-            let worktree_add_cmd = format!(
-                "git -C \"{}\" worktree add -b \"{}\" \"{}\"",
-                repo_path, branch, sandbox_path
-            );
-            let output = local_run_command(&worktree_add_cmd)?;
+            let output = local_run_program_blocking(ProgramRequest {
+                executable: "git".to_string(),
+                args: vec![
+                    "-C".to_string(),
+                    repo_path.clone(),
+                    "worktree".to_string(),
+                    "add".to_string(),
+                    "-b".to_string(),
+                    branch,
+                    sandbox_path,
+                ],
+                ..ProgramRequest::default()
+            })?;
             println!(
                 "[LocalSubprocessAdapter] Git Worktree provisioning output: {}",
                 output
@@ -487,28 +824,24 @@ impl ExecutionPort for LocalSubprocessAdapter {
     }
 
     async fn resolve_home(&self, _machine_id: &str) -> Result<String, String> {
-        let raw = std::env::var("HOME")
-            .map_err(|_| "HOME environment variable is not set on the local process".to_string())?;
-        tokio::task::spawn_blocking(move || -> Result<String, String> {
-            let expanded = if raw == "~" || raw.starts_with("~/") {
-                local_run_command("printf %s \"$HOME\"")?
-            } else {
-                raw
-            };
-            let trimmed = expanded.trim().to_string();
-            if trimmed.is_empty() {
-                return Err("Resolved local HOME is empty".to_string());
-            }
-            if !trimmed.starts_with('/') {
-                return Err(format!(
-                    "Resolved local HOME is not absolute: '{}'",
-                    trimmed
-                ));
-            }
-            Ok(trimmed)
-        })
-        .await
-        .map_err(|e| format!("blocking task panicked: {}", e))?
+        #[cfg(windows)]
+        let home = std::env::var("USERPROFILE").or_else(|_| {
+            let drive = std::env::var("HOMEDRIVE")?;
+            let path = std::env::var("HOMEPATH")?;
+            Ok(format!("{}{}", drive, path))
+        });
+        #[cfg(not(windows))]
+        let home = std::env::var("HOME");
+        let home =
+            home.map_err(|_| "local home directory environment variable is not set".to_string())?;
+        let path = std::path::PathBuf::from(home);
+        if !path.is_absolute() {
+            return Err(format!(
+                "Resolved local home is not absolute: '{}'",
+                path.display()
+            ));
+        }
+        Ok(path.to_string_lossy().into_owned())
     }
 
     async fn resolve_user(&self, _machine_id: &str) -> Result<String, String> {
@@ -517,9 +850,11 @@ impl ExecutionPort for LocalSubprocessAdapter {
         // USER (login identity) over LOGNAME; some minimal macOS GUI
         // launches set only LOGNAME, but USER is what `bash -c 'echo
         // $USER'` and most CLIs look at.
-        std::env::var("USER")
-            .or_else(|_| std::env::var("LOGNAME"))
-            .map_err(|_| "Neither USER nor LOGNAME is set on the local process".to_string())
+        #[cfg(windows)]
+        let user = std::env::var("USERNAME");
+        #[cfg(not(windows))]
+        let user = std::env::var("USER").or_else(|_| std::env::var("LOGNAME"));
+        user.map_err(|_| "local username environment variable is not set".to_string())
     }
 
     fn spawn_interactive(
@@ -543,7 +878,7 @@ impl ExecutionPort for LocalSubprocessAdapter {
         let child = cmd
             .spawn()
             .map_err(|e| format!("failed to spawn '{}': {}", binary, e))?;
-        Ok(Box::new(LocalChildProcess::new(child)))
+        Ok(Box::new(LocalChildProcess::new(child)?))
     }
 }
 

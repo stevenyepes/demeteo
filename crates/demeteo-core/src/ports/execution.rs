@@ -1,6 +1,8 @@
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+pub use crate::domain::models::ScriptVariants;
 
 /// Prefix on the `Err` string of an [`ExecutionPort`] method when the
 /// failure is a **transport/connection** problem (the machine could not be
@@ -19,6 +21,25 @@ pub const TRANSPORT_ERROR_PREFIX: &str = "transport: ";
 /// never finished being tested. Both prefixes classify as an *environment*
 /// failure; only an actual non-zero exit is a verdict.
 pub const TIMEOUT_ERROR_PREFIX: &str = "timeout: ";
+/// A Demeteo-owned process invocation. Commands are structured argv so they
+/// never depend on shell quoting or a POSIX shell on Windows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProgramRequest {
+    pub executable: String,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub env: BTreeMap<String, String>,
+    pub timeout: Option<std::time::Duration>,
+}
+
+/// Explicit user-authored shell bodies. Demeteo never translates between them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScriptRequest {
+    pub variants: ScriptVariants,
+    pub cwd: Option<String>,
+    pub env: BTreeMap<String, String>,
+    pub timeout: Option<std::time::Duration>,
+}
 
 /// Explicit shell context for [`ExecutionPort::run_command_with`]. Every
 /// field is data the caller supplies; **no adapter may fall back to ambient
@@ -181,6 +202,23 @@ pub trait ExecutionPort: Send + Sync {
     /// immediately closes it. Returns `Ok(())` on success, `Err(message)` on
     /// any connectivity or auth failure. Does NOT cache the session.
     async fn test_connection(&self, machine_id: &str) -> Result<(), String>;
+    /// Executes a Demeteo-owned command without a shell.
+    async fn run_program(
+        &self,
+        _machine_id: &str,
+        _request: ProgramRequest,
+    ) -> Result<String, String> {
+        Err("structured program execution is not implemented by this transport".to_string())
+    }
+
+    /// Executes an explicitly selected user-authored script variant.
+    async fn run_script(
+        &self,
+        _machine_id: &str,
+        _request: ScriptRequest,
+    ) -> Result<String, String> {
+        Err("script execution is not implemented by this transport".to_string())
+    }
 
     /// Run `cmd` through a **non-login** POSIX shell in the adapter's
     /// default cwd with no caller-supplied environment. Exactly equivalent
@@ -235,6 +273,43 @@ pub trait ExecutionPort: Send + Sync {
         path: &str,
         content: &[u8],
     ) -> Result<(), String>;
+
+    /// Create `path` and every missing parent directory on the target.
+    /// This is deliberately a filesystem operation rather than a `mkdir`
+    /// command: Windows has no standalone `mkdir` executable and callers
+    /// must not branch on the selected transport.
+    async fn create_dir_all(&self, _machine_id: &str, _path: &str) -> Result<(), String> {
+        Err("recursive directory creation is not implemented by this transport".to_string())
+    }
+
+    /// Remove a directory tree on the target. The operation is recursive but
+    /// never follows directory symlinks.
+    async fn remove_dir_all(&self, _machine_id: &str, _path: &str) -> Result<(), String> {
+        Err("recursive directory removal is not implemented by this transport".to_string())
+    }
+
+    async fn remove_file(&self, _machine_id: &str, _path: &str) -> Result<(), String> {
+        Err("file removal is not implemented by this transport".to_string())
+    }
+
+    /// Set the target file's POSIX permission bits. This is a filesystem
+    /// operation so callers do not need a shell (or a transport-specific
+    /// `chmod`) to protect a temporary credential helper.
+    async fn set_file_mode(
+        &self,
+        _machine_id: &str,
+        _path: &str,
+        _mode: u32,
+    ) -> Result<(), String> {
+        Err("file permission changes are not implemented by this transport".to_string())
+    }
+
+    /// Whether the target is executable according to the target platform's
+    /// hook-execution rules. Unlike metadata existence, this decides whether
+    /// Git would consider a `commit-msg` file a runnable hook.
+    async fn is_executable(&self, _machine_id: &str, _path: &str) -> Result<bool, String> {
+        Err("executable-bit inspection is not implemented by this transport".to_string())
+    }
 
     async fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String>;
 

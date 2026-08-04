@@ -1,6 +1,6 @@
 use crate::domain::artifact::{ArtifactCapture, ArtifactDecl};
 use crate::domain::ids::{ProjectId, StepId, WorkflowId, WorkflowVersionId};
-use crate::domain::models::EffortLevel;
+use crate::domain::models::{EffortLevel, ScriptVariants};
 use crate::domain::permission::StepCapability;
 use crate::domain::verifier::VerifierConfig;
 use serde::{Deserialize, Serialize};
@@ -193,7 +193,7 @@ pub struct StepConfig {
     ///
     /// [`CommandNodeHandler::lint`]: crate::adapters::step_executor::steps::command::CommandNodeHandler
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
+    pub command: Option<ScriptVariants>,
     /// For a `command` step: **worktree-relative** working directory.
     /// Unset runs at the worktree root. Absolute paths and `..` segments
     /// are refused — the step's cwd may not leave the tree it was given.

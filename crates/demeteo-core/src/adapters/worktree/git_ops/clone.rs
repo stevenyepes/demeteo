@@ -1,5 +1,5 @@
 use super::GitOpsHelper;
-use crate::paths;
+use crate::ports::execution::ProgramRequest;
 #[cfg(feature = "keyring")]
 use keyring::Entry;
 
@@ -53,26 +53,22 @@ impl GitOpsHelper {
             format!("https://oauth2:{}@{}/{}", pat, provider.host, repo_path)
         };
 
-        // Ensure parent directory exists
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let path = std::path::Path::new(target_dir);
-        if let Some(parent) = path.parent() {
-            let parent_str = parent.to_str().unwrap_or("");
-            self.exec
-                .run_command(
-                    machine_str,
-                    &format!("mkdir -p {}", paths::shell_escape_posix(parent_str)),
-                )
-                .await?;
+        if let Some(parent) = std::path::Path::new(target_dir).parent() {
+            let parent = parent.to_string_lossy().into_owned();
+            self.exec.create_dir_all(machine_str, &parent).await?;
         }
-
-        // Run clone
-        let clone_cmd = format!(
-            "git clone \"{}\" {}",
-            clone_url,
-            paths::shell_escape_posix(target_dir)
-        );
-        let output = self.exec.run_command(machine_str, &clone_cmd).await?;
+        let output = self
+            .exec
+            .run_program(
+                machine_str,
+                ProgramRequest {
+                    executable: "git".to_string(),
+                    args: vec!["clone".to_string(), clone_url, target_dir.to_string()],
+                    ..ProgramRequest::default()
+                },
+            )
+            .await?;
         println!("[GitOps] Clone output: {}", output);
 
         Ok(())

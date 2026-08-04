@@ -121,6 +121,8 @@ impl DagStepExecutor {
             .resolve_execution_context(fid, project_id, workflow_id, description, true)
             .await?;
 
+        self.run_harness_preflight(fid, &ctx).await?;
+
         let git_ops = GitOpsHelper::new(self.app_settings.clone(), self.exec.clone());
         let default_branch = ctx.settings.worktree_strategy.default_branch.clone();
 
@@ -161,7 +163,6 @@ impl DagStepExecutor {
         }
         self.emit_bootstrap(fid, branch, "completed", None);
 
-        self.run_harness_preflight(fid, &ctx).await?;
         self.register_steps(feature_id, &ctx, staged_attachments)?;
 
         // Phase 8: flip the feature to "running" and start the driver. The
@@ -208,6 +209,19 @@ impl DagStepExecutor {
     async fn run_harness_preflight(&self, fid: &str, ctx: &ExecutionContext) -> Result<(), String> {
         let preflight = bootstrap_phase::HARNESS_PREFLIGHT;
         self.emit_bootstrap(fid, preflight, "running", None);
+        crate::adapters::step_executor::preflight::validate_bootstrap_tools(
+            self.exec.as_ref(),
+            ctx.machine_id_opt
+                .as_deref()
+                .unwrap_or(crate::domain::ids::LOCAL_MACHINE),
+            &ctx.target_dir,
+            std::time::Duration::from_secs(PREFLIGHT_PROBE_TIMEOUT_S),
+        )
+        .await
+        .map_err(|error| {
+            self.emit_bootstrap(fid, preflight, "failed", Some(error.clone()));
+            error
+        })?;
         let verdict = crate::adapters::step_executor::preflight::probe_configured_commands(
             self.exec.as_ref(),
             ctx.machine_id_opt

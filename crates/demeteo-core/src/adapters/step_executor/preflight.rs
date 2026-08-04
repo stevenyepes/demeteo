@@ -5,8 +5,8 @@
 //! What counts as a configured command, what a probe of them establishes, and
 //! how that answer is attributed back to the settings panel are all pure, and
 //! live in [`crate::domain::harness_preflight`]. What is left here is the
-//! probing: two `async fn`s that spawn `command -v` under an interactive login
-//! shell, and the ceiling they run under.
+//! probing: two `async fn`s that run shell-specific probe variants through the
+//! execution port, and the ceiling they run under.
 //!
 //! # Why this exists at all
 //!
@@ -50,8 +50,8 @@
 
 use std::time::Duration;
 
-use crate::domain::models::WorktreeStrategy;
-use crate::ports::execution::{ExecutionPort, ShellOptions};
+use crate::domain::models::{ScriptVariants, WorktreeStrategy};
+use crate::ports::execution::{ExecutionPort, ScriptRequest};
 
 // Re-exported rather than re-homed: `commands/project.rs` and
 // `application/projects.rs` name these by full path through this module, and
@@ -92,11 +92,6 @@ pub const PREFLIGHT_PROBE_TIMEOUT_S: u64 = 20;
 /// and a decision reachable only through it is a decision no test can see
 /// (AGENTS.md, "where a decision is allowed to live").
 ///
-/// `command -v` runs under an **interactive login shell** for the same reason
-/// the harness itself does: the binaries live on the *user's* `PATH`, which
-/// only a login profile establishes, and `mise`/`asdf`/`nvm` shims only
-/// activate in an interactive one. Probing under a bare `sh -c` would report
-/// half a developer's toolchain missing.
 /// An empty `cwd` means "the adapter's default working directory" rather than
 /// an empty path. `command -v` needs the login shell, not the repo, and the
 /// settings-time caller (HB6) has no checkout to point at — the project may not
@@ -115,33 +110,33 @@ pub(crate) async fn probe_configured_commands(
         return PreflightVerdict::NotConfigured;
     }
 
-    let binaries = probeable_binaries(&commands);
+    let script_bodies: Vec<&str> = commands
+        .into_iter()
+        .flat_map(|script| [script.posix.as_deref(), script.powershell.as_deref()])
+        .flatten()
+        .collect();
+    let binaries = probeable_binaries(&script_bodies);
     if binaries.is_empty() {
         // A command made entirely of builtins and substitutions. Nothing to
         // assert, and asserting nothing is the honest outcome — not a failure.
         return PreflightVerdict::Resolved { probed: vec![] };
     }
 
-    let opts = ShellOptions {
-        cwd: Some(cwd.to_string()).filter(|c| !c.is_empty()),
-        timeout: Some(timeout),
-        ..ShellOptions::login_interactive()
-    };
-
     let mut missing = Vec::new();
     let mut probed = Vec::new();
     for bin in binaries {
-        // `command -v` exits non-zero when the name does not resolve, which the
-        // port surfaces as `Err`. A transport failure or a timeout also lands
-        // in `Err` and is indistinguishable here — so it is deliberately NOT
-        // treated as "missing": blocking a launch because the network hiccuped
-        // is the false positive this module exists to avoid. Those cases fall
-        // through as resolved, and the run behaves exactly as it does today.
+        // The port selects the shell variant at the execution boundary. That
+        // keeps a local Windows run, local POSIX run, and remote run on the
+        // same behavioural contract rather than teaching callers about hosts.
         match exec
-            .run_command_with(
+            .run_script(
                 machine_str,
-                &format!("command -v {}", crate::paths::shell_escape_posix(&bin)),
-                opts.clone(),
+                ScriptRequest {
+                    variants: binary_probe_script(&bin),
+                    cwd: Some(cwd.to_string()).filter(|path| !path.is_empty()),
+                    timeout: Some(timeout),
+                    ..ScriptRequest::default()
+                },
             )
             .await
         {
@@ -159,8 +154,55 @@ pub(crate) async fn probe_configured_commands(
     }
 }
 
-/// Whether an `ExecutionPort` error from `command -v` means "the name did not
-/// resolve" rather than "the probe itself could not run".
+/// Confirm the two tools every local bootstrap needs before it performs any
+/// git operation. `run_script` is deliberate: on Windows, selecting the
+/// PowerShell variant proves that PowerShell 7 is available before the feature
+/// branch or configured scripts can start.
+pub(crate) async fn validate_bootstrap_tools(
+    exec: &dyn ExecutionPort,
+    machine_str: &str,
+    cwd: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    exec.run_script(
+        machine_str,
+        ScriptRequest {
+            variants: ScriptVariants {
+                posix: Some("git --version".to_string()),
+                powershell: Some("git --version".to_string()),
+            },
+            cwd: Some(cwd.to_string()).filter(|path| !path.is_empty()),
+            timeout: Some(timeout),
+            ..ScriptRequest::default()
+        },
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| {
+        if error.starts_with("configuration error:") {
+            error
+        } else {
+            format!(
+                "configuration error: Git is required to start a feature. Install Git and ensure it is on PATH ({error})"
+            )
+        }
+    })
+}
+
+fn binary_probe_script(binary: &str) -> ScriptVariants {
+    let posix = format!("command -v {}", crate::paths::shell_escape_posix(binary));
+    let powershell_name = binary.replace('\'', "''");
+    let powershell = format!(
+        "$command = Get-Command -Name '{powershell_name}' -CommandType Application -ErrorAction SilentlyContinue; if ($null -eq $command) {{ exit 1 }}; $command.Source"
+    );
+    ScriptVariants {
+        posix: Some(posix),
+        powershell: Some(powershell),
+    }
+}
+
+/// Whether an `ExecutionPort` error from a binary probe means "the name did
+/// not resolve" rather than "the probe itself could not run".
 ///
 /// Only a genuine non-zero exit counts. Transport and timeout failures carry
 /// their own prefixes (D3) and must not be read as a missing binary — that

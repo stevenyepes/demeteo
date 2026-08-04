@@ -72,7 +72,7 @@ use crate::domain::verifier::VerdictFailure;
 use crate::domain::workflow_graph::{LintFinding, WorkflowGraph};
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::StepExecutionPatch;
-use crate::ports::execution::{ExecutionPort, ShellOptions};
+use crate::ports::execution::{ExecutionPort, ScriptRequest};
 use crate::ports::notification::DomainEvent;
 
 use super::StepOutcome;
@@ -127,9 +127,21 @@ impl ExecutionDriver {
         // rework loop over one spends the whole budget and closes nothing
         // (S13, decision 43).
         if !spec.measure_baseline {
-            match self.base_ctx.render_executable(&spec.command) {
-                Ok(rendered) => spec.command = rendered,
-                Err(msg) => {
+            let render = |script: &Option<String>| {
+                script
+                    .as_deref()
+                    .map(|body| self.base_ctx.render_executable(body))
+                    .transpose()
+            };
+            match (
+                render(&spec.command.posix),
+                render(&spec.command.powershell),
+            ) {
+                (Ok(posix), Ok(powershell)) => {
+                    spec.command.posix = posix;
+                    spec.command.powershell = powershell;
+                }
+                (Err(msg), _) | (_, Err(msg)) => {
                     return self.finish_command(
                         step_exec,
                         step_start,
@@ -220,14 +232,11 @@ impl ExecutionDriver {
         // `tokio::time::timeout` here would only stop *waiting*, leaving the
         // command running inside a worktree we are about to delete. See
         // `ShellOptions::timeout`.
-        let opts = ShellOptions {
+        let request = ScriptRequest {
+            variants: spec.command.clone(),
             cwd: Some(cwd),
             env: resolve_env(&spec.env_allowlist),
             timeout: spec.timeout,
-            ..crate::adapters::step_executor::harness_shell::harness_shell_options(
-                self.app_settings.as_ref(),
-                wt_path,
-            )
         };
 
         // Race the command against cancellation. Dropping the run future is
@@ -245,23 +254,10 @@ impl ExecutionDriver {
                 std::future::pending::<()>().await;
             }
         };
-        // Merge stderr into stdout. The execution port's contract is "stdout on
-        // success, stdout+stderr on failure" (D3), which for a command node
-        // means a green `cargo test` or `npm run build` — both of which report
-        // almost entirely on stderr — files an artifact named
-        // `command-output` containing nothing. Redirecting in a subshell keeps
-        // the exit status (it is the group's last command's) and makes the
-        // artifact the same shape whether the command passed or failed.
-        //
-        // The newlines matter: a command whose last line is a `#` comment
-        // would otherwise swallow the closing paren and turn a valid command
-        // into a syntax error.
-        let captured = crate::domain::harness_outcome::merge_stderr_into_stdout(&spec.command);
-
         let result = tokio::select! {
             biased;
             _ = cancelled => return (StepOutcome::Cancelled, Vec::new()),
-            r = self.exec.run_command_with(machine_str, &captured, opts) => r,
+            r = self.exec.run_script(machine_str, request) => r,
         };
 
         let evidence = self.command_evidence();
@@ -271,7 +267,7 @@ impl ExecutionDriver {
                 return (
                     StepOutcome::Environmental(format!(
                         "command '{}' could not run: {err}",
-                        spec.command
+                        step_exec.step_id.0
                     )),
                     Vec::new(),
                 )
@@ -280,7 +276,7 @@ impl ExecutionDriver {
                 return (
                     StepOutcome::Environmental(format!(
                         "command '{}' timed out: {err}",
-                        spec.command
+                        step_exec.step_id.0
                     )),
                     Vec::new(),
                 )
@@ -316,7 +312,7 @@ impl ExecutionDriver {
             return (
                 StepOutcome::VerdictFailed(VerdictFailure::from_reason(format!(
                     "Command '{}' failed.\nOutput:\n```\n{}\n```",
-                    spec.command,
+                    step_exec.step_id.0,
                     feedback_tail(&output, FEEDBACK_TAIL_BYTES)
                 ))),
                 refs,
@@ -334,7 +330,7 @@ impl ExecutionDriver {
             return (
                 StepOutcome::VerdictFailed(VerdictFailure::from_reason(format!(
                     "Command '{}' exited 0 but produced no {}",
-                    spec.command,
+                    step_exec.step_id.0,
                     missing.join(", ")
                 ))),
                 refs,
@@ -519,11 +515,15 @@ static COMMAND_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
                 that must change tracked files needs an agent step.",
             "properties": {
                 "command": {
-                    "type": "string",
-                    "description": "Shell command to run, verbatim, under an \
-                        interactive login shell (so the user's PATH and any \
-                        mise/asdf/nvm shims are active). Required unless \
-                        `measure_baseline` is set."
+                    "type": "object",
+                    "description": "Explicit POSIX and PowerShell script variants. \
+                        The target selects its native variant; script text is never \
+                        translated. Required unless `measure_baseline` is set.",
+                    "properties": {
+                        "posix": { "type": ["string", "null"] },
+                        "powershell": { "type": ["string", "null"] }
+                    },
+                    "additionalProperties": false
                 },
                 "measure_baseline": {
                     "type": ["boolean", "null"],
@@ -631,8 +631,19 @@ impl NodeHandler for CommandNodeHandler {
         let bool_field =
             |key: &str| -> Option<bool> { cfg.and_then(|o| o.get(key)).and_then(|v| v.as_bool()) };
         let measures_baseline = bool_field("measure_baseline") == Some(true);
+        let has_command = cfg
+            .and_then(|o| o.get("command"))
+            .and_then(|value| value.as_object())
+            .is_some_and(|variants| {
+                ["posix", "powershell"].into_iter().any(|key| {
+                    variants
+                        .get(key)
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|body| !body.trim().is_empty())
+                })
+            });
 
-        if str_field("command").is_none() && !measures_baseline {
+        if !has_command && !measures_baseline {
             findings.push(LintFinding::node_error(
                 "command-missing",
                 &node.id,

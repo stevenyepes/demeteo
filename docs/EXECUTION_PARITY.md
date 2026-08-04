@@ -135,5 +135,7 @@ path, ISO/epoch timestamps, feature/step run-id) and nothing else.
 ## Related
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the hexagon and port surface
+- [`TRUSTED_WORKTREE.md`](TRUSTED_WORKTREE.md) — no-follow trusted-root
+  operations that must preserve this parity
 - [`REMOTE_EXECUTION.md`](REMOTE_EXECUTION.md) — remote runner design
 - [`MULTI_CLIENT_RUNNER.md`](MULTI_CLIENT_RUNNER.md) — the not-yet-built next step

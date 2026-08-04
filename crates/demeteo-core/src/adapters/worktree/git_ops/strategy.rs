@@ -1,7 +1,7 @@
 use super::GitOpsHelper;
 use crate::domain::ecosystem::{self, MarkerSite, ECOSYSTEMS, JS_LOCKFILES, MAX_SCANNED_SUBDIRS};
-use crate::domain::models::WorktreeStrategy;
-use crate::paths;
+use crate::domain::models::{ScriptVariants, WorktreeStrategy};
+use crate::ports::execution::ProgramRequest;
 use std::collections::HashMap;
 
 impl GitOpsHelper {
@@ -17,12 +17,9 @@ impl GitOpsHelper {
         // Try origin/HEAD first. Fallback to local HEAD, but reject feature/subtask branch names.
         let default_branch = match self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} rev-parse --abbrev-ref origin/HEAD",
-                    paths::shell_escape_posix(repo_dir)
-                ),
+                git_request(repo_dir, ["rev-parse", "--abbrev-ref", "origin/HEAD"]),
             )
             .await
         {
@@ -101,15 +98,21 @@ impl GitOpsHelper {
         Ok(WorktreeStrategy {
             default_branch,
             branch_prefix: "demeteo/features/".to_string(),
-            test_command: detected.test_command,
-            build_command: detected.build_command,
+            test_command: detected.test_command.map(posix_script),
+            build_command: detected.build_command.map(posix_script),
             coverage_command: None,
             conventions_file,
             pr_template,
-            harnesses: Some(detected.harnesses.into_iter().collect::<HashMap<_, _>>())
-                .filter(|h| !h.is_empty()),
+            harnesses: Some(
+                detected
+                    .harnesses
+                    .into_iter()
+                    .map(|(name, command)| (name, posix_script(command)))
+                    .collect::<HashMap<_, _>>(),
+            )
+            .filter(|h| !h.is_empty()),
             validation_gates: Some(detected.validation_gates).filter(|g| !g.is_empty()),
-            prepare_command: detected.prepare_command,
+            prepare_command: detected.prepare_command.map(posix_script),
             extra_writable_paths: Vec::new(),
         })
     }
@@ -216,12 +219,9 @@ impl GitOpsHelper {
     async fn fallback_default_branch(&self, machine_str: &str, repo_dir: &str) -> String {
         let local_head = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} rev-parse --abbrev-ref HEAD",
-                    paths::shell_escape_posix(repo_dir)
-                ),
+                git_request(repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"]),
             )
             .await
             .unwrap_or_else(|_| "main".to_string());
@@ -234,6 +234,25 @@ impl GitOpsHelper {
         } else {
             local_trimmed.to_string()
         }
+    }
+}
+
+fn posix_script(posix: String) -> ScriptVariants {
+    ScriptVariants {
+        posix: Some(posix),
+        powershell: None,
+    }
+}
+
+fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> ProgramRequest {
+    ProgramRequest {
+        executable: "git".to_string(),
+        args: [
+            vec!["-C".to_string(), repo_dir.to_string()],
+            args.into_iter().map(str::to_string).collect(),
+        ]
+        .concat(),
+        ..ProgramRequest::default()
     }
 }
 

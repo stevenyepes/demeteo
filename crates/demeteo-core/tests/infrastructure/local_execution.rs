@@ -9,7 +9,9 @@
 //! process can tell you whether it died.
 
 use super::*;
-use crate::ports::execution::TIMEOUT_ERROR_PREFIX;
+use crate::ports::execution::{
+    ProgramRequest, ScriptRequest, ScriptVariants, TIMEOUT_ERROR_PREFIX,
+};
 use std::time::{Duration, Instant};
 
 /// `interactive` is what makes the child a session leader (`setsid`), which is
@@ -28,6 +30,7 @@ fn alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn a_command_that_finishes_returns_its_stdout() {
     let adapter = LocalSubprocessAdapter::new();
@@ -38,6 +41,185 @@ async fn a_command_that_finishes_returns_its_stdout() {
     assert_eq!(out.trim(), "hello");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_program_request_preserves_argv_cwd_and_environment() {
+    let adapter = LocalSubprocessAdapter::new();
+    let cwd = std::env::temp_dir();
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("DEMETEO_ARGV_TEST".to_string(), "present".to_string());
+    let out = adapter
+        .run_program(
+            "local",
+            ProgramRequest {
+                executable: "sh".to_string(),
+                args: vec![
+                    "-c".to_string(),
+                    "printf '%s|%s|%s' \"$1\" \"$DEMETEO_ARGV_TEST\" \"$PWD\"".to_string(),
+                    "ignored".to_string(),
+                    "value with spaces".to_string(),
+                ],
+                cwd: Some(cwd.to_string_lossy().into_owned()),
+                env,
+                timeout: Some(Duration::from_secs(5)),
+            },
+        )
+        .await
+        .expect("structured argv request succeeds");
+    assert!(out.starts_with("value with spaces|present|"), "got: {out}");
+}
+
+#[tokio::test]
+async fn a_missing_script_variant_is_a_configuration_error() {
+    let err = LocalSubprocessAdapter::new()
+        .run_script(
+            "local",
+            ScriptRequest {
+                variants: ScriptVariants::default(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("a script variant is required");
+    assert!(err.starts_with("configuration error:"), "got: {err}");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_windows_script_uses_powershell_7_without_a_profile() {
+    let out = LocalSubprocessAdapter::new()
+        .run_script(
+            "local",
+            ScriptRequest {
+                variants: ScriptVariants {
+                    posix: Some("printf wrong-shell".to_string()),
+                    powershell: Some("[Console]::Write('powershell')".to_string()),
+                },
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("pwsh script succeeds");
+    assert_eq!(out, "powershell");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_windows_program_request_preserves_argv_cwd_and_environment_with_spaces() {
+    let adapter = LocalSubprocessAdapter::new();
+    let cwd = std::env::temp_dir().join(format!("demeteo argv spaces {}", std::process::id()));
+    std::fs::create_dir_all(&cwd).expect("scratch directory");
+    let script = cwd.join("inspect.ps1");
+    std::fs::write(
+        &script,
+        "param([string]$Value) [Console]::Write(\"$Value|$env:DEMETEO_ARGV_TEST|$PWD\")",
+    )
+    .expect("script");
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("DEMETEO_ARGV_TEST".to_string(), "present".to_string());
+
+    let out = adapter
+        .run_program(
+            "local",
+            ProgramRequest {
+                executable: "pwsh".to_string(),
+                args: vec![
+                    "-NoProfile".to_string(),
+                    "-NonInteractive".to_string(),
+                    "-File".to_string(),
+                    script.to_string_lossy().into_owned(),
+                    "value with spaces".to_string(),
+                ],
+                cwd: Some(cwd.to_string_lossy().into_owned()),
+                env,
+                timeout: Some(Duration::from_secs(5)),
+            },
+        )
+        .await
+        .expect("structured argv request succeeds");
+
+    let _ = std::fs::remove_dir_all(&cwd);
+    assert!(out.starts_with("value with spaces|present|"), "got: {out}");
+    assert!(out.contains(&cwd.to_string_lossy()), "got: {out}");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_windows_program_failure_includes_stderr_and_exit_code() {
+    let err = LocalSubprocessAdapter::new()
+        .run_program(
+            "local",
+            ProgramRequest {
+                executable: "pwsh".to_string(),
+                args: vec![
+                    "-NoProfile".to_string(),
+                    "-NonInteractive".to_string(),
+                    "-Command".to_string(),
+                    "[Console]::Error.Write('program boom'); exit 7".to_string(),
+                ],
+                ..ProgramRequest::default()
+            },
+        )
+        .await
+        .expect_err("exit 7 is a failure");
+    assert!(err.contains("program boom"), "got: {err}");
+    assert!(err.contains('7'), "got: {err}");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_windows_program_timeout_returns_promptly() {
+    let started = Instant::now();
+    let err = LocalSubprocessAdapter::new()
+        .run_program(
+            "local",
+            ProgramRequest {
+                executable: "pwsh".to_string(),
+                args: vec![
+                    "-NoProfile".to_string(),
+                    "-NonInteractive".to_string(),
+                    "-Command".to_string(),
+                    "Start-Sleep -Seconds 30".to_string(),
+                ],
+                timeout: Some(Duration::from_millis(300)),
+                ..ProgramRequest::default()
+            },
+        )
+        .await
+        .expect_err("the ceiling is exceeded");
+    assert!(err.starts_with(TIMEOUT_ERROR_PREFIX), "got: {err}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn cancelling_a_windows_program_request_drops_its_process() {
+    let adapter = LocalSubprocessAdapter::new();
+    let started = Instant::now();
+    let run = adapter.run_program(
+        "local",
+        ProgramRequest {
+            executable: "pwsh".to_string(),
+            args: vec![
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-Command".to_string(),
+                "Start-Sleep -Seconds 30".to_string(),
+            ],
+            ..ProgramRequest::default()
+        },
+    );
+    let cancelled = tokio::time::timeout(Duration::from_millis(300), run).await;
+
+    assert!(
+        cancelled.is_err(),
+        "the long-running program unexpectedly finished"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn a_nonzero_exit_is_err_with_the_output_attached() {
     let adapter = LocalSubprocessAdapter::new();
@@ -54,6 +236,7 @@ async fn a_nonzero_exit_is_err_with_the_output_attached() {
     assert!(!err.starts_with(TIMEOUT_ERROR_PREFIX));
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn the_timeout_returns_promptly_rather_than_waiting_out_the_command() {
     let adapter = LocalSubprocessAdapter::new();
@@ -171,6 +354,7 @@ async fn abandoning_the_future_kills_the_tree_too() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn output_larger_than_a_pipe_buffer_does_not_deadlock() {
     // The pipes are drained concurrently with the wait. Reading only after the
@@ -185,4 +369,26 @@ async fn output_larger_than_a_pipe_buffer_does_not_deadlock() {
         .await
         .expect("a chatty command still completes");
     assert!(out.len() > 100_000, "got {} bytes", out.len());
+}
+
+#[tokio::test]
+async fn create_dir_all_creates_nested_directories_without_a_shell() {
+    let adapter = LocalSubprocessAdapter::new();
+    let root = std::env::temp_dir().join(format!(
+        "demeteo-create-dir-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after Unix epoch")
+            .as_nanos()
+    ));
+    let target = root.join("nested").join("directory");
+
+    adapter
+        .create_dir_all("local", &target.to_string_lossy())
+        .await
+        .expect("native recursive create succeeds");
+
+    assert!(target.is_dir());
+    let _ = std::fs::remove_dir_all(root);
 }

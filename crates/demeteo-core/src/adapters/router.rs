@@ -5,7 +5,9 @@ use async_trait::async_trait;
 
 use crate::ports::db::MachineRepository;
 use crate::ports::execution::SftpEntry;
-use crate::ports::execution::{ExecutionPort, InteractiveHandle, ShellOptions};
+use crate::ports::execution::{
+    ExecutionPort, InteractiveHandle, ProgramRequest, ScriptRequest, ShellOptions,
+};
 
 pub struct RouterExecutionPort {
     machines: Arc<dyn MachineRepository>,
@@ -47,6 +49,21 @@ impl ExecutionPort for RouterExecutionPort {
         self.resolve(machine_id)?.test_connection(machine_id).await
     }
 
+    async fn run_program(
+        &self,
+        machine_id: &str,
+        request: ProgramRequest,
+    ) -> Result<String, String> {
+        self.resolve(machine_id)?
+            .run_program(machine_id, request)
+            .await
+    }
+
+    async fn run_script(&self, machine_id: &str, request: ScriptRequest) -> Result<String, String> {
+        self.resolve(machine_id)?
+            .run_script(machine_id, request)
+            .await
+    }
     async fn run_command_with(
         &self,
         machine_id: &str,
@@ -79,6 +96,36 @@ impl ExecutionPort for RouterExecutionPort {
     ) -> Result<(), String> {
         self.resolve(machine_id)?
             .write_file_bytes(machine_id, path, content)
+            .await
+    }
+
+    async fn create_dir_all(&self, machine_id: &str, path: &str) -> Result<(), String> {
+        self.resolve(machine_id)?
+            .create_dir_all(machine_id, path)
+            .await
+    }
+
+    async fn remove_dir_all(&self, machine_id: &str, path: &str) -> Result<(), String> {
+        self.resolve(machine_id)?
+            .remove_dir_all(machine_id, path)
+            .await
+    }
+
+    async fn remove_file(&self, machine_id: &str, path: &str) -> Result<(), String> {
+        self.resolve(machine_id)?
+            .remove_file(machine_id, path)
+            .await
+    }
+
+    async fn set_file_mode(&self, machine_id: &str, path: &str, mode: u32) -> Result<(), String> {
+        self.resolve(machine_id)?
+            .set_file_mode(machine_id, path, mode)
+            .await
+    }
+
+    async fn is_executable(&self, machine_id: &str, path: &str) -> Result<bool, String> {
+        self.resolve(machine_id)?
+            .is_executable(machine_id, path)
             .await
     }
 

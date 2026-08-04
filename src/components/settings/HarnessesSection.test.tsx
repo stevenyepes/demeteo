@@ -37,12 +37,14 @@ import ProjectSettingsView from './ProjectSettingsShell';
 import { NavigationProvider, ProjectProvider, useProject } from '../../context';
 import { ErrorBusProvider } from '../../lib/errorBus';
 import type { CommandProbeReport } from '../../lib/project';
+import type { ScriptVariants } from '../../types';
 
 const mockedInvoke = vi.mocked(invoke);
 
 const PROJECT_ID = 'p-1';
 
-const HARNESSES = { lint: 'npm run lint', unit: 'cargo test' };
+const script = (posix: string): ScriptVariants => ({ posix, powershell: null });
+const HARNESSES = { lint: script('npm run lint'), unit: script('cargo test') };
 
 /** What the engine reports for `HARNESSES` on a machine with npm but no cargo. */
 const PROBE: CommandProbeReport = {
@@ -58,7 +60,7 @@ const PROBE: CommandProbeReport = {
 };
 
 interface Scenario {
-  harnesses?: Record<string, string>;
+  harnesses?: Record<string, ScriptVariants>;
   validationGates?: string[] | null;
   probe?: CommandProbeReport;
   /** When set, `probe_project_commands` rejects with this message. */
@@ -74,7 +76,7 @@ function scriptIpc(scenario: Scenario) {
       worktree_strategy: {
         default_branch: 'main',
         branch_prefix: 'demeteo/features/',
-        test_command: 'npm test',
+        test_command: script('npm test'),
         harnesses: scenario.harnesses ?? HARNESSES,
         validation_gates: scenario.validationGates ?? null,
       },
@@ -207,21 +209,21 @@ describe('the probe indicator', () => {
     expect(screen.getByText('missing')).toBeInTheDocument();
 
     await save();
-    expect(lastSavedStrategy()?.test_command).toBe('npm test');
+    expect(lastSavedStrategy()?.test_command).toEqual(script('npm test'));
   });
 
   it('probes the command that was typed, not the one that was saved', async () => {
     await mount({});
     await waitFor(() => expect(callsTo('probe_project_commands')).toHaveLength(1));
 
-    await userEvent.clear(screen.getByLabelText('Default Test Command'));
-    await userEvent.type(screen.getByLabelText('Default Test Command'), 'nosuchtool');
+    await userEvent.clear(screen.getByLabelText('Default Test Command POSIX'));
+    await userEvent.type(screen.getByLabelText('Default Test Command POSIX'), 'nosuchtool');
 
     await waitFor(
       () => {
         const probes = callsTo('probe_project_commands');
         const last = probes[probes.length - 1];
-        expect((last?.draft as { test_command?: string })?.test_command).toBe('nosuchtool');
+        expect((last?.draft as { test_command?: ScriptVariants })?.test_command).toEqual(script('nosuchtool'));
       },
       { timeout: 3000 },
     );
@@ -231,6 +233,14 @@ describe('the probe indicator', () => {
 });
 
 describe('gating validation', () => {
+  it('persists independent POSIX and PowerShell variants', async () => {
+    await mount({});
+    await userEvent.clear(screen.getByLabelText('Default Test Command PowerShell'));
+    await userEvent.type(screen.getByLabelText('Default Test Command PowerShell'), 'npm.cmd test');
+    await save();
+    expect(lastSavedStrategy()?.test_command).toEqual({ posix: 'npm test', powershell: 'npm.cmd test' });
+  });
+
   it('persists a ticked harness as an ordered selection', async () => {
     await mount({});
     await userEvent.click(screen.getByLabelText('lint gates validation'));
@@ -264,7 +274,7 @@ describe('gating validation', () => {
     await mount({ validationGates: ['lint', 'unit'] });
     await userEvent.click(screen.getByRole('button', { name: 'Delete unit harness' }));
     await userEvent.type(screen.getByLabelText('New harness name'), 'unit');
-    await userEvent.type(screen.getByLabelText('New harness command'), 'cargo test --lib');
+    await userEvent.type(screen.getByLabelText('New harness POSIX command'), 'cargo test --lib');
     await userEvent.click(screen.getByRole('button', { name: 'Add harness' }));
 
     expect(screen.getByLabelText('unit gates validation')).not.toBeChecked();

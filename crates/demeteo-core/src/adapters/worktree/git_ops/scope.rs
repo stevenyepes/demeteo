@@ -32,6 +32,8 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::artifact::ArtifactCapture;
 use crate::domain::permission::WriteScope;
+#[cfg(windows)]
+use crate::ports::execution::ProgramRequest;
 
 /// Sentinel writable-path meaning "the whole worktree is writable" (no
 /// fence). Emitted for [`WriteScope::All`] / `Implement` steps.
@@ -262,6 +264,13 @@ impl GitOpsHelper {
             return Ok(());
         }
 
+        #[cfg(windows)]
+        if machine == crate::domain::ids::LOCAL_MACHINE {
+            return self
+                .apply_windows_artifact_scope(machine, wt, writable_paths)
+                .await;
+        }
+
         // 1. Make everything writable first. Cheap and idempotent.
         //    Ensures that any directory created next inherits +w for
         //    its children, regardless of the umask.
@@ -359,6 +368,28 @@ impl GitOpsHelper {
         Ok(())
     }
 
+    /// Restore the ACL snapshot made by the Windows local scope fence. It is
+    /// deliberately best-effort at teardown: a missing snapshot means no
+    /// Windows fence was applied, while an actual cleanup operation still
+    /// reports its own failure.
+    pub(crate) async fn restore_artifact_scope(
+        &self,
+        machine_id: Option<&str>,
+        worktree_path: &str,
+    ) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            let machine = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+            if machine == crate::domain::ids::LOCAL_MACHINE {
+                return self
+                    .restore_windows_artifact_scope(machine, Path::new(worktree_path))
+                    .await;
+            }
+        }
+        let _ = (machine_id, worktree_path);
+        Ok(())
+    }
+
     /// Detect any working-tree changes outside the writable set and
     /// revert them. Returns the list of paths that were reverted (empty
     /// list means the step stayed in scope).
@@ -422,6 +453,12 @@ impl GitOpsHelper {
             if path.is_empty() || path.contains("..") {
                 continue;
             }
+            #[cfg(windows)]
+            if path == ".demeteo" || path.starts_with(".demeteo/") {
+                // The local fence's persisted DACL snapshot must survive the
+                // post-step guard so teardown can restore the exact ACL.
+                continue;
+            }
             let rel = Path::new(&path);
             let in_scope = if deny_all {
                 // ReadOnly step: nothing is in scope.
@@ -478,12 +515,141 @@ impl GitOpsHelper {
     }
 }
 
+#[cfg(windows)]
+impl GitOpsHelper {
+    async fn apply_windows_artifact_scope(
+        &self,
+        machine: &str,
+        worktree: &Path,
+        writable_paths: &[PathBuf],
+    ) -> Result<(), String> {
+        const SNAPSHOT_DIR: &str = ".demeteo";
+        const SNAPSHOT_FILE: &str = "scope-acl.txt";
+
+        // A previous attempt can have been cancelled after fencing but before
+        // teardown. Restore that complete DACL first, so the new snapshot is
+        // always the worktree's unfenced ACL rather than a stack of denies.
+        let _ = self.restore_windows_artifact_scope(machine, worktree).await;
+        self.exec
+            .create_dir_all(machine, &worktree.join(SNAPSHOT_DIR).to_string_lossy())
+            .await
+            .map_err(|error| format!("scope: create ACL snapshot directory failed: {}", error))?;
+
+        self.exec
+            .run_program(
+                machine,
+                ProgramRequest {
+                    executable: "icacls".to_string(),
+                    args: vec![
+                        ".".to_string(),
+                        "/save".to_string(),
+                        format!(r"{}\{}", SNAPSHOT_DIR, SNAPSHOT_FILE),
+                        "/t".to_string(),
+                        "/c".to_string(),
+                    ],
+                    cwd: Some(worktree.to_string_lossy().into_owned()),
+                    ..ProgramRequest::default()
+                },
+            )
+            .await
+            .map_err(|error| format!("scope: save Windows ACL snapshot failed: {}", error))?;
+
+        let user = self
+            .exec
+            .run_program(
+                machine,
+                ProgramRequest {
+                    executable: "whoami".to_string(),
+                    ..ProgramRequest::default()
+                },
+            )
+            .await
+            .map_err(|error| format!("scope: resolve Windows user failed: {}", error))?
+            .trim()
+            .to_string();
+        if user.is_empty() {
+            return Err("scope: resolve Windows user returned an empty identity".to_string());
+        }
+
+        let entries = self
+            .exec
+            .list_dir(machine, &worktree.to_string_lossy())
+            .await
+            .map_err(|error| {
+                format!("scope: read_dir({}) failed: {}", worktree.display(), error)
+            })?;
+        for entry in entries {
+            let path = PathBuf::from(entry.path);
+            let rel = path.strip_prefix(worktree).unwrap_or(&path);
+            let is_writable = writable_paths
+                .iter()
+                .any(|allowed| rel.starts_with(allowed) || allowed.starts_with(rel));
+            if is_writable || path.is_symlink() {
+                continue;
+            }
+            self.exec
+                .run_program(
+                    machine,
+                    ProgramRequest {
+                        executable: "icacls".to_string(),
+                        args: vec![
+                            path.to_string_lossy().into_owned(),
+                            "/deny".to_string(),
+                            format!("{}:(WD,AD,DC)", user),
+                            "/t".to_string(),
+                            "/c".to_string(),
+                        ],
+                        ..ProgramRequest::default()
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    format!("scope: deny writes on {} failed: {}", path.display(), error)
+                })?;
+        }
+        Ok(())
+    }
+
+    async fn restore_windows_artifact_scope(
+        &self,
+        machine: &str,
+        worktree: &Path,
+    ) -> Result<(), String> {
+        let snapshot = worktree.join(".demeteo").join("scope-acl.txt");
+        if !snapshot.is_file() {
+            return Ok(());
+        }
+        self.exec
+            .run_program(
+                machine,
+                ProgramRequest {
+                    executable: "icacls".to_string(),
+                    args: vec![
+                        ".".to_string(),
+                        "/restore".to_string(),
+                        r".demeteo\scope-acl.txt".to_string(),
+                        "/t".to_string(),
+                        "/c".to_string(),
+                    ],
+                    cwd: Some(worktree.to_string_lossy().into_owned()),
+                    ..ProgramRequest::default()
+                },
+            )
+            .await
+            .map_err(|error| format!("scope: restore Windows ACL snapshot failed: {}", error))
+    }
+}
+
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/worktree/scope.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../../../tests/infrastructure/worktree/git_ops/scope_runtime.rs"]
 mod tests_runtime;
+
+#[cfg(all(test, windows))]
+#[path = "../../../../tests/infrastructure/worktree/git_ops/scope_windows.rs"]
+mod tests_windows;

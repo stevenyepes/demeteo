@@ -8,6 +8,137 @@ use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+/// Repository and project roots resolved from Demeteo-owned records.
+///
+/// This is deliberately opaque outside `demeteo-core`: a terminal caller must
+/// prove project and repository ownership through application policy before it
+/// can request filesystem mutation. The strings retain the target host's path
+/// syntax; a desktop process must not reinterpret a remote path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedWorktreeTarget {
+    machine_id: Option<String>,
+    repository_dir: String,
+    project_root: String,
+}
+
+impl TrustedWorktreeTarget {
+    /// Construct a target after project/repository ownership and host selection
+    /// have been resolved by application policy.
+    pub(crate) fn from_resolved(
+        machine_id: Option<String>,
+        repository_dir: String,
+        project_root: String,
+    ) -> Self {
+        Self {
+            machine_id,
+            repository_dir,
+            project_root,
+        }
+    }
+
+    pub fn machine_id(&self) -> Option<&str> {
+        self.machine_id.as_deref()
+    }
+
+    pub fn repository_dir(&self) -> &str {
+        &self.repository_dir
+    }
+
+    pub fn project_root(&self) -> &str {
+        &self.project_root
+    }
+}
+
+/// A terminal-worktree creation scoped to a [`TrustedWorktreeTarget`].
+#[derive(Debug, Clone)]
+pub struct CreateTrustedTerminalWorktreeRequest {
+    pub target: TrustedWorktreeTarget,
+    pub terminal: TerminalWorktreeRequest,
+}
+
+/// The terminal worktree created by [`TrustedWorktreePort`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustedTerminalWorktreeCreated {
+    pub worktree: WorktreeInfo,
+    pub base_ref: String,
+}
+
+/// A terminal-worktree removal scoped to a [`TrustedWorktreeTarget`].
+///
+/// `worktree_name` is a relative name below the target's terminal area, never
+/// a caller-selected absolute path.
+#[derive(Debug, Clone)]
+pub struct RemoveTrustedTerminalWorktreeRequest {
+    pub target: TrustedWorktreeTarget,
+    pub worktree_name: String,
+    pub force: bool,
+}
+
+/// Evidence of the terminal worktree that was retired.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustedTerminalWorktreeRemoved {
+    pub worktree: WorktreeInfo,
+}
+
+/// Materialize the known dependency-cache directories for one trusted
+/// worktree from its feature-scoped cache root.
+///
+/// Both paths originate in Demeteo's worktree derivation, rather than in an
+/// agent prompt or terminal UI. The directory set itself is fixed by the port
+/// contract; callers cannot widen it with arbitrary path names.
+#[derive(Debug, Clone)]
+pub struct MaterializeDependencyCacheRequest {
+    pub target: TrustedWorktreeTarget,
+    pub worktree_dir: String,
+    pub feature_cache_dir: String,
+}
+
+/// The dependency-cache directories materialized for a worktree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyCacheMaterialization {
+    /// Well-known dependency directories made available in the worktree.
+    pub materialized: Vec<String>,
+    /// Well-known dependency directories absent from the feature cache.
+    pub absent: Vec<String>,
+}
+
+/// Filesystem mutations beneath a Demeteo-owned worktree root.
+///
+/// This is intentionally separate from [`WorktreeOpsPort`]. It is the narrow
+/// future contract for operations whose safety depends on trusted-root and
+/// no-follow handling; no implementation or caller uses it yet. Its complete
+/// security and transport requirements are in `docs/TRUSTED_WORKTREE.md`.
+#[async_trait]
+pub trait TrustedWorktreePort: Send + Sync {
+    /// Create a terminal worktree below the target's derived terminal area.
+    ///
+    /// Every existing component entered below the trusted root must be checked
+    /// without following symlinks or platform reparse points. The result must
+    /// report the physical worktree path and the base ref Git actually used.
+    async fn create_terminal_worktree(
+        &self,
+        request: CreateTrustedTerminalWorktreeRequest,
+    ) -> Result<TrustedTerminalWorktreeCreated, String>;
+
+    /// Remove exactly one terminal worktree below the target's derived area.
+    ///
+    /// Implementations must re-derive the destination from `worktree_name` and
+    /// validate it against Git's current worktree registration before removal.
+    async fn remove_terminal_worktree(
+        &self,
+        request: RemoveTrustedTerminalWorktreeRequest,
+    ) -> Result<TrustedTerminalWorktreeRemoved, String>;
+
+    /// Materialize only the contract's known dependency-cache directories.
+    ///
+    /// Materialized build outputs are feature-scoped; shared download caches
+    /// belong behind a separate capability and are not exposed by this method.
+    async fn materialize_dependency_cache(
+        &self,
+        request: MaterializeDependencyCacheRequest,
+    ) -> Result<DependencyCacheMaterialization, String>;
+}
+
 /// The caller-controlled half of a terminal-worktree creation.
 ///
 /// Bundled rather than passed positionally: all three travel together from the

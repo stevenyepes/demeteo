@@ -6,7 +6,7 @@ import { listProviderNamespaces, type ProviderNamespace } from '../../lib/create
 import { useErrorBus } from '../../lib/errorBus';
 import { formatError } from '../../lib/errors';
 import { useProject } from '../../context';
-import type { EffortLevel, Machine, Provider, WorkflowSummary } from '../../types';
+import type { EffortLevel, Machine, Provider, ScriptVariants, WorkflowSummary } from '../../types';
 
 const WORKFLOW_ID_STARTER = 'wf-starter-standard';
 
@@ -96,7 +96,7 @@ export interface WizardFormApi extends WizardFormState, WizardFormSetters {
   applyStrategyToForm: (strategy: {
     default_branch: string;
     branch_prefix: string;
-    test_command?: string | null;
+    test_command?: ScriptVariants | null;
     pr_template?: string | null;
   }) => void;
 }
@@ -278,12 +278,12 @@ export function useCreateZeroWizardForm(): WizardFormApi {
   const applyStrategyToForm = useCallback((strategy: {
     default_branch: string;
     branch_prefix: string;
-    test_command?: string | null;
+    test_command?: ScriptVariants | null;
     pr_template?: string | null;
   }) => {
     setDefaultBranch(strategy.default_branch);
     setBranchPrefix(strategy.branch_prefix);
-    setTestCommand(strategy.test_command ?? '');
+    setTestCommand(strategy.test_command?.posix ?? strategy.test_command?.powershell ?? '');
     setPrTemplate(strategy.pr_template ?? '');
   }, []);
 

@@ -24,6 +24,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ProjectSettingsView from './ProjectSettingsShell';
 import { NavigationProvider, ProjectProvider, useProject } from '../../context';
 import { ErrorBusProvider } from '../../lib/errorBus';
+import type { ScriptVariants } from '../../types';
 
 const mockedInvoke = vi.mocked(invoke);
 
@@ -33,6 +34,7 @@ const PROJECT_ID = 'p-1';
 const STRATEGY_TEST_COMMAND = 'B: freshly re-detected command';
 /** What the stale `get_proposed_strategy` "existing" record still has on file. */
 const EXISTING_TEST_COMMAND = 'A: stale DB command';
+const script = (posix: string): ScriptVariants => ({ posix, powershell: null });
 
 interface Scenario {
   /** Project status that routes `handleSave` into `proceedWithReBootstrap`. */
@@ -48,7 +50,7 @@ function scriptIpc(_scenario: Scenario) {
   // the field starting empty. Only the second call (inside
   // `proceedWithReBootstrap`, fetching `existing`) returns it.
   let gpsCalls = 0;
-  const strategyPayload = (testCommand: string | null) => ({
+  const strategyPayload = (testCommand: ScriptVariants | null) => ({
     project_id: PROJECT_ID,
     worktree_strategy: {
       default_branch: 'main',
@@ -67,7 +69,7 @@ function scriptIpc(_scenario: Scenario) {
 
   const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     get_proposed_strategy: () => {
-      const payload = strategyPayload(gpsCalls === 0 ? null : EXISTING_TEST_COMMAND);
+      const payload = strategyPayload(gpsCalls === 0 ? null : script(EXISTING_TEST_COMMAND));
       gpsCalls++;
       return payload;
     },
@@ -81,7 +83,7 @@ function scriptIpc(_scenario: Scenario) {
     bootstrap_project: () => ({
       default_branch: 'main',
       branch_prefix: 'demeteo/features/',
-      test_command: STRATEGY_TEST_COMMAND,
+      test_command: script(STRATEGY_TEST_COMMAND),
       build_command: null,
       coverage_command: null,
       conventions_file: null,
@@ -157,14 +159,14 @@ describe('proceedWithReBootstrap', () => {
     await mount({ status: 'error' });
 
     const typedCommand = 'C: what the user just typed';
-    const input = screen.getByLabelText('Default Test Command');
+    const input = screen.getByLabelText('Default Test Command POSIX');
     await userEvent.clear(input);
     await userEvent.type(input, typedCommand);
     expect(input).toHaveValue(typedCommand);
 
     await saveAndOpenStrategyProposal();
 
-    expect(screen.getByPlaceholderText('e.g. npm test or cargo test')).toHaveValue(typedCommand);
+    expect(screen.getByLabelText('Default Test Command POSIX')).toHaveValue(typedCommand);
   });
 
   it('falls back to the stale DB value, then the re-detected strategy, when nothing was typed', async () => {
@@ -172,13 +174,13 @@ describe('proceedWithReBootstrap', () => {
 
     // Untouched: the initial `get_proposed_strategy` fetch returned a null
     // test_command, so the field starts (and stays) empty.
-    expect(screen.getByLabelText('Default Test Command')).toHaveValue('');
+    expect(screen.getByLabelText('Default Test Command POSIX')).toHaveValue('');
 
     await saveAndOpenStrategyProposal();
 
     // ext.test_command (EXISTING_TEST_COMMAND) wins over strategy.test_command
     // (STRATEGY_TEST_COMMAND) — unchanged pre-fix fallback behavior.
-    expect(screen.getByPlaceholderText('e.g. npm test or cargo test')).toHaveValue(EXISTING_TEST_COMMAND);
+    expect(screen.getByLabelText('Default Test Command POSIX')).toHaveValue(EXISTING_TEST_COMMAND);
   });
 });
 

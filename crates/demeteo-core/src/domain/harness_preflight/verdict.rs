@@ -99,11 +99,9 @@ impl PreflightVerdict {
                  {list}. The run is stopped here because nothing downstream can make {them} \
                  appear — the validate step would fail on the same thing after the whole \
                  implementation had been paid for.\n\
-                 Check with:\n\
-                 \x20 bash -l -i -c 'command -v {first}'\n\
-                 If that prints nothing, either export the tool's directory from ~/.profile or \
-                 ~/.bashrc, or — if a version manager owns it (mise, asdf, nvm, pyenv, rbenv) — \
-                 declare it in that manager's *global* config so every shell activates it. If \
+                 Check with `Get-Command {first}` in PowerShell on Windows, or \
+                 `command -v {first}` in a POSIX shell. If neither resolves it, either add the \
+                 tool to PATH or configure its version manager so child shells activate it. If \
                  the command itself is wrong, fix it in project settings.",
                 plural = if missing.len() == 1 {
                     "a binary"

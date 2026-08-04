@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::domain::models::StepConfig;
+use crate::domain::models::{ScriptVariants, StepConfig};
 
 /// The validated `command` payload, parsed once per dispatch out of the
 /// v1 [`StepConfig`] fields (v2 storage is P3.6's prerequisite; the
@@ -13,7 +13,7 @@ pub(crate) struct CommandSpec {
     /// [`measure_baseline`](Self::measure_baseline) is set, which is the one
     /// mode where the commands to run come from the project rather than the
     /// workflow.
-    pub command: String,
+    pub command: ScriptVariants,
     /// Worktree-relative, already validated as non-escaping. `None` =
     /// worktree root.
     pub cwd: Option<String>,
@@ -40,14 +40,9 @@ pub(crate) fn parse_spec(step: &StepConfig) -> Result<CommandSpec, String> {
     // `prepare_command` and the harnesses that gate validation — so demanding
     // one in the workflow would be asking the author for a string they cannot
     // know. Every other command node still owes one: it is the entire step.
-    let command = match step
-        .command
-        .as_deref()
-        .map(str::trim)
-        .filter(|c| !c.is_empty())
-    {
-        Some(cmd) => cmd.to_string(),
-        None if measure_baseline => String::new(),
+    let command = match step.command.as_ref().filter(|command| !command.is_empty()) {
+        Some(command) => command.clone(),
+        None if measure_baseline => ScriptVariants::default(),
         None => return Err("command node declares no `command` to run".to_string()),
     };
 

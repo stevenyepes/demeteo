@@ -45,7 +45,14 @@ pub use super::session::SftpSession;
 use super::{command, control_rpc, interactive, sftp};
 use crate::ports::db::MachineRepository;
 use crate::ports::execution::SftpEntry;
-use crate::ports::execution::{ExecutionPort, InteractiveHandle, ShellOptions};
+use crate::ports::execution::{
+    ExecutionPort, InteractiveHandle, ProgramRequest, ScriptRequest, ShellOptions,
+};
+use crate::ports::worktree_ops::{
+    CreateTrustedTerminalWorktreeRequest, DependencyCacheMaterialization,
+    MaterializeDependencyCacheRequest, RemoveTrustedTerminalWorktreeRequest,
+    TrustedTerminalWorktreeCreated, TrustedTerminalWorktreeRemoved, TrustedWorktreePort,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -93,6 +100,50 @@ impl ExecutionPort for SshClientAdapter {
         .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
+    async fn run_program(
+        &self,
+        machine_id: &str,
+        request: ProgramRequest,
+    ) -> Result<String, String> {
+        let mut argv = Vec::with_capacity(request.args.len() + 1);
+        argv.push(crate::paths::shell_escape_posix(&request.executable));
+        argv.extend(
+            request
+                .args
+                .iter()
+                .map(|arg| crate::paths::shell_escape_posix(arg)),
+        );
+        self.run_command_with(
+            machine_id,
+            &format!("exec {}", argv.join(" ")),
+            ShellOptions {
+                login_shell: false,
+                interactive: false,
+                cwd: request.cwd,
+                env: request.env,
+                timeout: request.timeout,
+            },
+        )
+        .await
+    }
+
+    async fn run_script(&self, machine_id: &str, request: ScriptRequest) -> Result<String, String> {
+        let script = request.variants.posix.ok_or_else(|| {
+            "configuration error: this Linux remote has no POSIX script variant".to_string()
+        })?;
+        self.run_command_with(
+            machine_id,
+            &script,
+            ShellOptions {
+                login_shell: false,
+                interactive: false,
+                cwd: request.cwd,
+                env: request.env,
+                timeout: request.timeout,
+            },
+        )
+        .await
+    }
     async fn run_command_with(
         &self,
         machine_id: &str,
@@ -178,6 +229,86 @@ impl ExecutionPort for SshClientAdapter {
                 })
                 .await
                 .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
+        })
+        .await
+    }
+
+    async fn create_dir_all(&self, machine_id: &str, path: &str) -> Result<(), String> {
+        let mid = machine_id.to_string();
+        let path = path.to_string();
+        with_ssh_retry("create_dir_all", machine_id, &self.pool, None, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            let path = path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || sftp::create_dir_all(&pool, &mid, &path))
+                    .await
+                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
+        })
+        .await
+    }
+
+    async fn remove_dir_all(&self, machine_id: &str, path: &str) -> Result<(), String> {
+        let mid = machine_id.to_string();
+        let path = path.to_string();
+        with_ssh_retry("remove_dir_all", machine_id, &self.pool, None, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            let path = path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || sftp::remove_dir_all(&pool, &mid, &path))
+                    .await
+                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
+        })
+        .await
+    }
+
+    async fn remove_file(&self, machine_id: &str, path: &str) -> Result<(), String> {
+        let mid = machine_id.to_string();
+        let path = path.to_string();
+        with_ssh_retry("remove_file", machine_id, &self.pool, None, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            let path = path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || sftp::remove_file(&pool, &mid, &path))
+                    .await
+                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
+        })
+        .await
+    }
+
+    async fn set_file_mode(&self, machine_id: &str, path: &str, mode: u32) -> Result<(), String> {
+        let mid = machine_id.to_string();
+        let path = path.to_string();
+        with_ssh_retry("set_file_mode", machine_id, &self.pool, None, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            let path = path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || sftp::set_file_mode(&pool, &mid, &path, mode))
+                    .await
+                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
+        })
+        .await
+    }
+
+    async fn is_executable(&self, machine_id: &str, path: &str) -> Result<bool, String> {
+        let mid = machine_id.to_string();
+        let path = path.to_string();
+        with_ssh_retry("is_executable", machine_id, &self.pool, None, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            let path = path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || sftp::is_executable(&pool, &mid, &path))
+                    .await
+                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
             }
         })
         .await
@@ -335,13 +466,113 @@ impl ExecutionPort for SshClientAdapter {
     }
 }
 
+#[async_trait]
+impl TrustedWorktreePort for SshClientAdapter {
+    async fn create_terminal_worktree(
+        &self,
+        _request: CreateTrustedTerminalWorktreeRequest,
+    ) -> Result<TrustedTerminalWorktreeCreated, String> {
+        Err(trusted_worktree_helper_unavailable())
+    }
+
+    async fn remove_terminal_worktree(
+        &self,
+        _request: RemoveTrustedTerminalWorktreeRequest,
+    ) -> Result<TrustedTerminalWorktreeRemoved, String> {
+        Err(trusted_worktree_helper_unavailable())
+    }
+
+    async fn materialize_dependency_cache(
+        &self,
+        _request: MaterializeDependencyCacheRequest,
+    ) -> Result<DependencyCacheMaterialization, String> {
+        Err(trusted_worktree_helper_unavailable())
+    }
+}
+
+fn trusted_worktree_helper_unavailable() -> String {
+    "Trusted worktree operations are unavailable over SSH: the remote trusted-worktree helper is not installed. These operations require one remote helper transaction so the target host can enforce no-follow checks and prevent check-to-use substitution; Demeteo will not compose SFTP or independent commands as a fallback.".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::ids::{AgentProfileId, MachineId};
     use crate::domain::models::{AgentProfile, Machine};
+    use crate::ports::worktree_ops::{TerminalWorktreeRequest, TrustedWorktreeTarget};
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn trusted_worktree_operations_fail_closed_without_the_remote_helper() {
+        let error = trusted_worktree_helper_unavailable();
+        assert!(error.contains("unavailable over SSH"));
+        assert!(error.contains("one remote helper transaction"));
+        assert!(error.contains("will not compose SFTP"));
+    }
+
+    #[tokio::test]
+    async fn trusted_worktree_rejects_adversarial_remote_paths_without_connecting() {
+        let adapter = SshClientAdapter::new(Arc::new(OneMachine(Machine {
+            id: MachineId("remote".to_string()),
+            name: "remote".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 1,
+            username: "demeteo".to_string(),
+            auth_type: "agent".to_string(),
+            key_path: None,
+            agents: None,
+            auto_approved_rules: None,
+            use_login_shell: Some(false),
+            setup_commands: None,
+            notify_webhook_url: None,
+        })));
+        let target = TrustedWorktreeTarget::from_resolved(
+            Some("remote".to_string()),
+            "/repo; touch should-not-run".to_string(),
+            "/project/../project-link".to_string(),
+        );
+
+        let error = TrustedWorktreePort::create_terminal_worktree(
+            &adapter,
+            CreateTrustedTerminalWorktreeRequest {
+                target: target.clone(),
+                terminal: TerminalWorktreeRequest {
+                    branch: "terminal/$(touch should-not-run)".to_string(),
+                    base_branch: Some("main; touch should-not-run".to_string()),
+                    worktree_name: "../../should-not-run".to_string(),
+                },
+            },
+        )
+        .await
+        .expect_err("SSH must not compose a fallback transaction");
+
+        assert_eq!(error, trusted_worktree_helper_unavailable());
+
+        let error = TrustedWorktreePort::remove_terminal_worktree(
+            &adapter,
+            RemoveTrustedTerminalWorktreeRequest {
+                target: target.clone(),
+                worktree_name: "../../should-not-run".to_string(),
+                force: true,
+            },
+        )
+        .await
+        .expect_err("SSH must not remove an adversarial path without the helper");
+        assert_eq!(error, trusted_worktree_helper_unavailable());
+
+        let error = TrustedWorktreePort::materialize_dependency_cache(
+            &adapter,
+            MaterializeDependencyCacheRequest {
+                target,
+                worktree_dir: "/worktree/../../should-not-run".to_string(),
+                feature_cache_dir: "/cache/$(touch should-not-run)".to_string(),
+            },
+        )
+        .await
+        .expect_err("SSH must not materialize an adversarial cache path without the helper");
+        assert_eq!(error, trusted_worktree_helper_unavailable());
+    }
 
     /// Minimal single-machine repo, same shape as the conformance suite's stub.
     struct OneMachine(Machine);

@@ -1,5 +1,5 @@
 use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId, WorkflowId};
-use crate::domain::models::EffortLevel;
+use crate::domain::models::{EffortLevel, ScriptVariants};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -30,16 +30,16 @@ pub struct WorktreeStrategy {
     pub default_branch: String,
     pub branch_prefix: String,
     #[serde(default)]
-    pub test_command: Option<String>,
+    pub test_command: Option<ScriptVariants>,
     #[serde(default)]
-    pub build_command: Option<String>,
+    pub build_command: Option<ScriptVariants>,
     #[serde(default)]
-    pub coverage_command: Option<String>,
+    pub coverage_command: Option<ScriptVariants>,
     #[serde(default)]
     pub conventions_file: Option<String>,
     pub pr_template: Option<String>,
     #[serde(default)]
-    pub harnesses: Option<HashMap<String, String>>,
+    pub harnesses: Option<HashMap<String, ScriptVariants>>,
     /// The user's **ordered selection of which harnesses gate validation** —
     /// tier 2 of [`resolve_harnesses`](crate::domain::verifier::resolve_harnesses).
     ///
@@ -68,7 +68,7 @@ pub struct WorktreeStrategy {
     /// install can't — codegen, migrations, freshly-added dependencies.
     /// `None` (default) skips this step entirely.
     #[serde(default)]
-    pub prepare_command: Option<String>,
+    pub prepare_command: Option<ScriptVariants>,
     /// Project-wide writability exceptions, applied on top of the
     /// capability-driven chmod fence. Repo-relative paths the agent may
     /// write to even when the step's capability (`ReadOnly`,

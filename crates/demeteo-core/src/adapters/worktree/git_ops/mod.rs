@@ -1,7 +1,7 @@
 use crate::domain::branch_listing::BranchOption;
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use crate::ports::db::AppSettingsRepository;
-use crate::ports::execution::ExecutionPort;
+use crate::ports::execution::{ExecutionPort, ProgramRequest};
 use crate::ports::worktree_ops::{
     CommitMessageRejected, SquashOutcome, SyncFailure, SyncOutcome, TerminalWorktreeCreated,
     TerminalWorktreeRequest, WorktreeOpsPort,
@@ -34,6 +34,18 @@ impl GitOpsHelper {
     }
 }
 
+pub(super) fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> ProgramRequest {
+    git_request_vec(repo_dir, args.into_iter().map(str::to_string).collect())
+}
+
+pub(super) fn git_request_vec(repo_dir: &str, args: Vec<String>) -> ProgramRequest {
+    ProgramRequest {
+        executable: "git".to_string(),
+        args: [vec!["-C".to_string(), repo_dir.to_string()], args].concat(),
+        ..ProgramRequest::default()
+    }
+}
+
 /// The branch a subtask worktree is checked out on.
 ///
 /// Provisioning, merge-back, cleanup, and the `ConflictDetected` payload all
@@ -53,6 +65,7 @@ pub(crate) mod scope;
 pub(crate) mod squash;
 pub(crate) mod strategy;
 pub(crate) mod sync;
+pub(crate) mod trusted;
 pub(crate) mod worktree;
 
 #[cfg(test)]

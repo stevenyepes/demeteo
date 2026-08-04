@@ -349,9 +349,7 @@ pub async fn terminal_worktree_contract(
     )
     .await;
 
-    terminal_listing_through_a_symlinked_root(&port, machine_id, &anchor, nanos).await;
     terminal_branch_is_cut_from_origin(&port, machine_id, &anchor, nanos).await;
-    terminal_worktree_removal(&port, machine_id, &anchor, nanos).await;
 }
 
 /// A requested base is fetched before it is used, so the session starts on
@@ -713,13 +711,11 @@ async fn local_subprocess_adapter_satisfies_the_terminal_worktree_contract() {
     terminal_worktree_contract(port, "local", &scratch.to_string_lossy()).await;
 }
 
-/// The same assertions against the loopback sshd C2.2 stands up. This is the
-/// only leg that can catch a `create_terminal_worktree` whose script means one
-/// thing to a local `sh -c` and another to a remote one; the local leg above
-/// stays green through exactly that divergence.
+/// SSH must fail closed until the target has a trusted-worktree helper that can
+/// make the no-follow proof in one remote transaction.
 #[cfg(feature = "ssh-conformance")]
 #[tokio::test]
-async fn ssh_client_adapter_satisfies_the_terminal_worktree_contract() {
+async fn ssh_client_adapter_reports_trusted_worktree_unavailability() {
     let t = super::ssh_target::target();
     let machine_id = "ssh-terminal-worktree";
     let port = super::ssh_target::adapter(&t, t.port, machine_id);
@@ -728,5 +724,19 @@ async fn ssh_client_adapter_satisfies_the_terminal_worktree_contract() {
         .await
         .expect("failed to create the remote conformance workdir");
 
-    terminal_worktree_contract(port, machine_id, &t.workdir).await;
+    let (project_root, repo) = make_project_repo(&port, machine_id, &t.workdir).await;
+    let conn = Connection::open_in_memory().expect("opens database");
+    let db = Arc::new(SqliteAdapter::new(conn).expect("creates database"))
+        as Arc<dyn AppSettingsRepository>;
+    let ops = GitOpsHelper::new(db, port);
+    let error = ops
+        .create_terminal_worktree(
+            Some(machine_id),
+            &repo,
+            &project_root,
+            &terminal_request("terminal/unavailable", "unavailable"),
+        )
+        .await
+        .expect_err("SSH must not recreate the old shell transaction");
+    assert!(error.contains("unavailable over SSH"), "{error}");
 }

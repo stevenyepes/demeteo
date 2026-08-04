@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import type { ConfigOptionValue, EffortLevel, ProjectMemoryEntry, StepConfig, Machine, Project } from '../../types';
+import type { ConfigOptionValue, EffortLevel, ProjectMemoryEntry, StepConfig, Machine, Project, ScriptVariants } from '../../types';
 import { getAgentModels } from '../../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
 import { DEFAULT_EFFORT, reconcileEffort } from '../../lib/effortLevels';
@@ -16,6 +16,7 @@ import {
   listProjectMemory,
   probeProjectCommands,
   saveProjectSettings,
+  scriptVariants,
   setWorkflowOverride,
   updateProject,
   upsertProjectMemory,
@@ -98,11 +99,11 @@ interface SettingsCtx {
   // strategy
   defaultBranch: string; setDefaultBranch: (v: string) => void;
   branchPrefix: string; setBranchPrefix: (v: string) => void;
-  testCommand: string; setTestCommand: (v: string) => void;
-  buildCommand: string; setBuildCommand: (v: string) => void;
-  coverageCommand: string; setCoverageCommand: (v: string) => void;
+  testCommand: ScriptVariants; setTestCommand: (v: ScriptVariants) => void;
+  buildCommand: ScriptVariants; setBuildCommand: (v: ScriptVariants) => void;
+  coverageCommand: ScriptVariants; setCoverageCommand: (v: ScriptVariants) => void;
   conventionsFile: string; setConventionsFile: (v: string) => void;
-  harnesses: { [key: string]: string }; setHarnesses: (v: { [key: string]: string }) => void;
+  harnesses: Record<string, ScriptVariants>; setHarnesses: (v: Record<string, ScriptVariants>) => void;
   /** The harnesses that gate validation, in the order they run. Tier 2 of the
    *  engine's resolution chain; empty = fall through to `test_command`. */
   validationGates: string[]; setValidationGates: (v: string[]) => void;
@@ -114,7 +115,7 @@ interface SettingsCtx {
    *  Rendered beside the rows; never a reason to refuse a save. */
   probeError: string;
   refreshCommandProbe: () => void;
-  prepareCommand: string; setPrepareCommand: (v: string) => void;
+  prepareCommand: ScriptVariants; setPrepareCommand: (v: ScriptVariants) => void;
   prTemplate: string; setPrTemplate: (v: string) => void;
   conflictPolicy: string; setConflictPolicy: (v: string) => void;
   featureLifecycle: string; setFeatureLifecycle: (v: string) => void;
@@ -236,17 +237,17 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
 
   const [defaultBranch, setDefaultBranch] = useState('');
   const [branchPrefix, setBranchPrefix] = useState('');
-  const [testCommand, setTestCommand] = useState('');
-  const [buildCommand, setBuildCommand] = useState('');
-  const [coverageCommand, setCoverageCommand] = useState('');
+  const [testCommand, setTestCommand] = useState<ScriptVariants>({});
+  const [buildCommand, setBuildCommand] = useState<ScriptVariants>({});
+  const [coverageCommand, setCoverageCommand] = useState<ScriptVariants>({});
   const [conventionsFile, setConventionsFile] = useState('');
-  const [harnesses, setHarnesses] = useState<{ [key: string]: string }>({});
+  const [harnesses, setHarnesses] = useState<Record<string, ScriptVariants>>({});
   const [validationGates, setValidationGates] = useState<string[]>([]);
   const [commandProbe, setCommandProbe] = useState<CommandProbeReport | null>(null);
   const [isProbingCommands, setIsProbingCommands] = useState(false);
   const [probeError, setProbeError] = useState('');
   const [probeNonce, setProbeNonce] = useState(0);
-  const [prepareCommand, setPrepareCommand] = useState('');
+  const [prepareCommand, setPrepareCommand] = useState<ScriptVariants>({});
   const [prTemplate, setPrTemplate] = useState('');
   const [conflictPolicy, setConflictPolicy] = useState('always_gate');
   const [featureLifecycle, setFeatureLifecycle] = useState('archive');
@@ -504,13 +505,13 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
         if (res) {
           setDefaultBranch(res.worktree_strategy.default_branch);
           setBranchPrefix(res.worktree_strategy.branch_prefix);
-          setTestCommand(res.worktree_strategy.test_command || '');
-          setBuildCommand(res.worktree_strategy.build_command || '');
-          setCoverageCommand(res.worktree_strategy.coverage_command || '');
+          setTestCommand(res.worktree_strategy.test_command || {});
+          setBuildCommand(res.worktree_strategy.build_command || {});
+          setCoverageCommand(res.worktree_strategy.coverage_command || {});
           setConventionsFile(res.worktree_strategy.conventions_file || '');
           setHarnesses(res.worktree_strategy.harnesses || {});
           setValidationGates(res.worktree_strategy.validation_gates || []);
-          setPrepareCommand(res.worktree_strategy.prepare_command || '');
+          setPrepareCommand(res.worktree_strategy.prepare_command || {});
           setPrTemplate(res.worktree_strategy.pr_template || '');
           setConflictPolicy(res.conflict_policy);
           setFeatureLifecycle(res.feature_lifecycle);
@@ -608,6 +609,14 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const gatesToPersist = () =>
     validationGates.filter(g => Object.prototype.hasOwnProperty.call(harnesses, g));
 
+  const savedScript = (script: ScriptVariants) =>
+    scriptVariants(script.posix ?? '', script.powershell ?? '');
+  const savedHarnesses = (): Record<string, ScriptVariants> =>
+    Object.fromEntries(Object.entries(harnesses).flatMap(([name, command]) => {
+      const script = savedScript(command);
+      return script ? [[name, script] as const] : [];
+    }));
+
   const saveAllSettings = async () => {
     const machineId = computeType === 'remote' ? remoteHost : 'local';
     if (machineId) {
@@ -615,7 +624,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
-await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+    await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: savedScript(testCommand), build_command: savedScript(buildCommand), coverage_command: savedScript(coverageCommand), conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? savedHarnesses() : null, validation_gates: gatesToPersist(), prepare_command: savedScript(prepareCommand), extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
   };
 
   const handleSave = async () => {
@@ -638,7 +647,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     } else {
       try {
         await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
-        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: savedScript(testCommand), build_command: savedScript(buildCommand), coverage_command: savedScript(coverageCommand), conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? savedHarnesses() : null, validation_gates: gatesToPersist(), prepare_command: savedScript(prepareCommand), extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
         // Keep `compute_type` / `remote_host` in sync with the DB so the
         // Settings tab doesn't fall back to "Local Compute" the next
         // time the user reopens it. Mirrors the re-bootstrap save path
@@ -665,7 +674,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
       const ext = existing?.worktree_strategy;
       setDefaultBranch(currentDefaultBranch || ext?.default_branch || strategy.default_branch);
       setBranchPrefix(currentBranchPrefix || ext?.branch_prefix || strategy.branch_prefix);
-      setTestCommand(currentTestCommand || ext?.test_command || strategy.test_command || '');
+      setTestCommand(savedScript(currentTestCommand) || ext?.test_command || strategy.test_command || {});
       setPrTemplate(currentPrTemplate || ext?.pr_template || strategy.pr_template || '');
       setBootstrapStep('strategy_proposal');
     } catch (err) { setBootstrapStep('error'); setBootstrapError(formatError(err)); }

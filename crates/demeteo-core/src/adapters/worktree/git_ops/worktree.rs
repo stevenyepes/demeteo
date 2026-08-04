@@ -1,11 +1,40 @@
-use super::GitOpsHelper;
+use super::{git_request, GitOpsHelper};
 use crate::domain::branch_listing::BranchOption;
 use crate::domain::models::WorktreeInfo;
 use crate::paths;
-use crate::ports::worktree_ops::{TerminalWorktreeCreated, TerminalWorktreeRequest};
+use crate::ports::worktree_ops::{
+    CreateTrustedTerminalWorktreeRequest, MaterializeDependencyCacheRequest,
+    TerminalWorktreeCreated, TerminalWorktreeRequest, TrustedWorktreePort, TrustedWorktreeTarget,
+};
 use std::path::{Component, Path, PathBuf};
 
 impl GitOpsHelper {
+    fn trusted_target(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+    ) -> Result<TrustedWorktreeTarget, String> {
+        Self::trusted_target_is_local(machine_id)?;
+        let repo = Path::new(repo_dir);
+        let repos = repo.parent().ok_or_else(|| {
+            "trusted worktree: repository path has no containing repos directory".to_string()
+        })?;
+        if repos.file_name() != Some(std::ffi::OsStr::new(paths::REPOS_SUBDIR)) {
+            return Err(
+                "trusted worktree: repository is not below the controlled repos directory"
+                    .to_string(),
+            );
+        }
+        let project_root = repos.parent().ok_or_else(|| {
+            "trusted worktree: controlled repos directory has no project root".to_string()
+        })?;
+        Ok(TrustedWorktreeTarget::from_resolved(
+            machine_id.map(str::to_string),
+            repo_dir.to_string(),
+            project_root.to_string_lossy().into_owned(),
+        ))
+    }
+
     /// Get the current HEAD branch for a repo directory
     pub async fn get_head_branch(
         &self,
@@ -14,12 +43,9 @@ impl GitOpsHelper {
     ) -> Option<String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         self.exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} rev-parse --abbrev-ref HEAD",
-                    paths::shell_escape_posix(repo_dir)
-                ),
+                git_request(repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"]),
             )
             .await
             .ok()
@@ -37,7 +63,10 @@ impl GitOpsHelper {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let output = self
             .exec
-            .run_command(machine_str, &worktree_list_cmd(repo_dir))
+            .run_program(
+                machine_str,
+                git_request(repo_dir, ["worktree", "list", "--porcelain"]),
+            )
             .await?;
 
         Ok(crate::domain::worktree_listing::parse(&output).linked)
@@ -59,44 +88,22 @@ impl GitOpsHelper {
         project_root: &str,
         request: &TerminalWorktreeRequest,
     ) -> Result<TerminalWorktreeCreated, String> {
-        let branch = request.branch.as_str();
-        validate_terminal_branch(branch)?;
-        let destination = terminal_worktree_dir(repo_dir, project_root, &request.worktree_name)?;
-        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let base_ref = self
-            .terminal_start_point(machine_str, repo_dir, request.base_branch.as_deref())
-            .await?;
-        let start_point = request.base_branch.as_ref().map(|_| base_ref.as_str());
-        let command = terminal_worktree_create_cmd(
-            repo_dir,
-            project_root,
-            branch,
-            &destination,
-            start_point,
-            "",
-        )?;
-        let output = self
-            .exec
-            .run_command(machine_str, &command)
-            .await
-            .map_err(|e| {
-                format!(
-                    "create_terminal_worktree: git worktree add for branch '{branch}' failed: {e}"
-                )
-            })?;
-
-        // The path the command resolved, not the one derived from
-        // configuration. Git records the physical destination and replays it
-        // from `worktree list`, so returning the logical form would hand the
-        // caller a path that never equals the one it lists back — on macOS
-        // `/var` and `/private/var` name the same directory and compare unequal.
-        Ok(TerminalWorktreeCreated {
-            worktree: WorktreeInfo {
-                path: created_terminal_worktree_path(&output, &destination),
-                branch: Some(branch.to_string()),
-                is_locked: false,
+        let created = TrustedWorktreePort::create_terminal_worktree(
+            self,
+            CreateTrustedTerminalWorktreeRequest {
+                target: TrustedWorktreeTarget::from_resolved(
+                    machine_id.map(str::to_string),
+                    repo_dir.to_string(),
+                    project_root.to_string(),
+                ),
+                terminal: request.clone(),
             },
-            base_ref,
+        )
+        .await?;
+
+        Ok(TerminalWorktreeCreated {
+            worktree: created.worktree,
+            base_ref: created.base_ref,
         })
     }
 
@@ -126,17 +133,11 @@ impl GitOpsHelper {
         validate_git_branch_name(base).map_err(|_| {
             format!("create_terminal_worktree: base branch '{base}' is not a safe Git branch name")
         })?;
-        let safe_dir = paths::shell_escape_posix(repo_dir);
-
         let _ = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} fetch origin {}",
-                    safe_dir,
-                    paths::shell_escape_posix(base)
-                ),
+                git_request(repo_dir, ["fetch", "origin", base]),
             )
             .await;
 
@@ -149,13 +150,9 @@ impl GitOpsHelper {
         ] {
             if self
                 .exec
-                .run_command(
+                .run_program(
                     machine_str,
-                    &format!(
-                        "git -C {} rev-parse --verify --quiet {}",
-                        safe_dir,
-                        paths::shell_escape_posix(&reference)
-                    ),
+                    git_request(repo_dir, ["rev-parse", "--verify", "--quiet", &reference]),
                 )
                 .await
                 .is_ok()
@@ -188,38 +185,8 @@ impl GitOpsHelper {
         worktree_path: &str,
         force: bool,
     ) -> Result<(), String> {
-        let owned = self
-            .list_terminal_worktrees(machine_id, repo_dir, project_root)
-            .await?;
-        let target = owned
-            .into_iter()
-            .find(|worktree| Path::new(&worktree.path) == Path::new(worktree_path))
-            .ok_or_else(|| {
-                format!(
-                    "remove_terminal_worktree: {worktree_path} is not a terminal worktree of {repo_dir}"
-                )
-            })?;
-
-        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let safe_dir = paths::shell_escape_posix(repo_dir);
-        self.exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} worktree remove {}{}",
-                    safe_dir,
-                    if force { "--force " } else { "" },
-                    paths::shell_escape_posix(&target.path)
-                ),
-            )
-            .await
-            .map_err(|e| format!("remove_terminal_worktree: git worktree remove failed: {e}"))?;
-        let _ = self
-            .exec
-            .run_command(machine_str, &format!("git -C {safe_dir} worktree prune"))
-            .await;
-
-        Ok(())
+        let _ = (machine_id, repo_dir, project_root, worktree_path, force);
+        Err("terminal worktree removal is unavailable until TrustedWorktreePort can retire a Git registration without re-resolving the destination pathname".to_string())
     }
 
     /// Restate a terminal-worktree failure when the repository it names is not
@@ -245,12 +212,9 @@ impl GitOpsHelper {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let checked_out = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} rev-parse --is-inside-work-tree",
-                    paths::shell_escape_posix(repo_dir)
-                ),
+                git_request(repo_dir, ["rev-parse", "--is-inside-work-tree"]),
             )
             .await
             .is_ok();
@@ -273,7 +237,18 @@ impl GitOpsHelper {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let output = self
             .exec
-            .run_command(machine_str, &branch_list_cmd(repo_dir))
+            .run_program(
+                machine_str,
+                git_request(
+                    repo_dir,
+                    [
+                        "for-each-ref",
+                        "--format=%(refname)",
+                        "refs/heads",
+                        "refs/remotes/origin",
+                    ],
+                ),
+            )
             .await?;
 
         Ok(crate::domain::branch_listing::parse(&output))
@@ -294,7 +269,10 @@ impl GitOpsHelper {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let output = self
             .exec
-            .run_command(machine_str, &worktree_list_cmd(repo_dir))
+            .run_program(
+                machine_str,
+                git_request(repo_dir, ["worktree", "list", "--porcelain"]),
+            )
             .await?;
         let listing = crate::domain::worktree_listing::parse(&output);
         let primary = listing.primary.ok_or_else(|| {
@@ -337,8 +315,6 @@ impl GitOpsHelper {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let safe_dir = paths::shell_escape_posix(repo_dir);
-
         let stale: Vec<String> = self
             .list_worktrees(machine_id, repo_dir)
             .await?
@@ -350,20 +326,16 @@ impl GitOpsHelper {
         for path in &stale {
             let _ = self
                 .exec
-                .run_command(
+                .run_program(
                     machine_str,
-                    &format!(
-                        "git -C {} worktree remove --force {}",
-                        safe_dir,
-                        paths::shell_escape_posix(path)
-                    ),
+                    git_request(repo_dir, ["worktree", "remove", "--force", path]),
                 )
                 .await;
         }
 
         let _ = self
             .exec
-            .run_command(machine_str, &format!("git -C {safe_dir} worktree prune"))
+            .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
             .await;
         let _ = self
             .exec
@@ -400,10 +372,8 @@ impl GitOpsHelper {
         branch_name: &str,
     ) -> Result<(), String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let safe_dir = paths::shell_escape_posix(repo_dir);
-        let safe_default = paths::shell_escape_posix(default_branch);
-        let safe_tracking = paths::shell_escape_posix(&format!("origin/{}", default_branch));
-        let safe_branch = paths::shell_escape_posix(branch_name);
+        let tracking = format!("origin/{default_branch}");
+        let branch_ref = format!("refs/heads/{branch_name}");
 
         // Create/update the feature branch ref without checking it out.
         // `git branch -f <branch> <start>` is a ref-only operation — it never
@@ -414,34 +384,35 @@ impl GitOpsHelper {
         // Prefer `origin/<default>` as the start point (latest upstream);
         // fall back to the local `<default>` when there's no remote-tracking
         // ref (offline, no remote, brand-new repo).
-        let from_origin = format!(
-            "git -C {} branch -f {} {}",
-            safe_dir, safe_branch, safe_tracking,
-        );
         if self
             .exec
-            .run_command(machine_str, &from_origin)
+            .run_program(
+                machine_str,
+                git_request(repo_dir, ["branch", "-f", branch_name, &tracking]),
+            )
             .await
             .is_ok()
         {
             return Ok(());
         }
 
-        let cmd = format!(
-            "git -C {} branch -f {} {}",
-            safe_dir, safe_branch, safe_default,
-        );
-        match self.exec.run_command(machine_str, &cmd).await {
+        match self
+            .exec
+            .run_program(
+                machine_str,
+                git_request(repo_dir, ["branch", "-f", branch_name, default_branch]),
+            )
+            .await
+        {
             Ok(_) => Ok(()),
             Err(create_err) => {
                 // Branch may already exist from a prior interrupted run.
                 // Verify the ref is reachable; if so, we can proceed.
-                let check = format!(
-                    "git -C {} rev-parse --verify refs/heads/{}",
-                    safe_dir, safe_branch,
-                );
                 self.exec
-                    .run_command(machine_str, &check)
+                    .run_program(
+                        machine_str,
+                        git_request(repo_dir, ["rev-parse", "--verify", &branch_ref]),
+                    )
                     .await
                     .map(|_| ())
                     // Surface the real git error from the *create* attempt (not
@@ -488,6 +459,8 @@ impl GitOpsHelper {
         let wt_dir = worktree_dir(repo_dir, subtask_id);
         let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
 
+        let _ = self.restore_artifact_scope(machine_id, &wt_dir).await;
+
         // 1. If a previous run registered this worktree with git,
         //    `git worktree remove --force` is the only reliable way
         //    to detach it. `rm -rf` alone leaves stale metadata
@@ -495,13 +468,9 @@ impl GitOpsHelper {
         //    "'<path>' is already used by worktree at '<other>'".
         let _ = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} worktree remove --force {}",
-                    paths::shell_escape_posix(repo_dir),
-                    paths::shell_escape_posix(&wt_dir)
-                ),
+                git_request(repo_dir, ["worktree", "remove", "--force", &wt_dir]),
             )
             .await;
 
@@ -549,37 +518,44 @@ impl GitOpsHelper {
         //    crashed runs.
         let _ = self
             .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} worktree prune",
-                    paths::shell_escape_posix(repo_dir)
-                ),
-            )
+            .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
             .await;
 
         // 5. Create the worktree. `--force` lets git overwrite any
         //    remaining state (e.g. a missing-but-registered dir) so
         //    this last step is the safety net.
-        let cmd = format!(
-            "git -C {} worktree add --force {} -b {} {}",
-            paths::shell_escape_posix(repo_dir),
-            paths::shell_escape_posix(&wt_dir),
-            paths::shell_escape_posix(&subtask_branch),
-            paths::shell_escape_posix(feature_branch)
-        );
-        match self.exec.run_command(machine_str, &cmd).await {
+        match self
+            .exec
+            .run_program(
+                machine_str,
+                git_request(
+                    repo_dir,
+                    [
+                        "worktree",
+                        "add",
+                        "--force",
+                        &wt_dir,
+                        "-b",
+                        &subtask_branch,
+                        feature_branch,
+                    ],
+                ),
+            )
+            .await
+        {
             Ok(_) => {}
             Err(_) => {
                 // Fallback: the branch already exists from a prior interrupted
                 // run, so `-b` refused. Check it out without `-b`.
-                let fallback_cmd = format!(
-                    "git -C {} worktree add --force {} {}",
-                    paths::shell_escape_posix(repo_dir),
-                    paths::shell_escape_posix(&wt_dir),
-                    paths::shell_escape_posix(&subtask_branch)
-                );
-                self.exec.run_command(machine_str, &fallback_cmd).await?;
+                self.exec
+                    .run_program(
+                        machine_str,
+                        git_request(
+                            repo_dir,
+                            ["worktree", "add", "--force", &wt_dir, &subtask_branch],
+                        ),
+                    )
+                    .await?;
 
                 // That branch still points at the *previous* attempt's tip —
                 // it carries commits the failed attempt made, and the caller
@@ -589,13 +565,9 @@ impl GitOpsHelper {
                 // must hand back a worktree at the feature branch, exactly as
                 // the `-b` path does.
                 self.exec
-                    .run_command(
+                    .run_program(
                         machine_str,
-                        &format!(
-                            "git -C {} reset --hard {}",
-                            paths::shell_escape_posix(&wt_dir),
-                            paths::shell_escape_posix(feature_branch)
-                        ),
+                        git_request(&wt_dir, ["reset", "--hard", feature_branch]),
                     )
                     .await?;
             }
@@ -611,17 +583,15 @@ impl GitOpsHelper {
         //    per subtask. Best-effort: a failed link here shouldn't block
         //    worktree provisioning — the step will simply see the missing
         //    dependency and the harness fails as before.
-        let _ = self
-            .exec
-            .run_command(
-                machine_str,
-                &link_dependency_caches_cmd(
-                    repo_dir,
-                    &wt_dir,
-                    &paths::feature_cache_dir(repo_dir, feature_branch),
-                ),
-            )
-            .await;
+        TrustedWorktreePort::materialize_dependency_cache(
+            self,
+            MaterializeDependencyCacheRequest {
+                target: self.trusted_target(machine_id, repo_dir)?,
+                worktree_dir: wt_dir.clone(),
+                feature_cache_dir: paths::feature_cache_dir(repo_dir, feature_branch),
+            },
+        )
+        .await?;
 
         Ok(wt_dir)
     }
@@ -636,10 +606,7 @@ impl GitOpsHelper {
     pub async fn head_sha(&self, machine_id: Option<&str>, dir: &str) -> Option<String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         self.exec
-            .run_command(
-                machine_str,
-                &format!("git -C {} rev-parse HEAD", paths::shell_escape_posix(dir)),
-            )
+            .run_program(machine_str, git_request(dir, ["rev-parse", "HEAD"]))
             .await
             .ok()
             .map(|s| s.trim().to_string())
@@ -683,14 +650,14 @@ impl GitOpsHelper {
             .await
             .map_err(|e| format!("provision_detached_worktree: {e}"))?;
 
-        let cmd = format!(
-            "git -C {} worktree add --detach --force {} {}",
-            paths::shell_escape_posix(repo_dir),
-            paths::shell_escape_posix(&wt_dir),
-            paths::shell_escape_posix(sha),
-        );
         self.exec
-            .run_command(machine_str, &cmd)
+            .run_program(
+                machine_str,
+                git_request(
+                    repo_dir,
+                    ["worktree", "add", "--detach", "--force", &wt_dir, sha],
+                ),
+            )
             .await
             .map_err(|e| {
                 format!(
@@ -699,13 +666,15 @@ impl GitOpsHelper {
             })?;
 
         if let Some(cache) = cache_dir {
-            let _ = self
-                .exec
-                .run_command(
-                    machine_str,
-                    &link_dependency_caches_cmd(repo_dir, &wt_dir, cache),
-                )
-                .await;
+            TrustedWorktreePort::materialize_dependency_cache(
+                self,
+                MaterializeDependencyCacheRequest {
+                    target: self.trusted_target(machine_id, repo_dir)?,
+                    worktree_dir: wt_dir.clone(),
+                    feature_cache_dir: cache.to_string(),
+                },
+            )
+            .await?;
         }
 
         Ok(wt_dir)
@@ -752,14 +721,20 @@ impl GitOpsHelper {
         wt_dir: &str,
     ) -> Result<(), String> {
         let _ = self
+            .restore_artifact_scope(
+                if machine_str == crate::domain::ids::LOCAL_MACHINE {
+                    None
+                } else {
+                    Some(machine_str)
+                },
+                wt_dir,
+            )
+            .await;
+        let _ = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} worktree remove --force {}",
-                    paths::shell_escape_posix(repo_dir),
-                    paths::shell_escape_posix(wt_dir)
-                ),
+                git_request(repo_dir, ["worktree", "remove", "--force", wt_dir]),
             )
             .await;
         let _ = self
@@ -786,13 +761,7 @@ impl GitOpsHelper {
             })?;
         let _ = self
             .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} worktree prune",
-                    paths::shell_escape_posix(repo_dir)
-                ),
-            )
+            .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
             .await;
         Ok(())
     }
@@ -821,6 +790,8 @@ impl GitOpsHelper {
         let wt_dir = worktree_dir(repo_dir, subtask_id);
         let subtask_branch = super::subtask_branch_name(feature_branch, subtask_id);
 
+        let _ = self.restore_artifact_scope(machine_id, &wt_dir).await;
+
         let _ = self
             .exec
             .run_command(
@@ -833,24 +804,14 @@ impl GitOpsHelper {
             .await;
         let _ = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} worktree remove --force {}",
-                    paths::shell_escape_posix(repo_dir),
-                    paths::shell_escape_posix(&wt_dir)
-                ),
+                git_request(repo_dir, ["worktree", "remove", "--force", &wt_dir]),
             )
             .await;
         let _ = self
             .exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "git -C {} worktree prune",
-                    paths::shell_escape_posix(repo_dir)
-                ),
-            )
+            .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
             .await;
         let _ = self
             .exec
@@ -861,13 +822,9 @@ impl GitOpsHelper {
             .await;
         let _ = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} branch -D {}",
-                    paths::shell_escape_posix(repo_dir),
-                    paths::shell_escape_posix(&subtask_branch)
-                ),
+                git_request(repo_dir, ["branch", "-D", &subtask_branch]),
             )
             .await;
         Ok(())
@@ -921,13 +878,9 @@ impl GitOpsHelper {
                         .await;
                     let _ = self
                         .exec
-                        .run_command(
+                        .run_program(
                             machine_str,
-                            &format!(
-                                "git -C {} worktree remove --force {}",
-                                safe_dir,
-                                paths::shell_escape_posix(&wt.path)
-                            ),
+                            git_request(repo_dir, ["worktree", "remove", "--force", &wt.path]),
                         )
                         .await;
                     let _ = self
@@ -943,8 +896,10 @@ impl GitOpsHelper {
 
         // 2. Prune orphaned worktree metadata so the refs are no longer
         //    considered "checked out" by the branch deletes below.
-        let prune_cmd = format!("git -C {} worktree prune", safe_dir);
-        let _ = self.exec.run_command(machine_str, &prune_cmd).await;
+        let _ = self
+            .exec
+            .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
+            .await;
 
         // 3. Delete all subtask branches for this feature (now that their
         //    worktrees are gone). Use `--format=%(refname:short)` so the
@@ -977,9 +932,8 @@ impl GitOpsHelper {
             .await;
 
         // 5. Delete the feature branch itself.
-        let delete_cmd = format!("git -C {} branch -D {}", safe_dir, safe_branch);
         self.exec
-            .run_command(machine_str, &delete_cmd)
+            .run_program(machine_str, git_request(repo_dir, ["branch", "-D", branch]))
             .await
             .map_err(|e| format!("Failed to delete branch '{}': {}", branch, e))?;
 
@@ -1004,11 +958,10 @@ impl GitOpsHelper {
             return true;
         };
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let safe_dir = paths::shell_escape_posix(target_dir);
         // git rev-parse HEAD gives the current tip; compare it to the stored baseline SHA.
         let Ok(current_sha) = self
             .exec
-            .run_command(machine_str, &format!("git -C {} rev-parse HEAD", safe_dir))
+            .run_program(machine_str, git_request(target_dir, ["rev-parse", "HEAD"]))
             .await
         else {
             // git failure → assume something happened, allow validate.
@@ -1036,14 +989,11 @@ impl GitOpsHelper {
         branch: &str,
     ) -> Option<String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let cmd = format!(
-            "git -C {} merge-base {} {}",
-            paths::shell_escape_posix(repo_dir),
-            paths::shell_escape_posix(default_branch),
-            paths::shell_escape_posix(branch),
-        );
         self.exec
-            .run_command(machine_str, &cmd)
+            .run_program(
+                machine_str,
+                git_request(repo_dir, ["merge-base", default_branch, branch]),
+            )
             .await
             .ok()
             .map(|s| s.trim().to_string())
@@ -1085,64 +1035,8 @@ fn branch_list_cmd(repo_dir: &str) -> String {
     )
 }
 
-/// Resolve a terminal worktree beneath a directory controlled by Demeteo, not
-/// by the interactive caller. A relative name may contain normal path
-/// components, but it may never select the repository root, an absolute path,
-/// or an ancestor of that directory.
-fn terminal_worktree_dir(
-    repo_dir: &str,
-    project_root: &str,
-    worktree_name: &str,
-) -> Result<String, String> {
-    let name = Path::new(worktree_name);
-    if worktree_name.trim().is_empty()
-        || name.is_absolute()
-        // A remote repository may use POSIX paths while the desktop host is
-        // Windows (or vice versa), so reject the other platform's absolute
-        // path forms instead of trusting this host's `Path` parser alone.
-        || worktree_name.contains('\\')
-        || worktree_name.contains(':')
-        || name.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir
-                    | Component::RootDir
-                    | Component::Prefix(_)
-                    | Component::CurDir
-            )
-        })
-    {
-        return Err("create_terminal_worktree: worktree name must be a non-empty relative path without traversal".to_string());
-    }
-
-    let worktree_area = terminal_worktree_area(repo_dir, project_root)?;
-    let destination: PathBuf = worktree_area.join(name);
-    Ok(destination.to_string_lossy().into_owned())
-}
-
-/// `<project_root>/terminal-worktrees/<repo_name>` — a sibling of the project's
-/// `repos/`, never a child of it.
-///
-/// These worktrees hold the user's uncommitted interactive work, and
-/// `application::bootstrap` prunes `repos/` down to the configured repository
-/// names on every re-bootstrap. Inside `repos/` the area is destroyed, and
-/// destroyed *asymmetrically*: the local prune walks `read_dir`, which yields
-/// dot-entries, while the remote prune globs `"$dir"/*`, which does not match a
-/// leading dot — so a hidden sibling of the checkout survived remotely and
-/// vanished locally. Keeping the area out of `repos/` is what makes the two
-/// transports agree.
-fn terminal_worktree_area(repo_dir: &str, project_root: &str) -> Result<PathBuf, String> {
-    let repo_name = Path::new(repo_dir).file_name().ok_or_else(|| {
-        "create_terminal_worktree: repository path has no directory name".to_string()
-    })?;
-    Ok(Path::new(project_root)
-        .join(paths::TERMINAL_WORKTREES_SUBDIR)
-        .join(repo_name))
-}
-
 /// `<repos>/.<repo_name>.demeteo-terminal-worktrees` — where terminal
-/// worktrees lived before [`terminal_worktree_area`] moved them out of
-/// `repos/`. Retained only so
+/// worktrees lived before they moved out of `repos/`. Retained only so
 /// [`GitOpsHelper::cleanup_legacy_terminal_worktrees`] can find and retire
 /// them; nothing creates this path any more.
 fn legacy_terminal_worktree_area(repo_dir: &str) -> Option<PathBuf> {
