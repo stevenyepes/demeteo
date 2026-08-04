@@ -38,6 +38,8 @@
 
 use std::path::{Path, PathBuf};
 
+use super::win_path;
+
 /// The interpreter pair one Git for Windows installation provides.
 ///
 /// `sh` degrades to `bash` when the installation carries no `sh.exe`: the
@@ -354,15 +356,6 @@ pub fn rejection(bash: &Path) -> Option<Unusable> {
 pub fn probe_says_bash(stdout: &str) -> bool {
     let answer = stdout.trim();
     !answer.is_empty() && answer != "none"
-}
-
-/// Parse a Windows path from any of the three sources, all of which spell it
-/// differently. Backslashes become forward slashes because Windows accepts
-/// either everywhere and `\` is not a legal filename character, so the rewrite
-/// is lossless — and it leaves one [`Path`] implementation that behaves the
-/// same on the Linux host these functions are tested on.
-fn win_path(raw: &str) -> PathBuf {
-    PathBuf::from(raw.trim().trim_matches('"').replace('\\', "/"))
 }
 
 fn lower_name(path: &Path) -> Option<String> {

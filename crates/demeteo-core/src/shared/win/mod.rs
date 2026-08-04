@@ -8,7 +8,20 @@
 //! an extra edge here, because the usual escape (run it locally and see) is
 //! unavailable.
 
+pub mod exe;
 pub mod posix_shell;
 
 #[cfg(windows)]
 pub mod discovery;
+
+use std::path::PathBuf;
+
+/// Parse a Windows path from any of the sources that hand one over, all of
+/// which spell it differently. Backslashes become forward slashes because
+/// Windows accepts either everywhere and `\` is not a legal filename
+/// character, so the rewrite is lossless — and it leaves one [`std::path::Path`]
+/// implementation that behaves the same on the Linux host these functions are
+/// tested on.
+fn win_path(raw: &str) -> PathBuf {
+    PathBuf::from(raw.trim().trim_matches('"').replace('\\', "/"))
+}

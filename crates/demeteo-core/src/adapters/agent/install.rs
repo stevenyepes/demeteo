@@ -1,72 +1,37 @@
-use std::io::Read;
+use crate::ports::execution::{ExecutionPort, ShellOptions};
 
-use crate::ports::execution::ExecutionPort;
-
+/// Run an agent's official installer on the machine that agent will run on.
+///
+/// One call for every transport, deliberately. The installer is a
+/// user-authored shell one-liner (`npm i -g …`, `curl … | bash`), so it takes
+/// the user-authored plane's `run_command_with` and whatever shell that
+/// transport resolved. The local branch this replaces spawned `sh` by name,
+/// which on Windows names nothing at all — `sh.exe` is inside the Git
+/// installation and not on `PATH` — so local installation there could not run,
+/// and the plane split (`docs/WINDOWS_PARITY.md`) is what removes the question.
+///
+/// `login_interactive` is the same shell mode `availability()` probes under and
+/// the same one the agent is later spawned from. Anything weaker resolves a
+/// different `PATH`: an installer that lands its binary through `nvm`/`mise`/
+/// `asdf` writes where only that shell looks, so the install reports success
+/// and the probe immediately afterwards reports the agent missing.
+///
+/// The error carries the installer's own output verbatim. A human pressed a
+/// button and is waiting on this one, and `start_with_install` puts the string
+/// in front of them — a summary here is a support request later.
 pub async fn run_official_install(
     exec: &dyn ExecutionPort,
     machine_id: &str,
     install_command: &str,
 ) -> Result<(), String> {
-    if machine_id == "local" || machine_id.is_empty() {
-        run_local(install_command)
-    } else {
-        run_remote(exec, machine_id, install_command).await
-    }
-}
-
-fn run_local(install_command: &str) -> Result<(), String> {
-    let mut command = std::process::Command::new("sh");
-    command
-        .arg("-c")
-        .arg(install_command)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    crate::shared::proc::sanitize_child_env(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Failed to spawn install command: {}", e))?;
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-    let mut out = String::new();
-    let mut err = String::new();
-    let _ = stdout.read_to_string(&mut out);
-    let _ = stderr.read_to_string(&mut err);
-    let status = child
-        .wait()
-        .map_err(|e| format!("Install wait failed: {}", e))?;
-    if !status.success() {
-        return Err(format!(
-            "Install script failed (exit {:?}): {}{}",
-            status.code(),
-            err.trim(),
-            if !out.is_empty() {
-                format!("\nstdout: {}", out.trim())
-            } else {
-                String::new()
-            }
-        ));
-    }
-    Ok(())
-}
-
-async fn run_remote(
-    exec: &dyn ExecutionPort,
-    machine_id: &str,
-    install_command: &str,
-) -> Result<(), String> {
-    // Run the install command under an interactive login shell so the target
-    // user's package managers (`npm` via nvm, `mise`, `asdf`, Homebrew) are on
-    // `PATH` — the same shell mode the availability probe and agent spawn use.
-    // A bare non-login shell here would fail to resolve an `npm i -g …` /
-    // `mise use …` installer even though the tool is present for the user (D2).
     exec.run_command_with(
         machine_id,
         install_command,
-        crate::ports::execution::ShellOptions::login_interactive(),
+        ShellOptions::login_interactive(),
     )
-    .await?;
-    Ok(())
+    .await
+    .map(|_| ())
+    .map_err(|e| format!("Install script failed: {}\ncommand: {}", e, install_command))
 }
 
 #[cfg(test)]

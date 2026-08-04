@@ -8,7 +8,7 @@ use async_trait::async_trait;
 
 use crate::ports::execution::SftpEntry;
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, ProgramRequest, ShellOptions};
-use crate::shared::proc::sanitize_child_env;
+use crate::shared::proc::{harden_child_spawn, sanitize_child_env};
 use crate::shared::shell;
 
 #[cfg(windows)]
@@ -19,8 +19,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 #[cfg(windows)]
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
 };
 
 pub struct LocalSubprocessAdapter;
@@ -42,25 +41,21 @@ struct LocalChildProcess {
     stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
     stdout: Arc<Mutex<Option<BufReader<std::process::ChildStdout>>>>,
     _stderr: Arc<Mutex<Option<BufReader<std::process::ChildStderr>>>>,
-    #[cfg(windows)]
-    job: WindowsJob,
+    guard: ProcessGuard,
 }
 
 impl LocalChildProcess {
-    fn new(mut child: std::process::Child) -> Result<Self, String> {
-        #[cfg(windows)]
-        let job = WindowsJob::attach(child.as_raw_handle() as HANDLE)?;
+    fn new(mut child: std::process::Child, guard: ProcessGuard) -> Self {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().map(BufReader::new);
         let stderr = child.stderr.take().map(BufReader::new);
-        Ok(Self {
+        Self {
             child: Arc::new(Mutex::new(child)),
             stdin: Arc::new(Mutex::new(stdin)),
             stdout: Arc::new(Mutex::new(stdout)),
             _stderr: Arc::new(Mutex::new(stderr)),
-            #[cfg(windows)]
-            job,
-        })
+            guard,
+        }
     }
 }
 
@@ -85,8 +80,7 @@ impl InteractiveHandle for LocalChildProcess {
     }
 
     fn kill(&self) -> Result<(), String> {
-        #[cfg(windows)]
-        self.job.terminate()?;
+        self.guard.terminate();
         let mut child = self.child.lock().unwrap();
         match child.kill() {
             Ok(()) => Ok(()),
@@ -105,17 +99,133 @@ impl InteractiveHandle for LocalChildProcess {
     }
 }
 
-/// Owns a Windows Job Object configured to terminate every assigned process
-/// when the owner is dropped. This is the Windows equivalent of the Unix
-/// session/process-group guard below: a timeout or cancellation must not
-/// orphan grandchildren such as a compiler started by a package manager.
+/// What the job limits, and the one thing it deliberately permits.
+///
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`0x2000`) is the reaping: every
+/// process still in the job dies when the last handle to it closes, which is
+/// what takes a compiler down with the package manager that started it.
+///
+/// `JOB_OBJECT_LIMIT_BREAKAWAY_OK` (`0x800`) is for Hermes, which launches its
+/// gateway with `CREATE_BREAKAWAY_FROM_JOB`; inside a job without this bit that
+/// call fails `ERROR_ACCESS_DENIED` and the gateway never starts. Its
+/// neighbour `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK` (`0x1000`) grants the same
+/// exit without the asking — every ordinary agent child would leave the tree
+/// whether it meant to or not, and the reaping above would be reaping an empty
+/// job. Do not reach for it because something failed to break away: a process
+/// that has to say so is the entire distinction.
+#[cfg_attr(not(windows), allow(dead_code))]
+const JOB_LIMIT_FLAGS: u32 = 0x2000 | 0x0800;
+
+#[cfg(windows)]
+const _: () = {
+    use windows_sys::Win32::System::JobObjects::{
+        JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+    };
+
+    assert!(JOB_LIMIT_FLAGS == JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK);
+    assert!(JOB_LIMIT_FLAGS & JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK == 0);
+};
+
+/// The Windows Job Object a spawned tree is confined to — and nothing at all
+/// anywhere else, where the process group [`KillGroupOnDrop`] signals is the
+/// same guarantee by other means. Callers hold one either way, so no spawn
+/// site branches on the platform.
+///
+/// Constructed **before** the spawn it guards. Job membership is forward-only:
+/// a grandchild started before the child is assigned escapes for good, and
+/// there is no re-parenting it afterwards — so the two configuration syscalls
+/// that used to sit inside that window (`CreateJobObjectW`,
+/// `SetInformationJobObject`) are lifted out of it, leaving only
+/// `AssignProcessToJobObject`.
+///
+/// **The window is narrowed, not closed, and nothing here should be read as
+/// claiming otherwise.** Closing it means spawning `CREATE_SUSPENDED` and
+/// resuming only once the assignment has landed, and `ResumeThread` needs the
+/// primary thread's handle — which `std::process` closes on the way out and
+/// never exposes. Reaching it costs either an open-coded `CreateProcessW`,
+/// re-implementing std's stdio and handle-inheritance plumbing along with it,
+/// or a crate; the crate is an AGENTS.md §6 gate and has not been asked for.
+///
+/// Every operation is best effort. A job that could not be created, could not
+/// be configured, or could not adopt its child degrades to `kill_on_drop`'s
+/// direct-child kill — the guarantee this adapter had before any job existed —
+/// and says so at debug level. Returning `Err` instead, as this once did, makes
+/// a teardown guarantee a precondition for running anything at all, and
+/// `AssignProcessToJobObject` answers `ERROR_ACCESS_DENIED` for a process that
+/// has already exited: a command fast enough to finish first would have failed
+/// *because* it succeeded. Cargo's `util/job.rs` degrades for the same reason.
+#[derive(Default)]
+struct ProcessGuard {
+    #[cfg(windows)]
+    job: Option<WindowsJob>,
+}
+
+impl ProcessGuard {
+    /// Create the job the next spawn is to be assigned to.
+    fn armed() -> Self {
+        Self {
+            #[cfg(windows)]
+            job: WindowsJob::create(),
+        }
+    }
+
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn adopt(&self, child: &tokio::process::Child) {
+        // `tokio::process::Child` exposes its handle as an `Option` rather
+        // than implementing `AsRawHandle`: the handle is gone once the child
+        // has been reaped, and nothing needs confining after that.
+        #[cfg(windows)]
+        self.assign(child.raw_handle().map(|handle| handle as HANDLE));
+    }
+
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn adopt_sync(&self, child: &std::process::Child) {
+        #[cfg(windows)]
+        self.assign(Some(child.as_raw_handle() as HANDLE));
+    }
+
+    #[cfg(windows)]
+    fn assign(&self, process: Option<HANDLE>) {
+        let Some(job) = self.job.as_ref() else {
+            return;
+        };
+        match process {
+            Some(process) => job.adopt(process),
+            None => tracing::debug!("child exited before it could be confined to a job"),
+        }
+    }
+
+    /// Kill the tree now. The caller kills the direct child regardless, so a
+    /// failure here costs the grandchildren and nothing else.
+    fn terminate(&self) {
+        #[cfg(windows)]
+        if let Some(job) = self.job.as_ref() {
+            job.terminate();
+        }
+    }
+
+    /// The command finished on its own, so what is still running is what it
+    /// deliberately left running: clearing the limits lets that outlive the
+    /// handle. [`KillGroupOnDrop::disarm`] concedes the same thing at the same
+    /// point on Unix, and a command whose background daemon survives on one
+    /// platform and not the other is a parity break.
+    fn disarm(&self) {
+        #[cfg(windows)]
+        if let Some(job) = self.job.as_ref() {
+            job.disarm();
+        }
+    }
+}
+
 #[cfg(windows)]
 struct WindowsJob(HANDLE);
 
 // SAFETY: a Win32 `HANDLE` is a process-wide kernel-object reference, not a
 // pointer into this process's address space; every operation performed on it
-// here (`SetInformationJobObject`, `TerminateJobObject`, `CloseHandle`) is
-// documented as thread-safe. The wrapper owns it exclusively and closes it
+// here (`SetInformationJobObject`, `AssignProcessToJobObject`,
+// `TerminateJobObject`, `CloseHandle`) is documented as thread-safe. The
+// wrapper owns it exclusively and closes it
 // exactly once, in `Drop`. Needed because `LocalChildProcess` is handed out as
 // a `Box<dyn InteractiveHandle>`, which the port requires to be `Send + Sync`.
 #[cfg(windows)]
@@ -125,98 +235,84 @@ unsafe impl Sync for WindowsJob {}
 
 #[cfg(windows)]
 impl WindowsJob {
-    fn attach(process: HANDLE) -> Result<Self, String> {
-        // SAFETY: null name requests an unnamed Job Object owned by this
-        // wrapper. The returned handle is closed exactly once in Drop.
+    fn create() -> Option<Self> {
+        // SAFETY: a null name asks for an unnamed job nothing else can open,
+        // and a null attribute pointer for the default security descriptor.
+        // The returned handle is owned by the value below and closed exactly
+        // once, in Drop.
         let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if handle.is_null() {
-            return Err(format!(
-                "failed to create Windows Job Object: {}",
-                std::io::Error::last_os_error()
-            ));
+            tracing::debug!(
+                error = %std::io::Error::last_os_error(),
+                "no Windows Job Object for this spawn"
+            );
+            return None;
         }
+        let job = Self(handle);
+        job.set_limits(JOB_LIMIT_FLAGS).then_some(job)
+    }
+
+    fn set_limits(&self, flags: u32) -> bool {
+        // SAFETY: every field of this structure is an integer or a pointer,
+        // for all of which all-zero is a valid value — it is the documented
+        // way to build one, since a set bit in `LimitFlags` is what gives any
+        // other field meaning.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        // SAFETY: limits points to a fully initialized value for the exact
-        // information class requested, and handle is valid above.
+        limits.BasicLimitInformation.LimitFlags = flags;
+        // SAFETY: `limits` is a fully initialised value of exactly the type
+        // `JobObjectExtendedLimitInformation` names, the length passed is that
+        // type's own size, and `self.0` is live until Drop.
         let configured = unsafe {
-            SetInformationJobObject(
-                handle,
-                JobObjectExtendedLimitInformation,
-                &limits as *const _ as *const _,
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-        };
-        if configured == 0 {
-            // SAFETY: handle was created by CreateJobObjectW and has not moved.
-            unsafe { CloseHandle(handle) };
-            return Err(format!(
-                "failed to configure Windows Job Object: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        // SAFETY: process is the raw handle of the newly spawned child and
-        // handle remains owned by this wrapper for the child's lifetime.
-        if unsafe { AssignProcessToJobObject(handle, process) } == 0 {
-            // SAFETY: handle was created above and is still owned here.
-            unsafe { CloseHandle(handle) };
-            return Err(format!(
-                "failed to assign process to Windows Job Object: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        Ok(Self(handle))
-    }
-
-    fn terminate(&self) -> Result<(), String> {
-        // SAFETY: self.0 is a live Job Object handle until Drop.
-        if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1) } == 0 {
-            return Err(format!(
-                "failed to terminate Windows Job Object: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        Ok(())
-    }
-
-    fn disarm(&self) -> Result<(), String> {
-        let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        // SAFETY: limits is the exact structure required by this information
-        // class and self.0 is valid until Drop.
-        if unsafe {
             SetInformationJobObject(
                 self.0,
                 JobObjectExtendedLimitInformation,
                 &limits as *const _ as *const _,
                 std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             )
-        } == 0
-        {
-            return Err(format!(
-                "failed to disarm Windows Job Object: {}",
-                std::io::Error::last_os_error()
-            ));
+        };
+        if configured == 0 {
+            tracing::debug!(
+                error = %std::io::Error::last_os_error(),
+                flags,
+                "Windows Job Object limits not applied"
+            );
         }
-        Ok(())
+        configured != 0
     }
-}
 
-/// `tokio::process::Child` exposes its handle as an `Option` rather than
-/// implementing `AsRawHandle`: the handle is gone once the child has been
-/// reaped. Nothing can be confined after that point, and nothing needs to be.
-#[cfg(windows)]
-fn tokio_child_handle(child: &tokio::process::Child) -> Result<HANDLE, String> {
-    child
-        .raw_handle()
-        .map(|handle| handle as HANDLE)
-        .ok_or_else(|| "the child exited before it could be confined to a job".to_string())
+    fn adopt(&self, process: HANDLE) {
+        // SAFETY: `process` is the raw handle of a child this adapter spawned
+        // and still owns, so it cannot be closed or recycled during the call;
+        // `self.0` is live until Drop.
+        if unsafe { AssignProcessToJobObject(self.0, process) } == 0 {
+            tracing::debug!(
+                error = %std::io::Error::last_os_error(),
+                "child not confined to a job; its own children will outlive a tree kill"
+            );
+        }
+    }
+
+    fn terminate(&self) {
+        // SAFETY: self.0 is a live Job Object handle until Drop.
+        if unsafe { TerminateJobObject(self.0, 1) } == 0 {
+            tracing::debug!(
+                error = %std::io::Error::last_os_error(),
+                "Windows Job Object not terminated"
+            );
+        }
+    }
+
+    fn disarm(&self) {
+        self.set_limits(0);
+    }
 }
 
 #[cfg(windows)]
 impl Drop for WindowsJob {
     fn drop(&mut self) {
-        // SAFETY: self.0 is exclusively owned by this wrapper. KILL_ON_JOB_CLOSE
-        // ensures all remaining descendants terminate before the handle closes.
+        // SAFETY: self.0 is exclusively owned by this wrapper and closed here
+        // exactly once. Unless `disarm` ran first, KILL_ON_JOB_CLOSE takes
+        // every process still inside with it.
         unsafe { CloseHandle(self.0) };
     }
 }
@@ -318,6 +414,68 @@ pub(crate) fn no_posix_shell_error(
     )
 }
 
+/// Marks the spawn failure that is a statement about **how the command is
+/// configured**, not about anything it did: it never started, and starting it
+/// again changes nothing.
+///
+/// Windows raises it for the shape Demeteo hits by design. Since
+/// CVE-2024-24576 `std` refuses to spawn a `.bat`/`.cmd` target carrying an
+/// argument it cannot escape safely for `cmd.exe`, and every agent invocation
+/// passes a prompt — arbitrary feature and ticket prose — as an argument to a
+/// runtime that npm installed as exactly such a shim. Unix raises the same
+/// `ErrorKind` for an interior NUL in the program or an argument, which is the
+/// same statement about the caller, so the classification carries no `#[cfg]`.
+///
+/// It rides [`TRANSPORT_ERROR_PREFIX`](crate::ports::execution::TRANSPORT_ERROR_PREFIX)
+/// because that is what
+/// [`classify_exec_failure`](crate::domain::harness_failure::classify_exec_failure)
+/// reads, and it must not reach the rework loop: an agent handed this is being
+/// asked to repair source code that was never run, on every attempt, forever.
+/// The same reasoning as [`NO_POSIX_SHELL_ERROR`], and the same shape — a
+/// marker at a fixed position that a matcher can find.
+pub(crate) const UNSPAWNABLE_ARGUMENTS_ERROR: &str =
+    "the arguments cannot be passed to this program: ";
+
+/// Render a spawn failure as that configuration error, or `None` when it is an
+/// ordinary one the caller words itself.
+///
+/// Pure over the error kind and `cfg`-free, so the message a Windows user
+/// meets — and the side of the triage it lands on — is decided and tested on
+/// the host that has no Windows.
+fn unspawnable_arguments(executable: &str, error: &std::io::Error) -> Option<String> {
+    if error.kind() != std::io::ErrorKind::InvalidInput {
+        return None;
+    }
+    Some(format!(
+        "{}{}'{}' ({}). Nothing ran, and no source change can affect it. The cause on Windows \
+         is a program that resolves to a `.bat` or `.cmd` shim being handed an argument the \
+         interpreter cannot be made to quote safely (CVE-2024-24576): point the command at the \
+         `.exe` behind the shim, or keep the offending text out of the argument list.",
+        crate::ports::execution::TRANSPORT_ERROR_PREFIX,
+        UNSPAWNABLE_ARGUMENTS_ERROR,
+        executable,
+        error,
+    ))
+}
+
+/// The file a program name names.
+///
+/// Everywhere but Windows that is the name itself, resolved by `execvp`. There
+/// it is the `PATHEXT` search [`crate::shared::win::exe`] performs and Rust's
+/// `Command` does not, which is what makes `run_program("npm", …)` find the
+/// `.cmd` shim npm actually installs. Failing to resolve falls through to the
+/// bare name, so an unknown program still fails as `CreateProcess`'s own
+/// missing-file error rather than as a Demeteo one.
+fn program_path(name: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(resolved) = crate::shared::win::exe::resolve_on_path(name) {
+            return resolved;
+        }
+    }
+    PathBuf::from(name)
+}
+
 /// Apply the non-argument half of `opts` to a spawned child.
 fn configure_child(command: &mut Command, opts: &ShellOptions) {
     if let Some(cwd) = &opts.cwd {
@@ -333,6 +491,7 @@ fn configure_child(command: &mut Command, opts: &ShellOptions) {
         crate::shared::proc::detach_from_controlling_tty(command);
     }
     sanitize_child_env(command);
+    harden_child_spawn(command);
 }
 
 /// Assemble the D3 result shape from a finished child: stdout on success,
@@ -361,23 +520,25 @@ fn command_result(
 /// Execute an argv request directly so owned operations never depend on shell quoting.
 async fn local_run_program(request: ProgramRequest) -> Result<String, String> {
     use tokio::io::AsyncReadExt;
-    let mut command = tokio::process::Command::new(&request.executable);
+    let mut command = tokio::process::Command::new(program_path(&request.executable));
     command.args(&request.args);
     if let Some(cwd) = &request.cwd {
         command.current_dir(cwd);
     }
     command.envs(&request.env);
     sanitize_child_env(command.as_std_mut());
+    harden_child_spawn(command.as_std_mut());
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Failed to execute '{}': {}", request.executable, e))?;
-    #[cfg(windows)]
-    let _job = WindowsJob::attach(tokio_child_handle(&child)?)?;
+    let guard = ProcessGuard::armed();
+    let mut child = command.spawn().map_err(|e| {
+        unspawnable_arguments(&request.executable, &e)
+            .unwrap_or_else(|| format!("Failed to execute '{}': {}", request.executable, e))
+    })?;
+    guard.adopt(&child);
     let mut stdout = child
         .stdout
         .take()
@@ -406,8 +567,7 @@ async fn local_run_program(request: ProgramRequest) -> Result<String, String> {
         })?,
         None => run.await,
     };
-    #[cfg(windows)]
-    _job.disarm()?;
+    guard.disarm();
     let status = status.map_err(|e| format!("Failed to await program: {}", e))?;
     command_result(status.code(), status.success(), &out, &err)
 }
@@ -473,7 +633,7 @@ async fn local_run_command_async(cmd: &str, opts: &ShellOptions) -> Result<Strin
     use tokio::io::AsyncReadExt;
 
     let (program, args) = shell_invocation(cmd, opts)?;
-    let mut command = tokio::process::Command::new(program);
+    let mut command = tokio::process::Command::new(&program);
     command.args(&args);
     configure_child(command.as_std_mut(), opts);
     command
@@ -483,11 +643,12 @@ async fn local_run_command_async(cmd: &str, opts: &ShellOptions) -> Result<Strin
         // The floor when the group kill is disarmed (non-`setsid` children).
         .kill_on_drop(true);
 
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
-    #[cfg(windows)]
-    let _job = WindowsJob::attach(tokio_child_handle(&child)?)?;
+    let job = ProcessGuard::armed();
+    let mut child = command.spawn().map_err(|e| {
+        unspawnable_arguments(&program.to_string_lossy(), &e)
+            .unwrap_or_else(|| format!("Failed to execute command: {}", e))
+    })?;
+    job.adopt(&child);
     let mut guard = KillGroupOnDrop {
         pid: child.id(),
         own_session: opts.interactive,
@@ -524,25 +685,32 @@ async fn local_run_command_async(cmd: &str, opts: &ShellOptions) -> Result<Strin
     };
 
     guard.disarm();
-    #[cfg(windows)]
-    _job.disarm()?;
+    job.disarm();
     let status = status.map_err(|e| format!("Failed to await command: {}", e))?;
     command_result(status.code(), status.success(), &stdout, &stderr)
 }
 
 /// Blocking structured-program helper for a few short adapter-owned setup
 /// operations. User-authored scripts always go through [`local_run_program`].
+///
+/// The one spawn here that takes no [`ProcessGuard`]. `Command::output` never
+/// yields a handle to confine, and the call it would confine cannot be
+/// abandoned — there is no deadline and no cancellation point — so the job
+/// would only ever fire on an unwind, where it would kill whatever `git` had
+/// legitimately left running.
 fn local_run_program_blocking(request: ProgramRequest) -> Result<String, String> {
-    let mut command = Command::new(&request.executable);
+    let mut command = Command::new(program_path(&request.executable));
     command.args(&request.args);
     if let Some(cwd) = &request.cwd {
         command.current_dir(cwd);
     }
     command.envs(&request.env);
     sanitize_child_env(&mut command);
-    let output = command
-        .output()
-        .map_err(|e| format!("Failed to execute '{}': {}", request.executable, e))?;
+    harden_child_spawn(&mut command);
+    let output = command.output().map_err(|e| {
+        unspawnable_arguments(&request.executable, &e)
+            .unwrap_or_else(|| format!("Failed to execute '{}': {}", request.executable, e))
+    })?;
     command_result(
         output.status.code(),
         output.status.success(),
@@ -910,7 +1078,7 @@ impl ExecutionPort for LocalSubprocessAdapter {
         cwd: &str,
         env: &HashMap<String, String>,
     ) -> Result<Box<dyn InteractiveHandle>, String> {
-        let mut cmd = Command::new(binary);
+        let mut cmd = Command::new(program_path(binary));
         cmd.args(args);
         cmd.current_dir(cwd);
         cmd.stdin(Stdio::piped());
@@ -920,10 +1088,14 @@ impl ExecutionPort for LocalSubprocessAdapter {
             cmd.env(k, v);
         }
         sanitize_child_env(&mut cmd);
-        let child = cmd
-            .spawn()
-            .map_err(|e| format!("failed to spawn '{}': {}", binary, e))?;
-        Ok(Box::new(LocalChildProcess::new(child)?))
+        harden_child_spawn(&mut cmd);
+        let guard = ProcessGuard::armed();
+        let child = cmd.spawn().map_err(|e| {
+            unspawnable_arguments(binary, &e)
+                .unwrap_or_else(|| format!("failed to spawn '{}': {}", binary, e))
+        })?;
+        guard.adopt_sync(&child);
+        Ok(Box::new(LocalChildProcess::new(child, guard)))
     }
 }
 

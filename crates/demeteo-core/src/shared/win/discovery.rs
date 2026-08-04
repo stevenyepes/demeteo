@@ -12,7 +12,9 @@ use windows_sys::Win32::System::Registry::{
     REG_VALUE_TYPE,
 };
 
+use super::exe;
 use super::posix_shell::{ShellHost, ShellSearch};
+use crate::shared::proc::harden_child_spawn;
 
 const GIT_KEY: &str = r"SOFTWARE\GitForWindows";
 const INSTALL_PATH: &str = "InstallPath";
@@ -37,11 +39,12 @@ impl ShellHost for WindowsHost {
     }
 
     fn bash_version(&self, bash: &Path) -> Result<String, String> {
-        let output = Command::new(bash)
+        let mut command = Command::new(bash);
+        command
             .args(["-c", "echo ${BASH_VERSION:-none}"])
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| e.to_string())?;
+            .stdin(Stdio::null());
+        harden_child_spawn(&mut command);
+        let output = command.output().map_err(|e| e.to_string())?;
         if !output.status.success() {
             return Err(format!("exited with {:?}", output.status.code()));
         }
@@ -146,11 +149,10 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 fn git_exec_path() -> Option<String> {
-    let output = Command::new("git")
-        .arg("--exec-path")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+    let mut command = Command::new(git_exe_on_path().unwrap_or_else(|| "git".to_string()));
+    command.arg("--exec-path").stdin(Stdio::null());
+    harden_child_spawn(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -159,9 +161,5 @@ fn git_exec_path() -> Option<String> {
 }
 
 fn git_exe_on_path() -> Option<String> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join("git.exe"))
-        .find(|candidate| candidate.is_file())
-        .map(|candidate| candidate.to_string_lossy().into_owned())
+    exe::resolve_on_path("git").map(|path| path.to_string_lossy().into_owned())
 }

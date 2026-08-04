@@ -9,6 +9,7 @@
 //! process can tell you whether it died.
 
 use super::*;
+use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
 use crate::ports::execution::{ProgramRequest, TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
 use crate::shared::win::posix_shell::ShellMissing;
 use std::time::{Duration, Instant};
@@ -424,6 +425,167 @@ fn an_unresolvable_shell_reads_as_a_transport_failure_never_as_an_exit_code() {
     assert!(
         err.contains("no Git for Windows"),
         "which of the several failures happened must survive: {err}"
+    );
+}
+
+// ── what the spawn is confined to, and what it refuses to start ─────────────
+//
+// The job itself is a syscall's worth of `cfg(windows)` and only a Windows
+// machine can watch it reap anything. What it *decides* — which limits, and
+// which failure is a verdict — is reachable from the Linux host, which is the
+// only place anybody sees it before CI.
+
+#[test]
+fn the_job_reaps_its_tree_but_lets_a_process_that_asks_break_away() {
+    const KILL_ON_JOB_CLOSE: u32 = 0x2000;
+    const BREAKAWAY_OK: u32 = 0x800;
+    const SILENT_BREAKAWAY_OK: u32 = 0x1000;
+
+    assert_eq!(JOB_LIMIT_FLAGS & KILL_ON_JOB_CLOSE, KILL_ON_JOB_CLOSE);
+    assert_eq!(JOB_LIMIT_FLAGS & BREAKAWAY_OK, BREAKAWAY_OK);
+    assert_eq!(
+        JOB_LIMIT_FLAGS & SILENT_BREAKAWAY_OK,
+        0,
+        "silent breakaway would let every agent child leave the tree unasked — see the constant"
+    );
+}
+
+#[test]
+fn an_ordinary_spawn_failure_is_left_to_read_as_it_always_did() {
+    let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+    assert!(unspawnable_arguments("npm", &missing).is_none());
+}
+
+#[test]
+fn an_argument_no_spawn_can_carry_is_a_configuration_error_not_a_verdict() {
+    let refused = std::io::Error::new(std::io::ErrorKind::InvalidInput, "cannot be escaped");
+    let err = unspawnable_arguments("opencode", &refused).expect("InvalidInput is that error");
+
+    assert_eq!(
+        classify_exec_failure(&err),
+        HarnessExecFailure::Transport,
+        "anything else feeds the rework loop a failure no ticket can close: {err}"
+    );
+    assert!(
+        err[TRANSPORT_ERROR_PREFIX.len()..].starts_with(UNSPAWNABLE_ARGUMENTS_ERROR),
+        "a matcher reads this at a fixed position, as it does the missing-shell error: {err}"
+    );
+    assert!(err.contains("opencode"), "got: {err}");
+}
+
+#[tokio::test]
+async fn a_program_request_no_spawn_can_carry_never_reaches_the_retry_loop() {
+    // The same classification, through the adapter that has to produce it. A
+    // NUL is what makes `std` refuse on this host; on Windows it is a prompt
+    // heading for a `.cmd` shim. Both arrive as `InvalidInput` from `spawn`,
+    // before the program is so much as looked for.
+    let err = LocalSubprocessAdapter::new()
+        .run_program(
+            "local",
+            ProgramRequest {
+                executable: "demeteo-never-runs".to_string(),
+                args: vec!["a\0b".to_string()],
+                ..ProgramRequest::default()
+            },
+        )
+        .await
+        .expect_err("an argument that cannot be passed cannot spawn");
+
+    assert_eq!(classify_exec_failure(&err), HarnessExecFailure::Transport);
+    assert!(err.contains("demeteo-never-runs"), "got: {err}");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn every_program_spawn_is_hardened_even_against_its_own_caller() {
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("MSYSTEM".to_string(), "MINGW64".to_string());
+
+    let out = LocalSubprocessAdapter::new()
+        .run_program(
+            "local",
+            ProgramRequest {
+                executable: "pwsh".to_string(),
+                args: vec![
+                    "-NoProfile".to_string(),
+                    "-NonInteractive".to_string(),
+                    "-Command".to_string(),
+                    "[Console]::Write(\"$env:NoDefaultCurrentDirectoryInExePath|$env:MSYSTEM\")"
+                        .to_string(),
+                ],
+                env,
+                timeout: Some(Duration::from_secs(30)),
+                ..ProgramRequest::default()
+            },
+        )
+        .await
+        .expect("the probe runs");
+
+    assert_eq!(
+        out, "1|",
+        "a child of a Git Bash ancestor must not carry MSYSTEM into git, and must not search \
+         its working directory for the program it was asked for"
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_grandchild_is_reaped_when_the_deadline_takes_the_tree() {
+    // Why the job exists. Windows has no process group to signal, so killing
+    // the direct child leaves its own children running — an `npm test`
+    // abandoned at its ceiling would leave the compiler it started writing
+    // into a worktree that is about to be deleted.
+    let dir = std::env::temp_dir().join(format!("demeteo-jobtest-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let started = dir.join("grandchild-started");
+    let survived = dir.join("grandchild-survived");
+    let script = dir.join("spawn-grandchild.ps1");
+    std::fs::write(
+        &script,
+        format!(
+            "$g = \"New-Item -ItemType File -Path '{started}' | Out-Null; \
+             Start-Sleep -Seconds 6; \
+             New-Item -ItemType File -Path '{survived}' | Out-Null\"\n\
+             Start-Process -FilePath 'pwsh' -NoNewWindow \
+             -ArgumentList '-NoProfile','-NonInteractive','-Command',$g\n\
+             Start-Sleep -Seconds 120\n",
+            started = started.display(),
+            survived = survived.display(),
+        ),
+    )
+    .expect("script");
+
+    let err = LocalSubprocessAdapter::new()
+        .run_program(
+            "local",
+            ProgramRequest {
+                executable: "pwsh".to_string(),
+                args: vec![
+                    "-NoProfile".to_string(),
+                    "-NonInteractive".to_string(),
+                    "-File".to_string(),
+                    script.to_string_lossy().into_owned(),
+                ],
+                timeout: Some(Duration::from_secs(5)),
+                ..ProgramRequest::default()
+            },
+        )
+        .await
+        .expect_err("the ceiling is exceeded");
+    assert!(err.starts_with(TIMEOUT_ERROR_PREFIX), "got: {err}");
+
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    let launched = started.exists();
+    let outlived = survived.exists();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        launched,
+        "the grandchild never started, so a clean run here would have proved nothing"
+    );
+    assert!(
+        !outlived,
+        "the grandchild outlived the deadline — the child was killed but not its tree"
     );
 }
 

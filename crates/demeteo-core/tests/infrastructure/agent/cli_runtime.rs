@@ -45,7 +45,15 @@ where
 {
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
     std::thread::spawn(move || {
-        drain_lines(reader, mock_parse_event, exit_code_fn, tx, None, None);
+        drain_lines(
+            reader,
+            mock_parse_event,
+            exit_code_fn,
+            tx,
+            None,
+            None,
+            "stub-agent".to_string(),
+        );
     });
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -113,10 +121,85 @@ fn drain_lines_emits_error_on_nonzero_exit() {
 }
 
 #[test]
-fn drain_lines_emits_turn_complete_on_zero_exit_when_empty() {
+fn an_agent_that_exits_zero_without_writing_is_not_a_completed_turn() {
+    // The documented Windows signature of these CLIs, and what a `.cmd` shim
+    // does when its interpreter is gone. Reported as a completion it becomes a
+    // green turn that merely produced no deliverable — a verdict fabricated
+    // rather than measured, in a gated orchestrator.
     let events = run_drain(Cursor::new(Vec::new()), || Some(0));
-    assert_eq!(events.len(), 1);
-    assert!(matches!(&events[0], AgentEvent::TurnComplete { .. }));
+    assert_eq!(events.len(), 1, "got: {:?}", events);
+    match &events[0] {
+        AgentEvent::Error { code, message, .. } => {
+            assert_eq!(code, "agent_no_output");
+            assert!(message.contains("stub-agent"), "got: {}", message);
+        }
+        e => panic!("expected an agent_no_output Error, got {:?}", e),
+    }
+}
+
+#[test]
+fn a_process_that_never_reached_a_verdict_is_never_routed_back_as_feedback() {
+    // The turn loop reads this to decide between `Environmental` and `Failed`.
+    // Every ending below tested nothing, so re-implementing the code cannot
+    // close it; only `cli_error` — the agent's own report — is feedback.
+    for ending in [
+        TurnEnding::StreamLost,
+        TurnEnding::NonZeroExit(1),
+        TurnEnding::NoOutput,
+    ] {
+        let code = ending.error_code().expect("not a turn");
+        assert!(is_process_level_error(code), "{:?} → {}", ending, code);
+    }
+    assert_eq!(TurnEnding::Complete.error_code(), None);
+    assert!(is_process_level_error("spawn_failed"));
+    assert!(!is_process_level_error("cli_error"));
+}
+
+#[test]
+fn a_clean_exit_after_output_stays_a_turn_and_an_empty_one_does_not() {
+    assert_eq!(
+        classify_turn_ending(Some(0), false, true),
+        TurnEnding::Complete
+    );
+    assert_eq!(
+        classify_turn_ending(Some(0), false, false),
+        TurnEnding::NoOutput
+    );
+    // Not yet reaped: same two answers, so a slow `wait` cannot flip a silent
+    // agent into a success.
+    assert_eq!(
+        classify_turn_ending(None, false, true),
+        TurnEnding::Complete
+    );
+    assert_eq!(
+        classify_turn_ending(None, false, false),
+        TurnEnding::NoOutput
+    );
+}
+
+#[test]
+fn a_lost_stream_and_a_nonzero_exit_still_outrank_the_silence_check() {
+    // Both were already their own ending and must not be re-read as "no
+    // output": a broken stream is a lost transport, and a non-zero exit is the
+    // one ending that *is* the process's own verdict.
+    assert_eq!(
+        classify_turn_ending(None, true, false),
+        TurnEnding::StreamLost
+    );
+    assert_eq!(
+        classify_turn_ending(Some(137), false, false),
+        TurnEnding::NonZeroExit(137)
+    );
+    assert_eq!(
+        classify_turn_ending(Some(137), true, true),
+        TurnEnding::NonZeroExit(137)
+    );
+    // A read error alongside a clean exit is not a lost stream — the process
+    // finished — so the output check decides, exactly as it did before.
+    assert_eq!(
+        classify_turn_ending(Some(0), true, true),
+        TurnEnding::Complete
+    );
 }
 
 #[test]
@@ -191,6 +274,7 @@ fn drain_lines_keeps_reading_past_a_recoverable_error() {
             tx,
             None,
             None,
+            "stub-agent".to_string(),
         );
     });
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -405,7 +489,15 @@ fn drain_lines_returns_early_when_consumer_drops() {
 "#
         .to_vec(),
     );
-    drain_lines(reader, mock_parse_event, || Some(0), tx, None, None);
+    drain_lines(
+        reader,
+        mock_parse_event,
+        || Some(0),
+        tx,
+        None,
+        None,
+        "stub-agent".to_string(),
+    );
 }
 
 struct ChunkyHandle {
@@ -701,6 +793,7 @@ fn drain_lines_counts_cache_tokens_in_cumulative_footprint() {
             tx,
             None,
             Some(cum),
+            "stub-agent".to_string(),
         );
     });
     while rx.blocking_recv().is_some() {}
@@ -733,6 +826,7 @@ fn drain_lines_takes_the_largest_usage_delta_not_their_sum() {
             tx,
             None,
             Some(cum),
+            "stub-agent".to_string(),
         );
     });
     while rx.blocking_recv().is_some() {}
@@ -752,6 +846,7 @@ fn captured_session_id(input: &'static str) -> Option<String> {
             tx,
             Some(cap),
             None,
+            "stub-agent".to_string(),
         );
     });
     while rx.blocking_recv().is_some() {}

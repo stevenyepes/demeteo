@@ -262,6 +262,12 @@ impl UnifiedCliSession {
             cmd.env(k, v);
         }
         crate::shared::proc::sanitize_child_env(&mut cmd);
+        // No console for a headless turn. Without it a packaged Windows build
+        // — `windows_subsystem = "windows"`, so the app owns no console —
+        // flashes one per agent invocation, and the child inherits a console
+        // it could read stdin from. `Stdio::null()` above already forecloses
+        // the read; this forecloses the window.
+        crate::shared::proc::harden_child_spawn(&mut cmd);
         cmd
     }
 
@@ -324,6 +330,9 @@ impl UnifiedCliSession {
 
         let session_capture = self.captured_session_id.clone();
         let cumulative = self.cumulative_tokens.clone();
+        let agent = self.ctx.binary.clone();
+
+        reap_when_abandoned(child, tx.downgrade());
 
         std::thread::spawn(move || {
             drain_lines(
@@ -333,6 +342,7 @@ impl UnifiedCliSession {
                 tx,
                 Some(session_capture),
                 Some(cumulative),
+                agent,
             );
         });
     }
@@ -396,6 +406,7 @@ impl UnifiedCliSession {
         };
         let session_capture = self.captured_session_id.clone();
         let cumulative = self.cumulative_tokens.clone();
+        let agent = self.ctx.binary.clone();
         std::thread::spawn(move || {
             drain_lines(
                 reader,
@@ -404,6 +415,7 @@ impl UnifiedCliSession {
                 tx,
                 Some(session_capture),
                 Some(cumulative),
+                agent,
             );
         });
     }
@@ -519,6 +531,77 @@ impl Drop for UnifiedCliSession {
     }
 }
 
+/// Absolute ceiling on one spawned agent process, owned by the spawner.
+///
+/// [`stream_agent_turn`](super::event_stream::turn::stream_agent_turn) bounds
+/// the *turn*, not the process: on its silence or wall-clock deadline it
+/// returns a verdict and drops the stream, and nothing between there and the
+/// next `prompt()` stops the child — after an abandoned turn there is no next
+/// `prompt()` at all. On Unix the leftover is an idle process. On Windows it is
+/// a set of open handles under the worktree, and directory removal fails
+/// outright against one, so a single hung turn leaves a worktree that can never
+/// be torn down.
+///
+/// Above the largest `wall_cap_s`
+/// [`AgentTimeouts::validated`](crate::domain::models::AgentTimeouts::validated)
+/// accepts, so it can never pre-empt a turn a user configured. The abandonment
+/// check is what makes the turn's own deadline bind the process; this is the
+/// floor under a consumer that never went away either.
+const PROCESS_CEILING: std::time::Duration = std::time::Duration::from_secs(4 * 3600 + 900);
+
+/// How long a child may outlive the consumer of its output before it is killed.
+///
+/// Not zero: a CLI agent writes its own session store on the way out, and that
+/// store is exactly what the next turn's `--resume` reads. It is also longer
+/// than the gap this replaces in the common path — today a finished child lives
+/// until the *next* `prompt()`, which the driver usually issues within seconds.
+const ABANDONED_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Kill the child once nothing is listening, or at [`PROCESS_CEILING`],
+/// whichever comes first.
+///
+/// The consumer is held weakly on purpose: a strong `Sender` clone would keep
+/// the channel open past `drain_lines`, and callers that read the stream to
+/// completion would block on this thread's timer instead of the agent.
+///
+/// Local children only. The remote handle's mutex is held across a ~10s
+/// blocking read (see [`HandleReader`]), so polling it from a second thread
+/// would interleave with the read loop the SSH keepalive depends on — and the
+/// motivation above is a Windows filesystem fact about the *host*, which is
+/// never the machine a remote agent leaves a process on.
+fn reap_when_abandoned(
+    child: Arc<Mutex<std::process::Child>>,
+    consumer: tokio::sync::mpsc::WeakSender<AgentEvent>,
+) {
+    const TICK: std::time::Duration = std::time::Duration::from_millis(200);
+    std::thread::spawn(move || {
+        let ceiling = std::time::Instant::now() + PROCESS_CEILING;
+        let mut abandoned_since: Option<std::time::Instant> = None;
+        loop {
+            std::thread::sleep(TICK);
+            let Ok(mut child) = child.lock() else { return };
+            match child.try_wait() {
+                Ok(Some(_)) | Err(_) => return,
+                Ok(None) => {}
+            }
+            let now = std::time::Instant::now();
+            if consumer.upgrade().is_some_and(|tx| !tx.is_closed()) {
+                abandoned_since = None;
+            } else if abandoned_since.is_none() {
+                abandoned_since = Some(now);
+            }
+            let abandoned_long_enough =
+                abandoned_since.is_some_and(|since| now.duration_since(since) >= ABANDONED_GRACE);
+            if now < ceiling && !abandoned_long_enough {
+                continue;
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+    });
+}
+
 struct HandleReader {
     handle: Arc<Mutex<Box<dyn InteractiveHandle>>>,
 }
@@ -581,6 +664,83 @@ pub(crate) fn session_id_from_line(v: &serde_json::Value) -> Option<&str> {
         .and_then(|s| s.as_str())
 }
 
+/// How a one-shot agent process ended, for the cases where it emitted no
+/// terminal event of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TurnEnding {
+    /// The process wrote, then closed its stream and exited cleanly.
+    Complete,
+    /// The stream broke while the process was, as far as we know, still alive.
+    StreamLost,
+    /// A non-zero exit — the one ending that is the process's own verdict.
+    NonZeroExit(i32),
+    /// A clean exit that produced nothing at all.
+    NoOutput,
+}
+
+impl TurnEnding {
+    /// The [`AgentEvent::Error`] code this ending is reported under, or `None`
+    /// for the one ending that is a turn.
+    pub(crate) fn error_code(self) -> Option<&'static str> {
+        match self {
+            TurnEnding::Complete => None,
+            TurnEnding::StreamLost => Some("agent_stream_lost"),
+            TurnEnding::NonZeroExit(_) => Some("agent_exit_nonzero"),
+            TurnEnding::NoOutput => Some("agent_no_output"),
+        }
+    }
+}
+
+/// Whether an [`AgentEvent::Error`] names a *process* that never reached a
+/// verdict, as opposed to a verdict the agent itself reported.
+///
+/// The distinction the turn loop routes on, and the same one
+/// [`classify_exec_failure`](crate::domain::harness_failure::classify_exec_failure)
+/// draws for a harness command: a process that could not run, or ran and told
+/// us nothing, tested nothing. Feeding that into a rework cycle spends the
+/// retry budget re-implementing code no edit can make green. A `cli_error` —
+/// the agent's own report of what went wrong with the work — is the only one
+/// worth handing back as feedback.
+pub(crate) fn is_process_level_error(code: &str) -> bool {
+    matches!(
+        code,
+        "spawn_failed" | "agent_stream_lost" | "agent_exit_nonzero" | "agent_no_output"
+    )
+}
+
+/// Read the end of a one-shot agent's stdout as exactly one of four endings.
+///
+/// Pure over what [`drain_lines`] observed, because the four are
+/// indistinguishable at the call site and only one of them is a turn.
+///
+/// [`TurnEnding::NoOutput`] is the one that is not obvious. A process that
+/// exits 0 having written nothing did not run an empty turn — it did not run.
+/// Read as `Complete` it becomes a green turn that merely produced no
+/// deliverable, so the step's verdict is fabricated rather than measured, which
+/// in a human-approval-gated orchestrator is the worst outcome available. It is
+/// the documented Windows signature of several of these CLIs, and it is also
+/// what a `.cmd` shim does when the interpreter behind it is gone.
+///
+/// A verdict is deliberately *not* what it produces: nothing ran, so nothing
+/// was tested. `docs/EXECUTION_PARITY.md` D3 makes the same call for a
+/// transport error and a timeout.
+pub(crate) fn classify_turn_ending(
+    exit_code: Option<i32>,
+    stream_broke: bool,
+    wrote_output: bool,
+) -> TurnEnding {
+    match exit_code {
+        // A read error with no exit status means the process is still running
+        // and we lost its stream. Fabricating a completion here made the step
+        // executor treat a half-finished agent as done and then fail on the
+        // missing deliverable.
+        None if stream_broke => TurnEnding::StreamLost,
+        Some(code) if code != 0 => TurnEnding::NonZeroExit(code),
+        _ if !wrote_output => TurnEnding::NoOutput,
+        _ => TurnEnding::Complete,
+    }
+}
+
 fn drain_lines<R, F>(
     reader: R,
     parse_event: EventParser,
@@ -588,6 +748,7 @@ fn drain_lines<R, F>(
     tx: tokio::sync::mpsc::Sender<AgentEvent>,
     session_capture: Option<Arc<Mutex<Option<String>>>>,
     cumulative_tokens: Option<Arc<AtomicU64>>,
+    agent: String,
 ) where
     R: Read,
     F: FnOnce() -> Option<i32>,
@@ -610,6 +771,9 @@ fn drain_lines<R, F>(
     const TAIL_CAP: usize = 20;
     const TAIL_MAX_LINE: usize = 400;
     let mut tail: Vec<String> = Vec::with_capacity(TAIL_CAP);
+    // Whether the process said anything at all, parseable or not — the input
+    // `classify_turn_ending` needs, and deliberately not "did any of it parse".
+    let mut wrote_output = false;
     loop {
         line.clear();
         match reader.read_line(&mut line) {
@@ -623,6 +787,7 @@ fn drain_lines<R, F>(
                 if trimmed.is_empty() {
                     continue;
                 }
+                wrote_output = true;
                 if let Some(ref capture) = session_capture {
                     if let Ok(guard) = capture.lock() {
                         if guard.is_none() {
@@ -721,15 +886,11 @@ fn drain_lines<R, F>(
         }
     }
     if !terminal {
-        match (exit_code_fn(), read_error) {
-            // A read *error* with no exit status means the process is (as
-            // far as we know) still running and we lost its stream.
-            // Fabricating a TurnComplete here made the step executor treat
-            // a half-finished agent as done and fail on the missing
-            // deliverable. Surface it as an environmental error instead so
-            // the driver can retry the step without blaming the
-            // implementation.
-            (None, Some(err)) => {
+        let ending = classify_turn_ending(exit_code_fn(), read_error.is_some(), wrote_output);
+        let message = match ending {
+            TurnEnding::Complete => None,
+            TurnEnding::StreamLost => {
+                let err = read_error.map(|e| e.to_string()).unwrap_or_default();
                 let suffix = if tail.is_empty() {
                     String::new()
                 } else {
@@ -738,25 +899,12 @@ fn drain_lines<R, F>(
                         tail.join("\n")
                     )
                 };
-                let _ = tx.blocking_send(AgentEvent::Error {
-                    code: "agent_stream_lost".to_string(),
-                    message: format!(
-                        "lost the agent's output stream while the agent was still running ({}){}",
-                        err, suffix
-                    ),
-                    recoverable: false,
-                    usage: None,
-                });
+                Some(format!(
+                    "lost the agent's output stream while the agent was still running ({}){}",
+                    err, suffix
+                ))
             }
-            // Clean EOF with a zero/unknown exit is the normal "agent
-            // finished and closed its stream" ending.
-            (Some(0) | None, _) => {
-                let _ = tx.blocking_send(AgentEvent::TurnComplete {
-                    stop_reason: StopReason::EndOfTurn,
-                    usage: None,
-                });
-            }
-            (Some(code), _) => {
+            TurnEnding::NonZeroExit(code) => {
                 let suffix = if tail.is_empty() {
                     String::new()
                 } else {
@@ -765,14 +913,29 @@ fn drain_lines<R, F>(
                         tail.join("\n")
                     )
                 };
-                let _ = tx.blocking_send(AgentEvent::Error {
-                    code: "agent_exit_nonzero".to_string(),
-                    message: format!("agent exited with code {}{}", code, suffix),
-                    recoverable: false,
-                    usage: None,
-                });
+                Some(format!("agent exited with code {}{}", code, suffix))
             }
-        }
+            TurnEnding::NoOutput => Some(format!(
+                "{} exited 0 without writing a single line, so no turn ran. \
+                 Nothing was attempted and nothing was tested — check that the \
+                 binary on this machine is the agent and that it can start \
+                 (run it by hand in the worktree).",
+                agent
+            )),
+        };
+        let event = match (ending.error_code(), message) {
+            (Some(code), Some(message)) => AgentEvent::Error {
+                code: code.to_string(),
+                message,
+                recoverable: false,
+                usage: None,
+            },
+            _ => AgentEvent::TurnComplete {
+                stop_reason: StopReason::EndOfTurn,
+                usage: None,
+            },
+        };
+        let _ = tx.blocking_send(event);
     }
 }
 
