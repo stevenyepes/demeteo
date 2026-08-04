@@ -857,6 +857,16 @@ export interface TerminalWorktree {
   isLocked: boolean;
 }
 
+/** Where a session may open inside one repository. `mainBranch` is what the
+ *  main checkout is currently sitting on — a session opened there inherits it,
+ *  and nothing else in this payload reveals which branch that is. `null` for a
+ *  detached or unreadable checkout, which is a reason to say nothing rather
+ *  than to name a branch. */
+export interface TerminalLocations {
+  mainBranch: string | null;
+  worktrees: TerminalWorktree[];
+}
+
 /** The only caller-controlled inputs for creating a terminal worktree. */
 export interface CreateTerminalWorktreeRequest {
   projectId: string;

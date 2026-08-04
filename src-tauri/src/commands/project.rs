@@ -1,6 +1,8 @@
-use crate::application::projects::{ProjectConfig, RepoDirtyStatus, TerminalBranchOptions};
+use crate::application::projects::{
+    ProjectConfig, RepoDirtyStatus, TerminalBranchOptions, TerminalLocations,
+};
 use crate::domain::ids::ProjectId;
-use crate::domain::models::{EffortLevel, Project, RepoHealthStatus, Repository, WorktreeInfo};
+use crate::domain::models::{EffortLevel, Project, RepoHealthStatus, Repository};
 use crate::error::AppError;
 use crate::paths;
 use crate::ports::worktree_ops::{TerminalWorktreeCreated, TerminalWorktreeRequest};
@@ -147,17 +149,18 @@ pub async fn resolve_repo_dir(
         .map_err(AppError::from)
 }
 
-/// List the linked worktrees for a repository owned by a project.
+/// List the terminal locations for a repository owned by a project: its linked
+/// worktrees, and the branch the main checkout is currently on.
 ///
 /// The application policy resolves the trusted machine and checkout directory
 /// from these IDs before it delegates any Git operation to the worktree port.
 #[tauri::command]
-pub async fn list_terminal_worktrees(
+pub async fn list_terminal_locations(
     ctx: State<'_, AppContext>,
     project_id: String,
     repository_id: String,
-) -> Result<Vec<WorktreeInfo>, AppError> {
-    crate::application::projects::list_terminal_worktrees(&ctx, project_id, repository_id)
+) -> Result<TerminalLocations, AppError> {
+    crate::application::projects::list_terminal_locations(&ctx, project_id, repository_id)
         .await
         .map_err(AppError::from)
 }
