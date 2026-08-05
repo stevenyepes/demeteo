@@ -21,8 +21,7 @@ pub mod stub_runtime;
 #[cfg(test)]
 pub(crate) mod test_stubs;
 
-/// The absolute path this host would run for a bare program name, or `None`
-/// when it has none.
+/// The executable and fixed argv prefix this host uses for an agent binary.
 ///
 /// The single answer behind two questions that must never disagree:
 /// [`is_binary_on_local_path`] is what `availability()` reports, and
@@ -37,15 +36,39 @@ pub(crate) mod test_stubs;
 /// equivalent of the Unix login-shell fallback, and would be worse off with
 /// one: Git Bash's `which` answers in `/c/...` form, which `CreateProcess`
 /// cannot spawn.
-pub fn resolve_local_binary_path(binary: &str) -> Option<String> {
+pub struct LocalAgentLaunch {
+    pub executable: String,
+    pub prefix_args: Vec<String>,
+}
+
+/// The local launch form for a bare agent binary, or `None` when it is absent.
+pub fn resolve_local_binary_path(binary: &str) -> Option<LocalAgentLaunch> {
     #[cfg(windows)]
     {
-        crate::shared::win::exe::resolve_on_path(binary)
-            .map(|path| path.to_string_lossy().into_owned())
+        let resolved = crate::shared::win::exe::resolve_on_path(binary)?;
+        let shim = std::fs::read_to_string(&resolved).ok();
+        let path_node = crate::shared::win::exe::resolve_on_path("node");
+        if let Some(launch) = shim.as_deref().and_then(|contents| {
+            crate::shared::win::npm_shim::direct_launch(&resolved, contents, path_node, &|path| {
+                path.is_file()
+            })
+        }) {
+            return Some(LocalAgentLaunch {
+                executable: launch.node.to_string_lossy().into_owned(),
+                prefix_args: vec![launch.entrypoint.to_string_lossy().into_owned()],
+            });
+        }
+        Some(LocalAgentLaunch {
+            executable: resolved.to_string_lossy().into_owned(),
+            prefix_args: Vec::new(),
+        })
     }
     #[cfg(not(windows))]
     {
-        resolve_on_unix(binary)
+        resolve_on_unix(binary).map(|executable| LocalAgentLaunch {
+            executable,
+            prefix_args: Vec::new(),
+        })
     }
 }
 

@@ -192,14 +192,14 @@ impl AgentRuntime for UnifiedCliRuntime {
             // Demeteo run.
             ctx.env.extend((effort_env)(ctx.effort));
 
-            let resolved_binary = if ctx.machine_id.is_empty() || ctx.machine_id == "local" {
+            let local_launch = if ctx.machine_id.is_empty() || ctx.machine_id == "local" {
                 super::resolve_local_binary_path(&ctx.binary)
             } else {
                 None
             };
             let session = UnifiedCliSession {
                 session_id: format!("{}-{}", kind, ctx.thread_id),
-                resolved_binary,
+                local_launch,
                 ctx,
                 parse_event,
                 build_args,
@@ -217,7 +217,7 @@ impl AgentRuntime for UnifiedCliRuntime {
 #[allow(clippy::type_complexity)]
 pub struct UnifiedCliSession {
     session_id: String,
-    resolved_binary: Option<String>,
+    local_launch: Option<super::LocalAgentLaunch>,
     ctx: AgentContext,
     parse_event: EventParser,
     build_args: ArgsBuilder,
@@ -237,7 +237,11 @@ pub struct UnifiedCliSession {
 
 impl UnifiedCliSession {
     fn build_command(&self, prompt: &str) -> Command {
-        let binary = self.resolved_binary.as_deref().unwrap_or(&self.ctx.binary);
+        let binary = self
+            .local_launch
+            .as_ref()
+            .map(|launch| launch.executable.as_str())
+            .unwrap_or(&self.ctx.binary);
         let mut cmd = Command::new(binary);
         let captured = {
             if let Ok(guard) = self.captured_session_id.lock() {
@@ -247,6 +251,9 @@ impl UnifiedCliSession {
             }
         };
         let args = (self.build_args)(&self.ctx, captured.as_deref(), prompt);
+        if let Some(launch) = &self.local_launch {
+            cmd.args(&launch.prefix_args);
+        }
         cmd.args(&args);
         cmd.current_dir(&self.ctx.cwd);
         // Stdin is wired to /dev/null (immediate EOF). The prompt is already
@@ -278,7 +285,11 @@ impl UnifiedCliSession {
         tx: tokio::sync::mpsc::Sender<AgentEvent>,
     ) {
         let mut cmd = self.build_command(text);
-        let binary = self.resolved_binary.as_deref().unwrap_or(&self.ctx.binary);
+        let binary = self
+            .local_launch
+            .as_ref()
+            .map(|launch| launch.executable.as_str())
+            .unwrap_or(&self.ctx.binary);
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,

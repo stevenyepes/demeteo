@@ -11,6 +11,7 @@
 
 pub mod dacl;
 pub mod exe;
+pub mod npm_shim;
 pub mod posix_shell;
 
 #[cfg(windows)]
