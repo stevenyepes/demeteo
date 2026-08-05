@@ -19,7 +19,10 @@
 use crate::adapters::database::SqliteAdapter;
 use crate::adapters::local::execution::LocalSubprocessAdapter;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
-use crate::paths::{shell_escape_posix, REPOS_SUBDIR, TERMINAL_WORKTREES_SUBDIR};
+use crate::paths::{
+    native_path, same_path, shell_escape_posix, targets_windows_host, REPOS_SUBDIR,
+    TERMINAL_WORKTREES_SUBDIR,
+};
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::worktree_ops::{TerminalWorktreeRequest, WorktreeOpsPort};
@@ -86,6 +89,28 @@ async fn exists(port: &Arc<dyn ExecutionPort>, machine_id: &str, path: &str) -> 
         .is_ok()
 }
 
+/// Two spellings of one directory, asserted as a location.
+///
+/// Three producers answer in this file, and on a Windows host no two of them
+/// agree: `create_terminal_worktree` hands back what a shell's `pwd` printed,
+/// `git worktree list` replays git's own `C:/…`, and what is composed below
+/// from the anchor is a third. Everywhere else the three coincide, so this is
+/// the same clause on every target rather than a Windows concession.
+#[track_caller]
+fn assert_same_path(machine_id: &str, found: &str, expected: &str, clause: &str) {
+    assert!(
+        same_path(found, expected, targets_windows_host(machine_id)),
+        "{clause}\n  found:    {found}\n  expected: {expected}",
+    );
+}
+
+/// Whether `path` sits below `ancestor`, asked of the path components for the
+/// reason [`crate::domain::terminal_worktree::is_terminal_location`] records.
+fn is_below(machine_id: &str, path: &str, ancestor: &str) -> bool {
+    let windows_host = targets_windows_host(machine_id);
+    native_path(path, windows_host).starts_with(native_path(ancestor, windows_host))
+}
+
 /// Lay down `<base>/project/repos/<REPO_NAME>` as a one-commit git repository on
 /// the target, and hand back the project root and repository directory.
 async fn make_project_repo(
@@ -131,19 +156,26 @@ async fn make_project_repo(
 /// leg's temp dir is reached through `/var` → `/private/var` on macOS, and a
 /// logical path would make the same assertion pass remotely and fail locally
 /// for a reason that has nothing to do with the port.
+///
+/// That answer arrives in the shell's spelling, which on a Windows host is the
+/// MSYS `/c/…` no `std::fs` call accepts — so it is converted where it enters,
+/// as [`crate::paths::native_path`] requires, and every path below is composed
+/// from the converted anchor. Doing it at each `write_file` instead would leave
+/// the fixture holding two spellings of its own tree.
 pub async fn terminal_worktree_contract(
     port: Arc<dyn ExecutionPort>,
     machine_id: &str,
     scratch: &str,
 ) {
-    let anchor = sh(
+    let reported = sh(
         &port,
         machine_id,
         &format!("cd {} && pwd -P", shell_escape_posix(scratch)),
     )
-    .await
-    .trim()
-    .to_string();
+    .await;
+    let anchor = native_path(reported.trim(), targets_windows_host(machine_id))
+        .to_string_lossy()
+        .into_owned();
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock is after the Unix epoch")
@@ -173,16 +205,20 @@ pub async fn terminal_worktree_contract(
         .await
         .expect("create_terminal_worktree must succeed against a real repository");
 
-    assert_eq!(
-        created.worktree.path,
-        format!("{area}/session-one"),
-        "the destination must be <project_root>/{TERMINAL_WORKTREES_SUBDIR}/<repo_name>/<name>",
+    assert_same_path(
+        machine_id,
+        &created.worktree.path,
+        &format!("{area}/session-one"),
+        &format!(
+            "the destination must be <project_root>/{TERMINAL_WORKTREES_SUBDIR}/<repo_name>/<name>"
+        ),
     );
     assert!(
-        !created
-            .worktree
-            .path
-            .starts_with(&format!("{project_root}/{REPOS_SUBDIR}/")),
+        !is_below(
+            machine_id,
+            &created.worktree.path,
+            &format!("{project_root}/{REPOS_SUBDIR}"),
+        ),
         "the area must not live under the pruned repos/ directory: {}",
         created.worktree.path,
     );
@@ -224,7 +260,12 @@ pub async fn terminal_worktree_contract(
         1,
         "exactly one linked worktree must exist; got {listed:?}",
     );
-    assert_eq!(listed[0].path, created.worktree.path);
+    assert_same_path(
+        machine_id,
+        &listed[0].path,
+        &created.worktree.path,
+        "the listing must replay the worktree that was just created",
+    );
     assert_eq!(listed[0].branch, created.worktree.branch);
     assert_eq!(created.worktree.branch.as_deref(), Some("terminal/session"));
     assert!(!created.worktree.is_locked);
@@ -349,7 +390,9 @@ pub async fn terminal_worktree_contract(
     )
     .await;
 
-    terminal_listing_through_a_symlinked_root(&port, machine_id, &anchor, nanos).await;
+    if !targets_windows_host(machine_id) {
+        terminal_listing_through_a_symlinked_root(&port, machine_id, &anchor, nanos).await;
+    }
     terminal_branch_is_cut_from_origin(&port, machine_id, &anchor, nanos).await;
     terminal_worktree_removal(&port, machine_id, &anchor, nanos).await;
 }
@@ -555,14 +598,19 @@ async fn terminal_worktree_removal(
         !exists(port, machine_id, &retired.path).await,
         "removal must delete the directory, not just unregister it",
     );
+    let surviving = ops
+        .list_terminal_worktrees(Some(machine_id), &repo, &project_root)
+        .await
+        .expect("lists the surviving terminal worktrees");
     assert_eq!(
-        ops.list_terminal_worktrees(Some(machine_id), &repo, &project_root)
-            .await
-            .expect("lists the surviving terminal worktrees")
-            .iter()
-            .map(|worktree| worktree.path.as_str())
-            .collect::<Vec<_>>(),
-        [kept.path.as_str()],
+        surviving.len(),
+        1,
+        "removal must leave every other worktree registered; got {surviving:?}",
+    );
+    assert_same_path(
+        machine_id,
+        &surviving[0].path,
+        &kept.path,
         "removal must leave every other worktree registered",
     );
     assert!(
@@ -620,6 +668,16 @@ async fn terminal_worktree_removal(
 /// symlink to it, which is the shape a listing filter gets wrong: Git replays
 /// the resolved path, and a comparison against the configured one matches
 /// nothing.
+///
+/// Not reached for a Windows-local target, and the caller gates it rather than
+/// this asserting something weaker: `ln -s` there produces no link Git resolves,
+/// for the reasons `share_dependency_caches` records in
+/// `crates/demeteo-core/src/adapters/worktree/git_ops/worktree.rs`. The premise
+/// clause below would be the one to fail, which is the honest outcome and not a
+/// finding about the port. The rule it guards is
+/// [`crate::domain::terminal_worktree::physical_area`], which is synchronous and
+/// covered on every platform by its own tests; what is lost on Windows is the
+/// end-to-end leg, and the SSH one still runs it.
 async fn terminal_listing_through_a_symlinked_root(
     port: &Arc<dyn ExecutionPort>,
     machine_id: &str,

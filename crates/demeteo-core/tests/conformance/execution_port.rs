@@ -42,10 +42,17 @@ pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workd
     // the local FS, so a remote `pwd` returning the same literal path
     // (the typical Linux-container case has no symlinks) still
     // round-trips. Mirrors the same fix already used in
-    // `tests/infrastructure/worktree/git_ops.rs::test_list_worktrees_with_one_extra_worktree`.
-    let base = std::fs::canonicalize(base)
+    // `tests/infrastructure/worktree/git_ops/worktree.rs::test_list_worktrees_with_one_extra_worktree`.
+    let canonical = std::fs::canonicalize(base)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| base.to_string());
+    // Windows canonicalizes to the verbatim form, and a `\\?\` path reaches
+    // the filesystem unnormalised: it takes no `/`, so every path composed
+    // below would name nothing (`ERROR_INVALID_NAME`).
+    let base = canonical
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&canonical)
+        .to_string();
 
     // --- write → read round-trip -----------------------------------------
     let file_path = format!("{base}/conformance-roundtrip.txt");
@@ -71,10 +78,18 @@ pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workd
         )
         .await
         .expect("pwd in an explicit cwd should succeed");
-    assert_eq!(
+    // A shell reports the directory in its own spelling — the Git Bash that
+    // runs this body on a Windows host prints `/c/…` for the `C:\…` it was
+    // handed — so the clause is which directory, never which spelling. The
+    // strings coincide everywhere else, so this is the same assertion.
+    assert!(
+        crate::paths::same_path(
+            out.trim(),
+            &base,
+            crate::paths::targets_windows_host(machine_id),
+        ),
+        "run_command_with must honour the explicit cwd: ran in {}, not in {base}",
         out.trim(),
-        base,
-        "run_command_with must honour the explicit cwd",
     );
 
     // --- non-zero exit ⇒ Err carrying stderr (never Ok(\"\")) -------------
