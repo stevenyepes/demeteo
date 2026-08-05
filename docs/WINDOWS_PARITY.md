@@ -1,10 +1,19 @@
 # Windows Parity — The Plan, and the Decision Behind It
 
 > **Phases 0–4 are implemented on `feat/native-windows-local-execution`; Phase 5
-> is not.** The tree compiles, links and unit-tests on `windows-latest`. What
-> nothing has yet observed is a Windows *run* — every claim below about DACL
-> propagation cost, Git Bash resolution on a real install, or an authenticated
-> push is reasoned and type-checked, not executed. Read
+> is not.** The tree compiles, links and unit-tests on `windows-latest`.
+>
+> A Windows desktop has now been driven by hand as far as **creating a project
+> and starting a feature**, both of which work. The first agent step did not:
+> `codex` resolves to the `.cmd` shim npm installs, and a prompt cannot be
+> passed as an argument to one — see [Phase 2](#phase-2--spawning-is-correct-and-children-die-when-told).
+> That is fixed, and everything past it is still unobserved. A *completed* run,
+> the DACL fence denying a real agent, and an authenticated push remain
+> reasoned rather than executed; treat every claim about them as a prediction.
+>
+> Since then the `cfg(windows)` bodies are at least *executable* from Linux —
+> `scripts/check-windows.sh --run`, whose blind spots are set out under
+> [Gates](#gates). It is not a substitute for any of the above. Read
 > [`EXECUTION_PARITY.md`](EXECUTION_PARITY.md) first — the transport contract
 > this has to extend rather than contradict. The rejected design this document
 > argues against is fc8d65c's, kept below because the reasoning is the point.
@@ -265,6 +274,18 @@ with unescapable arguments, and Demeteo passes agent prompts and ticket text as
 arguments — so this *will* fire. If it reads as a harness failure it feeds the
 C6 rework loop something no ticket can close.
 
+It fired on the first real Windows run, at the first agent step, exactly as
+described, and the classification held: the run stopped with a configuration
+error instead of asking an agent to repair source that had never executed.
+Classifying it is not enough to make an agent *run*, though, and quoting
+harder cannot help — `cmd.exe` truncates its command line at a literal
+newline, so a multi-line prompt is unrepresentable to a batch target no matter
+how it is escaped. `shared/win/npm_shim.rs` therefore recognises the fixed
+shape npm emits and launches the `node.exe` and package entrypoint behind the
+shim directly, where arguments reach `CreateProcessW` with no `cmd.exe` in the
+path. It reads the shim only as a path shape, never as batch code, and refuses
+an entrypoint that climbs out of its `node_modules` directory.
+
 Harden the one-shot agent path: closed stdin, a mandatory wall-clock deadline,
 and treat `exit 0` with empty stdout as a **failure**, not an empty successful
 turn. Documented Windows bugs in the agent CLIs produce exactly that signature,
@@ -386,16 +407,45 @@ reduced-guarantee rather than presenting them as equivalent.
 
 `pr-checks.yml` gains, in order of value:
 
-1. `windows-latest` + `macos-latest` compile/clippy/test (Phase 0). Would have
-   caught fc8d65c entirely.
-2. A **Windows exec-contract** conformance case — identical exit codes, identical
-   stdout/stderr split, identical UTF-8 bytes for a fixed body across
-   local-Windows and local-Linux. No Docker needed.
-3. **Windows-host → Linux-sshd** `run-ssh-conformance.sh`. The single most
-   valuable test here, because it is exactly the topology a real user has.
+1. ~~`windows-latest` + `macos-latest` compile/clippy/test (Phase 0)~~ — **landed**
+   as the `cross-os` job. Would have caught fc8d65c entirely.
+2. ~~A **Windows exec-contract** conformance case~~ — **landed by construction**:
+   `exec_contract`'s local leg is an ordinary test, so `cargo test -p demeteo-core`
+   runs it on `windows-latest` against the identical assertions Linux uses.
+3. **Windows-host → Linux-sshd** `run-ssh-conformance.sh` — **outstanding**, and
+   still the single most valuable test here, because it is exactly the topology
+   a real user has. `ssh-conformance` runs on ubuntu only.
 
 `run-topology-conformance.sh` stays Linux-only with a **written** exemption
 rather than an implied one.
+
+### The Linux-side tier, and what it cannot see
+
+`scripts/check-windows.sh --run` links the `gnu` target's whole test binary and
+executes it under Wine, so a `cfg(windows)` body can be *run* here in about two
+minutes rather than a CI round trip. It is local-only by construction — it
+refuses when `CI` is set, `checks.sh` never calls it, and `windows-latest`
+remains the authority.
+
+Its blind spots are structural, and none of them is a matter of configuring the
+prefix better:
+
+- **The MSYS2 runtime does not work under Wine at all** (`Couldn't compute
+  FAST_CWD pointer`, `cygpath: Bad address`), so a login shell yields nothing.
+  Every probe spelled `bash -l -i -c` is therefore unreachable. Plain `bash -c`
+  works, so Phase 1's shell-parity path *is* covered.
+- **Deny ACEs are not enforced.** The fence applies without error and then
+  permits the write it denied. Phase 4 is verifiable on real Windows only.
+- **`pwsh` reports success for everything** — empty stdout, empty stderr, exit 0
+  for `exit 42` — so it is deliberately absent from the prefix and the tests
+  that spawn it fail honestly instead. Worth noting that those fixtures depend
+  on a program Windows does not ship at all; they pass in CI because the GitHub
+  runner preinstalls PowerShell 7, not because a user's machine would have it.
+
+`scripts/wine-known-failures.txt` enumerates every excused test with its cause,
+and each entry is confirmed green on `windows-latest` — so the list records
+gaps in the emulator, never an unproven claim about Windows. Nothing is
+skipped: a failure outside the list fails the run.
 
 Per §7, the fence and tree-kill tests count only once watched failing against the
 prior phase's code. And per §7's warning: the e2e `FakeExec` returns `Ok("")` for
