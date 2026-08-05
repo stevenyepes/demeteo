@@ -1,0 +1,81 @@
+# Tests that fail under Wine for reasons that are Wine's, not the code's.
+#
+# `check-windows.sh --run` fails on any failure NOT listed here, and reports any
+# entry here that has started passing. It never skips a test: a name in this file
+# still runs, so a second, real failure inside one of these modules cannot hide
+# behind an excused one.
+#
+# Every entry has been confirmed green on `windows-latest` (PR #112, run
+# 31037521314), so each is a gap in the emulator rather than an unproven claim
+# about Windows. Anything here that CI has NOT confirmed does not belong here —
+# it belongs in the failure list, loudly.
+#
+# Blank lines and `#` comments are ignored. One test path per line.
+
+# ── `pwsh` is deliberately not installed in the prefix ────────────────────────
+# It runs under Wine and answers everything with empty stdout, empty stderr and
+# exit 0 — including `exit 42`. See setup-wine-prefix.sh for why installing it
+# would be worse than leaving these red.
+adapters::local::execution::local_execution_tests::a_grandchild_is_reaped_when_the_deadline_takes_the_tree
+adapters::local::execution::local_execution_tests::a_windows_program_failure_includes_stderr_and_exit_code
+adapters::local::execution::local_execution_tests::a_windows_program_request_preserves_argv_cwd_and_environment_with_spaces
+adapters::local::execution::local_execution_tests::a_windows_program_timeout_returns_promptly
+adapters::local::execution::local_execution_tests::cancelling_a_windows_program_request_drops_its_process
+adapters::local::execution::local_execution_tests::every_program_spawn_is_hardened_even_against_its_own_caller
+
+# ── The MSYS2 runtime does not work under Wine ───────────────────────────────
+# `Couldn't compute FAST_CWD pointer` from every MSYS binary, and
+# `/usr/bin/cygpath: Bad address` from the profile scripts. Consequences: a
+# login shell produces nothing (`bash -l -c` and `bash -l -i -c` both return
+# empty, which is what the availability probes use), and git invoked *through*
+# bash resolves the wrong working directory. Plain `bash -c` is unaffected and
+# does run — the Phase 1 shell-parity path is genuinely covered here.
+adapters::step_executor::artifacts::add_exclusions::tests::test_commit_worktree_changes_when_artifact_subdir_is_gitignored
+adapters::step_executor::artifacts::declared::tests::test_commit_worktree_changes
+adapters::step_executor::artifacts::declared::tests::test_commit_worktree_changes_fails_when_agent_writes_only_land_under_artifacts
+adapters::step_executor::artifacts::declared::tests::test_commit_worktree_changes_happy_path_when_non_artifact_write_lands_in_stage
+adapters::step_executor::artifacts::declared::tests::test_commit_worktree_changes_warns_when_stage_is_empty_despite_non_artifact_writes
+adapters::step_executor::artifacts::declared::tests::test_compute_git_diff
+adapters::step_executor::artifacts::snapshot::tests::test_snapshot_delta_always_include
+adapters::step_executor::artifacts::snapshot::tests::test_snapshot_delta_detects_new_files
+adapters::step_executor::artifacts::snapshot::tests::test_snapshot_delta_excludes_scaffolding
+ports::execution::command_node::a_declaration_the_command_never_produced_fails_the_step
+ports::execution::command_node::an_idempotent_command_auto_resumes_like_any_other_node
+ports::execution::command_node::a_non_idempotent_command_parks_on_resume_despite_a_matching_fingerprint
+ports::execution::command_node::command_node_runs_and_captures_its_evidence
+ports::execution::harness_baseline::a_fallback_that_cannot_measure_leaves_the_verdict_untouched
+ports::execution::harness_baseline::a_gate_that_cannot_run_here_ends_the_run_before_a_line_is_written
+ports::execution::harness_baseline::a_green_validate_measures_nothing
+ports::execution::harness_baseline::the_node_records_the_sha_it_actually_measured
+ports::execution::harness_gates::a_failing_first_gate_does_not_stop_the_second_and_both_are_named
+ports::execution::harness_gates::a_starter_shaped_workflow_is_gated_by_the_projects_selected_gates
+ports::execution::harness_subtraction::a_differently_red_gate_is_still_this_features_verdict
+ports::execution::harness_subtraction::a_differently_red_gate_reports_only_the_failures_that_are_new
+ports::execution::harness_subtraction::a_gate_green_at_the_base_and_red_now_does_fail_the_step
+ports::execution::harness_subtraction::a_gate_red_at_the_base_and_identically_red_now_does_not_fail_the_step
+ports::execution::harness_subtraction::a_gate_that_could_not_run_at_the_base_terminates_rather_than_being_excluded
+ports::execution::harness_subtraction::a_missing_binary_stays_terminal_rather_than_being_subtracted
+ports::execution::harness_subtraction::an_excluded_gate_is_named_beside_the_failure_that_is_being_charged
+ports::execution::harness_subtraction::the_triage_agent_is_not_asked_about_a_case_the_baseline_settled
+ports::execution::harness_triage::persistent_environment_failure_terminates_without_exhausting_budget
+ports::execution::harness_triage::persistent_regression_failure_exhausts_retry_budget
+ports::execution::preflight_gate::a_resolvable_binary_leaves_the_run_untouched
+ports::execution::starter_baseline::starter_baseline_bugfix_pipeline
+ports::execution::starter_baseline::starter_baseline_ci_fix
+ports::execution::starter_baseline::starter_baseline_docs_update
+ports::execution::starter_baseline::starter_baseline_refactor
+ports::execution::starter_baseline::starter_baseline_simple_task
+ports::execution::starter_baseline::starter_baseline_standard_feature_pipeline
+
+# ── Wine maps the Windows temp directory onto `/tmp` ──────────────────────────
+# So a body that reports its own directory answers with the MSYS spelling where
+# the assertion wants the Win32 one. Real Windows agrees with the assertion.
+ports::execution::conformance::local_subprocess_adapter_satisfies_the_contract
+ports::execution::conformance::terminal_worktree::local_subprocess_adapter_satisfies_the_terminal_worktree_contract
+
+# ── Wine does not enforce deny ACEs ───────────────────────────────────────────
+# The fence applies without error and then permits the write it denied, so a
+# green here would be worth less than nothing. The artifact-scope fence is
+# verifiable only on real Windows — a VM or `windows-latest`, never this tier.
+adapters::worktree::git_ops::scope::tests_windows::teardown_gives_back_creating_and_deleting_as_well_as_writing
+adapters::worktree::git_ops::scope::tests_windows::the_fence_denies_writes_creations_and_deletes_outside_the_scope
