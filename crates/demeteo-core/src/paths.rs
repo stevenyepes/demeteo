@@ -232,6 +232,65 @@ pub fn native_path(path: &str, windows_host: bool) -> PathBuf {
     PathBuf::from(spelled.replace('/', "\\"))
 }
 
+/// Whether `path` is absolute under the rules of the host that owns it.
+///
+/// [`std::path::Path::is_absolute`] answers for the platform this was
+/// *compiled* for, which is the wrong question for every path belonging to
+/// another host. A Windows desktop driving a Linux machine reads `/srv/…` back
+/// from it; `Path::is_absolute` calls that relative, because Windows wants a
+/// drive letter or a UNC prefix — so a caller filtering on it silently discards
+/// the one answer the target gave, and falls back to whatever it guessed.
+///
+/// `windows_host` is the caller's [`windows_host_target`] answer, passed rather
+/// than read so both answers are reachable from a test on either platform.
+pub fn is_absolute_on(path: &str, windows_host: bool) -> bool {
+    fn separator(byte: u8) -> bool {
+        byte == b'/' || byte == b'\\'
+    }
+    if !windows_host {
+        return path.starts_with('/');
+    }
+    let bytes = path.as_bytes();
+    matches!(bytes, [first, second, ..] if separator(*first) && separator(*second))
+        || matches!(bytes, [drive, b':', sep, ..] if drive.is_ascii_alphabetic() && separator(*sep))
+}
+
+/// Whether `path` reads as absolute under *either* platform's rules.
+///
+/// For paths recovered from text whose producing host is not knowable where it
+/// is read: one path manifest carries artifact paths written by the desktop
+/// alongside worktree paths belonging to the machine the step runs on, so
+/// neither platform's rules alone recognise all of them. What the path *is* —
+/// a file here, a directory over there — is then settled by asking, not by the
+/// spelling.
+pub fn looks_absolute(path: &str) -> bool {
+    is_absolute_on(path, false) || is_absolute_on(path, true)
+}
+
+/// `base` with `components` appended, spelled with the separator the host that
+/// owns `base` uses.
+///
+/// [`std::path::Path::join`] writes the separator of the platform this was
+/// *compiled* for, so a Windows desktop composing a path inside a Linux
+/// worktree produces `/home/u/wt\artifacts\_context` — a single directory whose
+/// name contains backslashes, which SFTP creates without complaint and no later
+/// lookup ever finds again.
+///
+/// `windows_host` is the caller's [`windows_host_target`] answer.
+pub fn join_on<'a>(
+    base: &str,
+    components: impl IntoIterator<Item = &'a str>,
+    windows_host: bool,
+) -> String {
+    let separator = if windows_host { '\\' } else { '/' };
+    let mut joined = base.trim_end_matches(['/', '\\']).to_string();
+    for component in components {
+        joined.push(separator);
+        joined.push_str(component);
+    }
+    joined
+}
+
 /// Whether two spellings name one location.
 ///
 /// Every caller of this is comparing a path git reported against one Demeteo

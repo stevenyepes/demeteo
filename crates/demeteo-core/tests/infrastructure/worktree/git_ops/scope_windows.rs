@@ -56,6 +56,69 @@ async fn the_fence_denies_writes_creations_and_deletes_outside_the_scope() {
     assert!(after.is_ok(), "teardown left the protected path fenced");
 }
 
+/// Teardown is the inverse of the fence, so it owes back every right the mask
+/// took — and the mask names six. Asserting only the overwrite would pass on a
+/// half-lifted fence: Windows may keep one inheritable ACE as an effective
+/// entry plus a propagate-only twin, and removing one of the pair leaves the
+/// step's own file editable while the directory it lives in still refuses a
+/// create or a delete. That is the shape a later step fails on with no
+/// explanation.
+#[tokio::test]
+async fn teardown_gives_back_creating_and_deleting_as_well_as_writing() {
+    let root = worktree("teardown");
+    let protected = root.join("src").join("main.rs");
+    let helper = helper();
+
+    helper
+        .apply_artifact_scope(None, &root.to_string_lossy(), &[PathBuf::from("artifacts")])
+        .await
+        .expect("fence");
+    helper
+        .restore_artifact_scope(None, &root.to_string_lossy())
+        .await
+        .expect("teardown");
+
+    let overwrite = std::fs::write(&protected, "restored");
+    let create = std::fs::write(root.join("src").join("new.rs"), "restored");
+    let delete = std::fs::remove_file(&protected);
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(overwrite.is_ok(), "teardown left the write denied");
+    assert!(create.is_ok(), "teardown left the creation denied");
+    assert!(delete.is_ok(), "teardown left the delete denied");
+}
+
+/// Teardown runs again on every retry and on the cleanup queue's schedule, so
+/// it meets worktrees that were never fenced and worktrees it already lifted.
+/// Neither is a failure, and neither may rewrite an ACL — the entries it asks
+/// about include every one the fence deliberately left writable.
+#[tokio::test]
+async fn teardown_of_an_unfenced_worktree_is_a_success() {
+    let root = worktree("unfenced");
+    let helper = helper();
+
+    helper
+        .restore_artifact_scope(None, &root.to_string_lossy())
+        .await
+        .expect("teardown of a worktree that was never fenced");
+    helper
+        .apply_artifact_scope(None, &root.to_string_lossy(), &[PathBuf::from("artifacts")])
+        .await
+        .expect("fence");
+    helper
+        .restore_artifact_scope(None, &root.to_string_lossy())
+        .await
+        .expect("teardown");
+    helper
+        .restore_artifact_scope(None, &root.to_string_lossy())
+        .await
+        .expect("teardown of a worktree already lifted");
+
+    let after = std::fs::write(root.join("src").join("main.rs"), "restored");
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(after.is_ok(), "a repeated teardown re-fenced the worktree");
+}
+
 /// The ACE is inheritable, so a file the agent creates *inside* a fenced
 /// directory is fenced the moment it exists. Nothing walks the tree to make
 /// that true, which is what lets the fence cost one call per top-level entry.

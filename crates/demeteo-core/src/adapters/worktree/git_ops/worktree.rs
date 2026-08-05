@@ -1205,6 +1205,11 @@ fn terminal_worktree_create_cmd(
 /// spelling of the destination and not a path any Win32 call would accept — and
 /// the caller opens a terminal at what this returns.
 /// [`paths::native_path`] is where that spelling stops.
+///
+/// The absoluteness test belongs to the *target*, not to this build:
+/// `Path::is_absolute` compiled for Windows rejects the `/srv/…` a Linux
+/// machine reports, so a Windows desktop driving a remote would throw the
+/// created path away and hand back its own guess on every create.
 fn created_terminal_worktree_path(output: &str, derived: &str, windows_host: bool) -> String {
     output
         .lines()
@@ -1212,7 +1217,7 @@ fn created_terminal_worktree_path(output: &str, derived: &str, windows_host: boo
         .map(str::trim)
         .find(|line| !line.is_empty())
         .map(|line| paths::native_path(line, windows_host))
-        .filter(|path| path.is_absolute())
+        .filter(|path| paths::is_absolute_on(&path.to_string_lossy(), windows_host))
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| derived.to_string())
 }

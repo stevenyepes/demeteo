@@ -2,22 +2,22 @@
 //!
 //! Everything this acts on is decided next door in `dacl.rs`, where a Linux
 //! test can reach it; what is left here is one identity lookup, one directory
-//! read, and the get-merge-set triple that installs or removes a single ACE.
-//! Reviewing it by eye is meant to be enough, and it stays that way only while
-//! nothing here decides anything.
+//! read, and the read-modify-write triple that installs or removes a single
+//! ACE. Reviewing it by eye is meant to be enough, and it stays that way only
+//! while nothing here decides anything.
 
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, ERROR_SUCCESS, HANDLE};
 use windows_sys::Win32::Security::Authorization::{
-    GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, ACCESS_MODE, DENY_ACCESS,
-    EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, REVOKE_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID,
-    TRUSTEE_IS_USER, TRUSTEE_W,
+    GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, DENY_ACCESS, EXPLICIT_ACCESS_W,
+    NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
-    GetAce, GetLengthSid, GetTokenInformation, TokenUser, ACE_HEADER, ACL,
-    DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY, TOKEN_USER,
+    AddAce, GetAce, GetLengthSid, GetTokenInformation, InitializeAcl, TokenUser, ACE_HEADER,
+    ACE_REVISION, ACL, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY,
+    TOKEN_USER,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -42,14 +42,8 @@ const _: () = {
     assert!(dacl::INHERITED_ACE == sec::INHERITED_ACE);
 };
 
-/// What one [`set_entry_ace`] call installs, as `EXPLICIT_ACCESS_W` spells it.
-/// `REVOKE_ACCESS` reads neither of the other two; they are still stated so
-/// the call reads the same in both directions.
-struct AceSpec {
-    mode: ACCESS_MODE,
-    mask: u32,
-    inheritance: u32,
-}
+/// `MAXDWORD`, the index that tells `AddAce` to append.
+const APPEND_ACE: u32 = u32::MAX;
 
 /// Deny the token's user everything in [`DENY_MASK`](dacl::DENY_MASK) on every
 /// top-level entry the step may not write.
@@ -63,42 +57,25 @@ pub fn fence(worktree: &Path, writable_paths: &[PathBuf]) -> Result<(), String> 
 
     let sid = token_user_sid()?;
     for ace in dacl::fence_plan(&entries(worktree)?, writable_paths, worktree) {
-        set_entry_ace(
-            &ace.path,
-            &sid,
-            AceSpec {
-                mode: DENY_ACCESS,
-                mask: ace.mask,
-                inheritance: ace.inheritance,
-            },
-        )?;
+        add_deny_ace(&ace.path, &sid, ace.mask, ace.inheritance)?;
     }
     Ok(())
 }
 
-/// Remove the fence's ACE wherever it is still present.
+/// Remove the fence's ACE wherever it is still present, and fail rather than
+/// return over one that is still there.
 ///
-/// The revoke goes on the top-level entry alone. Its inheritable copies in the
-/// subtree are the system's, propagated when the ACE was set, and withdrawing
-/// the source is what withdraws them — which is what makes teardown cost one
-/// call per top-level entry rather than one per file.
+/// The removal goes on the top-level entry alone. Its inheritable copies in
+/// the subtree are the system's, propagated when the ACE was set, and
+/// withdrawing the source is what withdraws them — which is what makes
+/// teardown cost one call per top-level entry rather than one per file.
 pub fn unfence(worktree: &Path) -> Result<(), String> {
     if !worktree.is_dir() {
         return Ok(());
     }
     let sid = token_user_sid()?;
     for path in dacl::revoke_candidates(&entries(worktree)?) {
-        if dacl::carries_fence(&read_aces(&path)?, sid.bytes()) {
-            set_entry_ace(
-                &path,
-                &sid,
-                AceSpec {
-                    mode: REVOKE_ACCESS,
-                    mask: dacl::DENY_MASK,
-                    inheritance: dacl::NO_INHERITANCE,
-                },
-            )?;
-        }
+        remove_fence_ace(&path, &sid)?;
     }
     Ok(())
 }
@@ -217,15 +194,17 @@ fn entries(worktree: &Path) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
-/// Merge one explicit entry into the object's existing DACL and write it back.
+/// Read one object's DACL, hand it to `use_dacl`, and free the descriptor
+/// however that goes.
 ///
-/// The existing DACL is read rather than replaced, so the fence is a layer
-/// over what the worktree inherited rather than a new access policy for it —
-/// and so `REVOKE_ACCESS` has something to remove the ACE *from*. A null DACL
-/// grants everyone everything, and merging a deny into nothing would leave the
-/// object granting nobody anything, so that case is refused rather than
-/// guessed at.
-fn set_entry_ace(path: &Path, sid: &Sid, spec: AceSpec) -> Result<(), String> {
+/// The pointer may be null. A null DACL grants everyone everything, which is
+/// an object no fence is on and no teardown has work to do for, so the two
+/// callers answer that case differently and neither is served by a blanket
+/// refusal here.
+fn with_dacl<T>(
+    path: &Path,
+    use_dacl: impl FnOnce(*mut ACL) -> Result<T, String>,
+) -> Result<T, String> {
     let name = wide(path);
     let mut acl: *mut ACL = std::ptr::null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
@@ -247,51 +226,180 @@ fn set_entry_ace(path: &Path, sid: &Sid, spec: AceSpec) -> Result<(), String> {
     if read != ERROR_SUCCESS {
         return Err(format!("read ACL of {} failed: {}", path.display(), read));
     }
-    let result = write_merged_dacl(&name, path, acl, sid, spec);
+
+    let result = use_dacl(acl);
     // SAFETY: `descriptor` was allocated by the successful call above, and
     // neither it nor the `acl` pointing into it is used after this.
     unsafe { LocalFree(descriptor) };
     result
 }
 
-fn write_merged_dacl(
-    name: &[u16],
-    path: &Path,
-    current: *mut ACL,
-    sid: &Sid,
-    spec: AceSpec,
-) -> Result<(), String> {
-    if current.is_null() {
-        return Err(format!("{} has no discretionary ACL", path.display()));
+/// Merge one deny ACE into the object's existing DACL and write it back.
+///
+/// The existing DACL is read rather than replaced, so the fence is a layer
+/// over what the worktree inherited rather than a new access policy for it. A
+/// null DACL grants everyone everything, and merging a deny into nothing would
+/// leave the object granting nobody anything, so that case is refused rather
+/// than guessed at.
+fn add_deny_ace(path: &Path, sid: &Sid, mask: u32, inheritance: u32) -> Result<(), String> {
+    with_dacl(path, |current| {
+        if current.is_null() {
+            return Err(format!("{} has no discretionary ACL", path.display()));
+        }
+
+        let access = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: mask,
+            grfAccessMode: DENY_ACCESS,
+            grfInheritance: inheritance,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: sid.as_psid().cast(),
+            },
+        };
+
+        let mut merged: *mut ACL = std::ptr::null_mut();
+        // SAFETY: `access` names a SID this process owns and which outlives
+        // the call, `current` is the live DACL read above, and `merged` is a
+        // live out-parameter freed below.
+        let built = unsafe { SetEntriesInAclW(1, &access, current, &mut merged) };
+        if built != ERROR_SUCCESS {
+            return Err(format!(
+                "build ACL for {} failed: {}",
+                path.display(),
+                built
+            ));
+        }
+
+        let written = write_dacl(path, merged);
+        // SAFETY: `merged` was allocated by `SetEntriesInAclW` and is not used
+        // after this.
+        unsafe { LocalFree(merged.cast()) };
+        written
+    })
+}
+
+/// Take the fence's own ACEs off one object, and prove they are gone.
+///
+/// # Why this is a rewrite and not a `REVOKE_ACCESS` merge
+///
+/// `REVOKE_ACCESS` removes *every* explicit ACE for the trustee, so it would
+/// drop grants Demeteo never added — which is why the fence recognises its own
+/// ACE instead. But recognition then has to survive the round trip, and on a
+/// real Windows worktree it did not: `SetEntriesInAclW` was handed the mask and
+/// the inheritance flags the fence chose, the entry read back differing from
+/// them, an equality test matched nothing, and teardown returned success over
+/// a `src/` that was still unwritable. Filtering the DACL and writing it back
+/// keeps the merge API out of the removal path entirely, and leaves the
+/// judgement of what is the fence's in `dacl.rs`, where a Linux test reaches
+/// it.
+///
+/// # Why the re-read is not optional
+///
+/// The bug above was invisible to production and visible only to a test that
+/// went on to write the protected file. Every caller of teardown drops its
+/// `Result` on purpose — a teardown must not change a step's outcome — so a
+/// surviving fence has exactly two ways to be noticed: the delete of the
+/// worktree fails and the cleanup queue retries it, or this says so. Both need
+/// this to have said so.
+fn remove_fence_ace(path: &Path, sid: &Sid) -> Result<(), String> {
+    let rewritten = with_dacl(path, |acl| {
+        let aces = object_aces(acl, path)?;
+        let keep = dacl::retained_ace_indices(&aces, sid.bytes());
+        if keep.len() == aces.len() {
+            return Ok(false);
+        }
+        if keep.is_empty() {
+            return Err(format!(
+                "{} carries nothing but the scope fence; emptying its ACL would deny everyone everything",
+                path.display()
+            ));
+        }
+        // SAFETY: `acl` is the live DACL read for this path, and every index
+        // in `keep` came from enumerating that same ACL's entries.
+        let mut filtered = unsafe { filtered_acl(acl, &keep, path) }?;
+        write_dacl(path, filtered.as_mut_ptr().cast::<ACL>())?;
+        Ok(true)
+    })?;
+
+    if !rewritten {
+        return Ok(());
     }
 
-    let access = EXPLICIT_ACCESS_W {
-        grfAccessPermissions: spec.mask,
-        grfAccessMode: spec.mode,
-        grfInheritance: spec.inheritance,
-        Trustee: TRUSTEE_W {
-            pMultipleTrustee: std::ptr::null_mut(),
-            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
-            TrusteeForm: TRUSTEE_IS_SID,
-            TrusteeType: TRUSTEE_IS_USER,
-            ptstrName: sid.as_psid().cast(),
-        },
-    };
-
-    let mut merged: *mut ACL = std::ptr::null_mut();
-    // SAFETY: `access` names a SID this process owns and which outlives the
-    // call, `current` is the live DACL the caller read, and `merged` is a live
-    // out-parameter freed below.
-    let built = unsafe { SetEntriesInAclW(1, &access, current, &mut merged) };
-    if built != ERROR_SUCCESS {
+    let survived = with_dacl(path, |acl| {
+        Ok(dacl::carries_fence(&object_aces(acl, path)?, sid.bytes()))
+    })?;
+    if survived {
         return Err(format!(
-            "build ACL for {} failed: {}",
-            path.display(),
-            built
+            "the artifact-scope fence is still on {} after teardown wrote its ACL",
+            path.display()
         ));
     }
+    Ok(())
+}
 
-    // SAFETY: `name` is nul-terminated and `merged` is the ACL just built.
+/// A fresh ACL holding the entries of `acl` at `keep`, in the order they
+/// appear there.
+///
+/// The entries are copied whole rather than rebuilt from
+/// [`dacl::Ace`](dacl::Ace), which decodes two ACE types and would lose every
+/// other. `AddAce` appends without reordering, so an ACL that arrived in
+/// canonical order leaves in it.
+///
+/// # Safety
+///
+/// `acl` must point at a valid ACL that outlives the call, and every index in
+/// `keep` must be below its `AceCount`.
+unsafe fn filtered_acl(acl: *mut ACL, keep: &[usize], path: &Path) -> Result<Vec<u32>, String> {
+    let revision = ACE_REVISION::from((*acl).AclRevision);
+    let mut kept: Vec<(*mut core::ffi::c_void, u16)> = Vec::with_capacity(keep.len());
+    let mut size = std::mem::size_of::<ACL>();
+    for &index in keep {
+        let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
+        if GetAce(acl, index as u32, &mut ace) == 0 || ace.is_null() {
+            return Err(format!(
+                "read ACE {index} of {} failed: {}",
+                path.display(),
+                last_error()
+            ));
+        }
+        let bytes = (*ace.cast::<ACE_HEADER>()).AceSize;
+        size += usize::from(bytes);
+        kept.push((ace, bytes));
+    }
+
+    // An ACL states its own length in a `u16`, so a size that does not fit one
+    // would be written back truncated. Every ACE is DWORD-aligned, so `size` is
+    // already the multiple of four `InitializeAcl` asks for.
+    let capacity = u16::try_from(size)
+        .map_err(|_| format!("ACL of {} is too large to copy", path.display()))?;
+    let mut buffer: Vec<u32> = vec![0; size.div_ceil(4)];
+    let out = buffer.as_mut_ptr().cast::<ACL>();
+    if InitializeAcl(out, u32::from(capacity), revision) == 0 {
+        return Err(format!(
+            "initialise ACL for {} failed: {}",
+            path.display(),
+            last_error()
+        ));
+    }
+    for (ace, bytes) in kept {
+        if AddAce(out, revision, APPEND_ACE, ace, u32::from(bytes)) == 0 {
+            return Err(format!(
+                "copy ACE onto {} failed: {}",
+                path.display(),
+                last_error()
+            ));
+        }
+    }
+    Ok(buffer)
+}
+
+fn write_dacl(path: &Path, acl: *mut ACL) -> Result<(), String> {
+    let name = wide(path);
+    // SAFETY: `name` is nul-terminated and `acl` is a valid ACL owned by the
+    // caller for the duration of the call.
     let written = unsafe {
         SetNamedSecurityInfoW(
             name.as_ptr(),
@@ -299,13 +407,10 @@ fn write_merged_dacl(
             DACL_SECURITY_INFORMATION,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            merged,
+            acl,
             std::ptr::null(),
         )
     };
-    // SAFETY: `merged` was allocated by `SetEntriesInAclW` and is not used
-    // after this.
-    unsafe { LocalFree(merged.cast()) };
     if written != ERROR_SUCCESS {
         return Err(format!(
             "write ACL of {} failed: {}",
@@ -316,74 +421,55 @@ fn write_merged_dacl(
     Ok(())
 }
 
-/// The object's allow and deny ACEs, in ACL order.
+/// Every ACE of the object's DACL, in ACL order.
 ///
-/// Object-typed and callback ACEs are skipped rather than decoded: they carry
-/// their SID at a different offset, the fence never writes one, and
-/// [`is_fence_ace`](dacl::is_fence_ace) could not match one if it did.
-fn read_aces(path: &Path) -> Result<Vec<dacl::Ace>, String> {
-    let name = wide(path);
-    let mut acl: *mut ACL = std::ptr::null_mut();
-    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-
-    // SAFETY: as in `set_entry_ace` — nul-terminated name, live
-    // out-parameters, descriptor freed below.
-    let read = unsafe {
-        GetNamedSecurityInfoW(
-            name.as_ptr(),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut acl,
-            std::ptr::null_mut(),
-            &mut descriptor,
-        )
-    };
-    if read != ERROR_SUCCESS {
-        return Err(format!("read ACL of {} failed: {}", path.display(), read));
-    }
-
-    // SAFETY: `acl` is either null or the live DACL of the descriptor freed
-    // below, and every ACE it reports belongs to it.
-    let aces = unsafe { collect_aces(acl) };
-    // SAFETY: `descriptor` was allocated by the successful call above, and
-    // nothing pointing into it is used after this.
-    unsafe { LocalFree(descriptor) };
-    Ok(aces)
-}
-
-/// # Safety
-///
-/// `acl` must be null or point at a valid ACL that outlives the call.
-unsafe fn collect_aces(acl: *mut ACL) -> Vec<dacl::Ace> {
+/// A type the fence never writes is reported as
+/// [`AceKind::Other`](dacl::AceKind::Other) rather than skipped: object-typed
+/// and callback ACEs carry their SID at a different offset, so decoding one
+/// would misread it, and dropping one would make a position in this list stop
+/// meaning a position in the ACL — which is the only thing
+/// [`retained_ace_indices`](dacl::retained_ace_indices) hands back.
+fn object_aces(acl: *mut ACL, path: &Path) -> Result<Vec<dacl::Ace>, String> {
     if acl.is_null() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    for index in 0..u32::from((*acl).AceCount) {
-        let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
-        if GetAce(acl, index, &mut ace) == 0 || ace.is_null() {
-            continue;
+    // SAFETY: `acl` is non-null and points at the live DACL `with_dacl` read,
+    // and every ACE `GetAce` reports belongs to it.
+    unsafe {
+        for index in 0..u32::from((*acl).AceCount) {
+            let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
+            if GetAce(acl, index, &mut ace) == 0 || ace.is_null() {
+                return Err(format!(
+                    "read ACE {index} of {} failed: {}",
+                    path.display(),
+                    last_error()
+                ));
+            }
+            let header = *ace.cast::<ACE_HEADER>();
+            let kind = dacl::ace_kind(header.AceType);
+            let (mask, sid) = if kind == dacl::AceKind::Other {
+                (0, Vec::new())
+            } else {
+                let sid: PSID = ace.cast::<u8>().add(SID_OFFSET).cast();
+                (
+                    *ace.cast::<u8>().add(MASK_OFFSET).cast::<u32>(),
+                    std::slice::from_raw_parts(sid.cast::<u8>(), GetLengthSid(sid) as usize)
+                        .to_vec(),
+                )
+            };
+            out.push(dacl::Ace {
+                kind,
+                mask,
+                flags: u32::from(header.AceFlags),
+                sid,
+            });
         }
-        let header = *ace.cast::<ACE_HEADER>();
-        let denies = header.AceType == dacl::ACCESS_DENIED_ACE_TYPE;
-        if !denies && header.AceType != ACCESS_ALLOWED_ACE_TYPE {
-            continue;
-        }
-        let sid: PSID = ace.cast::<u8>().add(SID_OFFSET).cast();
-        out.push(dacl::Ace {
-            denies,
-            mask: *ace.cast::<u8>().add(MASK_OFFSET).cast::<u32>(),
-            flags: u32::from(header.AceFlags),
-            sid: std::slice::from_raw_parts(sid.cast::<u8>(), GetLengthSid(sid) as usize).to_vec(),
-        });
     }
-    out
+    Ok(out)
 }
 
 /// An allow or deny ACE is a header, then a `u32` mask, then the SID inline.
-const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const MASK_OFFSET: usize = std::mem::size_of::<ACE_HEADER>();
 const SID_OFFSET: usize = MASK_OFFSET + std::mem::size_of::<u32>();
 

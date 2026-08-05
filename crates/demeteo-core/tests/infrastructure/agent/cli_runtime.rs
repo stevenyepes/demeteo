@@ -920,10 +920,15 @@ fn apply_static_env_injects_defaults_but_never_overrides_caller() {
 /// 7)` under the `[environment — not an implementation failure]` banner, which is
 /// actively misleading — one observed run lost its whole pipeline to it after
 /// `s-implement` had already spent 3.8 M tokens.
+///
+/// Raised by kind rather than by errno 7: the number is E2BIG only where the
+/// numbering is POSIX's, and on Windows error 7 is `ERROR_ARENA_TRASHED`, which
+/// maps to no kind at all. `spawn_error_message` reads the kind, so the errno
+/// would be testing the mapping table instead of the message.
 #[test]
 fn an_oversized_prompt_is_reported_as_ours_with_the_numbers() {
     let msg = spawn_error_message(
-        &std::io::Error::from_raw_os_error(7),
+        &std::io::Error::from(std::io::ErrorKind::ArgumentListTooLong),
         "claude",
         "/home/u/.local/bin/claude",
         230_400,

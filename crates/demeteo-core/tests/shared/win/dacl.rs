@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 
 const WRITE_DAC: u32 = 0x0004_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
+const FILE_READ_DATA: u32 = 0x0000_0001;
+/// `INHERIT_ONLY_ACE`. The flag Windows adds when it keeps an inheritable ACE
+/// on a container as an effective entry plus a propagate-only twin.
+const INHERIT_ONLY_ACE: u32 = 0x0000_0008;
 
 fn worktree() -> PathBuf {
     PathBuf::from("/w/repo_wt_a1b2c3d4")
@@ -161,7 +165,7 @@ fn a_directory_fences_its_future_children_and_a_file_fences_only_itself() {
 
 fn fence_ace() -> Ace {
     Ace {
-        denies: true,
+        kind: AceKind::Deny,
         mask: DENY_MASK,
         flags: CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
         sid: vec![1, 5, 0, 0],
@@ -181,11 +185,21 @@ fn teardown_recognises_only_the_fences_own_ace() {
         ..fence_ace()
     };
     let allowing = Ace {
-        denies: false,
+        kind: AceKind::Allow,
         ..fence_ace()
     };
-    let another_mask = Ace {
+    let a_wider_mask = Ace {
         mask: DENY_MASK | WRITE_DAC,
+        ..fence_ace()
+    };
+    let a_read_deny = Ace {
+        mask: FILE_READ_DATA,
+        ..fence_ace()
+    };
+    let undecoded = Ace {
+        kind: AceKind::Other,
+        mask: 0,
+        sid: Vec::new(),
         ..fence_ace()
     };
     let propagated_from_above = Ace {
@@ -195,12 +209,132 @@ fn teardown_recognises_only_the_fences_own_ace() {
     for ace in [
         another_user,
         allowing,
-        another_mask,
+        a_wider_mask,
+        a_read_deny,
+        undecoded,
         propagated_from_above.clone(),
     ] {
         assert!(!is_fence_ace(&ace, &sid), "matched {ace:?}");
     }
     assert!(!carries_fence(&[propagated_from_above], &sid));
+}
+
+/// The failure this predicate exists in its current shape to fix. On a real
+/// Windows worktree the fence went up, denied every write it was meant to,
+/// and then teardown recognised nothing and reported success over a `src/`
+/// that was still unwritable. Windows may store an ACE with flags other than
+/// the ones `SetEntriesInAclW` was handed — an inheritable entry on a
+/// container can be kept as an effective ACE plus an `INHERIT_ONLY_ACE` twin —
+/// so anything that turns on a byte-exact round-trip of the flags can match
+/// nothing at all.
+#[test]
+fn a_fence_ace_whose_flags_windows_stored_differently_is_still_recognised() {
+    let sid = vec![1u8, 5, 0, 0];
+    for flags in [
+        NO_INHERITANCE,
+        CONTAINER_INHERIT_ACE,
+        OBJECT_INHERIT_ACE,
+        CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE | INHERIT_ONLY_ACE,
+    ] {
+        let stored = Ace {
+            flags,
+            ..fence_ace()
+        };
+        assert!(is_fence_ace(&stored, &sid), "skipped {stored:?}");
+    }
+}
+
+/// Same argument for the mask. A deny naming this token's user and denying
+/// only rights the fence already denies is the fence's, or has the fence's
+/// effect; leaving it up strands the worktree, and taking it down costs at
+/// most a right the user was denying themselves. An empty mask denies nothing
+/// and is nobody's fence.
+#[test]
+fn a_fence_ace_stored_with_fewer_of_its_own_rights_is_still_recognised() {
+    let sid = vec![1u8, 5, 0, 0];
+    for mask in [DELETE, FILE_WRITE_DATA | FILE_APPEND_DATA, DENY_MASK] {
+        let stored = Ace {
+            mask,
+            ..fence_ace()
+        };
+        assert!(is_fence_ace(&stored, &sid), "skipped {stored:?}");
+    }
+    let denies_nothing = Ace {
+        mask: 0,
+        ..fence_ace()
+    };
+    assert!(!is_fence_ace(&denies_nothing, &sid));
+}
+
+/// Teardown rewrites the DACL rather than revoking the trustee, so what it
+/// keeps is the whole question. Positions, because an ACE type this file does
+/// not decode is copied back byte for byte and would be lost if the ACL were
+/// rebuilt from the decoded view.
+#[test]
+fn the_rewritten_dacl_keeps_everything_that_is_not_the_fences_own() {
+    let sid = vec![1u8, 5, 0, 0];
+    let aces = vec![
+        fence_ace(),
+        Ace {
+            kind: AceKind::Deny,
+            sid: vec![1, 5, 0, 1],
+            ..fence_ace()
+        },
+        Ace {
+            kind: AceKind::Other,
+            mask: 0,
+            sid: Vec::new(),
+            ..fence_ace()
+        },
+        Ace {
+            kind: AceKind::Allow,
+            ..fence_ace()
+        },
+        Ace {
+            flags: fence_ace().flags | INHERITED_ACE,
+            ..fence_ace()
+        },
+        Ace {
+            mask: DELETE,
+            flags: NO_INHERITANCE,
+            ..fence_ace()
+        },
+    ];
+    assert_eq!(retained_ace_indices(&aces, &sid), vec![1, 2, 3, 4]);
+}
+
+/// An ACL with no fence ACE on it is one teardown must not write at all: a
+/// rewrite that changes nothing still resets the object's inheritance state,
+/// and the entries teardown asks about include every one the fence
+/// deliberately left writable.
+#[test]
+fn an_untouched_acl_retains_every_position_it_had() {
+    let sid = vec![1u8, 5, 0, 0];
+    let aces = vec![
+        Ace {
+            kind: AceKind::Allow,
+            ..fence_ace()
+        },
+        Ace {
+            kind: AceKind::Deny,
+            sid: vec![1, 5, 0, 1],
+            ..fence_ace()
+        },
+    ];
+    assert_eq!(retained_ace_indices(&aces, &sid), vec![0, 1]);
+    assert!(!carries_fence(&aces, &sid));
+}
+
+/// The header byte is classified once, here, so that every other rule in this
+/// file can compare a kind instead of re-deriving one — and so that a type the
+/// fence never writes is never mistaken for one it does.
+#[test]
+fn only_the_two_ace_types_the_fence_understands_are_decoded() {
+    assert_eq!(ace_kind(ACCESS_ALLOWED_ACE_TYPE), AceKind::Allow);
+    assert_eq!(ace_kind(ACCESS_DENIED_ACE_TYPE), AceKind::Deny);
+    for object_or_callback in [0x05u8, 0x06, 0x09, 0x0a, 0x0b] {
+        assert_eq!(ace_kind(object_or_callback), AceKind::Other);
+    }
 }
 
 /// Teardown has no record of which entries were fenced — a crash between

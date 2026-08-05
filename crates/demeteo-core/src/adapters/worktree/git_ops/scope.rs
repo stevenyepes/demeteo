@@ -381,6 +381,11 @@ impl GitOpsHelper {
     /// `chmod -R u+w` that `git_ops::worktree::restore_write_access_cmd`
     /// already issues on the teardown path, and for a remote machine that is
     /// still the only fence there is.
+    ///
+    /// Both callers drop this `Result`, and correctly so — a teardown runs on
+    /// the success path too and must not change a step's outcome. That is why
+    /// the Windows arm also logs: a fence that stays up strands the worktree,
+    /// and it must not be able to do that quietly.
     pub(crate) async fn restore_artifact_scope(
         &self,
         machine_id: Option<&str>,
@@ -392,7 +397,15 @@ impl GitOpsHelper {
         )
         .is_local()
         {
-            return unfence_windows_worktree(Path::new(worktree_path)).await;
+            return unfence_windows_worktree(Path::new(worktree_path))
+                .await
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        worktree = worktree_path,
+                        error,
+                        "artifact-scope fence was not lifted"
+                    );
+                });
         }
         let _ = (machine_id, worktree_path);
         Ok(())

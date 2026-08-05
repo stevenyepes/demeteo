@@ -425,12 +425,7 @@ async fn the_listing_names_the_branch_the_main_checkout_is_on() {
     let (ctx, worktree_port, _calls) = context();
     add_project(&ctx, "p-local", "local", None);
     add_repo(&ctx, "r-local", "p-local", "org/local-repo");
-    let project_root = ctx
-        .workspace_dir
-        .join("projects/p-local")
-        .to_string_lossy()
-        .to_string();
-    let repo_dir = format!("{project_root}/repos/local-repo");
+    let (project_root, repo_dir) = local_layout(&ctx, "p-local", "local-repo");
     worktree_port.expect(WorktreeCall::ListTerminal {
         machine: None,
         repo_dir: repo_dir.clone(),
@@ -458,12 +453,7 @@ async fn a_detached_main_checkout_names_no_branch() {
     let (ctx, worktree_port, _calls) = context();
     add_project(&ctx, "p-local", "local", None);
     add_repo(&ctx, "r-local", "p-local", "org/local-repo");
-    let project_root = ctx
-        .workspace_dir
-        .join("projects/p-local")
-        .to_string_lossy()
-        .to_string();
-    let repo_dir = format!("{project_root}/repos/local-repo");
+    let (project_root, repo_dir) = local_layout(&ctx, "p-local", "local-repo");
     worktree_port.expect(WorktreeCall::ListTerminal {
         machine: None,
         repo_dir: repo_dir.clone(),
@@ -493,11 +483,7 @@ async fn workspace_health_names_no_branch_for_a_detached_checkout() {
     let (mut ctx, worktree_port, _calls) = context();
     add_project(&ctx, "p-local", "local", None);
     add_repo(&ctx, "r-local", "p-local", "org/local-repo");
-    let repo_dir = ctx
-        .workspace_dir
-        .join("projects/p-local/repos/local-repo")
-        .to_string_lossy()
-        .to_string();
+    let (_project_root, repo_dir) = local_layout(&ctx, "p-local", "local-repo");
     ctx.exec = Arc::new(
         crate::adapters::step_executor::scripted_exec::ScriptedExec::new(&[(
             &format!(

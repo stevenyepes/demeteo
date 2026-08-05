@@ -49,6 +49,22 @@ fn expected_area(project_root: &std::path::Path, repo_dir: &str) -> std::path::P
         )
 }
 
+/// A temporary directory as git will report it back.
+///
+/// The resolution is what macOS needs — `/tmp` is a symlink to `/private/tmp`,
+/// so the path a `TempDir` hands out is not the one `git worktree list` prints.
+/// Stripping `\\?\` is what Windows needs: `canonicalize` answers in the
+/// verbatim form, which is a spelling `CreateProcessW` accepts as an argument
+/// and git does not resolve, so handing it to git names nothing.
+fn real_path_of(dir: &std::path::Path) -> String {
+    let resolved = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let spelled = resolved.to_string_lossy().into_owned();
+    spelled
+        .strip_prefix(r"\\?\")
+        .map(str::to_string)
+        .unwrap_or(spelled)
+}
+
 /// The paths a listing replays, against the ones Demeteo built or was handed
 /// back.
 ///
@@ -129,21 +145,18 @@ async fn test_list_worktrees_only_main_when_no_worktrees_added() {
 #[tokio::test]
 async fn test_list_worktrees_with_one_extra_worktree() {
     let (dir, helper) = make_repo("wt_extra").await;
-    // Canonicalize to handle macOS /tmp → /private/tmp symlink.
-    // TempDir may return the symlink path while git worktree list
-    // returns the real path, causing an assertion mismatch.
-    let repo = std::fs::canonicalize(&dir)
-        .unwrap_or_else(|_| dir.as_os_str().to_os_string().into())
-        .to_string_lossy()
-        .to_string();
+    let repo = real_path_of(&dir);
 
-    // Add a linked worktree on a new branch
+    // Add a linked worktree on a new branch. Through `run_program`, as every
+    // git call Demeteo makes is: a Windows path inside a double-quoted shell
+    // word loses its separators to bash's own escaping, so a shell string here
+    // sets the test up to fail for a reason the product does not have.
     let wt_dir = format!("{}-wt", repo);
     let exec_tmp = fresh_exec();
     let _ = exec_tmp
-        .run_command(
+        .run_program(
             "local",
-            &format!("git -C \"{repo}\" worktree add \"{wt_dir}\" -b feature/my-task"),
+            super::git_request(&repo, ["worktree", "add", &wt_dir, "-b", "feature/my-task"]),
         )
         .await;
 
@@ -160,9 +173,9 @@ async fn test_list_worktrees_with_one_extra_worktree() {
 
     // Cleanup (prune first so git lets us remove the dir)
     let _ = exec_tmp
-        .run_command(
+        .run_program(
             "local",
-            &format!("git -C \"{repo}\" worktree remove --force \"{wt_dir}\""),
+            super::git_request(&repo, ["worktree", "remove", "--force", &wt_dir]),
         )
         .await;
     let _ = std::fs::remove_dir_all(&dir);
@@ -1002,20 +1015,29 @@ async fn test_provision_subtask_worktree_distinct_per_feature() {
     // git-side bookkeeping separate), the wt_dir suffixes reflect
     // the feature-scoped subtask_id, so two features on the *same*
     // repo would also be distinct.
-    assert!(wt_a.contains("f-A-step-s-research"));
-    assert!(wt_b.contains("f-B-step-s-research"));
+    //
+    // Asserted as a *sibling suffix of its own repo*, not as the id spelled
+    // out: on a Windows host the suffix is the fixed-width segment
+    // `worktree_dir` folds the id into, and a literal would be asserting the
+    // spelling rather than the isolation.
+    let repo_a = dir_a.to_string_lossy().to_string();
+    let repo_b = dir_b.to_string_lossy().to_string();
+    assert!(wt_a.starts_with(&format!("{repo_a}_wt_")), "{wt_a}");
+    assert!(wt_b.starts_with(&format!("{repo_b}_wt_")), "{wt_b}");
+    assert_ne!(
+        wt_a.trim_start_matches(&format!("{repo_a}_wt_")),
+        wt_b.trim_start_matches(&format!("{repo_b}_wt_")),
+        "the suffix is what the feature-scoped subtask id has to reach"
+    );
     assert_ne!(wt_a, wt_b);
 
     // Cleanup.
     let exec = fresh_exec();
-    for (repo, wt) in [
-        (dir_a.to_string_lossy().to_string(), wt_a),
-        (dir_b.to_string_lossy().to_string(), wt_b),
-    ] {
+    for (repo, wt) in [(repo_a, wt_a), (repo_b, wt_b)] {
         let _ = exec
-            .run_command(
+            .run_program(
                 "local",
-                &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+                super::git_request(&repo, ["worktree", "remove", "--force", &wt]),
             )
             .await;
         let _ = std::fs::remove_dir_all(repo);
@@ -1107,6 +1129,14 @@ async fn test_provision_subtask_worktree_same_repo_two_features_do_not_collide()
 /// cleanup. The provisioner must restore write permissions before
 /// removing the directory, otherwise the next redirect or retry hits
 /// "already exists" with no clear way to recover.
+///
+/// The leftover this reconstructs is the Unix fence's, and only Unix has it:
+/// `chmod a-w` reaching Git Bash sets a read-only *attribute* NTFS does not
+/// apply to directory traversal, so the sanity check it opens with — that a
+/// naive `rm` is blocked — is not true there, and the Windows fence is a DACL
+/// that `restore_artifact_scope` lifts instead. The leftover-directory half is
+/// covered on every platform by the orphan and registered-worktree cases above.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_provision_subtask_worktree_handles_chmod_locked_leftover() {
     let (dir, helper) = make_repo("wt_chmod_locked").await;
@@ -2080,10 +2110,16 @@ impl ExecutionPort for TeardownExec {
 /// is doubly forced, the prune follows it, and only then is the residue
 /// deleted. Every one of those four is there because the step before it would
 /// otherwise fail.
+///
+/// Against a named machine rather than `local`, so that all four steps are
+/// present on every host: a remote is Linux whatever the desktop is, while a
+/// Windows-*local* teardown lifts an ACL instead and emits no `chmod` at all —
+/// which `the_posix_write_restore_is_skipped_only_for_a_windows_local_target`
+/// is the test for.
 #[tokio::test]
 async fn teardown_restores_write_access_before_git_and_prunes_before_deleting() {
     let exec = TeardownExec::new(true, false);
-    reclaim_worktree_path(&exec, "local", "/repo", "/repo_wt_a")
+    reclaim_worktree_path(&exec, "build-box", "/repo", "/repo_wt_a")
         .await
         .expect("a removable worktree is torn down");
 
@@ -2186,12 +2222,16 @@ async fn a_successful_delete_asks_nothing_further() {
 /// worktree, so on a Windows host it arrives in MSYS form — and the caller
 /// opens a terminal at what this returns, which no Win32 call can do with
 /// `/c/…`.
+///
+/// The derived path deliberately names a different directory: falling back to
+/// it is what a rejected line does, so an expectation that matches the fallback
+/// cannot tell the two apart.
 #[test]
 fn a_created_worktree_path_leaves_the_shells_msys_spelling_behind() {
     assert_eq!(
         created_terminal_worktree_path(
             "Preparing worktree\n/c/Users/runneradmin/p/terminal-worktrees/app/one\n",
-            r"C:\Users\runneradmin\p\terminal-worktrees\app\one",
+            r"C:\Users\runneradmin\p\terminal-worktrees\app\derived",
             true,
         ),
         r"C:\Users\runneradmin\p\terminal-worktrees\app\one"

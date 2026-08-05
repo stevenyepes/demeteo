@@ -4,11 +4,11 @@
 //! `adapters/worktree/git_ops/scope.rs`, whose module header states what the
 //! fence is worth. What lives here is everything that fence has to *decide*:
 //! the access mask, the inheritance flags, which
-//! top-level entries are covered, and whether an ACL already carries the
-//! fence's own ACE. None of it calls Windows, so all of it is reachable from a
-//! Linux test — the reason given in this directory's module header, which
-//! applies with extra force to a security boundary. `dacl_sys.rs` holds the
-//! calls that cannot be.
+//! top-level entries are covered, which of an ACL's entries are the fence's
+//! own, and which of them a teardown rewrite keeps. None of it calls Windows,
+//! so all of it is reachable from a Linux test — the reason given in this
+//! directory's module header, which applies with extra force to a security
+//! boundary. `dacl_sys.rs` holds the calls that cannot be.
 
 use std::path::{Path, PathBuf};
 
@@ -57,9 +57,31 @@ pub const INHERITED_ACE: u32 = 0x10;
 /// not exist yet, at one call per top-level entry.
 pub const SUBTREE_INHERITANCE: u32 = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
 
-/// `ACCESS_DENIED_ACE_TYPE`, the one ACE header type the fence writes and the
-/// only one [`is_fence_ace`] will match.
+pub const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+/// The one ACE header type the fence writes, and the only one
+/// [`is_fence_ace`] will match.
 pub const ACCESS_DENIED_ACE_TYPE: u8 = 1;
+
+/// What an ACE's header type means to the fence.
+///
+/// [`Other`](AceKind::Other) is every type the fence never writes —
+/// object-typed and callback ACEs among them. Their SID sits at a different
+/// offset, so they are carried through undecoded rather than misread as one of
+/// the two the fence does understand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AceKind {
+    Allow,
+    Deny,
+    Other,
+}
+
+pub fn ace_kind(ace_type: u8) -> AceKind {
+    match ace_type {
+        ACCESS_ALLOWED_ACE_TYPE => AceKind::Allow,
+        ACCESS_DENIED_ACE_TYPE => AceKind::Deny,
+        _ => AceKind::Other,
+    }
+}
 
 /// One entry of the worktree's top level, as the fence needs to see it.
 ///
@@ -81,11 +103,17 @@ pub struct DenyAce {
     pub inheritance: u32,
 }
 
-/// An access-allowed or access-denied ACE already on an object, reduced to the
-/// four fields [`is_fence_ace`] reads.
+/// One ACE already on an object, reduced to the four fields
+/// [`is_fence_ace`] reads.
+///
+/// An [`AceKind::Other`] entry carries an empty `sid` and a zero `mask`: those
+/// are the fields this view cannot read for a type it does not decode, and
+/// leaving them empty is what keeps such an entry out of every match below.
+/// It is present at all so that a position in a `Vec<Ace>` is a position in the
+/// ACL — which is what [`retained_ace_indices`] hands back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ace {
-    pub denies: bool,
+    pub kind: AceKind,
     pub mask: u32,
     pub flags: u32,
     pub sid: Vec<u8>,
@@ -153,27 +181,66 @@ pub fn inheritance_for(is_dir: bool) -> u32 {
     }
 }
 
-/// Whether this object's DACL still carries the ACE the fence itself wrote.
+/// Whether this ACE is one the fence itself put on the object.
 ///
-/// The match is exact on all four fields, which is what makes teardown a true
+/// Three of the four tests are exact, and they are what keeps teardown an
 /// inverse rather than a reset:
 ///
-/// - **Not inherited.** A copy of the ACE propagated down from a fenced parent
-///   is removed by revoking the parent's, and revoking on the child instead
-///   would rewrite a DACL the system is about to recompute anyway.
-/// - **Exactly [`DENY_MASK`].** A deny ACE naming the same user with some
-///   other mask was put there by someone else, and removing it would make
-///   teardown a policy change.
 /// - **Denying, not allowing.** The user's inherited full-control grant is
 ///   the thing the fence is layered over; matching it would revoke the access
 ///   the fence exists to restore.
+/// - **This token's user.** Another trustee's ACE is not Demeteo's to remove
+///   under any circumstances.
+/// - **Not inherited.** A copy propagated down from a fenced parent is removed
+///   by removing the parent's, and editing it on the child instead rewrites a
+///   DACL the system is about to recompute anyway.
+///
+/// The mask is the fourth, and it is a **subset** test rather than the
+/// equality one this started out as. That change is the fix for an observed
+/// Windows failure, not a loosening for its own sake: requiring the mask and
+/// the inheritance flags to read back byte-identical to what
+/// `SetEntriesInAclW` was handed made teardown recognise *nothing* on a real
+/// worktree, skip every entry, and report success over a tree that was still
+/// fenced. Windows is free to store an ACE differently from the value it was
+/// given — flags especially, since an inheritable ACE on a container can be
+/// kept as an effective entry plus an `INHERIT_ONLY_ACE` twin — so a predicate
+/// that depends on a byte-exact round-trip is a predicate that can silently
+/// match nothing.
+///
+/// What the subset test gives up is bounded and what it buys is not. A deny
+/// ACE naming this token's user and denying *only* rights [`DENY_MASK`]
+/// already denies is either the fence's own or has the same effect as the
+/// fence's, so removing it costs at most one right the user was denying
+/// themselves; a fence left standing strands the worktree with no route back
+/// short of `icacls`. Any deny carrying a right from outside the mask —
+/// `WRITE_DAC`, anything read — is someone else's policy and is still left
+/// exactly where it was found.
 pub fn is_fence_ace(ace: &Ace, sid: &[u8]) -> bool {
-    ace.denies && ace.mask == DENY_MASK && ace.flags & INHERITED_ACE == 0 && ace.sid == sid
+    ace.kind == AceKind::Deny
+        && ace.sid == sid
+        && ace.flags & INHERITED_ACE == 0
+        && ace.mask != 0
+        && ace.mask & !DENY_MASK == 0
 }
 
 /// Whether any ACE on the object is the fence's own.
 pub fn carries_fence(aces: &[Ace], sid: &[u8]) -> bool {
     aces.iter().any(|ace| is_fence_ace(ace, sid))
+}
+
+/// The positions, in ACL order, of the ACEs a DACL keeps once the fence's own
+/// are taken off it.
+///
+/// Positions rather than values, because everything that is not the fence's is
+/// copied back byte for byte. [`Ace`] is a lossy view — it decodes two ACE
+/// types and leaves every other undecoded — so rebuilding an ACL out of it
+/// would quietly drop whatever else the object carried.
+pub fn retained_ace_indices(aces: &[Ace], sid: &[u8]) -> Vec<usize> {
+    aces.iter()
+        .enumerate()
+        .filter(|(_, ace)| !is_fence_ace(ace, sid))
+        .map(|(index, _)| index)
+        .collect()
 }
 
 fn is_writable(rel: &Path, writable_paths: &[PathBuf]) -> bool {

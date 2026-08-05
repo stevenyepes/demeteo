@@ -80,9 +80,11 @@ async fn a_windows_program_request_preserves_argv_cwd_and_environment_with_space
     let cwd = std::env::temp_dir().join(format!("demeteo argv spaces {}", std::process::id()));
     std::fs::create_dir_all(&cwd).expect("scratch directory");
     let script = cwd.join("inspect.ps1");
+    // The `param` block ends at the newline; PowerShell will not start a
+    // statement on the same line as it.
     std::fs::write(
         &script,
-        "param([string]$Value) [Console]::Write(\"$Value|$env:DEMETEO_ARGV_TEST|$PWD\")",
+        "param([string]$Value)\n[Console]::Write(\"$Value|$env:DEMETEO_ARGV_TEST|$PWD\")\n",
     )
     .expect("script");
     let mut env = std::collections::BTreeMap::new();
@@ -108,9 +110,26 @@ async fn a_windows_program_request_preserves_argv_cwd_and_environment_with_space
         .await
         .expect("structured argv request succeeds");
 
+    // `%TEMP%` is handed out in its 8.3 short form on a stock profile
+    // (`C:\Users\RUNNER~1\…`) while the kernel canonicalises a process's
+    // working directory to the long one, so the child reports a different
+    // spelling of the very directory it was handed. Resolved through the
+    // filesystem and compared as a path, or this asserts a spelling.
+    let resolved = std::fs::canonicalize(&cwd)
+        .expect("the scratch directory resolves")
+        .to_string_lossy()
+        .into_owned();
+    let expected_cwd = resolved.strip_prefix(r"\\?\").unwrap_or(&resolved);
     let _ = std::fs::remove_dir_all(&cwd);
-    assert!(out.starts_with("value with spaces|present|"), "got: {out}");
-    assert!(out.contains(cwd.to_string_lossy().as_ref()), "got: {out}");
+
+    let mut fields = out.split('|');
+    assert_eq!(fields.next(), Some("value with spaces"), "got: {out}");
+    assert_eq!(fields.next(), Some("present"), "got: {out}");
+    let reported = fields.next().unwrap_or_default();
+    assert!(
+        crate::paths::same_path(reported, expected_cwd, true),
+        "the child ran in {reported}, not in {expected_cwd}"
+    );
 }
 
 #[cfg(windows)]
@@ -495,13 +514,22 @@ fn an_argument_no_spawn_can_carry_is_a_configuration_error_not_a_verdict() {
 async fn a_program_request_no_spawn_can_carry_never_reaches_the_retry_loop() {
     // The same classification, through the adapter that has to produce it. A
     // NUL is what makes `std` refuse on this host; on Windows it is a prompt
-    // heading for a `.cmd` shim. Both arrive as `InvalidInput` from `spawn`,
-    // before the program is so much as looked for.
+    // heading for a `.cmd` shim. Both arrive as `InvalidInput` from `spawn`.
+    //
+    // The program is this test binary because it has to *exist*: Windows
+    // resolves the executable before it encodes the arguments, so a name that
+    // is not on PATH fails as `NotFound` and the argument is never reached —
+    // which would test the missing-program path on one platform and the
+    // unspawnable-argument path on the other.
+    let executable = std::env::current_exe()
+        .expect("the test binary has a path")
+        .to_string_lossy()
+        .into_owned();
     let err = LocalSubprocessAdapter::new()
         .run_program(
             "local",
             ProgramRequest {
-                executable: "demeteo-never-runs".to_string(),
+                executable: executable.clone(),
                 args: vec!["a\0b".to_string()],
                 ..ProgramRequest::default()
             },
@@ -509,8 +537,17 @@ async fn a_program_request_no_spawn_can_carry_never_reaches_the_retry_loop() {
         .await
         .expect_err("an argument that cannot be passed cannot spawn");
 
-    assert_eq!(classify_exec_failure(&err), HarnessExecFailure::Transport);
-    assert!(err.contains("demeteo-never-runs"), "got: {err}");
+    assert_eq!(
+        classify_exec_failure(&err),
+        HarnessExecFailure::Transport,
+        "got: {err}"
+    );
+    assert!(
+        err.strip_prefix(TRANSPORT_ERROR_PREFIX)
+            .is_some_and(|rest| rest.starts_with(UNSPAWNABLE_ARGUMENTS_ERROR)),
+        "the NUL must be refused as an argument, not as a missing program: {err}"
+    );
+    assert!(err.contains(&executable), "got: {err}");
 }
 
 #[cfg(windows)]

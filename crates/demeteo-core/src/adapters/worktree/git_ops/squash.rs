@@ -44,6 +44,137 @@ fn backup_ref_for(feature_branch: &str) -> String {
     format!("refs/demeteo/pre-squash/{}", feature_branch)
 }
 
+/// How a repository's `commit-msg` hook is started, which is not the same
+/// question on both platforms.
+///
+/// Nothing here is `#[cfg(windows)]`: it is all decision and no syscall, so
+/// the Windows answers are reachable from a test on a host that has no
+/// Windows — AGENTS.md §3, with the extra edge `shared/win/mod.rs` records,
+/// that no Windows cross-compiler runs on the development host. The module as
+/// a whole is compiled away where nothing can call it.
+#[cfg(any(windows, test))]
+mod hook {
+    use crate::ports::execution::ProgramRequest;
+    use std::path::Path;
+
+    /// What the operating system is asked to start when the hook is run.
+    ///
+    /// `CreateProcessW` has no `#!` handling, so handing it a shell script earns
+    /// "%1 is not a valid Win32 application" — and this module reports whatever
+    /// the hook invocation returned to the authoring agent *as the hook's verdict
+    /// on its message*. A Windows-local run therefore rejects every message with
+    /// a spawn error, which is the one shape of wrong answer the rework loop
+    /// cannot act on.
+    ///
+    /// Git does not have that problem because it resolves the `#!` line itself
+    /// (`compat/mingw.c::parse_interpreter`) against the shell it ships, and a
+    /// hook Git would run must be a hook Demeteo can run: the entire reason to
+    /// run it here is that its answer is the answer a real commit would get.
+    ///
+    /// Unix reaches none of this — `execve` honours `#!` — so [`Self::Direct`] is
+    /// the only variant that platform ever produces.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Launch {
+        /// Spawn the file itself; the OS can already start it.
+        Direct,
+        /// Hand the file to one of Git for Windows' bundled shells as a script.
+        Shell(Shell),
+    }
+
+    /// Which of the pair [`crate::shared::win::posix_shell::PosixShell`] resolves
+    /// a hook asked for.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Shell {
+        Sh,
+        Bash,
+    }
+
+    /// Decide from the hook's name and its text which of the two it is.
+    ///
+    /// `hook_text` is `None` when the file could not be read as UTF-8, which a
+    /// compiled hook cannot be — that one is already startable and needs no
+    /// shell.
+    pub(super) fn launch(hook_path: &str, hook_text: Option<&str>) -> Launch {
+        let extension = Path::new(&hook_path.replace('\\', "/"))
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_ascii_lowercase());
+        if matches!(extension.as_deref(), Some("exe" | "com" | "bat" | "cmd")) {
+            return Launch::Direct;
+        }
+        let Some(first_line) = hook_text.map(|text| text.lines().next().unwrap_or_default()) else {
+            return Launch::Direct;
+        };
+        let Some(shebang) = first_line.strip_prefix("#!") else {
+            // Git's own `commit-msg.sample` carries one, husky's generated hooks
+            // since v9 carry none, and `sh` is what a POSIX shell falls back to
+            // for a text file it is handed.
+            return Launch::Shell(Shell::Sh);
+        };
+        match shell_from_shebang(shebang) {
+            Some(shell) => Launch::Shell(shell),
+            // A hook asking for node, python or perl is spawned exactly as it was
+            // before, and on Windows fails exactly as loudly. Finding *those*
+            // interpreters would be a second search, and
+            // `shared/win/posix_shell.rs` deliberately owns the only one.
+            None => Launch::Direct,
+        }
+    }
+
+    /// The shell a `#!` line names, unwrapping `env`: `#!/usr/bin/env bash` is the
+    /// portable spelling most generated hooks use, and its interpreter word is
+    /// `env` rather than the shell.
+    fn shell_from_shebang(shebang: &str) -> Option<Shell> {
+        let mut words = shebang.split_whitespace();
+        let mut name = base_name(words.next()?);
+        if name == "env" {
+            name = base_name(words.find(|word| !word.starts_with('-'))?);
+        }
+        match name {
+            "bash" => Some(Shell::Bash),
+            "sh" | "dash" | "ash" => Some(Shell::Sh),
+            _ => None,
+        }
+    }
+
+    fn base_name(word: &str) -> &str {
+        word.rsplit(['/', '\\']).next().unwrap_or(word)
+    }
+
+    /// Rewrite a direct hook invocation into one through `interpreter`, with every
+    /// path in the form a script running under Git for Windows' bash accepts.
+    ///
+    /// Forward slashes, and specifically **not** the `/c/Users/…` MSYS form. Both
+    /// are understood by the MSYS programs a hook is built from, but the hook
+    /// hands its `$1` on to things like `npx commitlint --edit "$1"`, and MSYS
+    /// rewrites a POSIX-looking argument on its way to a native `.exe` while
+    /// leaving `C:/Users/…` alone. Backslashes survive that trip too, but they
+    /// also reach MSYS's own command-line splitter, where a `\` before a quote is
+    /// an escape — and Rust quotes any argument containing a space. `cwd` is not
+    /// converted: it goes to `CreateProcessW`, which never reads it as text.
+    pub(super) fn through_posix_shell(
+        direct: ProgramRequest,
+        interpreter: &Path,
+    ) -> ProgramRequest {
+        let ProgramRequest {
+            executable,
+            args,
+            cwd,
+            env,
+            timeout,
+        } = direct;
+        ProgramRequest {
+            executable: interpreter.to_string_lossy().into_owned(),
+            args: std::iter::once(executable)
+                .chain(args)
+                .map(|arg| arg.replace('\\', "/"))
+                .collect(),
+            cwd,
+            env,
+            timeout,
+        }
+    }
+}
+
 impl GitOpsHelper {
     /// Run the repo's `commit-msg` hook against `message` without committing.
     pub async fn validate_commit_message(
@@ -124,21 +255,14 @@ impl GitOpsHelper {
             return Ok(());
         }
 
-        // git runs commit-msg from the repo root with the message file as
-        // $1; match that exactly so a hook resolving `node_modules/.bin`
-        // relative to the root behaves as it does for a real commit.
-        let result = self
-            .exec
-            .run_program(
-                machine_str,
-                ProgramRequest {
-                    executable: hook_path,
-                    args: vec![msg_path.clone()],
-                    cwd: Some(repo_dir.to_string()),
-                    ..ProgramRequest::default()
-                },
-            )
+        let request = self
+            .commit_msg_hook_request(machine_str, repo_dir, &hook_path, &msg_path)
             .await;
+        let Some(request) = request else {
+            let _ = self.exec.remove_file(machine_str, &msg_path).await;
+            return Ok(());
+        };
+        let result = self.exec.run_program(machine_str, request).await;
         let _ = self.exec.remove_file(machine_str, &msg_path).await;
 
         result.map(|_| ()).map_err(|hook_output| {
@@ -148,6 +272,65 @@ impl GitOpsHelper {
             );
             CommitMessageRejected { hook_output }
         })
+    }
+
+    /// The invocation the repo's `commit-msg` hook is run as.
+    ///
+    /// git runs the hook from the repo root with the message file as `$1`;
+    /// that is matched exactly, so a hook resolving `node_modules/.bin`
+    /// relative to the root behaves as it does for a real commit. On a
+    /// Windows-*local* machine the program actually started may be the shell
+    /// instead — see the `hook` module above. A remote machine is a Linux one
+    /// and takes the direct path whatever the desktop is running on.
+    ///
+    /// `None` means the hook cannot be run here at all, which is not a verdict
+    /// on the message and so is not reported as one — the same "no opinion"
+    /// the missing-hook and unwritable-message paths above already take. The
+    /// only way to reach it is a machine with `git.exe` and no `bash.exe`,
+    /// where no user-authored script runs either and the `MissingPosixShell`
+    /// preflight is what tells the user about the machine.
+    async fn commit_msg_hook_request(
+        &self,
+        machine: &str,
+        repo_dir: &str,
+        hook_path: &str,
+        msg_path: &str,
+    ) -> Option<ProgramRequest> {
+        let direct = ProgramRequest {
+            executable: hook_path.to_string(),
+            args: vec![msg_path.to_string()],
+            cwd: Some(repo_dir.to_string()),
+            ..ProgramRequest::default()
+        };
+
+        #[cfg(windows)]
+        if crate::domain::ids::MachineId::from(machine).is_local() {
+            let hook_text = self.exec.read_file(machine, hook_path).await.ok();
+            let hook::Launch::Shell(shell) = hook::launch(hook_path, hook_text.as_deref()) else {
+                return Some(direct);
+            };
+            let resolved = match crate::shared::win::posix_shell::posix_shell() {
+                Ok(resolved) => resolved,
+                Err(missing) => {
+                    tracing::warn!(
+                        repo = %repo_dir,
+                        reason = %missing,
+                        "commit_msg_hook_request: no POSIX shell to run this repo's commit-msg hook with; the message is going unvalidated",
+                    );
+                    return None;
+                }
+            };
+            return Some(hook::through_posix_shell(
+                direct,
+                match shell {
+                    hook::Shell::Bash => &resolved.bash,
+                    hook::Shell::Sh => &resolved.sh,
+                },
+            ));
+        }
+
+        let _ = machine;
+        Some(direct)
     }
 
     /// Collapse `<default_branch>..<feature_branch>` into one commit.

@@ -217,14 +217,16 @@ async fn materialize_external_paths_writes_to_remote_worktree_via_exec() {
     // The destination directory is made through the port, on the same machine
     // as the write. `mkdir -p` reached the target's shell; `create_dir_all`
     // reaches its filesystem, which is the one thing every transport has.
-    let expected_dir = std::path::Path::new(remote_wt)
-        .join("artifacts")
-        .join("_context")
-        .to_string_lossy()
-        .to_string();
+    //
+    // Spelled with `/` because the machine it is made on is Linux, whatever the
+    // desktop composing it runs — a `Path::join` here would agree with the
+    // production bug it exists to catch.
     assert_eq!(
         exec.created_dirs(),
-        vec![("m-builder".to_string(), expected_dir)]
+        vec![(
+            "m-builder".to_string(),
+            format!("{remote_wt}/artifacts/_context")
+        )]
     );
 
     // The prompt was rewritten to point at the new path so the
@@ -261,14 +263,12 @@ async fn a_worktree_path_with_a_space_reaches_the_port_unescaped() {
     let prompt = format!("- `{}`\n", src_path.to_string_lossy());
     let _ = materialize_external_artifact_paths(&prompt, remote_wt, &exec, "m-builder").await;
 
-    let expected_dir = std::path::Path::new(remote_wt)
-        .join("artifacts")
-        .join("_context")
-        .to_string_lossy()
-        .to_string();
     assert_eq!(
         exec.created_dirs(),
-        vec![("m-builder".to_string(), expected_dir)]
+        vec![(
+            "m-builder".to_string(),
+            format!("{remote_wt}/artifacts/_context")
+        )]
     );
     drop(_src_dir);
 }

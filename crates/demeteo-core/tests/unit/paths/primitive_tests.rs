@@ -85,6 +85,71 @@ fn a_non_windows_target_keeps_its_paths_verbatim() {
     assert!(same_path("/srv/repo/", "/srv/repo", false));
 }
 
+/// The Windows desktop is the only host that ever reads a POSIX path back from
+/// somewhere else, and `Path::is_absolute` compiled for Windows calls every one
+/// of them relative.
+#[test]
+fn a_posix_path_is_absolute_for_the_posix_target_that_reported_it() {
+    assert!(is_absolute_on("/srv/p/worktrees/one", false));
+    assert!(!is_absolute_on("srv/p", false));
+    assert!(!is_absolute_on(r"C:\Users\runner", false));
+}
+
+/// A drive letter or a UNC root, in either slash — git answers `C:/…` on every
+/// platform and a `PathBuf` answers `C:\…`. A bare `C:` is drive-*relative* and
+/// names a different directory per drive, so it is not one of them.
+#[test]
+fn a_windows_path_is_absolute_only_with_a_drive_or_a_unc_root() {
+    assert!(is_absolute_on(r"C:\Users\runner", true));
+    assert!(is_absolute_on("C:/Users/runner", true));
+    assert!(is_absolute_on(r"\\?\C:\Users\runner", true));
+    assert!(is_absolute_on(r"\\server\share\repo", true));
+    assert!(!is_absolute_on("C:", true));
+    assert!(!is_absolute_on(r"\Users\runner", true));
+    assert!(!is_absolute_on("Users/runner", true));
+}
+
+/// One path manifest holds both: the artifact the desktop wrote and the
+/// worktree the step will read it in.
+#[test]
+fn a_manifest_path_is_recognised_whichever_host_wrote_it() {
+    assert!(looks_absolute("/home/builder/wt/artifacts/plan.md"));
+    assert!(looks_absolute(r"C:\Users\runner\AppData\artifacts\plan.md"));
+    assert!(!looks_absolute("artifacts/plan.md"));
+    assert!(!looks_absolute(""));
+}
+
+/// The separator belongs to the machine the path is *on*, not to the one
+/// composing it — the whole reason this exists rather than `Path::join`.
+#[test]
+fn a_join_uses_the_owning_hosts_separator() {
+    assert_eq!(
+        join_on("/home/builder/repo_wt_x", ["artifacts", "_context"], false),
+        "/home/builder/repo_wt_x/artifacts/_context"
+    );
+    assert_eq!(
+        join_on(r"C:\w\repo_wt_x", ["artifacts", "_context"], true),
+        r"C:\w\repo_wt_x\artifacts\_context"
+    );
+}
+
+/// A base already carrying a separator must not double it, and a root is all
+/// separator — `//artifacts` is a UNC path on Windows and a reserved spelling
+/// in POSIX, so neither is the directory that was meant.
+#[test]
+fn a_join_onto_a_root_or_a_trailing_separator_adds_exactly_one() {
+    assert_eq!(join_on("/", ["artifacts"], false), "/artifacts");
+    assert_eq!(
+        join_on("/home/builder/wt/", ["artifacts"], false),
+        "/home/builder/wt/artifacts"
+    );
+    assert_eq!(join_on(r"C:\", ["artifacts"], true), r"C:\artifacts");
+    assert_eq!(
+        join_on(r"C:\w\wt\", ["artifacts"], true),
+        r"C:\w\wt\artifacts"
+    );
+}
+
 /// Ids that share a prefix are the norm here — every id starts with a tag and
 /// the high digits of a wall clock — so the segment has to read the whole
 /// string.
