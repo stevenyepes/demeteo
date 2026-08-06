@@ -50,6 +50,11 @@ pub async fn build_agent_context(
     // `agent_base_env` for the full rationale.
     let env =
         crate::ports::agent_runtime::agent_base_env(ctx.exec.as_ref(), machine.id.0.as_str()).await;
+    let platform = crate::ports::agent_runtime::resolve_agent_platform(
+        ctx.exec.as_ref(),
+        machine.id.0.as_str(),
+    )
+    .await;
 
     Ok(crate::ports::agent_runtime::AgentContext {
         thread_id: thread_id.to_string(),
@@ -61,6 +66,7 @@ pub async fn build_agent_context(
         model: None,
         effort: None,
         title: None,
+        platform,
         agent_exec: ctx.agent_exec.clone(),
         exec: ctx.exec.clone(),
         permissions: crate::domain::permission::PermissionProfile::all_allow(),

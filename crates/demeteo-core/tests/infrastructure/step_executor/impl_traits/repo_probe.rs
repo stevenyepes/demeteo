@@ -6,6 +6,7 @@
 // unreachable while this sat inside a 305-line `async fn` on `DagStepExecutor`.
 
 use super::*;
+use crate::domain::models::Platform;
 use crate::ports::execution::ShellOptions;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -131,6 +132,9 @@ impl ExecutionPort for FsExec {
     }
     async fn resolve_user(&self, _m: &str) -> Result<String, String> {
         Err("unscripted resolve_user".into())
+    }
+    async fn resolve_platform(&self, _m: &str) -> Result<Platform, String> {
+        Err("unscripted resolve_platform".into())
     }
     async fn control_rpc(
         &self,

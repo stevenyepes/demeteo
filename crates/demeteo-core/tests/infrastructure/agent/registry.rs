@@ -165,6 +165,12 @@ async fn get_or_spawn_returns_structured_error_for_unknown_kind() {
         async fn resolve_user(&self, _: &str) -> Result<String, String> {
             Ok("test".to_string())
         }
+        async fn resolve_platform(
+            &self,
+            _: &str,
+        ) -> Result<crate::domain::models::Platform, String> {
+            Err("no platform configured on this stub".to_string())
+        }
         async fn control_rpc(
             &self,
             _: &str,
@@ -201,6 +207,7 @@ async fn get_or_spawn_returns_structured_error_for_unknown_kind() {
                 model: None,
                 effort: None,
                 title: None,
+                platform: None,
                 agent_exec: stub.clone(),
                 exec: stub,
                 permissions: crate::domain::permission::PermissionProfile::all_allow(),
@@ -402,6 +409,12 @@ fn noop_exec() -> Arc<dyn crate::ports::execution::ExecutionPort> {
         }
         async fn resolve_user(&self, _: &str) -> Result<String, String> {
             Ok("test".into())
+        }
+        async fn resolve_platform(
+            &self,
+            _: &str,
+        ) -> Result<crate::domain::models::Platform, String> {
+            Err("no platform configured on this stub".into())
         }
         async fn control_rpc(
             &self,

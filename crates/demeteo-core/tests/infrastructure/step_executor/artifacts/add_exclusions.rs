@@ -388,6 +388,9 @@ impl crate::ports::execution::ExecutionPort for ProbeOnlyExec {
     async fn resolve_user(&self, _m: &str) -> Result<String, String> {
         Err("unscripted resolve_user".into())
     }
+    async fn resolve_platform(&self, _m: &str) -> Result<crate::domain::models::Platform, String> {
+        Err("unscripted resolve_platform".into())
+    }
     async fn control_rpc(
         &self,
         _m: &str,
@@ -514,6 +517,12 @@ async fn a_probe_failure_still_keeps_the_artifact_exclusion() {
         }
         async fn resolve_user(&self, _m: &str) -> Result<String, String> {
             Err("unscripted resolve_user".into())
+        }
+        async fn resolve_platform(
+            &self,
+            _m: &str,
+        ) -> Result<crate::domain::models::Platform, String> {
+            Err("unscripted resolve_platform".into())
         }
         async fn control_rpc(
             &self,

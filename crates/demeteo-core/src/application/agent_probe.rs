@@ -76,6 +76,11 @@ async fn probe_models_via_acp(
         model: None,
         effort: None,
         title: None,
+        platform: crate::ports::agent_runtime::resolve_agent_platform(
+            ctx.exec.as_ref(),
+            machine_id,
+        )
+        .await,
         agent_exec: ctx.agent_exec.clone(),
         exec: ctx.exec.clone(),
         permissions: crate::domain::permission::PermissionProfile::all_allow(),

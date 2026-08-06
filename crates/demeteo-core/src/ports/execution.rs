@@ -1,3 +1,4 @@
+use crate::domain::models::Platform;
 use async_trait::async_trait;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -312,6 +313,20 @@ pub trait ExecutionPort: Send + Sync {
 
     /// Resolve the absolute home directory on the target host.
     async fn resolve_home(&self, machine_id: &str) -> Result<String, String>;
+
+    /// Name the operating system the target actually runs.
+    ///
+    /// **Required, with no default, and no transport may guess.** A default
+    /// could only be a constant or a `cfg!`, and both describe the desktop
+    /// binary rather than the machine a command lands on — a Windows desktop
+    /// driving a Linux remote makes those two answers different on every call.
+    /// `docs/WINDOWS_PARITY.md` records where that ends: `is_executable`'s
+    /// Windows arm answers `!is_dir()`, so every regular file reads as a
+    /// runnable git hook, and a port method a transport can only no-op or lie
+    /// about is a parity break *inside* the contract. A transport that cannot
+    /// find out must return `Err`; callers degrade on that, and a caller that
+    /// cannot degrade honestly must not act.
+    async fn resolve_platform(&self, machine_id: &str) -> Result<Platform, String>;
 
     /// Resolve the SSH-authenticated username on the target host. The
     /// returned value matches what the remote shell's passwd entry

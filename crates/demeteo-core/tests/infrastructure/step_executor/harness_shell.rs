@@ -7,7 +7,7 @@
 // sender is not a cancellation.
 
 use super::*;
-use crate::domain::models::{AgentTimeouts, CONFIG_KEY};
+use crate::domain::models::{AgentTimeouts, Platform, CONFIG_KEY};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -150,6 +150,9 @@ impl ExecutionPort for ScriptedExec {
     }
     async fn resolve_user(&self, _m: &str) -> Result<String, String> {
         Err("unscripted resolve_user".into())
+    }
+    async fn resolve_platform(&self, _m: &str) -> Result<Platform, String> {
+        Err("unscripted resolve_platform".into())
     }
     async fn control_rpc(
         &self,

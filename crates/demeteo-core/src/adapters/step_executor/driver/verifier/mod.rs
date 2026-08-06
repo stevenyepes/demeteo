@@ -419,6 +419,9 @@ impl ExecutionDriver {
         // `--model` flag in `build_args` from `ctx.model` below.
         let agent_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+        let platform =
+            crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), machine_str)
+                .await;
 
         let verifier_thread_id = format!("{}-verifier", self.f_id_str);
         let verifier_binary = self
@@ -444,6 +447,7 @@ impl ExecutionDriver {
                     .unwrap_or(crate::domain::models::EffortLevel::VERIFIER_DEFAULT),
             ),
             title: Some(format!("Verify: {}", harness_label)),
+            platform,
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),

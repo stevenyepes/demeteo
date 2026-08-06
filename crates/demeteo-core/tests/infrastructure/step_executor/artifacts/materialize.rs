@@ -124,6 +124,9 @@ impl crate::ports::execution::ExecutionPort for RecordingExec {
     async fn resolve_user(&self, _: &str) -> Result<String, String> {
         Ok("test".to_string())
     }
+    async fn resolve_platform(&self, _: &str) -> Result<crate::domain::models::Platform, String> {
+        Err("materialize must not ask for a platform".into())
+    }
     async fn control_rpc(
         &self,
         _: &str,

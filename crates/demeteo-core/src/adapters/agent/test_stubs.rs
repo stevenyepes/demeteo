@@ -98,6 +98,13 @@ impl ExecutionPort for StubExec {
     async fn resolve_user(&self, _: &str) -> Result<String, String> {
         Ok("stub".to_string())
     }
+    /// The arg-builder tests these stubs serve construct their own
+    /// `AgentContext::platform`, so nothing reads this. Answering Linux rather
+    /// than erroring would make an adapter that started asking the port
+    /// silently POSIX on a Windows run.
+    async fn resolve_platform(&self, _: &str) -> Result<crate::domain::models::Platform, String> {
+        Err("platform resolution not supported by this stub".to_string())
+    }
     async fn control_rpc(
         &self,
         _: &str,

@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio_stream::Stream;
 
 use crate::domain::agent_event::AgentEvent;
-use crate::domain::models::{Availability, EffortLevel, SessionInfo};
+use crate::domain::models::{Availability, EffortLevel, Platform, SessionInfo};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_execution::AgentExecutionPort;
 
@@ -43,6 +43,20 @@ pub struct AgentContext {
     /// Optional step title, passed as `--title <value>` for CLI agents
     /// that support named sessions (opencode, hermes).
     pub title: Option<String>,
+    /// The OS the agent process will actually run on, resolved through
+    /// [`exec`](Self::exec) against [`machine_id`](Self::machine_id).
+    ///
+    /// Carried on the context rather than re-derived per adapter because
+    /// `cfg!(windows)` is the wrong question in every one of them: the same
+    /// desktop build spawns a local agent on Windows and a remote one on Linux
+    /// within a single feature, so the answer belongs to the turn.
+    ///
+    /// `None` means the port could not name it, not "assume POSIX". An adapter
+    /// that cannot proceed without knowing must emit nothing rather than guess
+    /// — a POSIX-shaped flag sent to a Windows host is the failure this whole
+    /// field exists to stop, and inventing one from a `None` reintroduces it
+    /// silently.
+    pub platform: Option<Platform>,
     /// The policy-enforced execution port. Used by the tool bridge
     /// inside the runtime to dispatch agent-originated file/terminal
     /// requests through the existing policy + scope-fence machinery.
@@ -223,6 +237,21 @@ pub async fn resolve_agent_identity(
     };
     let user = exec.resolve_user(machine_id).await.ok();
     (home, user)
+}
+
+/// Resolve the platform to record on [`AgentContext::platform`] for a
+/// session spawned against `machine_id`, always through the execution port.
+///
+/// Degrades to `None` on the same terms [`resolve_agent_identity`] drops the
+/// USER: an unreachable machine, or a transport that declines to answer, must
+/// not stop a turn that may not need the answer at all. It differs in having no
+/// local fallback — the *machine's* OS is the whole question, so borrowing the
+/// desktop's would answer a different one.
+pub async fn resolve_agent_platform(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+) -> Option<Platform> {
+    exec.resolve_platform(machine_id).await.ok()
 }
 
 /// Resolve just the HOME directory to forward as `$HOME` to an

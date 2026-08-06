@@ -4,7 +4,7 @@
 //! lives here so the `ExecutionPort` impl in `client.rs` only deals with what
 //! it does *over* that session.
 
-use crate::domain::models::Machine;
+use crate::domain::models::{Machine, Platform};
 use crate::ports::db::MachineRepository;
 use ssh2::{Session, Sftp};
 use std::collections::HashMap;
@@ -79,6 +79,13 @@ pub(super) struct SessionPool {
     /// `pub(super)` because [`SessionPool::resolve_home`] — the only reader —
     /// lives in the sibling `home` module with the rest of the HOME concern.
     pub(super) home_cache: Mutex<HashMap<String, String>>,
+    /// Resolved platform per machine_id, on the same terms as `home_cache`: a
+    /// remote's kernel does not change under a running desktop, so the entry is
+    /// written once and never invalidated.
+    ///
+    /// Read only by [`SessionPool::resolve_platform`] in the sibling `platform`
+    /// module.
+    pub(super) platform_cache: Mutex<HashMap<String, Platform>>,
 }
 
 impl SessionPool {
@@ -87,6 +94,7 @@ impl SessionPool {
             machines,
             sessions: Mutex::new(HashMap::new()),
             home_cache: Mutex::new(HashMap::new()),
+            platform_cache: Mutex::new(HashMap::new()),
         }
     }
 

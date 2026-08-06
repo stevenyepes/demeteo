@@ -6,6 +6,7 @@
 // was not told to answer, so "it issued something else" is a failure.
 
 use super::*;
+use crate::domain::models::Platform;
 use crate::ports::execution::{ExecutionPort, SftpEntry, ShellOptions};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -96,6 +97,9 @@ impl ExecutionPort for TeardownExec {
     }
     async fn resolve_user(&self, _m: &str) -> Result<String, String> {
         Err("unscripted resolve_user".into())
+    }
+    async fn resolve_platform(&self, _m: &str) -> Result<Platform, String> {
+        Err("unscripted resolve_platform".into())
     }
     async fn control_rpc(
         &self,

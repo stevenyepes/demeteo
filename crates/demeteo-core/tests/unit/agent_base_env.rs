@@ -19,8 +19,9 @@ use async_trait::async_trait;
 
 use crate::domain::action::AgentAction;
 use crate::domain::intercept::ExecutionResult;
+use crate::domain::models::Platform;
 use crate::ports::agent_execution::{ActionError, AgentExecutionPort, CommandOutcome};
-use crate::ports::agent_runtime::{agent_base_env, resolve_agent_home};
+use crate::ports::agent_runtime::{agent_base_env, resolve_agent_home, resolve_agent_platform};
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, SftpEntry};
 
 /// `ExecutionPort` stub whose `resolve_home` and `resolve_user`
@@ -32,6 +33,7 @@ use crate::ports::execution::{ExecutionPort, InteractiveHandle, SftpEntry};
 struct FakeExec {
     homes: HashMap<String, String>,
     users: HashMap<String, String>,
+    platforms: HashMap<String, Platform>,
     fail_for: Vec<String>,
 }
 
@@ -40,6 +42,7 @@ impl FakeExec {
         Self {
             homes: HashMap::new(),
             users: HashMap::new(),
+            platforms: HashMap::new(),
             fail_for: Vec::new(),
         }
     }
@@ -51,6 +54,11 @@ impl FakeExec {
 
     fn with_user(mut self, machine_id: &str, user: &str) -> Self {
         self.users.insert(machine_id.to_string(), user.to_string());
+        self
+    }
+
+    fn with_platform(mut self, machine_id: &str, platform: Platform) -> Self {
+        self.platforms.insert(machine_id.to_string(), platform);
         self
     }
 
@@ -142,6 +150,18 @@ impl ExecutionPort for FakeExec {
             .get(machine_id)
             .cloned()
             .ok_or_else(|| format!("no fake user configured for {}", machine_id))
+    }
+    async fn resolve_platform(&self, machine_id: &str) -> Result<Platform, String> {
+        if self.fail_for.iter().any(|m| m == machine_id) {
+            return Err(format!(
+                "simulated resolve_platform failure for {}",
+                machine_id
+            ));
+        }
+        self.platforms
+            .get(machine_id)
+            .copied()
+            .ok_or_else(|| format!("no fake platform configured for {}", machine_id))
     }
     async fn control_rpc(
         &self,
@@ -305,4 +325,29 @@ async fn resolve_agent_home_empty_uses_exec() {
     let exec = Arc::new(FakeExec::new().with_home("", GUI_HOME));
     let home = resolve_agent_home(exec.as_ref(), "").await;
     assert_eq!(home, GUI_HOME);
+}
+
+/// The whole point of routing this through the port: the machine the agent
+/// lands on decides, so a remote answer must survive to the context even when
+/// it disagrees with everything about the desktop that asked.
+#[tokio::test]
+async fn resolve_agent_platform_reports_what_the_machine_said() {
+    let exec = Arc::new(FakeExec::new().with_platform("m-dev", Platform::Linux));
+    assert_eq!(
+        resolve_agent_platform(exec.as_ref(), "m-dev").await,
+        Some(Platform::Linux),
+    );
+}
+
+/// Unlike HOME there is no local fallback to reach for — the desktop's OS is
+/// the answer to a different question — so an unreachable machine leaves the
+/// platform unknown rather than POSIX.
+#[tokio::test]
+async fn resolve_agent_platform_degrades_to_unknown_rather_than_to_the_desktop() {
+    let exec = Arc::new(
+        FakeExec::new()
+            .with_platform("local", Platform::MacOS)
+            .failing_for("m-flaky"),
+    );
+    assert_eq!(resolve_agent_platform(exec.as_ref(), "m-flaky").await, None);
 }

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
+use crate::domain::models::Platform;
 use crate::ports::execution::SftpEntry;
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, ProgramRequest, ShellOptions};
 use crate::shared::fs_remove;
@@ -1046,6 +1047,19 @@ impl ExecutionPort for LocalSubprocessAdapter {
             ));
         }
         Ok(path.to_string_lossy().into_owned())
+    }
+
+    /// The one transport that gets this for free: the target *is* the host, so
+    /// the answer is the compiler's and costs no probe. It is still routed
+    /// through the port rather than read as a `cfg!` at the call site, because
+    /// a caller that reads `cfg!` has no way to be right about a remote.
+    async fn resolve_platform(&self, _machine_id: &str) -> Result<Platform, String> {
+        Platform::from_target_os(std::env::consts::OS).ok_or_else(|| {
+            format!(
+                "Demeteo does not ship a desktop for '{}'",
+                std::env::consts::OS
+            )
+        })
     }
 
     async fn resolve_user(&self, _machine_id: &str) -> Result<String, String> {

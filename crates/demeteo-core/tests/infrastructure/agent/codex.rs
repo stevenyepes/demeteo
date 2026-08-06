@@ -222,6 +222,7 @@ fn ctx_with(model: Option<&str>, perms: PermissionProfile) -> AgentContext {
         model: model.map(|s| s.to_string()),
         effort: None,
         title: None,
+        platform: None,
         agent_exec: Arc::new(StubAgentExec),
         exec: Arc::new(StubExec),
         permissions: perms,

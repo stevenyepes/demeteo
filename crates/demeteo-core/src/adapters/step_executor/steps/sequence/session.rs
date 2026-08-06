@@ -27,6 +27,9 @@ impl ExecutionDriver {
     ) -> Result<std::sync::Arc<dyn crate::ports::agent_runtime::AgentSession>, SequenceError> {
         let env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), target.machine).await;
+        let platform =
+            crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), target.machine)
+                .await;
         let binary = self
             .registry
             .runtime_for(target.agent_kind)
@@ -43,6 +46,7 @@ impl ExecutionDriver {
             // A task turn is real agent work: it inherits the step's effort.
             effort: Some(target.effort),
             title: Some(title.to_string()),
+            platform,
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),

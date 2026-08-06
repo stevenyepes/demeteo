@@ -11,7 +11,10 @@
 //!   policy, and the keyring credential lookup (`machine_secret`).
 //! - `transport` — the keepalive-aware drain policy (`drain_stream`) and the
 //!   transport-vs-command error tagging.
+//! - `probe` — the one-line-question channel round-trip `home` and `platform`
+//!   share, and the budget it runs on.
 //! - `home` — resolving and caching the remote `$HOME`.
+//! - `platform` — resolving and caching the remote OS.
 //! - `command` — one-shot commands: shell-invocation assembly, channel exec,
 //!   drain, and the exit-code invariant.
 //! - `sftp` — file read/write, metadata, and directory listing.
@@ -30,7 +33,7 @@
 //! |---|---|---|
 //! | `run_command_with` | yes | only when the shell never received the command |
 //! | `read_file` / `write_file(_bytes)` / `get_metadata` / `list_dir` | yes | same rule; the session could not be established |
-//! | `resolve_home` | yes | same rule |
+//! | `resolve_home` / `resolve_platform` | yes | same rule |
 //! | `setup_worktree` | inherited | it is three `run_command` calls |
 //! | `test_connection` | **no** | its answer *is* "can this connect right now"; retrying would report a flaky host as healthy |
 //! | `resolve_user` | **no** | a database read; no network to drop |
@@ -43,6 +46,7 @@ use super::session::{machine_secret, SessionPool};
 // before the split — re-export it so the crate's surface is unchanged.
 pub use super::session::SftpSession;
 use super::{command, control_rpc, interactive, sftp};
+use crate::domain::models::Platform;
 use crate::ports::db::MachineRepository;
 use crate::ports::execution::SftpEntry;
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, ProgramRequest, ShellOptions};
@@ -364,6 +368,27 @@ impl ExecutionPort for SshClientAdapter {
             let mid = mid.clone();
             async move {
                 tokio::task::spawn_blocking(move || pool.resolve_home(&mid))
+                    .await
+                    .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
+            }
+        })
+        .await
+    }
+
+    async fn resolve_platform(&self, machine_id: &str) -> Result<Platform, String> {
+        if machine_id.is_empty() || machine_id == "local" {
+            return Err("Cannot resolve remote platform for local machine_id".to_string());
+        }
+        // Onto the blocking pool for the reason spelled on `resolve_home`
+        // above, which this shares exactly: a cache hit is a mutex lock and a
+        // miss is a connect, an auth handshake and a channel round-trip, paid
+        // by callers that fan out one probe per configured machine.
+        let mid = machine_id.to_string();
+        with_ssh_retry("resolve_platform", machine_id, &self.pool, None, || {
+            let pool = self.pool.clone();
+            let mid = mid.clone();
+            async move {
+                tokio::task::spawn_blocking(move || pool.resolve_platform(&mid))
                     .await
                     .map_err(|e| SshFailure::answered(format!("blocking task panicked: {}", e)))?
             }

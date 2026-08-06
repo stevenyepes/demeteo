@@ -3,6 +3,8 @@ mod command;
 mod control_rpc;
 mod home;
 mod interactive;
+mod platform;
+mod probe;
 mod retry;
 mod session;
 mod sftp;

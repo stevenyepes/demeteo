@@ -617,6 +617,9 @@ impl crate::ports::execution::ExecutionPort for ShellOptsRecorder {
     async fn resolve_user(&self, _: &str) -> Result<String, String> {
         Ok("stub".to_string())
     }
+    async fn resolve_platform(&self, _: &str) -> Result<crate::domain::models::Platform, String> {
+        Err("this recorder answers no platform".to_string())
+    }
     async fn control_rpc(
         &self,
         _: &str,

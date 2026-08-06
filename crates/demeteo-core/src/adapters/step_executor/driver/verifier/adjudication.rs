@@ -421,6 +421,9 @@ impl ExecutionDriver {
         // `--model` flag in `build_args` from `ctx.model` below.
         let agent_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+        let platform =
+            crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), machine_str)
+                .await;
 
         let thread_id = format!("{}-triage", self.f_id_str);
         let binary = self
@@ -440,6 +443,7 @@ impl ExecutionDriver {
             // inheriting the run's effort (which may be `max`).
             effort: Some(crate::domain::models::EffortLevel::TRIAGE),
             title: Some("Triage harness failure".to_string()),
+            platform,
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),

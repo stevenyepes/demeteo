@@ -120,6 +120,9 @@ impl ExecutionDriver {
 
         let planner_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), target.machine).await;
+        let platform =
+            crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), target.machine)
+                .await;
         let planner_binary = self
             .registry
             .runtime_for(target.agent_kind)
@@ -138,6 +141,7 @@ impl ExecutionDriver {
             // work — it inherits the step's resolved effort.
             effort: Some(target.effort),
             title: Some("plan".to_string()),
+            platform,
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             // Reads the codebase and emits JSON. Shell is allowed for

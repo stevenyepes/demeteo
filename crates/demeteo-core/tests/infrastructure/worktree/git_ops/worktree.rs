@@ -1987,6 +1987,7 @@ use super::{
     shareable_cache_names, shareable_cache_probe_cmd, target_path_join, worktree_dir,
     worktree_dir_on,
 };
+use crate::domain::models::Platform;
 use crate::ports::execution::{ProgramRequest, SftpEntry};
 use std::sync::Mutex;
 
@@ -2085,6 +2086,9 @@ impl ExecutionPort for TeardownExec {
     }
     async fn resolve_user(&self, _m: &str) -> Result<String, String> {
         Err("unscripted resolve_user".into())
+    }
+    async fn resolve_platform(&self, _m: &str) -> Result<Platform, String> {
+        Err("unscripted resolve_platform".into())
     }
     async fn control_rpc(
         &self,

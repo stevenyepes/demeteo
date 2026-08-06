@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::domain::models::Platform;
 use crate::ports::db::MachineRepository;
 use crate::ports::execution::SftpEntry;
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, ProgramRequest, ShellOptions};
@@ -140,6 +141,10 @@ impl ExecutionPort for RouterExecutionPort {
 
     async fn resolve_home(&self, machine_id: &str) -> Result<String, String> {
         self.resolve(machine_id)?.resolve_home(machine_id).await
+    }
+
+    async fn resolve_platform(&self, machine_id: &str) -> Result<Platform, String> {
+        self.resolve(machine_id)?.resolve_platform(machine_id).await
     }
 
     async fn resolve_user(&self, machine_id: &str) -> Result<String, String> {

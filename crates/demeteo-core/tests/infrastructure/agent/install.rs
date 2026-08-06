@@ -64,6 +64,9 @@ impl ExecutionPort for StubExec {
     async fn resolve_user(&self, _: &str) -> Result<String, String> {
         Ok("test".to_string())
     }
+    async fn resolve_platform(&self, _: &str) -> Result<crate::domain::models::Platform, String> {
+        Err("the installer must not ask this stub for a platform".to_string())
+    }
     async fn control_rpc(
         &self,
         _: &str,
