@@ -31,6 +31,17 @@ spawn — runs as structured argv with no shell on any platform.
 That is two planes split by **authorship**, not by operating system. The plane
 split is the whole design; the rest of this document is consequences.
 
+### The agent has to be told, or it decides for itself
+
+An agent reading a Windows worktree while the prompt quotes the project's POSIX
+gate commands will conclude the prompt is stale and helpfully rewrite them, which
+turns one body into two at the only layer no gate inspects. So the agent prompt
+carries a Windows-only block naming the OS, the bash those commands run under,
+and the prohibition on translating them —
+`crates/demeteo-core/src/domain/platform_context.rs`, which also records why
+keying on platform is not the transport branch §2 forbids. A change to which
+interpreter runs a user's script is a change to what that block claims.
+
 ### Why not two script bodies
 
 fc8d65c's `ScriptVariants { posix, powershell }` does not remove the transport

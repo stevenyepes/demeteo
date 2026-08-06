@@ -16,20 +16,25 @@
 //! 4. the retry-feedback safety net
 //! 5. the artifact contract
 //! 6. the Operating Boundary block
+//! 7. the platform block
 //!
 //! and then, once the worktree exists and only then:
 //!
-//! 7. external artifact paths materialised into the worktree
-//! 8. the harness section and the verdict contract
+//! 8. external artifact paths materialised into the worktree
+//! 9. the harness section and the verdict contract
 //!
 //! That split is why this module exposes two entry points rather than one:
-//! steps 7 and 8 name paths that do not exist until
-//! `provision_subtask_worktree` has run, and step 8 needs a harness result
+//! steps 8 and 9 name paths that do not exist until
+//! `provision_subtask_worktree` has run, and step 9 needs a harness result
 //! that is only produced after the fence is applied.
 
 use crate::adapters::step_executor::driver::{ExecutionDriver, RetryContext};
 use crate::domain::attachment::AttachedFile;
 use crate::domain::harness_outcome::HarnessOutcome;
+use crate::domain::models::Platform;
+use crate::domain::platform_context::{
+    inject_platform_context, platform_context_section, template_uses_platform_context,
+};
 use crate::domain::verifier::VerifierConfig;
 
 use super::context::{AgentStepCtx, AgentWorktree};
@@ -166,8 +171,17 @@ pub(crate) fn append_retry_feedback_section(
 }
 
 impl ExecutionDriver {
-    /// Steps 1–6: everything sayable before a worktree exists.
-    pub(crate) fn build_agent_prompt(&self, ctx: AgentStepCtx<'_>) -> String {
+    /// Steps 1–7: everything sayable before a worktree exists.
+    ///
+    /// `platform` is `None` when the execution port declined to name the
+    /// machine's OS. The block is then omitted rather than guessed at: an agent
+    /// told the wrong OS is worse off than one told nothing, which is the state
+    /// every prompt was in before the block existed.
+    pub(crate) fn build_agent_prompt(
+        &self,
+        ctx: AgentStepCtx<'_>,
+        platform: Option<Platform>,
+    ) -> String {
         let step_conf = ctx.step_conf;
 
         let (gate_decision, gate_feedback) =
@@ -201,6 +215,8 @@ impl ExecutionDriver {
         // copy below.
         let retry_section = format_retry_feedback_section(self.retry_ctx.as_ref());
         let uses_retry_section = template_uses_retry_section(template);
+        let platform_section = platform.map(platform_context_section).unwrap_or_default();
+        let uses_platform_section = template_uses_platform_context(template);
 
         // Pull the per-feature user attachment manifest fresh on every
         // agent turn (the same live-query pattern used for the gate
@@ -246,6 +262,7 @@ impl ExecutionDriver {
         let prompt = bound
             .set("harness_baseline", &harness_briefing)
             .set("retry_feedback_section", &retry_section)
+            .set("platform_context", &platform_section)
             .set("gate_feedback", &gate_feedback)
             .set("gate_decision", &gate_decision)
             .set("retry_feedback", &retry_feedback)
@@ -297,12 +314,17 @@ impl ExecutionDriver {
             step_conf.allow_network,
             step_conf.allow_shell,
         );
-        crate::adapters::step_executor::artifacts::inject_operating_boundary(
+        let prompt = crate::adapters::step_executor::artifacts::inject_operating_boundary(
             &prompt, capability, &profile,
-        )
+        );
+
+        match platform.filter(|_| !uses_platform_section) {
+            Some(platform) => inject_platform_context(&prompt, platform),
+            None => prompt,
+        }
     }
 
-    /// Steps 7–8: the part that could not be said until the worktree existed
+    /// Steps 8–9: the part that could not be said until the worktree existed
     /// and the harness had run.
     pub(crate) async fn bind_worktree_context(
         &self,

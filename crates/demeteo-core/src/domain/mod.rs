@@ -42,6 +42,7 @@ pub mod memory;
 pub(crate) mod merge_status;
 pub mod models;
 pub mod permission;
+pub mod platform_context;
 pub mod prompt_budget;
 pub mod prompt_context;
 pub mod restart_reconcile;
