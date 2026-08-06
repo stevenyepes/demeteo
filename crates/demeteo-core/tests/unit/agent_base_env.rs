@@ -24,12 +24,12 @@ use crate::ports::agent_execution::{ActionError, AgentExecutionPort, CommandOutc
 use crate::ports::agent_runtime::{agent_base_env, resolve_agent_home, resolve_agent_platform};
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, SftpEntry};
 
-/// `ExecutionPort` stub whose `resolve_home` and `resolve_user`
-/// return configurable per-machine values. These two are the only
-/// methods `agent_base_env` consults on the exec port, so a single
-/// fake is enough to exercise every behaviour the function cares
-/// about — every other `ExecutionPort` method returns a benign
-/// no-op so the trait stays satisfied.
+/// `ExecutionPort` stub whose `resolve_home`, `resolve_user` and
+/// `resolve_platform` return configurable per-machine values. Those
+/// three are the only methods `agent_base_env` consults on the exec
+/// port, so a single fake is enough to exercise every behaviour the
+/// function cares about — every other `ExecutionPort` method returns
+/// a benign no-op so the trait stays satisfied.
 struct FakeExec {
     homes: HashMap<String, String>,
     users: HashMap<String, String>,
@@ -286,24 +286,41 @@ async fn agent_base_env_falls_back_to_parent_user_when_remote_resolution_fails()
 }
 
 #[tokio::test]
-async fn agent_base_env_preserves_other_locally_inherited_vars() {
-    // SHELL/TMPDIR are inherited verbatim from the parent process
-    // for both local and remote runs — neither has a per-machine
-    // meaning. USER/LOGNAME are covered by their own tests above
-    // (remote uses the port, local inherits the parent).
-    let exec = Arc::new(FakeExec::new().with_home("m-dev", "/home/developer"));
+async fn agent_base_env_forwards_the_desktop_shell_to_a_posix_agent() {
+    // The pre-existing behaviour, now conditional: a POSIX target still sees
+    // the desktop's own SHELL/TMPDIR verbatim. USER/LOGNAME are covered by
+    // their own tests above (remote uses the port, local inherits the parent).
+    let exec = Arc::new(
+        FakeExec::new()
+            .with_home("m-dev", "/home/developer")
+            .with_platform("m-dev", Platform::Linux),
+    );
     let env = agent_base_env(exec.as_ref(), "m-dev").await;
     for k in ["SHELL", "TMPDIR"] {
-        if let (Some(parent_val), Some(env_val)) =
-            (std::env::var(k).ok(), env.get(k).map(String::as_str))
-        {
-            assert_eq!(
-                env_val, parent_val,
-                "{} must be inherited from the parent process unchanged",
-                k
-            );
-        }
+        assert_eq!(
+            env.get(k).cloned(),
+            std::env::var(k).ok(),
+            "{k} must reach a POSIX agent exactly as the desktop has it"
+        );
     }
+}
+
+#[tokio::test]
+async fn agent_base_env_hands_a_windows_agent_no_posix_identity() {
+    // A desktop started from Git Bash carries SHELL=/usr/bin/bash, and
+    // forwarding it told the agent a POSIX shell was waiting for it. The
+    // resolved HOME is unaffected — it was asked of the machine, so it is
+    // already whatever that machine calls a home.
+    let exec = Arc::new(
+        FakeExec::new()
+            .with_home("m-win", "C:/Users/dev")
+            .with_platform("m-win", Platform::Windows),
+    );
+    let env = agent_base_env(exec.as_ref(), "m-win").await;
+    for k in ["SHELL", "TMPDIR"] {
+        assert!(!env.contains_key(k), "{k} must not reach a Windows agent");
+    }
+    assert_eq!(env.get("HOME").map(String::as_str), Some("C:/Users/dev"));
 }
 
 #[tokio::test]

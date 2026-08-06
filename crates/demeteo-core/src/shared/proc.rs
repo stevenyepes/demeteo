@@ -83,27 +83,50 @@ pub fn is_msys_env_var(name: &str) -> bool {
     name == "MSYSTEM" || name == "MSYS" || name.starts_with("MSYS2_")
 }
 
+/// Whether an inherited variable asserts something about the host that is only
+/// true of a POSIX one.
+///
+/// `SHELL` is the load-bearing case. Demeteo's desktop is commonly started from
+/// a Git Bash terminal, which exports `SHELL=/usr/bin/bash`, and every child of
+/// it then inherits a claim that a POSIX shell is present — which a coding
+/// agent reads as licence to use one. `TMPDIR` is the same shape: Windows names
+/// its temp directory `TEMP`/`TMP`, so an inherited POSIX value is a second
+/// marker on top of a path that resolves to nothing.
+///
+/// Removal costs the genuinely POSIX-shaped children nothing. Bash assigns
+/// `SHELL` the login shell's own path when it starts without one, and `mktemp`
+/// falls back to `/tmp`, which the MSYS root provides.
+///
+/// [`crate::domain::agent_env::inherited_agent_env`] is the other half and has
+/// to keep agreeing with this: it stops Demeteo *inserting* these, this stops a
+/// child *inheriting* them, and either alone leaves the variable arriving.
+pub fn is_posix_host_env_var(name: &str) -> bool {
+    name.eq_ignore_ascii_case("SHELL") || name.eq_ignore_ascii_case("TMPDIR")
+}
+
 /// Whether a variable is removed from a child's block outright.
 ///
-/// [`is_msys_env_var`] on its own is not that question: `MSYS2_ENV_CONV_EXCL`
+/// Neither predicate above is on its own that question: `MSYS2_ENV_CONV_EXCL`
 /// is one of Git for Windows' own *and* one [`WINDOWS_CHILD_ENV`] sets, so a
-/// removal pass keyed on the predicate alone is only correct while it runs
+/// removal pass keyed on a predicate alone is only correct while it runs
 /// before the set pass — an ordering the compiler does not check and no test
 /// on this host can observe, since the passes are behind `cfg(windows)`.
-/// Deciding it here makes the two commute.
+/// Deciding it here makes the two commute, and keeps any later addition
+/// commuting without its author having to know that.
 pub fn must_strip_from_child(name: &str) -> bool {
-    is_msys_env_var(name)
+    (is_msys_env_var(name) || is_posix_host_env_var(name))
         && !WINDOWS_CHILD_ENV
             .iter()
             .any(|(set, _)| set.eq_ignore_ascii_case(name))
 }
 
 /// Spawn hygiene for every child that is not a PTY: no console window, no
-/// executable search through the working directory, and none of the MSYS
-/// state a Git Bash ancestor left in the environment.
+/// executable search through the working directory, and none of the state a
+/// Git Bash ancestor left in the environment — see [`must_strip_from_child`].
 ///
 /// Never call this on a `portable-pty` child — a terminal session's whole
-/// purpose is the console this suppresses.
+/// purpose is the console this suppresses, and the `SHELL` this removes is
+/// the very thing such a session is asked to honour.
 ///
 /// The creation flags are *set*, not merged, because Win32 offers no way to
 /// read back what a `Command` already carries. A site that needs another flag

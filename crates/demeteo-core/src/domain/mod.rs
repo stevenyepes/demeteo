@@ -12,6 +12,7 @@
 //! Submodules should cite this rule rather than restating it.
 
 pub mod action;
+pub mod agent_env;
 pub mod agent_event;
 pub mod agent_session;
 pub mod app_view;

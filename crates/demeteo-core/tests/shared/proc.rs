@@ -63,3 +63,32 @@ fn variables_that_merely_start_with_msys_are_left_alone() {
         assert!(!is_msys_env_var(name), "{name} is not ours to remove");
     }
 }
+
+#[test]
+fn the_posix_host_claims_never_reach_a_child() {
+    for name in ["SHELL", "shell", "TMPDIR", "TmpDir"] {
+        assert!(is_posix_host_env_var(name));
+        assert!(must_strip_from_child(name), "{name} must not reach a child");
+    }
+}
+
+#[test]
+fn the_windows_temp_names_and_the_resolved_identity_survive() {
+    // TEMP/TMP are what a temp directory is actually called here, and
+    // HOME/USER/LOGNAME are resolved per machine and set on the command — a
+    // predicate that caught any of them would have the strip pass delete
+    // Demeteo's own answer on the way out.
+    for name in [
+        "TEMP",
+        "TMP",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "PATH",
+        "SHELLOPTS",
+        "MY_SHELL",
+        "TMPDIR_ROOT",
+    ] {
+        assert!(!is_posix_host_env_var(name), "{name} is not ours to remove");
+    }
+}

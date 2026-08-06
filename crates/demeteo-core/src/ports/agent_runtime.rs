@@ -168,10 +168,14 @@ pub fn no_permission_env(_p: &PermissionProfile) -> HashMap<String, String> {
 /// own home locally; on the SSH adapter, the value cached by its
 /// first `printf %s "$HOME"` probe) and `resolve_user` (locally the
 /// GUI's user; remotely the `Machine.username` the SSH channel
-/// authenticates as).
+/// authenticates as). Being *resolved* rather than inherited is what
+/// exempts HOME from the platform rule below — its value is asked of
+/// the target machine, so it is already whatever that machine calls a
+/// home, `USERPROFILE` included.
 ///
-/// SHELL and TMPDIR are inherited from the parent process for both
-/// local and remote runs; neither has a per-machine meaning.
+/// Which variables are inherited from the desktop at all is a decision,
+/// not a list, and [`crate::domain::agent_env::inherited_agent_env`]
+/// holds it along with the reasoning.
 ///
 /// `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` are intentionally **not**
 /// injected here. Because we no longer pass `--bare` (which would set
@@ -184,12 +188,11 @@ pub async fn agent_base_env(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
 ) -> HashMap<String, String> {
-    let mut env = HashMap::new();
-    for key in ["SHELL", "TMPDIR"] {
-        if let Ok(val) = std::env::var(key) {
-            env.insert(key.to_string(), val);
-        }
-    }
+    let platform = resolve_agent_platform(exec, machine_id).await;
+    let mut env: HashMap<String, String> =
+        crate::domain::agent_env::inherited_agent_env(platform, |key| std::env::var(key).ok())
+            .into_iter()
+            .collect();
     let (home, user) = resolve_agent_identity(exec, machine_id).await;
     if !home.is_empty() {
         env.insert("HOME".to_string(), home);
