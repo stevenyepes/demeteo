@@ -38,6 +38,18 @@ fn mock_parse_event(line: &str) -> Option<AgentEvent> {
     }
 }
 
+fn sinks(
+    session_capture: Option<Arc<Mutex<Option<String>>>>,
+    cumulative_tokens: Option<Arc<AtomicU64>>,
+) -> DrainSinks {
+    DrainSinks {
+        session_capture,
+        cumulative_tokens,
+        agent: "stub-agent".to_string(),
+        trace: None,
+    }
+}
+
 fn run_drain<R, F>(reader: R, exit_code_fn: F) -> Vec<AgentEvent>
 where
     R: Read + Send + 'static,
@@ -50,9 +62,7 @@ where
             mock_parse_event,
             exit_code_fn,
             tx,
-            None,
-            None,
-            "stub-agent".to_string(),
+            sinks(None, None),
         );
     });
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -66,6 +76,63 @@ where
         }
         events
     })
+}
+
+/// The evidence this capture exists for is precisely what the parser drops:
+/// a `command_execution` item becomes a `ToolCall` nothing renders, and a
+/// banner or a stderr line mixed into the stream parses as nothing at all.
+/// Capturing only recognised events would reproduce the blind spot at a new
+/// layer.
+#[test]
+fn drain_lines_captures_the_lines_the_parser_recognises_and_the_ones_it_drops() {
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir =
+        TempDir(std::env::temp_dir().join(format!("demeteo-drain-trace-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&dir.0);
+
+    let input = concat!(
+        r#"{"type":"text","delta":"hi"}"#,
+        "\n",
+        r#"{"type":"command_execution","command":"bash -lc 'ls'"}"#,
+        "\n",
+        "codex: sandbox not supported on this platform\n",
+        r#"{"type":"end_turn"}"#,
+        "\n",
+    );
+    let trace = crate::adapters::agent::trace::TurnTrace::open_in(&dir.0, "codex-t42", 3)
+        .expect("trace file must be creatable");
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(8);
+    let handle = std::thread::spawn(move || {
+        drain_lines(
+            Cursor::new(input),
+            mock_parse_event,
+            || Some(0),
+            tx,
+            DrainSinks {
+                trace: Some(trace),
+                ..sinks(None, None)
+            },
+        );
+    });
+    while rx.blocking_recv().is_some() {}
+    handle.join().unwrap();
+
+    let written = std::fs::read_to_string(dir.0.join("codex-t42.turn003.jsonl"))
+        .expect("the capture must exist");
+    assert!(
+        written.contains("bash -lc 'ls'"),
+        "the command the agent ran was dropped again: {written}"
+    );
+    assert!(
+        written.contains("sandbox not supported"),
+        "an unparsed line was dropped: {written}"
+    );
+    assert_eq!(written.lines().count(), 4, "got: {written}");
 }
 
 #[test]
@@ -272,9 +339,7 @@ fn drain_lines_keeps_reading_past_a_recoverable_error() {
             mock_parse_event_with_warnings,
             || Some(0),
             tx,
-            None,
-            None,
-            "stub-agent".to_string(),
+            sinks(None, None),
         );
     });
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -489,15 +554,7 @@ fn drain_lines_returns_early_when_consumer_drops() {
 "#
         .to_vec(),
     );
-    drain_lines(
-        reader,
-        mock_parse_event,
-        || Some(0),
-        tx,
-        None,
-        None,
-        "stub-agent".to_string(),
-    );
+    drain_lines(reader, mock_parse_event, || Some(0), tx, sinks(None, None));
 }
 
 struct ChunkyHandle {
@@ -794,9 +851,7 @@ fn drain_lines_counts_cache_tokens_in_cumulative_footprint() {
             mock_parse_usage_event,
             || Some(0),
             tx,
-            None,
-            Some(cum),
-            "stub-agent".to_string(),
+            sinks(None, Some(cum)),
         );
     });
     while rx.blocking_recv().is_some() {}
@@ -827,9 +882,7 @@ fn drain_lines_takes_the_largest_usage_delta_not_their_sum() {
             mock_parse_usage_event,
             || Some(0),
             tx,
-            None,
-            Some(cum),
-            "stub-agent".to_string(),
+            sinks(None, Some(cum)),
         );
     });
     while rx.blocking_recv().is_some() {}
@@ -847,9 +900,7 @@ fn captured_session_id(input: &'static str) -> Option<String> {
             mock_parse_event,
             || Some(0),
             tx,
-            Some(cap),
-            None,
-            "stub-agent".to_string(),
+            sinks(Some(cap), None),
         );
     });
     while rx.blocking_recv().is_some() {}

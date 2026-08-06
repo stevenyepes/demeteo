@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 
+use super::trace::TurnTrace;
 use crate::domain::agent_event::{AgentEvent, StopReason};
 use crate::domain::models::{Availability, EffortLevel, SessionInfo};
 use crate::ports::agent_runtime::{
@@ -208,6 +209,7 @@ impl AgentRuntime for UnifiedCliRuntime {
                 captured_session_id: Arc::new(Mutex::new(None)),
                 stderr_hb: StderrHeartbeat::new(),
                 cumulative_tokens: Arc::new(AtomicU64::new(0)),
+                turn_seq: AtomicU64::new(0),
             };
             Ok(Arc::new(session) as Arc<dyn AgentSession>)
         })
@@ -233,6 +235,23 @@ pub struct UnifiedCliSession {
     /// because they occupy context even though they bill at ~10%.
     /// Zero for a fresh session before the first event arrives.
     cumulative_tokens: Arc<AtomicU64>,
+    /// Turns issued against this session so far. Its only consumer is the
+    /// raw-capture file name, which needs the turns of one session to be
+    /// distinguishable and ordered; a wall-clock stamp would give neither
+    /// when two turns land in the same millisecond.
+    turn_seq: AtomicU64,
+}
+
+/// Where the drain thread reports, besides the event channel.
+struct DrainSinks {
+    session_capture: Option<Arc<Mutex<Option<String>>>>,
+    cumulative_tokens: Option<Arc<AtomicU64>>,
+    /// The binary named in the `agent_no_output` message, which is the one
+    /// ending whose remedy is to run that binary by hand.
+    agent: String,
+    /// The turn's raw capture, `None` unless a developer asked for one
+    /// (`adapters::agent::trace`).
+    trace: Option<TurnTrace>,
 }
 
 impl UnifiedCliSession {
@@ -278,11 +297,21 @@ impl UnifiedCliSession {
         cmd
     }
 
+    fn drain_sinks(&self, trace: Option<TurnTrace>) -> DrainSinks {
+        DrainSinks {
+            session_capture: Some(self.captured_session_id.clone()),
+            cumulative_tokens: Some(self.cumulative_tokens.clone()),
+            agent: self.ctx.binary.clone(),
+            trace,
+        }
+    }
+
     fn spawn_local(
         &self,
         text: &str,
         parse_event: EventParser,
         tx: tokio::sync::mpsc::Sender<AgentEvent>,
+        trace: Option<TurnTrace>,
     ) {
         let mut cmd = self.build_command(text);
         let binary = self
@@ -339,22 +368,12 @@ impl UnifiedCliSession {
                 .and_then(|status| status.code())
         };
 
-        let session_capture = self.captured_session_id.clone();
-        let cumulative = self.cumulative_tokens.clone();
-        let agent = self.ctx.binary.clone();
+        let sinks = self.drain_sinks(trace);
 
         reap_when_abandoned(child, tx.downgrade());
 
         std::thread::spawn(move || {
-            drain_lines(
-                BufReader::new(stdout),
-                parse_event,
-                exit_code_fn,
-                tx,
-                Some(session_capture),
-                Some(cumulative),
-                agent,
-            );
+            drain_lines(BufReader::new(stdout), parse_event, exit_code_fn, tx, sinks);
         });
     }
 
@@ -363,6 +382,7 @@ impl UnifiedCliSession {
         text: &str,
         parse_event: EventParser,
         tx: tokio::sync::mpsc::Sender<AgentEvent>,
+        trace: Option<TurnTrace>,
     ) {
         let captured = {
             if let Ok(guard) = self.captured_session_id.lock() {
@@ -415,19 +435,9 @@ impl UnifiedCliSession {
         let reader = HandleReader {
             handle: handle.clone(),
         };
-        let session_capture = self.captured_session_id.clone();
-        let cumulative = self.cumulative_tokens.clone();
-        let agent = self.ctx.binary.clone();
+        let sinks = self.drain_sinks(trace);
         std::thread::spawn(move || {
-            drain_lines(
-                reader,
-                parse_event,
-                exit_code_fn,
-                tx,
-                Some(session_capture),
-                Some(cumulative),
-                agent,
-            );
+            drain_lines(reader, parse_event, exit_code_fn, tx, sinks);
         });
     }
 
@@ -476,10 +486,16 @@ impl AgentSession for UnifiedCliSession {
         let is_local = self.ctx.machine_id.is_empty() || self.ctx.machine_id == "local";
         let (tx, rx) = tokio::sync::mpsc::channel::<AgentEvent>(256);
 
+        // Opened here, not per transport: a capture that only local turns
+        // produced would answer the diagnostic question for one half of the
+        // ExecutionPort contract and quietly not for the other.
+        let turn = self.turn_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let trace = TurnTrace::open(&self.session_id, turn);
+
         if is_local {
-            self.spawn_local(text, parse_event, tx);
+            self.spawn_local(text, parse_event, tx, trace);
         } else {
-            self.spawn_remote(text, parse_event, tx);
+            self.spawn_remote(text, parse_event, tx, trace);
         }
 
         Box::pin(ReceiverStream::new(rx))
@@ -757,13 +773,17 @@ fn drain_lines<R, F>(
     parse_event: EventParser,
     exit_code_fn: F,
     tx: tokio::sync::mpsc::Sender<AgentEvent>,
-    session_capture: Option<Arc<Mutex<Option<String>>>>,
-    cumulative_tokens: Option<Arc<AtomicU64>>,
-    agent: String,
+    sinks: DrainSinks,
 ) where
     R: Read,
     F: FnOnce() -> Option<i32>,
 {
+    let DrainSinks {
+        session_capture,
+        cumulative_tokens,
+        agent,
+        mut trace,
+    } = sinks;
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
     let mut terminal = false;
@@ -799,6 +819,12 @@ fn drain_lines<R, F>(
                     continue;
                 }
                 wrote_output = true;
+                // Before the parser, so the capture holds what the agent said
+                // rather than what this runtime recognised — the lines it does
+                // not recognise are the ones worth having.
+                if let Some(trace) = trace.as_mut() {
+                    trace.record(trimmed);
+                }
                 if let Some(ref capture) = session_capture {
                     if let Ok(guard) = capture.lock() {
                         if guard.is_none() {

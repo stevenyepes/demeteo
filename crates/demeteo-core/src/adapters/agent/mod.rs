@@ -10,6 +10,7 @@ pub mod opencode;
 pub mod pi;
 pub mod registry;
 pub mod stub_runtime;
+pub mod trace;
 
 // Shared test stubs for `hermes::tests`, `claude_code::tests`, and
 // `opencode::tests`. Each of those test files imports the stubs via
