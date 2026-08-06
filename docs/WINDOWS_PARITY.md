@@ -11,6 +11,12 @@
 > the DACL fence denying a real agent, and an authenticated push remain
 > reasoned rather than executed; treat every claim about them as a prediction.
 >
+> Separately, three POSIX signals Demeteo emitted *regardless of platform* have
+> been removed or corrected, and a fourth question — what codex's sandbox flag
+> is backed by on Windows — is now instrumented but open. That work is under
+> [What Demeteo itself was telling the agent](#what-demeteo-itself-was-telling-the-agent),
+> and no Windows run has confirmed any of it either.
+>
 > Since then the `cfg(windows)` bodies are at least *executable* from Linux —
 > `scripts/check-windows.sh --run`, whose blind spots are set out under
 > [Gates](#gates). It is not a substitute for any of the above. Read
@@ -112,6 +118,60 @@ A WSL2 distro is registerable **today** as an ordinary SSH machine. It costs no
 new code and adds no fourth transport. It stays the documented escape hatch for
 Linux-only toolchains, not the strategy — requiring it would make the Windows
 desktop a client of a Linux box rather than a supported host.
+
+---
+
+## What Demeteo itself was telling the agent
+
+The one-body decision governs what *executes*. It says nothing about what an
+agent **believes** it is standing on, and that is the failure the first Windows
+desktop actually hit: codex reached for bash tooling on a machine where Demeteo
+had already resolved a bash and was invoking it. The agent was not guessing.
+Three things Demeteo emitted unconditionally said POSIX, and none of them was
+sensitive to the platform in any way:
+
+| The signal | Why it read as POSIX | Where the rule lives now |
+|---|---|---|
+| `SHELL` and `TMPDIR` forwarded from the GUI process into every agent spawn | A Demeteo launched from a Git Bash terminal exports `SHELL=/usr/bin/bash`, so the orchestrator handed a Windows agent a POSIX identity and was then surprised by POSIX behaviour | `domain/agent_env.rs` — forwarded to a POSIX target and to nothing else, plus a strip pass over every non-PTY child |
+| The prompt named no operating system, while `{{harness_baseline}}` quoted the project's POSIX gate commands verbatim on every platform | The only OS evidence in the prompt pointed one way | `domain/platform_context.rs` — a Windows-only block, placed above the command text it reframes |
+| `-c sandbox_mode=…` chosen for codex with no platform in the decision | Not a claim the agent reads, but a posture Demeteo asserts without knowing it holds | `domain/models/sandbox.rs` — the platform reaches the arg builder and the table records what is known per platform |
+
+The first two are corrections. The third is **not**, and reading it as one is
+the mistake this section exists to prevent.
+
+### The codex sandbox question is instrumented, not answered
+
+Codex's two published sandbox backends are POSIX kernel facilities — Seatbelt on
+macOS, Landlock/seccomp on Linux. Whether its Windows build carries a third has
+not been observed here, so the Windows entry is `Unknown` and Demeteo still
+sends the identical bytes it sends on Linux. An open question must not change
+what ships; the seam exists so that answering it later is an edit to one table
+arm rather than a redesign.
+
+Settling it needs no code change, only a capture. `DEMETEO_AGENT_TRACE` writes
+an agent's raw stdout verbatim, including the `command_execution` items the
+event parser drops — [`AGENT_INTEGRATION.md`](../AGENT_INTEGRATION.md) §5.2.1
+covers turning it on. One codex turn on a Windows desktop either runs with the
+mode accepted or names the unsupported sandbox on its own stream.
+
+### What is still a prediction
+
+This work was written, tested and reviewed on macOS. Nothing added sits behind a
+`#[cfg]` — the platform travels as data through the port, so `Platform::Windows`
+is exercised by the Linux and macOS suites as an ordinary value. That is why the
+compile gates say nothing here: there is no Windows-only body to miscompile, and
+equally no Windows-only body whose *behaviour* anything has checked.
+
+- **That the corrections change codex's behaviour at all.** The chain from
+  "`SHELL` said bash" to "the harness reached for bash utilities" is inferred
+  from the environment block and the prompt, not read off a capture. The first
+  Windows capture is the evidence and it does not exist yet.
+- **That no agent depends on the two variables.** The adapters drive third-party
+  CLIs whose behaviour on Windows without `TMPDIR` is untested; the reasoning
+  that they lose nothing is recorded in `domain/agent_env.rs` and is reasoning,
+  not observation.
+- **That the prompt block is sufficient.** It is instruction — see the gap
+  below.
 
 ---
 
@@ -481,6 +541,20 @@ Honest degradation, not silent:
   makes portable scripts work — and everything Demeteo constructs goes through
   `run_program`, which never touches bash. `MSYS_NO_PATHCONV` is not used: its
   mere definedness disables conversion and `=0` does not re-enable it.
+- **The Windows platform block is instruction, not enforcement.** Nothing
+  rejects an agent that translates a gate command into PowerShell anyway, and
+  nothing could today: detection would have to compare what the agent ran
+  against what the project configured, and no layer sees both — the agent's
+  commands run inside its own turn. The verdict-bearing run is Demeteo's own, so
+  a translated command costs a wasted turn rather than a false green. The block
+  raises the odds; it does not close the hole.
+- **Codex's sandbox is unverified on Windows.** Demeteo sends a mode it cannot
+  confirm is backed by anything, so on Windows an agent's containment rests on
+  the Phase 4 fence — whose own strength is stated above, and which has not yet
+  denied a real agent — and on `verify_and_revert_out_of_scope_writes`, which
+  is the layer that actually holds. On Linux and macOS the harness sandbox is a
+  genuine second layer; on Windows it is unknown rather than absent, and no
+  user-visible claim may count it.
 - **Defender** makes `node_modules` installs and post-build deletes markedly
   slower than Linux on identical hardware. Advisory mitigations only (Dev Drive,
   exclusions, lower default Windows parallelism).

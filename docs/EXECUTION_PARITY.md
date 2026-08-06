@@ -44,6 +44,55 @@ that, and they are the reason the code looks the way it does:
   a regression detector pointed at the wrong thing.
 - **A red harness is triaged before it feeds the retry loop.** See below.
 
+## Platform is not transport
+
+The guarantee quantifies over **transports**, not over machines. Two transports
+pointed at the same machine must be indistinguishable; one transport pointed at
+two different machines was never under that obligation, and a Linux worktree and
+a Windows worktree are different machines. Collapsing the two reads any `match
+platform` in driver-adjacent code as the §2 branch — which inverts the rule,
+because here it is *suppressing* the platform that breaks parity.
+
+The worked example is the agent prompt. It carries a Windows-only block
+(`domain/platform_context.rs`) naming the OS and forbidding the agent to
+translate the project's POSIX gate commands. Local-Linux and SSH-Linux render
+byte-identical prompts; local-Windows and local-Linux differ through the *same*
+transport. That is the shape the guarantee demands. The alternative — one prompt
+describing a POSIX machine, rendered onto a host with no `/usr/bin` — is a
+divergence in agent behaviour that no transport observes and no conformance
+suite can reach, which is precisely the class the guarantee exists to exclude.
+
+The test for whether a difference is legitimate: **hold the target machine fixed
+and swap the transport — does the difference survive?** If it does, it is a
+parity break. If it disappears, the target was answering for itself.
+
+### `resolve_platform` is what keeps the distinction honest
+
+`ExecutionPort::resolve_platform` is required, has no default, and the trait's
+own rustdoc records why a default is unimplementable. The parity reason it is on
+the port at all is separate: without it, the only question calling code can ask
+is `cfg!(windows)` — a fact about the **desktop binary**. Every consumer would
+then be branching on the client, the one branch guaranteed wrong the moment a
+Windows desktop drives a Linux remote, and wrong *silently*, because both
+answers are plausible OS names. So this is the one port method whose purpose is
+to let a caller vary behaviour without leaving the contract.
+
+Adapters answer it by observing their target, never by naming themselves: the
+local adapter reads `std::env::consts::OS`, which needs no `cfg` because
+locally the process *is* the target; SSH probes `uname -s` and caches it per
+machine beside the home and user probes.
+
+`exec_contract`'s assertion cross-checks the answer against `cfg!(windows)` /
+`cfg!(unix)` rather than against the adapter's own `std::env::consts::OS`, so on
+`windows-latest` it tests the Windows arm instead of agreeing with itself.
+
+Every consumer today is platform-keyed and none is transport-keyed: the prompt
+block above, the desktop environment an agent may inherit
+(`domain/agent_env.rs`), and codex's sandbox selection
+(`domain/models/sandbox.rs`) — the last of which is an inert seam that changes
+no bytes on any platform. [`WINDOWS_PARITY.md`](WINDOWS_PARITY.md) records what
+each is for and what remains unobserved.
+
 ## The gates — and the trap
 
 Two conformance suites hold the guarantee. **Neither runs under `npm run

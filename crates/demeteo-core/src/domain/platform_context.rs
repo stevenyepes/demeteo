@@ -9,25 +9,13 @@
 //! bash utilities and then translating the project's own gate commands into
 //! something else. This block is the correction, and it is the whole of it.
 //!
-//! ## Why this is not a transport branch
+//! ## The `match platform` below is not the branch AGENTS.md §2 forbids
 //!
-//! A reviewer meeting a `match platform` in a prompt builder will read it as
-//! the thing AGENTS.md §2 forbids — branching on transport in calling code. It
-//! is not, and the distinction is exact: this keys on the **platform of the
-//! machine the worktree is on**, which is orthogonal to how the work got there.
-//! A Linux box driven by the local subprocess adapter and the same box driven
-//! over SSH render byte-identical prompts; a Windows desktop and a Linux desktop
-//! render different ones through the *same* transport. The `ExecutionPort`
-//! contract is untouched — the platform arrives through `resolve_platform`,
-//! which every transport answers by observing its own target rather than by
-//! naming itself.
-//!
-//! The parity guarantee is that a feature behaves identically regardless of
-//! which transport ran it (`docs/EXECUTION_PARITY.md`). Telling an agent it is
-//! on Windows when it is on Windows is required *by* that guarantee: the
-//! alternative is one prompt, describing a POSIX machine, rendered onto a host
-//! that has no `/usr/bin` — which is a transport-invisible divergence in agent
-//! behaviour, i.e. the exact failure the guarantee exists to exclude.
+//! It keys on the platform of the machine the worktree is on, not on how the
+//! work reached it, and the platform arrives through `resolve_platform` rather
+//! than a `cfg!`. `docs/EXECUTION_PARITY.md` carries that argument in full,
+//! including the test that separates the two — do not delete this match on
+//! parity grounds without reading it.
 //!
 //! ## Why a POSIX target gets nothing
 //!

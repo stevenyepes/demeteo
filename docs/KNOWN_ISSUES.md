@@ -74,6 +74,49 @@ one of these lines on Linux:
 No banner means non-NVIDIA Linux and WebKitGTK defaults are in
 effect.
 
+## Agents behave as though Windows were Linux
+
+**Symptom:** On a Windows desktop, an agent step acts like it is on
+Linux. It hunts for bash or the Unix utilities as though they had to
+be found, or it rewrites your configured test/build command into
+PowerShell before running it. The turn is spent on the detour, and
+work can end up judged against a command you never configured.
+
+**Cause:** Nearly everything an agent uses to work out what machine
+it is on pointed at POSIX. Demeteo forwarded its own `SHELL` and
+`TMPDIR` to every agent it spawned — and Demeteo started from a Git
+Bash terminal exports `SHELL=/usr/bin/bash` — while the prompt named
+no operating system at all and quoted your project's POSIX gate
+commands verbatim. The agent drew the obvious conclusion.
+
+**Shipped fix:** a Windows agent inherits neither variable, and its
+prompt now opens by naming the OS, naming the Git Bash that runs
+those commands for it, and forbidding it to translate them.
+
+**What this does not settle:** the prompt is an instruction, so an
+agent can still ignore it; the correction makes that less likely
+rather than impossible. Separately, `codex` on Windows is sent the
+same sandbox setting it is sent on Linux, and whether Windows backs
+that with anything is unknown — see
+[WINDOWS_PARITY.md](WINDOWS_PARITY.md). Do not count that setting
+as containment on Windows: what actually bounds a step there is the
+worktree fence and the out-of-scope write check, the same two layers
+you would have with no sandbox at all.
+
+**Escape hatch — run the work on WSL2 instead.** A WSL2 distribution
+with an sshd is registerable as an ordinary machine under
+*Settings → Machines*, exactly like any other Linux box; it is not a
+special mode and needs nothing Windows-specific. The worktree, the
+agent, and your gate commands then all live on Linux, where every
+signal above is simply true.
+
+Two costs, both worth knowing before you choose it: keep the clone
+inside the distribution's own filesystem — a repo under `/mnt/c` is
+much slower and has different file semantics — and Windows-native
+toolchains (MSBuild, signtool, the .NET SDK) are not reachable from
+there, so a project that needs them wants the native path despite
+the caveats above.
+
 ## References
 
 - [tauri-apps/tauri#10702](https://github.com/tauri-apps/tauri/issues/10702) — Error 71 dispatching to Wayland display
