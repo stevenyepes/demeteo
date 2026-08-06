@@ -189,10 +189,13 @@ pub async fn agent_base_env(
     machine_id: &str,
 ) -> HashMap<String, String> {
     let platform = resolve_agent_platform(exec, machine_id).await;
-    let mut env: HashMap<String, String> =
-        crate::domain::agent_env::inherited_agent_env(platform, |key| std::env::var(key).ok())
-            .into_iter()
-            .collect();
+    let mut env: HashMap<String, String> = crate::domain::agent_env::inherited_agent_env(
+        Platform::from_target_os(std::env::consts::OS),
+        platform,
+        |key| std::env::var(key).ok(),
+    )
+    .into_iter()
+    .collect();
     let (home, user) = resolve_agent_identity(exec, machine_id).await;
     if !home.is_empty() {
         env.insert("HOME".to_string(), home);

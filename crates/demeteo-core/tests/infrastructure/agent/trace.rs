@@ -40,7 +40,7 @@ fn a_blank_or_absent_variable_leaves_tracing_off() {
 /// while the other still escaped the directory.
 #[test]
 fn a_separator_in_the_session_id_cannot_escape_the_trace_directory() {
-    let name = trace_file_name("codex-feat/42\\s-implement", 1);
+    let name = trace_file_name("codex-feat/42\\s-implement", 1, 0);
     assert!(
         !name.contains('/') && !name.contains('\\'),
         "separator survived into the file name: {name}"
@@ -49,7 +49,7 @@ fn a_separator_in_the_session_id_cannot_escape_the_trace_directory() {
 
     let dir = Path::new("traces");
     assert_eq!(
-        dir.join(trace_file_name("../../etc", 1)),
+        dir.join(trace_file_name("../../etc", 1, 0)),
         Path::new("traces").join(".._.._etc.turn001.jsonl")
     );
 }
@@ -57,9 +57,9 @@ fn a_separator_in_the_session_id_cannot_escape_the_trace_directory() {
 #[test]
 fn turns_are_padded_so_a_listing_is_in_turn_order() {
     let mut names = vec![
-        trace_file_name("codex-t", 10),
-        trace_file_name("codex-t", 2),
-        trace_file_name("codex-t", 1),
+        trace_file_name("codex-t", 10, 0),
+        trace_file_name("codex-t", 2, 0),
+        trace_file_name("codex-t", 1, 0),
     ];
     names.sort();
     assert_eq!(
@@ -74,14 +74,14 @@ fn turns_are_padded_so_a_listing_is_in_turn_order() {
 
 #[test]
 fn a_session_id_that_sanitizes_to_nothing_still_names_a_visible_file() {
-    let name = trace_file_name("", 1);
+    let name = trace_file_name("", 1, 0);
     assert_eq!(name, "agent.turn001.jsonl");
     assert!(!name.starts_with('.'), "capture would be hidden: {name}");
 }
 
 #[test]
 fn an_oversized_session_id_is_capped() {
-    let name = trace_file_name(&"x".repeat(400), 1);
+    let name = trace_file_name(&"x".repeat(400), 1, 0);
     assert!(
         name.len() <= MAX_SESSION_COMPONENT + ".turn001.jsonl".len(),
         "unbounded file name: {} chars",
@@ -130,6 +130,34 @@ fn a_recorded_line_is_on_disk_before_the_trace_is_dropped() {
     assert!(
         written.contains("bash -lc ls"),
         "nothing flushed: {written}"
+    );
+}
+
+/// A retry of the same task computes the same session id and restarts its turn
+/// counter, so the second attempt names the first attempt's file — and the
+/// attempt worth reading is usually the one that failed.
+#[test]
+fn a_second_capture_of_the_same_turn_never_overwrites_the_first() {
+    let dir = TempDir::new("retry");
+    let mut first =
+        TurnTrace::open_in(&dir.0, "codex-f1-s-implement-t-3", 1).expect("first attempt");
+    first.record(r#"{"command":"the attempt that misbehaved"}"#);
+    drop(first);
+
+    let mut second = TurnTrace::open_in(&dir.0, "codex-f1-s-implement-t-3", 1).expect("the retry");
+    second.record(r#"{"command":"the re-run that worked"}"#);
+
+    let original =
+        std::fs::read_to_string(dir.0.join("codex-f1-s-implement-t-3.turn001.jsonl")).unwrap();
+    assert!(
+        original.contains("the attempt that misbehaved"),
+        "the failing attempt's capture was truncated by the retry: {original}"
+    );
+    let retried =
+        std::fs::read_to_string(dir.0.join("codex-f1-s-implement-t-3.turn001.1.jsonl")).unwrap();
+    assert!(
+        retried.contains("the re-run that worked"),
+        "the retry's own capture is missing: {retried}"
     );
 }
 

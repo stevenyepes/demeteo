@@ -252,8 +252,9 @@ fn codex_error_message(v: &serde_json::Value) -> String {
 ///
 /// Codex sandbox modes are `read-only | workspace-write | danger-full-access`.
 /// We never select `danger-full-access` (it removes the sandbox entirely). The
-/// artifacts-vs-source path distinction is still enforced by the OS-level chmod
-/// fence in `adapters/worktree/git_ops/scope.rs`, uniformly across every agent.
+/// artifacts-vs-source path distinction is still enforced by the OS-level
+/// artifact-scope fence in `adapters/worktree/git_ops/scope.rs`, uniformly
+/// across every agent — by a `chmod` or by a deny ACE, per that module's header.
 ///
 /// `None` means emit no sandbox selection: no `-c sandbox_mode=…`, and no
 /// `-c sandbox_workspace_write.network_access=…` either, since that configures a

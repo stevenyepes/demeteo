@@ -28,27 +28,11 @@ use std::path::PathBuf;
 /// entries are dropped, since Windows resolves an empty entry as the current
 /// directory (GHSA-2mqj-m65w-jghx) and Demeteo's CWD is an agent-written
 /// worktree.
+///
+/// The splitter itself is core's, because core resolves `npm.cmd` against the
+/// very string this composes — see its rustdoc.
 pub fn split_path_list(raw: &str) -> Vec<String> {
-    let mut entries = Vec::new();
-    let mut current = String::new();
-    let mut quoted = false;
-    for ch in raw.chars() {
-        match ch {
-            '"' => quoted = !quoted,
-            ';' if !quoted => push_entry(&mut entries, &mut current),
-            _ => current.push(ch),
-        }
-    }
-    push_entry(&mut entries, &mut current);
-    entries
-}
-
-fn push_entry(entries: &mut Vec<String>, current: &mut String) {
-    let trimmed = current.trim();
-    if !trimmed.is_empty() {
-        entries.push(trimmed.to_string());
-    }
-    current.clear();
+    demeteo_core::shared::win::exe::split_semicolons(raw)
 }
 
 /// Renders entries back into a PATH string, re-quoting any that need it.

@@ -538,6 +538,7 @@ impl GitOpsHelper {
             repo_dir,
             &wt_dir,
             &paths::feature_cache_dir(repo_dir, feature_branch),
+            paths::targets_windows_host(machine_str),
         )
         .await;
 
@@ -614,8 +615,15 @@ impl GitOpsHelper {
             })?;
 
         if let Some(cache) = cache_dir {
-            share_dependency_caches(self.exec.as_ref(), machine_str, repo_dir, &wt_dir, cache)
-                .await;
+            share_dependency_caches(
+                self.exec.as_ref(),
+                machine_str,
+                repo_dir,
+                &wt_dir,
+                cache,
+                paths::targets_windows_host(machine_str),
+            )
+            .await;
         }
 
         Ok(wt_dir)
@@ -1300,6 +1308,11 @@ fn validate_git_branch_name(branch: &str) -> Result<(), String> {
 /// Steps 1 and 2 still run there, so the exclusions a commit sees are the same
 /// on every platform.
 ///
+/// `windows_host` is the caller's [`paths::targets_windows_host`] answer, and
+/// [`may_link_caches`] holds both conditions above it — neither the ordering
+/// nor the platform arm is observable from the filesystem afterwards, so
+/// neither is reachable from a test spelled inside this `async fn`.
+///
 /// Best-effort throughout: a failure here costs a re-install, not the step.
 async fn share_dependency_caches(
     exec: &dyn crate::ports::execution::ExecutionPort,
@@ -1307,6 +1320,7 @@ async fn share_dependency_caches(
     repo_dir: &str,
     wt_dir: &str,
     cache_dir: &str,
+    windows_host: bool,
 ) {
     let probed = exec
         .run_command(machine_id, &shareable_cache_probe_cmd(repo_dir))
@@ -1317,17 +1331,17 @@ async fn share_dependency_caches(
         return;
     }
 
-    if let Err(error) = record_cache_exclusions(exec, machine_id, repo_dir, &names).await {
+    let excluded = record_cache_exclusions(exec, machine_id, repo_dir, &names).await;
+    if let Err(error) = &excluded {
         tracing::warn!(
             machine = %machine_id,
             repo = %repo_dir,
             error = %error,
             "dependency caches are not shared into this worktree: the exclusion could not be written",
         );
-        return;
     }
 
-    if paths::targets_windows_host(machine_id) {
+    if !may_link_caches(excluded.is_ok(), windows_host) {
         return;
     }
     let _ = exec
@@ -1336,6 +1350,18 @@ async fn share_dependency_caches(
             &link_dependency_caches_cmd(repo_dir, wt_dir, cache_dir, &names),
         )
         .await;
+}
+
+/// Whether step 3 of [`share_dependency_caches`] may run.
+///
+/// Both answers are a commit-visible decision that a filesystem check after the
+/// fact cannot tell apart from a slow install: linking without the exclusion
+/// puts an absolute host path on the feature branch, and linking on Windows
+/// copies a whole `node_modules` per step or — via a junction — hides one from
+/// the walk steps 1–2 assume. So the conditions are here, where a Linux test
+/// reaches both, rather than as two early returns in the pipeline.
+fn may_link_caches(exclusions_written: bool, windows_host: bool) -> bool {
+    exclusions_written && !windows_host
 }
 
 /// One round trip that prints the [`paths::DEPENDENCY_CACHE_DIRS`] entries the

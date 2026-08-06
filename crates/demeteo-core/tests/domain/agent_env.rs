@@ -20,35 +20,55 @@ fn names(env: &[(String, String)]) -> Vec<&str> {
 
 #[test]
 fn a_windows_agent_inherits_no_posix_claim() {
-    assert!(
-        inherited_agent_env(Some(Platform::Windows), git_bash_desktop).is_empty(),
-        "a Windows agent must not be told the desktop's shell or temp directory"
-    );
+    for desktop in Platform::ALL {
+        assert!(
+            inherited_agent_env(Some(desktop), Some(Platform::Windows), git_bash_desktop)
+                .is_empty(),
+            "a Windows agent must not be told the desktop's shell or temp directory, \
+             whatever the desktop is ({desktop})"
+        );
+    }
 }
 
+/// The same false claim pointed the other way: the values are the desktop's,
+/// and a Windows desktop driving a Linux remote has neither to give.
 #[test]
-fn a_posix_agent_inherits_both_unchanged() {
+fn a_windows_desktop_forwards_nothing_to_a_posix_agent() {
     for target in [Platform::Linux, Platform::MacOS] {
-        let env = inherited_agent_env(Some(target), git_bash_desktop);
-        assert_eq!(names(&env), ["SHELL", "TMPDIR"], "on {target}");
-        assert_eq!(env[0].1, "/usr/bin/bash");
-        assert_eq!(env[1].1, "/tmp");
+        assert!(
+            inherited_agent_env(Some(Platform::Windows), Some(target), git_bash_desktop).is_empty(),
+            "a Git Bash desktop's `/usr/bin/bash` names no file on the {target} remote"
+        );
     }
 }
 
 #[test]
-fn an_unnameable_target_is_not_assumed_posix() {
-    assert!(inherited_agent_env(None, git_bash_desktop).is_empty());
+fn a_posix_agent_inherits_both_unchanged() {
+    for desktop in [Platform::Linux, Platform::MacOS] {
+        for target in [Platform::Linux, Platform::MacOS] {
+            let env = inherited_agent_env(Some(desktop), Some(target), git_bash_desktop);
+            assert_eq!(names(&env), ["SHELL", "TMPDIR"], "{desktop} → {target}");
+            assert_eq!(env[0].1, "/usr/bin/bash");
+            assert_eq!(env[1].1, "/tmp");
+        }
+    }
+}
+
+#[test]
+fn an_unnameable_platform_is_not_assumed_posix() {
+    assert!(inherited_agent_env(Some(Platform::Linux), None, git_bash_desktop).is_empty());
+    assert!(inherited_agent_env(None, Some(Platform::Linux), git_bash_desktop).is_empty());
+    assert!(inherited_agent_env(None, None, git_bash_desktop).is_empty());
 }
 
 #[test]
 fn a_variable_the_desktop_never_set_is_not_forged_empty() {
-    assert!(inherited_agent_env(Some(Platform::Linux), |_| None).is_empty());
+    assert!(inherited_agent_env(Some(Platform::Linux), Some(Platform::Linux), |_| None).is_empty());
 }
 
 #[test]
 fn nothing_beyond_the_two_is_taken_from_the_desktop() {
-    let env = inherited_agent_env(Some(Platform::Linux), |name| {
+    let env = inherited_agent_env(Some(Platform::Linux), Some(Platform::Linux), |name| {
         Some(format!("value-of-{name}"))
     });
     assert_eq!(names(&env), ["SHELL", "TMPDIR"]);

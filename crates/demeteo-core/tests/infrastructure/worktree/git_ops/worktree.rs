@@ -1984,8 +1984,8 @@ async fn head_sha_reports_nothing_for_a_directory_that_is_not_a_repo() {
 use super::{
     created_terminal_worktree_path, delete_worktree_residue, exclude_file_with,
     link_dependency_caches_cmd, reclaim_worktree_path, restore_write_access_cmd,
-    shareable_cache_names, shareable_cache_probe_cmd, target_path_join, worktree_dir,
-    worktree_dir_on,
+    share_dependency_caches, shareable_cache_names, shareable_cache_probe_cmd, target_path_join,
+    worktree_dir, worktree_dir_on,
 };
 use crate::domain::models::Platform;
 use crate::ports::execution::{ProgramRequest, SftpEntry};
@@ -2491,6 +2491,169 @@ async fn provisioning_records_the_shared_caches_in_the_clone_exclude_file() {
         .await;
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(feature_cache_dir(&repo, "main"));
+}
+
+/// Answers the three questions cache sharing asks and errors on everything
+/// else, so a pipeline that visits an unexpected verb fails rather than reads a
+/// default. Every call is recorded in order: what this covers is *which* calls
+/// were made and in what sequence, which no inspection of the resulting
+/// filesystem can recover.
+struct CacheShareExec {
+    log: Mutex<Vec<String>>,
+    /// Whether the `.git/info/exclude` write succeeds.
+    exclusion_writable: bool,
+}
+
+impl CacheShareExec {
+    fn new(exclusion_writable: bool) -> Self {
+        Self {
+            log: Mutex::new(Vec::new()),
+            exclusion_writable,
+        }
+    }
+    fn seen(&self) -> Vec<String> {
+        self.log.lock().unwrap().clone()
+    }
+    fn note(&self, line: String) {
+        self.log.lock().unwrap().push(line);
+    }
+}
+
+#[async_trait::async_trait]
+impl ExecutionPort for CacheShareExec {
+    async fn test_connection(&self, _m: &str) -> Result<(), String> {
+        Err("unscripted test_connection".into())
+    }
+    async fn run_program(&self, _m: &str, request: ProgramRequest) -> Result<String, String> {
+        let line = format!("{} {}", request.executable, request.args.join(" "));
+        self.note(line.clone());
+        if line.contains("--absolute-git-dir") {
+            return Ok("/repo/.git\n".to_string());
+        }
+        Err(format!("unscripted run_program: {line}"))
+    }
+    async fn run_command(&self, _m: &str, cmd: &str) -> Result<String, String> {
+        if cmd.contains("check-ignore") {
+            self.note("probe".to_string());
+            return Ok("node_modules\n".to_string());
+        }
+        if cmd.contains("ln -sfn") {
+            self.note("link".to_string());
+            return Ok(String::new());
+        }
+        Err(format!("unscripted run_command: {cmd}"))
+    }
+    async fn remove_dir_all(&self, _m: &str, _p: &str) -> Result<(), String> {
+        Err("unscripted remove_dir_all".into())
+    }
+    async fn get_metadata(&self, _m: &str, _p: &str) -> Result<SftpEntry, String> {
+        Err("unscripted get_metadata".into())
+    }
+    async fn read_file(&self, _m: &str, path: &str) -> Result<String, String> {
+        self.note(format!("read_file {path}"));
+        Ok(String::new())
+    }
+    async fn write_file(&self, _m: &str, path: &str, _c: &str) -> Result<(), String> {
+        self.note(format!("write_file {path}"));
+        if self.exclusion_writable {
+            Ok(())
+        } else {
+            Err("Permission denied".into())
+        }
+    }
+    async fn write_file_bytes(&self, _m: &str, _p: &str, _c: &[u8]) -> Result<(), String> {
+        Err("unscripted write_file_bytes".into())
+    }
+    async fn list_dir(&self, _m: &str, _p: &str) -> Result<Vec<SftpEntry>, String> {
+        Err("unscripted list_dir".into())
+    }
+    async fn setup_worktree(&self, _m: &str, _r: &str, _b: &str, _s: &str) -> Result<(), String> {
+        Err("unscripted setup_worktree".into())
+    }
+    async fn resolve_home(&self, _m: &str) -> Result<String, String> {
+        Err("unscripted resolve_home".into())
+    }
+    async fn resolve_user(&self, _m: &str) -> Result<String, String> {
+        Err("unscripted resolve_user".into())
+    }
+    async fn resolve_platform(&self, _m: &str) -> Result<Platform, String> {
+        Err("unscripted resolve_platform".into())
+    }
+    async fn control_rpc(
+        &self,
+        _m: &str,
+        _method: &str,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err("unscripted control_rpc".into())
+    }
+    fn spawn_interactive(
+        &self,
+        _m: &str,
+        _b: &str,
+        _a: &[String],
+        _c: &str,
+        _e: &std::collections::HashMap<String, String>,
+    ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+        Err("unscripted spawn_interactive".into())
+    }
+}
+
+async fn share_caches(exec: &CacheShareExec, windows_host: bool) -> Vec<String> {
+    share_dependency_caches(exec, "m-dev", "/repo", "/wt", "/cache", windows_host).await;
+    exec.seen()
+}
+
+/// The link is what a commit can see, and the exclusion is the only thing that
+/// keeps it out of one — so a link that precedes a *successful* exclusion write
+/// is as wrong as one that follows a failed one.
+#[tokio::test]
+async fn a_cache_is_linked_only_after_its_exclusion_has_landed() {
+    let exec = CacheShareExec::new(true);
+    let seen = share_caches(&exec, false).await;
+    assert_eq!(
+        seen,
+        vec![
+            "probe".to_string(),
+            "git -C /repo rev-parse --absolute-git-dir".to_string(),
+            "read_file /repo/.git/info/exclude".to_string(),
+            "write_file /repo/.git/info/exclude".to_string(),
+            "link".to_string(),
+        ],
+    );
+}
+
+/// The failure this ordering exists for: an unwritable exclude file degrades to
+/// no sharing, never to a symlink to an absolute host path on the branch.
+#[tokio::test]
+async fn an_unwritable_exclude_file_stops_the_link() {
+    let exec = CacheShareExec::new(false);
+    let seen = share_caches(&exec, false).await;
+    assert!(
+        seen.contains(&"write_file /repo/.git/info/exclude".to_string()),
+        "the exclusion was attempted: {seen:?}"
+    );
+    assert!(
+        !seen.contains(&"link".to_string()),
+        "no link may follow an exclusion that did not land: {seen:?}"
+    );
+}
+
+/// Windows-local shares no caches — `ln -s` under Git for Windows silently
+/// copies without the privilege, and a junction is followed by git's walk. The
+/// exclusions are still written, so a commit sees the same files everywhere.
+#[tokio::test]
+async fn a_windows_local_worktree_is_excluded_but_never_linked() {
+    let exec = CacheShareExec::new(true);
+    let seen = share_caches(&exec, true).await;
+    assert!(
+        seen.contains(&"write_file /repo/.git/info/exclude".to_string()),
+        "steps 1 and 2 run on every platform: {seen:?}"
+    );
+    assert!(
+        !seen.contains(&"link".to_string()),
+        "a whole node_modules per step is what this skip avoids: {seen:?}"
+    );
 }
 
 /// The last component of a detached baseline worktree, which is what git

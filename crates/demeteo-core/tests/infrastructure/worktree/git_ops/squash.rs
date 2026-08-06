@@ -1,6 +1,7 @@
 use super::super::common::*;
 use super::*;
 use crate::ports::execution::ExecutionPort;
+use std::path::Path;
 
 /// Every hook shape that reaches a Windows host, decided without one.
 ///
@@ -102,6 +103,35 @@ fn a_shell_launched_hook_is_handed_forward_slash_paths() {
         Some("C:\\Users\\RUNNER~1\\repo".to_string()),
         "cwd goes to CreateProcessW, which never reads it as text"
     );
+}
+
+/// The desktop and the machine it drives do not always agree on how a path is
+/// spelled, and the hook is found by name — a mangled one is not a rejection,
+/// it is a hook that is silently never run.
+#[test]
+fn the_hook_path_is_spelled_by_the_machine_that_reported_it() {
+    assert_eq!(
+        hook_path_on("/home/u/repo", ".git/hooks/commit-msg\n", false),
+        Some("/home/u/repo/.git/hooks/commit-msg".to_string()),
+        "a Windows desktop driving a Linux machine must still join with `/`"
+    );
+    assert_eq!(
+        hook_path_on("/home/u/repo", "/srv/hooks/commit-msg", false),
+        Some("/srv/hooks/commit-msg".to_string()),
+        "an absolute `core.hooksPath` is taken as it stands"
+    );
+
+    assert_eq!(
+        hook_path_on("C:\\repo", ".git/hooks/commit-msg", true),
+        Some("C:\\repo\\.git/hooks/commit-msg".to_string())
+    );
+    assert_eq!(
+        hook_path_on("C:\\repo", "D:\\hooks\\commit-msg", true),
+        Some("D:\\hooks\\commit-msg".to_string()),
+        "a drive-lettered path is absolute even where `/` does not start one"
+    );
+
+    assert_eq!(hook_path_on("/home/u/repo", "  \n", false), None);
 }
 
 /// The core contract: N commits become 1, the content is byte-for-byte

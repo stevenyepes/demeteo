@@ -175,14 +175,21 @@ pub async fn repo_target_dir_str(
 
 /// Whether an operation aimed at `machine_id` lands on a Windows filesystem.
 ///
-/// `host_is_windows` is the caller's `cfg!(windows)`, passed rather than read so
-/// the two answers are both reachable from a test on either platform.
-///
 /// A remote machine is Linux (R2, `docs/REMOTE_EXECUTION.md`), so only the local
 /// machine can be the Windows one — a Windows desktop driving a remote must
 /// still emit the POSIX form. Anything that branches on "is this Windows" needs
 /// *both* halves; branching on `cfg!(windows)` alone is the shape that sends a
 /// `chmod` to Linux or a `MAX_PATH` workaround to a machine with no `MAX_PATH`.
+///
+/// # The injected-flag convention
+///
+/// `host_is_windows` is the caller's `cfg!(windows)`, passed rather than read so
+/// both answers are reachable from a test on either platform. Every path
+/// function below takes a `windows_host` on the same terms — it is *this*
+/// function's answer, handed in. None of them may start deriving it from a
+/// `machine_id` of its own: that puts one half of the behaviour behind a `cfg`
+/// again, in the functions whose whole purpose is to stop a caller guessing
+/// which platform owns a path.
 pub fn windows_host_target(host_is_windows: bool, machine_id: &str) -> bool {
     host_is_windows && crate::domain::ids::MachineId::from(machine_id).is_local()
 }
@@ -209,10 +216,9 @@ pub fn targets_windows_host(machine_id: &str) -> bool {
 /// boundary it enters through, rather than tolerated at each comparison
 /// downstream.
 ///
-/// `windows_host` is the caller's [`windows_host_target`] answer, passed rather
-/// than read so both halves are reachable from a test on either platform. It
-/// must be false for a remote target even on a Windows desktop: there
-/// `/c/anything` is an ordinary directory and rewriting it would invent a drive.
+/// `windows_host` per the [`windows_host_target`] convention. It must be false
+/// for a remote target even on a Windows desktop: there `/c/anything` is an
+/// ordinary directory and rewriting it would invent a drive.
 pub fn native_path(path: &str, windows_host: bool) -> PathBuf {
     if !windows_host {
         return PathBuf::from(path);
@@ -241,8 +247,7 @@ pub fn native_path(path: &str, windows_host: bool) -> PathBuf {
 /// drive letter or a UNC prefix — so a caller filtering on it silently discards
 /// the one answer the target gave, and falls back to whatever it guessed.
 ///
-/// `windows_host` is the caller's [`windows_host_target`] answer, passed rather
-/// than read so both answers are reachable from a test on either platform.
+/// `windows_host` per the [`windows_host_target`] convention.
 pub fn is_absolute_on(path: &str, windows_host: bool) -> bool {
     fn separator(byte: u8) -> bool {
         byte == b'/' || byte == b'\\'
@@ -276,7 +281,7 @@ pub fn looks_absolute(path: &str) -> bool {
 /// name contains backslashes, which SFTP creates without complaint and no later
 /// lookup ever finds again.
 ///
-/// `windows_host` is the caller's [`windows_host_target`] answer.
+/// `windows_host` per the [`windows_host_target`] convention.
 pub fn join_on<'a>(
     base: &str,
     components: impl IntoIterator<Item = &'a str>,
@@ -310,9 +315,8 @@ fn comparison_key(path: &str, windows_host: bool) -> PathBuf {
         return native;
     }
     // A trailing separator is folded away by [`std::path::Path`] only on a
-    // Windows *build*, and `windows_host` is a parameter precisely so the
-    // Windows answer stays reachable from a Linux test — so it cannot be left
-    // to whichever `Path` this was compiled against.
+    // Windows *build*, so it cannot be left to whichever `Path` this was
+    // compiled against.
     let mut key = native.to_string_lossy().to_ascii_lowercase();
     while key.len() > 3 && key.ends_with('\\') {
         key.pop();

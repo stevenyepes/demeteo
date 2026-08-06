@@ -65,9 +65,6 @@ pub fn resolve(
 /// current directory to Windows and a relative one is resolved against it, so
 /// both are dropped rather than searched — see the module header.
 ///
-/// `src-tauri/src/env_path.rs` composes the string this splits back apart and
-/// carries the same splitter; they are one function that cannot yet be one
-/// item, because the Tauri crate depends on this one and not the reverse.
 pub fn path_dirs(raw: &str) -> Vec<PathBuf> {
     split_semicolons(raw)
         .into_iter()
@@ -152,7 +149,15 @@ fn windows_form(path: &Path) -> PathBuf {
     PathBuf::from(path.to_string_lossy().replace('/', "\\"))
 }
 
-fn split_semicolons(raw: &str) -> Vec<String> {
+/// The entries of a `;`-separated Windows `PATH`, quoting respected and empty
+/// entries dropped.
+///
+/// `src-tauri/src/env_path.rs` composes the string this splits back apart and
+/// calls this to do it. One splitter and not two: a fix to the quoting — an
+/// unpaired `"`, an escaped one — applied to the composer alone would leave the
+/// resolver disagreeing with it about where one entry ends, and a tool on the
+/// PATH the app installed would then be unfindable against that same PATH.
+pub fn split_semicolons(raw: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut quoted = false;

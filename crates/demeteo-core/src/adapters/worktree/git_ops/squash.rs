@@ -37,11 +37,30 @@
 use super::GitOpsHelper;
 use crate::ports::execution::ProgramRequest;
 use crate::ports::worktree_ops::{CommitMessageRejected, SquashOutcome};
-use std::path::Path;
 
 /// Where the pre-squash tip is parked so the rewrite is undoable.
 fn backup_ref_for(feature_branch: &str) -> String {
     format!("refs/demeteo/pre-squash/{}", feature_branch)
+}
+
+/// The hook `git rev-parse --git-path` named, absolute, in the spelling of the
+/// machine that answered — `None` when it named nothing.
+///
+/// Both halves go through [`crate::paths`] rather than [`std::path::Path`],
+/// whose rustdoc carries why: a Windows desktop driving a Linux machine reads
+/// `/…/hooks/commit-msg` back from it, which `Path::is_absolute` calls relative
+/// and `Path::join` then rewrites with a backslash. The hook that name no
+/// longer reaches is silently never run, so every squashed message goes
+/// unvalidated on exactly that topology.
+fn hook_path_on(repo_dir: &str, reported: &str, windows_host: bool) -> Option<String> {
+    let reported = reported.trim();
+    if reported.is_empty() {
+        return None;
+    }
+    if crate::paths::is_absolute_on(reported, windows_host) {
+        return Some(reported.to_string());
+    }
+    Some(crate::paths::join_on(repo_dir, [reported], windows_host))
 }
 
 /// How a repository's `commit-msg` hook is started, which is not the same
@@ -194,17 +213,15 @@ impl GitOpsHelper {
             )
             .await
         {
-            Ok(p) => {
-                let p = p.trim().to_string();
-                if p.is_empty() {
-                    return Ok(());
-                } else if Path::new(&p).is_absolute() {
-                    p
-                } else {
-                    // `--git-path` yields a path relative to the repo root.
-                    Path::new(repo_dir).join(p).to_string_lossy().into_owned()
-                }
-            }
+            // `--git-path` yields a path relative to the repo root.
+            Ok(p) => match hook_path_on(
+                repo_dir,
+                &p,
+                crate::paths::targets_windows_host(machine_str),
+            ) {
+                Some(path) => path,
+                None => return Ok(()),
+            },
             // No hooks resolvable — nothing to validate against.
             Err(_) => return Ok(()),
         };

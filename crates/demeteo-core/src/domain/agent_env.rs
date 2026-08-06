@@ -9,6 +9,10 @@
 //! then being surprised when the agent reached for POSIX tooling. Nothing in
 //! the harness was wrong; the block it was spawned with was.
 //!
+//! The desktop and the machine the agent lands on are two different questions
+//! and both are asked: the values are the desktop's, and a Windows desktop
+//! driving a Linux remote is a supported topology.
+//!
 //! The rule lives here rather than in
 //! [`agent_base_env`](crate::ports::agent_runtime::agent_base_env) because that
 //! function is `async` and resolves identity over the execution port — see
@@ -19,7 +23,7 @@
 
 use crate::domain::models::Platform;
 
-/// Forwarded verbatim to a POSIX agent and to no other kind.
+/// Forwarded verbatim between two POSIX platforms and in no other case.
 ///
 /// Both are per-*platform*, never per-machine, which is what makes it sound to
 /// take them from the desktop's own environment at all: a Linux desktop and a
@@ -32,6 +36,13 @@ const POSIX_ONLY: [&str; 2] = ["SHELL", "TMPDIR"];
 
 /// The desktop-inherited environment an agent running on `target` may see.
 ///
+/// Both platforms are asked because the *values* come from the desktop and the
+/// *agent* is on the target, so either half being non-POSIX makes the pair a
+/// false claim — pointed one way, a Git Bash desktop tells a Windows agent it
+/// has `/usr/bin/bash`; pointed the other, that same desktop tells a Linux
+/// remote it has a `$TMPDIR` on a drive letter. The agreement above is between
+/// two POSIX platforms, and this is where it is enforced rather than assumed.
+///
 /// `None` is treated as "not POSIX", not as "probably Linux": it means the
 /// execution port declined to name the machine, and
 /// [`AgentContext::platform`](crate::ports::agent_runtime::AgentContext::platform)
@@ -39,10 +50,12 @@ const POSIX_ONLY: [&str; 2] = ["SHELL", "TMPDIR"];
 /// guess. Guessing POSIX here would restore the exact leak on precisely the
 /// hosts least able to answer for themselves.
 pub fn inherited_agent_env(
+    desktop: Option<Platform>,
     target: Option<Platform>,
     read: impl Fn(&str) -> Option<String>,
 ) -> Vec<(String, String)> {
-    if !target.is_some_and(Platform::is_posix) {
+    let posix = |platform: Option<Platform>| platform.is_some_and(Platform::is_posix);
+    if !posix(desktop) || !posix(target) {
         return Vec::new();
     }
     POSIX_ONLY

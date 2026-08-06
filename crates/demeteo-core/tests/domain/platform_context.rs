@@ -56,33 +56,43 @@ fn a_posix_render_is_unchanged() {
             "",
             "{platform} needs no correction"
         );
+        let placed = place_platform_context(Some(platform), "do the work");
+        assert_eq!(placed.bound, "", "{platform} needs no correction");
         assert_eq!(
-            inject_platform_context("do the work", platform),
+            render(&placed, "do the work"),
             "do the work",
             "{platform} must render exactly the prompt it renders today"
         );
     }
 }
 
+/// A machine whose OS the port could not name is not a machine assumed POSIX —
+/// it is one the block says nothing about, whatever the template asked for.
 #[test]
-fn the_windows_block_is_prepended_whole() {
-    let out = inject_platform_context("do the work", Platform::Windows);
-    assert!(
-        out.ends_with("do the work"),
-        "the prompt must survive intact after the block, got: {out}"
-    );
-    assert!(
-        out.starts_with("## Platform — Windows"),
-        "the block reframes command text that follows it, so it goes first: {out}"
-    );
+fn an_unresolved_platform_places_nothing_either_way() {
+    for template in ["do the work", "intro\n\n{{platform_context}}\n\noutro"] {
+        let placed = place_platform_context(None, template);
+        assert_eq!(placed.bound, "");
+        assert_eq!(placed.prefix, "");
+    }
 }
 
 // ── the block appears exactly once, either way ──────────────────────────
 //
-// The two placements are the caller's branch: a template naming the token
-// gets the section substituted in place and no prepend; one that does not
-// gets the prepend. Both are asserted against the same counting helper so a
-// divergence between them cannot read as a pass.
+// The two placements are one decision, and this is the decision the prompt
+// builders actually run: `bound` is what `{{platform_context}}` renders as and
+// `prefix` is what precedes the result, so applying both — as every builder
+// does, unconditionally — is the whole of what an agent receives. Asserting
+// against a hand-rolled `replace` here would be asserting against a second
+// implementation of the renderer rather than against this one.
+
+fn render(placed: &PlatformPlacement, template: &str) -> String {
+    format!(
+        "{}{}",
+        placed.prefix,
+        template.replace("{{platform_context}}", &placed.bound)
+    )
+}
 
 fn occurrences(rendered: &str) -> usize {
     rendered.matches("## Platform — Windows").count()
@@ -91,27 +101,39 @@ fn occurrences(rendered: &str) -> usize {
 #[test]
 fn a_template_that_never_names_the_token_still_gets_the_block_once() {
     let template = "Implement the feature.";
-    assert!(!template_uses_platform_context(template));
 
-    let rendered = inject_platform_context(template, Platform::Windows);
+    let placed = place_platform_context(Some(Platform::Windows), template);
+    let rendered = render(&placed, template);
     assert_eq!(
         occurrences(&rendered),
         1,
         "the safety net must reach a template that cannot know the token: {rendered}"
+    );
+    assert!(
+        rendered.starts_with("## Platform — Windows"),
+        "the block reframes command text that follows it, so it goes first: {rendered}"
+    );
+    assert!(
+        rendered.ends_with(template),
+        "the prompt must survive intact after the block, got: {rendered}"
     );
 }
 
 #[test]
 fn a_template_that_names_the_token_gets_the_block_once_where_it_asked() {
     let template = "intro\n\n{{platform_context}}\n\noutro";
-    assert!(template_uses_platform_context(template));
 
-    let section = platform_context_section(Platform::Windows);
-    let rendered = template.replace("{{platform_context}}", &section);
+    let placed = place_platform_context(Some(Platform::Windows), template);
+    assert_eq!(
+        placed.prefix, "",
+        "a template that placed the block must not also be prefixed with it"
+    );
+
+    let rendered = render(&placed, template);
     assert_eq!(
         occurrences(&rendered),
         1,
-        "substitution alone must place exactly one block: {rendered}"
+        "the template's own placement must be the only one: {rendered}"
     );
     assert!(
         rendered.find("intro").unwrap() < rendered.find("## Platform — Windows").unwrap(),
@@ -125,7 +147,16 @@ fn a_template_that_names_the_token_gets_the_block_once_where_it_asked() {
 
 #[test]
 fn a_near_miss_token_does_not_count_as_opting_in() {
-    assert!(!template_uses_platform_context("{{platform}}"));
-    assert!(!template_uses_platform_context("{{platform_contexts}}"));
-    assert!(!template_uses_platform_context(""));
+    for template in ["{{platform}}", "{{platform_contexts}}", ""] {
+        let placed = place_platform_context(Some(Platform::Windows), template);
+        assert_eq!(
+            placed.bound, "",
+            "`{template}` does not name the token, so nothing binds to it"
+        );
+        assert_eq!(
+            occurrences(&placed.prefix),
+            1,
+            "`{template}` gets the safety net instead"
+        );
+    }
 }

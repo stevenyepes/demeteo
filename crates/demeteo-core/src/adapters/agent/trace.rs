@@ -49,15 +49,32 @@ pub(crate) fn trace_dir(raw: Option<String>) -> Option<PathBuf> {
     Some(PathBuf::from(trimmed))
 }
 
+/// How many same-named captures one directory will hold before the next is
+/// dropped. A retry loop is bounded well below this; a number this size only
+/// arises from a directory reused across many days, where losing the newest
+/// capture is the honest outcome.
+const MAX_TRACE_COLLISIONS: u32 = 99;
+
 /// The file one turn is captured to: the session it belongs to, then its
-/// ordinal within that session.
+/// ordinal within that session, then `collision` where something already holds
+/// that name.
 ///
 /// The ordinal is zero-padded so a directory listing is in turn order, and
 /// every character outside `[A-Za-z0-9._-]` is replaced rather than rejected.
 /// Neither half of a session id promises to be a legal path segment on all
 /// three desktop targets, and a surviving separator would write the capture
 /// into a sibling directory rather than the one the caller named.
-pub(crate) fn trace_file_name(session_id: &str, turn: u64) -> String {
+///
+/// # Why the name is not unique on its own
+///
+/// Both halves repeat across attempts. A sequence task's thread id is
+/// `{feature}-{step}-{task}`, identical on every attempt of that task, and the
+/// turn counter belongs to the session — a retry spawns a fresh one and starts
+/// again at 1. So attempt 2's first turn names attempt 1's file exactly, and
+/// the attempt worth reading is the one that failed. `collision` is what keeps
+/// it: the *earlier* capture keeps the plain name, since that is the one
+/// already cited in whatever notes sent the reader here.
+pub(crate) fn trace_file_name(session_id: &str, turn: u64, collision: u32) -> String {
     let mut safe = String::with_capacity(session_id.len().min(MAX_SESSION_COMPONENT));
     for c in session_id.chars() {
         if safe.len() == MAX_SESSION_COMPONENT {
@@ -69,7 +86,10 @@ pub(crate) fn trace_file_name(session_id: &str, turn: u64) -> String {
     if safe.is_empty() {
         safe.push_str("agent");
     }
-    format!("{}.turn{:03}.jsonl", safe, turn)
+    match collision {
+        0 => format!("{}.turn{:03}.jsonl", safe, turn),
+        n => format!("{}.turn{:03}.{}.jsonl", safe, turn, n),
+    }
 }
 
 /// One turn's capture file.
@@ -88,19 +108,32 @@ impl TurnTrace {
         Self::open_in(&dir, session_id, turn)
     }
 
+    /// `create_new` and never `create`: the latter truncates, and the name a
+    /// second attempt computes is the first attempt's — see
+    /// [`trace_file_name`].
     pub(crate) fn open_in(dir: &Path, session_id: &str, turn: u64) -> Option<Self> {
         if let Err(e) = std::fs::create_dir_all(dir) {
             tracing::debug!(dir = %dir.display(), error = %e, "agent trace directory unavailable");
             return None;
         }
-        let path = dir.join(trace_file_name(session_id, turn));
-        match std::fs::File::create(&path) {
-            Ok(file) => Some(Self { file: Some(file) }),
-            Err(e) => {
-                tracing::debug!(path = %path.display(), error = %e, "agent trace file unavailable");
-                None
+        for collision in 0..=MAX_TRACE_COLLISIONS {
+            let path = dir.join(trace_file_name(session_id, turn, collision));
+            match std::fs::File::create_new(&path) {
+                Ok(file) => return Some(Self { file: Some(file) }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    tracing::debug!(path = %path.display(), error = %e, "agent trace file unavailable");
+                    return None;
+                }
             }
         }
+        tracing::debug!(
+            dir = %dir.display(),
+            session = %session_id,
+            turn,
+            "agent trace not captured: too many captures already hold this name"
+        );
+        None
     }
 
     /// Append one line of agent output, scrubbed.

@@ -32,9 +32,7 @@ use crate::adapters::step_executor::driver::{ExecutionDriver, RetryContext};
 use crate::domain::attachment::AttachedFile;
 use crate::domain::harness_outcome::HarnessOutcome;
 use crate::domain::models::Platform;
-use crate::domain::platform_context::{
-    inject_platform_context, platform_context_section, template_uses_platform_context,
-};
+use crate::domain::platform_context::place_platform_context;
 use crate::domain::verifier::VerifierConfig;
 
 use super::context::{AgentStepCtx, AgentWorktree};
@@ -173,10 +171,8 @@ pub(crate) fn append_retry_feedback_section(
 impl ExecutionDriver {
     /// Steps 1–7: everything sayable before a worktree exists.
     ///
-    /// `platform` is `None` when the execution port declined to name the
-    /// machine's OS. The block is then omitted rather than guessed at: an agent
-    /// told the wrong OS is worse off than one told nothing, which is the state
-    /// every prompt was in before the block existed.
+    /// `platform` is the machine's OS as the execution port answered it;
+    /// [`place_platform_context`] decides what that is worth saying and where.
     pub(crate) fn build_agent_prompt(
         &self,
         ctx: AgentStepCtx<'_>,
@@ -215,8 +211,7 @@ impl ExecutionDriver {
         // copy below.
         let retry_section = format_retry_feedback_section(self.retry_ctx.as_ref());
         let uses_retry_section = template_uses_retry_section(template);
-        let platform_section = platform.map(platform_context_section).unwrap_or_default();
-        let uses_platform_section = template_uses_platform_context(template);
+        let platform_placement = place_platform_context(platform, template);
 
         // Pull the per-feature user attachment manifest fresh on every
         // agent turn (the same live-query pattern used for the gate
@@ -262,7 +257,7 @@ impl ExecutionDriver {
         let prompt = bound
             .set("harness_baseline", &harness_briefing)
             .set("retry_feedback_section", &retry_section)
-            .set("platform_context", &platform_section)
+            .set("platform_context", &platform_placement.bound)
             .set("gate_feedback", &gate_feedback)
             .set("gate_decision", &gate_decision)
             .set("retry_feedback", &retry_feedback)
@@ -318,10 +313,7 @@ impl ExecutionDriver {
             &prompt, capability, &profile,
         );
 
-        match platform.filter(|_| !uses_platform_section) {
-            Some(platform) => inject_platform_context(&prompt, platform),
-            None => prompt,
-        }
+        format!("{}{}", platform_placement.prefix, prompt)
     }
 
     /// Steps 8–9: the part that could not be said until the worktree existed

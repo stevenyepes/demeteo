@@ -50,7 +50,7 @@ pub(crate) const ALL_WRITES: &str = "__ALL_WRITES__";
 /// Sentinel writable-path meaning "nothing in the worktree is writable".
 /// Emitted for [`WriteScope::None`] / `ReadOnly` steps *unless* the
 /// project provides extra writable paths that explicitly widen the
-/// scope. The fence chmods every entry `a-w`; the diff guard reverts
+/// scope. The fence restricts every entry; the diff guard reverts
 /// *any* change.
 pub(crate) const NONE_WRITABLE: &str = "__NONE__";
 
@@ -231,10 +231,10 @@ pub(crate) fn step_declares_full_write(
 }
 
 impl GitOpsHelper {
-    /// Apply the scope fence. Strategy: first make the whole
-    /// worktree writable (so newly-created files under a writable path
-    /// inherit +w), then chmod `a-w` every top-level entry that isn't
-    /// under any declared `writable_paths` path. Idempotent and safe
+    /// Apply the scope fence: restrict every top-level entry that isn't
+    /// under a declared `writable_paths` path. `chmod a-w` on Unix and on
+    /// every remote, one inheritable deny ACE on a Windows-local worktree —
+    /// the module header carries what each is worth. Idempotent and safe
     /// to call multiple times.
     ///
     /// No-op when `writable_paths` is empty (caller is signaling "no
@@ -259,15 +259,15 @@ impl GitOpsHelper {
         }
 
         // Deny-all: a `ReadOnly` step. Fall through with an *empty*
-        // writable set so every top-level entry gets chmod'd `a-w`.
+        // writable set so every top-level entry is fenced.
         let deny_all = writable_paths
             .iter()
             .any(|p| p == &PathBuf::from(NONE_WRITABLE));
         let writable_paths: &[PathBuf] = if deny_all { &[] } else { writable_paths };
 
         if !deny_all && writable_paths.is_empty() {
-            // Nothing declared and not an explicit deny → don't chmod
-            // anything. Legacy back-compat for steps without a capability
+            // Nothing declared and not an explicit deny → fence
+            // nothing. Legacy back-compat for steps without a capability
             // or artifacts; the diff guard catches any actual writes.
             return Ok(());
         }

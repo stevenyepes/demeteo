@@ -2,7 +2,7 @@
 // (mirrored-tests convention). `super` resolves to that module.
 
 use super::*;
-use crate::adapters::local::execution::no_posix_shell_error;
+use crate::adapters::local::invocation::no_posix_shell_error;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::models::WorktreeStrategy;
 use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};

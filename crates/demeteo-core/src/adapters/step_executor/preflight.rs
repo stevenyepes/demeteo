@@ -50,7 +50,7 @@
 
 use std::time::Duration;
 
-use crate::adapters::local::execution::NO_POSIX_SHELL_ERROR;
+use crate::adapters::local::invocation::NO_POSIX_SHELL_ERROR;
 use crate::domain::models::WorktreeStrategy;
 use crate::ports::execution::{ExecutionPort, ShellOptions};
 
