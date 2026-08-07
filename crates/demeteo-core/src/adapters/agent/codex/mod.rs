@@ -26,7 +26,7 @@
 use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
 use crate::domain::action::ActionKind;
 use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus, Usage};
-use crate::domain::models::{AgentKind, EffortLevel};
+use crate::domain::models::{AgentKind, EffortLevel, Platform, SandboxSupport};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_runtime::AgentContext;
 
@@ -247,18 +247,30 @@ fn codex_error_message(v: &serde_json::Value) -> String {
         .to_string()
 }
 
-/// Map the abstract [`PermissionProfile`] to a Codex `--sandbox` mode.
+/// Map the abstract [`PermissionProfile`] to a Codex `--sandbox` mode, for the
+/// platform the agent process will actually run on.
 ///
 /// Codex sandbox modes are `read-only | workspace-write | danger-full-access`.
 /// We never select `danger-full-access` (it removes the sandbox entirely). The
-/// artifacts-vs-source path distinction is still enforced by the OS-level chmod
-/// fence in `adapters/worktree/git_ops/scope.rs`, uniformly across every agent.
-fn codex_sandbox_mode(p: &PermissionProfile) -> &'static str {
-    if p.write_fs.is_allow() {
+/// artifacts-vs-source path distinction is still enforced by the OS-level
+/// artifact-scope fence in `adapters/worktree/git_ops/scope.rs`, uniformly
+/// across every agent — by a `chmod` or by a deny ACE, per that module's header.
+///
+/// `None` means emit no sandbox selection: no `-c sandbox_mode=…`, and no
+/// `-c sandbox_workspace_write.network_access=…` either, since that configures a
+/// mode that would not have been chosen. `-c approval_policy=never` is unaffected
+/// — it governs whether a denial parks on a prompt, not whether anything issues
+/// one. [`SandboxSupport::for_agent`] produces no `None` for codex on any
+/// platform today, and carries the evidence that would change that.
+fn codex_sandbox_mode(p: &PermissionProfile, platform: Option<Platform>) -> Option<&'static str> {
+    if !SandboxSupport::for_agent(AgentKind::Codex, platform).selects_sandbox() {
+        return None;
+    }
+    Some(if p.write_fs.is_allow() {
         "workspace-write"
     } else {
         "read-only"
-    }
+    })
 }
 
 /// Build `codex exec` args for one turn.
@@ -269,10 +281,11 @@ fn codex_sandbox_mode(p: &PermissionProfile) -> &'static str {
 ///   --json                     nd-JSON wire format we parse.
 ///   --skip-git-repo-check      worktrees are git repos, but this keeps a
 ///                              non-git project host from hard-failing at spawn.
-///   -c sandbox_mode=<mode>     compiled from the PermissionProfile. Set via `-c`
-///                              (not `--sandbox`) because `codex exec resume`
-///                              accepts `-c` but not `--sandbox`, so both the
-///                              initial and resumed turns share one code path.
+///   -c sandbox_mode=<mode>     compiled from the PermissionProfile and the
+///                              platform the process lands on. Set via `-c` (not
+///                              `--sandbox`) because `codex exec resume` accepts
+///                              `-c` but not `--sandbox`, so both the initial and
+///                              resumed turns share one code path.
 ///   -c approval_policy=never   the autonomous-pipeline guarantee — a sandbox
 ///                              denial returns to the model instantly instead of
 ///                              parking on an approval prompt no human will answer.
@@ -301,12 +314,14 @@ fn build_codex_args(
     args.push("--json".to_string());
     args.push("--skip-git-repo-check".to_string());
 
-    let mode = codex_sandbox_mode(&ctx.permissions);
-    args.push("-c".to_string());
-    args.push(format!("sandbox_mode={mode}"));
+    let mode = codex_sandbox_mode(&ctx.permissions, ctx.platform);
+    if let Some(mode) = mode {
+        args.push("-c".to_string());
+        args.push(format!("sandbox_mode={mode}"));
+    }
     args.push("-c".to_string());
     args.push("approval_policy=never".to_string());
-    if ctx.permissions.network.is_allow() && mode == "workspace-write" {
+    if ctx.permissions.network.is_allow() && mode == Some("workspace-write") {
         args.push("-c".to_string());
         args.push("sandbox_workspace_write.network_access=true".to_string());
     }

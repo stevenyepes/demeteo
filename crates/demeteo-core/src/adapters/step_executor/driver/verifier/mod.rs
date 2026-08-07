@@ -37,6 +37,33 @@ pub(crate) struct VerifierTarget<'a> {
     pub override_model: Option<&'a str>,
 }
 
+/// Which inverse the pre-harness write-restore has to apply on a machine.
+///
+/// Two fences exist and they are lifted by different means, so naming the means
+/// is the decision — one that would otherwise be spelled inside an `async fn`
+/// where no test can reach it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteRestore {
+    /// `chmod -R u+w` over the worktree, the inverse of the Unix `chmod a-w`.
+    Chmod,
+    /// Revoke the deny ACE the Windows-local fence set. A `chmod` here would
+    /// walk Git Bash over the tree to change nothing, and leave every harness
+    /// build denied its own output directory.
+    RevokeDenyAce,
+}
+
+/// Which fence is standing follows the machine, not the host: a remote machine
+/// is always Linux and always `chmod a-w`-fenced whatever the desktop runs.
+/// `cfg!(windows)` is a parameter rather than a read so both answers are
+/// reachable from a test on the platform this is developed on.
+fn write_restore(host_is_windows: bool, machine_id: &str) -> WriteRestore {
+    if paths::windows_host_target(host_is_windows, machine_id) {
+        WriteRestore::RevokeDenyAce
+    } else {
+        WriteRestore::Chmod
+    }
+}
+
 impl ExecutionDriver {
     /// Persist complete harness logs for the validator without making its argv
     /// exceed the prompt budget. A failed artifact write leaves the bounded
@@ -140,19 +167,30 @@ impl ExecutionDriver {
             })
             .unwrap_or_default();
 
-        // Idempotent write-restore. Fresh worktrees are writable, but a
-        // retried step may run in a worktree the fence already touched.
+        // Idempotent write-restore. Fresh worktrees are writable, but a retried
+        // step runs in a worktree the fence already touched, and the commands
+        // below have to write `target/`, `node_modules/`, ….
         if prepare_command.is_some() || !resolved.is_empty() {
-            let _ = self
-                .exec
-                .run_command(
-                    machine_str,
-                    &format!(
-                        "chmod -R u+w {} 2>/dev/null || true",
-                        paths::shell_escape_posix(wt_path)
-                    ),
-                )
-                .await;
+            match write_restore(cfg!(windows), machine_str) {
+                WriteRestore::RevokeDenyAce => {
+                    let _ = self
+                        .git_ops
+                        .restore_artifact_scope(Some(machine_str), wt_path)
+                        .await;
+                }
+                WriteRestore::Chmod => {
+                    let _ = self
+                        .exec
+                        .run_command(
+                            machine_str,
+                            &format!(
+                                "chmod -R u+w {} 2>/dev/null || true",
+                                paths::shell_escape_posix(wt_path)
+                            ),
+                        )
+                        .await;
+                }
+            }
         }
 
         // Run the prepare/harness commands under an interactive login shell with
@@ -381,6 +419,9 @@ impl ExecutionDriver {
         // `--model` flag in `build_args` from `ctx.model` below.
         let agent_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+        let platform =
+            crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), machine_str)
+                .await;
 
         let verifier_thread_id = format!("{}-verifier", self.f_id_str);
         let verifier_binary = self
@@ -406,6 +447,7 @@ impl ExecutionDriver {
                     .unwrap_or(crate::domain::models::EffortLevel::VERIFIER_DEFAULT),
             ),
             title: Some(format!("Verify: {}", harness_label)),
+            platform,
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
@@ -600,3 +642,7 @@ impl ExecutionDriver {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/infrastructure/step_executor/verifier/write_restore.rs"]
+mod tests;

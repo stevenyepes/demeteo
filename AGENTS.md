@@ -259,6 +259,42 @@ Run them when you touch an `ExecutionPort` impl, the step executor, or anything 
 transport observes. **The e2e suite will not catch this** — it drives a per-test
 `FakeExec` that passes while masking exactly the drift these suites exist to find.
 
+### Windows is invisible to every gate above
+
+`checks.sh` compiles for the host only, so nothing it runs ever parses a
+`#[cfg(windows)]` body past name resolution. That is how the first native-Windows
+commit reached this tree carrying six Windows compile errors while local checks
+were green. When you touch anything behind a `cfg(windows)`:
+
+```bash
+scripts/check-windows.sh        # cargo check, x86_64-pc-windows-gnu, via mingw-w64
+scripts/check-windows.sh --run  # …and execute it under wine, where one exists
+```
+
+It skips with exit 0 when mingw-w64 or the rustup target is absent, so a green run
+on a machine without them means *nothing was checked* — read its output, not just
+its status. It uses the `gnu` target because MSVC's C dependencies do not
+cross-compile from Linux; that shares the whole `cfg(windows)` surface but not MSVC
+linkage, so it proves the source is coherent, not that the shipped artifact links.
+`windows-latest` in `pr-checks.yml` stays the authority.
+
+`--run` links that same target's test binary and executes it under wine, which
+turns a compile check into a behaviour check for a large part of the surface —
+but not for the artifact-scope fence, nor for anything reached through a login
+shell, and it is local-only by construction. Read
+[docs/WINDOWS_PARITY.md](docs/WINDOWS_PARITY.md) before trusting a green run;
+what it cannot see is enumerated there, and a green there is never a substitute
+for `windows-latest`.
+
+The deeper rule this enforces: **a decision behind a `cfg` is a decision no local
+test can reach.** Keep candidate ordering, path derivation, and probe interpretation
+in `cfg`-free functions covered on Linux, and leave only the syscall behind the
+`cfg` — see `shared/win/` for the shape. The inverse trap is easy to miss:
+`cfg`-free logic proves nothing if its *fixtures* only parse on one platform. A
+Windows-shaped path spelled with backslashes is a single filename everywhere
+else, so a test built from one asserts nothing off Windows — and reads as a pass
+wherever it expects `None`.
+
 Fix any failure before handing back.
 
 When your change has UI or runtime surface, smoke-test with `npm run dev:tauri` — **not**
@@ -282,6 +318,7 @@ Read the relevant doc before modifying that area.
 | Agent CLI integration spec | [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md) |
 | Workflow DAG model, registry, canvas | [docs/PRD_DAG_WORKFLOWS.md](docs/PRD_DAG_WORKFLOWS.md) · remaining work in [docs/TASKS_DAG_WORKFLOWS.md](docs/TASKS_DAG_WORKFLOWS.md) |
 | Local/remote execution parity | [docs/EXECUTION_PARITY.md](docs/EXECUTION_PARITY.md) |
+| Windows parity plan & shell decision | [docs/WINDOWS_PARITY.md](docs/WINDOWS_PARITY.md) |
 | Reliability invariants & open backlog | [docs/RELIABILITY_PLAN.md](docs/RELIABILITY_PLAN.md) |
 | Harness truthfulness & baseline preflight | [docs/HARNESS_BASELINE.md](docs/HARNESS_BASELINE.md) |
 | Remote execution design | [docs/REMOTE_EXECUTION.md](docs/REMOTE_EXECUTION.md) |

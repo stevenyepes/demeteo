@@ -107,9 +107,12 @@ impl ExecutionDriver {
             session_key: &session_key,
         };
 
-        let prompt = self.build_agent_prompt(ctx);
-
         let machine_str = self.machine_id().to_string();
+        let platform =
+            crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), &machine_str)
+                .await;
+
+        let prompt = self.build_agent_prompt(ctx, platform);
 
         // Subtask id must include the feature id so two features running on
         // the same project concurrently get distinct worktree directories

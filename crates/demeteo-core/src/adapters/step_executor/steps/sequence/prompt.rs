@@ -10,6 +10,7 @@ use crate::adapters::step_executor::steps::agent::{
 };
 
 use super::context::{RunTarget, StepCtx, StepWorktree, TaskRun};
+use crate::domain::platform_context::place_platform_context;
 use crate::domain::sequence::tasks::PlanKind;
 
 /// What one finished task contributed, carried forward so the next task's
@@ -86,6 +87,7 @@ impl ExecutionDriver {
             .unwrap_or_else(|| self.base_ctx.get("test_command").to_string());
 
         let acceptance_str = format_acceptance_criteria(&task.acceptance);
+        let platform_placement = place_platform_context(target.platform, template);
 
         let rendered = self
             .base_ctx
@@ -112,6 +114,7 @@ impl ExecutionDriver {
             .set("retry_feedback", effective_feedback)
             .set("iteration", &iteration)
             .set("max_iterations", &max_iterations)
+            .set("platform_context", &platform_placement.bound)
             .render(template);
 
         let prompt = if rendered.trim().is_empty() {
@@ -141,6 +144,7 @@ impl ExecutionDriver {
         } else {
             append_retry_feedback_section(prompt, effective_retry_ctx.as_ref())
         };
+        let prompt = format!("{}{}", platform_placement.prefix, prompt);
 
         crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
             &prompt,

@@ -7,8 +7,10 @@
 //! new field on `WorktreeStrategy` meant three identical edits and the copies
 //! were free to drift apart between them.
 //!
-//! `#[path]`-included by each caller rather than declared once, because the
-//! three callers live under different parent modules.
+//! Reached as `crate::support::preflight_strategy`. The obvious alternative —
+//! `#[path]`-including it from each of the three, since they share no parent
+//! but the crate root — compiles the same file into three modules, which is
+//! the drift it exists to remove and which clippy's `duplicate_mod` denies.
 
 use crate::domain::models::WorktreeStrategy;
 

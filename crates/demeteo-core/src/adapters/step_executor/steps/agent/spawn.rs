@@ -58,6 +58,9 @@ impl ExecutionDriver {
         // is no config-file/env model path to set up here.
         let agent_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+        let platform =
+            crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), machine_str)
+                .await;
 
         // Resolve the actual executable name from the registered runtime
         // (e.g. kind "claude-code" → binary "claude"). Falls back to the
@@ -88,6 +91,7 @@ impl ExecutionDriver {
             model: override_model.map(str::to_string),
             effort: Some(effort),
             title: Some(step_conf.title.clone()),
+            platform,
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions,
@@ -179,6 +183,7 @@ impl ExecutionDriver {
                 model: override_model.map(str::to_string),
                 effort: Some(effort),
                 title: Some(step_conf.title.clone()),
+                platform,
                 agent_exec: self.agent_exec.clone(),
                 exec: self.exec.clone(),
                 permissions,

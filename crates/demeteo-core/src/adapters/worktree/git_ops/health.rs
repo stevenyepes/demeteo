@@ -1,5 +1,5 @@
 use super::GitOpsHelper;
-use crate::paths;
+use crate::ports::execution::ProgramRequest;
 
 impl GitOpsHelper {
     /// Check if a repository has uncommitted changes or unpushed commits
@@ -13,12 +13,9 @@ impl GitOpsHelper {
         // Check if directory exists
         let exists = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} rev-parse --is-inside-work-tree",
-                    paths::shell_escape_posix(repo_dir)
-                ),
+                git_request(repo_dir, ["rev-parse", "--is-inside-work-tree"]),
             )
             .await
             .is_ok();
@@ -30,12 +27,9 @@ impl GitOpsHelper {
         // 1. Check for uncommitted changes
         let status_output = match self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} status --porcelain",
-                    paths::shell_escape_posix(repo_dir)
-                ),
+                git_request(repo_dir, ["status", "--porcelain"]),
             )
             .await
         {
@@ -47,11 +41,11 @@ impl GitOpsHelper {
         // 2. Check for unpushed commits
         let unpushed_output = match self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} log --branches --not --remotes --oneline",
-                    paths::shell_escape_posix(repo_dir)
+                git_request(
+                    repo_dir,
+                    ["log", "--branches", "--not", "--remotes", "--oneline"],
                 ),
             )
             .await
@@ -62,5 +56,17 @@ impl GitOpsHelper {
         let has_unpushed = !unpushed_output.is_empty();
 
         Ok((has_uncommitted, has_unpushed))
+    }
+}
+
+fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> ProgramRequest {
+    ProgramRequest {
+        executable: "git".to_string(),
+        args: [
+            vec!["-C".to_string(), repo_dir.to_string()],
+            args.into_iter().map(str::to_string).collect(),
+        ]
+        .concat(),
+        ..ProgramRequest::default()
     }
 }

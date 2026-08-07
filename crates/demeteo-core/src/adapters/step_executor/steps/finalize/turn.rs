@@ -42,6 +42,9 @@ impl ExecutionDriver {
         let thread_id = format!("{}-finalize-{}", self.f_id.0, paths::now_ms());
         let agent_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+        let platform =
+            crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), machine_str)
+                .await;
         let binary = self
             .registry
             .runtime_for(&agent_kind)
@@ -71,6 +74,7 @@ impl ExecutionDriver {
             // turn too.
             effort: Some(crate::domain::models::EffortLevel::FINALIZE),
             title: Some("Finalize: summarize the work".to_string()),
+            platform,
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions,

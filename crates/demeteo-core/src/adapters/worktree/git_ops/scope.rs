@@ -4,7 +4,7 @@
 //! class of bugs (e.g. a Research step modifying source code instead of
 //! producing the research report):
 //!
-//! 1. **Spawn-time chmod fence** ([`apply_artifact_scope`]) — restricts the
+//! 1. **Spawn-time OS fence** ([`apply_artifact_scope`]) — restricts the
 //!    worktree so only the step's declared artifact paths are writable.
 //!    The agent still has `edit: allow` + `bash: allow` in the
 //!    `OPENCODE_PERMISSION` env var; the OS denies writes outside the
@@ -16,10 +16,20 @@
 //!    `git checkout` / `rm`, and return the list so the caller can fail
 //!    the step. The failure surfaces in the next attempt's retry feedback.
 //!
-//! Both layers compose: chmod stops honest mistakes and most misbehavior
-//! at write time; the diff guard catches anything that bypassed chmod
-//! (e.g. via `chmod u+w .` shell escape) before it reaches the feature
-//! branch via the merge step.
+//! # What layer 1 is actually worth, on both operating systems
+//!
+//! On Unix the fence is `chmod a-w` per top-level entry; on a Windows-local
+//! worktree it is one inheritable deny ACE per top-level entry, naming the
+//! process token's user SID ([`crate::shared::win::dacl`]). The Windows half
+//! is genuinely enforced — a deny ACE sorts canonically before every allow, so
+//! no inherited grant outranks it against a process running as that user — but
+//! it is *not* stronger than the Unix half, and must not be described as
+//! though it were: the user owns a worktree Demeteo created for them, an owner
+//! holds `WRITE_DAC` implicitly whatever the DACL says, and so `icacls .
+//! /reset` lifts the fence exactly as `chmod u+w .` lifts the Unix one. Both
+//! stop honest mistakes and most misbehaviour at write time, neither is a
+//! sandbox, and [`GitOpsHelper::verify_and_revert_out_of_scope_writes`] is the
+//! gate that actually decides what reaches the feature branch.
 //!
 //! Writable paths are derived from `StepConfig::artifacts[*].capture`:
 //! - `LastWriteTo { path }` → the explicit path
@@ -40,7 +50,7 @@ pub(crate) const ALL_WRITES: &str = "__ALL_WRITES__";
 /// Sentinel writable-path meaning "nothing in the worktree is writable".
 /// Emitted for [`WriteScope::None`] / `ReadOnly` steps *unless* the
 /// project provides extra writable paths that explicitly widen the
-/// scope. The fence chmods every entry `a-w`; the diff guard reverts
+/// scope. The fence restricts every entry; the diff guard reverts
 /// *any* change.
 pub(crate) const NONE_WRITABLE: &str = "__NONE__";
 
@@ -221,10 +231,10 @@ pub(crate) fn step_declares_full_write(
 }
 
 impl GitOpsHelper {
-    /// Apply chmod-based scope fence. Strategy: first make the whole
-    /// worktree writable (so newly-created files under a writable path
-    /// inherit +w), then chmod `a-w` every top-level entry that isn't
-    /// under any declared `writable_paths` path. Idempotent and safe
+    /// Apply the scope fence: restrict every top-level entry that isn't
+    /// under a declared `writable_paths` path. `chmod a-w` on Unix and on
+    /// every remote, one inheritable deny ACE on a Windows-local worktree —
+    /// the module header carries what each is worth. Idempotent and safe
     /// to call multiple times.
     ///
     /// No-op when `writable_paths` is empty (caller is signaling "no
@@ -249,17 +259,22 @@ impl GitOpsHelper {
         }
 
         // Deny-all: a `ReadOnly` step. Fall through with an *empty*
-        // writable set so every top-level entry gets chmod'd `a-w`.
+        // writable set so every top-level entry is fenced.
         let deny_all = writable_paths
             .iter()
             .any(|p| p == &PathBuf::from(NONE_WRITABLE));
         let writable_paths: &[PathBuf] = if deny_all { &[] } else { writable_paths };
 
         if !deny_all && writable_paths.is_empty() {
-            // Nothing declared and not an explicit deny → don't chmod
-            // anything. Legacy back-compat for steps without a capability
+            // Nothing declared and not an explicit deny → fence
+            // nothing. Legacy back-compat for steps without a capability
             // or artifacts; the diff guard catches any actual writes.
             return Ok(());
+        }
+
+        #[cfg(windows)]
+        if crate::domain::ids::MachineId::from(machine).is_local() {
+            return fence_windows_worktree(wt, writable_paths).await;
         }
 
         // 1. Make everything writable first. Cheap and idempotent.
@@ -356,6 +371,43 @@ impl GitOpsHelper {
                 .map_err(|e| format!("scope: chmod a-w on {} failed: {}", p.display(), e))?;
         }
 
+        Ok(())
+    }
+
+    /// Lift the Windows local scope fence, leaving every entry's DACL as the
+    /// fence found it.
+    ///
+    /// The Unix half has no counterpart here: its inverse is the
+    /// `chmod -R u+w` that `git_ops::worktree::restore_write_access_cmd`
+    /// already issues on the teardown path, and for a remote machine that is
+    /// still the only fence there is.
+    ///
+    /// Both callers drop this `Result`, and correctly so — a teardown runs on
+    /// the success path too and must not change a step's outcome. That is why
+    /// the Windows arm also logs: a fence that stays up strands the worktree,
+    /// and it must not be able to do that quietly.
+    pub(crate) async fn restore_artifact_scope(
+        &self,
+        machine_id: Option<&str>,
+        worktree_path: &str,
+    ) -> Result<(), String> {
+        #[cfg(windows)]
+        if crate::domain::ids::MachineId::from(
+            machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE),
+        )
+        .is_local()
+        {
+            return unfence_windows_worktree(Path::new(worktree_path))
+                .await
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        worktree = worktree_path,
+                        error,
+                        "artifact-scope fence was not lifted"
+                    );
+                });
+        }
+        let _ = (machine_id, worktree_path);
         Ok(())
     }
 
@@ -478,12 +530,50 @@ impl GitOpsHelper {
     }
 }
 
+/// Fence a Windows-local worktree with one inheritable deny ACE per
+/// non-writable top-level entry.
+///
+/// A free function and not a method: it reaches no port. The DACL calls are
+/// in-process because they are the only implementation there is — this arm is
+/// reached for [`LOCAL_MACHINE`](crate::domain::ids::LOCAL_MACHINE) alone,
+/// and a remote machine is a Linux one that takes the `chmod` path above
+/// whatever the desktop is running on.
+///
+/// `spawn_blocking` because `SetNamedSecurityInfoW` propagates the ACE through
+/// the subtree itself, which is the whole point of it — one call for a
+/// `node_modules` tree, but a call that does not return promptly.
+#[cfg(windows)]
+async fn fence_windows_worktree(worktree: &Path, writable_paths: &[PathBuf]) -> Result<(), String> {
+    let worktree = worktree.to_path_buf();
+    let writable_paths = writable_paths.to_vec();
+    tokio::task::spawn_blocking(move || {
+        crate::shared::win::dacl_sys::fence(&worktree, &writable_paths)
+    })
+    .await
+    .map_err(|error| format!("scope: fence task panicked: {}", error))?
+    .map_err(|error| format!("scope: {}", error))
+}
+
+/// The inverse of [`fence_windows_worktree`], for the same target.
+#[cfg(windows)]
+async fn unfence_windows_worktree(worktree: &Path) -> Result<(), String> {
+    let worktree = worktree.to_path_buf();
+    tokio::task::spawn_blocking(move || crate::shared::win::dacl_sys::unfence(&worktree))
+        .await
+        .map_err(|error| format!("scope: unfence task panicked: {}", error))?
+        .map_err(|error| format!("scope: {}", error))
+}
+
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/worktree/scope.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../../../tests/infrastructure/worktree/git_ops/scope_runtime.rs"]
 mod tests_runtime;
+
+#[cfg(all(test, windows))]
+#[path = "../../../../tests/infrastructure/worktree/git_ops/scope_windows.rs"]
+mod tests_windows;

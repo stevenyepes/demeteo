@@ -21,15 +21,18 @@ use super::*;
 use std::sync::Mutex;
 
 /// `ExecutionPort` double that records every `write_file` /
-/// `write_file_bytes` / `get_metadata` call so the test can assert the artifact
-/// ended up on the *target* host (path string) — not on the Tauri host.
+/// `write_file_bytes` / `get_metadata` / `create_dir_all` call so the test can
+/// assert the artifact ended up on the *target* host (path string) — not on the
+/// Tauri host.
 ///
-/// It answers **only** `mkdir -p …`, which is all either materialize function
-/// needs to succeed, and errors on every other command and on `read_file`. A
-/// double that answers everything with `Ok("")` asserts against a default
-/// rather than an answer (AGENTS.md §7, the e2e `FakeExec`).
+/// It answers **no** shell command at all: the destination directory is made
+/// with `create_dir_all`, and a `mkdir -p` reaching this double is the
+/// regression that would put the shell back. A double that answers everything
+/// with `Ok("")` asserts against a default rather than an answer (AGENTS.md §7,
+/// the e2e `FakeExec`).
 struct RecordingExec {
     writes: Mutex<Vec<(String, String, String)>>, // (machine_id, path, content)
+    dirs: Mutex<Vec<(String, String)>>,           // (machine_id, path)
     metadata_results: Mutex<std::collections::HashMap<String, crate::ports::execution::SftpEntry>>,
 }
 
@@ -37,6 +40,7 @@ impl RecordingExec {
     fn new() -> Self {
         Self {
             writes: Mutex::new(Vec::new()),
+            dirs: Mutex::new(Vec::new()),
             metadata_results: Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -48,6 +52,10 @@ impl RecordingExec {
     fn recorded_writes(&self) -> Vec<(String, String, String)> {
         self.writes.lock().unwrap().clone()
     }
+
+    fn created_dirs(&self) -> Vec<(String, String)> {
+        self.dirs.lock().unwrap().clone()
+    }
 }
 
 #[async_trait::async_trait]
@@ -56,11 +64,14 @@ impl crate::ports::execution::ExecutionPort for RecordingExec {
         Ok(())
     }
     async fn run_command(&self, _: &str, cmd: &str) -> Result<String, String> {
-        if cmd.starts_with("mkdir -p ") {
-            Ok(String::new())
-        } else {
-            Err(format!("RecordingExec: unscripted command `{cmd}`"))
-        }
+        panic!("materialize must not run a shell command: `{cmd}`");
+    }
+    async fn create_dir_all(&self, machine_id: &str, path: &str) -> Result<(), String> {
+        self.dirs
+            .lock()
+            .unwrap()
+            .push((machine_id.to_string(), path.to_string()));
+        Ok(())
     }
     async fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
         Err("unscripted read_file".into())
@@ -112,6 +123,9 @@ impl crate::ports::execution::ExecutionPort for RecordingExec {
     }
     async fn resolve_user(&self, _: &str) -> Result<String, String> {
         Ok("test".to_string())
+    }
+    async fn resolve_platform(&self, _: &str) -> Result<crate::domain::models::Platform, String> {
+        Err("materialize must not ask for a platform".into())
     }
     async fn control_rpc(
         &self,
@@ -203,6 +217,21 @@ async fn materialize_external_paths_writes_to_remote_worktree_via_exec() {
     );
     assert_eq!(content, "# Plan body\n", "file body must round-trip");
 
+    // The destination directory is made through the port, on the same machine
+    // as the write. `mkdir -p` reached the target's shell; `create_dir_all`
+    // reaches its filesystem, which is the one thing every transport has.
+    //
+    // Spelled with `/` because the machine it is made on is Linux, whatever the
+    // desktop composing it runs — a `Path::join` here would agree with the
+    // production bug it exists to catch.
+    assert_eq!(
+        exec.created_dirs(),
+        vec![(
+            "m-builder".to_string(),
+            format!("{remote_wt}/artifacts/_context")
+        )]
+    );
+
     // The prompt was rewritten to point at the new path so the
     // opencode Read tool finds the file inside the worktree.
     assert!(
@@ -220,6 +249,30 @@ async fn materialize_external_paths_writes_to_remote_worktree_via_exec() {
         "no file should be created on the host at the remote worktree's path string"
     );
 
+    drop(_src_dir);
+}
+
+/// A worktree under a directory with a space is ordinary on macOS and the norm
+/// on Windows. `mkdir -p` needed `shell_escape_posix` around it or the shell
+/// split the argument in two; the port takes the path as one argument, so the
+/// escaping must be *gone* — quotes carried through would become part of the
+/// directory's name.
+#[tokio::test]
+async fn a_worktree_path_with_a_space_reaches_the_port_unescaped() {
+    let (_src_dir, src_path) = temp_artifact("plan.md", "# Plan\n");
+    let remote_wt = "/home/builder/my projects/repo_wt_x";
+
+    let exec = RecordingExec::new();
+    let prompt = format!("- `{}`\n", src_path.to_string_lossy());
+    let _ = materialize_external_artifact_paths(&prompt, remote_wt, &exec, "m-builder").await;
+
+    assert_eq!(
+        exec.created_dirs(),
+        vec![(
+            "m-builder".to_string(),
+            format!("{remote_wt}/artifacts/_context")
+        )]
+    );
     drop(_src_dir);
 }
 

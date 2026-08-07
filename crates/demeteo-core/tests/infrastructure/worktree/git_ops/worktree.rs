@@ -1,7 +1,6 @@
 // Tests extracted from `crates/demeteo-core/src/adapters/worktree/git_ops/worktree.rs` (mirrored-tests convention). `super` = that module.
 
 use super::super::common::*;
-use super::link_dependency_caches_cmd;
 use super::GitOpsHelper;
 use crate::adapters::database::SqliteAdapter;
 use crate::adapters::local::execution::LocalSubprocessAdapter;
@@ -10,90 +9,7 @@ use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::worktree_ops::{TerminalWorktreeRequest, WorktreeOpsPort};
 use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
-
-/// Strict execution double for the terminal-worktree transport boundary. It
-/// accepts the one compound prepare-and-add command and records which machine
-/// received it; every unrelated operation is an error.
-struct RecordingTerminalExec {
-    calls: Mutex<Vec<(String, String)>>,
-}
-
-impl RecordingTerminalExec {
-    fn calls(&self) -> Vec<(String, String)> {
-        self.calls.lock().unwrap().clone()
-    }
-}
-
-#[async_trait::async_trait]
-impl ExecutionPort for RecordingTerminalExec {
-    async fn test_connection(&self, _: &str) -> Result<(), String> {
-        Err("unexpected test_connection".to_string())
-    }
-
-    async fn run_command(&self, machine_id: &str, command: &str) -> Result<String, String> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((machine_id.to_string(), command.to_string()));
-        if command.contains("worktree add") {
-            Ok(String::new())
-        } else {
-            Err(format!("unexpected command: {command}"))
-        }
-    }
-
-    async fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
-        Err("unexpected read_file".to_string())
-    }
-    async fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
-        Err("unexpected write_file".to_string())
-    }
-    async fn write_file_bytes(&self, _: &str, _: &str, _: &[u8]) -> Result<(), String> {
-        Err("unexpected write_file_bytes".to_string())
-    }
-    async fn get_metadata(
-        &self,
-        _: &str,
-        _: &str,
-    ) -> Result<crate::ports::execution::SftpEntry, String> {
-        Err("unexpected get_metadata".to_string())
-    }
-    async fn list_dir(
-        &self,
-        _: &str,
-        _: &str,
-    ) -> Result<Vec<crate::ports::execution::SftpEntry>, String> {
-        Err("unexpected list_dir".to_string())
-    }
-    async fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
-        Err("unexpected setup_worktree".to_string())
-    }
-    async fn resolve_home(&self, _: &str) -> Result<String, String> {
-        Err("unexpected resolve_home".to_string())
-    }
-    async fn resolve_user(&self, _: &str) -> Result<String, String> {
-        Err("unexpected resolve_user".to_string())
-    }
-    async fn control_rpc(
-        &self,
-        _: &str,
-        _: &str,
-        _: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        Err("unexpected control_rpc".to_string())
-    }
-    fn spawn_interactive(
-        &self,
-        _: &str,
-        _: &str,
-        _: &[String],
-        _: &str,
-        _: &std::collections::HashMap<String, String>,
-    ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
-        Err("unexpected spawn_interactive".to_string())
-    }
-}
+use std::sync::Arc;
 
 /// A creation request that names no base, so the start point stays the primary
 /// checkout's HEAD. Tests about *where a branch is cut* set `base_branch`
@@ -133,78 +49,42 @@ fn expected_area(project_root: &std::path::Path, repo_dir: &str) -> std::path::P
         )
 }
 
-#[test]
-fn command_iterates_every_known_cache_dir() {
-    let cmd = link_dependency_caches_cmd("/repo", "/repo_wt_1", "/repo_cache_feature-a");
-    for dir in crate::paths::DEPENDENCY_CACHE_DIRS {
-        assert!(
-            cmd.contains(dir),
-            "expected command to reference '{}': {}",
-            dir,
-            cmd
-        );
-    }
+/// A temporary directory as git will report it back.
+///
+/// The resolution is what macOS needs — `/tmp` is a symlink to `/private/tmp`,
+/// so the path a `TempDir` hands out is not the one `git worktree list` prints.
+/// Stripping `\\?\` is what Windows needs: `canonicalize` answers in the
+/// verbatim form, which is a spelling `CreateProcessW` accepts as an argument
+/// and git does not resolve, so handing it to git names nothing.
+fn real_path_of(dir: &std::path::Path) -> String {
+    let resolved = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let spelled = resolved.to_string_lossy().into_owned();
+    spelled
+        .strip_prefix(r"\\?\")
+        .map(str::to_string)
+        .unwrap_or(spelled)
 }
 
-#[test]
-fn command_gates_on_existence_and_check_ignore() {
-    // These paths contain only shell-safe characters, so `shell_escape_posix`
-    // leaves them bare (no quoting needed).
-    let cmd = link_dependency_caches_cmd("/repo", "/repo_wt_1", "/repo_cache_feature-a");
-    assert!(cmd.contains("check-ignore -q"));
-    assert!(cmd.contains("[ -e /repo/\"$d\" ]"));
-    assert!(cmd.contains("[ ! -e /repo_wt_1/\"$d\" ]"));
-}
-
-/// The worktree must symlink into *this feature's* cache root, never straight
-/// into the primary checkout. Linking to `{repo}/node_modules` is what let one
-/// feature's install overwrite another's — and, worse, let one feature's build
-/// output decide another feature's harness verdict.
-#[test]
-fn worktree_links_into_the_feature_cache_not_the_shared_primary() {
-    let cache = feature_cache_dir("/repo", "feature/login");
-    let cmd = link_dependency_caches_cmd("/repo", "/repo_wt_1", &cache);
-
+/// The paths a listing replays, against the ones Demeteo built or was handed
+/// back.
+///
+/// One string each on Linux and macOS; on Windows git answers `C:/…`, a
+/// `PathBuf` builds `C:\…`, and Git Bash prints `/c/…`, so the comparison has
+/// to go through [`crate::paths::same_path`] or it is asserting a spelling.
+#[track_caller]
+fn assert_same_paths(listed: &[crate::domain::models::WorktreeInfo], expected: &[&str]) {
+    let found: Vec<&str> = listed
+        .iter()
+        .map(|worktree| worktree.path.as_str())
+        .collect();
     assert!(
-        cmd.contains("ln -sfn /repo_cache_feature-login/\"$d\" /repo_wt_1/\"$d\""),
-        "worktree must link into the feature's own cache root: {cmd}"
+        found.len() == expected.len()
+            && found
+                .iter()
+                .zip(expected)
+                .all(|(a, b)| crate::paths::same_path(a, b, cfg!(windows))),
+        "listed {found:?}, expected {expected:?}"
     );
-    assert!(
-        !cmd.contains("ln -sfn /repo/\"$d\""),
-        "worktree must NOT link straight at the shared primary checkout: {cmd}"
-    );
-}
-
-/// Seeding must be a copy (ideally a copy-on-write clone), never a hardlink: a
-/// tool that rewrites a file in place would write *through* a hardlink into
-/// every other feature's tree, reintroducing the very bug this replaces.
-#[test]
-fn seeds_the_feature_cache_by_copy_preferring_copy_on_write() {
-    let cmd = link_dependency_caches_cmd("/repo", "/repo_wt_1", "/repo_cache_feature-a");
-    // APFS clonefile, then btrfs/xfs reflink, then a plain copy.
-    assert!(cmd.contains("cp -cR"), "{cmd}");
-    assert!(cmd.contains("--reflink=auto"), "{cmd}");
-    assert!(
-        !cmd.contains("cp -al") && !cmd.contains("ln /repo"),
-        "seeding must never hardlink: {cmd}"
-    );
-    // Seed once — a feature's later steps reuse the cache they already have.
-    assert!(
-        cmd.contains("[ ! -e /repo_cache_feature-a/\"$d\" ]"),
-        "{cmd}"
-    );
-}
-
-#[test]
-fn paths_with_special_chars_are_escaped() {
-    let cmd = link_dependency_caches_cmd(
-        "/repos/my repo",
-        "/repos/my repo_wt_1",
-        "/repos/my repo_cache_f",
-    );
-    assert!(cmd.contains("'/repos/my repo'"));
-    assert!(cmd.contains("'/repos/my repo_wt_1'"));
-    assert!(cmd.contains("'/repos/my repo_cache_f'"));
 }
 
 /// The cache root is keyed by feature branch, so two features on one repo can
@@ -265,28 +145,25 @@ async fn test_list_worktrees_only_main_when_no_worktrees_added() {
 #[tokio::test]
 async fn test_list_worktrees_with_one_extra_worktree() {
     let (dir, helper) = make_repo("wt_extra").await;
-    // Canonicalize to handle macOS /tmp → /private/tmp symlink.
-    // TempDir may return the symlink path while git worktree list
-    // returns the real path, causing an assertion mismatch.
-    let repo = std::fs::canonicalize(&dir)
-        .unwrap_or_else(|_| dir.as_os_str().to_os_string().into())
-        .to_string_lossy()
-        .to_string();
+    let repo = real_path_of(&dir);
 
-    // Add a linked worktree on a new branch
+    // Add a linked worktree on a new branch. Through `run_program`, as every
+    // git call Demeteo makes is: a Windows path inside a double-quoted shell
+    // word loses its separators to bash's own escaping, so a shell string here
+    // sets the test up to fail for a reason the product does not have.
     let wt_dir = format!("{}-wt", repo);
     let exec_tmp = fresh_exec();
     let _ = exec_tmp
-        .run_command(
+        .run_program(
             "local",
-            &format!("git -C \"{repo}\" worktree add \"{wt_dir}\" -b feature/my-task"),
+            super::git_request(&repo, ["worktree", "add", &wt_dir, "-b", "feature/my-task"]),
         )
         .await;
 
     let worktrees = helper.list_worktrees(None, &repo).await.unwrap();
     assert_eq!(worktrees.len(), 1, "Expected exactly one linked worktree");
+    assert_same_paths(&worktrees, &[wt_dir.as_str()]);
     let wt = &worktrees[0];
-    assert_eq!(wt.path, wt_dir, "Worktree path should match the added dir");
     assert_eq!(
         wt.branch.as_deref(),
         Some("feature/my-task"),
@@ -296,9 +173,9 @@ async fn test_list_worktrees_with_one_extra_worktree() {
 
     // Cleanup (prune first so git lets us remove the dir)
     let _ = exec_tmp
-        .run_command(
+        .run_program(
             "local",
-            &format!("git -C \"{repo}\" worktree remove --force \"{wt_dir}\""),
+            super::git_request(&repo, ["worktree", "remove", "--force", &wt_dir]),
         )
         .await;
     let _ = std::fs::remove_dir_all(&dir);
@@ -333,15 +210,9 @@ async fn terminal_worktree_creation_returns_linked_worktree_metadata() {
     assert!(std::path::Path::new(&created.worktree.path).exists());
     // What `create` returns must be what `list` replays, or nothing can match
     // a freshly created worktree against the listing it appears in.
-    assert_eq!(
-        helper
-            .list_worktrees(None, &repo)
-            .await
-            .unwrap()
-            .iter()
-            .map(|worktree| worktree.path.as_str())
-            .collect::<Vec<_>>(),
-        [created.worktree.path.as_str()]
+    assert_same_paths(
+        &helper.list_worktrees(None, &repo).await.unwrap(),
+        &[created.worktree.path.as_str()],
     );
     // The bootstrap prune sweeps `repos/` by configured repository name, so a
     // terminal worktree anywhere below it is deleted on the next re-bootstrap.
@@ -408,170 +279,6 @@ async fn terminal_worktree_rejects_a_symlinked_area_or_nested_parent() {
     );
 
     let _ = std::fs::remove_dir_all(&project_root);
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn terminal_worktree_keeps_the_checked_parent_when_its_path_is_replaced() {
-    use std::os::unix::fs::symlink;
-    use std::process::Stdio;
-    use tokio::process::Command;
-    use tokio::time::{sleep, Duration};
-
-    let (project_root, repo, _helper) = make_project_repo("terminal_worktree_replacement").await;
-    let root = project_root.to_string_lossy().to_string();
-    let area = expected_area(&project_root, &repo);
-    let nested = area.join("nested");
-    let outside = project_root.join("demeteo_terminal_worktree_replacement_outside");
-    let retained = area.join("nested-retained");
-    let ready = project_root.join("demeteo_terminal_worktree_replacement_ready");
-    let release = project_root.join("demeteo_terminal_worktree_replacement_release");
-    std::fs::create_dir_all(&nested).expect("creates initially valid parent");
-    std::fs::create_dir(&outside).expect("creates outside directory");
-
-    let destination = super::terminal_worktree_dir(&repo, &root, "nested/session")
-        .expect("derives controlled destination");
-    // The pause is injected rather than compiled in, so the command under test
-    // differs from the production one only by this string. It parks after the
-    // destination parent has been validated and entered, which is the only
-    // moment at which the substitution below can prove anything.
-    let command = super::terminal_worktree_create_cmd(
-        &repo,
-        &root,
-        "terminal/replaced",
-        &destination,
-        None,
-        ": > \"$DEMETEO_TERMINAL_WORKTREE_TEST_READY\"; \
-         while [ ! -e \"$DEMETEO_TERMINAL_WORKTREE_TEST_RELEASE\" ]; do sleep 0.01; done; ",
-    )
-    .expect("builds target command");
-    let child = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .env("DEMETEO_TERMINAL_WORKTREE_TEST_READY", &ready)
-        .env("DEMETEO_TERMINAL_WORKTREE_TEST_RELEASE", &release)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("starts target-machine command");
-
-    // The command creates this file only after it has validated and entered
-    // the final destination parent, but immediately before invoking Git.
-    // That makes this replacement deterministic rather than relying on a
-    // pre-command swap that cannot exercise the check-to-use interval.
-    for _ in 0..100 {
-        if ready.exists() {
-            break;
-        }
-        sleep(Duration::from_millis(10)).await;
-    }
-    assert!(
-        ready.exists(),
-        "target command reached its synchronization point"
-    );
-    std::fs::rename(&nested, &retained).expect("moves checked parent aside");
-    symlink(&outside, &nested).expect("replaces checked parent with link");
-    std::fs::File::create(&release).expect("releases target command to Git");
-
-    let output = child
-        .wait_with_output()
-        .await
-        .expect("waits for target command");
-    assert!(
-        output.status.success(),
-        "git must use the retained directory: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        !outside.join("session").exists(),
-        "the replacement must not redirect git worktree add outside the controlled area"
-    );
-    assert!(
-        retained.join("session").exists(),
-        "git must create beneath the directory retained before its pathname changed"
-    );
-
-    let exec = fresh_exec();
-    let _ = exec
-        .run_command(
-            "local",
-            &format!(
-                "git -C \"{repo}\" worktree remove --force \"{}\"",
-                retained.join("session").to_string_lossy()
-            ),
-        )
-        .await;
-    let _ = std::fs::remove_dir_all(&project_root);
-}
-
-#[tokio::test]
-async fn terminal_worktree_creation_escapes_arguments_on_the_selected_machine() {
-    let exec = Arc::new(RecordingTerminalExec {
-        calls: Mutex::new(Vec::new()),
-    });
-    let conn = Connection::open_in_memory().expect("opens database");
-    let db = Arc::new(SqliteAdapter::new(conn).expect("creates database"))
-        as Arc<dyn AppSettingsRepository>;
-    let helper = GitOpsHelper::new(db, exec.clone());
-
-    let created = helper
-        .create_terminal_worktree(
-            Some("remote-machine"),
-            "/srv/project/repos/O'Reilly repo",
-            "/srv/project",
-            &terminal_request("terminal/remote's-session", "nested/session's"),
-        )
-        .await
-        .expect("recording remote command succeeds");
-    assert_eq!(
-        created.worktree.path,
-        "/srv/project/terminal-worktrees/O'Reilly repo/nested/session's"
-    );
-
-    let calls = exec.calls();
-    assert_eq!(
-        calls.len(),
-        1,
-        "inspection and add must be one target command"
-    );
-    assert_eq!(calls[0].0, "remote-machine");
-    assert!(
-        calls[0].1.contains("[ -L "),
-        "the target command must reject symlinked components: {}",
-        calls[0].1
-    );
-    assert!(
-        calls[0].1.contains("mkdir "),
-        "the target command must establish the controlled parents: {}",
-        calls[0].1
-    );
-    assert!(
-        calls[0]
-            .1
-            .contains("cd /srv/project; expected_parent=$(pwd -P)"),
-        "the command must anchor at the project root before descending: {}",
-        calls[0].1
-    );
-    assert!(
-        calls[0].1.contains("mkdir ./terminal-worktrees")
-            && calls[0].1.contains("mkdir ./'O'\\''Reilly repo'"),
-        "both levels of the relocated area must be fenced per component: {}",
-        calls[0].1
-    );
-    assert!(
-        calls[0].1.contains(
-            "git --git-dir=\"$git_dir\" --work-tree='/srv/project/repos/O'\\''Reilly repo' worktree add -b 'terminal/remote'\\''s-session' ./'session'\\''s'"
-        ),
-        "the repository, branch, and retained-relative destination name must be POSIX-escaped: {}",
-        calls[0].1
-    );
-    assert!(
-        calls[0].1.contains(
-            "git_dir=$(git -C '/srv/project/repos/O'\\''Reilly repo' rev-parse --absolute-git-dir)"
-        ),
-        "the git directory must be discovered, not assumed to be <repo>/.git: {}",
-        calls[0].1
-    );
 }
 
 #[tokio::test]
@@ -785,11 +492,9 @@ async fn a_workspace_under_a_terminal_worktrees_directory_still_withholds_a_runn
         .await
         .expect("lists terminal locations");
 
-    assert_eq!(
-        listed.iter().map(|w| w.path.as_str()).collect::<Vec<_>>(),
-        [mine.worktree.path.as_str()],
-        "a checkout a running step owns is force-removed under whoever opened a shell in it"
-    );
+    // A checkout a running step owns is force-removed under whoever opened a
+    // shell in it, so only the terminal one may be listed.
+    assert_same_paths(&listed, &[mine.worktree.path.as_str()]);
     assert_eq!(
         helper.list_worktrees(None, &repo).await.unwrap().len(),
         3,
@@ -911,15 +616,9 @@ async fn legacy_terminal_worktrees_are_unregistered_and_current_ones_left_alone(
         !legacy_area.exists(),
         "the legacy area itself must be gone, not just its registration"
     );
+    // Git must forget the legacy worktree and keep the current-location one.
     let surviving = helper.list_worktrees(None, &repo).await.unwrap();
-    assert_eq!(
-        surviving
-            .iter()
-            .map(|worktree| worktree.path.as_str())
-            .collect::<Vec<_>>(),
-        [kept.worktree.path.as_str()],
-        "Git must forget the legacy worktree and keep the current-location one"
-    );
+    assert_same_paths(&surviving, &[kept.worktree.path.as_str()]);
 
     let _ = exec
         .run_command(
@@ -1206,9 +905,11 @@ async fn test_provision_subtask_worktree_handles_orphan_dir() {
     let (dir, helper) = make_repo("wt_orphan").await;
     let repo = dir.to_string_lossy().to_string();
 
-    // Pre-create the exact path provision_subtask_worktree would use,
-    // as an orphan dir NOT registered with git.
-    let wt_path = format!("{}_wt_sub-orphan", repo);
+    // Pre-create the exact path provision_subtask_worktree would use, as an
+    // orphan dir NOT registered with git. Derived rather than spelled out: the
+    // segment is shortened on Windows, and what that segment *is* is pinned by
+    // `shortening_touches_the_worktree_suffix_and_nothing_else`.
+    let wt_path = worktree_dir_on(&repo, "sub-orphan", "local");
     std::fs::create_dir_all(&wt_path).unwrap();
     std::fs::write(format!("{wt_path}/leftover.txt"), "from crashed run").unwrap();
     assert!(std::path::Path::new(&wt_path).exists());
@@ -1253,7 +954,7 @@ async fn test_provision_subtask_worktree_handles_registered_worktree() {
         .provision_subtask_worktree(None, &repo, "main", "sub-reg")
         .await
         .unwrap();
-    let wt_path = format!("{}_wt_sub-reg", repo);
+    let wt_path = worktree_dir_on(&repo, "sub-reg", "local");
     assert!(std::path::Path::new(&wt_path).exists());
 
     // Simulate an interrupted run: worktree is registered with git
@@ -1314,20 +1015,29 @@ async fn test_provision_subtask_worktree_distinct_per_feature() {
     // git-side bookkeeping separate), the wt_dir suffixes reflect
     // the feature-scoped subtask_id, so two features on the *same*
     // repo would also be distinct.
-    assert!(wt_a.contains("f-A-step-s-research"));
-    assert!(wt_b.contains("f-B-step-s-research"));
+    //
+    // Asserted as a *sibling suffix of its own repo*, not as the id spelled
+    // out: on a Windows host the suffix is the fixed-width segment
+    // `worktree_dir` folds the id into, and a literal would be asserting the
+    // spelling rather than the isolation.
+    let repo_a = dir_a.to_string_lossy().to_string();
+    let repo_b = dir_b.to_string_lossy().to_string();
+    assert!(wt_a.starts_with(&format!("{repo_a}_wt_")), "{wt_a}");
+    assert!(wt_b.starts_with(&format!("{repo_b}_wt_")), "{wt_b}");
+    assert_ne!(
+        wt_a.trim_start_matches(&format!("{repo_a}_wt_")),
+        wt_b.trim_start_matches(&format!("{repo_b}_wt_")),
+        "the suffix is what the feature-scoped subtask id has to reach"
+    );
     assert_ne!(wt_a, wt_b);
 
     // Cleanup.
     let exec = fresh_exec();
-    for (repo, wt) in [
-        (dir_a.to_string_lossy().to_string(), wt_a),
-        (dir_b.to_string_lossy().to_string(), wt_b),
-    ] {
+    for (repo, wt) in [(repo_a, wt_a), (repo_b, wt_b)] {
         let _ = exec
-            .run_command(
+            .run_program(
                 "local",
-                &format!("git -C \"{repo}\" worktree remove --force \"{wt}\""),
+                super::git_request(&repo, ["worktree", "remove", "--force", &wt]),
             )
             .await;
         let _ = std::fs::remove_dir_all(repo);
@@ -1419,6 +1129,14 @@ async fn test_provision_subtask_worktree_same_repo_two_features_do_not_collide()
 /// cleanup. The provisioner must restore write permissions before
 /// removing the directory, otherwise the next redirect or retry hits
 /// "already exists" with no clear way to recover.
+///
+/// The leftover this reconstructs is the Unix fence's, and only Unix has it:
+/// `chmod a-w` reaching Git Bash sets a read-only *attribute* NTFS does not
+/// apply to directory traversal, so the sanity check it opens with — that a
+/// naive `rm` is blocked — is not true there, and the Windows fence is a DACL
+/// that `restore_artifact_scope` lifts instead. The leftover-directory half is
+/// covered on every platform by the orphan and registered-worktree cases above.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_provision_subtask_worktree_handles_chmod_locked_leftover() {
     let (dir, helper) = make_repo("wt_chmod_locked").await;
@@ -1428,7 +1146,7 @@ async fn test_provision_subtask_worktree_handles_chmod_locked_leftover() {
     // Pre-create the wt path as an unregistered dir with a protected
     // subdirectory chmod'd to a-w — mimicking what the scope fence
     // leaves behind after a crashed run.
-    let wt_path = format!("{}_wt_sub-chmod", repo);
+    let wt_path = worktree_dir_on(&repo, "sub-chmod", "local");
     std::fs::create_dir_all(format!("{wt_path}/src")).unwrap();
     std::fs::write(format!("{wt_path}/src/main.rs"), "fn main() {}").unwrap();
     let _ = exec
@@ -1473,6 +1191,12 @@ async fn test_provision_subtask_worktree_handles_chmod_locked_leftover() {
 /// never committed. Without symlinking them in from the primary
 /// checkout, any harness run inside the subtask worktree (`npm test`,
 /// `cargo test`) fails immediately on missing dependencies.
+// Cache sharing is a symlink, and Demeteo makes none on Windows — `ln -s`
+// under Git for Windows needs a privilege a desktop user usually lacks and
+// silently copies otherwise, and a junction carries a reparse tag git follows
+// transparently. `share_dependency_caches` records the stated gap; these three
+// cover the mechanism that only exists where the link does.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_provision_subtask_worktree_symlinks_dependency_caches() {
     let (dir, helper) = make_repo("wt_dep_link").await;
@@ -1544,6 +1268,7 @@ async fn test_provision_subtask_worktree_symlinks_dependency_caches() {
 /// decided by *another feature's* build output, and that verdict drives
 /// Demeteo's retry and critic loops. A feature would chase a failure that was
 /// never its own.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_concurrent_features_do_not_share_a_dependency_cache() {
     let (dir, helper) = make_repo("wt_dep_isolation").await;
@@ -1631,6 +1356,7 @@ async fn test_concurrent_features_do_not_share_a_dependency_cache() {
 /// untracked. `commit_worktree_changes`'s `git add -A` must not stage
 /// it — committing an absolute host path onto the feature branch would
 /// corrupt the branch for anyone else who checks it out.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_commit_worktree_changes_never_stages_symlinked_dependency_caches() {
     let (dir, helper) = make_repo("wt_dep_commit").await;
@@ -2139,7 +1865,7 @@ async fn a_detached_worktree_carries_no_branch() {
     let listed = helper.list_worktrees(None, &repo).await.expect("lists");
     let entry = listed
         .iter()
-        .find(|w| w.path.ends_with("_wt_baseline"))
+        .find(|w| w.path.ends_with(baseline_suffix(&repo).as_str()))
         .expect("the detached worktree is registered");
     assert_eq!(
         entry.branch, None,
@@ -2178,7 +1904,9 @@ async fn cleanup_removes_the_directory_and_the_registration() {
     );
     let listed = helper.list_worktrees(None, &repo).await.expect("lists");
     assert!(
-        !listed.iter().any(|w| w.path.ends_with("_wt_baseline")),
+        !listed
+            .iter()
+            .any(|w| w.path.ends_with(baseline_suffix(&repo).as_str())),
         "the registration must be pruned too, or the next `add` fails with \
          'already used by worktree at': {listed:?}"
     );
@@ -2220,7 +1948,7 @@ async fn an_orphan_directory_is_cleared_before_the_add() {
     let repo = dir.to_string_lossy().to_string();
     let (first, _) = two_commits(&repo).await;
 
-    let orphan = format!("{repo}_wt_baseline");
+    let orphan = worktree_dir_on(&repo, "baseline", "local");
     std::fs::create_dir_all(&orphan).unwrap();
     std::fs::write(format!("{orphan}/debris.txt"), "left over").unwrap();
 
@@ -2243,4 +1971,699 @@ async fn head_sha_reports_nothing_for_a_directory_that_is_not_a_repo() {
     let (dir, helper) = make_repo("wt_head_sha_missing").await;
     assert_eq!(helper.head_sha(None, "/nonexistent/path/xyz").await, None);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── Teardown, path budget, and cache exclusion ───────────────────────────────
+//
+// The ordering tests drive the free functions directly against a double that
+// records every verb in one ordered list. Order is the whole content of
+// `reclaim_worktree_path`, and no test that only inspects the filesystem
+// afterwards can see it: a wrong order still ends with an empty directory on
+// Linux, and only fails on the platform none of these tests run on.
+
+use super::{
+    created_terminal_worktree_path, delete_worktree_residue, exclude_file_with,
+    link_dependency_caches_cmd, reclaim_worktree_path, restore_write_access_cmd,
+    share_dependency_caches, shareable_cache_names, shareable_cache_probe_cmd, target_path_join,
+    worktree_dir, worktree_dir_on,
+};
+use crate::domain::models::Platform;
+use crate::ports::execution::{ProgramRequest, SftpEntry};
+use std::sync::Mutex;
+
+/// Records every port call in one ordered list and answers only the two
+/// questions the teardown asks, so a step that visits the wrong verb — or the
+/// right ones in the wrong order — fails rather than passes quietly.
+struct TeardownExec {
+    log: Mutex<Vec<String>>,
+    /// What `remove_dir_all` reports.
+    removed: bool,
+    /// Whether the path is still there when the teardown asks afterwards.
+    residue: bool,
+    /// Whether `git worktree remove` refuses — a locked worktree.
+    git_remove_fails: bool,
+}
+
+impl TeardownExec {
+    fn new(removed: bool, residue: bool) -> Self {
+        Self {
+            log: Mutex::new(Vec::new()),
+            removed,
+            residue,
+            git_remove_fails: false,
+        }
+    }
+    fn with_locked_worktree() -> Self {
+        Self {
+            git_remove_fails: true,
+            ..Self::new(true, false)
+        }
+    }
+    fn seen(&self) -> Vec<String> {
+        self.log.lock().unwrap().clone()
+    }
+    fn note(&self, line: String) {
+        self.log.lock().unwrap().push(line);
+    }
+}
+
+#[async_trait::async_trait]
+impl ExecutionPort for TeardownExec {
+    async fn test_connection(&self, _m: &str) -> Result<(), String> {
+        Err("unscripted test_connection".into())
+    }
+    async fn run_program(&self, _m: &str, request: ProgramRequest) -> Result<String, String> {
+        let line = format!("{} {}", request.executable, request.args.join(" "));
+        self.note(line.clone());
+        if self.git_remove_fails && line.contains("worktree remove") {
+            return Err("fatal: cannot remove a locked working tree".into());
+        }
+        Ok(String::new())
+    }
+    async fn run_command(&self, _m: &str, cmd: &str) -> Result<String, String> {
+        self.note(format!("sh: {cmd}"));
+        Ok(String::new())
+    }
+    async fn remove_dir_all(&self, _m: &str, path: &str) -> Result<(), String> {
+        self.note(format!("remove_dir_all {path}"));
+        if self.removed {
+            Ok(())
+        } else {
+            Err(format!("Failed to remove directory '{path}': busy"))
+        }
+    }
+    async fn get_metadata(&self, _m: &str, path: &str) -> Result<SftpEntry, String> {
+        self.note(format!("get_metadata {path}"));
+        if self.residue {
+            Ok(SftpEntry {
+                name: path.to_string(),
+                path: path.to_string(),
+                is_dir: true,
+                size: 0,
+                modified: 0,
+            })
+        } else {
+            Err("No such file or directory".into())
+        }
+    }
+    async fn read_file(&self, _m: &str, _p: &str) -> Result<String, String> {
+        Err("unscripted read_file".into())
+    }
+    async fn write_file(&self, _m: &str, _p: &str, _c: &str) -> Result<(), String> {
+        Err("unscripted write_file".into())
+    }
+    async fn write_file_bytes(&self, _m: &str, _p: &str, _c: &[u8]) -> Result<(), String> {
+        Err("unscripted write_file_bytes".into())
+    }
+    async fn list_dir(&self, _m: &str, _p: &str) -> Result<Vec<SftpEntry>, String> {
+        Err("unscripted list_dir".into())
+    }
+    async fn setup_worktree(&self, _m: &str, _r: &str, _b: &str, _s: &str) -> Result<(), String> {
+        Err("unscripted setup_worktree".into())
+    }
+    async fn resolve_home(&self, _m: &str) -> Result<String, String> {
+        Err("unscripted resolve_home".into())
+    }
+    async fn resolve_user(&self, _m: &str) -> Result<String, String> {
+        Err("unscripted resolve_user".into())
+    }
+    async fn resolve_platform(&self, _m: &str) -> Result<Platform, String> {
+        Err("unscripted resolve_platform".into())
+    }
+    async fn control_rpc(
+        &self,
+        _m: &str,
+        _method: &str,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err("unscripted control_rpc".into())
+    }
+    fn spawn_interactive(
+        &self,
+        _m: &str,
+        _b: &str,
+        _a: &[String],
+        _c: &str,
+        _e: &std::collections::HashMap<String, String>,
+    ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+        Err("unscripted spawn_interactive".into())
+    }
+}
+
+/// Write access is restored before git is asked to remove anything, the removal
+/// is doubly forced, the prune follows it, and only then is the residue
+/// deleted. Every one of those four is there because the step before it would
+/// otherwise fail.
+///
+/// Against a named machine rather than `local`, so that all four steps are
+/// present on every host: a remote is Linux whatever the desktop is, while a
+/// Windows-*local* teardown lifts an ACL instead and emits no `chmod` at all —
+/// which `the_posix_write_restore_is_skipped_only_for_a_windows_local_target`
+/// is the test for.
+#[tokio::test]
+async fn teardown_restores_write_access_before_git_and_prunes_before_deleting() {
+    let exec = TeardownExec::new(true, false);
+    reclaim_worktree_path(&exec, "build-box", "/repo", "/repo_wt_a")
+        .await
+        .expect("a removable worktree is torn down");
+
+    assert_eq!(
+        exec.seen(),
+        vec![
+            "sh: chmod -R u+w /repo_wt_a 2>/dev/null || true".to_string(),
+            "git -C /repo worktree remove --force --force /repo_wt_a".to_string(),
+            "git -C /repo worktree prune".to_string(),
+            "remove_dir_all /repo_wt_a".to_string(),
+        ]
+    );
+}
+
+/// A single `-f` **refuses a locked worktree**, and a lock is what a crashed or
+/// killed step leaves behind — so the doubled force is the difference between
+/// teardown working and teardown failing exactly when it is needed.
+#[tokio::test]
+async fn the_worktree_removal_is_forced_twice() {
+    let exec = TeardownExec::new(true, false);
+    let _ = reclaim_worktree_path(&exec, "local", "/repo", "/repo_wt_a").await;
+
+    let removal = exec
+        .seen()
+        .into_iter()
+        .find(|line| line.contains("worktree remove"))
+        .expect("the teardown asks git to remove the worktree");
+    assert_eq!(
+        removal.matches("--force").count(),
+        2,
+        "a locked worktree needs `--force --force`: {removal}"
+    );
+}
+
+/// The prune runs even when the removal failed — that is precisely when there
+/// is an administrative entry left to prune, and an entry left behind fails the
+/// next `add` of the same destination with "already used by worktree".
+#[tokio::test]
+async fn the_prune_still_runs_when_the_directory_cannot_be_deleted() {
+    let exec = TeardownExec::new(false, true);
+    let error = reclaim_worktree_path(&exec, "local", "/repo", "/repo_wt_a")
+        .await
+        .expect_err("a surviving directory is a failure");
+
+    assert!(exec
+        .seen()
+        .iter()
+        .any(|line| line.ends_with("worktree prune")));
+    assert!(
+        error.starts_with("/repo_wt_a could not be deleted"),
+        "the message names the path first, for the cleanup queue: {error}"
+    );
+}
+
+/// The prune is what makes the *name* reusable, and a `remove` that refused is
+/// exactly when there is an administrative entry left to prune — so it cannot
+/// be conditional on that removal, and the delete after it cannot be either.
+#[tokio::test]
+async fn a_refused_removal_is_still_pruned_and_still_deleted() {
+    let exec = TeardownExec::with_locked_worktree();
+    reclaim_worktree_path(&exec, "local", "/repo", "/repo_wt_a")
+        .await
+        .expect("git refusing to deregister does not stop the teardown");
+
+    let seen = exec.seen();
+    assert!(seen.iter().any(|line| line.ends_with("worktree prune")));
+    assert!(seen.iter().any(|line| line == "remove_dir_all /repo_wt_a"));
+}
+
+/// `ExecutionPort::remove_dir_all` reports an absent path as an error, and a
+/// teardown reaches it with the directory already gone often enough that the
+/// error alone cannot be the verdict. The path is asked about directly instead
+/// of the message being matched on.
+#[tokio::test]
+async fn a_directory_that_is_already_gone_is_not_a_teardown_failure() {
+    let exec = TeardownExec::new(false, false);
+    delete_worktree_residue(&exec, "local", "/repo_wt_a")
+        .await
+        .expect("an absent directory is the outcome teardown wanted");
+    assert_eq!(
+        exec.seen(),
+        vec![
+            "remove_dir_all /repo_wt_a".to_string(),
+            "get_metadata /repo_wt_a".to_string(),
+        ]
+    );
+}
+
+/// A successful delete must not spend a round trip proving it.
+#[tokio::test]
+async fn a_successful_delete_asks_nothing_further() {
+    let exec = TeardownExec::new(true, true);
+    delete_worktree_residue(&exec, "local", "/repo_wt_a")
+        .await
+        .unwrap();
+    assert_eq!(exec.seen(), vec!["remove_dir_all /repo_wt_a".to_string()]);
+}
+
+/// The last line was printed by `pwd` inside the shell that created the
+/// worktree, so on a Windows host it arrives in MSYS form — and the caller
+/// opens a terminal at what this returns, which no Win32 call can do with
+/// `/c/…`.
+///
+/// The derived path deliberately names a different directory: falling back to
+/// it is what a rejected line does, so an expectation that matches the fallback
+/// cannot tell the two apart.
+#[test]
+fn a_created_worktree_path_leaves_the_shells_msys_spelling_behind() {
+    assert_eq!(
+        created_terminal_worktree_path(
+            "Preparing worktree\n/c/Users/runneradmin/p/terminal-worktrees/app/one\n",
+            r"C:\Users\runneradmin\p\terminal-worktrees\app\derived",
+            true,
+        ),
+        r"C:\Users\runneradmin\p\terminal-worktrees\app\one"
+    );
+}
+
+/// The same output on a POSIX host is already the answer, and a Windows desktop
+/// driving a remote reads a genuine `/c` directory there.
+#[test]
+fn a_created_worktree_path_is_untouched_for_a_posix_target() {
+    assert_eq!(
+        created_terminal_worktree_path("/srv/p/terminal-worktrees/app/one\n", "/derived", false),
+        "/srv/p/terminal-worktrees/app/one"
+    );
+    assert_eq!(
+        created_terminal_worktree_path("/c/checkouts/one\n", "/derived", false),
+        "/c/checkouts/one"
+    );
+}
+
+/// A silent stdout, or a last line that is not a path at all, falls back to the
+/// derived destination rather than failing the create.
+#[test]
+fn a_created_worktree_path_falls_back_when_the_shell_reported_no_path() {
+    assert_eq!(
+        created_terminal_worktree_path("", "/derived", false),
+        "/derived"
+    );
+    assert_eq!(
+        created_terminal_worktree_path("Preparing worktree\n", r"C:\derived", true),
+        r"C:\derived"
+    );
+}
+
+/// The Unix write-restore is the inverse of the Unix `chmod a-w` fence. On a
+/// Windows-local target the fence is an ACL that `restore_artifact_scope` has
+/// already lifted, so the POSIX `chmod` would walk the tree to change nothing —
+/// while a Windows desktop driving a **remote** machine still faces a real
+/// `chmod a-w` fence there and must undo it.
+#[test]
+fn the_posix_write_restore_is_skipped_only_for_a_windows_local_target() {
+    assert!(crate::paths::windows_host_target(true, "local"));
+    assert!(!crate::paths::windows_host_target(true, "build-box"));
+    assert!(!crate::paths::windows_host_target(false, "local"));
+
+    assert!(restore_write_access_cmd("/wt", false).is_some());
+    assert_eq!(restore_write_access_cmd("/wt", true), None);
+}
+
+/// Shortening is a Windows-only measure and it changes only the worktree
+/// suffix, so every path an existing installation already resolves is
+/// byte-identical.
+#[test]
+fn shortening_touches_the_worktree_suffix_and_nothing_else() {
+    let full = worktree_dir(
+        "/w/projects/p1781624953648/repos/app",
+        "f-1-step-s-implement",
+        false,
+    );
+    assert_eq!(
+        full,
+        "/w/projects/p1781624953648/repos/app_wt_f-1-step-s-implement"
+    );
+
+    let short = worktree_dir(
+        "/w/projects/p1781624953648/repos/app",
+        "f-1-step-s-implement",
+        true,
+    );
+    assert!(
+        short.starts_with("/w/projects/p1781624953648/repos/app_wt_"),
+        "only the suffix moves: {short}"
+    );
+    assert_eq!(
+        short.len(),
+        "/w/projects/p1781624953648/repos/app_wt_".len() + crate::paths::SHORT_SEGMENT_LEN,
+        "the suffix is a fixed-width segment: {short}"
+    );
+}
+
+/// Demeteo's ids are `<tag><wall-clock millis>`, so the first eight characters
+/// are the *high* digits of a timestamp and change once every ~16 minutes. A
+/// literal prefix would give two features created the same afternoon one shared
+/// worktree directory — which
+/// `test_provision_subtask_worktree_same_repo_two_features_do_not_collide`
+/// records as data loss, not as a name clash.
+#[test]
+fn ids_that_differ_only_in_their_tail_get_different_segments() {
+    let a = crate::paths::short_path_segment("f-1781624953648-step-s-implement");
+    let b = crate::paths::short_path_segment("f-1781624953649-step-s-implement");
+    let c = crate::paths::short_path_segment("f-1781624953648-step-s-validate");
+    assert_ne!(a, b);
+    assert_ne!(a, c);
+    assert_eq!(a.len(), crate::paths::SHORT_SEGMENT_LEN);
+    assert!(a
+        .chars()
+        .all(|ch| ch.is_ascii_hexdigit() && !ch.is_uppercase()));
+}
+
+/// The directory outlives the process that made it, so the segment has to be
+/// the same in the next build too. Pinned as a literal: a change of algorithm
+/// strands every worktree a previous build left behind, and nothing else would
+/// notice.
+#[test]
+fn the_segment_is_pinned_across_builds() {
+    assert_eq!(crate::paths::short_path_segment(""), "cbf29ce4");
+    assert_eq!(
+        crate::paths::short_path_segment("f-1-step-s-implement"),
+        "8734e820"
+    );
+}
+
+/// The probe's answer reaches a shell command and a git exclude file, so it is
+/// read back as entries of the compiled-in list rather than as strings. A login
+/// banner, a git warning, or anything else on that stream names nothing.
+#[test]
+fn the_cache_probe_answer_is_matched_against_the_known_names() {
+    let answer = "node_modules\n  target  \nWelcome to Ubuntu\n../../etc\n";
+    assert_eq!(
+        shareable_cache_names(answer),
+        vec!["node_modules", "target"]
+    );
+    assert!(shareable_cache_names("").is_empty());
+}
+
+/// `run_command` treats any non-zero exit as `Err` and would discard the whole
+/// answer, and the loop's exit status is its last `if`'s.
+#[test]
+fn the_cache_probe_cannot_exit_non_zero_on_its_last_test() {
+    assert!(shareable_cache_probe_cmd("/repo").ends_with("; true"));
+}
+
+/// Only the names the probe cleared are linked — the gate is not re-spelled in
+/// the linking command, so the two cannot disagree about `vendor/`.
+#[test]
+fn only_the_probed_names_are_linked() {
+    let cmd = link_dependency_caches_cmd("/repo", "/wt", "/cache", &["node_modules"]);
+    assert!(cmd.contains("for d in node_modules;"));
+    assert!(!cmd.contains("vendor"));
+    assert!(!cmd.contains("check-ignore"));
+}
+
+/// The exclude file belongs to a repository Demeteo cloned but whose contents
+/// it does not own, so entries are appended and a user's own lines survive.
+#[test]
+fn exclusions_are_appended_and_never_repeated() {
+    let existing = "# my own\n*.log\n";
+    let first = exclude_file_with(existing, &["node_modules", "target"])
+        .expect("two new names are appended");
+    assert!(
+        first.starts_with(existing),
+        "the user's lines survive: {first}"
+    );
+    assert!(first.contains("\nnode_modules\n"));
+    assert!(first.ends_with("target\n"));
+
+    assert_eq!(
+        exclude_file_with(&first, &["node_modules", "target"]),
+        None,
+        "a second provisioning of the same repository writes nothing"
+    );
+    assert!(exclude_file_with(&first, &["venv"]).is_some());
+}
+
+/// An exclude file whose last line has no newline must not have the next entry
+/// welded onto it.
+#[test]
+fn an_unterminated_exclude_file_still_gets_a_separate_line() {
+    let updated = exclude_file_with("*.log", &["target"]).expect("a new name is appended");
+    assert!(
+        updated.lines().any(|line| line == "*.log"),
+        "the unterminated line stays whole: {updated:?}"
+    );
+    assert!(updated.lines().any(|line| line == "target"));
+}
+
+/// `git rev-parse` may or may not answer with a trailing separator, and a
+/// doubled one is a path SFTP will not resolve.
+///
+/// The other half of this — that the join never uses the *host's* separator,
+/// which is what would send `…\info\exclude` to a Linux machine from a Windows
+/// desktop — is not observable from a Linux test, since `Path::join` agrees
+/// here. It is stated on the function instead.
+#[test]
+fn a_target_path_is_joined_without_doubling_a_separator() {
+    assert_eq!(
+        target_path_join("/repo/.git", "info/exclude"),
+        "/repo/.git/info/exclude"
+    );
+    assert_eq!(
+        target_path_join("/repo/.git/", "info/exclude"),
+        "/repo/.git/info/exclude"
+    );
+    assert_eq!(
+        target_path_join("C:/r/.git", "info/exclude"),
+        "C:/r/.git/info/exclude"
+    );
+}
+
+/// End to end: provisioning a worktree against a checkout that has a gitignored
+/// `node_modules` records the name in the clone's own `.git/info/exclude`, so
+/// the symlink it then creates is invisible to `git add -A` without any
+/// pathspec.
+#[tokio::test]
+async fn provisioning_records_the_shared_caches_in_the_clone_exclude_file() {
+    let (dir, helper) = make_repo("wt_exclude_entry").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+
+    exec.write_file("local", &format!("{repo}/.gitignore"), "node_modules/\n")
+        .await
+        .unwrap();
+    exec.write_file(
+        "local",
+        &format!("{repo}/node_modules/dep/index.js"),
+        "//x\n",
+    )
+    .await
+    .unwrap();
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" add -A && git -C \"{repo}\" commit -m ignore"),
+        )
+        .await;
+
+    let wt = helper
+        .provision_subtask_worktree(None, &repo, "main", "sub-exclude")
+        .await
+        .expect("provisioning succeeds");
+
+    let exclude = std::fs::read_to_string(format!("{repo}/.git/info/exclude")).unwrap();
+    assert!(
+        exclude.lines().any(|line| line == "node_modules"),
+        "the shared cache is excluded slashlessly, got: {exclude:?}"
+    );
+    assert!(
+        !exclude.lines().any(|line| line == "vendor"),
+        "a name the checkout does not have is not excluded, got: {exclude:?}"
+    );
+
+    let untracked = exec
+        .run_command("local", &format!("git -C \"{wt}\" status --porcelain"))
+        .await
+        .unwrap();
+    assert!(
+        !untracked.contains("node_modules"),
+        "the linked cache is ignored rather than staged, got: {untracked:?}"
+    );
+
+    let _ = helper
+        .cleanup_subtask_worktree(None, &repo, "main", "sub-exclude")
+        .await;
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(feature_cache_dir(&repo, "main"));
+}
+
+/// Answers the three questions cache sharing asks and errors on everything
+/// else, so a pipeline that visits an unexpected verb fails rather than reads a
+/// default. Every call is recorded in order: what this covers is *which* calls
+/// were made and in what sequence, which no inspection of the resulting
+/// filesystem can recover.
+struct CacheShareExec {
+    log: Mutex<Vec<String>>,
+    /// Whether the `.git/info/exclude` write succeeds.
+    exclusion_writable: bool,
+}
+
+impl CacheShareExec {
+    fn new(exclusion_writable: bool) -> Self {
+        Self {
+            log: Mutex::new(Vec::new()),
+            exclusion_writable,
+        }
+    }
+    fn seen(&self) -> Vec<String> {
+        self.log.lock().unwrap().clone()
+    }
+    fn note(&self, line: String) {
+        self.log.lock().unwrap().push(line);
+    }
+}
+
+#[async_trait::async_trait]
+impl ExecutionPort for CacheShareExec {
+    async fn test_connection(&self, _m: &str) -> Result<(), String> {
+        Err("unscripted test_connection".into())
+    }
+    async fn run_program(&self, _m: &str, request: ProgramRequest) -> Result<String, String> {
+        let line = format!("{} {}", request.executable, request.args.join(" "));
+        self.note(line.clone());
+        if line.contains("--absolute-git-dir") {
+            return Ok("/repo/.git\n".to_string());
+        }
+        Err(format!("unscripted run_program: {line}"))
+    }
+    async fn run_command(&self, _m: &str, cmd: &str) -> Result<String, String> {
+        if cmd.contains("check-ignore") {
+            self.note("probe".to_string());
+            return Ok("node_modules\n".to_string());
+        }
+        if cmd.contains("ln -sfn") {
+            self.note("link".to_string());
+            return Ok(String::new());
+        }
+        Err(format!("unscripted run_command: {cmd}"))
+    }
+    async fn remove_dir_all(&self, _m: &str, _p: &str) -> Result<(), String> {
+        Err("unscripted remove_dir_all".into())
+    }
+    async fn get_metadata(&self, _m: &str, _p: &str) -> Result<SftpEntry, String> {
+        Err("unscripted get_metadata".into())
+    }
+    async fn read_file(&self, _m: &str, path: &str) -> Result<String, String> {
+        self.note(format!("read_file {path}"));
+        Ok(String::new())
+    }
+    async fn write_file(&self, _m: &str, path: &str, _c: &str) -> Result<(), String> {
+        self.note(format!("write_file {path}"));
+        if self.exclusion_writable {
+            Ok(())
+        } else {
+            Err("Permission denied".into())
+        }
+    }
+    async fn write_file_bytes(&self, _m: &str, _p: &str, _c: &[u8]) -> Result<(), String> {
+        Err("unscripted write_file_bytes".into())
+    }
+    async fn list_dir(&self, _m: &str, _p: &str) -> Result<Vec<SftpEntry>, String> {
+        Err("unscripted list_dir".into())
+    }
+    async fn setup_worktree(&self, _m: &str, _r: &str, _b: &str, _s: &str) -> Result<(), String> {
+        Err("unscripted setup_worktree".into())
+    }
+    async fn resolve_home(&self, _m: &str) -> Result<String, String> {
+        Err("unscripted resolve_home".into())
+    }
+    async fn resolve_user(&self, _m: &str) -> Result<String, String> {
+        Err("unscripted resolve_user".into())
+    }
+    async fn resolve_platform(&self, _m: &str) -> Result<Platform, String> {
+        Err("unscripted resolve_platform".into())
+    }
+    async fn control_rpc(
+        &self,
+        _m: &str,
+        _method: &str,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err("unscripted control_rpc".into())
+    }
+    fn spawn_interactive(
+        &self,
+        _m: &str,
+        _b: &str,
+        _a: &[String],
+        _c: &str,
+        _e: &std::collections::HashMap<String, String>,
+    ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+        Err("unscripted spawn_interactive".into())
+    }
+}
+
+async fn share_caches(exec: &CacheShareExec, windows_host: bool) -> Vec<String> {
+    share_dependency_caches(exec, "m-dev", "/repo", "/wt", "/cache", windows_host).await;
+    exec.seen()
+}
+
+/// The link is what a commit can see, and the exclusion is the only thing that
+/// keeps it out of one — so a link that precedes a *successful* exclusion write
+/// is as wrong as one that follows a failed one.
+#[tokio::test]
+async fn a_cache_is_linked_only_after_its_exclusion_has_landed() {
+    let exec = CacheShareExec::new(true);
+    let seen = share_caches(&exec, false).await;
+    assert_eq!(
+        seen,
+        vec![
+            "probe".to_string(),
+            "git -C /repo rev-parse --absolute-git-dir".to_string(),
+            "read_file /repo/.git/info/exclude".to_string(),
+            "write_file /repo/.git/info/exclude".to_string(),
+            "link".to_string(),
+        ],
+    );
+}
+
+/// The failure this ordering exists for: an unwritable exclude file degrades to
+/// no sharing, never to a symlink to an absolute host path on the branch.
+#[tokio::test]
+async fn an_unwritable_exclude_file_stops_the_link() {
+    let exec = CacheShareExec::new(false);
+    let seen = share_caches(&exec, false).await;
+    assert!(
+        seen.contains(&"write_file /repo/.git/info/exclude".to_string()),
+        "the exclusion was attempted: {seen:?}"
+    );
+    assert!(
+        !seen.contains(&"link".to_string()),
+        "no link may follow an exclusion that did not land: {seen:?}"
+    );
+}
+
+/// Windows-local shares no caches — `ln -s` under Git for Windows silently
+/// copies without the privilege, and a junction is followed by git's walk. The
+/// exclusions are still written, so a commit sees the same files everywhere.
+#[tokio::test]
+async fn a_windows_local_worktree_is_excluded_but_never_linked() {
+    let exec = CacheShareExec::new(true);
+    let seen = share_caches(&exec, true).await;
+    assert!(
+        seen.contains(&"write_file /repo/.git/info/exclude".to_string()),
+        "steps 1 and 2 run on every platform: {seen:?}"
+    );
+    assert!(
+        !seen.contains(&"link".to_string()),
+        "a whole node_modules per step is what this skip avoids: {seen:?}"
+    );
+}
+
+/// The last component of a detached baseline worktree, which is what git
+/// replays: the leading directories are physical in git's answer and logical
+/// here, and on macOS `/var` and `/private/var` name the same directory and
+/// compare unequal.
+fn baseline_suffix(repo: &str) -> String {
+    std::path::Path::new(&worktree_dir_on(repo, "baseline", "local"))
+        .file_name()
+        .expect("a worktree directory has a name")
+        .to_string_lossy()
+        .into_owned()
 }

@@ -43,6 +43,7 @@ impl ExecutionDriver {
             // A task turn is real agent work: it inherits the step's effort.
             effort: Some(target.effort),
             title: Some(title.to_string()),
+            platform: target.platform,
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),

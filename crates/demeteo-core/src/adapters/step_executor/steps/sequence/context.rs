@@ -34,7 +34,7 @@
 
 use std::time::Instant;
 
-use crate::domain::models::{EffortLevel, StepConfig, StepExecution};
+use crate::domain::models::{EffortLevel, Platform, StepConfig, StepExecution};
 use crate::domain::sequence::tasks::{PlanKind, PlannedTask};
 
 use super::prompt::CompletedTask;
@@ -77,6 +77,14 @@ pub(crate) struct RunTarget<'a> {
     pub override_model: Option<&'a str>,
     /// The reasoning effort a task turn inherits.
     pub effort: EffortLevel,
+    /// What OS `machine` runs, as the execution port answered — `None` when it
+    /// declined to say.
+    ///
+    /// Every prompt this step builds needs it (`domain::platform_context`) and
+    /// so does every session it spawns, so it is resolved with the rest of the
+    /// target rather than per stage: the planner and the tasks disagreeing
+    /// about the OS is not a state worth being able to reach.
+    pub platform: Option<Platform>,
 }
 
 /// The feature-wide spend totals, plus when this step started.

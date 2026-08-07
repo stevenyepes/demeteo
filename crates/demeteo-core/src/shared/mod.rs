@@ -13,11 +13,13 @@
 //! the codebase compiling during the migration. Those re-exports will
 //! be removed in Phase F.
 
+pub mod fs_remove;
 pub mod ids;
 pub mod proc;
 pub mod secret_scrub;
 pub mod shell;
 pub mod time;
+pub mod win;
 
 // `paths.rs` lives at the crate root for now (Phase A migration).
 // During Phase D it will move here as a sibling.

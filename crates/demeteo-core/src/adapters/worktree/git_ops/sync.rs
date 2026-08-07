@@ -1,5 +1,4 @@
-use super::GitOpsHelper;
-use crate::paths;
+use super::{git_request, GitOpsHelper};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::worktree_ops::{SyncFailure, SyncOutcome};
 
@@ -28,17 +27,14 @@ impl GitOpsHelper {
         default_branch: &str,
     ) -> Result<(), String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let safe_branch = paths::shell_escape_posix(default_branch);
-        let safe_dir = paths::shell_escape_posix(repo_dir);
-
         // 1. Fetch the latest refs from origin. The fetch is best-effort:
         //    if origin is unreachable, we leave the local branch alone and
         //    warn via stderr (which the executor surfaces to the UI logs).
         let _ = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!("git -C {} fetch origin {}", safe_dir, safe_branch),
+                git_request(repo_dir, ["fetch", "origin", default_branch]),
             )
             .await;
 
@@ -49,13 +45,9 @@ impl GitOpsHelper {
         let tracking = format!("origin/{}", default_branch);
         let _ = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} rev-parse --verify {}",
-                    safe_dir,
-                    paths::shell_escape_posix(&tracking)
-                ),
+                git_request(repo_dir, ["rev-parse", "--verify", &tracking]),
             )
             .await
             .map_err(|_| {
@@ -83,11 +75,15 @@ impl GitOpsHelper {
         //    that keeps the local ref in sync.
         let fetch_outcome = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} fetch origin +{}:{}",
-                    safe_dir, safe_branch, safe_branch
+                git_request(
+                    repo_dir,
+                    [
+                        "fetch",
+                        "origin",
+                        &format!("+{default_branch}:{default_branch}"),
+                    ],
                 ),
             )
             .await;
@@ -99,7 +95,7 @@ impl GitOpsHelper {
         // or origin is unreachable — step 1 is best-effort). Try the
         // safe fallback that updates the local ref together with HEAD
         // and the working tree when the checkout state allows it.
-        self.fast_forward_local_default_safe(machine_str, &safe_dir, default_branch, &tracking)
+        self.fast_forward_local_default_safe(machine_str, repo_dir, default_branch, &tracking)
             .await
     }
 
@@ -127,22 +123,19 @@ impl GitOpsHelper {
     async fn fast_forward_local_default_safe(
         &self,
         machine_str: &str,
-        safe_dir: &str,
+        repo_dir: &str,
         default_branch: &str,
         tracking: &str,
     ) -> Result<(), String> {
         let head_branch = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!("git -C {} rev-parse --abbrev-ref HEAD", safe_dir),
+                git_request(repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"]),
             )
             .await
             .map(|s| s.trim().to_string())
             .unwrap_or_default();
-
-        let safe_default = paths::shell_escape_posix(default_branch);
-        let safe_tracking = paths::shell_escape_posix(tracking);
 
         if head_branch != default_branch {
             // HEAD is on a non-default branch (a feature branch the
@@ -152,11 +145,15 @@ impl GitOpsHelper {
             // is safe.
             return self
                 .exec
-                .run_command(
+                .run_program(
                     machine_str,
-                    &format!(
-                        "git -C {} update-ref refs/heads/{} {}",
-                        safe_dir, safe_default, safe_tracking
+                    git_request(
+                        repo_dir,
+                        [
+                            "update-ref",
+                            &format!("refs/heads/{default_branch}"),
+                            tracking,
+                        ],
                     ),
                 )
                 .await
@@ -176,12 +173,9 @@ impl GitOpsHelper {
         // so HEAD, the index, and the working tree move together.
         let status_porcelain = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} status --porcelain --untracked-files=no",
-                    safe_dir
-                ),
+                git_request(repo_dir, ["status", "--porcelain", "--untracked-files=no"]),
             )
             .await
             .map(|s| s.trim().to_string())
@@ -190,11 +184,11 @@ impl GitOpsHelper {
         if !status_porcelain.is_empty() {
             let behind = self
                 .exec
-                .run_command(
+                .run_program(
                     machine_str,
-                    &format!(
-                        "git -C {} rev-list --count HEAD..{}",
-                        safe_dir, safe_tracking
+                    git_request(
+                        repo_dir,
+                        ["rev-list", "--count", &format!("HEAD..{tracking}")],
                     ),
                 )
                 .await
@@ -214,9 +208,9 @@ impl GitOpsHelper {
         // commits (so origin isn't strictly ahead), `--ff-only` rejects
         // it and we surface the underlying error verbatim.
         self.exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!("git -C {} merge --ff-only {}", safe_dir, safe_tracking),
+                git_request(repo_dir, ["merge", "--ff-only", tracking]),
             )
             .await
             .map(|_| ())
@@ -249,12 +243,8 @@ impl GitOpsHelper {
         default_branch: &str,
     ) -> Result<SyncOutcome, SyncFailure> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let safe_dir = paths::shell_escape_posix(repo_dir);
-        let safe_default = paths::shell_escape_posix(default_branch);
-
         let tracking = format!("origin/{}", default_branch);
         let feat_ref = format!("refs/heads/{}", feature_branch);
-        let safe_feat_ref = paths::shell_escape_posix(&feat_ref);
 
         // 1. Refresh remote refs. We use `git fetch <remote> <branch>`
         //    so the local `refs/remotes/origin/<default>` ref is
@@ -264,9 +254,9 @@ impl GitOpsHelper {
         //    `origin/<default>` was used as the merge source.
         let fetch_outcome = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!("git -C {} fetch origin {}", safe_dir, safe_default),
+                git_request(repo_dir, ["fetch", "origin", default_branch]),
             )
             .await;
         if let Err(fetch_err) = fetch_outcome {
@@ -288,13 +278,9 @@ impl GitOpsHelper {
         //    that as a config error rather than a silent no-op.
         if self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} rev-parse --verify {}",
-                    safe_dir,
-                    paths::shell_escape_posix(&tracking)
-                ),
+                git_request(repo_dir, ["rev-parse", "--verify", &tracking]),
             )
             .await
             .is_err()
@@ -314,23 +300,18 @@ impl GitOpsHelper {
         //    directly instead of `HEAD` to avoid touching the shared checkout.
         let head_before = self
             .exec
-            .run_command(
-                machine_str,
-                &format!("git -C {} rev-parse {}", safe_dir, safe_feat_ref),
-            )
+            .run_program(machine_str, git_request(repo_dir, ["rev-parse", &feat_ref]))
             .await
             .ok()
             .map(|s| s.trim().to_string())
             .unwrap_or_default();
         let _behind_count = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} rev-list --count {}..{}",
-                    safe_dir,
-                    paths::shell_escape_posix(&tracking),
-                    safe_feat_ref,
+                git_request(
+                    repo_dir,
+                    ["rev-list", "--count", &format!("{tracking}..{feat_ref}")],
                 ),
             )
             .await
@@ -339,13 +320,11 @@ impl GitOpsHelper {
             .unwrap_or(0);
         let ahead_count = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} rev-list --count {}..{}",
-                    safe_dir,
-                    safe_feat_ref,
-                    paths::shell_escape_posix(&tracking),
+                git_request(
+                    repo_dir,
+                    ["rev-list", "--count", &format!("{feat_ref}..{tracking}")],
                 ),
             )
             .await
@@ -373,16 +352,18 @@ impl GitOpsHelper {
                 raw_error: e,
                 worktree_path: None,
             })?;
-        let safe_wt = paths::shell_escape_posix(&wt_path);
         let merge_out = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} merge {} -m \"chore(sync): sync feature with origin/{}\"",
-                    safe_wt,
-                    paths::shell_escape_posix(&tracking),
-                    default_branch
+                git_request(
+                    &wt_path,
+                    [
+                        "merge",
+                        &tracking,
+                        "-m",
+                        &format!("chore(sync): sync feature with origin/{default_branch}"),
+                    ],
                 ),
             )
             .await;
@@ -391,7 +372,7 @@ impl GitOpsHelper {
             Ok(_) => {
                 let head_after = self
                     .exec
-                    .run_command(machine_str, &format!("git -C {} rev-parse HEAD", safe_wt))
+                    .run_program(machine_str, git_request(&wt_path, ["rev-parse", "HEAD"]))
                     .await
                     .ok()
                     .map(|s| s.trim().to_string())
@@ -400,12 +381,14 @@ impl GitOpsHelper {
 
                 if changed {
                     // Push the successful clean merge to origin so remote MR is updated
-                    let push_cmd = format!(
-                        "git -C {} push origin {}",
-                        safe_wt,
-                        paths::shell_escape_posix(feature_branch)
-                    );
-                    if let Err(push_err) = self.exec.run_command(machine_str, &push_cmd).await {
+                    if let Err(push_err) = self
+                        .exec
+                        .run_program(
+                            machine_str,
+                            git_request(&wt_path, ["push", "origin", feature_branch]),
+                        )
+                        .await
+                    {
                         return Err(SyncFailure {
                             files: Vec::new(),
                             raw_error: format!(
@@ -440,18 +423,15 @@ impl GitOpsHelper {
         if wt_path != repo_dir && result.is_ok() {
             let _ = self
                 .exec
-                .run_command(
+                .run_program(
                     machine_str,
-                    &format!("git -C {} worktree remove --force {}", safe_dir, safe_wt),
+                    git_request(repo_dir, ["worktree", "remove", "--force", &wt_path]),
                 )
                 .await;
+            let _ = self.exec.remove_dir_all(machine_str, &wt_path).await;
             let _ = self
                 .exec
-                .run_command(machine_str, &format!("rm -rf {}", safe_wt))
-                .await;
-            let _ = self
-                .exec
-                .run_command(machine_str, &format!("git -C {} worktree prune", safe_dir))
+                .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
                 .await;
         }
 
@@ -483,65 +463,47 @@ impl GitOpsHelper {
             return Ok(repo_dir.to_string());
         }
 
-        let safe_dir = paths::shell_escape_posix(repo_dir);
-
         // Clean up any stale sync worktrees checked out on this branch
         if let Ok(worktrees) = self.list_worktrees(Some(machine_str), repo_dir).await {
             for wt in worktrees {
                 if wt.branch.as_deref() == Some(feature_branch) && wt.path.contains("_wt_sync") {
-                    let safe_wt_path = paths::shell_escape_posix(&wt.path);
                     let _ = self
                         .exec
-                        .run_command(
+                        .run_program(
                             machine_str,
-                            &format!(
-                                "git -C {} worktree remove --force {}",
-                                safe_dir, safe_wt_path
-                            ),
+                            git_request(repo_dir, ["worktree", "remove", "--force", &wt.path]),
                         )
                         .await;
-                    let _ = self
-                        .exec
-                        .run_command(machine_str, &format!("rm -rf {}", safe_wt_path))
-                        .await;
+                    let _ = self.exec.remove_dir_all(machine_str, &wt.path).await;
                 }
             }
             let _ = self
                 .exec
-                .run_command(machine_str, &format!("git -C {} worktree prune", safe_dir))
+                .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
                 .await;
         }
 
         // Use a deterministic path for this feature branch's sync worktree
         let wt_path = format!("{}_wt_sync_{}", repo_dir, feature_branch.replace('/', "_"));
-        let safe_wt = paths::shell_escape_posix(&wt_path);
 
         // Force remove any pre-existing worktree at that path to avoid collisions
         let _ = self
             .exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!("git -C {} worktree remove --force {}", safe_dir, safe_wt),
+                git_request(repo_dir, ["worktree", "remove", "--force", &wt_path]),
             )
             .await;
+        let _ = self.exec.remove_dir_all(machine_str, &wt_path).await;
         let _ = self
             .exec
-            .run_command(machine_str, &format!("rm -rf {}", safe_wt))
-            .await;
-        let _ = self
-            .exec
-            .run_command(machine_str, &format!("git -C {} worktree prune", safe_dir))
+            .run_program(machine_str, git_request(repo_dir, ["worktree", "prune"]))
             .await;
 
         self.exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} worktree add {} {}",
-                    safe_dir,
-                    safe_wt,
-                    paths::shell_escape_posix(feature_branch)
-                ),
+                git_request(repo_dir, ["worktree", "add", &wt_path, feature_branch]),
             )
             .await
             .map_err(|e| {
@@ -566,12 +528,9 @@ pub(crate) async fn parse_unmerged_files(
     repo_dir: &str,
 ) -> Vec<crate::domain::models::ConflictFile> {
     let raw = match exec
-        .run_command(
+        .run_program(
             machine_id,
-            &format!(
-                "git -C {} status --porcelain --untracked-files=no",
-                paths::shell_escape_posix(repo_dir)
-            ),
+            git_request(repo_dir, ["status", "--porcelain", "--untracked-files=no"]),
         )
         .await
     {

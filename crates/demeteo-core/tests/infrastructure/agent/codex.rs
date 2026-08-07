@@ -13,6 +13,7 @@ use crate::adapters::agent::codex::{
 use crate::adapters::agent::test_stubs::{StubAgentExec, StubExec};
 use crate::domain::action::ActionKind;
 use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus};
+use crate::domain::models::Platform;
 use crate::domain::permission::{PermissionProfile, StepCapability};
 use crate::ports::agent_runtime::AgentContext;
 use std::collections::HashMap;
@@ -222,6 +223,7 @@ fn ctx_with(model: Option<&str>, perms: PermissionProfile) -> AgentContext {
         model: model.map(|s| s.to_string()),
         effort: None,
         title: None,
+        platform: None,
         agent_exec: Arc::new(StubAgentExec),
         exec: Arc::new(StubExec),
         permissions: perms,
@@ -229,6 +231,13 @@ fn ctx_with(model: Option<&str>, perms: PermissionProfile) -> AgentContext {
         tool_allowlist: None,
         max_turns: None,
         max_budget_usd: None,
+    }
+}
+
+fn ctx_on(platform: Option<Platform>, perms: PermissionProfile) -> AgentContext {
+    AgentContext {
+        platform,
+        ..ctx_with(None, perms)
     }
 }
 
@@ -282,6 +291,33 @@ fn args_read_only_capability_selects_read_only_sandbox() {
     );
     // read-only → no network escalation.
     assert!(!args.iter().any(|a| a.contains("network_access")));
+}
+
+/// The platform reaches [`build_codex_args`] but changes nothing yet, and this
+/// is the guard that keeps it that way until someone means to change it: a
+/// Windows desktop and a Linux one must produce the same argv from the same
+/// profile. Whether codex enforces a sandbox on Windows is unobserved
+/// (`SandboxSupport::for_agent`), and an unobserved answer must not reach a
+/// user's spawn.
+#[test]
+fn args_are_byte_identical_on_every_platform() {
+    for perms in [
+        PermissionProfile::all_allow(),
+        StepCapability::ReadOnly.base_profile(),
+    ] {
+        let baseline = build_codex_args(&ctx_on(None, perms), Some("sid"), "p");
+        assert!(
+            baseline.iter().any(|a| a.starts_with("sandbox_mode=")),
+            "identical-but-empty would pass vacuously: {baseline:?}",
+        );
+        for platform in Platform::ALL {
+            assert_eq!(
+                build_codex_args(&ctx_on(Some(platform), perms), Some("sid"), "p"),
+                baseline,
+                "{platform} diverged",
+            );
+        }
+    }
 }
 
 #[test]

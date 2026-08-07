@@ -40,7 +40,9 @@ pub struct CommandProbeReport {
     /// showing the panel, and an indicator that does not say where it looked is
     /// a lie on exactly those projects.
     pub machine: String,
-    /// Every configured command, in [`labelled_commands`] order.
+    /// Every configured command, in [`labelled_commands`] order — and empty
+    /// when the probe never ran, so the panel renders "not checked" rather
+    /// than an answer nobody gave.
     pub commands: Vec<ProbedCommand>,
     /// [`PreflightVerdict::detail`] verbatim — the same string a blocked launch
     /// terminates with, carrying the `bash -l -i -c` reproduce line. Rendered
@@ -73,21 +75,28 @@ pub fn attribute_verdict(
         _ => NONE,
     };
 
-    let commands = labelled_commands(strategy)
-        .into_iter()
-        .map(|(source, harness, command)| ProbedCommand {
-            source,
-            harness: harness.map(str::to_string),
-            command: command.to_string(),
-            binaries: probeable_binaries(&[command])
-                .into_iter()
-                .map(|name| ProbedBinary {
-                    resolved: !missing.contains(&name),
-                    name,
-                })
-                .collect(),
-        })
-        .collect();
+    // An empty `missing` set means "everything resolved" on every other
+    // verdict. On this one it means the shell that would have answered does not
+    // exist, so attributing it per command would paint the whole panel healthy
+    // at the exact moment nothing can run.
+    let commands = match verdict {
+        PreflightVerdict::MissingPosixShell => Vec::new(),
+        _ => labelled_commands(strategy)
+            .into_iter()
+            .map(|(source, harness, command)| ProbedCommand {
+                source,
+                harness: harness.map(str::to_string),
+                command: command.to_string(),
+                binaries: probeable_binaries(&[command])
+                    .into_iter()
+                    .map(|name| ProbedBinary {
+                        resolved: !missing.contains(&name),
+                        name,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
 
     CommandProbeReport {
         machine: machine.to_string(),

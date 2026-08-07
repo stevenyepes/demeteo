@@ -435,6 +435,45 @@ stream.
 
 <!-- EXAMPLE: new -->
 
+### 5.2.1 Capturing the raw stream (`DEMETEO_AGENT_TRACE`)
+
+"Unknown event types are silently dropped" is the sentence above that costs you
+an investigation. Everything an agent *did* — codex's `command_execution` items,
+banners, stderr that a remote PTY interleaved into stdout — is read off the wire
+and discarded, so after a turn misbehaves there is no way to tell whether the
+cause was the environment Demeteo forwarded, the prompt it built, or the
+harness's own sandbox. Set the variable and the drain loop also writes each line
+verbatim:
+
+```bash
+DEMETEO_AGENT_TRACE=~/demeteo-traces npm run dev:tauri
+```
+
+One file per turn, `<agent>-<thread id>.turn003.jsonl`, so a step's turns sort in
+order and a session's files group together. The variable is read by the desktop
+process, not by the agent, so it captures **remote turns too** — the drain is
+host-side on both transports, and the files land on the desktop either way.
+
+Values are put through the same scrubber the run-event log uses, so a capture is
+shareable, but it is otherwise unabridged model output and is written only where
+you asked for it. Unset — or set to an empty string, which is how a variable is
+unset in a profile or a CI matrix — nothing is opened or written. A capture that
+cannot be written degrades to a debug log; a turn never fails because tracing
+did.
+
+**What to look for**, in the order that has been useful:
+
+| Question | What in the capture answers it |
+|---|---|
+| Did the agent run something that does not exist on this OS? | The literal argv of each tool call, which no `AgentEvent` carries |
+| Did the agent rewrite a configured gate command? | Compare the command it ran against the one the prompt quoted — a translated command is the failure `docs/WINDOWS_PARITY.md` predicts, and this is the only place it is visible |
+| Did the harness reject something Demeteo sent it? | Lines `parse_event` returned `None` for. An unsupported CLI flag is usually announced on the same stream and then dropped as an unknown type |
+| Did an "empty successful turn" have output at all? | An `exit 0` with an empty capture is a spawn or flag problem; a full capture with no `TurnComplete` is a parser problem |
+
+The third row is the standing open question for codex on Windows —
+`docs/WINDOWS_PARITY.md` records what one capture would settle and what changes
+if it does.
+
 ### 5.3 Cross-step session continuity
 
 A multi-step feature run uses one session id across all `agent` steps:

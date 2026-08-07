@@ -75,20 +75,42 @@ pub(crate) fn parse_spec(step: &StepConfig) -> Result<CommandSpec, String> {
     })
 }
 
-/// A command's cwd may not leave the worktree it was handed. Absolute
+/// A command's cwd may not leave the worktree it was handed. Rooted
 /// paths, `~`, and any `..` segment are refused: the node runs in a
 /// disposable worktree precisely so its blast radius is bounded, and a
 /// cwd that climbs out of it silently un-bounds that.
+///
+/// The verdict is the same on every host OS. A workflow authored on one
+/// desktop is linted on another and executed by an always-Linux runner, so
+/// a cwd Windows would resolve outside the worktree has to be refused
+/// wherever it is read — which rules out [`std::path::Path::is_absolute`],
+/// whose answer is `cfg`-dependent: on Unix it reads `C:\Windows` as a
+/// relative directory named `C:`.
 pub(crate) fn validate_relative_cwd(dir: &str) -> Result<(), String> {
-    if dir.starts_with('/') || dir.starts_with('~') {
-        return Err(format!(
-            "`cwd` must be worktree-relative, got absolute path '{dir}'"
-        ));
+    if dir.starts_with('~') || is_rooted(dir) {
+        return Err(format!("`cwd` must be worktree-relative, got '{dir}'"));
     }
-    if dir.split('/').any(|seg| seg == "..") {
+    if dir.split(is_separator).any(|seg| seg == "..") {
         return Err(format!("`cwd` must not escape the worktree, got '{dir}'"));
     }
     Ok(())
+}
+
+fn is_separator(c: char) -> bool {
+    c == '/' || c == '\\'
+}
+
+/// Every spelling of "this path does not start at the directory it was
+/// handed": POSIX absolute, both UNC forms, the Windows current-drive root
+/// `\x`, and a drive prefix — including bare `C:foo`, which Windows resolves
+/// against that drive's own working directory rather than this one.
+fn is_rooted(dir: &str) -> bool {
+    let mut chars = dir.chars();
+    match (chars.next(), chars.next()) {
+        (Some(first), _) if is_separator(first) => true,
+        (Some(drive), Some(':')) => drive.is_ascii_alphabetic(),
+        _ => false,
+    }
 }
 
 #[cfg(test)]

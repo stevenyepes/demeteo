@@ -18,6 +18,31 @@ pub const FRESH_CHECKOUT_REMEDIATION: &str =
      prepare command; if it hangs, it is most likely a watch-mode runner, which never \
      exits.";
 
+/// Why a machine that unquestionably has Git still cannot run one configured
+/// command, and what to install so that it can.
+///
+/// Whoever meets this has a working git — every clone and fetch Demeteo made on
+/// this machine went through it — so a bare "no shell found" reads as nonsense
+/// and sends them auditing a `PATH` that is fine. The cause is narrower than
+/// that and has a name, so the text says the name.
+///
+/// One constant for the reason [`FRESH_CHECKOUT_REMEDIATION`] is one: the
+/// launch refusal and the settings panel render the identical sentence, and a
+/// second copy would drift until the two disagreed about which install is
+/// broken.
+pub const MISSING_POSIX_SHELL_REMEDIATION: &str =
+    "Git is installed on this machine, but Git Bash is not — so there is no POSIX shell to run \
+     the project's commands with. Demeteo runs one POSIX script body on every platform, and on \
+     Windows that body needs the bash the full Git for Windows package installs. A MinGit \
+     install — the trimmed git that some tools bundle — ships git.exe without it, which is why \
+     nothing else has complained. The run is stopped here because nothing downstream can supply \
+     a missing interpreter: the validate step would fail on the same thing after the whole \
+     implementation had been paid for.\n\
+     Install Git for Windows from https://git-scm.com/download/win with its default options, \
+     then check again. If bash is already installed somewhere the search does not look, set \
+     DEMETEO_BASH_PATH to its full path (…\\bin\\bash.exe) and Demeteo will use that instead of \
+     searching.";
+
 /// What the preflight established about a project's configured commands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreflightVerdict {
@@ -38,12 +63,22 @@ pub enum PreflightVerdict {
     /// downstream can turn "not installed" into a passing harness, and every
     /// step until `s-validate` would be paid for before anyone found out.
     MissingBinaries { missing: Vec<String> },
+    /// There is no POSIX shell on the machine to run any configured command
+    /// with. Blocks for the same reason [`MissingBinaries`] does, and one step
+    /// earlier: the probe could not even ask, so no command has a verdict and
+    /// none can be given one downstream.
+    ///
+    /// [`MissingBinaries`]: PreflightVerdict::MissingBinaries
+    MissingPosixShell,
 }
 
 impl PreflightVerdict {
     /// Whether the launch may proceed.
     pub fn permits_launch(&self) -> bool {
-        !matches!(self, PreflightVerdict::MissingBinaries { .. })
+        !matches!(
+            self,
+            PreflightVerdict::MissingBinaries { .. } | PreflightVerdict::MissingPosixShell
+        )
     }
 
     /// The error the feature terminates with, or `None` to proceed.
@@ -73,7 +108,9 @@ impl PreflightVerdict {
             // harness", which is information the user may want to act on.
             PreflightVerdict::NotConfigured => "skipped",
             PreflightVerdict::Resolved { .. } => "completed",
-            PreflightVerdict::MissingBinaries { .. } => "failed",
+            PreflightVerdict::MissingBinaries { .. } | PreflightVerdict::MissingPosixShell => {
+                "failed"
+            }
         }
     }
 
@@ -114,6 +151,9 @@ impl PreflightVerdict {
                 them = if missing.len() == 1 { "it" } else { "them" },
                 first = missing.first().map(String::as_str).unwrap_or(""),
             )),
+            PreflightVerdict::MissingPosixShell => {
+                Some(MISSING_POSIX_SHELL_REMEDIATION.to_string())
+            }
         }
     }
 }

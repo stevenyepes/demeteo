@@ -173,6 +173,190 @@ pub async fn repo_target_dir_str(
     .map(|p| p.to_string_lossy().to_string())
 }
 
+/// Whether an operation aimed at `machine_id` lands on a Windows filesystem.
+///
+/// A remote machine is Linux (R2, `docs/REMOTE_EXECUTION.md`), so only the local
+/// machine can be the Windows one — a Windows desktop driving a remote must
+/// still emit the POSIX form. Anything that branches on "is this Windows" needs
+/// *both* halves; branching on `cfg!(windows)` alone is the shape that sends a
+/// `chmod` to Linux or a `MAX_PATH` workaround to a machine with no `MAX_PATH`.
+///
+/// # The injected-flag convention
+///
+/// `host_is_windows` is the caller's `cfg!(windows)`, passed rather than read so
+/// both answers are reachable from a test on either platform. Every path
+/// function below takes a `windows_host` on the same terms — it is *this*
+/// function's answer, handed in. None of them may start deriving it from a
+/// `machine_id` of its own: that puts one half of the behaviour behind a `cfg`
+/// again, in the functions whose whole purpose is to stop a caller guessing
+/// which platform owns a path.
+pub fn windows_host_target(host_is_windows: bool, machine_id: &str) -> bool {
+    host_is_windows && crate::domain::ids::MachineId::from(machine_id).is_local()
+}
+
+/// [`windows_host_target`] against this build's platform.
+pub fn targets_windows_host(machine_id: &str) -> bool {
+    windows_host_target(cfg!(windows), machine_id)
+}
+
+/// `path` as the host that owns it spells it, whoever reported it.
+///
+/// # One directory, three spellings
+///
+/// On Windows the same location reaches Demeteo under three names, from three
+/// producers: `C:\Users\…` from a [`PathBuf`], `C:/Users/…` from git, which
+/// reports forward slashes on every platform, and `/c/Users/…` from anything
+/// that has been through Git Bash — `pwd` inside a shell answers in that MSYS
+/// form, and `git_ops::worktree`'s terminal-worktree creation reads a path out
+/// of one.
+///
+/// The MSYS form is not merely a third spelling to tolerate. No Win32 call
+/// accepts it, so it is a path that names nothing: a terminal opened there
+/// fails, and so does every `std::fs` call. It is converted here, at the
+/// boundary it enters through, rather than tolerated at each comparison
+/// downstream.
+///
+/// `windows_host` per the [`windows_host_target`] convention. It must be false
+/// for a remote target even on a Windows desktop: there `/c/anything` is an
+/// ordinary directory and rewriting it would invent a drive.
+pub fn native_path(path: &str, windows_host: bool) -> PathBuf {
+    if !windows_host {
+        return PathBuf::from(path);
+    }
+    let drive = match path.as_bytes() {
+        [b'/', drive, rest @ ..]
+            if drive.is_ascii_alphabetic() && matches!(rest, [] | [b'/', ..]) =>
+        {
+            Some(drive.to_ascii_uppercase() as char)
+        }
+        _ => None,
+    };
+    let spelled = match drive {
+        Some(drive) => format!("{drive}:\\{}", path[2..].trim_start_matches('/')),
+        None => path.to_string(),
+    };
+    PathBuf::from(spelled.replace('/', "\\"))
+}
+
+/// Whether `path` is absolute under the rules of the host that owns it.
+///
+/// [`std::path::Path::is_absolute`] answers for the platform this was
+/// *compiled* for, which is the wrong question for every path belonging to
+/// another host. A Windows desktop driving a Linux machine reads `/srv/…` back
+/// from it; `Path::is_absolute` calls that relative, because Windows wants a
+/// drive letter or a UNC prefix — so a caller filtering on it silently discards
+/// the one answer the target gave, and falls back to whatever it guessed.
+///
+/// `windows_host` per the [`windows_host_target`] convention.
+pub fn is_absolute_on(path: &str, windows_host: bool) -> bool {
+    fn separator(byte: u8) -> bool {
+        byte == b'/' || byte == b'\\'
+    }
+    if !windows_host {
+        return path.starts_with('/');
+    }
+    let bytes = path.as_bytes();
+    matches!(bytes, [first, second, ..] if separator(*first) && separator(*second))
+        || matches!(bytes, [drive, b':', sep, ..] if drive.is_ascii_alphabetic() && separator(*sep))
+}
+
+/// Whether `path` reads as absolute under *either* platform's rules.
+///
+/// For paths recovered from text whose producing host is not knowable where it
+/// is read: one path manifest carries artifact paths written by the desktop
+/// alongside worktree paths belonging to the machine the step runs on, so
+/// neither platform's rules alone recognise all of them. What the path *is* —
+/// a file here, a directory over there — is then settled by asking, not by the
+/// spelling.
+pub fn looks_absolute(path: &str) -> bool {
+    is_absolute_on(path, false) || is_absolute_on(path, true)
+}
+
+/// `base` with `components` appended, spelled with the separator the host that
+/// owns `base` uses.
+///
+/// [`std::path::Path::join`] writes the separator of the platform this was
+/// *compiled* for, so a Windows desktop composing a path inside a Linux
+/// worktree produces `/home/u/wt\artifacts\_context` — a single directory whose
+/// name contains backslashes, which SFTP creates without complaint and no later
+/// lookup ever finds again.
+///
+/// `windows_host` per the [`windows_host_target`] convention.
+pub fn join_on<'a>(
+    base: &str,
+    components: impl IntoIterator<Item = &'a str>,
+    windows_host: bool,
+) -> String {
+    let separator = if windows_host { '\\' } else { '/' };
+    let mut joined = base.trim_end_matches(['/', '\\']).to_string();
+    for component in components {
+        joined.push(separator);
+        joined.push_str(component);
+    }
+    joined
+}
+
+/// Whether two spellings name one location.
+///
+/// Every caller of this is comparing a path git reported against one Demeteo
+/// built, so both go through [`native_path`] first and then through
+/// [`std::path::Path`]'s component equality — which a string comparison gets
+/// wrong at a trailing separator and at a doubled one.
+///
+/// Case-insensitive on a Windows host, as NTFS is. A drive letter that arrived
+/// lowercased — every MSYS path does — must not fork one directory into two.
+pub fn same_path(a: &str, b: &str, windows_host: bool) -> bool {
+    comparison_key(a, windows_host) == comparison_key(b, windows_host)
+}
+
+fn comparison_key(path: &str, windows_host: bool) -> PathBuf {
+    let native = native_path(path, windows_host);
+    if !windows_host {
+        return native;
+    }
+    // A trailing separator is folded away by [`std::path::Path`] only on a
+    // Windows *build*, so it cannot be left to whichever `Path` this was
+    // compiled against.
+    let mut key = native.to_string_lossy().to_ascii_lowercase();
+    while key.len() > 3 && key.ends_with('\\') {
+        key.pop();
+    }
+    PathBuf::from(key)
+}
+
+/// How many hex digits [`short_path_segment`] emits.
+pub const SHORT_SEGMENT_LEN: usize = 8;
+
+/// Fold an identifier into a fixed 8 hex digits for use as a path segment.
+///
+/// # Why not a prefix of the id
+///
+/// Demeteo's ids are `<tag><wall-clock millis>` (`p1781624953648`,
+/// `f-1781624953648-step-s-implement`). The first eight characters of that are
+/// the *high* digits of the timestamp, which change once every ~16 minutes — so
+/// a literal prefix collides between any two entities created in the same
+/// afternoon, and a collision here is two features sharing one worktree
+/// directory, which `test_provision_subtask_worktree_same_repo_two_features_do_not_collide`
+/// records as data loss rather than a name clash. The distinguishing bits are in
+/// the tail, so the whole id has to be read to keep them.
+///
+/// # Why FNV-1a rather than `DefaultHasher`
+///
+/// [`new_id`] can use `DefaultHasher` because its output only has to be unique
+/// within one process. This one names a directory that outlives the process: a
+/// worktree provisioned by one build is torn down by whichever build is running
+/// when the step ends, and `DefaultHasher`'s output is explicitly not stable
+/// across Rust releases. A stale directory nobody can name again is a leak that
+/// only a rebuild produces, which is the worst kind to find.
+pub fn short_path_segment(id: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{:08x}", (hash >> 32) as u32)
+}
+
 /// Extract the repository name (last `/`-separated segment) from a
 /// `repo_path` like `"prototype/spectacular"`.
 pub fn repo_name_from_path(repo_path: &str) -> String {
@@ -303,14 +487,16 @@ pub fn git_no_hooks(dir: &str) -> String {
 /// Important: a symlink standing in for a directory is NOT recognized
 /// by git as matching a trailing-slash `.gitignore` pattern (e.g.
 /// `node_modules/` matches a real directory but not a symlink named
-/// `node_modules`), so it shows up as untracked. Every place that
-/// stages files with `git add -A` (`commit_worktree_changes`) must
-/// pathspec-exclude these names — otherwise the symlink itself (an
-/// absolute host path) gets committed into the feature branch. Exclude
-/// only the names git does *not* already ignore, though: a pathspec
-/// naming an ignored path makes `git add` fail outright, and the
-/// slashless form of the same pattern (`node_modules`) does match the
-/// symlink. See `commit_worktree_changes` for the gate.
+/// `node_modules`), so a linked cache shows up as untracked and, left
+/// alone, an absolute host path gets committed onto the feature branch.
+/// The answer is a **slashless entry in the clone's own
+/// `.git/info/exclude`**, written by `git_ops::worktree` before any link
+/// is made — `node_modules` without the slash matches a symlink and a
+/// directory alike, so from `git add -A`'s point of view the entry is
+/// simply ignored and no pathspec is involved. Doing it there rather
+/// than at `git add` time is what keeps the answer the same on a
+/// platform that shares no caches at all: nothing is linked, nothing is
+/// excluded, and the same feature captures the same files.
 ///
 /// [`DECISIONS.md`]: https://github.com/stevenyepes/demeteo/blob/master/docs/DECISIONS.md
 pub const DEPENDENCY_CACHE_DIRS: &[&str] = &[

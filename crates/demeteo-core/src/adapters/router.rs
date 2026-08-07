@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::domain::models::Platform;
 use crate::ports::db::MachineRepository;
 use crate::ports::execution::SftpEntry;
-use crate::ports::execution::{ExecutionPort, InteractiveHandle, ShellOptions};
+use crate::ports::execution::{ExecutionPort, InteractiveHandle, ProgramRequest, ShellOptions};
 
 pub struct RouterExecutionPort {
     machines: Arc<dyn MachineRepository>,
@@ -47,6 +48,16 @@ impl ExecutionPort for RouterExecutionPort {
         self.resolve(machine_id)?.test_connection(machine_id).await
     }
 
+    async fn run_program(
+        &self,
+        machine_id: &str,
+        request: ProgramRequest,
+    ) -> Result<String, String> {
+        self.resolve(machine_id)?
+            .run_program(machine_id, request)
+            .await
+    }
+
     async fn run_command_with(
         &self,
         machine_id: &str,
@@ -82,6 +93,30 @@ impl ExecutionPort for RouterExecutionPort {
             .await
     }
 
+    async fn create_dir_all(&self, machine_id: &str, path: &str) -> Result<(), String> {
+        self.resolve(machine_id)?
+            .create_dir_all(machine_id, path)
+            .await
+    }
+
+    async fn remove_dir_all(&self, machine_id: &str, path: &str) -> Result<(), String> {
+        self.resolve(machine_id)?
+            .remove_dir_all(machine_id, path)
+            .await
+    }
+
+    async fn remove_file(&self, machine_id: &str, path: &str) -> Result<(), String> {
+        self.resolve(machine_id)?
+            .remove_file(machine_id, path)
+            .await
+    }
+
+    async fn is_executable(&self, machine_id: &str, path: &str) -> Result<bool, String> {
+        self.resolve(machine_id)?
+            .is_executable(machine_id, path)
+            .await
+    }
+
     async fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String> {
         self.resolve(machine_id)?
             .get_metadata(machine_id, path)
@@ -106,6 +141,10 @@ impl ExecutionPort for RouterExecutionPort {
 
     async fn resolve_home(&self, machine_id: &str) -> Result<String, String> {
         self.resolve(machine_id)?.resolve_home(machine_id).await
+    }
+
+    async fn resolve_platform(&self, machine_id: &str) -> Result<Platform, String> {
+        self.resolve(machine_id)?.resolve_platform(machine_id).await
     }
 
     async fn resolve_user(&self, machine_id: &str) -> Result<String, String> {

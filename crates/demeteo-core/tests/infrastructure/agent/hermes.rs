@@ -26,6 +26,7 @@ fn ctx_for_test() -> AgentContext {
         model: Some("claude-sonnet-4".into()),
         effort: None,
         title: None,
+        platform: None,
         agent_exec: Arc::new(StubAgentExec),
         exec: Arc::new(StubExec),
         permissions: PermissionProfile::all_allow(),

@@ -31,13 +31,18 @@ pub async fn build_agent_context(
         .find(|m| m.id == thread.machine_id)
         .ok_or_else(|| format!("Machine not found: {}", thread.machine_id))?;
 
-    let cwd = thread.sandbox_path.clone().unwrap_or_else(|| {
-        if machine.auth_type == "local" || thread.machine_id.is_empty() {
-            std::env::var("HOME").unwrap_or_else(|_| ".".into())
-        } else {
-            ".".into()
-        }
-    });
+    // No sandbox: the session runs in the machine's home, never in the
+    // GUI process's cwd — that is the app bundle, and on Windows often
+    // a system directory the agent would then write into.
+    let cwd = match thread.sandbox_path.clone() {
+        Some(path) => path,
+        None if machine.auth_type == "local" || thread.machine_id.is_empty() => ctx
+            .exec
+            .resolve_home(machine.id.0.as_str())
+            .await
+            .map_err(|e| format!("Cannot resolve a working directory for this session: {}", e))?,
+        None => ".".into(),
+    };
     let binary = agent_kind.to_string();
     // Machine-aware HOME: the local-auth interactive terminal gets
     // the GUI's HOME; a remote machine gets the value cached on the
@@ -45,6 +50,11 @@ pub async fn build_agent_context(
     // `agent_base_env` for the full rationale.
     let env =
         crate::ports::agent_runtime::agent_base_env(ctx.exec.as_ref(), machine.id.0.as_str()).await;
+    let platform = crate::ports::agent_runtime::resolve_agent_platform(
+        ctx.exec.as_ref(),
+        machine.id.0.as_str(),
+    )
+    .await;
 
     Ok(crate::ports::agent_runtime::AgentContext {
         thread_id: thread_id.to_string(),
@@ -56,6 +66,7 @@ pub async fn build_agent_context(
         model: None,
         effort: None,
         title: None,
+        platform,
         agent_exec: ctx.agent_exec.clone(),
         exec: ctx.exec.clone(),
         permissions: crate::domain::permission::PermissionProfile::all_allow(),

@@ -1,7 +1,7 @@
 use crate::domain::branch_listing::BranchOption;
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use crate::ports::db::AppSettingsRepository;
-use crate::ports::execution::ExecutionPort;
+use crate::ports::execution::{ExecutionPort, ProgramRequest};
 use crate::ports::worktree_ops::{
     CommitMessageRejected, SquashOutcome, SyncFailure, SyncOutcome, TerminalWorktreeCreated,
     TerminalWorktreeRequest, WorktreeOpsPort,
@@ -34,6 +34,34 @@ impl GitOpsHelper {
     }
 }
 
+/// A `git -C <repo_dir> …` invocation.
+///
+/// **`core.autocrlf`, `core.eol` and `core.symlinks` must never appear as a
+/// `-c key=value` override here or at a call site.** All three decide how the
+/// index compares against the working tree, so an override present for one
+/// command and absent for the next makes every tracked file read as modified
+/// — opencode #27276, arrived at from the same reasoning that makes the
+/// override look correct. Here that answer is read by
+/// [`GitOpsHelper::verify_and_revert_out_of_scope_writes`], which would
+/// classify the entire tree as out of scope and `git checkout` away the work
+/// the step just did.
+///
+/// The line-ending answer is instead written **once**, persistently, into the
+/// clone's own config (`git_ops::clone`), where the index and the working tree
+/// are created agreeing with it and every linked worktree inherits it.
+pub(super) fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> ProgramRequest {
+    git_request_vec(repo_dir, args.into_iter().map(str::to_string).collect())
+}
+
+/// The variadic form of [`git_request`], whose forbidden overrides it shares.
+pub(super) fn git_request_vec(repo_dir: &str, args: Vec<String>) -> ProgramRequest {
+    ProgramRequest {
+        executable: "git".to_string(),
+        args: [vec!["-C".to_string(), repo_dir.to_string()], args].concat(),
+        ..ProgramRequest::default()
+    }
+}
+
 /// The branch a subtask worktree is checked out on.
 ///
 /// Provisioning, merge-back, cleanup, and the `ConflictDetected` payload all
@@ -53,6 +81,7 @@ pub(crate) mod scope;
 pub(crate) mod squash;
 pub(crate) mod strategy;
 pub(crate) mod sync;
+pub(crate) mod trusted;
 pub(crate) mod worktree;
 
 #[cfg(test)]

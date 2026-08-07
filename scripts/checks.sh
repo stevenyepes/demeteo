@@ -39,6 +39,12 @@ cd "$ROOT"
 
 step() { printf '\n\033[1;34m==>\033[0m %s\n' "$1"; }
 
+HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+RUNNER_SUPPORTED=1
+if [[ "$HOST_TRIPLE" == *-windows-* ]]; then
+  RUNNER_SUPPORTED=0
+fi
+
 step "TypeScript type-check (tsc --noEmit)"
 npx tsc --noEmit
 
@@ -66,7 +72,12 @@ step "Rust clippy (--all-targets -D warnings)"
 # Neither is reachable from clippy: it does not evaluate rustdoc lints, and no
 # lint reads a `//` comment at all.
 step "Rust doc links (cargo doc --no-deps)"
-cargo doc --no-deps -p demeteo-core -p demeteo-runner
+if [[ "$RUNNER_SUPPORTED" == 1 ]]; then
+  cargo doc --no-deps -p demeteo-core -p demeteo-runner
+else
+  cargo doc --no-deps -p demeteo-core
+  step "Runner docs — skipped (Linux-only binary; host: $HOST_TRIPLE)"
+fi
 
 step "Doc references + duplicate comment blocks"
 scripts/check-doc-refs.sh
@@ -78,7 +89,12 @@ step "Rust tests (cargo test)"
 # the demeteo package (cargo scopes to the cwd's package). Test them explicitly
 # so a change to either crate is actually exercised locally.
 step "Core + runner tests"
-cargo test -p demeteo-core -p demeteo-runner
+if [[ "$RUNNER_SUPPORTED" == 1 ]]; then
+  cargo test -p demeteo-core -p demeteo-runner
+else
+  cargo test -p demeteo-core
+  step "Runner tests — skipped (Linux-only binary; host: $HOST_TRIPLE)"
+fi
 
 if [ "${CHECKS_SKIP_COMMITLINT:-0}" = "1" ]; then
   step "Commitlint — skipped (CHECKS_SKIP_COMMITLINT=1)"

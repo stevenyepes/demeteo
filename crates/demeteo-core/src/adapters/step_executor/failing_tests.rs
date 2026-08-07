@@ -195,6 +195,9 @@ impl ExecutionDriver {
 
         let agent_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+        let platform =
+            crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), machine_str)
+                .await;
 
         let thread_id = format!("{}-testids", self.f_id_str);
         let binary = self
@@ -214,6 +217,7 @@ impl ExecutionDriver {
             // inheriting the run's effort (which may be `max`).
             effort: Some(crate::domain::models::EffortLevel::TRIAGE),
             title: Some("Read failing test ids".to_string()),
+            platform,
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),

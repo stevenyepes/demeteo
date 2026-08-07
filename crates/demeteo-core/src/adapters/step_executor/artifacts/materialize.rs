@@ -30,20 +30,21 @@ pub(crate) async fn materialize_user_attachments_to_worktree(
     if attachments.is_empty() {
         return Vec::new();
     }
-    let dest_root = std::path::Path::new(wt_path)
-        .join("artifacts")
-        .join("_context")
-        .join("attachments");
-    let dest_root_str = dest_root.to_string_lossy().to_string();
+    let windows_target = crate::paths::targets_windows_host(machine_id);
+    let dest_root_str = crate::paths::join_on(
+        wt_path,
+        ["artifacts", "_context", "attachments"],
+        windows_target,
+    );
     // Ensure the destination directory exists on the target machine
     // (works for both local and remote via the exec port). Fail loud
     // here so the caller surfaces the error instead of silently
     // shipping a prompt that points at files the agent can't read.
-    let mkdir_cmd = format!(
-        "mkdir -p {}",
-        crate::paths::shell_escape_posix(&dest_root_str)
-    );
-    if exec.run_command(machine_id, &mkdir_cmd).await.is_err() {
+    if exec
+        .create_dir_all(machine_id, &dest_root_str)
+        .await
+        .is_err()
+    {
         tracing::warn!(
             dest_root = %dest_root_str,
             machine_id = machine_id,
@@ -65,8 +66,11 @@ pub(crate) async fn materialize_user_attachments_to_worktree(
             );
             continue;
         }
-        let dest = dest_root.join(format!("{}.{}", att.sha256, ext));
-        let dest_str = dest.to_string_lossy().to_string();
+        let dest_str = crate::paths::join_on(
+            &dest_root_str,
+            [format!("{}.{}", att.sha256, ext).as_str()],
+            windows_target,
+        );
         // Idempotency check via exec.get_metadata so it dispatches
         // SFTP for remote and stat() for local — same primitive either
         // way. When the file already exists we sanity-check the size
@@ -84,7 +88,7 @@ pub(crate) async fn materialize_user_attachments_to_worktree(
                     tracing::warn!(
                         feature_id = feature_id,
                         src = %src_path.display(),
-                        dst = %dest.display(),
+                        dst = %dest_str,
                         src_bytes = src_len,
                         dst_bytes = dst_meta.size,
                         sha256 = %att.sha256,
@@ -144,6 +148,13 @@ pub(crate) async fn materialize_user_attachments_to_worktree(
 /// `{wt_path}/artifacts/_context/` and the path is rewritten
 /// in the returned prompt.
 ///
+/// One manifest carries paths from two hosts — the artifact store's, which is
+/// always the desktop's, and the worktree's, which is the step machine's — so
+/// what counts as absolute is [`crate::paths::looks_absolute`] rather than a
+/// leading `/`. A `/`-only test recognises nothing a Windows desktop wrote,
+/// which leaves every external artifact uncopied and every `Read` of one
+/// refused by the `external_directory: deny` fence.
+///
 /// `exec` and `machine_id` identify the target worktree's host — the
 /// write goes through the machine-aware exec port (SFTP for remote
 /// machines, `std::fs` for local) so the bytes actually land where the
@@ -159,6 +170,7 @@ pub(crate) async fn materialize_external_artifact_paths(
     machine_id: &str,
 ) -> String {
     let wt = std::path::Path::new(wt_path);
+    let windows_target = crate::paths::targets_windows_host(machine_id);
     let mut result = prompt.to_string();
     let mut rewrites: Vec<(String, String)> = Vec::new();
 
@@ -166,7 +178,7 @@ pub(crate) async fn materialize_external_artifact_paths(
     let mut search = prompt;
     while let Some(tick_pos) = search.find("- `") {
         let after_tick = &search[tick_pos + 3..];
-        if !after_tick.starts_with('/') {
+        if !crate::paths::looks_absolute(after_tick) {
             search = &search[tick_pos + 1..];
             continue;
         }
@@ -182,10 +194,13 @@ pub(crate) async fn materialize_external_artifact_paths(
             && path.is_file()
         {
             if let Some(file_name) = path.file_name() {
-                let dest_dir = wt.join("artifacts").join("_context");
-                let dest = dest_dir.join(file_name);
-                let dest_str = dest.to_string_lossy().to_string();
-                let dest_dir_str = dest_dir.to_string_lossy().to_string();
+                let dest_dir_str =
+                    crate::paths::join_on(wt_path, ["artifacts", "_context"], windows_target);
+                let dest_str = crate::paths::join_on(
+                    &dest_dir_str,
+                    [file_name.to_string_lossy().as_ref()],
+                    windows_target,
+                );
 
                 // Source is always the local FS artifact store; read it
                 // locally. Push the bytes to the worktree via the
@@ -197,11 +212,7 @@ pub(crate) async fn materialize_external_artifact_paths(
                 // the remote worktree's path string) for remote steps
                 // — see AGENTS.md / docs for the regression writeup.
                 if let Ok(content) = std::fs::read_to_string(path) {
-                    let mkdir_cmd = format!(
-                        "mkdir -p {}",
-                        crate::paths::shell_escape_posix(&dest_dir_str)
-                    );
-                    if exec.run_command(machine_id, &mkdir_cmd).await.is_ok()
+                    if exec.create_dir_all(machine_id, &dest_dir_str).await.is_ok()
                         && exec
                             .write_file(machine_id, &dest_str, &content)
                             .await

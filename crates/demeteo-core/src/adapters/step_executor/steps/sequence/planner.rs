@@ -9,6 +9,7 @@ use crate::adapters::step_executor::artifacts::{
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
+use crate::domain::platform_context::place_platform_context;
 use crate::domain::sequence::tasks::{extract_task_plan, task_list_json_shape_example, TaskPlan};
 use crate::ports::agent_runtime::AgentContext;
 
@@ -118,6 +119,15 @@ impl ExecutionDriver {
             None,
         );
 
+        // The planner writes each task's `test_command`, which the task turns
+        // then run verbatim — so a planner that infers Linux hands every task
+        // below it a command the machine will not run.
+        let planner_prompt = format!(
+            "{}{}",
+            place_platform_context(target.platform, &planner_prompt).prefix,
+            planner_prompt
+        );
+
         let planner_env =
             crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), target.machine).await;
         let planner_binary = self
@@ -138,6 +148,7 @@ impl ExecutionDriver {
             // work — it inherits the step's resolved effort.
             effort: Some(target.effort),
             title: Some("plan".to_string()),
+            platform: target.platform,
             agent_exec: self.agent_exec.clone(),
             exec: self.exec.clone(),
             // Reads the codebase and emits JSON. Shell is allowed for

@@ -5,10 +5,15 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
+use crate::domain::models::Platform;
 use crate::ports::execution::SftpEntry;
-use crate::ports::execution::{ExecutionPort, InteractiveHandle, ShellOptions};
-use crate::shared::proc::sanitize_child_env;
-use crate::shared::shell;
+use crate::ports::execution::{ExecutionPort, InteractiveHandle, ProgramRequest, ShellOptions};
+use crate::shared::fs_remove;
+use crate::shared::proc::{harden_child_spawn, sanitize_child_env};
+
+use super::invocation::{git_would_run_hook, program_path, unspawnable_arguments};
+use super::process_guard::ProcessGuard;
+use super::run::{local_run_command_async, local_run_program, local_run_program_blocking};
 
 pub struct LocalSubprocessAdapter;
 
@@ -29,10 +34,11 @@ struct LocalChildProcess {
     stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
     stdout: Arc<Mutex<Option<BufReader<std::process::ChildStdout>>>>,
     _stderr: Arc<Mutex<Option<BufReader<std::process::ChildStderr>>>>,
+    guard: ProcessGuard,
 }
 
 impl LocalChildProcess {
-    fn new(mut child: std::process::Child) -> Self {
+    fn new(mut child: std::process::Child, guard: ProcessGuard) -> Self {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().map(BufReader::new);
         let stderr = child.stderr.take().map(BufReader::new);
@@ -41,6 +47,7 @@ impl LocalChildProcess {
             stdin: Arc::new(Mutex::new(stdin)),
             stdout: Arc::new(Mutex::new(stdout)),
             _stderr: Arc::new(Mutex::new(stderr)),
+            guard,
         }
     }
 }
@@ -66,8 +73,13 @@ impl InteractiveHandle for LocalChildProcess {
     }
 
     fn kill(&self) -> Result<(), String> {
+        self.guard.terminate();
         let mut child = self.child.lock().unwrap();
-        child.kill().map_err(|e| e.to_string())
+        match child.kill() {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     fn try_wait(&self) -> Result<Option<i32>, String> {
@@ -80,218 +92,18 @@ impl InteractiveHandle for LocalChildProcess {
     }
 }
 
-/// The `(program, args)` a set of [`ShellOptions`] resolves to. Shared by the
-/// sync and async run paths so the two can never drift into invoking different
-/// shells for the same options.
-///
-/// * login shell ⇒ `bash -l -c <body>` (profile sourced), else `sh -c <body>`;
-/// * `env` is exported *inside* the body so it wins over a login profile,
-///   matching the SSH construction exactly (D2).
-///
-/// `cwd` is deliberately not baked into the body: the local adapter has a
-/// `current_dir` channel the SSH one lacks.
-fn shell_invocation(cmd: &str, opts: &ShellOptions) -> (&'static str, Vec<String>) {
-    let exports = shell::export_prefix(&opts.env);
-    let body = format!(
-        "{}{}",
-        shell::job_control_prefix(opts.interactive),
-        shell::command_body(None, &exports, cmd)
-    );
-
-    if opts.login_shell {
-        let mut args = vec!["-l".to_string()];
-        // Interactive login also sources `~/.bashrc` (mise/asdf/nvm tool
-        // activation); see `ShellOptions::interactive`. Kept in lockstep with
-        // the SSH adapter so both transports resolve the same PATH (D2).
-        if opts.interactive {
-            args.push("-i".to_string());
-        }
-        args.push("-c".to_string());
-        args.push(body);
-        ("bash", args)
-    } else {
-        ("sh", vec!["-c".to_string(), body])
-    }
-}
-
-/// Apply the non-argument half of `opts` to a spawned child.
-fn configure_child(command: &mut Command, opts: &ShellOptions) {
-    if let Some(cwd) = &opts.cwd {
-        command.current_dir(cwd);
-    }
-    // An interactive login shell (`bash -l -i -c`, used by the availability /
-    // model probes so mise/asdf/nvm tools resolve) tries to grab the
-    // controlling terminal for job control. When demeteo runs under a terminal
-    // (e.g. `tauri dev`), that suspends the whole process group. Detach the
-    // child into its own session so it has no controlling TTY. Harmless for the
-    // non-interactive paths. See `detach_from_controlling_tty`.
-    if opts.interactive {
-        crate::shared::proc::detach_from_controlling_tty(command);
-    }
-    sanitize_child_env(command);
-}
-
-/// Assemble the D3 result shape from a finished child: stdout on success,
-/// `Err(stdout + stderr)` on a non-zero exit — never `Ok("")`.
-fn command_result(
-    status_code: Option<i32>,
-    ok: bool,
-    stdout: &[u8],
-    stderr: &[u8],
-) -> Result<String, String> {
-    let mut result = String::from_utf8_lossy(stdout).to_string();
-    if !ok {
-        let stderr = String::from_utf8_lossy(stderr);
-        if !result.is_empty() {
-            result.push('\n');
-        }
-        result.push_str(&stderr);
-        return Err(format!(
-            "Command failed (exit code: {:?}): {}",
-            status_code, result
-        ));
-    }
-    Ok(result)
-}
-
-/// Kill a spawned child's whole **process group** on drop.
-///
-/// `kill_on_drop` alone is not enough for this adapter: every command runs as
-/// `bash -c <body>`, so killing the direct child reaps the shell and orphans
-/// whatever it spawned — the `npm test` inside a hung `bash -c "npm test"`
-/// would keep running (and keep writing into a worktree that is about to be
-/// torn down). Killing the group takes the tree.
-///
-/// Armed **only** when the child called `setsid` (the `interactive` path,
-/// which is what `harness_shell_options` — and therefore every `command` node
-/// — uses). A child that did not `setsid` shares *demeteo's own* process
-/// group, and `killpg` on that would kill the app. When disarmed the caller
-/// still gets `kill_on_drop`'s direct-child kill, which is the correct floor.
-struct KillGroupOnDrop {
-    pid: Option<u32>,
-    own_session: bool,
-}
-
-impl KillGroupOnDrop {
-    /// The child exited on its own; there is no group left to signal (and a
-    /// recycled pid must never be).
-    fn disarm(&mut self) {
-        self.pid = None;
-    }
-}
-
-impl Drop for KillGroupOnDrop {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            if let (Some(pid), true) = (self.pid, self.own_session) {
-                // SAFETY: `pid` is a child we spawned with `setsid`, so it is
-                // its own session and process-group leader — the group can
-                // contain nothing but its descendants. ESRCH (already gone) is
-                // the expected benign error and is ignored.
-                unsafe {
-                    libc::killpg(pid as libc::pid_t, libc::SIGKILL);
-                }
-            }
-        }
-    }
-}
-
-/// Run `cmd` locally honouring `opts`, **owning the deadline** so an expiry
-/// actually stops the work (see [`ShellOptions::timeout`]).
-///
-/// Cancel-safe by construction: the group kill hangs off `Drop`, so abandoning
-/// this future — a timeout, a cancelled step, an aborted task — kills the
-/// command tree just as the deadline does. That is what lets the `command`
-/// node treat "cancelled" as immediate.
-async fn local_run_command_async(cmd: &str, opts: &ShellOptions) -> Result<String, String> {
-    use tokio::io::AsyncReadExt;
-
-    let (program, args) = shell_invocation(cmd, opts);
-    let mut command = tokio::process::Command::new(program);
-    command.args(&args);
-    configure_child(command.as_std_mut(), opts);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // The floor when the group kill is disarmed (non-`setsid` children).
-        .kill_on_drop(true);
-
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
-    let mut guard = KillGroupOnDrop {
-        pid: child.id(),
-        own_session: opts.interactive,
-    };
-
-    let mut out_pipe = child.stdout.take().expect("stdout piped above");
-    let mut err_pipe = child.stderr.take().expect("stderr piped above");
-    // Drain both pipes *while* waiting. Waiting first and reading after would
-    // deadlock the moment a build fills the 64K pipe buffer.
-    let run = async {
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let (_, _, status) = tokio::join!(
-            out_pipe.read_to_end(&mut stdout),
-            err_pipe.read_to_end(&mut stderr),
-            child.wait(),
-        );
-        (stdout, stderr, status)
-    };
-
-    let (stdout, stderr, status) = match opts.timeout {
-        Some(limit) => match tokio::time::timeout(limit, run).await {
-            Ok(finished) => finished,
-            Err(_) => {
-                // `guard` drops on return and takes the process group with it.
-                return Err(format!(
-                    "{}command exceeded its {}s ceiling",
-                    crate::ports::execution::TIMEOUT_ERROR_PREFIX,
-                    limit.as_secs()
-                ));
-            }
-        },
-        None => run.await,
-    };
-
-    guard.disarm();
-    let status = status.map_err(|e| format!("Failed to await command: {}", e))?;
-    command_result(status.code(), status.success(), &stdout, &stderr)
-}
-
-/// Blocking twin of [`local_run_command_async`] for the adapter's own
-/// synchronous helpers (`setup_worktree`, `resolve_home`), which run short
-/// fixed commands and need no deadline. `opts.timeout` is not honoured here —
-/// [`ExecutionPort::run_command_with`] routes through the async path.
-fn local_run_command_with(cmd: &str, opts: &ShellOptions) -> Result<String, String> {
-    let (program, args) = shell_invocation(cmd, opts);
-    let mut command = Command::new(program);
-    command.args(&args);
-    configure_child(&mut command, opts);
-    let output = command
-        .output()
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
-    command_result(
-        output.status.code(),
-        output.status.success(),
-        &output.stdout,
-        &output.stderr,
-    )
-}
-
-/// Non-login, default-cwd, no-extra-env convenience used by the adapter's
-/// own internal helpers (`setup_worktree`, `resolve_home`). Equivalent to
-/// `run_command`.
-fn local_run_command(cmd: &str) -> Result<String, String> {
-    local_run_command_with(cmd, &ShellOptions::default())
-}
-
 #[async_trait]
 impl ExecutionPort for LocalSubprocessAdapter {
     async fn test_connection(&self, _machine_id: &str) -> Result<(), String> {
         Ok(())
+    }
+
+    async fn run_program(
+        &self,
+        _machine_id: &str,
+        request: ProgramRequest,
+    ) -> Result<String, String> {
+        local_run_program(request).await
     }
 
     async fn run_command_with(
@@ -348,6 +160,57 @@ impl ExecutionPort for LocalSubprocessAdapter {
                     .map_err(|e| format!("Failed to create parent directories: {}", e))?;
             }
             std::fs::write(&path, &content).map_err(|e| format!("Failed to write file: {}", e))
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
+    }
+
+    async fn create_dir_all(&self, _machine_id: &str, path: &str) -> Result<(), String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&path)
+                .map_err(|e| format!("Failed to create directory '{}': {}", path, e))
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
+    }
+
+    /// The SFTP arm of this method deletes a Git checkout on any target;
+    /// `std::fs::remove_dir_all` does not delete one on Windows at all. The
+    /// walk in [`fs_remove`] is what closes that gap — see its module doc.
+    async fn remove_dir_all(&self, _machine_id: &str, path: &str) -> Result<(), String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || {
+            fs_remove::remove_dir_all(std::path::Path::new(&path)).into_result()
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
+    }
+
+    async fn remove_file(&self, _machine_id: &str, path: &str) -> Result<(), String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || {
+            std::fs::remove_file(&path)
+                .map_err(|e| format!("Failed to remove file '{}': {}", path, e))
+        })
+        .await
+        .map_err(|e| format!("blocking task panicked: {}", e))?
+    }
+
+    async fn is_executable(&self, _machine_id: &str, path: &str) -> Result<bool, String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || -> Result<bool, String> {
+            let metadata = std::fs::metadata(&path)
+                .map_err(|e| format!("Failed to stat '{}': {}", path, e))?;
+            #[cfg(unix)]
+            let mode = {
+                use std::os::unix::fs::PermissionsExt;
+
+                Some(metadata.permissions().mode())
+            };
+            #[cfg(not(unix))]
+            let mode = None;
+            Ok(git_would_run_hook(metadata.is_dir(), mode))
         })
         .await
         .map_err(|e| format!("blocking task panicked: {}", e))?
@@ -449,19 +312,54 @@ impl ExecutionPort for LocalSubprocessAdapter {
         let branch = branch.to_string();
         let sandbox_path = sandbox_path.to_string();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
-            local_run_command(&format!("mkdir -p {}/.demeteo/worktrees", repo_path))?;
+            let repo = std::path::PathBuf::from(&repo_path);
+            std::fs::create_dir_all(repo.join(".demeteo").join("worktrees"))
+                .map_err(|error| format!("Failed to create local worktree directory: {}", error))?;
 
-            let git_exclude_cmd = format!(
-                "if [ -d \"{0}/.git\" ]; then mkdir -p \"{0}/.git/info\"; if ! grep -q \".demeteo/\" \"{0}/.git/info/exclude\" 2>/dev/null; then echo \".demeteo/\" >> \"{0}/.git/info/exclude\"; fi; fi",
-                repo_path
-            );
-            let _ = local_run_command(&git_exclude_cmd);
+            let exclude = repo.join(".git").join("info").join("exclude");
+            if let Some(parent) = exclude.parent() {
+                if parent.is_dir() {
+                    let existing = match std::fs::read_to_string(&exclude) {
+                        Ok(contents) => contents,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                        Err(error) => {
+                            return Err(format!(
+                                "Failed to read Git exclude file '{}': {}",
+                                exclude.display(),
+                                error
+                            ));
+                        }
+                    };
+                    if !existing.lines().any(|line| line == ".demeteo/") {
+                        let mut updated = existing;
+                        if !updated.is_empty() && !updated.ends_with('\n') {
+                            updated.push('\n');
+                        }
+                        updated.push_str(".demeteo/\n");
+                        std::fs::write(&exclude, updated).map_err(|error| {
+                            format!(
+                                "Failed to update Git exclude file '{}': {}",
+                                exclude.display(),
+                                error
+                            )
+                        })?;
+                    }
+                }
+            }
 
-            let worktree_add_cmd = format!(
-                "git -C \"{}\" worktree add -b \"{}\" \"{}\"",
-                repo_path, branch, sandbox_path
-            );
-            let output = local_run_command(&worktree_add_cmd)?;
+            let output = local_run_program_blocking(ProgramRequest {
+                executable: "git".to_string(),
+                args: vec![
+                    "-C".to_string(),
+                    repo_path.clone(),
+                    "worktree".to_string(),
+                    "add".to_string(),
+                    "-b".to_string(),
+                    branch,
+                    sandbox_path,
+                ],
+                ..ProgramRequest::default()
+            })?;
             println!(
                 "[LocalSubprocessAdapter] Git Worktree provisioning output: {}",
                 output
@@ -487,28 +385,38 @@ impl ExecutionPort for LocalSubprocessAdapter {
     }
 
     async fn resolve_home(&self, _machine_id: &str) -> Result<String, String> {
-        let raw = std::env::var("HOME")
-            .map_err(|_| "HOME environment variable is not set on the local process".to_string())?;
-        tokio::task::spawn_blocking(move || -> Result<String, String> {
-            let expanded = if raw == "~" || raw.starts_with("~/") {
-                local_run_command("printf %s \"$HOME\"")?
-            } else {
-                raw
-            };
-            let trimmed = expanded.trim().to_string();
-            if trimmed.is_empty() {
-                return Err("Resolved local HOME is empty".to_string());
-            }
-            if !trimmed.starts_with('/') {
-                return Err(format!(
-                    "Resolved local HOME is not absolute: '{}'",
-                    trimmed
-                ));
-            }
-            Ok(trimmed)
+        #[cfg(windows)]
+        let home =
+            std::env::var("USERPROFILE").or_else(|_| -> Result<String, std::env::VarError> {
+                let drive = std::env::var("HOMEDRIVE")?;
+                let path = std::env::var("HOMEPATH")?;
+                Ok(format!("{}{}", drive, path))
+            });
+        #[cfg(not(windows))]
+        let home = std::env::var("HOME");
+        let home =
+            home.map_err(|_| "local home directory environment variable is not set".to_string())?;
+        let path = std::path::PathBuf::from(home);
+        if !path.is_absolute() {
+            return Err(format!(
+                "Resolved local home is not absolute: '{}'",
+                path.display()
+            ));
+        }
+        Ok(path.to_string_lossy().into_owned())
+    }
+
+    /// The one transport that gets this for free: the target *is* the host, so
+    /// the answer is the compiler's and costs no probe. It is still routed
+    /// through the port rather than read as a `cfg!` at the call site, because
+    /// a caller that reads `cfg!` has no way to be right about a remote.
+    async fn resolve_platform(&self, _machine_id: &str) -> Result<Platform, String> {
+        Platform::from_target_os(std::env::consts::OS).ok_or_else(|| {
+            format!(
+                "Demeteo does not ship a desktop for '{}'",
+                std::env::consts::OS
+            )
         })
-        .await
-        .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
     async fn resolve_user(&self, _machine_id: &str) -> Result<String, String> {
@@ -517,9 +425,11 @@ impl ExecutionPort for LocalSubprocessAdapter {
         // USER (login identity) over LOGNAME; some minimal macOS GUI
         // launches set only LOGNAME, but USER is what `bash -c 'echo
         // $USER'` and most CLIs look at.
-        std::env::var("USER")
-            .or_else(|_| std::env::var("LOGNAME"))
-            .map_err(|_| "Neither USER nor LOGNAME is set on the local process".to_string())
+        #[cfg(windows)]
+        let user = std::env::var("USERNAME");
+        #[cfg(not(windows))]
+        let user = std::env::var("USER").or_else(|_| std::env::var("LOGNAME"));
+        user.map_err(|_| "local username environment variable is not set".to_string())
     }
 
     fn spawn_interactive(
@@ -530,7 +440,7 @@ impl ExecutionPort for LocalSubprocessAdapter {
         cwd: &str,
         env: &HashMap<String, String>,
     ) -> Result<Box<dyn InteractiveHandle>, String> {
-        let mut cmd = Command::new(binary);
+        let mut cmd = Command::new(program_path(binary));
         cmd.args(args);
         cmd.current_dir(cwd);
         cmd.stdin(Stdio::piped());
@@ -540,13 +450,17 @@ impl ExecutionPort for LocalSubprocessAdapter {
             cmd.env(k, v);
         }
         sanitize_child_env(&mut cmd);
-        let child = cmd
-            .spawn()
-            .map_err(|e| format!("failed to spawn '{}': {}", binary, e))?;
-        Ok(Box::new(LocalChildProcess::new(child)))
+        harden_child_spawn(&mut cmd);
+        let guard = ProcessGuard::armed();
+        let child = cmd.spawn().map_err(|e| {
+            unspawnable_arguments(binary, &e)
+                .unwrap_or_else(|| format!("failed to spawn '{}': {}", binary, e))
+        })?;
+        guard.adopt_sync(&child);
+        Ok(Box::new(LocalChildProcess::new(child, guard)))
     }
 }
 
 #[cfg(test)]
-#[path = "../../../tests/infrastructure/local_execution.rs"]
-mod local_execution_tests;
+#[path = "../../../tests/infrastructure/local/execution.rs"]
+mod tests;

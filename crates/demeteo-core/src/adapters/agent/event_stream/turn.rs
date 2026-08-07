@@ -134,15 +134,8 @@ where
                     AgentEvent::TurnComplete { .. } => break,
                     AgentEvent::Error { message, code, .. } if event.ends_turn() => {
                         let descriptive = crate::adapters::step_executor::steps::agent::format_agent_error_message(message, machine_str, exec).await;
-                        // A process that couldn't spawn, died with a
-                        // non-zero exit, or whose output stream we lost
-                        // mid-turn is an environment problem, not
-                        // something re-implementing the code can fix. A
-                        // `cli_error` is the agent's own reported failure
-                        // — that one is feedback-worthy.
-                        let environmental = code == "spawn_failed"
-                            || code == "agent_exit_nonzero"
-                            || code == "agent_stream_lost";
+                        let environmental =
+                            crate::adapters::agent::cli_runtime::is_process_level_error(code);
                         run_failed = Some(if environmental {
                             TurnResult::Environmental(descriptive)
                         } else {

@@ -50,6 +50,7 @@
 
 use std::time::Duration;
 
+use crate::adapters::local::invocation::NO_POSIX_SHELL_ERROR;
 use crate::domain::models::WorktreeStrategy;
 use crate::ports::execution::{ExecutionPort, ShellOptions};
 
@@ -137,6 +138,10 @@ pub(crate) async fn probe_configured_commands(
         // treated as "missing": blocking a launch because the network hiccuped
         // is the false positive this module exists to avoid. Those cases fall
         // through as resolved, and the run behaves exactly as it does today.
+        //
+        // The one exception is a machine with no shell to ask with, which is a
+        // permanent fact about the machine rather than a blip: see
+        // [`is_missing_posix_shell`].
         match exec
             .run_command_with(
                 machine_str,
@@ -147,6 +152,7 @@ pub(crate) async fn probe_configured_commands(
         {
             Ok(out) if !out.trim().is_empty() => probed.push(bin),
             Ok(_) => missing.push(bin),
+            Err(e) if is_missing_posix_shell(&e) => return PreflightVerdict::MissingPosixShell,
             Err(e) if is_not_found(&e) => missing.push(bin),
             Err(_) => probed.push(bin),
         }
@@ -168,6 +174,25 @@ pub(crate) async fn probe_configured_commands(
 fn is_not_found(err: &str) -> bool {
     !err.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX)
         && !err.starts_with(crate::ports::execution::TIMEOUT_ERROR_PREFIX)
+}
+
+/// Whether the probe failed because the machine has no POSIX shell to run it
+/// with — a statement about the machine, not about the binary being asked for.
+///
+/// It is a transport-class error (the probe never ran), so the rule above would
+/// otherwise read it as no evidence and let every binary through as resolved.
+/// That is right for a dropped connection and wrong here: the next probe fails
+/// identically, the harness fails identically, and the launch would proceed to
+/// spend an entire implement budget before `s-validate` discovered it. Answered
+/// once, from the first probe, because a second asks the same question of the
+/// same absent shell.
+///
+/// The one Windows behaviour visible from this module, and it is visible only
+/// as a string every transport could in principle raise —
+/// [`NO_POSIX_SHELL_ERROR`] is the vocabulary, not a `#[cfg]`.
+fn is_missing_posix_shell(err: &str) -> bool {
+    err.strip_prefix(crate::ports::execution::TRANSPORT_ERROR_PREFIX)
+        .is_some_and(|rest| rest.starts_with(NO_POSIX_SHELL_ERROR))
 }
 
 /// Probe the project's configured commands **at configuration time** and report

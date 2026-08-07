@@ -12,7 +12,7 @@ use crate::ports::execution::SftpEntry;
 use ssh2::{FileStat, Sftp};
 use std::fmt::Display;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Take the pooled session for `machine_id` and run `op` against its locked
 /// `Sftp` handle. Every operation below shares this preamble.
@@ -105,6 +105,105 @@ pub(super) fn write_file_bytes(
         file.flush()
             .map_err(|e| format!("Failed to flush file: {}", e))?;
         Ok(())
+    })
+}
+
+pub(super) fn create_dir_all(
+    pool: &SessionPool,
+    machine_id: &str,
+    path: &str,
+) -> Result<(), SshFailure> {
+    with_sftp(pool, machine_id, |sftp| {
+        let mut current = PathBuf::new();
+        for component in Path::new(path).components() {
+            match component {
+                Component::RootDir => current.push("/"),
+                Component::Normal(segment) => current.push(segment),
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    return Err(format!(
+                        "refusing to create directory with parent traversal: {path}"
+                    ));
+                }
+                Component::Prefix(_) => {
+                    return Err(format!("unsupported remote directory path: {path}"));
+                }
+            }
+            if current.as_os_str().is_empty() || current == Path::new("/") {
+                continue;
+            }
+            match sftp.stat(&current) {
+                Ok(stat) if stat.is_dir() => {}
+                Ok(_) => {
+                    return Err(format!(
+                        "remote path is not a directory: {}",
+                        current.display()
+                    ))
+                }
+                Err(_) => sftp.mkdir(&current, 0o755).map_err(|e| {
+                    format!("Failed to create directory '{}': {}", current.display(), e)
+                })?,
+            }
+        }
+        Ok(())
+    })
+}
+
+pub(super) fn remove_dir_all(
+    pool: &SessionPool,
+    machine_id: &str,
+    path: &str,
+) -> Result<(), SshFailure> {
+    with_sftp(pool, machine_id, |sftp| {
+        fn remove(sftp: &Sftp, path: &Path) -> Result<(), String> {
+            let stat = sftp
+                .lstat(path)
+                .map_err(|e| format!("Failed to stat '{}': {}", path.display(), e))?;
+            if stat.is_dir() {
+                for (entry, _) in sftp
+                    .readdir(path)
+                    .map_err(|e| format!("Failed to read directory '{}': {}", path.display(), e))?
+                {
+                    remove(sftp, &entry)?;
+                }
+                sftp.rmdir(path).map_err(|e| {
+                    format!("Failed to remove directory '{}': {}", path.display(), e)
+                })?;
+            } else {
+                sftp.unlink(path)
+                    .map_err(|e| format!("Failed to remove file '{}': {}", path.display(), e))?;
+            }
+            Ok(())
+        }
+
+        remove(sftp, Path::new(path))
+    })
+}
+
+pub(super) fn remove_file(
+    pool: &SessionPool,
+    machine_id: &str,
+    path: &str,
+) -> Result<(), SshFailure> {
+    with_sftp(pool, machine_id, |sftp| {
+        sftp.unlink(Path::new(path))
+            .map_err(|e| format!("Failed to remove file '{path}': {e}"))
+    })
+}
+
+pub(super) fn is_executable(
+    pool: &SessionPool,
+    machine_id: &str,
+    path: &str,
+) -> Result<bool, SshFailure> {
+    with_sftp(pool, machine_id, |sftp| {
+        let stat = evict_on_err(
+            pool,
+            machine_id,
+            sftp.stat(Path::new(path)),
+            "Failed to stat file",
+        )?;
+        Ok(!stat.is_dir() && stat.perm.unwrap_or(0) & 0o111 != 0)
     })
 }
 

@@ -6,9 +6,7 @@
 
 use super::*;
 
-#[path = "../../support/preflight_strategy.rs"]
-mod preflight_strategy;
-use preflight_strategy::strategy;
+use crate::support::preflight_strategy::strategy;
 
 #[test]
 fn a_plain_command_yields_its_binary() {

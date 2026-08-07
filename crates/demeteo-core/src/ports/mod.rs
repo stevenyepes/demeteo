@@ -17,4 +17,5 @@ pub mod remote_run_mirror;
 pub mod run_events;
 pub mod runner_run;
 pub mod step_executor;
+pub mod worktree_cleanup;
 pub mod worktree_ops;

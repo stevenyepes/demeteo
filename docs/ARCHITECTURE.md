@@ -96,6 +96,11 @@ distinguish "leave alone" from "set to NULL".
   (`clone_repository`, `create_feature_branch`,
   `provision_subtask_worktree`, `cleanup_subtask_worktree`,
   `branch_delete`, `merge_subtask`, `sync_feature_with_upstream`).
+- **`TrustedWorktreePort`** (`ports/worktree_ops.rs`) — the future narrow
+  boundary for terminal-worktree creation/removal and dependency-cache
+  materialization beneath Demeteo-owned roots. Its no-follow and transport
+  contract is in [`TRUSTED_WORKTREE.md`](TRUSTED_WORKTREE.md); no adapter or
+  caller implements it yet.
 - **`MergePort`** (`ports/merge.rs`) — the feature ↔ upstream sync flow
   (`sync_feature_with_upstream`, `feature_syncs` audit rows). Task-branch
   merges are *not* a port: the steps that own the worktree merge inline

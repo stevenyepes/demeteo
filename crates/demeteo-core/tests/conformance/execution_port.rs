@@ -11,6 +11,7 @@
 //! * non-zero exit ⇒ `Err` carrying stderr (D3) — never `Ok("")`;
 //! * missing file ⇒ `Err`, not `Ok("")` (D3);
 //! * `list_dir` entry shape (name/is_dir, `.`/`..` filtered);
+//! * `resolve_platform` answers on every transport (no default, no guess);
 //! * login-shell env resolution (D2 — the caller's env crosses the boundary);
 //! * a command silent longer than the transport's blocking-call timeout still
 //!   drains to EOF and returns its output (D3 — a slow, silent command is not
@@ -25,6 +26,7 @@
 use std::sync::Arc;
 
 use crate::adapters::local::execution::LocalSubprocessAdapter;
+use crate::domain::models::Platform;
 use crate::ports::execution::{ExecutionPort, ShellOptions};
 
 /// Exercise the full `ExecutionPort` contract against `port`, using
@@ -42,10 +44,17 @@ pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workd
     // the local FS, so a remote `pwd` returning the same literal path
     // (the typical Linux-container case has no symlinks) still
     // round-trips. Mirrors the same fix already used in
-    // `tests/infrastructure/worktree/git_ops.rs::test_list_worktrees_with_one_extra_worktree`.
-    let base = std::fs::canonicalize(base)
+    // `tests/infrastructure/worktree/git_ops/worktree.rs::test_list_worktrees_with_one_extra_worktree`.
+    let canonical = std::fs::canonicalize(base)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| base.to_string());
+    // Windows canonicalizes to the verbatim form, and a `\\?\` path reaches
+    // the filesystem unnormalised: it takes no `/`, so every path composed
+    // below would name nothing (`ERROR_INVALID_NAME`).
+    let base = canonical
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&canonical)
+        .to_string();
 
     // --- write → read round-trip -----------------------------------------
     let file_path = format!("{base}/conformance-roundtrip.txt");
@@ -71,11 +80,47 @@ pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workd
         )
         .await
         .expect("pwd in an explicit cwd should succeed");
-    assert_eq!(
+    // A shell reports the directory in its own spelling — the Git Bash that
+    // runs this body on a Windows host prints `/c/…` for the `C:\…` it was
+    // handed — so the clause is which directory, never which spelling. The
+    // strings coincide everywhere else, so this is the same assertion.
+    assert!(
+        crate::paths::same_path(
+            out.trim(),
+            &base,
+            crate::paths::targets_windows_host(machine_id),
+        ),
+        "run_command_with must honour the explicit cwd: ran in {}, not in {base}",
         out.trim(),
-        base,
-        "run_command_with must honour the explicit cwd",
     );
+
+    // --- the target names its own platform -------------------------------
+    // Both legs must *answer*; they need not agree, and asserting they did
+    // would encode the local desktop's OS as the remote's. What the shared
+    // assertion holds is that no transport is allowed to be silent about this
+    // — a default would have to be a guess, and the guess is wrong on exactly
+    // the mixed local/remote setup the port exists for.
+    let platform = port
+        .resolve_platform(machine_id)
+        .await
+        .expect("every transport must name the platform of its target");
+    if machine_id == "local" {
+        // Cross-checked against `cfg!` rather than against the adapter's own
+        // source of truth (`std::env::consts::OS`), so a mapping that dropped
+        // a variant cannot agree with itself.
+        assert_eq!(
+            platform == Platform::Windows,
+            cfg!(windows),
+            "the local transport reported {platform} on a host that is{} Windows",
+            if cfg!(windows) { "" } else { " not" },
+        );
+        assert_eq!(
+            platform.is_posix(),
+            cfg!(unix),
+            "the local transport reported {platform} on a host that is{} POSIX",
+            if cfg!(unix) { "" } else { " not" },
+        );
+    }
 
     // --- non-zero exit ⇒ Err carrying stderr (never Ok(\"\")) -------------
     let err = port

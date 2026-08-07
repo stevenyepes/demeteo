@@ -44,8 +44,14 @@ async fn probe_models_via_acp(
     machine_id: &str,
     agent_kind: &str,
 ) -> Result<Vec<ConfigOptionValue>, String> {
+    // A probe that cannot name a home is not worth running from the GUI
+    // process's cwd; erroring here falls the caller through to CLI
+    // probing and then the bundled model list.
     let cwd = if machine_id == "local" || machine_id.is_empty() {
-        std::env::var("HOME").unwrap_or_else(|_| ".".into())
+        ctx.exec
+            .resolve_home(machine_id)
+            .await
+            .map_err(|e| format!("ACP probe: {}", e))?
     } else {
         ".".into()
     };
@@ -70,6 +76,11 @@ async fn probe_models_via_acp(
         model: None,
         effort: None,
         title: None,
+        platform: crate::ports::agent_runtime::resolve_agent_platform(
+            ctx.exec.as_ref(),
+            machine_id,
+        )
+        .await,
         agent_exec: ctx.agent_exec.clone(),
         exec: ctx.exec.clone(),
         permissions: crate::domain::permission::PermissionProfile::all_allow(),

@@ -38,6 +38,18 @@ fn mock_parse_event(line: &str) -> Option<AgentEvent> {
     }
 }
 
+fn sinks(
+    session_capture: Option<Arc<Mutex<Option<String>>>>,
+    cumulative_tokens: Option<Arc<AtomicU64>>,
+) -> DrainSinks {
+    DrainSinks {
+        session_capture,
+        cumulative_tokens,
+        agent: "stub-agent".to_string(),
+        trace: None,
+    }
+}
+
 fn run_drain<R, F>(reader: R, exit_code_fn: F) -> Vec<AgentEvent>
 where
     R: Read + Send + 'static,
@@ -45,7 +57,13 @@ where
 {
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
     std::thread::spawn(move || {
-        drain_lines(reader, mock_parse_event, exit_code_fn, tx, None, None);
+        drain_lines(
+            reader,
+            mock_parse_event,
+            exit_code_fn,
+            tx,
+            sinks(None, None),
+        );
     });
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -58,6 +76,63 @@ where
         }
         events
     })
+}
+
+/// The evidence this capture exists for is precisely what the parser drops:
+/// a `command_execution` item becomes a `ToolCall` nothing renders, and a
+/// banner or a stderr line mixed into the stream parses as nothing at all.
+/// Capturing only recognised events would reproduce the blind spot at a new
+/// layer.
+#[test]
+fn drain_lines_captures_the_lines_the_parser_recognises_and_the_ones_it_drops() {
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir =
+        TempDir(std::env::temp_dir().join(format!("demeteo-drain-trace-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&dir.0);
+
+    let input = concat!(
+        r#"{"type":"text","delta":"hi"}"#,
+        "\n",
+        r#"{"type":"command_execution","command":"bash -lc 'ls'"}"#,
+        "\n",
+        "codex: sandbox not supported on this platform\n",
+        r#"{"type":"end_turn"}"#,
+        "\n",
+    );
+    let trace = crate::adapters::agent::trace::TurnTrace::open_in(&dir.0, "codex-t42", 3)
+        .expect("trace file must be creatable");
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(8);
+    let handle = std::thread::spawn(move || {
+        drain_lines(
+            Cursor::new(input),
+            mock_parse_event,
+            || Some(0),
+            tx,
+            DrainSinks {
+                trace: Some(trace),
+                ..sinks(None, None)
+            },
+        );
+    });
+    while rx.blocking_recv().is_some() {}
+    handle.join().unwrap();
+
+    let written = std::fs::read_to_string(dir.0.join("codex-t42.turn003.jsonl"))
+        .expect("the capture must exist");
+    assert!(
+        written.contains("bash -lc 'ls'"),
+        "the command the agent ran was dropped again: {written}"
+    );
+    assert!(
+        written.contains("sandbox not supported"),
+        "an unparsed line was dropped: {written}"
+    );
+    assert_eq!(written.lines().count(), 4, "got: {written}");
 }
 
 #[test]
@@ -113,10 +188,85 @@ fn drain_lines_emits_error_on_nonzero_exit() {
 }
 
 #[test]
-fn drain_lines_emits_turn_complete_on_zero_exit_when_empty() {
+fn an_agent_that_exits_zero_without_writing_is_not_a_completed_turn() {
+    // The documented Windows signature of these CLIs, and what a `.cmd` shim
+    // does when its interpreter is gone. Reported as a completion it becomes a
+    // green turn that merely produced no deliverable — a verdict fabricated
+    // rather than measured, in a gated orchestrator.
     let events = run_drain(Cursor::new(Vec::new()), || Some(0));
-    assert_eq!(events.len(), 1);
-    assert!(matches!(&events[0], AgentEvent::TurnComplete { .. }));
+    assert_eq!(events.len(), 1, "got: {:?}", events);
+    match &events[0] {
+        AgentEvent::Error { code, message, .. } => {
+            assert_eq!(code, "agent_no_output");
+            assert!(message.contains("stub-agent"), "got: {}", message);
+        }
+        e => panic!("expected an agent_no_output Error, got {:?}", e),
+    }
+}
+
+#[test]
+fn a_process_that_never_reached_a_verdict_is_never_routed_back_as_feedback() {
+    // The turn loop reads this to decide between `Environmental` and `Failed`.
+    // Every ending below tested nothing, so re-implementing the code cannot
+    // close it; only `cli_error` — the agent's own report — is feedback.
+    for ending in [
+        TurnEnding::StreamLost,
+        TurnEnding::NonZeroExit(1),
+        TurnEnding::NoOutput,
+    ] {
+        let code = ending.error_code().expect("not a turn");
+        assert!(is_process_level_error(code), "{:?} → {}", ending, code);
+    }
+    assert_eq!(TurnEnding::Complete.error_code(), None);
+    assert!(is_process_level_error("spawn_failed"));
+    assert!(!is_process_level_error("cli_error"));
+}
+
+#[test]
+fn a_clean_exit_after_output_stays_a_turn_and_an_empty_one_does_not() {
+    assert_eq!(
+        classify_turn_ending(Some(0), false, true),
+        TurnEnding::Complete
+    );
+    assert_eq!(
+        classify_turn_ending(Some(0), false, false),
+        TurnEnding::NoOutput
+    );
+    // Not yet reaped: same two answers, so a slow `wait` cannot flip a silent
+    // agent into a success.
+    assert_eq!(
+        classify_turn_ending(None, false, true),
+        TurnEnding::Complete
+    );
+    assert_eq!(
+        classify_turn_ending(None, false, false),
+        TurnEnding::NoOutput
+    );
+}
+
+#[test]
+fn a_lost_stream_and_a_nonzero_exit_still_outrank_the_silence_check() {
+    // Both were already their own ending and must not be re-read as "no
+    // output": a broken stream is a lost transport, and a non-zero exit is the
+    // one ending that *is* the process's own verdict.
+    assert_eq!(
+        classify_turn_ending(None, true, false),
+        TurnEnding::StreamLost
+    );
+    assert_eq!(
+        classify_turn_ending(Some(137), false, false),
+        TurnEnding::NonZeroExit(137)
+    );
+    assert_eq!(
+        classify_turn_ending(Some(137), true, true),
+        TurnEnding::NonZeroExit(137)
+    );
+    // A read error alongside a clean exit is not a lost stream — the process
+    // finished — so the output check decides, exactly as it did before.
+    assert_eq!(
+        classify_turn_ending(Some(0), true, true),
+        TurnEnding::Complete
+    );
 }
 
 #[test]
@@ -189,8 +339,7 @@ fn drain_lines_keeps_reading_past_a_recoverable_error() {
             mock_parse_event_with_warnings,
             || Some(0),
             tx,
-            None,
-            None,
+            sinks(None, None),
         );
     });
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -405,7 +554,7 @@ fn drain_lines_returns_early_when_consumer_drops() {
 "#
         .to_vec(),
     );
-    drain_lines(reader, mock_parse_event, || Some(0), tx, None, None);
+    drain_lines(reader, mock_parse_event, || Some(0), tx, sinks(None, None));
 }
 
 struct ChunkyHandle {
@@ -524,6 +673,9 @@ impl crate::ports::execution::ExecutionPort for ShellOptsRecorder {
     }
     async fn resolve_user(&self, _: &str) -> Result<String, String> {
         Ok("stub".to_string())
+    }
+    async fn resolve_platform(&self, _: &str) -> Result<crate::domain::models::Platform, String> {
+        Err("this recorder answers no platform".to_string())
     }
     async fn control_rpc(
         &self,
@@ -699,8 +851,7 @@ fn drain_lines_counts_cache_tokens_in_cumulative_footprint() {
             mock_parse_usage_event,
             || Some(0),
             tx,
-            None,
-            Some(cum),
+            sinks(None, Some(cum)),
         );
     });
     while rx.blocking_recv().is_some() {}
@@ -731,8 +882,7 @@ fn drain_lines_takes_the_largest_usage_delta_not_their_sum() {
             mock_parse_usage_event,
             || Some(0),
             tx,
-            None,
-            Some(cum),
+            sinks(None, Some(cum)),
         );
     });
     while rx.blocking_recv().is_some() {}
@@ -750,8 +900,7 @@ fn captured_session_id(input: &'static str) -> Option<String> {
             mock_parse_event,
             || Some(0),
             tx,
-            Some(cap),
-            None,
+            sinks(Some(cap), None),
         );
     });
     while rx.blocking_recv().is_some() {}
@@ -825,10 +974,15 @@ fn apply_static_env_injects_defaults_but_never_overrides_caller() {
 /// 7)` under the `[environment — not an implementation failure]` banner, which is
 /// actively misleading — one observed run lost its whole pipeline to it after
 /// `s-implement` had already spent 3.8 M tokens.
+///
+/// Raised by kind rather than by errno 7: the number is E2BIG only where the
+/// numbering is POSIX's, and on Windows error 7 is `ERROR_ARENA_TRASHED`, which
+/// maps to no kind at all. `spawn_error_message` reads the kind, so the errno
+/// would be testing the mapping table instead of the message.
 #[test]
 fn an_oversized_prompt_is_reported_as_ours_with_the_numbers() {
     let msg = spawn_error_message(
-        &std::io::Error::from_raw_os_error(7),
+        &std::io::Error::from(std::io::ErrorKind::ArgumentListTooLong),
         "claude",
         "/home/u/.local/bin/claude",
         230_400,

@@ -1,0 +1,258 @@
+//! What the Windows artifact-scope fence denies, and which objects get it.
+//!
+//! The policy this serves belongs to
+//! `adapters/worktree/git_ops/scope.rs`, whose module header states what the
+//! fence is worth. What lives here is everything that fence has to *decide*:
+//! the access mask, the inheritance flags, which
+//! top-level entries are covered, which of an ACL's entries are the fence's
+//! own, and which of them a teardown rewrite keeps. None of it calls Windows,
+//! so all of it is reachable from a Linux test — the reason given in this
+//! directory's module header, which applies with extra force to a security
+//! boundary. `dacl_sys.rs` holds the calls that cannot be.
+
+use std::path::{Path, PathBuf};
+
+/// `FILE_ADD_FILE` seen from a directory: the right that creates a new file
+/// in it, and the right that overwrites an existing one.
+pub const FILE_WRITE_DATA: u32 = 0x0000_0002;
+/// `FILE_ADD_SUBDIRECTORY` seen from a directory.
+pub const FILE_APPEND_DATA: u32 = 0x0000_0004;
+pub const FILE_WRITE_EA: u32 = 0x0000_0010;
+pub const FILE_DELETE_CHILD: u32 = 0x0000_0040;
+pub const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
+pub const DELETE: u32 = 0x0001_0000;
+
+/// The rights a fenced entry denies to the token's own user.
+///
+/// Both delete rights are here and both are load-bearing: Windows permits a
+/// delete when the child grants `DELETE` **or** its directory grants
+/// `FILE_DELETE_CHILD`, so a mask naming one of them leaves the other route
+/// open — and an agent deletes `src/main.rs` through a fence that will not let
+/// it edit the same file.
+///
+/// `WRITE_DAC` is deliberately absent, and adding it would be a regression
+/// rather than a hardening. Demeteo's own teardown runs under the same token,
+/// so an ACE denying `WRITE_DAC` would deny the revoke that lifts the fence —
+/// and it would buy nothing, because the user owns a worktree Demeteo created
+/// on their behalf and an owner is granted `WRITE_DAC` implicitly whatever the
+/// DACL says.
+pub const DENY_MASK: u32 = FILE_WRITE_DATA
+    | FILE_APPEND_DATA
+    | FILE_WRITE_EA
+    | FILE_WRITE_ATTRIBUTES
+    | FILE_DELETE_CHILD
+    | DELETE;
+
+pub const NO_INHERITANCE: u32 = 0x0;
+pub const OBJECT_INHERIT_ACE: u32 = 0x1;
+pub const CONTAINER_INHERIT_ACE: u32 = 0x2;
+pub const INHERITED_ACE: u32 = 0x10;
+
+/// The flags that make one ACE on a directory cover the whole subtree under
+/// it, including what is created after the fence goes up.
+///
+/// Stamping the files that exist at fence time instead leaves everything the
+/// agent creates during its own turn unfenced, and costs one call per file
+/// over a `node_modules` tree. Inheritance buys both: coverage of what does
+/// not exist yet, at one call per top-level entry.
+pub const SUBTREE_INHERITANCE: u32 = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
+
+pub const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+/// The one ACE header type the fence writes, and the only one
+/// [`is_fence_ace`] will match.
+pub const ACCESS_DENIED_ACE_TYPE: u8 = 1;
+
+/// What an ACE's header type means to the fence.
+///
+/// [`Other`](AceKind::Other) is every type the fence never writes —
+/// object-typed and callback ACEs among them. Their SID sits at a different
+/// offset, so they are carried through undecoded rather than misread as one of
+/// the two the fence does understand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AceKind {
+    Allow,
+    Deny,
+    Other,
+}
+
+pub fn ace_kind(ace_type: u8) -> AceKind {
+    match ace_type {
+        ACCESS_ALLOWED_ACE_TYPE => AceKind::Allow,
+        ACCESS_DENIED_ACE_TYPE => AceKind::Deny,
+        _ => AceKind::Other,
+    }
+}
+
+/// One entry of the worktree's top level, as the fence needs to see it.
+///
+/// `is_dir` and `is_symlink` are read without following the path: a directory
+/// symlink is `is_symlink`, never `is_dir`, which is what keeps the two rules
+/// below from overlapping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub path: PathBuf,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+}
+
+/// One deny ACE and the object it goes on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DenyAce {
+    pub path: PathBuf,
+    pub mask: u32,
+    pub inheritance: u32,
+}
+
+/// One ACE already on an object, reduced to the four fields
+/// [`is_fence_ace`] reads.
+///
+/// An [`AceKind::Other`] entry carries an empty `sid` and a zero `mask`: those
+/// are the fields this view cannot read for a type it does not decode, and
+/// leaving them empty is what keeps such an entry out of every match below.
+/// It is present at all so that a position in a `Vec<Ace>` is a position in the
+/// ACL — which is what [`retained_ace_indices`] hands back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ace {
+    pub kind: AceKind,
+    pub mask: u32,
+    pub flags: u32,
+    pub sid: Vec<u8>,
+}
+
+/// Which entries get an ACE, mirroring the Unix `chmod a-w` walk one for one.
+///
+/// Three rules, each with a consequence that is not visible from the call:
+///
+/// - **Per top-level entry, never the worktree root.** A single inheritable
+///   deny on the root would propagate into `artifacts/` too, and there is no
+///   explicit allow to countermand it — the agent's access to its own artifact
+///   directory comes from an *inherited* grant, which a deny ACE outranks. The
+///   step would then be denied the writes it exists to make.
+/// - **`writable_paths` is compared in both directions.** `rel` under a
+///   writable path is writable, and so is an entry a writable path lies
+///   *under*: `artifacts/report.md` makes the `artifacts` entry writable, or
+///   the fence would deny the directory the file has to be created in.
+/// - **Symlinks and junctions are skipped**, for the reason the Unix arm's
+///   `[ -L ]` guard is load-bearing there. `SetNamedSecurityInfoW` has no
+///   open-reparse-point mode, so it edits the DACL of the *target* — which for
+///   `node_modules` is the feature's shared dependency cache, outside the
+///   worktree and outliving this step. Fencing one `ArtifactsOnly` step would
+///   leave every later step of the feature unable to write the cache, and
+///   nothing would lift it. Nothing is lost: a reparse point's own DACL is not
+///   what governs access through it, its target is by construction outside the
+///   tree the fence reasons about, and the diff guard still sees the link.
+pub fn fence_plan(entries: &[Entry], writable_paths: &[PathBuf], worktree: &Path) -> Vec<DenyAce> {
+    entries
+        .iter()
+        .filter(|entry| entry.path != worktree)
+        .filter(|entry| !entry.is_symlink)
+        .filter(|entry| !is_writable(&relative(&entry.path, worktree), writable_paths))
+        .map(|entry| DenyAce {
+            path: entry.path.clone(),
+            mask: DENY_MASK,
+            inheritance: inheritance_for(entry.is_dir),
+        })
+        .collect()
+}
+
+/// The entries teardown asks the ACL of. Every non-symlink entry is asked,
+/// including the ones [`fence_plan`] left writable: which entries were fenced
+/// is not recorded anywhere, and re-deriving it would need the step's
+/// `writable_paths`, which a teardown running after a crash does not have.
+/// [`is_fence_ace`] is what makes asking harmless — an entry that never
+/// carried the fence's ACE is not written to at all.
+pub fn revoke_candidates(entries: &[Entry]) -> Vec<PathBuf> {
+    entries
+        .iter()
+        .filter(|entry| !entry.is_symlink)
+        .map(|entry| entry.path.clone())
+        .collect()
+}
+
+/// A directory fences everything under it, now and later; a file fences only
+/// itself. Inheritance flags on a leaf object are meaningless to Windows, and
+/// stating them anyway would make the fence's own ACE unrecognisable to
+/// [`is_fence_ace`] on teardown.
+pub fn inheritance_for(is_dir: bool) -> u32 {
+    if is_dir {
+        SUBTREE_INHERITANCE
+    } else {
+        NO_INHERITANCE
+    }
+}
+
+/// Whether this ACE is one the fence itself put on the object.
+///
+/// Three of the four tests are exact, and they are what keeps teardown an
+/// inverse rather than a reset:
+///
+/// - **Denying, not allowing.** The user's inherited full-control grant is
+///   the thing the fence is layered over; matching it would revoke the access
+///   the fence exists to restore.
+/// - **This token's user.** Another trustee's ACE is not Demeteo's to remove
+///   under any circumstances.
+/// - **Not inherited.** A copy propagated down from a fenced parent is removed
+///   by removing the parent's, and editing it on the child instead rewrites a
+///   DACL the system is about to recompute anyway.
+///
+/// The mask is the fourth, and it is a **subset** test rather than the
+/// equality one this started out as. That change is the fix for an observed
+/// Windows failure, not a loosening for its own sake: requiring the mask and
+/// the inheritance flags to read back byte-identical to what
+/// `SetEntriesInAclW` was handed made teardown recognise *nothing* on a real
+/// worktree, skip every entry, and report success over a tree that was still
+/// fenced. Windows is free to store an ACE differently from the value it was
+/// given — flags especially, since an inheritable ACE on a container can be
+/// kept as an effective entry plus an `INHERIT_ONLY_ACE` twin — so a predicate
+/// that depends on a byte-exact round-trip is a predicate that can silently
+/// match nothing.
+///
+/// What the subset test gives up is bounded and what it buys is not. A deny
+/// ACE naming this token's user and denying *only* rights [`DENY_MASK`]
+/// already denies is either the fence's own or has the same effect as the
+/// fence's, so removing it costs at most one right the user was denying
+/// themselves; a fence left standing strands the worktree with no route back
+/// short of `icacls`. Any deny carrying a right from outside the mask —
+/// `WRITE_DAC`, anything read — is someone else's policy and is still left
+/// exactly where it was found.
+pub fn is_fence_ace(ace: &Ace, sid: &[u8]) -> bool {
+    ace.kind == AceKind::Deny
+        && ace.sid == sid
+        && ace.flags & INHERITED_ACE == 0
+        && ace.mask != 0
+        && ace.mask & !DENY_MASK == 0
+}
+
+/// Whether any ACE on the object is the fence's own.
+pub fn carries_fence(aces: &[Ace], sid: &[u8]) -> bool {
+    aces.iter().any(|ace| is_fence_ace(ace, sid))
+}
+
+/// The positions, in ACL order, of the ACEs a DACL keeps once the fence's own
+/// are taken off it.
+///
+/// Positions rather than values, because everything that is not the fence's is
+/// copied back byte for byte. [`Ace`] is a lossy view — it decodes two ACE
+/// types and leaves every other undecoded — so rebuilding an ACL out of it
+/// would quietly drop whatever else the object carried.
+pub fn retained_ace_indices(aces: &[Ace], sid: &[u8]) -> Vec<usize> {
+    aces.iter()
+        .enumerate()
+        .filter(|(_, ace)| !is_fence_ace(ace, sid))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+fn is_writable(rel: &Path, writable_paths: &[PathBuf]) -> bool {
+    writable_paths
+        .iter()
+        .any(|allowed| rel.starts_with(allowed) || allowed.starts_with(rel))
+}
+
+fn relative(path: &Path, worktree: &Path) -> PathBuf {
+    path.strip_prefix(worktree).unwrap_or(path).to_path_buf()
+}
+
+#[cfg(test)]
+#[path = "../../../tests/shared/win/dacl.rs"]
+mod tests;

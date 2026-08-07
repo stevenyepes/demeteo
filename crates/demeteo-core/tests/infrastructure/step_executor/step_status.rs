@@ -137,11 +137,15 @@ impl FeatureRepository for FeaturesDouble {
     }
 }
 
+/// `(status, cost_usd, tokens, cache_read, cache_creation)` — the fields of one
+/// `StepProgress` these tests assert on.
+type ProgressRecord = (String, Option<f64>, Option<i64>, Option<u64>, Option<u64>);
+
 /// Records every `StepProgress` it is handed; anything else is a test bug,
 /// not a default to swallow.
 #[derive(Default)]
 struct NotifDouble {
-    events: Mutex<Vec<(String, Option<f64>, Option<i64>, Option<u64>, Option<u64>)>>,
+    events: Mutex<Vec<ProgressRecord>>,
 }
 
 impl NotificationPort for NotifDouble {

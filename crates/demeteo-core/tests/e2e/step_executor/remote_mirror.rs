@@ -166,6 +166,10 @@ impl crate::ports::execution::ExecutionPort for RecordingRunnerRpc {
         Err("unexpected resolve_user".to_string())
     }
 
+    async fn resolve_platform(&self, _: &str) -> Result<crate::domain::models::Platform, String> {
+        Err("unexpected resolve_platform".to_string())
+    }
+
     async fn control_rpc(
         &self,
         _: &str,

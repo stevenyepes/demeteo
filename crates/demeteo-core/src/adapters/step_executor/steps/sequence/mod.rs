@@ -132,6 +132,11 @@ impl ExecutionDriver {
             agent_kind: &agent_kind,
             override_model: override_model.as_deref(),
             effort: self.resolve_step_effort(step_conf),
+            platform: crate::ports::agent_runtime::resolve_agent_platform(
+                self.exec.as_ref(),
+                &machine_str,
+            )
+            .await,
         };
 
         // Rollback anchor: the feature branch tip before this attempt. On

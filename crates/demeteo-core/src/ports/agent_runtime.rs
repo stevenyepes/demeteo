@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio_stream::Stream;
 
 use crate::domain::agent_event::AgentEvent;
-use crate::domain::models::{Availability, EffortLevel, SessionInfo};
+use crate::domain::models::{Availability, EffortLevel, Platform, SessionInfo};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_execution::AgentExecutionPort;
 
@@ -43,6 +43,20 @@ pub struct AgentContext {
     /// Optional step title, passed as `--title <value>` for CLI agents
     /// that support named sessions (opencode, hermes).
     pub title: Option<String>,
+    /// The OS the agent process will actually run on, resolved through
+    /// [`exec`](Self::exec) against [`machine_id`](Self::machine_id).
+    ///
+    /// Carried on the context rather than re-derived per adapter because
+    /// `cfg!(windows)` is the wrong question in every one of them: the same
+    /// desktop build spawns a local agent on Windows and a remote one on Linux
+    /// within a single feature, so the answer belongs to the turn.
+    ///
+    /// `None` means the port could not name it, not "assume POSIX". An adapter
+    /// that cannot proceed without knowing must emit nothing rather than guess
+    /// — a POSIX-shaped flag sent to a Windows host is the failure this whole
+    /// field exists to stop, and inventing one from a `None` reintroduces it
+    /// silently.
+    pub platform: Option<Platform>,
     /// The policy-enforced execution port. Used by the tool bridge
     /// inside the runtime to dispatch agent-originated file/terminal
     /// requests through the existing policy + scope-fence machinery.
@@ -149,14 +163,19 @@ pub fn no_permission_env(_p: &PermissionProfile) -> HashMap<String, String> {
 /// read their config out of `$HOME`, and a wrong value causes the
 /// agent to exit with code 1 and no useful diagnostic. Worse, a
 /// split identity (`HOME=<remote>` but `USER=<gui>`) confuses some
-/// provider auth flows. For local runs we keep the parent
-/// process's values; for remote runs we ask the execution port —
-/// `resolve_home` (cached by the SSH adapter's first
-/// `printf %s "$HOME"` probe) and `resolve_user` (the
-/// `Machine.username` the SSH channel authenticates as).
+/// provider auth flows. Both are asked of the execution port for
+/// every machine, local included — `resolve_home` (the GUI process's
+/// own home locally; on the SSH adapter, the value cached by its
+/// first `printf %s "$HOME"` probe) and `resolve_user` (locally the
+/// GUI's user; remotely the `Machine.username` the SSH channel
+/// authenticates as). Being *resolved* rather than inherited is what
+/// exempts HOME from the platform rule below — its value is asked of
+/// the target machine, so it is already whatever that machine calls a
+/// home, `USERPROFILE` included.
 ///
-/// SHELL and TMPDIR are inherited from the parent process for both
-/// local and remote runs; neither has a per-machine meaning.
+/// Which variables are inherited from the desktop at all is a decision,
+/// not a list, and [`crate::domain::agent_env::inherited_agent_env`]
+/// holds it along with the reasoning.
 ///
 /// `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` are intentionally **not**
 /// injected here. Because we no longer pass `--bare` (which would set
@@ -169,12 +188,14 @@ pub async fn agent_base_env(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
 ) -> HashMap<String, String> {
-    let mut env = HashMap::new();
-    for key in ["SHELL", "TMPDIR"] {
-        if let Ok(val) = std::env::var(key) {
-            env.insert(key.to_string(), val);
-        }
-    }
+    let platform = resolve_agent_platform(exec, machine_id).await;
+    let mut env: HashMap<String, String> = crate::domain::agent_env::inherited_agent_env(
+        Platform::from_target_os(std::env::consts::OS),
+        platform,
+        |key| std::env::var(key).ok(),
+    )
+    .into_iter()
+    .collect();
     let (home, user) = resolve_agent_identity(exec, machine_id).await;
     if !home.is_empty() {
         env.insert("HOME".to_string(), home);
@@ -183,10 +204,10 @@ pub async fn agent_base_env(
         env.insert("USER".to_string(), u.clone());
         env.insert("LOGNAME".to_string(), u);
     } else {
-        // Local runs may not need a forced USER override (the parent
-        // process already has it), but if the GUI process happens to
-        // launch without USER set we still try to pull it from the
-        // exec port's view of the local machine identity.
+        // The port could not name the user (an unreachable remote, or a
+        // GUI process launched without one). Forward whatever the parent
+        // has rather than nothing: a POSIX agent with no `$USER` is worse
+        // off than one carrying the desktop's.
         for key in ["USER", "LOGNAME"] {
             if let Ok(val) = std::env::var(key) {
                 env.insert(key.to_string(), val);
@@ -197,29 +218,46 @@ pub async fn agent_base_env(
 }
 
 /// Resolve the (HOME, USER) identity to forward to an agent process
-/// spawned against `machine_id`. Local runs (`""` or `"local"`)
-/// return the GUI process's HOME and no forced USER (the parent's
-/// `$USER` is inherited via `agent_base_env`'s `std::env::var`
-/// loop); remote runs return the values already cached by the SSH
-/// adapter — `home_cache` (probed via `printf %s "$HOME"` over the
-/// SSH channel) and the `Machine.username` the SSH channel
-/// authenticates as. Falls back to the parent process's HOME and
-/// skips the USER override if the remote resolution fails, so the
-/// agent at least has *some* HOME rather than crashing on a
-/// missing `~`.
+/// spawned against `machine_id`, always through the execution port.
+/// The local adapter reads the GUI process's own identity — and on
+/// Windows that is `USERPROFILE` / `HOMEDRIVE`+`HOMEPATH` and
+/// `USERNAME`, none of which a direct `std::env::var("HOME")` would
+/// find; the SSH adapter returns its `home_cache` (probed via
+/// `printf %s "$HOME"` over the channel) and the `Machine.username`
+/// the channel authenticates as.
+///
+/// A remote machine that fails to resolve degrades to the *local*
+/// home and no USER override: wrong, but the agent at least has some
+/// `$HOME` rather than exiting 1 on a missing `~`. A local machine
+/// that fails to resolve yields an empty home, which `agent_base_env`
+/// drops rather than forwarding as `HOME=`.
 pub async fn resolve_agent_identity(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
 ) -> (String, Option<String>) {
-    if machine_id.is_empty() || machine_id == "local" {
-        return (std::env::var("HOME").unwrap_or_default(), None);
-    }
+    let is_local = machine_id.is_empty() || machine_id == "local";
     let home = match exec.resolve_home(machine_id).await {
         Ok(h) if !h.is_empty() => h,
-        _ => std::env::var("HOME").unwrap_or_default(),
+        _ if is_local => String::new(),
+        _ => exec.resolve_home("local").await.unwrap_or_default(),
     };
     let user = exec.resolve_user(machine_id).await.ok();
     (home, user)
+}
+
+/// Resolve the platform to record on [`AgentContext::platform`] for a
+/// session spawned against `machine_id`, always through the execution port.
+///
+/// Degrades to `None` on the same terms [`resolve_agent_identity`] drops the
+/// USER: an unreachable machine, or a transport that declines to answer, must
+/// not stop a turn that may not need the answer at all. It differs in having no
+/// local fallback — the *machine's* OS is the whole question, so borrowing the
+/// desktop's would answer a different one.
+pub async fn resolve_agent_platform(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+) -> Option<Platform> {
+    exec.resolve_platform(machine_id).await.ok()
 }
 
 /// Resolve just the HOME directory to forward as `$HOME` to an

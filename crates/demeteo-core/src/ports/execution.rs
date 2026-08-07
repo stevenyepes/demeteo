@@ -1,3 +1,4 @@
+use crate::domain::models::Platform;
 use async_trait::async_trait;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -19,6 +20,22 @@ pub const TRANSPORT_ERROR_PREFIX: &str = "transport: ";
 /// never finished being tested. Both prefixes classify as an *environment*
 /// failure; only an actual non-zero exit is a verdict.
 pub const TIMEOUT_ERROR_PREFIX: &str = "timeout: ";
+
+/// A Demeteo-owned process invocation. Commands are structured argv so they
+/// never depend on shell quoting or a POSIX shell being present.
+///
+/// This is the counterpart to [`ExecutionPort::run_command_with`], split by
+/// **authorship** rather than by platform (`docs/WINDOWS_PARITY.md`): what
+/// Demeteo itself invokes — git, probes, filesystem tools — is argv with no
+/// shell, while a *user-authored* body keeps the shell it was written for.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProgramRequest {
+    pub executable: String,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+    pub env: BTreeMap<String, String>,
+    pub timeout: Option<std::time::Duration>,
+}
 
 /// Explicit shell context for [`ExecutionPort::run_command_with`]. Every
 /// field is data the caller supplies; **no adapter may fall back to ambient
@@ -181,6 +198,14 @@ pub trait ExecutionPort: Send + Sync {
     /// immediately closes it. Returns `Ok(())` on success, `Err(message)` on
     /// any connectivity or auth failure. Does NOT cache the session.
     async fn test_connection(&self, machine_id: &str) -> Result<(), String>;
+    /// Executes a Demeteo-owned command without a shell.
+    async fn run_program(
+        &self,
+        _machine_id: &str,
+        _request: ProgramRequest,
+    ) -> Result<String, String> {
+        Err("structured program execution is not implemented by this transport".to_string())
+    }
 
     /// Run `cmd` through a **non-login** POSIX shell in the adapter's
     /// default cwd with no caller-supplied environment. Exactly equivalent
@@ -236,6 +261,44 @@ pub trait ExecutionPort: Send + Sync {
         content: &[u8],
     ) -> Result<(), String>;
 
+    /// Create `path` and every missing parent directory on the target.
+    /// This is deliberately a filesystem operation rather than a `mkdir`
+    /// command: Windows has no standalone `mkdir` executable and callers
+    /// must not branch on the selected transport.
+    async fn create_dir_all(&self, _machine_id: &str, _path: &str) -> Result<(), String> {
+        Err("recursive directory creation is not implemented by this transport".to_string())
+    }
+
+    /// Remove a directory tree on the target. The operation is recursive but
+    /// never follows directory symlinks.
+    async fn remove_dir_all(&self, _machine_id: &str, _path: &str) -> Result<(), String> {
+        Err("recursive directory removal is not implemented by this transport".to_string())
+    }
+
+    async fn remove_file(&self, _machine_id: &str, _path: &str) -> Result<(), String> {
+        Err("file removal is not implemented by this transport".to_string())
+    }
+
+    /// Whether Git on the target would run `path` as a hook.
+    ///
+    /// Not a POSIX-permission question, and the two answers differ. On Unix it
+    /// is the execute bit, which is what `find_hook`'s `access(X_OK)` tests.
+    /// On Windows `mingw_access` masks `X_OK` off before calling `_waccess` —
+    /// there is no bit to test — so Git will attempt **any** file that is not
+    /// a directory, and a file it cannot spawn fails the hook rather than
+    /// skipping it. `false` for a regular file there would be the harmful
+    /// answer: the sole caller uses this to decide whether a repository's
+    /// `commit-msg` hook gets to reject a message Demeteo composed, and
+    /// skipping that check is how an unrunnable commit message reaches a
+    /// branch.
+    ///
+    /// A missing path is `Err`, not `Ok(false)` (D3). The name predates this
+    /// contract and overstates it — on Windows there is no executable bit for
+    /// it to be reading.
+    async fn is_executable(&self, _machine_id: &str, _path: &str) -> Result<bool, String> {
+        Err("hook-runnability inspection is not implemented by this transport".to_string())
+    }
+
     async fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String>;
 
     async fn list_dir(&self, machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String>;
@@ -250,6 +313,20 @@ pub trait ExecutionPort: Send + Sync {
 
     /// Resolve the absolute home directory on the target host.
     async fn resolve_home(&self, machine_id: &str) -> Result<String, String>;
+
+    /// Name the operating system the target actually runs.
+    ///
+    /// **Required, with no default, and no transport may guess.** A default
+    /// could only be a constant or a `cfg!`, and both describe the desktop
+    /// binary rather than the machine a command lands on — a Windows desktop
+    /// driving a Linux remote makes those two answers different on every call.
+    /// `docs/WINDOWS_PARITY.md` records where that ends: `is_executable`'s
+    /// Windows arm answers `!is_dir()`, so every regular file reads as a
+    /// runnable git hook, and a port method a transport can only no-op or lie
+    /// about is a parity break *inside* the contract. A transport that cannot
+    /// find out must return `Err`; callers degrade on that, and a caller that
+    /// cannot degrade honestly must not act.
+    async fn resolve_platform(&self, machine_id: &str) -> Result<Platform, String>;
 
     /// Resolve the SSH-authenticated username on the target host. The
     /// returned value matches what the remote shell's passwd entry

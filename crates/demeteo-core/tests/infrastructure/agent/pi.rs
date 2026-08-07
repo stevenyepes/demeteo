@@ -381,6 +381,7 @@ fn ctx() -> AgentContext {
         model: None,
         effort: None,
         title: None,
+        platform: None,
         agent_exec: Arc::new(StubAgentExec),
         exec: Arc::new(StubExec),
         permissions: PermissionProfile::all_allow(),

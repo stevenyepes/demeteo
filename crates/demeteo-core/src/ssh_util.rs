@@ -2,8 +2,28 @@ use crate::domain::models::Machine;
 use socket2::{SockRef, TcpKeepalive};
 use ssh2::Session;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+/// The home directory of the process itself, for expanding a `~`-prefixed
+/// private-key path. The key is read on *this* host, so this is the local
+/// home even when the connection is remote.
+///
+/// `ExecutionPort::resolve_home` owns this ladder and is the value an agent
+/// is handed; it is async, while `connect` is synchronous and reached from
+/// Tauri command handlers and from inside `spawn_blocking`. Until one of
+/// those changes the two must be kept in step.
+fn process_home() -> Result<String, String> {
+    #[cfg(windows)]
+    let home = std::env::var("USERPROFILE").or_else(|_| {
+        let drive = std::env::var("HOMEDRIVE")?;
+        let path = std::env::var("HOMEPATH")?;
+        Ok::<_, std::env::VarError>(format!("{}{}", drive, path))
+    });
+    #[cfg(not(windows))]
+    let home = std::env::var("HOME");
+    home.map_err(|_| "Home directory environment variable is not set".to_string())
+}
 
 /// Resolve host:port, TCP connect with 5s timeout, SSH handshake, and
 /// authenticate using the machine's auth_type. Returns the connected
@@ -80,18 +100,19 @@ pub fn connect(machine: &Machine, secret: Option<String>) -> Result<(Session, Tc
             if key_path_str.trim_end().ends_with(".pub") {
                 return Err("Key path points to a public key (.pub). Provide the private key instead (e.g. ~/.ssh/id_ed25519).".to_string());
             }
-            let resolved = if key_path_str.starts_with('~') {
-                let home = std::env::var("HOME")
-                    .map_err(|_| "HOME environment variable not set".to_string())?;
-                key_path_str.replacen('~', &home, 1)
-            } else {
-                key_path_str.to_string()
+            let key_file = match key_path_str.strip_prefix('~') {
+                Some(rest) => {
+                    Path::new(&process_home()?).join(rest.trim_start_matches(['/', '\\']))
+                }
+                None => PathBuf::from(key_path_str),
             };
-            let key_file = Path::new(&resolved);
             if !key_file.exists() {
-                return Err(format!("Private key file not found: {}", resolved));
+                return Err(format!(
+                    "Private key file not found: {}",
+                    key_file.display()
+                ));
             }
-            sess.userauth_pubkey_file(&machine.username, None, key_file, secret.as_deref())
+            sess.userauth_pubkey_file(&machine.username, None, &key_file, secret.as_deref())
                 .map_err(|e| format!("Key authentication failed: {}", e))?;
         }
         "agent" => {

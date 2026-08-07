@@ -7,6 +7,11 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 struct StubExec {
     last_opts: Arc<Mutex<Option<ShellOptions>>>,
+    last_call: Arc<Mutex<Option<(String, String)>>>,
+    /// What `run_command_with` answers. `None` is the success case; `Some` is
+    /// the transport's verbatim failure, which is the only thing the installer
+    /// has to tell the human who pressed the button.
+    fails_with: Option<String>,
 }
 #[async_trait::async_trait]
 impl ExecutionPort for StubExec {
@@ -18,12 +23,16 @@ impl ExecutionPort for StubExec {
     }
     async fn run_command_with(
         &self,
-        _: &str,
-        _: &str,
+        machine_id: &str,
+        cmd: &str,
         opts: ShellOptions,
     ) -> Result<String, String> {
         *self.last_opts.lock().unwrap() = Some(opts);
-        Ok(String::new())
+        *self.last_call.lock().unwrap() = Some((machine_id.to_string(), cmd.to_string()));
+        match &self.fails_with {
+            Some(err) => Err(err.clone()),
+            None => Ok(String::new()),
+        }
     }
     async fn read_file(&self, _: &str, _: &str) -> Result<String, String> {
         Ok(String::new())
@@ -55,6 +64,9 @@ impl ExecutionPort for StubExec {
     async fn resolve_user(&self, _: &str) -> Result<String, String> {
         Ok("test".to_string())
     }
+    async fn resolve_platform(&self, _: &str) -> Result<crate::domain::models::Platform, String> {
+        Err("the installer must not ask this stub for a platform".to_string())
+    }
     async fn control_rpc(
         &self,
         _: &str,
@@ -75,37 +87,68 @@ impl ExecutionPort for StubExec {
     }
 }
 
-#[test]
-fn local_install_true_succeeds() {
-    assert!(run_local("true").is_ok());
-}
-
-#[test]
-fn local_install_false_fails() {
-    let err = run_local("false").unwrap_err();
-    assert!(err.contains("Install script failed"), "got: {}", err);
-}
-
-#[test]
-fn local_install_missing_command_fails() {
-    let err = run_local("this_binary_does_not_exist_xyz").unwrap_err();
-    assert!(err.contains("Install script failed"), "got: {}", err);
-}
-
-#[tokio::test]
-async fn remote_install_runs_under_interactive_login_shell() {
-    // A remote agent install must resolve the user's package managers
-    // (npm via nvm, mise, asdf, brew), which only an interactive login shell
-    // puts on PATH — regression guard for the C1.3 explicit-context migration.
+async fn install_on(machine_id: &str) -> (StubExec, Result<(), String>) {
     let exec = StubExec::default();
-    let res = run_official_install(&exec, "remote_1", "curl -fsSL https://x/install | bash").await;
-    assert!(res.is_ok());
+    let res = run_official_install(&exec, machine_id, "curl -fsSL https://x/install | bash").await;
+    (exec, res)
+}
+
+fn recorded(exec: &StubExec) -> (String, String, ShellOptions) {
+    let (machine_id, cmd) = exec
+        .last_call
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("call recorded");
     let opts = exec
         .last_opts
         .lock()
         .unwrap()
         .clone()
         .expect("opts recorded");
-    assert!(opts.login_shell, "remote install must use a login shell");
-    assert!(opts.interactive, "remote install must be interactive");
+    (machine_id, cmd, opts)
+}
+
+#[tokio::test]
+async fn every_install_runs_under_an_interactive_login_shell() {
+    // An install must resolve the user's package managers (npm via nvm, mise,
+    // asdf, brew), which only an interactive login shell puts on PATH, and it
+    // must be the *same* shell the availability probe uses — otherwise the
+    // install succeeds and the probe that follows it reports the agent
+    // missing. Regression guard for the C1.3 explicit-context migration.
+    for machine_id in ["local", "", "remote_1"] {
+        let (exec, res) = install_on(machine_id).await;
+        assert!(res.is_ok(), "{}: {:?}", machine_id, res);
+        let (routed_to, _, opts) = recorded(&exec);
+        assert_eq!(routed_to, machine_id, "the router picks the transport");
+        assert!(opts.login_shell, "{}: must use a login shell", machine_id);
+        assert!(opts.interactive, "{}: must be interactive", machine_id);
+    }
+}
+
+#[tokio::test]
+async fn the_local_install_goes_through_the_port_like_every_other_one() {
+    // It used to spawn `sh` by name, which names nothing on Windows: the Git
+    // installation's `sh.exe` is not on PATH, so local installation there
+    // could not run at all. Routing it through the port is what makes the
+    // shell the transport's problem rather than this function's.
+    let (exec, _) = install_on("local").await;
+    let (machine_id, cmd, _) = recorded(&exec);
+    assert_eq!(machine_id, "local");
+    assert_eq!(cmd, "curl -fsSL https://x/install | bash");
+}
+
+#[tokio::test]
+async fn a_failed_install_reports_what_the_installer_said_and_what_was_run() {
+    // A human pressed a button and is waiting on this string.
+    let exec = StubExec {
+        fails_with: Some("Command failed (exit code: Some(1)): npm ERR! EACCES".to_string()),
+        ..StubExec::default()
+    };
+    let err = run_official_install(&exec, "local", "npm i -g opencode-ai")
+        .await
+        .unwrap_err();
+    assert!(err.contains("Install script failed"), "got: {}", err);
+    assert!(err.contains("npm ERR! EACCES"), "got: {}", err);
+    assert!(err.contains("npm i -g opencode-ai"), "got: {}", err);
 }

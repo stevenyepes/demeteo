@@ -17,6 +17,7 @@
 use std::sync::Mutex;
 
 use super::*;
+use crate::domain::models::Platform;
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, SftpEntry, ShellOptions};
 
 const ANCHOR: &str = "1111111111111111111111111111111111111111";
@@ -98,6 +99,9 @@ impl ExecutionPort for ScriptedExec {
         unreachable!("probe_anchor only runs commands")
     }
     async fn resolve_user(&self, _: &str) -> Result<String, String> {
+        unreachable!("probe_anchor only runs commands")
+    }
+    async fn resolve_platform(&self, _: &str) -> Result<Platform, String> {
         unreachable!("probe_anchor only runs commands")
     }
     async fn control_rpc(

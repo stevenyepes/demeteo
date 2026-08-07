@@ -124,6 +124,8 @@ pub(crate) async fn resolve_sync_conflicts_shared(
     // Every supported agent is a CLI runtime that takes its model via the
     // `--model` flag in `build_args` from `ctx.model` below.
     let agent_env = crate::ports::agent_runtime::agent_base_env(exec.as_ref(), machine_str).await;
+    let platform =
+        crate::ports::agent_runtime::resolve_agent_platform(exec.as_ref(), machine_str).await;
 
     let binary = registry
         .runtime_for(agent_kind)
@@ -139,6 +141,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         model: override_model.map(str::to_string),
         effort: Some(effort),
         title: Some("Sync conflict resolver".to_string()),
+        platform,
         agent_exec: agent_exec.clone(),
         exec: exec.clone(),
         permissions: crate::domain::permission::PermissionProfile::all_allow(),

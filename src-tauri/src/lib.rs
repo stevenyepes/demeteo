@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod commands;
 pub mod composition;
+pub mod env_path;
 pub mod forward;
 pub mod sftp;
 pub mod terminal;
@@ -88,45 +89,37 @@ fn enrich_env_path() {
         }
     }
 
-    // Enrich local PATH so coding agents installed via npm-global, cargo, scoop,
-    // etc. are discoverable when Demeteo is launched from Explorer/Start menu on
-    // Windows (a GUI launch only inherits the user's persisted PATH).
+    // A GUI launch inherits the environment block Explorer held at logon, so
+    // PATH here is not the PATH the user's own shell resolves against. See
+    // `env_path` for why that has to be rebuilt from the registry rather than
+    // trusted, and for what it still cannot recover.
     #[cfg(target_os = "windows")]
     {
-        if let Ok(current_path) = std::env::var("PATH") {
-            let mut paths: Vec<std::path::PathBuf> = std::env::split_paths(&current_path).collect();
+        let inherited = std::env::var("PATH").unwrap_or_default();
+        let appdata = std::env::var("APPDATA").ok();
+        let local_appdata = std::env::var("LOCALAPPDATA").ok();
+        let user_profile = std::env::var("USERPROFILE").ok();
 
-            let mut additional_paths: Vec<std::path::PathBuf> = Vec::new();
+        let appended: Vec<String> = env_path::windows_shim_dirs(
+            appdata.as_deref(),
+            local_appdata.as_deref(),
+            user_profile.as_deref(),
+        )
+        .into_iter()
+        .filter(|dir| dir.exists())
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .collect();
 
-            // npm-global `.cmd` shims (e.g. claude.cmd) live in %APPDATA%\npm.
-            if let Ok(appdata) = std::env::var("APPDATA") {
-                additional_paths.push(std::path::PathBuf::from(appdata).join("npm"));
-            }
-            // Per-user installers commonly drop binaries under %LOCALAPPDATA%\Programs.
-            if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
-                additional_paths.push(std::path::PathBuf::from(local_appdata).join("Programs"));
-            }
-            if let Ok(userprofile) = std::env::var("USERPROFILE") {
-                let profile = std::path::PathBuf::from(userprofile);
-                // cargo-installed binaries.
-                additional_paths.push(profile.join(".cargo").join("bin"));
-                // scoop shims.
-                additional_paths.push(profile.join("scoop").join("shims"));
-            }
+        let enriched = env_path::compose_windows_path(
+            &inherited,
+            env_path::machine_environment_path().as_deref(),
+            env_path::user_environment_path().as_deref(),
+            &appended,
+            &|name: &str| std::env::var(name).ok(),
+        );
 
-            let mut changed = false;
-            for p in additional_paths {
-                if p.exists() && !paths.contains(&p) {
-                    paths.push(p);
-                    changed = true;
-                }
-            }
-
-            if changed {
-                if let Ok(new_path) = std::env::join_paths(paths) {
-                    std::env::set_var("PATH", new_path);
-                }
-            }
+        if enriched != inherited {
+            std::env::set_var("PATH", enriched);
         }
     }
 }
@@ -545,12 +538,11 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    // The Windows PATH-enrichment branch mutates the process env in place and
-    // only rewrites PATH when at least one existing agent-install directory was
-    // appended. There is no return value to assert, so this is a smoke test: it
-    // exercises the `#[cfg(target_os = "windows")]` block end-to-end (var reads,
-    // existence guard, join_paths) and confirms it runs without panicking. It is
-    // gated to Windows so it only compiles/runs where that branch is active.
+    // What this branch decides is tested in `env_path`, on every platform.
+    // What is left here is the part no unit test reaches: the registry reads
+    // and the in-place env mutation, which have no return value to assert. So
+    // this is a smoke test that the Windows-only path runs to completion, and
+    // it is gated to Windows because that is the only place it exists.
     #[cfg(target_os = "windows")]
     #[test]
     fn enrich_env_path_runs_without_panicking_on_windows() {

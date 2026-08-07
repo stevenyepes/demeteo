@@ -1,10 +1,15 @@
 //! The `git add` pathspec, against a real repo and against a strict double.
 //!
-//! The three `.gitignore` cases genuinely need git's own ignore semantics, so
-//! they drive `LocalSubprocessAdapter` end to end through
-//! `commit_worktree_changes`. The shape of the probe command itself is asserted
-//! separately, against a double that answers the probe and **errors on any
-//! other command**.
+//! The `.gitignore` cases genuinely need git's own ignore semantics, so they
+//! drive `LocalSubprocessAdapter` end to end through `commit_worktree_changes`.
+//! The shape of the probe command itself is asserted separately, against a
+//! double that answers the probe and **errors on any other command**.
+//!
+//! The dependency-cache half of this used to live here as a pathspec and now
+//! lives in the clone's `.git/info/exclude`, written at provisioning time. Two
+//! cases below still cover it from this side, because this is where the damage
+//! would show: they assert that the entry keeps the symlink out of the commit,
+//! and that without the entry it lands in it.
 
 use super::*;
 use crate::adapters::step_executor::artifacts::commit_worktree_changes;
@@ -15,6 +20,7 @@ use std::sync::Mutex;
 /// standing in for `node_modules` (what `provision_subtask_worktree`
 /// leaves behind), with `ignore_line` as the repo's whole `.gitignore`,
 /// one committed file, and one uncommitted agent write.
+#[cfg(unix)]
 async fn repo_with_node_modules_symlink(
     exec: &crate::adapters::local::execution::LocalSubprocessAdapter,
     temp: &str,
@@ -74,6 +80,9 @@ async fn repo_with_node_modules_symlink(
 /// exited 1 with "The following paths are ignored by one of your
 /// .gitignore files", the sequence step could commit nothing, and the
 /// whole task failed with "produced nothing to merge".
+// The linked cache is a symlink, which Demeteo only creates on Unix — see
+// `git_ops::worktree::share_dependency_caches` for the stated Windows gap.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_commit_worktree_changes_when_symlinked_cache_dir_is_gitignored() {
     let temp = temp_git_repo("commit_worktree_ignored_symlink");
@@ -120,18 +129,23 @@ async fn test_commit_worktree_changes_when_symlinked_cache_dir_is_gitignored() {
     let _ = std::fs::remove_dir_all(format!("{temp}_cache"));
 }
 
-/// The other half of the gate: a trailing-slash `.gitignore` pattern
-/// (`node_modules/`) does NOT match a symlink of that name, so git sees
-/// it as untracked and the exclusion is the only thing keeping an
-/// absolute host path out of the feature branch. Dropping the exclusion
-/// wholesale to fix the test above would reintroduce that bug.
+/// The case the `.git/info/exclude` entry exists for: a trailing-slash
+/// `.gitignore` pattern (`node_modules/`) does NOT match a symlink of that
+/// name, so git sees the linked cache as untracked and would stage an absolute
+/// host path onto the feature branch.
+///
+/// `git_ops::worktree` writes the slashless name into the clone's own exclude
+/// file before it links anything; from here, `git add -A` simply never sees the
+/// symlink and no pathspec is involved.
+#[cfg(unix)]
 #[tokio::test]
-async fn test_commit_worktree_changes_excludes_unignored_cache_symlink() {
-    let temp = temp_git_repo("commit_worktree_unignored_symlink");
+async fn an_excluded_cache_symlink_needs_no_pathspec_to_stay_out_of_the_commit() {
+    let temp = temp_git_repo("commit_worktree_excluded_symlink");
     let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
     let machine = "local";
 
     repo_with_node_modules_symlink(&exec, &temp, "node_modules/\n").await;
+    write_cache_exclusion(&exec, &temp, "node_modules").await;
 
     let sha = commit_worktree_changes(
         &exec,
@@ -146,27 +160,83 @@ async fn test_commit_worktree_changes_excludes_unignored_cache_symlink() {
     .unwrap();
     assert!(!sha.is_empty());
 
-    let committed = exec
-        .run_command(
-            machine,
-            &format!(
-                "git -C {} show --stat --name-only --format= HEAD",
-                shell_esc(&temp)
-            ),
-        )
-        .await
-        .unwrap();
+    let committed = committed_files(&exec, &temp).await;
     assert!(
         committed.contains("src.rs"),
         "the agent's deliverable is committed, got: {committed}"
     );
     assert!(
         !committed.contains("node_modules"),
-        "the unignored cache symlink is pathspec-excluded, got: {committed}"
+        "the cache symlink is excluded by .git/info/exclude, got: {committed}"
     );
 
     let _ = std::fs::remove_dir_all(&temp);
     let _ = std::fs::remove_dir_all(format!("{temp}_cache"));
+}
+
+/// What the exclusion is worth, stated as the failure it prevents: the same
+/// repository without the entry commits the symlink — an absolute host path —
+/// onto the feature branch.
+///
+/// This is why `share_dependency_caches` writes the exclusion *before* it links
+/// and abandons the link when the write fails. Nothing downstream compensates.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unexcluded_cache_symlink_is_committed_as_an_absolute_host_path() {
+    let temp = temp_git_repo("commit_worktree_unexcluded_symlink");
+    let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
+    let machine = "local";
+
+    repo_with_node_modules_symlink(&exec, &temp, "node_modules/\n").await;
+
+    commit_worktree_changes(
+        &exec,
+        machine,
+        &temp,
+        "worker: task-1",
+        "artifacts/",
+        false,
+        &[],
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        committed_files(&exec, &temp).await.contains("node_modules"),
+        "without the exclusion the symlink is staged — the link must not be made without it"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp);
+    let _ = std::fs::remove_dir_all(format!("{temp}_cache"));
+}
+
+/// Write `name` into the repository's `.git/info/exclude` the way
+/// `git_ops::worktree::record_cache_exclusions` does.
+#[cfg(unix)]
+async fn write_cache_exclusion(
+    exec: &crate::adapters::local::execution::LocalSubprocessAdapter,
+    repo: &str,
+    name: &str,
+) {
+    exec.write_file("local", &format!("{repo}/.git/info/exclude"), name)
+        .await
+        .unwrap();
+}
+
+#[cfg(unix)]
+async fn committed_files(
+    exec: &crate::adapters::local::execution::LocalSubprocessAdapter,
+    repo: &str,
+) -> String {
+    exec.run_command(
+        "local",
+        &format!(
+            "git -C {} show --stat --name-only --format= HEAD",
+            shell_esc(repo)
+        ),
+    )
+    .await
+    .unwrap()
 }
 
 /// Same pathspec trap, reached through the artifact subdir instead: a
@@ -318,6 +388,9 @@ impl crate::ports::execution::ExecutionPort for ProbeOnlyExec {
     async fn resolve_user(&self, _m: &str) -> Result<String, String> {
         Err("unscripted resolve_user".into())
     }
+    async fn resolve_platform(&self, _m: &str) -> Result<crate::domain::models::Platform, String> {
+        Err("unscripted resolve_platform".into())
+    }
     async fn control_rpc(
         &self,
         _m: &str,
@@ -338,30 +411,55 @@ impl crate::ports::execution::ExecutionPort for ProbeOnlyExec {
     }
 }
 
-/// One round trip, and `; true` closes it so the loop's last failing `[ -L … ]`
-/// cannot turn the whole answer into an `Err` and silently drop every exclusion.
+/// One round trip, and `; true` closes it so the trailing `[ $? -eq 1 ]`
+/// cannot turn the whole answer into an `Err` and silently drop the exclusion.
 #[tokio::test]
 async fn the_probe_is_one_command_that_cannot_exit_non_zero_on_its_last_test() {
     let exec = ProbeOnlyExec {
-        answer: "node_modules\nartifacts\n".to_string(),
+        answer: "artifacts\n".to_string(),
         seen: Mutex::new(Vec::new()),
     };
     let paths = resolve_add_exclusions(&exec, "local", "/wt", "artifacts/", false).await;
 
-    assert_eq!(paths, " -- ':!node_modules' ':!artifacts'");
+    assert_eq!(paths, " -- ':!artifacts'");
     let seen = exec.seen.lock().unwrap().clone();
-    assert_eq!(seen.len(), 1, "one round trip, not one per candidate");
+    assert_eq!(seen.len(), 1, "one round trip");
     assert!(
         seen[0].ends_with("; true"),
-        "the loop's exit status must not decide the probe's: {}",
+        "the last test's exit status must not decide the probe's: {}",
         seen[0]
     );
     assert!(
         seen[0].starts_with("cd /wt || exit 1;"),
-        "`|| exit 1` and not `&&`: the `;`-separated probes would otherwise run \
+        "`|| exit 1` and not `&&`: the `;`-separated probe would otherwise run \
          in the wrong directory: {}",
         seen[0]
     );
+    assert!(
+        !seen[0].contains("node_modules"),
+        "the dependency caches are excluded by .git/info/exclude, not by a pathspec: {}",
+        seen[0]
+    );
+}
+
+/// A caller that commits its artifacts has nothing to exclude, so it must not
+/// spend a round trip finding that out — the `ProbeOnlyExec` errors on
+/// everything, so any command at all fails this.
+#[tokio::test]
+async fn nothing_to_exclude_costs_no_round_trip() {
+    let exec = ProbeOnlyExec {
+        answer: String::new(),
+        seen: Mutex::new(Vec::new()),
+    };
+    assert_eq!(
+        resolve_add_exclusions(&exec, "local", "/wt", "artifacts/", true).await,
+        ""
+    );
+    assert_eq!(
+        resolve_add_exclusions(&exec, "local", "/wt", "", false).await,
+        ""
+    );
+    assert!(exec.seen.lock().unwrap().is_empty());
 }
 
 /// A probe that could not run keeps the artifact exclusion, so a dead transport
@@ -419,6 +517,12 @@ async fn a_probe_failure_still_keeps_the_artifact_exclusion() {
         }
         async fn resolve_user(&self, _m: &str) -> Result<String, String> {
             Err("unscripted resolve_user".into())
+        }
+        async fn resolve_platform(
+            &self,
+            _m: &str,
+        ) -> Result<crate::domain::models::Platform, String> {
+            Err("unscripted resolve_platform".into())
         }
         async fn control_rpc(
             &self,

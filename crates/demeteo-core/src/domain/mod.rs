@@ -12,6 +12,7 @@
 //! Submodules should cite this rule rather than restating it.
 
 pub mod action;
+pub mod agent_env;
 pub mod agent_event;
 pub mod agent_session;
 pub mod app_view;
@@ -41,6 +42,7 @@ pub mod memory;
 pub(crate) mod merge_status;
 pub mod models;
 pub mod permission;
+pub mod platform_context;
 pub mod prompt_budget;
 pub mod prompt_context;
 pub mod restart_reconcile;
