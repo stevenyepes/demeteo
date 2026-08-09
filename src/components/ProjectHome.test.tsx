@@ -828,6 +828,49 @@ describe('the project header’s provenance line', () => {
     expect(line.textContent).not.toMatch(/workflow/i);
   });
 
+  it('names the project’s chosen default workflow', async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case 'workflow_list':
+          return Promise.resolve([{ id: 'wf-2', name: 'Docs Update', is_starter: true }]);
+        case 'get_proposed_strategy':
+          return Promise.resolve({ project_id: 'proj-1', default_workflow_id: 'wf-2' });
+        case 'get_repositories_for_project':
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve([]);
+      }
+    });
+    mountWithProviders(baseProject(), []);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('project-provenance')).toHaveTextContent(
+        'Default workflow: Docs Update',
+      ),
+    );
+  });
+
+  it('omits the workflow clause when the chosen one has been deleted', async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case 'workflow_list':
+          return Promise.resolve([{ id: 'wf-2', name: 'Docs Update', is_starter: true }]);
+        case 'get_proposed_strategy':
+          // The column carries no foreign key on purpose, so a deleted
+          // workflow leaves this id behind — reachable in normal use.
+          return Promise.resolve({ project_id: 'proj-1', default_workflow_id: 'wf-gone' });
+        case 'get_repositories_for_project':
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve([]);
+      }
+    });
+    mountWithProviders(baseProject(), []);
+
+    await waitFor(() => expect(screen.getByTestId('project-provenance')).toBeInTheDocument());
+    expect(screen.getByTestId('project-provenance').textContent).not.toMatch(/workflow/i);
+  });
+
   it('says where the run executes rather than inventing a machine', async () => {
     mountWithProviders(baseProject({ compute_type: 'remote' }), [provider()]);
 

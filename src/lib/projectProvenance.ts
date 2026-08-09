@@ -8,12 +8,19 @@
  * module rather than a template string because the interesting cases are the
  * degraded ones, and each needed a decision:
  *
- *  1. **A project has no default workflow, so the clause is gone and no input
- *     can bring it back.** There is no `default_workflow_id` on `projects`, none
- *     in `project_settings` (V1 through the current migration), and none in
- *     `ProjectSettingsData`; `StartFeatureModal`'s `defaultWorkflowId` is the
- *     caller's seed for one launch, not a stored project property. Restoring the
- *     clause needs a column, so it is a backend decision, not a rendering one.
+ *  1. **The default-workflow clause reports a stored choice or says nothing.**
+ *     It once named the same workflow for every project while no such setting
+ *     existed anywhere; `project_settings.default_workflow_id` (migration V40)
+ *     is that setting, and a project that has not chosen one omits the clause
+ *     rather than naming whatever the workflow list happens to start with.
+ *
+ *     An id that resolves to no workflow omits it too. A workflow can be
+ *     deleted while a project names it — the column deliberately carries no
+ *     foreign key, because the remote runner re-ingests a workflow under a
+ *     fresh id and persists the launching client's settings verbatim, so on the
+ *     runner's own database the id names nothing and a constraint would abort
+ *     the run. Unset and dangling are therefore the same state to a reader,
+ *     which is what makes omission the honest rendering of both.
  *
  *  2. **A host is reported, an edition is never inferred.** `github` + a host
  *     that is not `github.com` most likely *is* GitHub Enterprise Server, but
@@ -46,11 +53,23 @@ export interface ProvenanceRepository {
   provider_id: string;
 }
 
+/** The subset of a workflow this module reads. `ProjectHome`'s `workflowById`
+ *  values satisfy it. */
+export interface ProvenanceWorkflow {
+  name: string;
+}
+
 export interface ProjectProvenanceInput {
   repositories: ReadonlyArray<ProvenanceRepository>;
   /** Every provider instance the app knows about — `ProjectContext`'s
    *  `providers`, which `App` already loads on startup. */
   providers: ReadonlyArray<ProvenanceProvider>;
+  /** `ProjectSettings.default_workflow_id` (migration V40). */
+  defaultWorkflowId?: string | null;
+  /** Workflow id → display meta. Absent means the list has not answered yet,
+   *  which is not the same as an id that resolves to nothing: an unanswered
+   *  list would degrade every valid id, so the clause waits instead. */
+  workflowsById?: ReadonlyMap<string, ProvenanceWorkflow>;
   /** `Project.compute_type`. Absent reads as `'local'`: the column is
    *  `NOT NULL DEFAULT 'local'`, so only the optional TS field can be missing. */
   computeType?: string | null;
@@ -109,6 +128,11 @@ export function describeProjectProvenance(input: ProjectProvenanceInput): Projec
     segments.push(`Connected via ${labels.join(', ')}`);
   }
   segments.push(computeSegment(input.computeType, input.remoteHost));
+
+  const workflow = input.defaultWorkflowId
+    ? input.workflowsById?.get(input.defaultWorkflowId)
+    : undefined;
+  if (workflow) segments.push(`Default workflow: ${workflow.name}`);
 
   return { segments, text: segments.join(PROVENANCE_SEPARATOR), unresolvedRepositories };
 }

@@ -113,3 +113,55 @@ describe('describeProjectProvenance', () => {
     expect(out.segments[1]).toBe('Runs locally');
   });
 });
+
+/**
+ * The default-workflow clause. Its whole content is the difference between a
+ * stored choice and the three states that are not one — unset, an id whose
+ * workflow was deleted, and a workflow list that has not answered yet. F10 was
+ * the clause rendering regardless of all four.
+ */
+describe('describeProjectProvenance — default workflow', () => {
+  const WORKFLOWS = new Map([
+    ['wf-1', { name: 'Standard Feature Pipeline' }],
+    ['wf-2', { name: 'Docs Update' }],
+  ]);
+
+  const base = {
+    repositories: [{ provider_id: 'p-1' }],
+    providers: [{ id: 'p-1', type: 'github', host: 'github.com' }],
+  };
+
+  it('names the workflow the project chose', () => {
+    const { text } = describeProjectProvenance({
+      ...base,
+      defaultWorkflowId: 'wf-2',
+      workflowsById: WORKFLOWS,
+    });
+    expect(text).toContain('Default workflow: Docs Update');
+  });
+
+  it('says nothing when the project has not chosen one', () => {
+    const { text } = describeProjectProvenance({
+      ...base,
+      defaultWorkflowId: null,
+      workflowsById: WORKFLOWS,
+    });
+    expect(text).not.toMatch(/workflow/i);
+  });
+
+  /** The column carries no foreign key by design, so this is reachable in
+   *  normal use rather than a corrupt-data case. */
+  it('says nothing when the chosen workflow has been deleted', () => {
+    const { text } = describeProjectProvenance({
+      ...base,
+      defaultWorkflowId: 'wf-deleted',
+      workflowsById: WORKFLOWS,
+    });
+    expect(text).not.toMatch(/workflow/i);
+  });
+
+  it('waits rather than degrading while the workflow list is unanswered', () => {
+    const { text } = describeProjectProvenance({ ...base, defaultWorkflowId: 'wf-1' });
+    expect(text).not.toMatch(/workflow/i);
+  });
+});

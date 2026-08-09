@@ -62,6 +62,8 @@ const ProjectHome = () => {
     const [repositoriesProjectId, setRepositoriesProjectId] = useState<string | null>(null);
     // Workflow id → display meta, used to label the Active Pipelines list.
     const [workflowById, setWorkflowById] = useState<Map<string, { name: string; is_starter: boolean }>>(new Map());
+    // `ProjectSettings.default_workflow_id` (migration V40), for the header.
+    const [defaultWorkflowId, setDefaultWorkflowId] = useState<string | null>(null);
 
     // Staged attachments for the inline composer. Handed to the Start
     // Feature modal as a seed on launch; see AttachmentDropzone.tsx for
@@ -226,11 +228,12 @@ const ProjectHome = () => {
         const fetchWorkspaceData = async () => {
             setIsLoadingFeatures(true);
 
-            const [featuresRes, reposRes, workflowsRes, mirrorsRes] = await Promise.allSettled([
+            const [featuresRes, reposRes, workflowsRes, mirrorsRes, settingsRes] = await Promise.allSettled([
                 fetchActiveFeatures(activeProject.id),
                 getRepositoriesForProject(activeProject.id),
                 listWorkflows(),
                 listMirroredRuns(),
+                getProposedStrategy(activeProject.id),
             ]);
 
             if (cancelled) return;
@@ -300,6 +303,17 @@ const ProjectHome = () => {
             } else if (workflowsRes.status === 'rejected') {
                 console.error("Failed to fetch workflows:", workflowsRes.reason);
                 setWorkflowById(new Map());
+            }
+
+            // The header's default-workflow clause. A project saved before V40,
+            // or one that has never been saved at all, reads as unset — which
+            // is the state the clause is omitted for, so a failure here costs
+            // the clause and nothing else.
+            if (settingsRes.status === 'fulfilled') {
+                setDefaultWorkflowId(settingsRes.value?.default_workflow_id ?? null);
+            } else {
+                console.error("Failed to fetch project settings:", settingsRes.reason);
+                setDefaultWorkflowId(null);
             }
         };
         fetchWorkspaceData();
@@ -501,6 +515,8 @@ const ProjectHome = () => {
                             {describeProjectProvenance({
                                 repositories,
                                 providers,
+                                defaultWorkflowId,
+                                workflowsById: workflowById,
                                 computeType: activeProject.compute_type,
                                 remoteHost: activeProject.remote_host,
                             }).text}

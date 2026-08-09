@@ -493,12 +493,20 @@ A redesign that repaints a lie is worse than one that fixes it.
 
 **What Phase 4 settled:**
 
-- **F10's two halves resolved differently, and one of them cannot be fixed here.** The
-  provider is knowable and is now named truthfully with its stored host and no inferred
-  edition. A project has **no default workflow** — no column on `projects` or
-  `project_settings` — so that clause is deleted and no input can restore it. Restoring
-  it is a migration plus a way to set one, i.e. an AGENTS.md §6 gate; see the finding in
-  [`docs/ux-audit/findings.md`](ux-audit/findings.md).
+- **F10's two halves resolved differently.** The provider is knowable and is now named
+  truthfully with its stored host and no inferred edition. A project had **no default
+  workflow at all**, so that clause was a claim about a setting that did not exist —
+  migration **V40** adds it, the Strategy tab lets a user set it, and the header names it
+  only when it resolves. The finding in
+  [`docs/ux-audit/findings.md`](ux-audit/findings.md) carries the detail, including why
+  the column deliberately has no foreign key.
+
+  Worth keeping in mind for the phases after this one: the header string was the
+  *symptom*. `StartFeatureModal` was falling through to `workflows[0]`, so every project
+  already had a default decided by table order. **Repainting the header without that
+  would have made the lie truthful and left the behaviour it described untouched** —
+  which is the failure mode "a redesign that repaints a lie" was written to warn about,
+  one level deeper than it was aimed.
 - **The detail tier is a quiet line, not a disclosure.** The description is one truncated
   line whose full text is already free via `title`, and a per-row open/closed state in a
   memoized list buys the click back as the fan-out §4.2 spent Phase 1 removing.
