@@ -778,6 +778,11 @@ body {
   animation: pulse-glow 1.2s ease-in-out infinite;
 }
 
+.animate-pulse-glow-amber {
+  box-shadow: 0 0 10px 1px rgba(245, 158, 11, 0.5);
+  animation: pulse-glow 1.2s ease-in-out infinite;
+}
+
 .animate-pulse-glow-delay-1 { animation-delay: 0.15s; }
 .animate-pulse-glow-delay-2 { animation-delay: 0.30s; }
 
@@ -828,6 +833,7 @@ body {
    (fade-in, slide-in) are collapsed to instant. */
 @media (prefers-reduced-motion: reduce) {
   .animate-pulse-glow,
+  .animate-pulse-glow-amber,
   .animate-spin,
   .animate-spin-slow,
   .animate-progress-shimmer,
@@ -918,6 +924,25 @@ body {
 .stream-event {
   content-visibility: auto;
   contain-intrinsic-size: 80px 180px;
+}
+
+/* Same trade as .stream-event, for a 30+ step run (docs/UI_REDESIGN_PLAN.md
+   §4.9). Two things it is easy to get wrong:
+
+   Put it on the step card, NEVER on the <li> around it. content-visibility
+   implies paint containment at all times, on-screen included, and the timeline
+   hangs its connector circle outside the row at -41px — contained, that circle
+   is clipped away and the run loses its spine.
+
+   28px is the *content* box: contain-intrinsic-size stands in for the contents
+   and box-sizing:border-box adds the card's own 40px of padding and 2px of
+   border back on top, so a skipped comfortable row still reserves ~70px. It is
+   the height of the identity/metric row — one 20px text-sm line in a py-1
+   button. Raising it to the whole card over-reserves every off-screen row,
+   which is the scrollbar jumping under the thumb as you scroll. */
+.timeline-step-card {
+  content-visibility: auto;
+  contain-intrinsic-size: 640px 28px;
 }
 
 .supervisor-stream-content {
