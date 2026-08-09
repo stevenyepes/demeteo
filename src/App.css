@@ -798,6 +798,19 @@ body {
   animation: progress-shimmer 1.6s linear infinite;
 }
 
+/* Loading-placeholder shimmer. Same constraint as `pulse-glow` above, for the
+   same reason and at higher stakes: a skeleton stands in for a whole column, so
+   dozens of these animate at once. Only opacity moves; the tint is static. */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 0.85; }
+}
+
+.animate-skeleton-pulse {
+  background-color: rgba(255, 255, 255, 0.07);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
 /* ----------------------------------------------------
    REDUCED MOTION
    ----------------------------------------------------
@@ -810,6 +823,7 @@ body {
   .animate-spin,
   .animate-spin-slow,
   .animate-progress-shimmer,
+  .animate-skeleton-pulse,
   .pulse-indicator {
     animation: none !important;
   }

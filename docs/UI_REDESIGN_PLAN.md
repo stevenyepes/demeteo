@@ -288,7 +288,7 @@ joins the existing catalogue.
 | Component | Replaces | Notes |
 |---|---|---|
 | `SplitPane` | mock's hand-rolled resizer | §4.1. Controlled, persisted by key, keyboard-accessible |
-| `Chip` | four separate re-spellings of the same pill | Tone from `runStatus.ts`; `dot` / `pill` variants; folds in `StatusBadge`'s job rather than competing with it |
+| `Chip` | four separate re-spellings of the same pill | Tone from `runStatus.ts`. Does **not** subsume `StatusBadge` — see the division recorded below |
 | `MetricStrip` + `Metric` | `FeatureHeader`'s four stat blocks, mock's `MetricItem` | Label + value + tone + optional tooltip |
 | `Disclosure` | `InitialPromptPanel`, activity block | One animation, one a11y contract (`aria-expanded`, `aria-controls`) |
 | `SegmentedControl` | `RunViewToggle` (which *is* one), new list filter | Generalize the existing component; do not add a second |
@@ -299,6 +299,30 @@ joins the existing catalogue.
 `StatusBadge` already exist — reuse, don't re-create. Audit F28 and F36 are both about
 parallel implementations drifting; every new component here has to justify why an
 existing one couldn't take the job.
+
+#### Two overlaps Phase 0 surfaced, and how they resolve
+
+Both are cases where "one primitive" was the plan and two components exist in fact.
+Recorded here because a migration that changes appearance is not the "no visual change"
+Phase 0 claimed, and pretending otherwise is how a redesign loses its audit trail.
+
+- **`Chip` vs `StatusBadge`.** They do *not* do the same job, and `Chip` was wrong to
+  imply it. `StatusBadge`'s `dot` variant is a standalone glow dot with no label —
+  a rail/list-row affordance. `Chip`'s dot is `bg-current` and exists only inside a
+  pill. **Division:** `Chip` owns every labelled pill; `StatusBadge` narrows to the
+  standalone dot. Both already resolve colour through `runStatusMeta` + `TONE_CHIP`,
+  so there is no F27 drift either way — this is about typography and scope, not colour.
+  Phase 4 migrates the pill call sites and drops `StatusBadge`'s `pill` variant then.
+- **`SegmentedControl` vs `RunViewToggle`.** §5.1 said generalize, don't add a second;
+  a second landed and `RunViewToggle` is untouched. Their selected states differ —
+  `RunViewToggle` uses `bg-cyan-500/15 text-cyan-300` plus a glow, `SegmentedControl`
+  uses `TONE_CHIP.cyan`. **So Phase 2's migration is a deliberate visual change, not a
+  pure swap.** Decide the selected-state treatment once, there, and apply it to both
+  call sites; do not let the two drift further apart in the meantime.
+- **`SplitPane` restore-on-reopen.** The width to restore after a collapse currently
+  lives in a component-local ref, so it does not survive a remount. §7's
+  "collapse fully, restore last width" therefore needs Phase 6 to own that value as
+  state, not the component. Phase 2 should pass it in rather than build on the ref.
 
 ### 5.2 Where the decisions live
 
