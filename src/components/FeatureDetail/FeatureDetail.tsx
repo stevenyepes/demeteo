@@ -8,10 +8,10 @@ import { useNavigation, useProject, useUIState } from '../../context';
 import { ArtifactModal } from '../ArtifactModal';
 import { RunViewToggle } from '../RunViewToggle';
 import { defaultInspectorWidth, pickInspectorLayout } from '../runLayout';
+import { DensityToggle } from '../ui/DensityToggle';
 import { useRunColumnLayout } from '../useRunColumnLayout';
 import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { AttachmentsPanel } from './AttachmentsPanel';
-import { DensityToggle } from './DensityToggle';
 import { FeatureHeader } from './FeatureHeader';
 import { FeatureStatusBanners } from './FeatureStatusBanners';
 import { GateStrip } from './GateStrip';
@@ -353,7 +353,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
                   {graph.canShowGraph && (
                     <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} />
                   )}
-                  {!graph.graphMode && <DensityToggle value={density} onChange={setDensity} />}
+                  {!graph.graphMode && <DensityToggle value={density} onChange={setDensity} ariaLabel="Timeline density" />}
                 </div>
               )}
               <RunPanes

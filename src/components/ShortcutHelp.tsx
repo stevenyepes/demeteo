@@ -43,6 +43,7 @@ import {
   SHORTCUT_GROUPS,
   findShortcutById,
   formatEntryChords,
+  isEditableTarget,
   type ShortcutBadge,
   type ShortcutEntry,
   type ShortcutPlatform,
@@ -235,12 +236,6 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
   // call `event.stopPropagation()` if they want to opt out.
   useEffect(() => {
     const handleKey = (event: KeyboardEvent): void => {
-      const target = event.target as Element | null;
-      const isEditableTarget =
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        (target instanceof HTMLElement && target.isContentEditable);
-
       if (event.key === 'Escape') {
         if (stateRef.current.isOpen) {
           event.preventDefault();
@@ -256,7 +251,7 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
 
       // While a text field is focused we don't want to compete with it
       // for keystrokes (typing "?" in an input must not open help).
-      if (isEditableTarget) {
+      if (isEditableTarget(event.target)) {
         return;
       }
 

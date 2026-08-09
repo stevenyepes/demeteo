@@ -443,6 +443,32 @@ export function matchesKeyEvent(
   return true;
 }
 
+/**
+ * Whether a key event landed in something the user is typing into.
+ *
+ * Any chord whose key is a character the user can type has to ask this before
+ * consuming the event, and the cost of forgetting is invisible: bare `?` is
+ * bound to the docs panel with `preventDefault`, so an unguarded dispatcher
+ * eats the `?` out of whatever field has focus and opens a panel over it. The
+ * two global `keydown` listeners disagreed about this — `ShortcutHelp` guarded,
+ * `useKeyboardShortcuts` did not — which is audit finding F5's shape, and the
+ * reason the predicate lives here rather than a third time at a call site.
+ *
+ * `SELECT` is deliberately absent: a select consumes printable keys to jump
+ * between options, but it is not a text field, and `WorkflowBuilder` includes it
+ * only because a canvas delete-key would otherwise fire from its own toolbar.
+ */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    // `=== true` rather than a bare read: the DOM types promise a boolean and
+    // jsdom returns `undefined`, so `&&` would hand back a non-boolean through
+    // a signature that says otherwise.
+    (target instanceof HTMLElement && target.isContentEditable === true)
+  );
+}
+
 export function matchesMouseButton(
   event: MouseEventLike,
   chord: ShortcutChord,

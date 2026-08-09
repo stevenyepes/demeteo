@@ -9,6 +9,7 @@ import {
   findShortcutById,
   formatChord,
   formatEntryChords,
+  isEditableTarget,
   matchesEntryKeyboard,
   matchesEntryMouse,
   matchesKeyEvent,
@@ -304,5 +305,38 @@ describe('group coverage', () => {
     'help',
   ])('defines the "%s" group', (id) => {
     expect(SHORTCUT_GROUPS.some((group) => group.id === id)).toBe(true);
+  });
+});
+
+/**
+ * Bare `?` is bound to the docs panel with `preventDefault`, so a dispatcher
+ * that skips this guard eats the character out of whatever field has focus.
+ * Both global `keydown` listeners route through this predicate now; they used
+ * to disagree, which is audit F5's shape.
+ */
+describe('isEditableTarget', () => {
+  it('claims the fields a user types into', () => {
+    expect(isEditableTarget(document.createElement('input'))).toBe(true);
+    expect(isEditableTarget(document.createElement('textarea'))).toBe(true);
+
+    const rich = document.createElement('div');
+    rich.contentEditable = 'true';
+    // jsdom does not derive `isContentEditable` from the attribute.
+    Object.defineProperty(rich, 'isContentEditable', { value: true });
+    expect(isEditableTarget(rich)).toBe(true);
+  });
+
+  it('leaves everything else to the shortcut dispatchers', () => {
+    expect(isEditableTarget(document.createElement('div'))).toBe(false);
+    expect(isEditableTarget(document.createElement('button'))).toBe(false);
+    expect(isEditableTarget(null)).toBe(false);
+  });
+
+  /** A select consumes printable keys to jump between options but holds no
+   *  text, so a shortcut is right to fire over it. `WorkflowBuilder` counts it
+   *  as editable for a different reason — a canvas Delete key — and that
+   *  difference is deliberate, not drift to be reconciled here. */
+  it('does not claim a select', () => {
+    expect(isEditableTarget(document.createElement('select'))).toBe(false);
   });
 });

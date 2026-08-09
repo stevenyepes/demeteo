@@ -13,7 +13,7 @@ import { DensityToggle } from './DensityToggle';
 
 describe('DensityToggle', () => {
   it('is the shared segmented control, named for what it changes', () => {
-    render(<DensityToggle value="comfortable" onChange={() => {}} />);
+    render(<DensityToggle ariaLabel="Timeline density" value="comfortable" onChange={() => {}} />);
 
     expect(screen.getByTestId('segmented-control')).toBe(
       screen.getByRole('radiogroup', { name: 'Timeline density' }),
@@ -21,7 +21,7 @@ describe('DensityToggle', () => {
   });
 
   it('offers exactly the two densities', () => {
-    render(<DensityToggle value="comfortable" onChange={() => {}} />);
+    render(<DensityToggle ariaLabel="Timeline density" value="comfortable" onChange={() => {}} />);
 
     expect(screen.getAllByRole('radio').map((el) => el.textContent)).toEqual([
       'Comfortable',
@@ -30,7 +30,7 @@ describe('DensityToggle', () => {
   });
 
   it('checks the density it was given', () => {
-    render(<DensityToggle value="compact" onChange={() => {}} />);
+    render(<DensityToggle ariaLabel="Timeline density" value="compact" onChange={() => {}} />);
 
     expect(screen.getByRole('radio', { name: 'Compact' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('radio', { name: 'Comfortable' })).toHaveAttribute(
@@ -41,7 +41,7 @@ describe('DensityToggle', () => {
 
   it('reports the picked density to the caller', async () => {
     const onChange = vi.fn();
-    render(<DensityToggle value="comfortable" onChange={onChange} />);
+    render(<DensityToggle ariaLabel="Timeline density" value="comfortable" onChange={onChange} />);
 
     await userEvent.click(screen.getByRole('radio', { name: 'Compact' }));
 
@@ -49,17 +49,17 @@ describe('DensityToggle', () => {
   });
 
   it('keeps no state of its own — the checked segment follows the prop', async () => {
-    const { rerender } = render(<DensityToggle value="comfortable" onChange={() => {}} />);
+    const { rerender } = render(<DensityToggle ariaLabel="Timeline density" value="comfortable" onChange={() => {}} />);
 
     await userEvent.click(screen.getByRole('radio', { name: 'Compact' }));
     expect(screen.getByRole('radio', { name: 'Compact' })).toHaveAttribute('aria-checked', 'false');
 
-    rerender(<DensityToggle value="compact" onChange={() => {}} />);
+    rerender(<DensityToggle ariaLabel="Timeline density" value="compact" onChange={() => {}} />);
     expect(screen.getByRole('radio', { name: 'Compact' })).toHaveAttribute('aria-checked', 'true');
   });
 
   it('renders at the denser size, so it fits the run toolbar', () => {
-    render(<DensityToggle value="comfortable" onChange={() => {}} className="ml-auto" />);
+    render(<DensityToggle ariaLabel="Timeline density" value="comfortable" onChange={() => {}} className="ml-auto" />);
 
     const group = screen.getByTestId('segmented-control');
     expect(group).toHaveAttribute('data-size', 'sm');
