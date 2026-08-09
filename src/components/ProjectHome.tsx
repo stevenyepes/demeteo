@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
-import { Zap, Cpu, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
+import { Zap, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
 import { Feature, Repository } from '../types';
-import { formatTokens } from '../lib/utils';
 import { formatError } from '../lib/errors';
 import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } from '../lib/project';
 import { bootstrapProject } from '../lib/createProjectWizard';
@@ -10,10 +9,22 @@ import { fetchActiveFeatures } from '../lib/features';
 import { listMirroredRuns } from '../lib/remoteRuns';
 import { listWorkflows } from '../lib/workflows';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
+import EmptyStateCard from './EmptyStateCard';
 import { PipelineCard } from './PipelineCard';
+import { PipelineFilterBar } from './PipelineFilterBar';
+import { PipelineListSkeleton } from './PipelineListSkeleton';
+import { ProjectTelemetry } from './ProjectTelemetry';
 import { StartSessionButton } from './StartSessionButton';
+import { DensityToggle } from './ui/DensityToggle';
+import { DEFAULT_DENSITY, pipelineDensityClasses, type Density } from '../lib/density';
+import {
+    DEFAULT_PIPELINE_FILTER,
+    filterPipelines,
+    type PipelineFilterOptions,
+} from '../lib/pipelineFilter';
 import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
 import { buildWorkflowById } from '../lib/workflowBadge';
+import { describeProjectProvenance } from '../lib/projectProvenance';
 import {
     extractClipboardImageFiles,
     recoverClipboardImageFile,
@@ -22,13 +33,16 @@ import {
 
 const ProjectHome = () => {
     const { navigate } = useNavigation();
-    const { state: { currentProjectId, projects }, dispatch: projDispatch } = useProject();
+    const { state: { currentProjectId, projects, providers }, dispatch: projDispatch } = useProject();
     const { uiDispatch } = useUIState();
     const activeProject = projects.find(p => p.id === currentProjectId)!;
     const [featureInput, setFeatureInput] = useState('');
     const [features, setFeatures] = useState<Feature[]>([]);
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
     const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
+    /** Both are the session's until Phase 6 persists them. */
+    const [pipelineFilter, setPipelineFilter] = useState<PipelineFilterOptions>(DEFAULT_PIPELINE_FILTER);
+    const [density, setDensity] = useState<Density>(DEFAULT_DENSITY);
     const [activeRepositoryId, setActiveRepositoryId] = useState<string>('');
     // Feature ids that have a remote-run mirror → they execute detached under
     // the runner rather than on this machine. Drives the per-card transport
@@ -107,6 +121,17 @@ const ProjectHome = () => {
     const openFeature = useCallback((featureId: string, featureTitle: string) => {
         navigate({ kind: 'detail', featureId, featureTitle });
     }, [navigate]);
+
+    /** `filterPipelines` returns `features` itself when nothing was dropped and
+     *  nothing moved, so this memo genuinely holds across a keystroke in the
+     *  composer — which is the same component's state. `pipelineDensityClasses`
+     *  returns one stable object per density for the same reason: both feed
+     *  memoized rows. */
+    const visibleFeatures = useMemo(
+        () => filterPipelines(features, pipelineFilter),
+        [features, pipelineFilter],
+    );
+    const densityClasses = pipelineDensityClasses(density);
 
     const openStartFeature = () => {
         uiDispatch({
@@ -467,13 +492,25 @@ const ProjectHome = () => {
                                 <Settings className="w-5 h-5" />
                             </button>
                         </div>
-                        <p className="text-sm text-slate-400">Connected via GitHub Enterprise &bull; Default Workflow: Standard Feature Pipeline</p>
+                        {/* Audit F10. Every clause here is a stored fact or is
+                            absent — the string this replaced named a provider
+                            edition and a default workflow for every project
+                            regardless of either, and a project has no default
+                            workflow to name at all (`projectProvenance.ts`). */}
+                        <p className="text-sm text-slate-400" data-testid="project-provenance">
+                            {describeProjectProvenance({
+                                repositories,
+                                providers,
+                                computeType: activeProject.compute_type,
+                                remoteHost: activeProject.remote_host,
+                            }).text}
+                        </p>
                     </div>
-                    <div className="glass-panel px-4 py-2 rounded-lg flex gap-4 text-xs font-mono">
-                        <div className="flex flex-col"><span className="text-slate-500">Fleet Active</span><span className="text-emerald-400 font-bold">{features.filter(f => f.status === 'running').length} Nodes</span></div>
-                        <div className="w-px bg-white/10"></div>
-                        <div className="flex flex-col"><span className="text-slate-500">Token Spend</span><span className="text-white">{formatTokens(features.reduce((sum, f) => sum + (f.tokens || 0), 0))}</span></div>
-                    </div>
+                    {/* Summed over every feature, not the filtered view: the
+                        strip reports the project, and a total that moved when
+                        you typed in the search box would be reporting the
+                        query instead. */}
+                    <ProjectTelemetry features={features} />
                 </div>
 
                 {/* Persistent Start Session affordance — visible for both local
@@ -601,26 +638,41 @@ const ProjectHome = () => {
                     returns everything that isn't archived/deleted, so completed,
                     failed and gated runs are here too, each wearing its own chip. */}
                 <div>
-                    <h2 className="font-heading text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Feature Pipelines</h2>
-                    <div className="space-y-4">
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                        <h2 className="font-heading text-sm font-semibold text-slate-400 uppercase tracking-widest">Feature Pipelines</h2>
+                        {features.length > 0 && (
+                            <DensityToggle value={density} onChange={setDensity} ariaLabel="Pipeline list density" />
+                        )}
+                    </div>
+
+                    {/* The bar self-suppresses on an empty project, so the
+                        "no pipelines at all" state below stays the only one
+                        this component owns; "your filter matched nothing" is
+                        the bar's, next to the controls that caused it. */}
+                    {!isLoadingFeatures && (
+                        <PipelineFilterBar
+                            value={pipelineFilter}
+                            onChange={setPipelineFilter}
+                            features={features}
+                            resultCount={visibleFeatures.length}
+                            className="mb-4"
+                        />
+                    )}
+
+                    <div className={densityClasses.list}>
                         {isLoadingFeatures ? (
-                            <div className="flex items-center justify-center p-8">
-                                <RotateCw className="w-6 h-6 text-cyan-400 animate-spin" />
-                            </div>
+                            /* A skeleton, not a spinner: the spinner replaced
+                               the whole list, so coming back re-mounted every
+                               row (§3.4). */
+                            <PipelineListSkeleton />
                         ) : features.length === 0 ? (
-                            <div className="glass-panel p-8 rounded-2xl border border-white/5 text-center bg-black/20 flex flex-col items-center justify-center space-y-4 relative overflow-hidden">
-                                <div className="absolute -top-10 -left-10 w-40 h-40 bg-violet-600/5 rounded-full blur-2xl pointer-events-none"></div>
-                                <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-cyan-600/5 rounded-full blur-2xl pointer-events-none"></div>
-                                <div className="w-12 h-12 rounded-full bg-violet-500/10 border border-violet-500/25 flex items-center justify-center text-violet-400 mb-2">
-                                    <Cpu className="w-6 h-6 animate-pulse" />
-                                </div>
-                                <h3 className="font-heading text-white font-medium text-base">No feature pipelines yet</h3>
-                                <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
-                                    There are no agent orchestration workflows running in this workspace right now. Use the tool above to start a new pipeline.
-                                </p>
-                            </div>
+                            <EmptyStateCard
+                                variant="inline"
+                                title="No feature pipelines yet"
+                                description="There are no agent orchestration workflows running in this workspace right now. Use the tool above to start a new pipeline."
+                            />
                         ) : (
-                            features.map((feature) => (
+                            visibleFeatures.map((feature) => (
                                 <PipelineCard
                                     key={feature.id}
                                     feature={feature}
@@ -628,6 +680,7 @@ const ProjectHome = () => {
                                     detached={detachedIds.has(feature.id)}
                                     computeType={activeProject.compute_type}
                                     remoteHost={activeProject.remote_host}
+                                    density={densityClasses}
                                     onOpen={openFeature}
                                 />
                             ))

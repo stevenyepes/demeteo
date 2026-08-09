@@ -25,7 +25,7 @@ import {
   useUIState,
 } from '../context';
 import ProjectHome from './ProjectHome';
-import type { Project } from '../types';
+import type { Feature, Project, Provider } from '../types';
 
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
@@ -730,5 +730,151 @@ describe('ProjectHome — handleRetryBootstrap defaultBranch/branchPrefix preced
 
     expect(getInputByLabel('Default Branch')).toHaveValue(typedBranch);
     expect(getInputByLabel('Branch Prefix')).toHaveValue(typedPrefix);
+  });
+});
+
+/**
+ * The project header and the pipeline list, wired in Phase 4 of
+ * `docs/UI_REDESIGN_PLAN.md`.
+ *
+ * The provenance claim is audit F10's regression guard, and it is a claim about
+ * a *lie* rather than about formatting: the header used to name a provider
+ * edition and a default workflow for every project regardless of either, and a
+ * project has no default workflow to name at all. Asserting the truthful string
+ * would pass on a template that happened to contain it, so the assertions on
+ * what must be absent carry the finding.
+ */
+function ProvenanceSeed({ project, providers, children }: {
+  project: Project;
+  providers: Provider[];
+  children: ReactNode;
+}): ReactElement | null {
+  const { dispatch } = useProject();
+  const [seeded, setSeeded] = useState(false);
+  useEffect(() => {
+    dispatch({ type: 'LOAD_PROJECTS', projects: [project], reposByProject: {} });
+    dispatch({ type: 'SET_CURRENT', id: project.id });
+    dispatch({ type: 'SET_PROVIDERS', providers });
+    setSeeded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  if (!seeded) return null;
+  return <>{children}</>;
+}
+
+function mountWithProviders(project: Project, providers: Provider[]) {
+  render(
+    <NavigationProvider>
+      <ProjectProvider>
+        <UIStateProvider>
+          <TerminalPanelProvider>
+            <ProvenanceSeed project={project} providers={providers}>
+              <ProjectHome />
+            </ProvenanceSeed>
+          </TerminalPanelProvider>
+        </UIStateProvider>
+      </ProjectProvider>
+    </NavigationProvider>,
+  );
+}
+
+function provider(overrides: Partial<Provider> = {}): Provider {
+  return {
+    id: 'provider-1',
+    type: 'github',
+    name: 'GitHub',
+    host: 'git.acme.dev',
+    pat: '',
+    username: 'octo',
+    avatarUrl: '',
+    ...overrides,
+  };
+}
+
+function feature(overrides: Partial<Feature> = {}): Feature {
+  return {
+    id: 'f-1',
+    project_id: 'proj-1',
+    title: 'Feature one',
+    status: 'completed',
+    total_cost: 0,
+    tokens: 0,
+    duration: '1m',
+    created_at: 1,
+    ...overrides,
+  };
+}
+
+describe('the project header’s provenance line', () => {
+  beforeEach(() => {
+    mockBackend(['/repo/a']);
+  });
+
+  it('names the provider the project is actually connected to', async () => {
+    mountWithProviders(baseProject(), [provider()]);
+
+    const line = await screen.findByTestId('project-provenance');
+    expect(line).toHaveTextContent('Connected via GitHub (git.acme.dev)');
+  });
+
+  it('never claims an edition or a default workflow', async () => {
+    mountWithProviders(baseProject(), [provider()]);
+
+    const line = await screen.findByTestId('project-provenance');
+    // Both halves of F10. A self-hosted host is *probably* Enterprise, and
+    // "probably" is what the finding was made of; a default workflow is not a
+    // property a project has at all.
+    expect(line.textContent).not.toMatch(/enterprise/i);
+    expect(line.textContent).not.toMatch(/workflow/i);
+  });
+
+  it('says where the run executes rather than inventing a machine', async () => {
+    mountWithProviders(baseProject({ compute_type: 'remote' }), [provider()]);
+
+    const line = await screen.findByTestId('project-provenance');
+    expect(line).toHaveTextContent('Runs remotely');
+  });
+});
+
+describe('the pipeline list’s filter', () => {
+  const FEATURES: Feature[] = [
+    feature({ id: 'f-done', title: 'Landed already', status: 'completed' }),
+    feature({ id: 'f-gate', title: 'Waiting on a human', status: 'gated' }),
+    feature({ id: 'f-run', title: 'Still moving', status: 'running' }),
+  ];
+
+  beforeEach(() => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case 'fetch_active_features':
+          return Promise.resolve(FEATURES);
+        case 'get_repositories_for_project':
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve([]);
+      }
+    });
+  });
+
+  it('shows every pipeline until a segment is chosen', async () => {
+    mountWithProviders(baseProject(), []);
+
+    expect(await screen.findByText('Landed already')).toBeInTheDocument();
+    expect(screen.getByText('Waiting on a human')).toBeInTheDocument();
+    expect(screen.getByText('Still moving')).toBeInTheDocument();
+  });
+
+  it('narrows the rendered rows to the chosen segment', async () => {
+    mountWithProviders(baseProject(), []);
+    await screen.findByText('Landed already');
+
+    await userEvent.click(screen.getByRole('radio', { name: /needs you/i }));
+
+    // The filter has to reach the rendered list, not merely the control: the
+    // policy is already covered in `pipelineFilter.test.ts`, so what is worth
+    // asserting here is that `ProjectHome` renders what it returns.
+    expect(screen.getByText('Waiting on a human')).toBeInTheDocument();
+    expect(screen.queryByText('Landed already')).not.toBeInTheDocument();
+    expect(screen.queryByText('Still moving')).not.toBeInTheDocument();
   });
 });

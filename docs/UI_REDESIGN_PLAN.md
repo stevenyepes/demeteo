@@ -15,7 +15,7 @@ into this codebase's palette, primitives and hexagon discipline.
 
 ## 0. Status
 
-Branch `feat/ui-redesign-pipeline-project`. **Phases 0–3 are implemented; 4–6 are not
+Branch `feat/ui-redesign-pipeline-project`. **Phases 0–4 are implemented; 5–6 are not
 started.** Read §6 for what each phase covers and §7 for the decisions already taken.
 §1's "Status here today" column is the pre-Phase-2 snapshot this plan was written
 against — read it as the starting position, not as the tree.
@@ -27,27 +27,32 @@ against — read it as the starting position, not as the tree.
 | — | unplanned, done | `c40fde3` — dead utility classes + `scripts/check-classes.mjs` |
 | 2 — pipeline shell | done, **confirmed visually 2026-08-09** | |
 | 3 — timeline slim-down | code complete, **never rendered** | |
-| 4 — project view | **next** | |
-| 5 — activity & motion | | |
+| 4 — project view | code complete, **never rendered** | |
+| 5 — activity & motion | **next** | |
 | 6 — keyboard & persistence | | |
 
 **The Phase 2 deferral is closed.** The sticky collapsed header on scroll landed in
 Phase 3 (`lib/headerCollapse.ts` + `FeatureDetail/useHeaderCollapse.ts`), which is
 where §6 said it would.
 
-**Outstanding:** Phase 2 has now been looked at in `dev:tauri`, so the three-deep
-unobserved debt this section used to carry is paid. Phase 3 replaces it with one
-change of its own, and it is a large one — the step card lost every panel it used to
-expand inline, the timeline gained a density switch, and the header now changes shape
-as the run column scrolls. `npm run checks` compiles and tests all of it and renders
-none of it. What a `dev:tauri` pass has to answer, because no gate can:
+**Outstanding:** Phase 2 has been looked at in `dev:tauri`. Phases 3 and 4 have not, and
+between them they restructure both of the app's main surfaces. `npm run checks` compiles
+and tests all of it and renders none of it. What a `dev:tauri` pass has to answer,
+because no gate can:
 
 - the collapsed header's transition on a `backdrop-blur-md` surface under WebKitGTK;
-- `content-visibility: auto` on `.timeline-step-card` — an intrinsic size that is too
-  small shows up as a jumping scroll thumb on a 30-step run, not as an error;
+- `content-visibility: auto` on `.timeline-step-card` and `.pipeline-card` — an
+  intrinsic size that is too small shows up as a jumping scroll thumb on a long list,
+  not as an error;
 - the inspector's Actions tab at a narrow docked width: `HarnessModelPicker`'s grid
   is `sm:`-gated, and `sm:` is viewport-based, so the three selects do not know the
-  pane is 320 px wide.
+  pane is 320 px wide;
+- **the deliberate visual changes the `Chip` migration made**, which are not
+  regressions and would otherwise read as some: the pipeline row's workflow chip is now
+  uppercase mono and has lost its nested Starter/Custom pill (moved to the tooltip); the
+  local-transport chip lost its deliberately-weaker slate now that tier separation does
+  that job; and `RemoteRunInbox`'s status pill changed typeface and casing and gained a
+  pulsing dot for live runs. §5.1 predicted exactly this and said to record it.
 
 macOS and Windows appearance is unverified by any gate — `pr-checks.yml` runs
 `ubuntu-22.04` only (AGENTS.md §3, Cross-OS).
@@ -477,7 +482,7 @@ where the truncation notice now lives, instead of only on the timeline's copy.
 - **The step card's pulsing gate block is gone**, which is one of the two items §5 names
   by line number. What replaced it does not pulse; the gate strip pulses a 2×2 dot only.
 
-### Phase 4 — Project view
+### Phase 4 — Project view *(done)*
 `PipelineCard` (memoized, three-tier read per §3.3, cost column);
 filter + sort + needs-you-first via `SegmentedControl` and `pipelineFilter.ts`;
 `MetricStrip` for the telemetry cluster; skeletons; empty state through
@@ -485,6 +490,31 @@ filter + sort + needs-you-first via `SegmentedControl` and `pipelineFilter.ts`;
 "Connected via GitHub Enterprise • Default Workflow: Standard Feature Pipeline"
 (`ProjectHome.tsx:468`) for every project regardless of the real provider and workflow.
 A redesign that repaints a lie is worse than one that fixes it.
+
+**What Phase 4 settled:**
+
+- **F10's two halves resolved differently, and one of them cannot be fixed here.** The
+  provider is knowable and is now named truthfully with its stored host and no inferred
+  edition. A project has **no default workflow** — no column on `projects` or
+  `project_settings` — so that clause is deleted and no input can restore it. Restoring
+  it is a migration plus a way to set one, i.e. an AGENTS.md §6 gate; see the finding in
+  [`docs/ux-audit/findings.md`](ux-audit/findings.md).
+- **The detail tier is a quiet line, not a disclosure.** The description is one truncated
+  line whose full text is already free via `title`, and a per-row open/closed state in a
+  memoized list buys the click back as the fan-out §4.2 spent Phase 1 removing.
+- **§3.3's "branch" has no data source.** `Feature` carries no branch field, so the
+  detail tier is the feature id and the description. Nothing was invented to fill it.
+- **`DensityToggle` moved to `ui/` and took a required `ariaLabel`.** Two surfaces carry
+  one now, and a control whose accessible name says "timeline" while it sizes the
+  pipeline list is worse than an unnamed one — §5.1's rule, applied to itself.
+- **The `Chip`/`StatusBadge` split from §5.1 is executed**: pills migrated,
+  `StatusBadge`'s `pill` variant deleted so the two cannot drift back together. The
+  visible consequences are listed in §0.
+- **Out of scope but fixed, because Phase 4 shipped the input it broke:** bare `?` is
+  bound to the docs panel with `preventDefault` and had no editable-target guard, so it
+  ate the character out of any text field — including the new filter query. The two
+  global `keydown` listeners disagreed about that guard, which is audit F5's shape; they
+  now share `isEditableTarget` in `lib/shortcuts.ts`. The rest of F5 is untouched.
 
 ### Phase 5 — Activity surface & motion budget
 Collapsible activity block with sync affordance (**D**); every always-on animation
