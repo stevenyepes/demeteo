@@ -1,13 +1,28 @@
 /**
  * Graph | Timeline toggle for the run column (PRD §6.1).
  *
- * List stays the default; the graph is the same pinned-version definition with
- * the live `run_events`-driven overlay. It lives in its own file because it is
- * also *chrome* — one of the two elements `useRunColumnLayout` measures to work
- * out how much height is left for the graph box — so the `ref` it takes is the
- * hook's, not decoration.
+ * The graph opens first, and a run with no pinned definition falls back to the
+ * timeline rather than defaulting to it — settled in UI_REDESIGN_PLAN §7 and
+ * PRD §6.1, and spelled in `useRunGraph`'s initialiser. Both surfaces are fed
+ * the same steps and the same `run_events` overlay, so this toggle chooses a
+ * view and never a source.
+ *
+ * It lives in its own file because it is also *chrome* — one of the two
+ * elements `useRunColumnLayout` measures to work out how much height is left
+ * for the graph box. That is why the positioning
+ * classes ride on `SegmentedControl`'s own group element via `className`
+ * rather than an enclosing div: `chromeRef` must land on the node whose
+ * `offsetHeight` is the height the hook subtracts.
+ *
+ * The selected segment's treatment is `SegmentedControl`'s `TONE_CHIP.cyan` and
+ * nothing local (UI_REDESIGN_PLAN §5.1). Colours resolve through
+ * `lib/runStatus.ts` — audit finding F27 settled that once, and §2 of the plan
+ * forbids re-opening it, so a bespoke selected style here would be drift even
+ * though it would look fine on its own.
  */
 import { List, Network } from 'lucide-react';
+
+import { SegmentedControl, type SegmentedOption } from './ui/SegmentedControl';
 
 export type RunViewMode = 'graph' | 'timeline';
 
@@ -18,22 +33,20 @@ interface RunViewToggleProps {
   chromeRef: (el: HTMLDivElement | null) => void;
 }
 
-const TAB = 'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition';
-const SELECTED = 'bg-cyan-500/15 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.15)]';
-const IDLE = 'text-slate-400 hover:text-slate-200';
+const OPTIONS: readonly SegmentedOption<RunViewMode>[] = [
+  { value: 'graph', label: 'Graph', icon: Network },
+  { value: 'timeline', label: 'Timeline', icon: List },
+];
 
 export function RunViewToggle({ mode, onSelect, chromeRef }: RunViewToggleProps) {
   return (
-    <div
+    <SegmentedControl
+      options={OPTIONS}
+      value={mode}
+      onChange={onSelect}
+      ariaLabel="Run view"
+      className="mb-6 self-start"
       ref={chromeRef}
-      className="mb-6 inline-flex shrink-0 self-start items-center gap-1 rounded-lg border border-white/10 bg-white/[0.02] p-1"
-    >
-      <button onClick={() => onSelect('graph')} className={`${TAB} ${mode === 'graph' ? SELECTED : IDLE}`}>
-        <Network className="h-3.5 w-3.5" /> Graph
-      </button>
-      <button onClick={() => onSelect('timeline')} className={`${TAB} ${mode === 'timeline' ? SELECTED : IDLE}`}>
-        <List className="h-3.5 w-3.5" /> Timeline
-      </button>
-    </div>
+    />
   );
 }

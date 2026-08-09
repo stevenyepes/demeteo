@@ -1,36 +1,60 @@
-// The Graph|Timeline toggle, extracted out of `FeatureDetail` when the run
-// layout moved into `useRunColumnLayout`.
+// The Graph|Timeline toggle, now a thin binding of `SegmentedControl` to the
+// run column's view mode.
 //
-// Two things have to survive the move: the selected tab still reads as selected
-// (the cyan treatment is the only affordance saying which view you're in), and
-// the element still hands its node to the `chromeRef` it was given — that ref is
-// how the layout hook measures the chrome above the graph, so a dropped ref
-// silently over-states the space the graph box has.
+// Three things have to survive that binding: the selected mode still reads as
+// selected through the shared `TONE_CHIP` treatment (a local cyan style here is
+// the F27 drift the redesign closed), `onSelect` still speaks `RunViewMode`
+// rather than the primitive's generic, and the element still hands its node to
+// the `chromeRef` it was given — that ref is how `useRunColumnLayout` measures
+// the chrome above the graph, so a dropped ref silently over-states the space
+// the graph box has.
 
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { TONE_CHIP } from '../lib/runStatus';
 import { RunViewToggle } from './RunViewToggle';
 
 describe('RunViewToggle', () => {
-  it('marks the active mode and reports the other on click', async () => {
-    const onSelect = vi.fn();
+  it('offers both run views in a named group', () => {
+    render(<RunViewToggle mode="graph" onSelect={() => {}} chromeRef={() => {}} />);
+
+    expect(screen.getByRole('radiogroup', { name: 'Run view' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /graph/i })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /timeline/i })).toBeInTheDocument();
+  });
+
+  it('checks only the active mode', () => {
+    render(<RunViewToggle mode="timeline" onSelect={() => {}} chromeRef={() => {}} />);
+
+    expect(screen.getByRole('radio', { name: /timeline/i })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: /graph/i })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('dresses the active mode in the shared cyan chip, not a local one', () => {
+    render(<RunViewToggle mode="graph" onSelect={() => {}} chromeRef={() => {}} />);
+
+    expect(screen.getByRole('radio', { name: /graph/i }).className).toContain(TONE_CHIP.cyan);
+    expect(screen.getByRole('radio', { name: /timeline/i }).className).not.toContain(TONE_CHIP.cyan);
+  });
+
+  it('reports the mode the user picked', async () => {
+    const onSelect = vi.fn<(mode: 'graph' | 'timeline') => void>();
     render(<RunViewToggle mode="graph" onSelect={onSelect} chromeRef={() => {}} />);
 
-    expect(screen.getByRole('button', { name: /graph/i }).className).toContain('text-cyan-300');
-    expect(screen.getByRole('button', { name: /timeline/i }).className).not.toContain('text-cyan-300');
+    await userEvent.click(screen.getByRole('radio', { name: /timeline/i }));
 
-    await userEvent.click(screen.getByRole('button', { name: /timeline/i }));
-    expect(onSelect).toHaveBeenCalledWith('timeline');
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('timeline');
   });
 
   it('hands its own element to the layout hook s chrome ref', () => {
-    const chromeRef = vi.fn();
+    const chromeRef = vi.fn<(el: HTMLDivElement | null) => void>();
     render(<RunViewToggle mode="timeline" onSelect={() => {}} chromeRef={chromeRef} />);
 
-    expect(chromeRef).toHaveBeenCalledTimes(1);
-    expect(chromeRef.mock.calls[0][0]).toBeInstanceOf(HTMLDivElement);
-    expect(chromeRef.mock.calls[0][0].textContent).toContain('Graph');
+    const el = chromeRef.mock.calls[0]?.[0];
+    expect(el).toBeInstanceOf(HTMLDivElement);
+    expect(el).toBe(screen.getByRole('radiogroup'));
+    expect(el?.textContent).toContain('Graph');
   });
 });

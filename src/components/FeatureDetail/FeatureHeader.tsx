@@ -2,6 +2,7 @@ import { Cpu, GitBranch, GitPullRequest, RefreshCw, Terminal } from 'lucide-reac
 import type { Project, RemoteRunMirror } from '../../types';
 import { runStatusMeta, TERMINAL_STATUSES, TONE_CHIP } from '../../lib/runStatus';
 import { formatCost, formatTokens } from '../../lib/utils';
+import { Metric, MetricStrip } from '../ui/MetricStrip';
 
 interface FeatureHeaderProps {
   featureId: string;
@@ -113,33 +114,24 @@ export function FeatureHeader({
       </div>
 
       <div className="flex min-w-0 flex-col items-end gap-3">
-        <div className="flex flex-wrap items-center justify-end gap-x-6 gap-y-2">
-          <div className="text-right">
-            <div className="text-[10px] text-slate-500 uppercase font-bold">Elapsed Duration</div>
-            <div className="text-lg font-bold font-mono text-white">{duration}</div>
-          </div>
-          <div className="text-right">
-            <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Cost</div>
-            <div className="text-lg font-bold font-mono text-emerald-400" title={`${totalCost.toFixed(4)} USD across ${stepCount} steps`}>
-              {formatCost(totalCost)}
-            </div>
-          </div>
-          <div className="text-right">
-            <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Tokens</div>
-            <div className="text-lg font-bold font-mono text-cyan-400">{formatTokens(tokens)}</div>
-          </div>
+        <MetricStrip className="justify-end">
+          <Metric label="Elapsed" value={duration} />
+          <Metric
+            label="Cost"
+            value={formatCost(totalCost)}
+            tone="emerald"
+            tooltip={`${totalCost.toFixed(4)} USD across ${stepCount} steps`}
+          />
+          <Metric label="Tokens" value={formatTokens(tokens)} tone="cyan" />
           {cacheReadTokens > 0 && (
-            <div className="text-right">
-              <div className="text-[10px] text-slate-500 uppercase font-bold">Cache Reads</div>
-              <div
-                className="text-lg font-bold font-mono text-violet-400"
-                title={`${cacheReadTokens.toLocaleString()} tokens served from prompt cache (billed at ~10% of base input price) across this pipeline. ${cacheCreationTokens.toLocaleString()} tokens written to cache.`}
-              >
-                {formatTokens(cacheReadTokens)}
-              </div>
-            </div>
+            <Metric
+              label="Cache Reads"
+              value={formatTokens(cacheReadTokens)}
+              tone="violet"
+              tooltip={`${cacheReadTokens.toLocaleString()} tokens served from prompt cache (billed at ~10% of base input price) across this pipeline. ${cacheCreationTokens.toLocaleString()} tokens written to cache.`}
+            />
           )}
-        </div>
+        </MetricStrip>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             onClick={onOpenTerminalTab}
