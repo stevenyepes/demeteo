@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect } from 'react';
 import type { ConfigOptionValue, EffortLevel, ProjectMemoryEntry, StepConfig, Machine, Project } from '../../types';
 import { getAgentModels } from '../../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
+import { reconcileDefaultWorkflow } from '../../lib/workflowDefault';
 import { DEFAULT_EFFORT, reconcileEffort } from '../../lib/effortLevels';
 import { formatError } from '../../lib/errors';
 import { useErrorBus } from '../../lib/errorBus';
@@ -123,6 +124,14 @@ interface SettingsCtx {
   /** Project-wide default reasoning effort. `''` = no project default, which
    *  resolves to the engine default (`high`) at run time. */
   defaultEffort: EffortLevel | ''; setDefaultEffort: (v: EffortLevel | '') => void;
+  /** The workflow a new feature in this project starts on. `''` = not chosen,
+   *  which persists as `null` — the launch modal falls back explicitly on it
+   *  rather than taking whatever `workflow_list` returned first. */
+  defaultWorkflowId: string; setDefaultWorkflowId: (v: string) => void;
+  /** The id the stored default named before its workflow was deleted, kept so
+   *  the picker can say *which* choice it dropped. `null` once the user picks
+   *  again. */
+  missingDefaultWorkflowId: string | null;
   defaultLoopIterations: string; setDefaultLoopIterations: (v: string) => void;
   defaultMaxBudgetUsd: string; setDefaultMaxBudgetUsd: (v: string) => void;
   extraWritablePaths: string[]; setExtraWritablePaths: (v: string[]) => void;
@@ -140,6 +149,11 @@ interface SettingsCtx {
   showDeleteConfirm: boolean; setShowDeleteConfirm: (v: boolean) => void;
   // overrides
   workflows: { id: string; name: string; description: string; steps: StepConfig[] }[];
+  /** True once `workflow_list` has answered. Distinguishes "no workflows" from
+   *  "not asked yet", which the default-workflow picker cannot conflate: an
+   *  unanswered list would degrade every stored id to unset. */
+  workflowsLoaded: boolean;
+  workflowsError: string;
   overrides: Record<string, OverrideRowValue>;
   setOverrides: (v: Record<string, OverrideRowValue>) => void;
   isLoadingOverrides: boolean; overridesError: string;
@@ -261,6 +275,8 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [defaultAgentKind, setDefaultAgentKind] = useState('');
   const [defaultModel, setDefaultModel] = useState('');
   const [defaultEffort, setDefaultEffort] = useState<EffortLevel | ''>('');
+  const [defaultWorkflowId, setDefaultWorkflowId] = useState('');
+  const [missingDefaultWorkflowId, setMissingDefaultWorkflowId] = useState<string | null>(null);
   const [defaultLoopIterations, setDefaultLoopIterations] = useState('');
   const [defaultMaxBudgetUsd, setDefaultMaxBudgetUsd] = useState('');
   const [availableModelsForDefault, setAvailableModelsForDefault] = useState<ConfigOptionValue[]>([]);
@@ -271,6 +287,8 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [newExtraPath, setNewExtraPath] = useState('');
 
   const [workflows, setWorkflows] = useState<{ id: string; name: string; description: string; steps: StepConfig[] }[]>([]);
+  const [workflowsLoaded, setWorkflowsLoaded] = useState(false);
+  const [workflowsError, setWorkflowsError] = useState('');
   const [overrides, setOverrides] = useState<Record<string, OverrideRowValue>>({});
   const [isLoadingOverrides, setIsLoadingOverrides] = useState(false);
   const [overridesError, setOverridesError] = useState('');
@@ -387,16 +405,41 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     return n;
   };
 
+  // Both tabs read the same list — Strategy for the default-workflow picker,
+  // Overrides for its per-step table — so it is fetched once, outside the
+  // override fetch that only one of them needs.
+  useEffect(() => {
+    if (activeTab !== 'strategy' && activeTab !== 'overrides') return;
+    let cancelled = false;
+    (async () => {
+      setWorkflowsError('');
+      try {
+        const list = (await listWorkflows()) ?? [];
+        if (cancelled) return;
+        setWorkflows(list.map(w => ({ id: w.id, name: w.name, description: w.description, steps: w.steps ?? [] })));
+        setWorkflowsLoaded(true);
+      } catch (err) { if (!cancelled) setWorkflowsError(formatError(err)); }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!workflowsLoaded) return;
+    const { selected, dangling } = reconcileDefaultWorkflow(defaultWorkflowId, workflows);
+    if (dangling) { setMissingDefaultWorkflowId(dangling); setDefaultWorkflowId(selected); }
+  }, [workflowsLoaded, workflows, defaultWorkflowId]);
+
+  const chooseDefaultWorkflow = (id: string) => {
+    setDefaultWorkflowId(id);
+    setMissingDefaultWorkflowId(null);
+  };
+
   useEffect(() => {
     if (activeTab === 'overrides') {
       (async () => {
         setIsLoadingOverrides(true); setOverridesError('');
         try {
-          const [wfList, ovList] = await Promise.all([
-            listWorkflows(),
-            getWorkflowOverrides(activeProject.id),
-          ]);
-          setWorkflows(wfList.map(w => ({ id: w.id, name: w.name, description: w.description, steps: w.steps ?? [] })));
+          const ovList = await getWorkflowOverrides(activeProject.id);
           const map: Record<string, OverrideRowValue> = {};
           for (const ov of ovList) map[ovKey(ov.workflow_id, ov.step_id ?? WF_LEVEL)] = { agent_kind: ov.agent_kind ?? null, model: ov.model ?? null, effort: ov.effort ?? null };
           setOverrides(map);
@@ -517,6 +560,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setDefaultAgentKind(res.default_agent_kind || '');
           setDefaultModel(res.default_model || '');
           setDefaultEffort(res.default_effort || '');
+          setDefaultWorkflowId(res.default_workflow_id || '');
           setDefaultLoopIterations(res.default_loop_iterations != null ? String(res.default_loop_iterations) : '');
           setDefaultMaxBudgetUsd(res.default_max_budget_usd != null ? String(res.default_max_budget_usd) : '');
           setArtifactSubdir(res.artifact_subdir || 'artifacts/');
@@ -615,7 +659,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
-await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
   };
 
   const handleSave = async () => {
@@ -638,7 +682,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     } else {
       try {
         await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
-        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
         // Keep `compute_type` / `remote_host` in sync with the DB so the
         // Settings tab doesn't fall back to "Local Compute" the next
         // time the user reopens it. Mirrors the re-bootstrap save path
@@ -712,12 +756,14 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     prepareCommand, setPrepareCommand, prTemplate, setPrTemplate, conflictPolicy, setConflictPolicy,
     featureLifecycle, setFeatureLifecycle, defaultAgentKind, setDefaultAgentKind, defaultModel, setDefaultModel,
     defaultEffort, setDefaultEffort,
+    defaultWorkflowId, setDefaultWorkflowId: chooseDefaultWorkflow, missingDefaultWorkflowId,
     defaultLoopIterations, setDefaultLoopIterations, availableModelsForDefault, isLoadingModelsForDefault,
     defaultMaxBudgetUsd, setDefaultMaxBudgetUsd,
     agentConfigs, setAgentConfigs, isRefreshingAgents, artifactSubdir, setArtifactSubdir, commitArtifacts, setCommitArtifacts,
     extraWritablePaths, setExtraWritablePaths, newExtraPath, setNewExtraPath,
     dirtyWarningRepos, setDirtyWarningRepos, pendingActionAfterConfirm, setPendingActionAfterConfirm, showDeleteConfirm, setShowDeleteConfirm,
-    workflows, overrides, setOverrides, isLoadingOverrides, overridesError, expandedWf, setExpandedWf,
+    workflows, workflowsLoaded, workflowsError,
+    overrides, setOverrides, isLoadingOverrides, overridesError, expandedWf, setExpandedWf,
     rowModels, rowModelsLoading, savedPulse, overrideAgentKinds, overridesMachineId,
     handleSave, handleDeleteClick, proceedWithReBootstrap, proceedWithDelete, handleApproveStrategy,
     handleSaveMemory, handleDeleteMemory, handleEditMemoryClick, handleCancelEdit,

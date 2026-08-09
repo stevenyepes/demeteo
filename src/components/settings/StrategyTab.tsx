@@ -2,6 +2,7 @@ import { GitBranch, Zap, Settings, FileText, Activity, Check, RotateCw, Trash2, 
 import { DEFAULT_EFFORT, EFFORT_LABELS, reconcileEffort, type EffortLevel } from '../../lib/effortLevels';
 import { HarnessesSection } from './HarnessesSection';
 import { useSettings } from './ProjectSettingsContext';
+import { UNSET_DEFAULT_WORKFLOW_HINT } from '../../lib/workflowDefault';
 
 export function StrategyTab() {
   const s = useSettings();
@@ -61,6 +62,25 @@ export function StrategyTab() {
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
           <Zap className="w-4 h-4 text-violet-400" /> Default AI Executor Settings
         </h3>
+        <div>
+          <label htmlFor="default-workflow" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Workflow</label>
+          {s.workflowsError ? (
+            <div className="w-full bg-[#08090c]/40 border border-white/10 rounded-lg py-2.5 px-3 text-sm text-ruby-300">Workflows could not be listed ({s.workflowsError}).</div>
+          ) : !s.workflowsLoaded ? (
+            <div className="w-full bg-[#08090c]/40 border border-white/10 rounded-lg py-2.5 px-3 text-sm text-slate-400 flex items-center gap-2">
+              <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" /><span>Loading workflows...</span>
+            </div>
+          ) : (
+            <select id="default-workflow" value={s.defaultWorkflowId} onChange={e => s.setDefaultWorkflowId(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50">
+              <option value="">Not set</option>
+              {s.workflows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          )}
+          {s.missingDefaultWorkflowId && (
+            <p className="text-[11px] text-amber-400 mt-1.5 leading-relaxed">The workflow this project pointed at (<span className="font-mono">{s.missingDefaultWorkflowId}</span>) no longer exists, so the default is back to unset. Pick another, or leave it unset.</p>
+          )}
+          <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">{UNSET_DEFAULT_WORKFLOW_HINT}</p>
+        </div>
         <div>
           <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Coding Agent</label>
           <select value={s.defaultAgentKind} onChange={e => { const k = e.target.value; s.setDefaultAgentKind(k); s.setDefaultModel(''); s.setDefaultEffort(reconcileEffort(s.defaultEffort, s.effortLevelsFor(k))); }} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 capitalize">
