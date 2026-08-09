@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  clearFilters,
   DEFAULT_PIPELINE_FILTER,
   filterPipelines,
   segmentCounts,
@@ -190,6 +191,23 @@ describe('filterPipelines identity', () => {
     filterPipelines(jumbled, opts());
 
     expect(ids(jumbled)).toEqual(['done', 'gate', 'run']);
+  });
+});
+
+describe('clearFilters', () => {
+  it('drops the segment and the query', () => {
+    expect(clearFilters(opts({ segment: 'done', query: 'ssh' }))).toEqual(opts());
+  });
+
+  it('keeps the sort, which reorders rather than hides', () => {
+    expect(clearFilters(opts({ segment: 'needs-you', query: 'ssh', sort: 'oldest' }))).toEqual(
+      opts({ sort: 'oldest' }),
+    );
+  });
+
+  it('returns the same options when nothing was narrowed', () => {
+    const untouched = opts({ sort: 'newest' });
+    expect(clearFilters(untouched)).toBe(untouched);
   });
 });
 

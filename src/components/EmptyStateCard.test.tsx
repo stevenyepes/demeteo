@@ -7,6 +7,7 @@
 
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { Zap } from 'lucide-react';
 import { describe, expect, it, vi } from 'vitest';
 
 import EmptyStateCard from './EmptyStateCard';
@@ -63,5 +64,43 @@ describe('EmptyStateCard', () => {
 
     // 3 legacy tiles + the new tile + seed sample.
     expect(screen.getAllByRole('button').length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+// The inline variant is what lets one component serve both empty surfaces —
+// the first-run landing page and a list section that is merely empty. The
+// tests below are about the difference between the two, since sharing the
+// glass card, the glow pair and the icon tile is the whole point.
+describe('EmptyStateCard, inline', () => {
+  it('says what is missing without offering the first-run tiles', () => {
+    render(
+      <EmptyStateCard
+        variant="inline"
+        title="No feature pipelines yet"
+        description="Use the composer above to start one."
+      />,
+    );
+
+    expect(screen.getByText('No feature pipelines yet')).toBeInTheDocument();
+    expect(screen.getByText('Use the composer above to start one.')).toBeInTheDocument();
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
+  });
+
+  it('takes the icon of the surface it stands in for', () => {
+    const { container } = render(
+      <EmptyStateCard variant="inline" title="Nothing yet" description="…" icon={Zap} />,
+    );
+
+    expect(container.querySelector('.lucide-zap')).not.toBeNull();
+  });
+
+  // App.css records a WKWebView GPU incident behind this: an infinite
+  // animation on a container holding text, not on a bare dot.
+  it('animates nothing inside the card', () => {
+    const { container } = render(
+      <EmptyStateCard variant="inline" title="Nothing yet" description="…" />,
+    );
+
+    expect(container.querySelectorAll('[class*="animate-"]')).toHaveLength(0);
   });
 });

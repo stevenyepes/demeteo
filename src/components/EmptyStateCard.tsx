@@ -1,7 +1,22 @@
 import React from 'react';
-import { Rocket, Box, Database, Sparkles, Play } from 'lucide-react';
+import { Rocket, Box, Database, Sparkles, Play, Cpu, type LucideIcon } from 'lucide-react';
 
-interface EmptyStateCardProps {
+/**
+ * One card for both empty surfaces this app has: the first-run landing page,
+ * and a section of a populated app that happens to hold nothing yet. They
+ * share the glass card, the static glow pair, the icon tile and the
+ * heading/paragraph pair — the project view had grown its own copy of all
+ * four (UI_REDESIGN_PLAN §6, Phase 4), which is the parallel-implementation
+ * drift ux-audit F28 and F36 both record.
+ *
+ * The variants differ in what they may carry, so the props are a union rather
+ * than one bag of optionals: a hero without its five actions would render five
+ * dead tiles, and an inline card with them would offer a first-run tour to
+ * someone who is already three projects in.
+ */
+
+interface EmptyStateHeroProps {
+  variant?: 'hero';
   onSeedSample: () => void;
   onConnectProviders: () => void;
   onSyncWorktrees: () => void;
@@ -9,13 +24,56 @@ interface EmptyStateCardProps {
   onCreateFromZero: () => void;
 }
 
-const EmptyStateCard: React.FC<EmptyStateCardProps> = ({
-  onSeedSample,
-  onConnectProviders,
-  onSyncWorktrees,
-  onDeployAgents,
-  onCreateFromZero,
-}) => {
+interface EmptyStateInlineProps {
+  variant: 'inline';
+  title: string;
+  description: string;
+  /** The icon of the surface that is empty. Defaults to the fleet's `Cpu`. */
+  icon?: LucideIcon;
+}
+
+export type EmptyStateCardProps = EmptyStateHeroProps | EmptyStateInlineProps;
+
+function InlineEmptyState({
+  title,
+  description,
+  icon: Icon = Cpu,
+}: EmptyStateInlineProps): React.ReactElement {
+  return (
+    <div
+      data-testid="empty-state-inline"
+      className="glass-panel p-8 rounded-2xl border border-white/5 text-center bg-black/20 flex flex-col items-center justify-center space-y-4 relative overflow-hidden"
+    >
+      <div className="absolute -top-10 -left-10 w-40 h-40 bg-violet-600/5 rounded-full blur-2xl pointer-events-none" />
+      <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-cyan-600/5 rounded-full blur-2xl pointer-events-none" />
+
+      {/* The icon does not pulse. It sits inside a card that carries text, and
+          an infinite animation on one of those is the WKWebView GPU incident
+          src/App.css records above `pulse-glow`; a pulse belongs on a bare
+          dot, where there is nothing to re-rasterize behind it. */}
+      <div className="w-12 h-12 rounded-full bg-violet-500/10 border border-violet-500/25 flex items-center justify-center text-violet-400 mb-2">
+        <Icon className="w-6 h-6" />
+      </div>
+
+      <h3 className="font-heading text-white font-medium text-base">{title}</h3>
+      <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">{description}</p>
+    </div>
+  );
+}
+
+const EmptyStateCard: React.FC<EmptyStateCardProps> = (props) => {
+  if (props.variant === 'inline') {
+    return <InlineEmptyState {...props} />;
+  }
+
+  const {
+    onSeedSample,
+    onConnectProviders,
+    onSyncWorktrees,
+    onDeployAgents,
+    onCreateFromZero,
+  } = props;
+
   return (
     <div className="flex-1 flex items-center justify-center relative overflow-hidden">
       {/* Background radial gradients for that neon look. Static (no pulse):
@@ -26,7 +84,7 @@ const EmptyStateCard: React.FC<EmptyStateCardProps> = ({
       <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-cyan-600/20 rounded-full blur-[100px] pointer-events-none" />
 
       <div className="glass-panel max-w-2xl w-full p-10 flex flex-col items-center text-center relative z-10 border-white/10 hover:border-white/20 transition-all duration-500">
-        
+
         <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center mb-6 shadow-[0_0_30px_rgba(139,92,246,0.2)]">
             <Sparkles className="w-8 h-8 text-cyan-400" />
         </div>
@@ -34,7 +92,7 @@ const EmptyStateCard: React.FC<EmptyStateCardProps> = ({
         <h1 className="font-heading text-3xl font-bold text-white mb-4 tracking-tight">
           Welcome to the Demeteo Fleet Orchestrator
         </h1>
-        
+
         <p className="text-slate-400 text-lg mb-8 max-w-lg leading-relaxed">
           Demeteo is a modern, premium control center for orchestrating multi-agent workflows. Connect your repositories, construct custom pipelines, and let specialized AI fleets handle the coding.
         </p>
@@ -73,7 +131,7 @@ const EmptyStateCard: React.FC<EmptyStateCardProps> = ({
           </button>
         </div>
 
-        <button 
+        <button
           onClick={onSeedSample}
           className="group relative px-8 py-3 bg-violet-600 hover:bg-violet-500 text-white rounded-lg shadow-[0_0_20px_rgba(139,92,246,0.4)] transition-all font-medium flex items-center gap-3 overflow-hidden cursor-pointer"
         >

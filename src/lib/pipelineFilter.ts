@@ -79,6 +79,21 @@ export function segmentCounts(features: readonly PipelineRow[]): Record<Pipeline
   return counts;
 }
 
+/** Drop the choices that hide rows, keep the one that only reorders them.
+ *
+ *  Sort is not a filter. A user who reordered the list and then narrowed it to
+ *  nothing wants the rows back, not their ordering silently reverted, so a
+ *  reset that included `sort` would undo a choice they never complained about.
+ *  Which fields narrow is a statement about [`PipelineFilterOptions`] and lives
+ *  with the rest of them; a control spelling `{ ...value, segment: 'all',
+ *  query: '' }` inline is the same policy with no test over it.
+ *
+ *  Returns `options` itself when nothing was narrowed. */
+export function clearFilters(options: PipelineFilterOptions): PipelineFilterOptions {
+  if (options.segment === 'all' && options.query === '') return options;
+  return { ...options, segment: 'all', query: '' };
+}
+
 const BAND_RANK: Record<PipelineBand, number> = {
   'needs-you': 0,
   active: 1,
