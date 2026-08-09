@@ -26,8 +26,10 @@ import type { TabDef } from '../ui/TabBar';
 import { formatError } from '../../lib/errors';
 import { listStepAttempts } from '../../lib/features';
 import { runStatusMeta, TONE_CHIP, TONE_TEXT } from '../../lib/runStatus';
+import { listStepArtifacts } from '../../lib/stepArtifacts';
 import type { AgentStreamStore } from '../FeatureDetail/useAgentStream';
-import type { RunEvent, StepAttempt, StepExecution } from '../../types';
+import type { HarnessOverrides } from '../FeatureDetail/useHarnessOverrides';
+import type { HarnessBaseline, RunEvent, StepAttempt, StepExecution } from '../../types';
 import { nodeTypeMeta, type NodeConfigV2, type NodeRunStatus } from './types';
 import { ActionsTab, type BlockingAncestor } from './nodePanel/ActionsTab';
 import { LiveTab } from './nodePanel/LiveTab';
@@ -57,6 +59,14 @@ export interface NodePanelProps {
    *  same shape either way (P2.6). Rendered raw in the Overview tab, replacing
    *  the standalone `RunEventTimeline` as a separate surface. */
   runEvents?: RunEvent[];
+  /** What the run's gates said at the base commit, so the Output tab can tell a
+   *  machine that was already broken from one that broke during the run. Both
+   *  this and `overrides` below are optional because the canvas mounts this
+   *  panel too and holds neither; absent degrades to the weaker of the two
+   *  statements rather than to a guess. */
+  harnessBaseline?: HarnessBaseline | null;
+  /** The harness/model/effort a retry re-pins, for the Actions tab. */
+  overrides?: HarnessOverrides;
 
   // --- P2.4 ---
   /** Where the Live tab reads the backing execution's `agent_stream` buffer.
@@ -101,6 +111,8 @@ export function NodePanel({
   onOpenEditorForPath,
   onOpenArtifact,
   runEvents,
+  harnessBaseline,
+  overrides,
   streamStore,
   isStreaming,
   blockedBy,
@@ -150,16 +162,7 @@ export function NodePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepExecutionId, version]);
 
-  // Artifacts declared by this node's execution, deduped (two runner artifacts
-  // sharing a basename can cache to one local ref — same rule the timeline uses).
-  const artifactPaths = useMemo(() => {
-    const raw = step?.artifact_paths?.length
-      ? step.artifact_paths
-      : step?.artifact_path
-        ? [step.artifact_path]
-        : [];
-    return Array.from(new Set(raw));
-  }, [step]);
+  const artifacts = useMemo(() => listStepArtifacts(step), [step]);
 
   const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
   // Reset the tab + artifact selection whenever the panel retargets a node.
@@ -168,7 +171,10 @@ export function NodePanel({
     setSelectedArtifact(null);
   }, [node.id]);
 
-  const hasOutput = artifactPaths.length > 0 || !!step?.error_message;
+  // The folded count is output too: an agent step that only edited source
+  // declares nothing listable and has still produced something to say.
+  const hasOutput =
+    artifacts.listed.length > 0 || artifacts.hiddenCount > 0 || !!step?.error_message;
   const hasActions = !!(onRetry || onReplay || onStop || onDecideGate);
 
   return (
@@ -225,7 +231,9 @@ export function NodePanel({
         <OutputTab
           step={step}
           hasOutput={hasOutput}
-          artifactPaths={artifactPaths}
+          artifactPaths={artifacts.listed}
+          hiddenArtifactCount={artifacts.hiddenCount}
+          harnessBaseline={harnessBaseline}
           selectedArtifact={selectedArtifact}
           onSelectArtifact={setSelectedArtifact}
           onOpenEditorForPath={onOpenEditorForPath}
@@ -239,6 +247,7 @@ export function NodePanel({
           hasActions={hasActions}
           attempts={attempts}
           blockedBy={blockedBy ?? null}
+          overrides={overrides}
           onRetry={onRetry}
           onReplay={onReplay}
           onStop={onStop}

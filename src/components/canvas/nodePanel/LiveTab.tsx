@@ -1,7 +1,7 @@
 import { Cpu } from 'lucide-react';
 
 import type { AgentStreamStore } from '../../FeatureDetail/useAgentStream';
-import { useStreamText } from '../../FeatureDetail/useAgentStream';
+import { useStreamText, useStreamTruncated } from '../../FeatureDetail/useAgentStream';
 
 /** Stands in for a panel mounted with no run behind it. Module-level so its
  *  identity is stable — `useSyncExternalStore` re-subscribes whenever the store
@@ -22,6 +22,10 @@ const NO_STREAM: AgentStreamStore = {
  * identically and pays that wake on every tab, which for Overview means
  * re-parsing and re-formatting the whole capped run-event feed per frame.
  * Higher still is worse for a second reason: see `StepInspector`'s header.
+ *
+ * Being the only mount site is also why the truncation line is this tab's to
+ * say: `lib/streamBuffer.ts` keeps a bounded tail, and left unsaid, a long
+ * turn's last slice reads as everything the agent said.
  */
 export function LiveTab({
   streamStore,
@@ -32,7 +36,9 @@ export function LiveTab({
   stepExecutionId: string | null;
   isStreaming: boolean;
 }) {
-  const content = useStreamText(streamStore ?? NO_STREAM, stepExecutionId).trim();
+  const store = streamStore ?? NO_STREAM;
+  const content = useStreamText(store, stepExecutionId).trim();
+  const truncated = useStreamTruncated(store, stepExecutionId);
   if (!content) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 px-8 text-center text-xs text-slate-500">
@@ -55,6 +61,11 @@ export function LiveTab({
         {isStreaming && <Cpu className="h-3 w-3 animate-spin text-cyan-400" />}
         Agent reasoning
       </div>
+      {truncated && (
+        <div className="mb-2 shrink-0 font-mono text-[10px] text-slate-500">
+          Earlier output dropped — this is the tail of the turn.
+        </div>
+      )}
       {/* Newest at the bottom; `flex-col-reverse` keeps it scrolled to live. */}
       <div className="flex min-h-0 flex-1 flex-col-reverse overflow-y-auto rounded-lg border border-cyan-500/20 bg-[#020304] p-3">
         <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-cyan-300/80">

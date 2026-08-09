@@ -3,10 +3,11 @@ import { useCallback } from 'react';
 import { NodePanel } from '../canvas/NodePanel';
 import type { NodeRunStatus, WorkflowDefinitionV2 } from '../canvas/types';
 import type { InspectorTarget } from '../../lib/inspectorTarget';
-import type { RunEvent, StepExecution } from '../../types';
+import type { HarnessBaseline, RunEvent, StepExecution } from '../../types';
 import { InspectorEmpty } from './InspectorEmpty';
 import { inspectorNodeConfig, inspectorRunStatus } from './stepIdentity';
 import type { AgentStreamStore } from './useAgentStream';
+import type { HarnessOverrides } from './useHarnessOverrides';
 
 interface StepInspectorProps {
   featureId: string;
@@ -15,6 +16,13 @@ interface StepInspectorProps {
   statusByNode: Record<string, NodeRunStatus>;
   runEvents: RunEvent[];
   streamStore: AgentStreamStore;
+  /** What the gates said at the base commit, for the Output tab's reading of an
+   *  environment failure. Optional here because `NodePanel` is served to the
+   *  canvas as well, which has no baseline in hand. */
+  harnessBaseline?: HarnessBaseline | null;
+  /** The harness/model/effort a retry re-pins, offered in the Actions tab.
+   *  Optional for the same reason. */
+  overrides?: HarnessOverrides;
   /** Empties the pane rather than hiding it — there is no closed state. */
   onDeselect: () => void;
   onOpenEditorForPath: (filePath: string) => void;
@@ -54,6 +62,8 @@ export function StepInspector({
   statusByNode,
   runEvents,
   streamStore,
+  harnessBaseline,
+  overrides,
   onDeselect,
   onOpenEditorForPath,
   onOpenArtifact,
@@ -85,6 +95,8 @@ export function StepInspector({
       onOpenEditorForPath={onOpenEditorForPath}
       onOpenArtifact={openArtifact}
       runEvents={runEvents}
+      harnessBaseline={harnessBaseline}
+      overrides={overrides}
       streamStore={streamStore}
       isStreaming={isStreaming}
       blockedBy={blockedBy}

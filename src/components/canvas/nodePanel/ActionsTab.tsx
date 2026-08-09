@@ -3,6 +3,8 @@ import { AlertCircle, RefreshCw, RotateCcw, ShieldCheck, XCircle } from 'lucide-
 
 import { TONE_TEXT } from '../../../lib/runStatus';
 import type { StepAttempt } from '../../../types';
+import { RerunOptions } from '../../FeatureDetail/RerunOptions';
+import type { HarnessOverrides } from '../../FeatureDetail/useHarnessOverrides';
 import type { NodeConfigV2, NodeRunStatus } from '../types';
 import { classLabel } from './format';
 
@@ -21,6 +23,7 @@ export function ActionsTab({
   hasActions,
   attempts,
   blockedBy,
+  overrides,
   onRetry,
   onReplay,
   onStop,
@@ -31,6 +34,9 @@ export function ActionsTab({
   hasActions: boolean;
   attempts: StepAttempt[];
   blockedBy: BlockingAncestor | null;
+  /** The harness/model/effort a retry would re-pin. Absent where nobody holds
+   *  them — the canvas mounts this panel outside the run view. */
+  overrides?: HarnessOverrides;
   onRetry?: () => void;
   onReplay?: () => void;
   onStop?: () => void;
@@ -71,20 +77,30 @@ export function ActionsTab({
       )}
 
       {onRetry && isFailed && (
-        <ActionRow
-          icon={<RefreshCw className="h-4 w-4" />}
-          tone="ruby"
-          title="Retry node"
-          desc={
-            lastFailed?.applied_rule
-              ? `Re-run from scratch. Last failure (${classLabel(lastFailed.error_class!)}) was handled by ${lastFailed.applied_rule}.`
-              : 'Re-run this node from scratch with the current harness/model.'
-          }
-          buttonLabel="Retry"
-          onClick={onRetry}
-          disabled={guarded}
-          disabledReason={guardMsg}
-        />
+        <>
+          <ActionRow
+            icon={<RefreshCw className="h-4 w-4" />}
+            tone="ruby"
+            title="Retry node"
+            desc={
+              lastFailed?.applied_rule
+                ? `Re-run from scratch. Last failure (${classLabel(lastFailed.error_class!)}) was handled by ${lastFailed.applied_rule}.`
+                : 'Re-run this node from scratch with the current harness/model.'
+            }
+            buttonLabel="Retry"
+            onClick={onRetry}
+            disabled={guarded}
+            disabledReason={guardMsg}
+          />
+          {overrides && (
+            <div className="rounded-xl border border-white/5 bg-black/20 p-3.5">
+              <div className="mb-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                Retry with
+              </div>
+              <RerunOptions overrides={overrides} />
+            </div>
+          )}
+        </>
       )}
 
       {onReplay && (

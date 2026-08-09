@@ -1,17 +1,24 @@
 import { ArtifactViewer } from '../../ArtifactViewer';
+import { EnvironmentNotReadyPanel } from '../../EnvironmentNotReadyPanel';
 import {
   ArtifactIcon,
   ARTIFACT_KIND_COLORS,
   ARTIFACT_KIND_LABELS,
   classifyArtifact,
 } from '../../../lib/artifacts';
-import type { StepExecution } from '../../../types';
+import {
+  isBaselineEnvironmentFailure,
+  parseEnvironmentFailure,
+} from '../../../lib/harnessVerdict';
+import type { HarnessBaseline, StepExecution } from '../../../types';
 
 /** Output: declared artifacts (Monaco) + harness/verifier output. */
 export function OutputTab({
   step,
   hasOutput,
   artifactPaths,
+  hiddenArtifactCount,
+  harnessBaseline,
   selectedArtifact,
   onSelectArtifact,
   onOpenEditorForPath,
@@ -20,6 +27,10 @@ export function OutputTab({
   step: StepExecution | null;
   hasOutput: boolean;
   artifactPaths: string[];
+  /** Declared paths `listStepArtifacts` folded away, summarised rather than
+   *  listed. */
+  hiddenArtifactCount: number;
+  harnessBaseline?: HarnessBaseline | null;
   selectedArtifact: string | null;
   onSelectArtifact: (path: string) => void;
   onOpenEditorForPath?: (filePath: string) => void;
@@ -33,6 +44,14 @@ export function OutputTab({
     : undefined;
   const errorOutput = step?.error_message?.trim() || null;
   const isFailed = step?.status === 'failed' || step?.status === 'interrupted';
+  // Two different things end a step and they are not the same claim. The
+  // machine failing to run the command carries an action and is not the
+  // feature's defect, so it gets the remediation-first panel and the raw text
+  // it was composed from is not repeated underneath.
+  const environment = isFailed ? parseEnvironmentFailure(step?.error_message) : null;
+  // The viewer needs a box to fill, so the tab only scrolls when it is not
+  // holding one; with it, its own scroller is the one that moves.
+  const inlineViewer = !onOpenArtifact && selectedArtifact !== null;
 
   if (!hasOutput) {
     return (
@@ -43,9 +62,20 @@ export function OutputTab({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden px-5 py-4">
+    <div
+      className={`flex h-full min-h-0 flex-col px-5 py-4 ${inlineViewer ? 'overflow-hidden' : 'overflow-y-auto'}`}
+    >
+      {environment && (
+        <div className="mb-4 shrink-0">
+          <EnvironmentNotReadyPanel
+            failure={environment}
+            atBase={isBaselineEnvironmentFailure(environment, harnessBaseline)}
+          />
+        </div>
+      )}
+
       {/* Harness / verifier output — the failing-tests / implicated-files surface. */}
-      {errorOutput && (
+      {errorOutput && !environment && (
         <div className="mb-4 shrink-0">
           <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
             {isFailed ? 'Verifier / harness output' : 'Message'}
@@ -56,7 +86,7 @@ export function OutputTab({
         </div>
       )}
 
-      {artifactPaths.length > 0 && (
+      {(artifactPaths.length > 0 || hiddenArtifactCount > 0) && (
         <div className="mb-3 shrink-0 space-y-2">
           <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
             Artifacts
@@ -86,6 +116,12 @@ export function OutputTab({
               </button>
             );
           })}
+          {hiddenArtifactCount > 0 && (
+            <div className="px-1 font-mono text-[10px] text-slate-600">
+              {hiddenArtifactCount} file{hiddenArtifactCount !== 1 ? 's' : ''} changed · use Browse
+              Code to review
+            </div>
+          )}
         </div>
       )}
 

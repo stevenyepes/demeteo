@@ -31,8 +31,9 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => invoke(
 import { StepInspector } from './StepInspector';
 import type { AgentStreamStore } from './useAgentStream';
 import type { InspectorTarget } from '../../lib/inspectorTarget';
+import type { HarnessOverrides } from './useHarnessOverrides';
 import type { WorkflowDefinitionV2 } from '../canvas/types';
-import type { RunEvent, StepExecution } from '../../types';
+import type { HarnessBaseline, RunEvent, StepExecution } from '../../types';
 
 const step = (over: Partial<StepExecution> = {}): StepExecution => ({
   id: 'se-1',
@@ -99,6 +100,46 @@ function emittingStream() {
   };
 }
 
+/** The shape `parseEnvironmentFailure` reports on — anything else yields no
+ *  panel, which would pass a "the panel says X" assertion by never rendering. */
+const ENVIRONMENT_MESSAGE =
+  'Environment not ready — this failure is not something editing the code can fix.\n\n' +
+  'cargo is not on the PATH of the login shell.\n' +
+  'Remediation: install rustup on the machine.\n\n' +
+  'Failing command: cargo test\n' +
+  'Machine: local\n' +
+  'Reproduce:\n  cd /wt && cargo test\n';
+
+const BASELINE: HarnessBaseline = {
+  base_sha: 'abc123',
+  harnesses: [
+    {
+      name: 'unit',
+      command: 'cargo test',
+      exit_ok: false,
+      measured_at: 1,
+      producer: 'node',
+      environment: { reason: 'cargo missing', remediation: 'install rustup' },
+    },
+  ],
+};
+
+const OVERRIDES: HarnessOverrides = {
+  availableModels: [],
+  selectedModel: '',
+  setSelectedModel: () => {},
+  isLoadingModels: false,
+  availableAgents: ['opencode'],
+  selectedAgent: '',
+  selectedEffort: '',
+  setSelectedEffort: () => {},
+  featureAgentKind: 'opencode',
+  retryEffortLevels: ['low', 'high'],
+  onAgentChange: () => {},
+  adoptFeatureModel: () => {},
+  probeForFeature: () => {},
+};
+
 const RUN_EVENTS: RunEvent[] = [
   { offset: 0, run_id: 'r-1', kind: 'step_progress', payload_json: '"implement"', created_at: 0 },
 ];
@@ -107,6 +148,7 @@ function mount(
   target: InspectorTarget,
   graphDef: WorkflowDefinitionV2 | null = GRAPH,
   streamStore: AgentStreamStore = STREAM,
+  extra: { harnessBaseline?: HarnessBaseline | null; overrides?: HarnessOverrides } = {},
 ) {
   return render(
     <StepInspector
@@ -123,6 +165,7 @@ function mount(
       onReplay={() => {}}
       onStop={() => {}}
       onDecideGate={() => {}}
+      {...extra}
     />,
   );
 }
@@ -210,7 +253,9 @@ describe('StepInspector — a step', () => {
     // Not a store nobody could have read: the same chunks are on screen the
     // moment the one tab that asks for them is opened.
     await user.click(screen.getByRole('tab', { name: 'Live' }));
-    expect(stream.subscriberCount()).toBe(1);
+    // Count, not identity: the tab reads two slices of the store (the text and
+    // whether it is a tail), and the claim is about when it subscribes at all.
+    expect(stream.subscriberCount()).toBeGreaterThan(0);
     expect(screen.getByTestId('inspector')).toHaveTextContent('chunk 4');
   });
 
@@ -222,6 +267,36 @@ describe('StepInspector — a step', () => {
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /stop/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Decide' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * Both of these are pass-throughs, and both are the sort a wiring change
+   * drops silently: the panel renders a complete, plausible tab without either
+   * of them, so nothing but an assertion notices they never arrived.
+   */
+  it('hands the baseline down, so the panel can say the run stopped at it', async () => {
+    invoke.mockResolvedValue([]);
+    const user = (await import('@testing-library/user-event')).default;
+    mount(
+      { kind: 'step', step: step({ error_message: ENVIRONMENT_MESSAGE }), blockedBy: null },
+      GRAPH,
+      STREAM,
+      { harnessBaseline: BASELINE },
+    );
+    await user.click(await screen.findByRole('tab', { name: 'Output' }));
+    expect(screen.getByTestId('environment-not-ready')).toHaveTextContent(
+      /already failing at the base commit/i,
+    );
+  });
+
+  it('hands the rerun overrides down to the retry', async () => {
+    invoke.mockResolvedValue([]);
+    const user = (await import('@testing-library/user-event')).default;
+    mount({ kind: 'step', step: step({ status: 'failed' }), blockedBy: null }, GRAPH, STREAM, {
+      overrides: OVERRIDES,
+    });
+    await user.click(await screen.findByRole('tab', { name: 'Actions' }));
+    expect(screen.getByLabelText('Harness')).toBeInTheDocument();
   });
 
   it('offers the gate decision on a waiting gate', async () => {
