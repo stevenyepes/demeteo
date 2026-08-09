@@ -22,6 +22,8 @@ interface FeatureHeaderProps {
   resolving: boolean;
   publishing: boolean;
   mrUrl: string | null;
+  /** Quieter chrome for a scrolled run column; `lib/headerCollapse.ts` decides it. */
+  collapsed?: boolean;
   onBack: () => void;
   onOpenTerminalTab: () => void;
   onBrowseCode: () => void;
@@ -37,6 +39,16 @@ interface FeatureHeaderProps {
  * level: a run with every action available (sync / publish / cleanup) is
  * wider than a half-window, and it should wrap rather than push the header
  * off-screen.
+ *
+ * Collapsed is the same header, quieter — it gives back the id line, half the
+ * vertical padding and one title size step, and nothing else. Status, transport,
+ * telemetry and the actions are the reason someone scrolls back up to this, so
+ * hiding them would trade one scroll for another; every element that survives
+ * keeps its position, which makes the change a restyle rather than a remount.
+ * The transition stays on padding: this element is `backdrop-blur-md` over a
+ * translucent surface, and animating `box-shadow` or `scale` on one of those
+ * cost a WKWebView GPU incident already — src/App.css records it above
+ * `pulse-glow`.
  */
 export function FeatureHeader({
   featureId,
@@ -56,6 +68,7 @@ export function FeatureHeader({
   resolving,
   publishing,
   mrUrl,
+  collapsed = false,
   onBack,
   onOpenTerminalTab,
   onBrowseCode,
@@ -65,7 +78,12 @@ export function FeatureHeader({
   onCleanup,
 }: FeatureHeaderProps) {
   return (
-    <div className="p-6 border-b border-white/5 bg-[#0d0f14]/80 flex flex-wrap items-start justify-between gap-x-6 gap-y-4 backdrop-blur-md">
+    <div
+      data-testid="feature-header"
+      className={`px-6 ${
+        collapsed ? 'py-3' : 'py-6'
+      } border-b border-white/5 bg-[#0d0f14]/80 flex flex-wrap items-start justify-between gap-x-6 gap-y-4 backdrop-blur-md transition-[padding] duration-200 ease-out motion-reduce:transition-none`}
+    >
       <div className="space-y-1 min-w-0 flex-1">
         <div className="flex items-center gap-3 min-w-0">
           <button
@@ -74,7 +92,14 @@ export function FeatureHeader({
           >
             Back
           </button>
-          <h1 className="text-xl font-bold font-heading text-white tracking-wide line-clamp-2 break-words min-w-0 flex-1" title={featureTitle}>{featureTitle}</h1>
+          <h1
+            className={`${
+              collapsed ? 'text-lg' : 'text-xl'
+            } font-bold font-heading text-white tracking-wide line-clamp-2 break-words min-w-0 flex-1 transition-[font-size] duration-200 ease-out motion-reduce:transition-none`}
+            title={featureTitle}
+          >
+            {featureTitle}
+          </h1>
           <span
             className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
               TONE_CHIP[statusMeta.tone]
@@ -110,7 +135,7 @@ export function FeatureHeader({
               : 'Local'}
           </span>
         </div>
-        <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>
+        {!collapsed && <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>}
       </div>
 
       <div className="flex min-w-0 flex-col items-end gap-3">

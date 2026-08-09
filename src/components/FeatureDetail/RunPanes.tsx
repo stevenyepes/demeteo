@@ -27,6 +27,10 @@ interface RunPanesProps {
  *
  * Either way the inspector is rendered. It has no closed state to fall into
  * (§7, settled 2026-08-08); a narrow column moves it, and nothing hides it.
+ *
+ * `data-run-scroll` marks whichever element the run surface actually scrolls in,
+ * which is this one only in the side layout — stacked, the run column upstream
+ * carries it. `useHeaderCollapse` reads the attribute rather than the layout.
  */
 export function RunPanes({
   layout,
@@ -44,7 +48,11 @@ export function RunPanes({
       >
         <SplitPane
           label="Resize step inspector"
-          primary={<div className="h-full overflow-y-auto overflow-x-hidden pr-4">{runSurface}</div>}
+          primary={
+            <div data-run-scroll className="h-full overflow-y-auto overflow-x-hidden pr-4">
+              {runSurface}
+            </div>
+          }
           secondary={inspector}
           secondaryWidth={inspectorWidth}
           onSecondaryWidthCommit={onInspectorWidthCommit}

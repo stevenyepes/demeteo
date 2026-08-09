@@ -96,3 +96,35 @@ describe('FeatureHeader telemetry', () => {
     expect(title).toContain((4_500).toLocaleString());
   });
 });
+
+describe('FeatureHeader collapsed variant', () => {
+  it('renders the full header when the caller says nothing about collapsing', () => {
+    renderHeader();
+
+    expect(screen.getByText('ID: feat-1')).toBeInTheDocument();
+    expect(screen.getByTestId('feature-header')).toHaveClass('py-6');
+    expect(screen.getByRole('heading', { name: 'Add a metric strip' })).toHaveClass('text-xl');
+  });
+
+  it('drops the id line and tightens the rhythm once collapsed', () => {
+    renderHeader({ collapsed: true });
+
+    expect(screen.queryByText('ID: feat-1')).toBeNull();
+    expect(screen.getByTestId('feature-header')).toHaveClass('py-3');
+    expect(screen.getByTestId('feature-header')).not.toHaveClass('py-6');
+    expect(screen.getByRole('heading', { name: 'Add a metric strip' })).toHaveClass('text-lg');
+  });
+
+  it('keeps everything a scroll back to the top is for', () => {
+    renderHeader({ collapsed: true });
+
+    expect(screen.getByRole('heading', { name: 'Add a metric strip' })).toBeInTheDocument();
+    expect(screen.getByText(runStatusMeta('running').label)).toBeInTheDocument();
+    expect(screen.getByText('Local')).toBeInTheDocument();
+    expect(screen.getByTestId('metric-strip')).toBeInTheDocument();
+    expect(screen.getAllByTestId('metric')).toHaveLength(4);
+    expect(screen.getByRole('button', { name: /code with agent/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /browse code/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /cancel feature/i })).toBeInTheDocument();
+  });
+});

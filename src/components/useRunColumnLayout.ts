@@ -38,6 +38,11 @@ import { pickRunLayout, type RunColumnSize, type RunLayoutMode } from './runLayo
 export interface RunColumnLayout {
   /** `ref` for the run column itself. */
   setRunColumnEl: (el: HTMLDivElement | null) => void;
+  /** The column element, for the one consumer that needs to *listen* to it
+   *  rather than measure it: the header's collapse watches a scroll offset, and
+   *  a second piece of state holding the same element in `FeatureDetail` would
+   *  be two answers to "which element is the run column". */
+  runColumnEl: HTMLDivElement | null;
   /** `ref` for the meta track — pass `undefined` when it sits *beside* the
    *  graph rather than above it, since then it is not the graph's chrome. */
   setMetaChromeEl: (el: HTMLDivElement | null) => void;
@@ -112,6 +117,7 @@ export function useRunColumnLayout(graphDef: WorkflowDefinitionV2 | null): RunCo
 
   return {
     setRunColumnEl,
+    runColumnEl,
     setMetaChromeEl,
     setToggleChromeEl,
     runColumnSize,
