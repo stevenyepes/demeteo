@@ -14,9 +14,10 @@ import {
   listMachines,
   type AgentConfigView,
 } from '../lib/machines';
-import { getRepositoriesForProject } from '../lib/project';
+import { getProposedStrategy, getRepositoriesForProject } from '../lib/project';
 import { fetchActiveFeatures } from '../lib/features';
 import { getWorkflow, listWorkflows, workflowVersionGraph } from '../lib/workflows';
+import { resolveLaunchWorkflowId } from '../lib/workflowDefault';
 import { MiniGraph } from './canvas/MiniGraph';
 import type { WorkflowDefinitionV2 } from './canvas/types';
 
@@ -138,6 +139,14 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   // of them.
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [workflowId, setWorkflowId] = useState<string>('');
+  // Both loads answer the same question — "what should the picker start on?" —
+  // and both have a legitimate empty answer, so an empty list and an unset
+  // project default are indistinguishable from "still loading" by value alone.
+  // These flags are what let the seed wait for a real answer instead of
+  // committing to a fallback the first render would have produced.
+  const [workflowsLoaded, setWorkflowsLoaded] = useState(false);
+  const [projectDefaultWorkflowId, setProjectDefaultWorkflowId] = useState<string | null>(null);
+  const [projectDefaultLoaded, setProjectDefaultLoaded] = useState(false);
   const [agentKind, setAgentKind] = useState<string>('');
   const [model, setModel] = useState<string>('');
   const [effort, setEffort] = useState<EffortLevel | ''>('');
@@ -218,15 +227,8 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
     [machines],
   );
 
-  // Initialize workflow picker to the requested default (or the first
-  // workflow if none specified) when the modal opens.
   useEffect(() => {
     if (isOpen) {
-      if (defaultWorkflowId && workflows.some((w) => w.id === defaultWorkflowId)) {
-        setWorkflowId(defaultWorkflowId);
-      } else if (workflows.length > 0 && !workflowId) {
-        setWorkflowId(workflows[0].id);
-      }
       // Prefill from the inline composer, but only into still-empty
       // fields so a user editing in the modal is never clobbered.
       // Seeding `description` drives the modal's repo-chip inference.
@@ -242,6 +244,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       // reset on close so the next open is clean
       setTitle('');
       setDescription('');
+      setWorkflowId('');
       setAgentKind('');
       setModel('');
       setEffort('');
@@ -258,7 +261,41 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setMaxCostUsd('');
       setMaxWallClockMins('');
     }
-  }, [isOpen, workflows, defaultWorkflowId, workflowId, seedTitle, seedAttachments]);
+  }, [isOpen, seedTitle, seedAttachments]);
+
+  // Seed the workflow picker exactly once per open, and only once both inputs
+  // the rule reads have answered.
+  //
+  // "Once" is a ref rather than a `!workflowId` guard because such a guard has
+  // to read `workflowId`, which puts the effect's own output into its
+  // dependency list: the effect then re-runs on every pick and snaps a
+  // `defaultWorkflowId` launch back to the prop, leaving a picker the user
+  // cannot change at all. Every milder version of that is the same bug — a
+  // re-seed on a workflow-list refresh or a prop identity change overwrites a
+  // choice already made, which is worse than starting on the wrong workflow.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen) {
+      seededRef.current = false;
+      return;
+    }
+    if (seededRef.current || !workflowsLoaded || !projectDefaultLoaded) return;
+    seededRef.current = true;
+    setWorkflowId(
+      resolveLaunchWorkflowId({
+        workflows,
+        requestedId: defaultWorkflowId,
+        projectDefaultId: projectDefaultWorkflowId,
+      }) ?? '',
+    );
+  }, [
+    isOpen,
+    workflows,
+    workflowsLoaded,
+    projectDefaultLoaded,
+    projectDefaultWorkflowId,
+    defaultWorkflowId,
+  ]);
 
   // The dropzone can only observe paste events targeted at itself. Route
   // image files pasted into the title, description, or any other modal
@@ -334,6 +371,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
+    setWorkflowsLoaded(false);
     (async () => {
       try {
         const list = await listWorkflows();
@@ -341,12 +379,40 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       } catch (e) {
         console.warn('failed to load workflows for start-feature picker:', e);
         if (!cancelled) setWorkflows([]);
+      } finally {
+        if (!cancelled) setWorkflowsLoaded(true);
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [isOpen]);
+
+  // The project's stored launch default (audit F10). Read here rather than
+  // threaded down as a prop: the modal already fetches its own workflow list
+  // for the same reason, and an entry point that forgot to pass it would
+  // silently fall back to a rule the user never chose. A failed read is the
+  // unset path — the picker resolves without it and the launch is never
+  // blocked on a setting.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    setProjectDefaultLoaded(false);
+    (async () => {
+      try {
+        const settings = await getProposedStrategy(projectId);
+        if (!cancelled) setProjectDefaultWorkflowId(settings?.default_workflow_id ?? null);
+      } catch (e) {
+        console.warn('failed to read the project default workflow:', e);
+        if (!cancelled) setProjectDefaultWorkflowId(null);
+      } finally {
+        if (!cancelled) setProjectDefaultLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, projectId]);
 
   // Fetch remote machines whenever the modal opens (M6.1). Local runs
   // don't need this list, so it's fetched lazily rather than threaded
@@ -753,14 +819,26 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
           {/* Workflow picker (always visible per Q22) */}
           <div>
-            <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
+            <label
+              htmlFor="start-feature-workflow"
+              className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider"
+            >
               Workflow
             </label>
             <select
+              id="start-feature-workflow"
               value={workflowId}
               onChange={(e) => setWorkflowId(e.target.value)}
               className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
             >
+              {/* Named, because no rule picked one: without an option matching
+                  the empty value the select renders blank, which reads as a
+                  loading bug rather than as a question. */}
+              {workflowId === '' && (
+                <option value="" disabled>
+                  {workflows.length === 0 ? 'No workflows available' : 'Choose a workflow…'}
+                </option>
+              )}
               {workflows.map((w) => (
                 <option key={w.id} value={w.id}>
                   {w.name} (v{w.version})
