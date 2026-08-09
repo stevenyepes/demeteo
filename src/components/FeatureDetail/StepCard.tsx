@@ -1,9 +1,9 @@
+import { memo, useCallback } from 'react';
 import {
   ArrowRight, CheckCircle, Cpu, Hourglass, RefreshCw, RotateCcw, ShieldAlert, XCircle,
 } from 'lucide-react';
 import type { HarnessBaseline, StepExecution } from '../../types';
 import { formatCost, formatDuration, formatTokens } from '../../lib/utils';
-import { findActivePredecessor } from '../../lib/features';
 import { isBaselineEnvironmentFailure, parseEnvironmentFailure } from '../../lib/harnessVerdict';
 import { EnvironmentNotReadyPanel } from '../EnvironmentNotReadyPanel';
 import { StepArtifactList } from './StepArtifactList';
@@ -22,14 +22,18 @@ const humanizeStepId = (id: string) => {
 interface StepCardProps {
   step: StepExecution;
   index: number;
-  steps: StepExecution[];
+  /** Steps a replay from here would re-run after it. */
+  downstreamCount: number;
+  activePredecessor: StepExecution | null;
   isActiveGate: boolean;
   cardRef: (el: HTMLDivElement | null) => void;
   harnessBaseline: HarnessBaseline | null;
   overrides: HarnessOverrides;
   selectedArtifactPath: string | null;
-  activeStreamId: string | null;
-  streamContent: Record<string, string>;
+  isStreamOpen: boolean;
+  /** This step's own buffered output — never the whole run's. */
+  stream: string;
+  streamTruncated: boolean;
   onToggleStream: (stepExecutionId: string) => void;
   onOpenArtifact: (path: string, stepTitle: string) => void;
   onStartReplay: (target: ReplayTarget) => void;
@@ -38,17 +42,19 @@ interface StepCardProps {
   onDecideGate: (stepExecutionId: string) => void;
 }
 
-export function StepCard({
+function StepCardInner({
   step,
   index,
-  steps,
+  downstreamCount,
+  activePredecessor,
   isActiveGate,
   cardRef,
   harnessBaseline,
   overrides,
   selectedArtifactPath,
-  activeStreamId,
-  streamContent,
+  isStreamOpen,
+  stream,
+  streamTruncated,
   onToggleStream,
   onOpenArtifact,
   onStartReplay,
@@ -81,8 +87,12 @@ export function StepCard({
   // error. Guessing here would dress a real defect up as somebody
   // else's problem.
   const stepEnvironment = parseEnvironmentFailure(step.error_message);
-  const activePredecessor = findActivePredecessor(steps, step);
   const isBlockedByPredecessor = (step.status === 'failed' || step.status === 'interrupted') && activePredecessor !== null;
+
+  const selectArtifact = useCallback(
+    (path: string) => onOpenArtifact(path, step.step_id),
+    [onOpenArtifact, step.step_id],
+  );
 
   return (
     <div className="relative group">
@@ -125,7 +135,7 @@ export function StepCard({
               onClick={() => onStartReplay({
                 id: step.id,
                 name: humanizeStepId(step.step_id),
-                downstreamCount: steps.length - index - 1,
+                downstreamCount,
               })}
               className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1 px-2 py-1 rounded text-[10px] text-cyan-400/60 hover:text-cyan-300 hover:bg-cyan-500/10 font-bold uppercase tracking-wider"
               title="Replay from this step"
@@ -204,7 +214,7 @@ export function StepCard({
         <StepArtifactList
           step={step}
           selectedArtifactPath={selectedArtifactPath}
-          onSelect={(path) => onOpenArtifact(path, step.step_id)}
+          onSelect={selectArtifact}
         />
 
         {(step.status === 'running' || step.status === 'verifying') && (
@@ -218,7 +228,7 @@ export function StepCard({
                 View Agent Reasoning
               </span>
               <span className="text-[9px] uppercase font-bold text-cyan-500 shrink-0">
-                {activeStreamId === step.id ? 'Hide Stream' : 'Live Stream'}
+                {isStreamOpen ? 'Hide Stream' : 'Live Stream'}
               </span>
             </button>
 
@@ -233,14 +243,33 @@ export function StepCard({
           </div>
         )}
 
-        {activeStreamId === step.id && (
-          <div className="mt-2 p-3 rounded-lg bg-[#020304] border border-cyan-500/20 max-h-64 overflow-y-auto font-mono text-[11px] shadow-inner flex flex-col-reverse">
-            <pre className="text-cyan-300/80 whitespace-pre-wrap break-words">
-              {streamContent[step.id] || 'Waiting for agent output...'}
-            </pre>
-          </div>
+        {isStreamOpen && (
+          <>
+            {/* The buffer keeps a bounded tail (`lib/streamBuffer.ts`), so
+                without this line a long turn's last 256 KB reads as everything
+                the agent said. */}
+            {streamTruncated && (
+              <div className="mt-2 text-[10px] font-mono text-slate-500">
+                Earlier output dropped — this is the tail of the turn.
+              </div>
+            )}
+            <div className="mt-2 p-3 rounded-lg bg-[#020304] border border-cyan-500/20 max-h-64 overflow-y-auto font-mono text-[11px] shadow-inner flex flex-col-reverse">
+              <pre className="text-cyan-300/80 whitespace-pre-wrap break-words">
+                {stream || 'Waiting for agent output...'}
+              </pre>
+            </div>
+          </>
         )}
       </div>
     </div>
   );
 }
+
+/**
+ * Memoized, and every prop above is a primitive or a stable identity for that
+ * reason: the timeline re-renders once per animation frame while an agent
+ * streams, and the only card whose props changed is the one being streamed to.
+ * A literal object, array or closure in any prop here re-opens that fan-out
+ * (UI_REDESIGN_PLAN §4.2, §4.6).
+ */
+export const StepCard = memo(StepCardInner);

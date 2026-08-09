@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { RefreshCw, ShieldAlert } from 'lucide-react';
 import type { AppView } from '../../types';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
@@ -14,7 +15,7 @@ import { ReplayModal } from './ReplayModal';
 import { RunGraphPanel } from './RunGraphPanel';
 import { RunMetaColumn } from './RunMetaColumn';
 import { StepTimeline } from './StepTimeline';
-import { useAgentStream } from './useAgentStream';
+import { useAgentStream, useStreamText } from './useAgentStream';
 import { useArtifactSelection } from './useArtifactSelection';
 import { useAttachmentPreview } from './useAttachmentPreview';
 import { useBootstrapPhases } from './useBootstrapPhases';
@@ -23,7 +24,7 @@ import { useFeatureRun } from './useFeatureRun';
 import { useGateCardScroll } from './useGateCardScroll';
 import { useHarnessOverrides } from './useHarnessOverrides';
 import { useRemoteRun } from './useRemoteRun';
-import { useRerunActions } from './useRerunActions';
+import { useRerunActions, type ReplayTarget } from './useRerunActions';
 import { useRunGraph } from './useRunGraph';
 import { useWorktreeRouting } from './useWorktreeRouting';
 
@@ -129,8 +130,22 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     }
   });
 
-  const decideGate = (stepExecutionId: string) =>
-    navigate({ kind: 'detail', featureId, featureTitle: run.featureTitle, gateStepExecutionId: stepExecutionId });
+  const decideGate = useCallback(
+    (stepExecutionId: string) =>
+      navigate({ kind: 'detail', featureId, featureTitle: run.featureTitle, gateStepExecutionId: stepExecutionId }),
+    [navigate, featureId, run.featureTitle],
+  );
+
+  const toggleStream = useCallback(
+    (stepExecutionId: string) =>
+      stream.setActiveStreamId((open) => (open === stepExecutionId ? null : stepExecutionId)),
+    [stream.setActiveStreamId],
+  );
+
+  const startReplayFromCard = useCallback(
+    (target: ReplayTarget) => rerun.startReplay(target, null),
+    [rerun.startReplay],
+  );
 
   // The unified feed the node panel reads: local runs push it through
   // `useRunEvents`; remote runs fill `remoteRunEvents` from the poll above.
@@ -139,6 +154,14 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   const { graphDef, selectedNode, selectedRun, selectedStep } = graph;
   const gateStepId =
     selectedNode?.type === 'gate' ? selectedRun?.stepExecutionId ?? null : null;
+
+  // The node panel's Live tab is the only stream this component reads, and it
+  // is mounted in graph mode alone — subscribing outside it would wake the whole
+  // detail view once per animation frame for a surface nobody is looking at.
+  const liveStream = useStreamText(
+    stream.store,
+    graph.graphMode && selectedStep ? selectedStep.id : null,
+  );
 
   return (
     <div className="h-full w-full bg-[#08090c] text-slate-100 flex flex-col font-sans">
@@ -246,7 +269,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
                   selectedStep={selectedStep}
                   selectedBlockedBy={graph.selectedBlockedBy}
                   runEvents={panelRunEvents}
-                  liveStream={selectedStep ? stream.streamContent[selectedStep.id] : undefined}
+                  liveStream={liveStream}
                   onNodeActivate={graph.onNodeActivate}
                   onCloseNode={() => graph.setSelectedNodeId(null)}
                   onOpenEditorForPath={routing.openEditorForPath}
@@ -277,10 +300,10 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
                   overrides={overrides}
                   selectedArtifactPath={artifact.selectedArtifactPath}
                   activeStreamId={stream.activeStreamId}
-                  streamContent={stream.streamContent}
-                  onToggleStream={(id) => stream.setActiveStreamId(stream.activeStreamId === id ? null : id)}
+                  streamStore={stream.store}
+                  onToggleStream={toggleStream}
                   onOpenArtifact={artifact.openArtifact}
-                  onStartReplay={(target) => rerun.startReplay(target, null)}
+                  onStartReplay={startReplayFromCard}
                   onRetry={rerun.handleRetryStep}
                   onStop={rerun.handleStopStep}
                   onDecideGate={decideGate}

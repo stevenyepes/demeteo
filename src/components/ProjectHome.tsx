@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
-import { Zap, Cpu, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
+import { Zap, Cpu, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
 import { Feature, Repository } from '../types';
 import { formatTokens } from '../lib/utils';
 import { formatError } from '../lib/errors';
@@ -10,29 +10,15 @@ import { fetchActiveFeatures } from '../lib/features';
 import { listMirroredRuns } from '../lib/remoteRuns';
 import { listWorkflows } from '../lib/workflows';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
+import { PipelineCard } from './PipelineCard';
 import { StartSessionButton } from './StartSessionButton';
 import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
-import { featureRunStatus, runStatusMeta, TONE_CHIP, type RunStatusTone } from '../lib/runStatus';
-import { buildWorkflowById, classifyWorkflowBadge } from '../lib/workflowBadge';
+import { buildWorkflowById } from '../lib/workflowBadge';
 import {
     extractClipboardImageFiles,
     recoverClipboardImageFile,
     stageBrowserFilesForLaunch,
 } from '../lib/attachments';
-
-/**
- * Left accent bar per tone. Local to this component (the way StatusBadge
- * keeps its own TONE_DOT) because the glow is specific to these cards —
- * the shared registry only carries the flat `TONE_BORDER_L` border.
- */
-const TONE_ACCENT: Record<RunStatusTone, string> = {
-    emerald: 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]',
-    cyan:    'bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.8)]',
-    violet:  'bg-violet-500 shadow-[0_0_10px_rgba(139,92,246,0.8)]',
-    amber:   'bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.8)]',
-    ruby:    'bg-ruby-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]',
-    slate:   'bg-slate-600 shadow-[0_0_10px_rgba(100,116,139,0.6)]',
-};
 
 const ProjectHome = () => {
     const { navigate } = useNavigation();
@@ -73,13 +59,23 @@ const ProjectHome = () => {
     // surface (Alternative A): it captures a title + attachments and
     // hands off to the Start Feature modal, which owns every launch
     // knob (repos, runner, overrides) and the actual start_feature call.
+    //
+    // Staging is async, so the merge into the current list belongs in the
+    // updater and not around the `await`: two pastes in flight would otherwise
+    // both read the `attachments` this callback captured, and the second
+    // result would erase the first.
     const stageClipboardFiles = useCallback(async (files: File[]) => {
         try {
-            setAttachments(await stageBrowserFilesForLaunch(files, attachments));
+            const staged = await stageBrowserFilesForLaunch(files, []);
+            const stagedHashes = new Set(staged.map((entry) => entry.sha256));
+            setAttachments((prev) => [
+                ...prev.filter((entry) => !stagedHashes.has(entry.sha256)),
+                ...staged,
+            ]);
         } catch (err) {
             console.error('ProjectHome: failed to stage pasted attachment', err);
         }
-    }, [attachments]);
+    }, []);
 
     const handleComposerPaste = useCallback(
         async (e: React.ClipboardEvent<HTMLDivElement>) => {
@@ -106,6 +102,12 @@ const ProjectHome = () => {
         },
         [stageClipboardFiles],
     );
+    // Takes the row's identity as arguments so the memoized `PipelineCard`
+    // receives the same handler across an unrelated render of this component.
+    const openFeature = useCallback((featureId: string, featureTitle: string) => {
+        navigate({ kind: 'detail', featureId, featureTitle });
+    }, [navigate]);
+
     const openStartFeature = () => {
         uiDispatch({
             type: 'OPEN_START_FEATURE',
@@ -618,107 +620,17 @@ const ProjectHome = () => {
                                 </p>
                             </div>
                         ) : (
-                            features.map((feature) => {
-                                const meta = runStatusMeta(featureRunStatus(feature));
-                                return (
-                                <div
+                            features.map((feature) => (
+                                <PipelineCard
                                     key={feature.id}
-                                    onClick={() => {
-                                        navigate({ kind: 'detail', featureId: feature.id, featureTitle: feature.title });
-                                    }}
-                                    className="glass-panel glass-panel-hover rounded-xl p-5 cursor-pointer relative overflow-hidden group"
-                                >
-                                    <div className={`absolute left-0 top-0 bottom-0 w-1 ${TONE_ACCENT[meta.tone]}`}></div>
-
-                                    <div className="flex justify-between items-start gap-4">
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-center gap-3 mb-1 flex-wrap">
-                                                <span className={`px-2 py-0.5 rounded text-[10px] font-mono border uppercase flex items-center gap-1 ${TONE_CHIP[meta.tone]}`}>
-                                                    {meta.active && (
-                                                        <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
-                                                    )}
-                                                    {meta.label}
-                                                </span>
-                                                {(() => {
-                                                    const badge = classifyWorkflowBadge(feature, workflowById);
-                                                    if (badge.variant === 'fallback') {
-                                                        return (
-                                                            <span
-                                                                className="px-2 py-0.5 rounded text-[10px] font-mono bg-white/5 border border-white/10 text-slate-500 uppercase"
-                                                                title="Workflow reference missing"
-                                                            >
-                                                                Workflow: unknown
-                                                            </span>
-                                                        );
-                                                    }
-                                                    return (
-                                                        <span
-                                                            className="px-2 py-0.5 rounded text-[10px] font-mono bg-violet-500/10 border border-violet-500/30 text-violet-300 font-outfit truncate max-w-[220px] inline-flex items-center gap-1"
-                                                            title={`Workflow: ${badge.name}`}
-                                                        >
-                                                            <span className="text-violet-400/80">Workflow:</span>
-                                                            <span className="truncate">{badge.name}</span>
-                                                            <span className="text-[9px] px-1 rounded bg-violet-500/20 text-violet-300 font-medium font-mono uppercase">
-                                                                {badge.is_starter ? 'Starter' : 'Custom'}
-                                                            </span>
-                                                        </span>
-                                                    );
-                                                })()}
-                                                {(() => {
-                                                    const detached = detachedIds.has(feature.id);
-                                                    const remote = detached || activeProject.compute_type === 'remote';
-                                                    const label = detached
-                                                        ? 'Detached'
-                                                        : activeProject.compute_type === 'remote'
-                                                        ? 'Remote · SSH'
-                                                        : 'Local';
-                                                    return (
-                                                        <span
-                                                            className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase border inline-flex items-center gap-1 ${
-                                                                remote
-                                                                    ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
-                                                                    : 'bg-white/5 text-slate-500 border-white/10'
-                                                            }`}
-                                                            title={
-                                                                detached
-                                                                    ? 'Runs detached under the runner — continues even if this app is closed'
-                                                                    : activeProject.compute_type === 'remote'
-                                                                    ? `Executes on ${activeProject.remote_host ?? 'the project machine'} over SSH`
-                                                                    : 'Executes on this machine'
-                                                            }
-                                                        >
-                                                            <Cpu className="w-3 h-3" /> {label}
-                                                        </span>
-                                                    );
-                                                })()}
-                                                <span className="text-xs text-slate-500 font-mono truncate">{feature.id}</span>
-                                            </div>
-                                            <h3 className="text-lg font-outfit text-white line-clamp-2 break-words" title={feature.title}>{feature.title}</h3>
-                                            {feature.description?.trim() && (
-                                                <p
-                                                    className="mt-1 text-xs text-slate-400 leading-relaxed line-clamp-2 break-words"
-                                                    title={feature.description}
-                                                >
-                                                    {feature.description}
-                                                </p>
-                                            )}
-                                        </div>
-
-                                        <div className="flex gap-6 text-right shrink-0 pt-1">
-                                            <div>
-                                                <div className="text-xs text-slate-500 font-mono flex items-center gap-1 justify-end"><Clock className="w-3 h-3" /> Duration</div>
-                                                <div className="text-sm font-medium text-white">{feature.duration}</div>
-                                            </div>
-                                            <div>
-                                                <div className="text-xs text-slate-500 font-mono flex items-center gap-1 justify-end"><Zap className="w-3 h-3 text-cyan-400 animate-pulse" /> Tokens</div>
-                                                <div className="text-sm font-medium text-white">{formatTokens(feature.tokens || 0)}</div>
-                                            </div>
-                                            <ChevronRight className="w-5 h-5 text-slate-500 mt-2 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                        </div>
-                                    </div>
-                                </div>
-                                );
-                            })
+                                    feature={feature}
+                                    workflowById={workflowById}
+                                    detached={detachedIds.has(feature.id)}
+                                    computeType={activeProject.compute_type}
+                                    remoteHost={activeProject.remote_host}
+                                    onOpen={openFeature}
+                                />
+                            ))
                         )}
                     </div>
                 </div>

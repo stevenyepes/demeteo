@@ -395,6 +395,20 @@ AGENTS.md §3, you changed the code, you own the comment.
 panels served by the inspector; gate strip (§3.2); density toggle (§3.7);
 `content-visibility` on rows.
 
+**Two things Phase 1 deliberately left here**, because moving these panels out of the
+card is what actually fixes them:
+
+- `StepCard` is memoized, but two of its props are still fresh every render and both
+  come from hooks Phase 1 did not touch: `overrides` (`useHarnessOverrides` returns a
+  new object literal) and `handleRetryStep` / `handleStopStep` (`useRerunActions`
+  returns bare async functions). So the memo holds on the stream path — where it
+  mattered, at frame rate — but not on the reload path, which is now ≤2 renders/sec.
+  Stabilizing those hooks is possible, but Phase 3 removes both props from the card
+  entirely, so doing it earlier is work Phase 3 deletes.
+- The graph's Live tab renders the same capped tail as the timeline but **without** the
+  truncation notice, because `NodePanel` was outside Phase 1's file set. Once the stream
+  has one mount site in the inspector there is one place to say it.
+
 ### Phase 4 — Project view
 `PipelineCard` (memoized, three-tier read per §3.3, cost column);
 filter + sort + needs-you-first via `SegmentedControl` and `pipelineFilter.ts`;

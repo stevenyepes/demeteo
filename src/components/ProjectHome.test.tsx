@@ -283,6 +283,23 @@ describe('ProjectHome inline composer paste', () => {
     });
   });
 
+  // Two pastes fired before either has staged: both handlers are in flight
+  // across the `await`, so a handler that computes the next stage list from the
+  // `attachments` it captured at creation time overwrites the first result with
+  // the second.
+  it('keeps both images when a second paste lands before the first has staged', async () => {
+    renderHome();
+    const composer = await screen.findByTestId('project-home-composer');
+
+    paste(composer, [imageItem(new File(['first'], 'first.png', { type: 'image/png' }))]);
+    paste(composer, [imageItem(new File(['second'], 'second.png', { type: 'image/png' }))]);
+
+    await waitFor(() => {
+      expect(screen.getByText(/first\.png/)).toBeInTheDocument();
+      expect(screen.getByText(/second\.png/)).toBeInTheDocument();
+    });
+  });
+
   it('does not stage or prevent an unsupported-image-only paste', async () => {
     renderHome();
     const composer = await screen.findByTestId('project-home-composer');

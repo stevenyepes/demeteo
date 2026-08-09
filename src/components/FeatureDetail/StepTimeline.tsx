@@ -1,7 +1,10 @@
-import type { MutableRefObject } from 'react';
+import { useMemo, useRef, type MutableRefObject } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { HarnessBaseline, RemoteRunMirror, StepExecution } from '../../types';
+import { findActivePredecessor } from '../../lib/features';
 import { StepCard } from './StepCard';
+import type { AgentStreamStore } from './useAgentStream';
+import { useStreamText, useStreamTruncated } from './useAgentStream';
 import type { HarnessOverrides } from './useHarnessOverrides';
 import type { ReplayTarget } from './useRerunActions';
 
@@ -16,7 +19,7 @@ interface StepTimelineProps {
   overrides: HarnessOverrides;
   selectedArtifactPath: string | null;
   activeStreamId: string | null;
-  streamContent: Record<string, string>;
+  streamStore: AgentStreamStore;
   onToggleStream: (stepExecutionId: string) => void;
   onOpenArtifact: (path: string, stepTitle: string) => void;
   onStartReplay: (target: ReplayTarget) => void;
@@ -37,7 +40,7 @@ export function StepTimeline({
   overrides,
   selectedArtifactPath,
   activeStreamId,
-  streamContent,
+  streamStore,
   onToggleStream,
   onOpenArtifact,
   onStartReplay,
@@ -45,15 +48,40 @@ export function StepTimeline({
   onStop,
   onDecideGate,
 }: StepTimelineProps) {
+  // Only the open card renders a stream, so this is the one subscription the
+  // timeline needs — and with no card open it subscribes to nothing at all.
+  const openStream = useStreamText(streamStore, activeStreamId);
+  const openStreamTruncated = useStreamTruncated(streamStore, activeStreamId);
+
+  // Aligned with `steps` by index. Recomputed only when the list itself
+  // changes, rather than once per card per stream frame.
+  const predecessors = useMemo(
+    () => steps.map((step) => findActivePredecessor(steps, step)),
+    [steps],
+  );
+
+  /** One ref callback per step, cached: a fresh closure per render would change
+   *  a memoized card's props on every frame. */
+  const cardRefCache = useRef(new Map<string, (el: HTMLDivElement | null) => void>());
+  const cardRefFor = (stepExecutionId: string) => {
+    const cached = cardRefCache.current.get(stepExecutionId);
+    if (cached) return cached;
+    const collect = (el: HTMLDivElement | null) => {
+      stepCardRefs.current[stepExecutionId] = el;
+    };
+    cardRefCache.current.set(stepExecutionId, collect);
+    return collect;
+  };
+
   return (
     <div className="relative shrink-0 border-l border-white/5 ml-4 pl-8 space-y-6">
       {remoteRun && steps.length === 0 && !hasBootstrapPhases && (
         /* Eager shadow, pre-hydration: the run was submitted a
            moment ago and the runner hasn't bootstrapped a
            feature yet, so there are no shadow steps to mirror.
-           The 3s remote_refresh_run poll above fills this in as
-           soon as the runner reports them. Suppressed once the
-           richer bootstrap stepper has phases to show. */
+           `useRemoteRun`'s poll fills this in once the runner
+           reports them. Suppressed once the richer bootstrap
+           stepper has phases to show. */
         <div className="glass-panel p-6 border border-cyan-500/20">
           <div className="flex items-center gap-3">
             <RefreshCw className="w-5 h-5 text-cyan-400 animate-spin shrink-0" />
@@ -74,14 +102,16 @@ export function StepTimeline({
           key={step.id}
           step={step}
           index={idx}
-          steps={steps}
+          downstreamCount={steps.length - idx - 1}
+          activePredecessor={predecessors[idx]}
           isActiveGate={gateStepExecutionId === step.id}
-          cardRef={(el) => { stepCardRefs.current[step.id] = el; }}
+          cardRef={cardRefFor(step.id)}
           harnessBaseline={harnessBaseline}
           overrides={overrides}
           selectedArtifactPath={selectedArtifactPath}
-          activeStreamId={activeStreamId}
-          streamContent={streamContent}
+          isStreamOpen={activeStreamId === step.id}
+          stream={activeStreamId === step.id ? openStream : ''}
+          streamTruncated={activeStreamId === step.id ? openStreamTruncated : false}
           onToggleStream={onToggleStream}
           onOpenArtifact={onOpenArtifact}
           onStartReplay={onStartReplay}
