@@ -152,7 +152,7 @@ describe('SplitPane drag', () => {
     expect(commits).toEqual([720]);
   });
 
-  it('collapses instead of leaving a sliver', () => {
+  it('stops at the secondary minimum rather than closing the pane', () => {
     const { container, handle } = mount(400);
 
     act(() => {
@@ -161,8 +161,8 @@ describe('SplitPane drag', () => {
       pointer(handle, 'pointerup', 1150);
     });
 
-    expect(secondaryPx(container)).toBe('0px');
-    expect(commits).toEqual([0]);
+    expect(secondaryPx(container)).toBe('320px');
+    expect(commits).toEqual([320]);
   });
 
   it('commits a drag that ends by losing the pointer instead of releasing it', () => {
@@ -234,11 +234,10 @@ describe('SplitPane keyboard', () => {
     expect(handle).toHaveAttribute('aria-orientation', 'vertical');
     expect(handle).toHaveAttribute('aria-label', 'Resize inspector');
     expect(handle).toHaveAttribute('aria-valuenow', '400');
-    expect(handle).toHaveAttribute('aria-valuemin', '0');
     expect(handle).toHaveAttribute('tabindex', '0');
   });
 
-  it('reports the widest secondary pane once the container has been measured', () => {
+  it('reports the resizable range once the container has been measured', () => {
     const { handle } = mount(400);
 
     expect(handle).not.toHaveAttribute('aria-valuemax');
@@ -247,6 +246,7 @@ describe('SplitPane keyboard', () => {
       resizeObserverStubs[0]?.trigger();
     });
 
+    expect(handle).toHaveAttribute('aria-valuemin', '320');
     expect(handle).toHaveAttribute('aria-valuemax', '720');
   });
 
@@ -267,25 +267,26 @@ describe('SplitPane keyboard', () => {
     expect(commits).toEqual([424, 400]);
   });
 
-  it('jumps to collapsed with Home and to the widest secondary with End', () => {
+  it('jumps to the narrowest secondary with Home and the widest with End', () => {
     const { handle } = mount(400);
 
     press(handle, 'Home');
-    expect(commits).toEqual([0]);
+    expect(commits).toEqual([320]);
 
     press(handle, 'End');
-    expect(commits).toEqual([0, 720]);
+    expect(commits).toEqual([320, 720]);
   });
 
-  it('restores the last open width when reopened', () => {
+  it('leaves the pane at its minimum on Home, with no key that closes it', () => {
     const { container, handle } = mount(560);
 
     press(handle, 'Home');
-    expect(secondaryPx(container)).toBe('0px');
+    expect(secondaryPx(container)).toBe('320px');
 
     press(handle, 'Enter');
-    expect(commits).toEqual([0, 560]);
-    expect(secondaryPx(container)).toBe('560px');
+    press(handle, ' ');
+    expect(commits).toEqual([320]);
+    expect(secondaryPx(container)).toBe('320px');
   });
 
   it('leaves keys it does not own to the rest of the app', () => {
@@ -311,16 +312,33 @@ describe('SplitPane against a container that shrank', () => {
   });
 });
 
-describe('SplitPane collapsed pane', () => {
-  it('takes the collapsed secondary pane out of reach', () => {
-    mount(0);
+describe('SplitPane against a width it cannot honour', () => {
+  it('opens a caller width of zero at the minimum once measured', () => {
+    const { container, handle } = mount(0);
 
-    expect(screen.getByTestId('split-pane-secondary')).toHaveAttribute('inert');
+    act(() => {
+      resizeObserverStubs[0]?.trigger();
+    });
+
+    expect(secondaryPx(container)).toBe('320px');
+    expect(handle).toHaveAttribute('aria-valuenow', '320');
+    expect(commits).toEqual([]);
   });
 
-  it('leaves an open secondary pane reachable', () => {
-    mount(400);
+  /** The one case that still renders `0px`, and the reason it is not a
+   *  collapse: 400px cannot seat the primary pane's own minimum, so there is no
+   *  width left to give. The pane is not closed and is not taken out of reach —
+   *  it reappears when the container can hold it, with nothing to reopen. */
+  it('has nothing to give the secondary pane in a container below the primary minimum', () => {
+    const { container, handle } = mount(400, 400);
 
+    act(() => {
+      resizeObserverStubs[0]?.trigger();
+    });
+
+    expect(secondaryPx(container)).toBe('0px');
+    expect(handle).not.toHaveAttribute('aria-valuemax');
+    expect(commits).toEqual([]);
     expect(screen.getByTestId('split-pane-secondary')).not.toHaveAttribute('inert');
   });
 });

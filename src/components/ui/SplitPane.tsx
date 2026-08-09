@@ -4,7 +4,6 @@ import {
   DEFAULT_MIN_PRIMARY,
   DEFAULT_MIN_SECONDARY,
   maxSecondaryWidth,
-  openSecondaryWidth,
   resolveSecondaryWidth,
   secondaryWidthForKey,
   secondaryWidthFromPointer,
@@ -20,7 +19,8 @@ export const SPLIT_SECONDARY_VAR = '--split-secondary-w';
 export interface SplitPaneProps {
   primary: ReactNode;
   secondary: ReactNode;
-  /** Committed width of the secondary pane in px; `0` is collapsed. */
+  /** Committed width of the secondary pane in px, clamped on render into what
+   *  the container can actually seat. */
   secondaryWidth: number;
   /** Called once per drag, on release — never per pointer move. */
   onSecondaryWidthCommit: (width: number) => void;
@@ -70,7 +70,6 @@ export function SplitPane({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<Drag | null>(null);
-  const lastOpenRef = useRef(secondaryWidth);
   /** Held in state only for what has to be *rendered* from it — the divider's
    *  value range, and a committed width the container has since outgrown. Every
    *  interaction below measures the box itself instead, since a bound one
@@ -89,15 +88,13 @@ export function SplitPane({
 
   /** The committed width is the caller's, but the primary pane's minimum
    *  outranks it: a window narrowed after the width was committed would
-   *  otherwise starve the primary pane until the user dragged again. What is
-   *  restored on reopen stays the committed width, not this one. */
-  const renderedWidth =
-    secondaryWidth > 0 ? openSecondaryWidth(secondaryWidth, boundsFor(containerWidth)) : 0;
+   *  otherwise starve the primary pane until the user dragged again. Nothing is
+   *  committed back for it, so the caller's width returns when the box does. */
+  const renderedWidth = resolveSecondaryWidth(secondaryWidth, boundsFor(containerWidth));
 
   useLayoutEffect(() => {
-    if (secondaryWidth > 0) lastOpenRef.current = secondaryWidth;
     applyWidth(renderedWidth);
-  }, [secondaryWidth, renderedWidth, applyWidth]);
+  }, [renderedWidth, applyWidth]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -175,7 +172,6 @@ export function SplitPane({
     const next = secondaryWidthForKey(
       event.key,
       secondaryWidth,
-      lastOpenRef.current,
       boundsFor(container.getBoundingClientRect().width),
     );
     if (next === null) return;
@@ -183,8 +179,8 @@ export function SplitPane({
     if (next !== secondaryWidth) onSecondaryWidthCommit(next);
   };
 
-  const collapsed = renderedWidth <= 0;
   const valueMax = maxSecondaryWidth(boundsFor(containerWidth));
+  const valueMin = Math.min(minSecondary, valueMax);
 
   return (
     <div
@@ -194,11 +190,7 @@ export function SplitPane({
       style={{ gridTemplateColumns: `minmax(0, 1fr) var(${SPLIT_SECONDARY_VAR}, 0px)` }}
     >
       <div className="min-w-0 min-h-0 overflow-hidden">{primary}</div>
-      <div
-        data-testid="split-pane-secondary"
-        className="min-w-0 min-h-0 overflow-hidden"
-        inert={collapsed}
-      >
+      <div data-testid="split-pane-secondary" className="min-w-0 min-h-0 overflow-hidden">
         {secondary}
       </div>
       <div
@@ -208,7 +200,7 @@ export function SplitPane({
         aria-orientation="vertical"
         aria-label={label}
         aria-valuenow={renderedWidth}
-        aria-valuemin={0}
+        aria-valuemin={valueMin}
         aria-valuemax={valueMax > 0 ? valueMax : undefined}
         tabIndex={0}
         onPointerDown={onPointerDown}

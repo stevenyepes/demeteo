@@ -24,17 +24,6 @@ export interface SplitBounds {
 export const DEFAULT_MIN_PRIMARY = 480;
 export const DEFAULT_MIN_SECONDARY = 320;
 
-/**
- * Share of `minSecondary` below which a drag collapses the pane instead of
- * clamping it.
- *
- * Without a collapse zone the divider simply stops, and a user dragging it to
- * the edge — which is how a user asks for the whole column — gets a pane
- * wedged at its minimum that they then have to close some other way. Half the
- * minimum is far enough past it that no clamped drag lands there by accident.
- */
-export const COLLAPSE_FRACTION = 0.5;
-
 /** Pixels one arrow key moves the divider. */
 export const KEYBOARD_STEP = 24;
 
@@ -47,52 +36,30 @@ export function maxSecondaryWidth(bounds: SplitBounds): number {
   return Math.max(0, Math.round(bounds.containerWidth - bounds.minPrimary));
 }
 
-/** Requested width at or below which a drag collapses the secondary pane. */
-export function collapseBelow(bounds: SplitBounds): number {
-  return Math.round(bounds.minSecondary * COLLAPSE_FRACTION);
-}
-
 /**
- * Width the secondary pane takes for a width the *drag* asked for — the only
- * entry point that may answer `0`.
+ * The width the secondary pane takes for any width anything asks for — a drag,
+ * a keystroke, or a caller's persisted value. There is one clamp because there
+ * is one rule: **the pane clamps to its minimum and never collapses to zero**
+ * (UI_REDESIGN_PLAN §7, settled 2026-08-08). An earlier model snapped the pane
+ * shut below half its minimum; nothing in this file may reintroduce a width
+ * that means "closed", because no caller has a way back from one.
  *
  * An unmeasured container (width `0`, which is every mount before layout and
- * every jsdom render) applies no constraint rather than clamping against
- * zeros: the same rule `pickRunLayout` follows, for the same reason — a
- * collapse decision taken from a container that was never laid out is a
- * decision taken from nothing.
+ * every jsdom render) applies no constraint rather than clamping against zeros:
+ * the same rule `pickRunLayout` follows, for the same reason — a width taken
+ * from a container that was never laid out is a width taken from nothing.
+ *
+ * This *can* still answer `0`, and the distinction matters: when the container
+ * is too narrow to seat `minPrimary + minSecondary`, the primary minimum wins
+ * and the max it leaves may reach zero. That is a measurement degenerate case
+ * with no width available to give, not a collapse affordance — the pane
+ * reappears the moment the container can hold it, with nothing to reopen.
  */
 export function resolveSecondaryWidth(requested: number, bounds: SplitBounds): number {
   const width = Math.round(requested);
   if (!isMeasured(bounds)) return Math.max(0, width);
 
   const max = maxSecondaryWidth(bounds);
-  if (max <= 0) return 0;
-  if (width <= collapseBelow(bounds)) return 0;
-
-  return clampOpen(width, bounds, max);
-}
-
-/**
- * Width the secondary pane takes when it is being *opened* — restoring a
- * persisted width, reopening after a collapse, or any keyboard move.
- *
- * Deliberately cannot collapse: a keypress that closed the pane outright
- * because the arithmetic crossed a threshold is indistinguishable from a bug,
- * and the divider offers `Home` and its collapse toggle for closing it on
- * purpose.
- */
-export function openSecondaryWidth(requested: number, bounds: SplitBounds): number {
-  const width = Math.round(requested);
-  if (!isMeasured(bounds)) return Math.max(0, width);
-
-  const max = maxSecondaryWidth(bounds);
-  if (max <= 0) return 0;
-
-  return clampOpen(width, bounds, max);
-}
-
-function clampOpen(width: number, bounds: SplitBounds, max: number): number {
   const min = Math.min(Math.round(bounds.minSecondary), max);
   return Math.min(Math.max(width, min), max);
 }
@@ -104,23 +71,7 @@ export function secondaryWidthFromPointer(pointerX: number, containerRight: numb
 
 /** Secondary width after one keyboard step of `delta` px. */
 export function nudgeSecondaryWidth(current: number, delta: number, bounds: SplitBounds): number {
-  const from = Math.round(current);
-  const step = Math.round(delta);
-  if (from <= 0) return step > 0 ? openSecondaryWidth(bounds.minSecondary, bounds) : 0;
-  return openSecondaryWidth(from + step, bounds);
-}
-
-/**
- * Secondary width after a collapse toggle. `lastExpanded` is the width to come
- * back to; `0` means there is none yet and the pane opens at its minimum.
- */
-export function toggleSecondaryWidth(
-  current: number,
-  lastExpanded: number,
-  bounds: SplitBounds,
-): number {
-  if (Math.round(current) > 0) return 0;
-  return openSecondaryWidth(lastExpanded > 0 ? lastExpanded : bounds.minSecondary, bounds);
+  return resolveSecondaryWidth(Math.round(current) + Math.round(delta), bounds);
 }
 
 /**
@@ -130,12 +81,13 @@ export function toggleSecondaryWidth(
  * The whole key map is a decision, so it lives here beside the widths it
  * produces rather than as a `switch` inside the component (UI_REDESIGN_PLAN
  * §5.2). Left grows the secondary pane because that is the direction the
- * divider moves, not the direction the pane grows in.
+ * divider moves, not the direction the pane grows in. `Enter` and `Space` are
+ * claimed by nothing: they toggled the pane closed, and there is no closed
+ * state left to toggle.
  */
 export function secondaryWidthForKey(
   key: string,
   current: number,
-  lastExpanded: number,
   bounds: SplitBounds,
 ): number | null {
   if (!isMeasured(bounds)) return null;
@@ -148,12 +100,9 @@ export function secondaryWidthForKey(
     case 'ArrowDown':
       return nudgeSecondaryWidth(current, -KEYBOARD_STEP, bounds);
     case 'Home':
-      return 0;
+      return resolveSecondaryWidth(bounds.minSecondary, bounds);
     case 'End':
-      return openSecondaryWidth(maxSecondaryWidth(bounds), bounds);
-    case 'Enter':
-    case ' ':
-      return toggleSecondaryWidth(current, lastExpanded, bounds);
+      return resolveSecondaryWidth(maxSecondaryWidth(bounds), bounds);
     default:
       return null;
   }
