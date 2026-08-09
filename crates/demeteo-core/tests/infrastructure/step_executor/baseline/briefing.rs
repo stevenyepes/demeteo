@@ -31,6 +31,7 @@ impl SettingsDouble {
                 default_agent_kind: None,
                 default_model: None,
                 default_effort: None,
+                default_workflow_id: None,
                 default_loop_iterations: None,
                 default_max_budget_usd: None,
                 artifact_subdir: "artifacts/".to_string(),

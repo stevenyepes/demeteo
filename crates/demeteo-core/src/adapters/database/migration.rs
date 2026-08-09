@@ -119,6 +119,11 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     add_column_if_missing(conn, "features", "max_budget_usd", "REAL")?;
     add_column_if_missing(conn, "project_settings", "default_max_budget_usd", "REAL")?;
 
+    // The project's chosen default Workflow (V40). Nullable with no default:
+    // NULL = unset, so pre-V40 rows keep falling back to the first workflow the
+    // list returns without a backfill.
+    add_column_if_missing(conn, "project_settings", "default_workflow_id", "TEXT")?;
+
     // Applied retry-policy rule id (P1.10). Defensive for databases that
     // ran V31 before the column joined the table on the same branch.
     add_column_if_missing(conn, "step_attempts", "applied_rule", "TEXT")?;

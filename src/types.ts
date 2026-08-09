@@ -851,6 +851,11 @@ export interface ProjectSettingsData {
   /** Project-wide default reasoning effort. `null` = no project default,
    *  which resolves to the engine default (`high`) at run time. */
   default_effort?: EffortLevel | null;
+  /** The workflow a new feature in this project starts on. `null`/absent = the
+   *  project has not chosen one, which is not the same as having none: the
+   *  launch modal then falls back explicitly rather than taking whatever
+   *  `workflow_list` returned first. See migration V40. */
+  default_workflow_id?: string | null;
   default_loop_iterations?: number | null;
   /** Project-wide default per-turn dollar budget passed to the agent as
    *  `--max-budget-usd`. `null` = no project default, which resolves to the

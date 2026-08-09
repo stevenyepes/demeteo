@@ -174,6 +174,7 @@ pub(crate) fn slug_from_description(description: &str) -> String {
 pub fn fetch_default_settings() -> ProjectSettings {
     ProjectSettings {
         default_effort: None,
+        default_workflow_id: None,
         project_id: ProjectId::from(String::new()),
         worktree_strategy: WorktreeStrategy {
             default_branch: "main".to_string(),

@@ -423,6 +423,7 @@ pub async fn submit_create_project_step(
                 commit_artifacts: false,
                 default_loop_iterations: None,
                 default_max_budget_usd: None,
+                default_workflow_id: None,
             };
             ctx.projects
                 .save_settings(settings)

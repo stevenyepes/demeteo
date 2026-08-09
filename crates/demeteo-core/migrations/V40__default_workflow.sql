@@ -1,0 +1,21 @@
+-- The Workflow a project starts a new Feature with.
+--
+-- Nullable with no default, and NULL means "unset" — never "this project
+-- offers no workflow", which is not a state a launch can be in. The app
+-- already had a de facto default (the launch modal falls back to the first
+-- entry `workflow_list` returns); this column only lets a project narrow
+-- that guess into a deliberate choice, so every pre-existing row keeps the
+-- old behaviour for free by staying NULL.
+--
+-- Deliberately NOT a foreign key to workflows(id), unlike the cascades V1
+-- gives workflow_versions. Two reasons, and the second is decisive:
+-- features.workflow_id and project_workflow_overrides.workflow_id already
+-- reference workflows without one; and the remote runner re-ingests the
+-- submitted workflow JSON under a *freshly generated* id, then persists the
+-- launching client's ProjectSettings verbatim (RunSpec::project_settings).
+-- On the runner's own database this id therefore names nothing, so with
+-- `PRAGMA foreign_keys = ON` a REFERENCES clause would abort save_settings
+-- and with it every remote run launched from a project that has chosen a
+-- default. Readers degrade a dangling id to unset, which is the same state
+-- as never having chosen one.
+ALTER TABLE project_settings ADD COLUMN default_workflow_id TEXT;
