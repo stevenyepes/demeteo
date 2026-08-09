@@ -1,5 +1,13 @@
-// The claim this file defends: the artifact preview and the Gate overlay never
-// occupy the screen at the same time.
+// Two claims this file defends. The second one first, because it is the one a
+// reader is likely to undo: `FeatureDetail` may stay mounted while the app
+// navigates to a view it does not render. It renders nothing then, and the
+// hooks that drive the detail view live one component down, so the hook count
+// never depends on `view.kind`. `App.tsx` mounts it conditionally today, so no
+// screen in the app exercises that state — which is why it takes a test rather
+// than a comment to keep it true (audit F17).
+//
+// The first: the artifact preview and the Gate overlay never occupy the screen
+// at the same time.
 //
 // Why that needs a test rather than a comment. `App.tsx` renders `GateView` in
 // an `OverlayPortal` *on top of* a still-mounted `FeatureDetail`, so both
@@ -16,7 +24,7 @@
 // answer). The global setup mock resolves every command to `undefined`, which
 // is precisely that failure mode, so it is overridden here.
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useEffect, useState, type ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -141,6 +149,45 @@ function mount() {
   return { openGate };
 }
 
+/**
+ * Keeps `FeatureDetail` mounted across every view change, which `App.tsx` does
+ * not do — it is the state the component has to be correct in rather than
+ * accidentally safe in.
+ */
+function ViewSwitcher() {
+  const { navigate } = useNavigation();
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() =>
+          navigate({ kind: 'detail', featureId: FEATURE_ID, featureTitle: 'Responsive run view' })
+        }
+      >
+        to detail
+      </button>
+      <button type="button" onClick={() => navigate({ kind: 'home' })}>
+        to home
+      </button>
+      <FeatureDetail />
+    </>
+  );
+}
+
+function mountAlwaysOn() {
+  render(
+    <NavigationProvider>
+      <ProjectProvider>
+        <UIStateProvider>
+          <TerminalPanelProvider>
+            <ViewSwitcher />
+          </TerminalPanelProvider>
+        </UIStateProvider>
+      </ProjectProvider>
+    </NavigationProvider>,
+  );
+}
+
 beforeEach(() => {
   mockBackend();
 });
@@ -165,5 +212,43 @@ describe('FeatureDetail', () => {
       expect(screen.queryByTestId('artifact-modal-title')).not.toBeInTheDocument();
     });
     expect(screen.getByTitle('research-report.md')).toBeInTheDocument();
+  });
+
+  it('renders nothing while the view is not a detail view', async () => {
+    const { container } = render(
+      <NavigationProvider>
+        <ProjectProvider>
+          <UIStateProvider>
+            <TerminalPanelProvider>
+              <FeatureDetail />
+            </TerminalPanelProvider>
+          </UIStateProvider>
+        </ProjectProvider>
+      </NavigationProvider>,
+    );
+
+    // Settled, not merely synchronous: a component that fetched and then
+    // rendered would still look empty on the first frame.
+    await act(async () => {});
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('survives view-kind changes while staying mounted', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mountAlwaysOn();
+
+    await userEvent.click(screen.getByRole('button', { name: 'to detail' }));
+    expect(await screen.findByTitle('research-report.md')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'to home' }));
+    await waitFor(() => {
+      expect(screen.queryByTitle('research-report.md')).not.toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'to detail' }));
+    expect(await screen.findByTitle('research-report.md')).toBeInTheDocument();
+
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });

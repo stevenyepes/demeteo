@@ -1,4 +1,5 @@
 import { RefreshCw, ShieldAlert } from 'lucide-react';
+import type { AppView } from '../../types';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import { useNavigation, useProject, useUIState } from '../../context';
 import { ArtifactModal } from '../ArtifactModal';
@@ -26,8 +27,27 @@ import { useRerunActions } from './useRerunActions';
 import { useRunGraph } from './useRunGraph';
 import { useWorktreeRouting } from './useWorktreeRouting';
 
+type DetailView = Extract<AppView, { kind: 'detail' }>;
+
+interface FeatureDetailViewProps {
+  view: DetailView;
+  navigate: (view: AppView) => void;
+}
+
+/**
+ * The narrowing is the whole job of this component: `FeatureDetailView` cannot
+ * mount without a detail view, so none of its ~20 hooks is reachable
+ * conditionally. Guarding inside the body instead reads as safe only while
+ * `App.tsx` mounts this for `kind: 'detail'` alone — the first caller that keeps
+ * it mounted across a view change gets a hooks-order crash (audit F17).
+ */
 export function FeatureDetail() {
   const { view, navigate } = useNavigation();
+  if (view.kind !== 'detail') return null;
+  return <FeatureDetailView view={view} navigate={navigate} />;
+}
+
+function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   const { state: { currentProjectId, projects } } = useProject();
   const { ui: { sidebarCollapsed: _sidebarCollapsed } } = useUIState();
   // The legacy `AgentTerminalDrawer` mount consumed `sidebarCollapsed`
@@ -36,7 +56,6 @@ export function FeatureDetail() {
   // `pickEscapeAction` helper exported from `App.tsx`.
   void _sidebarCollapsed;
 
-  if (view.kind !== 'detail') return null;
   const { featureId } = view;
   const projectId = currentProjectId ?? undefined;
   const currentProject = projects.find(p => p.id === currentProjectId) ?? null;
