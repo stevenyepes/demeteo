@@ -175,7 +175,7 @@ async function mount(scenario: Scenario) {
       </NavigationProvider>
     </ErrorBusProvider>,
   );
-  await userEvent.click(await screen.findByRole('button', { name: /Agent Strategy/ }));
+  await userEvent.click(await screen.findByRole('tab', { name: /Agent Strategy/ }));
   await screen.findByText('Validation Harnesses');
 }
 

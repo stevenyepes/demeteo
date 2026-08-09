@@ -3,7 +3,8 @@
  * read-only tabs surface the right Phase-1 data — the Overview tab's per-attempt
  * table from `step_attempts_list` (the row the timeline overwrites on retry) and
  * the failure class, and the Output tab's harness/verifier output + artifact
- * list — so a failure's root cause is reachable without leaving the graph.
+ * list — so a failure's root cause is reachable from whichever run surface is
+ * showing, without opening another one.
  *
  * `ArtifactViewer` is mocked out: it only mounts when an artifact is selected
  * (these tests assert the chooser, not the body) and pulls Monaco otherwise.
@@ -22,6 +23,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => invoke(
 
 import { NodePanel } from './NodePanel';
 import type { NodeConfigV2, NodeRunStatus } from './types';
+import type { AgentStreamStore } from '../FeatureDetail/useAgentStream';
 import type { StepAttempt, StepExecution } from '../../types';
 
 const node = (over: Partial<NodeConfigV2> = {}): NodeConfigV2 => ({
@@ -112,18 +114,25 @@ describe('NodePanel — Overview', () => {
 });
 
 describe('NodePanel — layout', () => {
-  it('clamps its width', () => {
-    // A flat `w-[62%]` is a ~2100px panel at 4K and squeezes the canvas to 38%
-    // in a side-by-side window. The basis needs a floor and a ceiling.
+  it('states no width of its own and takes the one its host gives it', () => {
+    // The pane's floor and ceiling belong to the `SplitPane` divider's clamp
+    // (`splitPaneGeometry.ts`), which the user drags. A width spelled on the
+    // panel as well would fight that clamp, so the panel carries none.
     const { container } = render(
-      <NodePanel featureId="f1" node={node()} run={null} step={null} onClose={() => {}} />,
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={null}
+        step={null}
+        onClose={() => {}}
+        className="h-full"
+      />,
     );
     const root = container.firstElementChild;
     expect(root).not.toBeNull();
     const cls = root!.className;
-    expect(cls).toContain('min-w-[20rem]');
-    expect(cls).toContain('max-w-[38rem]');
-    expect(cls).not.toContain('w-[62%]');
+    expect(cls).toContain('h-full');
+    expect(cls).not.toMatch(/(^|\s)(w-|min-w-|max-w-|basis-)/);
   });
 });
 
@@ -311,6 +320,14 @@ describe('NodePanel — Overview: sequence task list (P2.5)', () => {
 });
 
 describe('NodePanel — Live', () => {
+  /** Answers for one execution id only: a store that returns the same text for
+   *  any id would pass even if the tab subscribed to the wrong step. */
+  const storeFor = (stepExecutionId: string, text: string): AgentStreamStore => ({
+    subscribe: () => () => {},
+    read: (id) => (id === stepExecutionId ? text : ''),
+    isTruncated: () => false,
+  });
+
   it('shows the agent-stream buffer while running', () => {
     invoke.mockResolvedValue([]);
     const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
@@ -321,7 +338,7 @@ describe('NodePanel — Live', () => {
         run={run}
         step={step({ status: 'running' })}
         onClose={() => {}}
-        liveStream={'thinking about the change…'}
+        streamStore={storeFor('se-1', 'thinking about the change…')}
         isStreaming
       />,
     );

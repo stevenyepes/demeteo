@@ -231,11 +231,11 @@ function Shell() {
         </div>
       )}
 
-      <TabBar className="mb-6 z-10" tabs={[
-        { key: 'general', label: 'General & Repositories' },
-        { key: 'strategy', label: 'Agent Strategy & Policies' },
-        { key: 'overrides', label: 'Workflow Overrides' },
-        { key: 'memory', label: 'Project Memory' },
+      <TabBar className="mb-6 z-10" ariaLabel="Project settings sections" tabs={[
+        { value: 'general', label: 'General & Repositories' },
+        { value: 'strategy', label: 'Agent Strategy & Policies' },
+        { value: 'overrides', label: 'Workflow Overrides' },
+        { value: 'memory', label: 'Project Memory' },
       ] satisfies TabDef[]} activeTab={s.activeTab} onChange={k => s.setActiveTab(k as typeof s.activeTab)} />
 
       <div className="z-10">

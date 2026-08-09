@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import React from 'react';
 
 import { TONE_CHIP, TONE_TEXT, type RunStatusTone } from '../../lib/runStatus';
+import { nextIndexForKey } from './rovingIndex';
 
 export interface SegmentedOption<T extends string | number> {
   value: T;
@@ -67,20 +68,8 @@ export function SegmentedControl<T extends string | number>({
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (options.length === 0) return;
-
-    const from = selectedIndex >= 0 ? selectedIndex : 0;
-    const step = STEP[event.key];
-    let next: number;
-    if (step !== undefined) {
-      next = (from + step + options.length) % options.length;
-    } else if (event.key === 'Home') {
-      next = 0;
-    } else if (event.key === 'End') {
-      next = options.length - 1;
-    } else {
-      return;
-    }
+    const next = nextIndexForKey(event.key, selectedIndex, options.length);
+    if (next === null) return;
 
     event.preventDefault();
     segmentsRef.current[next]?.focus();
@@ -136,13 +125,6 @@ export function SegmentedControl<T extends string | number>({
 }
 
 const IDLE = 'border-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200';
-
-const STEP: Record<string, number | undefined> = {
-  ArrowRight: 1,
-  ArrowDown: 1,
-  ArrowLeft: -1,
-  ArrowUp: -1,
-};
 
 const SIZE: Record<SegmentedSize, { group: string; segment: string; icon: string }> = {
   sm: { group: 'p-0.5', segment: 'px-2 py-1 text-[11px]', icon: 'h-3 w-3' },

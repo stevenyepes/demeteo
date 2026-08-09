@@ -133,12 +133,12 @@ const PreferencesScreen = () => {
     }
   };
 
-  const tabs: TabDef[] = [
-    { key: 'machines', label: 'Machines', icon: <Server className="w-4 h-4" /> },
-    { key: 'providers', label: 'Providers', icon: <Globe className="w-4 h-4" /> },
-    { key: 'defaults', label: 'Defaults', icon: <Cpu className="w-4 h-4" /> },
-    { key: 'memory', label: 'Memory', icon: <Brain className="w-4 h-4" /> },
-    { key: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
+  const tabs: TabDef<PrefTab>[] = [
+    { value: 'machines', label: 'Machines', icon: <Server className="w-4 h-4" /> },
+    { value: 'providers', label: 'Providers', icon: <Globe className="w-4 h-4" /> },
+    { value: 'defaults', label: 'Defaults', icon: <Cpu className="w-4 h-4" /> },
+    { value: 'memory', label: 'Memory', icon: <Brain className="w-4 h-4" /> },
+    { value: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
   ];
 
   return (
@@ -164,7 +164,13 @@ const PreferencesScreen = () => {
         </div>
 
         {/* Tab bar */}
-        <TabBar tabs={tabs} activeTab={activeTab} onChange={(k) => setActiveTab(k as PrefTab)} className="mb-6" />
+        <TabBar
+          tabs={tabs}
+          activeTab={activeTab}
+          onChange={setActiveTab}
+          ariaLabel="Preferences sections"
+          className="mb-6"
+        />
 
         {/* Tab content */}
         {activeTab === 'machines' && (
