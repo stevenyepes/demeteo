@@ -112,6 +112,19 @@ failed / cancelled) here.
 Workflow: Standard Feature Pipeline" regardless of the actual provider (possibly GitLab,
 possibly none) and the actual default workflow.
 
+**Closed** in the UI redesign's Phase 4 by `src/lib/projectProvenance.ts`. Both halves
+resolved differently, and the difference is the finding's real content:
+
+- The provider *is* knowable — `Repository.provider_id` resolves against the provider
+  instances the app already loads at startup — so the header now names it, with the
+  stored host and never an inferred edition. A dangling `provider_id` drops the clause
+  rather than filling it.
+- **A project has no default workflow to name.** There is no such column on `projects`
+  or `project_settings`; `StartFeatureModal`'s `defaultWorkflowId` is a per-launch seed.
+  The clause is deleted and no input can restore it. Bringing it back means a migration
+  and a way for a user to *set* one first — until both exist, displaying it would be
+  this finding again.
+
 ### F11. About tab lists wrong data paths
 `PreferencesScreen.tsx:348-352` claims `~/.demeteo/` for data/logs/artifacts. The README
 and Tauri identifier put the database at
