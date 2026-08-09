@@ -346,7 +346,7 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
             <div className="flex flex-col leading-tight">
               <h2
                 id="shortcut-help-title"
-                className="text-lg font-bold font-outfit text-white"
+                className="text-lg font-bold font-heading text-white"
               >
                 Keyboard &amp; Mouse Shortcuts
               </h2>
@@ -384,7 +384,7 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
                   data-testid={`shortcut-help-group-${group.id}`}
                 >
                   <header className="px-4 py-3 border-b border-white/5 bg-gradient-to-r from-violet-500/[0.07] to-transparent">
-                    <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-violet-300 font-outfit">
+                    <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-violet-300 font-heading">
                       {group.title}
                     </h3>
                     {group.description && (

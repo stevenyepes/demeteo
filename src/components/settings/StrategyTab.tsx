@@ -14,7 +14,7 @@ export function StrategyTab() {
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {/* Git Isolation */}
       <div className="glass-panel p-6 rounded-xl space-y-4">
-        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
           <GitBranch className="w-4 h-4 text-violet-400" /> Git Isolation & Strategy
         </h3>
         {/* The test command moved to `HarnessesSection`: it is the harness
@@ -35,7 +35,7 @@ export function StrategyTab() {
 
       {/* Automation Policies */}
       <div className="glass-panel p-6 rounded-xl space-y-4">
-        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
           <Settings className="w-4 h-4 text-cyan-400" /> Automation Policies
         </h3>
         <div>
@@ -58,7 +58,7 @@ export function StrategyTab() {
 
       {/* Default AI Executor */}
       <div className="glass-panel p-6 rounded-xl space-y-4">
-        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
           <Zap className="w-4 h-4 text-violet-400" /> Default AI Executor Settings
         </h3>
         <div>
@@ -114,7 +114,7 @@ export function StrategyTab() {
 
       {/* Artifact Handling */}
       <div className="glass-panel p-6 rounded-xl space-y-4">
-        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
           <FileText className="w-4 h-4 text-cyan-400" /> Artifact Handling
         </h3>
         <p className="text-xs text-slate-400 leading-relaxed">Each workflow step produces a report (<code className="text-slate-300">research-report.md</code>, <code className="text-slate-300">critic-review.md</code>, …). By default these land in a subfolder and stay out of the PR — view them in demeteo's artifact panel. Toggle the commit switch to ship them with the feature branch instead.</p>
@@ -134,14 +134,14 @@ export function StrategyTab() {
 
       {s.prTemplate && (
         <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-2">
-          <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider">Detected PR Template</h3>
+          <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider">Detected PR Template</h3>
           <div className="w-full bg-black/40 border border-white/5 rounded-lg p-4 font-mono text-xs text-slate-400 max-h-[160px] overflow-y-auto leading-relaxed">{s.prTemplate}</div>
         </div>
       )}
 
       {/* Extra Writable Paths */}
       <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-4">
-        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
           <FolderOpen className="w-4 h-4 text-emerald-400" /> Extra Writable Paths
         </h3>
         <p className="text-xs text-slate-400 leading-relaxed">
@@ -200,7 +200,7 @@ export function StrategyTab() {
       {/* Coding Agent Configurations */}
       <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-4">
         <div className="flex items-center justify-between border-b border-white/5 pb-2">
-          <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+          <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
             <Activity className="w-4 h-4 text-cyan-400 animate-pulse" /> Coding Agent Configuration
           </h3>
           <button type="button" onClick={() => s.fetchAgentConfigs(true)} disabled={s.isRefreshingAgents} className="p-1 rounded text-slate-500 hover:text-cyan-400 hover:bg-white/5 transition-all disabled:opacity-50" title="Re-check agent availability">
@@ -221,7 +221,7 @@ export function StrategyTab() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-white font-outfit">{agent.display_label}</span>
+                    <span className="text-sm font-semibold text-white font-heading">{agent.display_label}</span>
                     {agent.available ? (
                       <span className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-mono"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />Available</span>
                     ) : (

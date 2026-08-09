@@ -191,7 +191,7 @@ const CreateFromZeroWizard: React.FC = () => {
         <header className="flex items-center gap-3">
           <Sparkles className="w-5 h-5 text-cyan-400" />
           <div>
-            <h1 className="text-2xl font-outfit font-bold text-white">Create from scratch</h1>
+            <h1 className="text-2xl font-heading font-bold text-white">Create from scratch</h1>
             <p className="text-xs text-slate-400">A guided, one-decision-at-a-time workspace setup.</p>
           </div>
         </header>
@@ -199,7 +199,7 @@ const CreateFromZeroWizard: React.FC = () => {
         <div className="glass-panel p-6 rounded-2xl border-white/10 shadow-2xl space-y-6">
           <CreateZeroStepHeader steps={STEP_DESCRIPTORS} activeId={step} completedIds={completedIds} />
 
-          <div key={step} className="animate-fadeIn">
+          <div key={step} className="animate-fade-in">
             {step === 'name' && <CreateZeroNameStep projectName={form.projectName} onChange={form.setProjectName} />}
 
             {step === 'provider' && (

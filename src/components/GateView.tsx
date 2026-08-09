@@ -122,7 +122,7 @@ export const GateView: React.FC<GateViewProps> = ({
               <ShieldAlert className="w-5 h-5 animate-pulse" />
             </span>
             <div>
-              <h2 className="text-lg font-bold font-display text-white tracking-wide">Manual Approval Gate</h2>
+              <h2 className="text-lg font-bold font-heading text-white tracking-wide">Manual Approval Gate</h2>
               <p className="text-xs text-slate-400">Review findings and authorize the next pipeline stage</p>
             </div>
           </div>
@@ -182,7 +182,7 @@ export const GateView: React.FC<GateViewProps> = ({
 
           {/* Redirect / Loop feedback */}
           {isRedirecting && (
-            <div className="space-y-2 animate-fadeIn">
+            <div className="space-y-2 animate-fade-in">
               <label className="block text-xs uppercase tracking-wider text-slate-400 font-bold">
                 Redirection Feedback / Instructions
               </label>

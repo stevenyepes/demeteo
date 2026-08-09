@@ -180,7 +180,7 @@ export function ConfigPanel({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <TypeIcon className={`h-4 w-4 shrink-0 ${TONE_TEXT[meta.tone]}`} aria-hidden />
-            <h3 className="truncate font-display text-sm font-bold uppercase tracking-wider text-white">
+            <h3 className="truncate font-heading text-sm font-bold uppercase tracking-wider text-white">
               {node.title || node.id}
             </h3>
           </div>

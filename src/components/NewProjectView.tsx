@@ -254,7 +254,7 @@ const NewProjectView = () => {
                 <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
                 <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-white/10 shadow-2xl">
                     <RotateCw className="w-12 h-12 text-cyan-400 animate-spin mb-6" />
-                    <h2 className="text-2xl font-outfit font-bold text-white mb-2">Workspace Bootstrap In Progress</h2>
+                    <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap In Progress</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
                         Demeteo is securely checking out your repositories and running structural analysis.
                     </p>
@@ -286,7 +286,7 @@ const NewProjectView = () => {
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
                 <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-ruby-500/20 shadow-2xl">
                     <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4" />
-                    <h2 className="text-2xl font-outfit font-bold text-white mb-2">Bootstrap Failed</h2>
+                    <h2 className="text-2xl font-heading font-bold text-white mb-2">Bootstrap Failed</h2>
                     <p className="text-sm text-slate-400 mb-6">
                         An error occurred while building the project workspace.
                     </p>
@@ -315,7 +315,7 @@ const NewProjectView = () => {
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#08090c]/80 backdrop-blur-sm">
                     <div className="glass-panel w-[500px] border border-white/10 rounded-xl overflow-hidden shadow-2xl flex flex-col">
                         <div className="p-4 border-b border-white/5 flex justify-between items-center bg-[#0d0f14]">
-                            <h3 className="font-outfit font-semibold text-white">Select Repositories</h3>
+                            <h3 className="font-heading font-semibold text-white">Select Repositories</h3>
                             <button onClick={() => setIsRepoModalOpen(false)} className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/5 transition-colors">
                                 <X className="w-5 h-5" />
                             </button>
@@ -368,7 +368,7 @@ const NewProjectView = () => {
                 <div className="space-y-6">
                     <div>
                         <div className="flex items-center justify-between gap-4 mb-2">
-                            <h1 className="text-3xl font-outfit font-bold text-white">Project Bootstrap</h1>
+                            <h1 className="text-3xl font-heading font-bold text-white">Project Bootstrap</h1>
                             <button
                                 type="button"
                                 onClick={() => navigate({ kind: 'create-project' })}
@@ -578,7 +578,7 @@ const NewProjectView = () => {
                     {bootstrapStep === 'form' ? (
                         <>
                             <div className="mb-6">
-                                <h3 className="font-outfit font-semibold text-slate-400 uppercase tracking-widest text-xs mb-1">AUTOMATED PROPOSAL</h3>
+                                <h3 className="font-heading font-semibold text-slate-400 uppercase tracking-widest text-xs mb-1">AUTOMATED PROPOSAL</h3>
                                 <h2 className="text-xl font-bold text-white">Suggested Worktree Strategy</h2>
                             </div>
 
@@ -607,7 +607,7 @@ const NewProjectView = () => {
                     ) : (
                         <>
                             <div className="mb-6 border-b border-white/5 pb-4">
-                                <h3 className="font-outfit font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
+                                <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
                                 <h2 className="text-xl font-bold text-white">Configure Worktree Strategy</h2>
                             </div>
 

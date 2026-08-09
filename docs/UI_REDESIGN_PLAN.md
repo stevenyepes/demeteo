@@ -386,9 +386,14 @@ behind it; Timeline rows become selectable and drive the same inspector; collaps
 prompt (**B**); `MetricStrip` header (**C**); sticky collapsed header on scroll;
 selection moved into navigation state (§3.5).
 Reconcile with `runLayout.ts`: automatic split at 1600 px becomes the *default* width
-for a pane the user can now resize and collapse. `pickRunLayout` keeps deciding the
-initial state; it stops being the final word. Update its doc comment accordingly —
-AGENTS.md §3, you changed the code, you own the comment.
+for a pane the user can now resize. `pickRunLayout` keeps deciding the initial state;
+it stops being the final word. Update its doc comment accordingly — AGENTS.md §3, you
+changed the code, you own the comment.
+
+Both settled decisions in §7 land here: the splitter clamps rather than collapses, and
+`viewMode` starts on `'graph'`. Neither is a free switch — the clamp replaces
+`splitPaneGeometry`'s collapse zone, and the default flip makes `useRunGraph`'s
+"graph is opt-in" comment false the moment it changes.
 
 ### Phase 3 — Timeline & step-card slim-down
 `StepCard` down to scan tier + one CTA; stream, artifacts, rerun and environment
@@ -464,11 +469,24 @@ density, last view mode and filter. Audit *Opportunity 2* notes
   path and are in scope. The other ~40 findings are not, and are scheduled separately
   under roadmap Theme F.
 
-**Deliberately left open:**
+**Settled (2026-08-08), both against this plan's original recommendation:**
 
-- Whether the inspector should be dismissible to zero width or clamp to a minimum.
-  Recommendation: collapse fully, with the last width restored on reopen — a 30-step
-  run wants the full column sometimes.
-- Whether Graph or Timeline is the default. Today it is Timeline. The mock implies
-  Timeline too. Worth revisiting once the inspector serves both, since the argument
-  for Timeline-as-default was partly that the graph had no detail affordance.
+- **The inspector clamps to a minimum width — it never collapses to zero.** So the
+  pane is always on screen and always has a home. Two consequences worth stating,
+  because each removes something this plan had planned for:
+  - `splitPaneGeometry.ts` currently models a collapse zone that *snaps* the pane
+    shut past its minimum. Phase 2 replaces that with a clamp. The "restore the last
+    width on reopen" problem recorded above then stops existing — there is no closed
+    state to reopen from, so nothing needs to survive a remount and Phase 6 has one
+    less value to persist.
+  - Closing a step (`NodePanel`'s dismiss, deselecting a node) empties the pane
+    instead of hiding it, which makes `inspectorTarget`'s distinct empty *reasons*
+    load-bearing rather than speculative — an always-present pane that says nothing
+    is exactly how an empty panel comes to feel broken.
+- **Graph is the default view.** `useRunGraph` initialises `viewMode` to `'timeline'`
+  and its comment says the graph "is opt-in until Phase-2 parity is signed off" —
+  Phase 2 *is* that parity, so both the value and the comment change together, and
+  [docs/PRD_DAG_WORKFLOWS.md](PRD_DAG_WORKFLOWS.md) §6.1 needs the same correction.
+  What must NOT change: `canShowGraph` still requires a definition and at least one
+  step, so a legacy feature with no workflow graph continues to open on the timeline.
+  That is a fallback, not a default.

@@ -107,7 +107,7 @@ export function WizardShell(props: WizardShellProps) {
         <header className="flex items-center gap-3">
           <span className="w-2 h-2 rounded-full bg-violet-400 shadow-[0_0_12px_rgba(139,92,246,0.6)]" />
           <div>
-            <h1 className="text-2xl font-outfit font-bold text-white">Create a project</h1>
+            <h1 className="text-2xl font-heading font-bold text-white">Create a project</h1>
             <p className="text-xs text-slate-400">
               A guided, one-decision-at-a-time setup. Seven steps.
             </p>

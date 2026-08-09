@@ -20,7 +20,7 @@ export function TabBar({ tabs, activeTab, onChange, className = '' }: TabBarProp
         <button
           key={tab.key}
           onClick={() => onChange(tab.key)}
-          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-outfit font-medium border-b-2 transition-all ${
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-heading font-medium border-b-2 transition-all ${
             activeTab === tab.key
               ? 'border-cyan-500 text-cyan-400'
               : 'border-transparent text-slate-400 hover:text-slate-200'

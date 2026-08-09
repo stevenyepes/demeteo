@@ -246,7 +246,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
           as a column so the field list — which outgrew the container once the
           shell-environment and webhook sections landed — scrolls on its own
           instead of overflowing the panel. Header and action row stay pinned. */}
-      <div className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-md max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-md max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl overflow-hidden animate-fade-in">
         <div className="shrink-0 px-6 py-4 border-b border-white/5 flex justify-between items-center bg-[#050508]">
           <h3 className="text-sm font-semibold text-white flex items-center">
             <Server size={16} className="mr-2 text-cyan-400" /> Configure Environment

@@ -66,7 +66,7 @@ export function Disclosure({
           className="flex-1 min-w-0 px-4 py-3 flex items-center gap-2 text-left hover:bg-white/[0.02] transition-colors"
         >
           {icon && <span className="shrink-0 flex items-center">{icon}</span>}
-          <span className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider truncate">
+          <span className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider truncate">
             {title}
           </span>
           <ChevronRight

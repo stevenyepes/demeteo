@@ -31,6 +31,14 @@
   font-display: block;
 }
 
+/*
+ * These keys are the utility namespace, not only values: `--font-heading` is
+ * what makes `font-heading` resolve, `--color-ruby-500` what makes
+ * `text-ruby-500` resolve. Rename or drop one and nothing fails to build —
+ * every call site keeps a class that now matches no rule and silently
+ * inherits. `scripts/check-classes.mjs` is what catches that; AGENTS.md §4
+ * covers how to name a key.
+ */
 @theme {
   --font-sans: 'Inter', -apple-system, sans-serif;
   --font-mono: 'Fira Code', 'JetBrains Mono', monospace;

@@ -73,7 +73,7 @@ export function FeatureHeader({
           >
             Back
           </button>
-          <h1 className="text-xl font-bold font-display text-white tracking-wide line-clamp-2 break-words min-w-0 flex-1" title={featureTitle}>{featureTitle}</h1>
+          <h1 className="text-xl font-bold font-heading text-white tracking-wide line-clamp-2 break-words min-w-0 flex-1" title={featureTitle}>{featureTitle}</h1>
           <span
             className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
               TONE_CHIP[statusMeta.tone]

@@ -110,7 +110,7 @@ export function HarnessesSection() {
   return (
     <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-4">
       <div className="flex items-center justify-between border-b border-white/5 pb-2">
-        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
           <Zap className="w-4 h-4 text-cyan-400" /> Validation Harnesses
         </h3>
         <div className="flex items-center gap-3">

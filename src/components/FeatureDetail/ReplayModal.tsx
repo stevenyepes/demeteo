@@ -26,7 +26,7 @@ export function ReplayModal({
           <RotateCcw className="w-4 h-4 text-cyan-400" />
         </div>
         <div>
-          <h3 className="text-sm font-bold text-white font-display tracking-wide">
+          <h3 className="text-sm font-bold text-white font-heading tracking-wide">
             Replay from "{target.name}"
           </h3>
           <p className="text-[10px] text-slate-500 font-mono mt-0.5">

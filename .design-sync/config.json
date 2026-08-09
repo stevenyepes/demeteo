@@ -1,0 +1,123 @@
+{
+  "projectId": "ba64e19e-397c-42f6-b288-5d01bad4a73f",
+  "pkg": "demeteo",
+  "globalName": "Demeteo",
+  "shape": "package",
+  "srcDir": "src",
+  "tsconfig": "tsconfig.json",
+  "buildCmd": "npm run build && mkdir -p .design-sync/.cache && cat dist/assets/index-*.css .design-sync/card-surface.css > .design-sync/.cache/app.css",
+  "cssEntry": ".design-sync/.cache/app.css",
+  "guidelinesGlob": [
+    "docs/UX_JOURNEYS.md"
+  ],
+  "extraFonts": [
+    "node_modules/@fontsource/inter/latin-400.css",
+    "node_modules/@fontsource/inter/latin-500.css",
+    "node_modules/@fontsource/inter/latin-600.css",
+    "node_modules/@fontsource/inter/latin-700.css",
+    "node_modules/@fontsource/outfit/latin-400.css",
+    "node_modules/@fontsource/outfit/latin-500.css",
+    "node_modules/@fontsource/outfit/latin-600.css",
+    "node_modules/@fontsource/outfit/latin-700.css",
+    "node_modules/@fontsource/fira-code/latin-400.css",
+    "node_modules/@fontsource/fira-code/latin-500.css"
+  ],
+  "docsMap": {
+    "ActivityIndicator": ".design-sync/docs/ActivityIndicator.md",
+    "AgentBadge": ".design-sync/docs/AgentBadge.md",
+    "MachineDot": ".design-sync/docs/MachineDot.md",
+    "PhaseBadge": ".design-sync/docs/PhaseBadge.md",
+    "StatusBadge": ".design-sync/docs/StatusBadge.md",
+    "SectionCard": ".design-sync/docs/SectionCard.md",
+    "ScrollArea": ".design-sync/docs/ScrollArea.md",
+    "OverlayPortal": ".design-sync/docs/OverlayPortal.md",
+    "Modal": ".design-sync/docs/Modal.md",
+    "TabBar": ".design-sync/docs/TabBar.md",
+    "RailNavItem": ".design-sync/docs/RailNavItem.md",
+    "FieldLabel": ".design-sync/docs/FieldLabel.md",
+    "TimeoutField": ".design-sync/docs/TimeoutField.md",
+    "HarnessModelPicker": ".design-sync/docs/HarnessModelPicker.md",
+    "CreateZeroStepHeader": ".design-sync/docs/CreateZeroStepHeader.md",
+    "CreateZeroStepFooter": ".design-sync/docs/CreateZeroStepFooter.md",
+    "CreateZeroNameStep": ".design-sync/docs/CreateZeroNameStep.md",
+    "CreateZeroDescriptionStep": ".design-sync/docs/CreateZeroDescriptionStep.md",
+    "CreateZeroStrategyStep": ".design-sync/docs/CreateZeroStrategyStep.md",
+    "CreateZeroAgentStep": ".design-sync/docs/CreateZeroAgentStep.md",
+    "CreateZeroMachineStep": ".design-sync/docs/CreateZeroMachineStep.md",
+    "CreateZeroProviderStep": ".design-sync/docs/CreateZeroProviderStep.md",
+    "CreateZeroWorkflowStep": ".design-sync/docs/CreateZeroWorkflowStep.md",
+    "CreateZeroLaunchStep": ".design-sync/docs/CreateZeroLaunchStep.md",
+    "CreateZeroBootstrapPanel": ".design-sync/docs/CreateZeroBootstrapPanel.md"
+  },
+  "overrides": {
+    "CreateZeroStepHeader": {
+      "cardMode": "column"
+    },
+    "Modal": {
+      "cardMode": "single",
+      "primaryStory": "GateDialog",
+      "viewport": "900x560"
+    },
+    "OverlayPortal": {
+      "cardMode": "column"
+    },
+    "RailNavItem": {
+      "cardMode": "column"
+    },
+    "CreateZeroStepFooter": {
+      "cardMode": "column"
+    },
+    "CreateZeroStrategyStep": {
+      "cardMode": "column"
+    },
+    "CreateZeroProviderStep": {
+      "cardMode": "column"
+    },
+    "CreateZeroMachineStep": {
+      "cardMode": "column"
+    },
+    "CreateZeroAgentStep": {
+      "cardMode": "column"
+    },
+    "CreateZeroBootstrapPanel": {
+      "cardMode": "column"
+    },
+    "CreateZeroWorkflowStep": {
+      "cardMode": "column"
+    },
+    "CreateZeroDescriptionStep": {
+      "cardMode": "column"
+    },
+    "HarnessModelPicker": {
+      "cardMode": "column"
+    }
+  },
+  "componentSrcMap": {
+    "ActivityIndicator": "src/components/ui/ActivityIndicator.tsx",
+    "AgentBadge": "src/components/ui/AgentBadge.tsx",
+    "FieldLabel": "src/components/ui/FieldLabel.tsx",
+    "HarnessModelPicker": "src/components/ui/HarnessModelPicker.tsx",
+    "MachineDot": "src/components/ui/MachineDot.tsx",
+    "Modal": "src/components/ui/Modal.tsx",
+    "OverlayPortal": "src/components/ui/OverlayPortal.tsx",
+    "PhaseBadge": "src/components/ui/PhaseBadge.tsx",
+    "RailNavItem": "src/components/ui/RailNavItem.tsx",
+    "ScrollArea": "src/components/ui/ScrollArea.tsx",
+    "SectionCard": "src/components/ui/SectionCard.tsx",
+    "StatusBadge": "src/components/ui/StatusBadge.tsx",
+    "TabBar": "src/components/ui/TabBar.tsx",
+    "TimeoutField": "src/components/ui/TimeoutField.tsx",
+    "CreateZeroStepHeader": "src/components/ui/CreateZeroStepHeader.tsx",
+    "CreateZeroStepFooter": "src/components/ui/CreateZeroStepFooter.tsx",
+    "CreateZeroNameStep": "src/components/ui/CreateZeroNameStep.tsx",
+    "CreateZeroDescriptionStep": "src/components/ui/CreateZeroDescriptionStep.tsx",
+    "CreateZeroStrategyStep": "src/components/ui/CreateZeroStrategyStep.tsx",
+    "CreateZeroAgentStep": "src/components/ui/CreateZeroAgentStep.tsx",
+    "CreateZeroMachineStep": "src/components/ui/CreateZeroMachineStep.tsx",
+    "CreateZeroProviderStep": "src/components/ui/CreateZeroProviderStep.tsx",
+    "CreateZeroWorkflowStep": "src/components/ui/CreateZeroWorkflowStep.tsx",
+    "CreateZeroLaunchStep": "src/components/ui/CreateZeroLaunchStep.tsx",
+    "CreateZeroBootstrapPanel": "src/components/ui/CreateZeroBootstrapPanel.tsx"
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

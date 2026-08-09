@@ -55,7 +55,7 @@ export function TemplatePicker({ onPick, onCancel }: TemplatePickerProps) {
       <div className="mx-auto w-full max-w-3xl space-y-8">
         <header className="flex items-start justify-between">
           <div>
-            <h1 className="font-display text-2xl font-bold text-white">New workflow</h1>
+            <h1 className="font-heading text-2xl font-bold text-white">New workflow</h1>
             <p className="mt-1 text-sm text-slate-400">
               Start from a pipeline that already works, or from a shape.
             </p>

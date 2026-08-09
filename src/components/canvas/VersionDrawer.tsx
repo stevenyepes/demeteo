@@ -236,7 +236,7 @@ export function VersionDrawer({
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/5 px-4 py-3">
         <div className="flex items-center gap-2">
           <History className="h-4 w-4 text-slate-400" aria-hidden />
-          <h3 className="font-display text-sm font-bold uppercase tracking-wider text-white">
+          <h3 className="font-heading text-sm font-bold uppercase tracking-wider text-white">
             Version history
           </h3>
         </div>

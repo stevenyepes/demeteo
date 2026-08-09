@@ -76,7 +76,7 @@ export function ArtifactModal({
           <div className="min-w-0">
             <h2
               data-testid="artifact-modal-title"
-              className="text-lg font-bold font-display text-white tracking-wide truncate"
+              className="text-lg font-bold font-heading text-white tracking-wide truncate"
               title={basename}
             >
               {basename}

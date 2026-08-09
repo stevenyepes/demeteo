@@ -311,7 +311,7 @@ const ProjectHome = () => {
                 <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
                 <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-white/10 shadow-2xl">
                     <RotateCw className="w-12 h-12 text-cyan-400 animate-spin mb-6" />
-                    <h2 className="text-2xl font-outfit font-bold text-white mb-2">Workspace Bootstrap In Progress</h2>
+                    <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap In Progress</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
                         Demeteo is securely checking out your repositories and running structural analysis.
                     </p>
@@ -339,7 +339,7 @@ const ProjectHome = () => {
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
                 <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-ruby-500/20 shadow-2xl">
                     <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4 animate-pulse" />
-                    <h2 className="text-2xl font-outfit font-bold text-white mb-2">Workspace Bootstrap Failed</h2>
+                    <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap Failed</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
                         Demeteo could not clone configured repositories or analyze workspace structures. Verify target compute availability, credentials, and mapped repository paths.
                     </p>
@@ -367,7 +367,7 @@ const ProjectHome = () => {
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
                 <div className="glass-panel max-w-xl w-full p-6 rounded-xl flex flex-col border-white/10 shadow-2xl text-left">
                     <div className="mb-6 border-b border-white/5 pb-4">
-                        <h3 className="font-outfit font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
+                        <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
                         <h2 className="text-xl font-bold text-white">Configure Worktree Strategy</h2>
                     </div>
 
@@ -458,7 +458,7 @@ const ProjectHome = () => {
                 <div className="flex justify-between items-end shrink-0">
                     <div>
                         <div className="flex items-center gap-2 mb-2">
-                            <h1 className="text-3xl font-outfit font-bold text-white tracking-tight">{activeProject.name}</h1>
+                            <h1 className="text-3xl font-heading font-bold text-white tracking-tight">{activeProject.name}</h1>
                             <button
                                 onClick={() => navigate({ kind: 'project-settings' })}
                                 className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-white/5 transition-all"
@@ -601,7 +601,7 @@ const ProjectHome = () => {
                     returns everything that isn't archived/deleted, so completed,
                     failed and gated runs are here too, each wearing its own chip. */}
                 <div>
-                    <h2 className="font-outfit text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Feature Pipelines</h2>
+                    <h2 className="font-heading text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Feature Pipelines</h2>
                     <div className="space-y-4">
                         {isLoadingFeatures ? (
                             <div className="flex items-center justify-center p-8">
@@ -614,7 +614,7 @@ const ProjectHome = () => {
                                 <div className="w-12 h-12 rounded-full bg-violet-500/10 border border-violet-500/25 flex items-center justify-center text-violet-400 mb-2">
                                     <Cpu className="w-6 h-6 animate-pulse" />
                                 </div>
-                                <h3 className="font-outfit text-white font-medium text-base">No feature pipelines yet</h3>
+                                <h3 className="font-heading text-white font-medium text-base">No feature pipelines yet</h3>
                                 <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
                                     There are no agent orchestration workflows running in this workspace right now. Use the tool above to start a new pipeline.
                                 </p>

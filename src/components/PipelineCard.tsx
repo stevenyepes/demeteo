@@ -103,7 +103,7 @@ function PipelineCardInner({
                             </span>
                         ) : (
                             <span
-                                className="px-2 py-0.5 rounded text-[10px] font-mono bg-violet-500/10 border border-violet-500/30 text-violet-300 font-outfit truncate max-w-[220px] inline-flex items-center gap-1"
+                                className="px-2 py-0.5 rounded text-[10px] font-mono bg-violet-500/10 border border-violet-500/30 text-violet-300 font-heading truncate max-w-[220px] inline-flex items-center gap-1"
                                 title={`Workflow: ${context.workflow.name}`}
                             >
                                 <span className="text-violet-400/80">Workflow:</span>
@@ -121,7 +121,7 @@ function PipelineCardInner({
                         </span>
                         <span className="text-xs text-slate-500 font-mono truncate">{detail.featureId}</span>
                     </div>
-                    <h3 className="text-lg font-outfit text-white line-clamp-2 break-words" title={scan.title}>{scan.title}</h3>
+                    <h3 className="text-lg font-heading text-white line-clamp-2 break-words" title={scan.title}>{scan.title}</h3>
                     {detail.description && (
                         <p
                             className="mt-1 text-xs text-slate-400 leading-relaxed line-clamp-2 break-words"

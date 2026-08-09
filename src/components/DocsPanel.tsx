@@ -64,7 +64,7 @@ const DocsPanel: React.FC<DocsPanelProps> = ({ isOpen, onClose }) => {
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/5 bg-[#0d0f14]/80 shrink-0">
           <div className="flex items-center gap-2">
             <BookOpen className="w-5 h-5 text-cyan-400" />
-            <h2 className="text-sm font-bold font-outfit text-white">Documentation</h2>
+            <h2 className="text-sm font-bold font-heading text-white">Documentation</h2>
           </div>
           <button
             onClick={onClose}
@@ -103,7 +103,10 @@ const DocsPanel: React.FC<DocsPanelProps> = ({ isOpen, onClose }) => {
                 <div className="w-6 h-6 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : (
-              <div className="prose prose-invert prose-sm max-w-none">
+              // `SimpleMarkdown` styles every element it emits, so this wrapper
+              // wants no typography classes. @tailwindcss/typography is not a
+              // dependency, so `prose*` here resolves to nothing at all.
+              <div>
                 <SimpleMarkdown text={content} />
               </div>
             )}
@@ -148,15 +151,15 @@ function SimpleMarkdown({ text }: { text: string }) {
 
     if (line.startsWith('# ')) {
       elements.push(
-        <h1 key={i} className="text-xl font-bold font-outfit text-white mb-4 mt-2">{line.slice(2)}</h1>
+        <h1 key={i} className="text-xl font-bold font-heading text-white mb-4 mt-2">{line.slice(2)}</h1>
       );
     } else if (line.startsWith('## ')) {
       elements.push(
-        <h2 key={i} className="text-base font-bold font-outfit text-white mb-3 mt-5">{line.slice(3)}</h2>
+        <h2 key={i} className="text-base font-bold font-heading text-white mb-3 mt-5">{line.slice(3)}</h2>
       );
     } else if (line.startsWith('### ')) {
       elements.push(
-        <h3 key={i} className="text-sm font-bold font-outfit text-white mb-2 mt-4">{line.slice(4)}</h3>
+        <h3 key={i} className="text-sm font-bold font-heading text-white mb-2 mt-4">{line.slice(4)}</h3>
       );
     } else if (/^- /.test(line)) {
       elements.push(

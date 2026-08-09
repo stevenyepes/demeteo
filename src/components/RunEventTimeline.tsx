@@ -230,7 +230,7 @@ export const RunEventTimeline: React.FC<{
       >
         <div className="flex items-center gap-2 min-w-0">
           <Radio className={`w-4 h-4 shrink-0 ${error ? 'text-slate-600' : isTerminal ? 'text-slate-500' : 'text-cyan-400 animate-pulse'}`} />
-          <span className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider">Activity</span>
+          <span className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider">Activity</span>
           <span className="text-[10px] text-slate-500 font-mono truncate">{machineName} · run {run.run_id}</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">

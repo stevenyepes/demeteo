@@ -5,9 +5,9 @@ export function MemoryTab() {
   const s = useSettings();
 
   return (
-    <div className="space-y-6 animate-fadeIn">
+    <div className="space-y-6 animate-fade-in">
       <div className="glass-panel p-6 rounded-xl space-y-4">
-        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
           <Brain className="w-4 h-4 text-violet-400" /> Project Context Memory
         </h3>
         <p className="text-xs text-slate-400 leading-relaxed">

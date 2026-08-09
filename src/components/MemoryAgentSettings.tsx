@@ -125,7 +125,7 @@ const MemoryAgentSettings: React.FC = () => {
     <div className="space-y-4">
       <div className="glass-panel p-6">
         <div className="flex items-start justify-between mb-1">
-          <h3 className="text-sm font-outfit font-semibold text-white flex items-center gap-2">
+          <h3 className="text-sm font-heading font-semibold text-white flex items-center gap-2">
             <Brain className="w-4 h-4 text-violet-400" />
             Memory Agent
           </h3>

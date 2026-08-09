@@ -150,7 +150,7 @@ export function HarnessModelPicker({
       {onClear && (
         <div className="flex items-center gap-2 pb-0.5">
           {saved && (
-            <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-medium shrink-0 animate-fadeIn">
+            <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-medium shrink-0 animate-fade-in">
               <Check className="w-3 h-3" /> Saved
             </span>
           )}
