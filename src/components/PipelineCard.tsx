@@ -10,14 +10,20 @@
  * asserting the memo exists.
  *
  * Everything the card shows is derived by `pipelineCardMeta`; nothing is
- * decided here.
+ * decided here. The `data-tier` attributes are what keeps that grouping
+ * enforceable: the row rendered all three tiers at one weight for as long as
+ * the grouping existed only in the type, and a test asserting a field is
+ * *present* passes on exactly that layout. Asserting which tier it landed in
+ * does not.
  */
 
 import { Clock, Cpu, Zap, ChevronRight } from 'lucide-react';
 import { memo, useCallback, useMemo } from 'react';
 
+import { Chip } from './ui/Chip';
+import { DEFAULT_DENSITY, pipelineDensityClasses, type PipelineDensityClasses } from '../lib/density';
 import { pipelineCardMeta } from '../lib/pipelineCard';
-import { TONE_CHIP, type RunStatusTone } from '../lib/runStatus';
+import { type RunStatusTone } from '../lib/runStatus';
 import type { WorkflowMeta } from '../lib/workflowBadge';
 import type { Feature } from '../types';
 
@@ -35,21 +41,7 @@ const TONE_ACCENT: Record<RunStatusTone, string> = {
     slate:   'bg-slate-600 shadow-[0_0_10px_rgba(100,116,139,0.6)]',
 };
 
-/**
- * Chip classes for the transport badge, which is not a run status.
- *
- * `slate` here is deliberately weaker than `TONE_CHIP.slate`: a local run is
- * the unremarkable case and must not compete with the status chip beside it.
- * Only the two tones `pipelineCardMeta` can produce for a transport are listed.
- */
-const TRANSPORT_CHIP: Record<'cyan' | 'slate', string> = {
-    cyan:  'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-    slate: 'bg-white/5 text-slate-500 border-white/10',
-};
-
-function transportChipClass(tone: RunStatusTone): string {
-    return tone === 'cyan' ? TRANSPORT_CHIP.cyan : TRANSPORT_CHIP.slate;
-}
+const COMFORTABLE = pipelineDensityClasses(DEFAULT_DENSITY);
 
 export interface PipelineCardProps {
     feature: Feature;
@@ -58,6 +50,12 @@ export interface PipelineCardProps {
     detached: boolean;
     computeType: string | undefined;
     remoteHost: string | null | undefined;
+    /**
+     * Resolved by `pipelineDensityClasses` — one stable object per density, or
+     * the memo below sees a changed prop on every parent render. A caller that
+     * offers no density control gets comfortable.
+     */
+    density?: PipelineDensityClasses;
     onOpen: (featureId: string, featureTitle: string) => void;
 }
 
@@ -67,6 +65,7 @@ function PipelineCardInner({
     detached,
     computeType,
     remoteHost,
+    density = COMFORTABLE,
     onOpen,
 }: PipelineCardProps) {
     const { scan, context, detail } = useMemo(
@@ -81,68 +80,75 @@ function PipelineCardInner({
     return (
         <div
             onClick={handleOpen}
-            className="glass-panel glass-panel-hover rounded-xl p-5 cursor-pointer relative overflow-hidden group"
+            className={`pipeline-card glass-panel glass-panel-hover rounded-xl cursor-pointer relative overflow-hidden group ${density.card} ${scan.needsYou ? 'ring-1 ring-amber-500/40' : ''}`}
         >
             <div className={`absolute left-0 top-0 bottom-0 w-1 ${TONE_ACCENT[scan.status.tone]}`}></div>
 
-            <div className="flex justify-between items-start gap-4">
-                <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-3 mb-1 flex-wrap">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono border uppercase flex items-center gap-1 ${TONE_CHIP[scan.status.tone]}`}>
-                            {scan.status.active && (
-                                <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
-                            )}
-                            {scan.status.label}
-                        </span>
-                        {context.workflow.variant === 'fallback' ? (
-                            <span
-                                className="px-2 py-0.5 rounded text-[10px] font-mono bg-white/5 border border-white/10 text-slate-500 uppercase"
-                                title="Workflow reference missing"
-                            >
-                                Workflow: unknown
-                            </span>
-                        ) : (
-                            <span
-                                className="px-2 py-0.5 rounded text-[10px] font-mono bg-violet-500/10 border border-violet-500/30 text-violet-300 font-heading truncate max-w-[220px] inline-flex items-center gap-1"
-                                title={`Workflow: ${context.workflow.name}`}
-                            >
-                                <span className="text-violet-400/80">Workflow:</span>
-                                <span className="truncate">{context.workflow.name}</span>
-                                <span className="text-[9px] px-1 rounded bg-violet-500/20 text-violet-300 font-medium font-mono uppercase">
-                                    {context.workflow.is_starter ? 'Starter' : 'Custom'}
-                                </span>
-                            </span>
-                        )}
-                        <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase border inline-flex items-center gap-1 ${transportChipClass(context.transport.tone)}`}
-                            title={context.transport.title}
-                        >
-                            <Cpu className="w-3 h-3" /> {context.transport.label}
-                        </span>
-                        <span className="text-xs text-slate-500 font-mono truncate">{detail.featureId}</span>
-                    </div>
-                    <h3 className="text-lg font-heading text-white line-clamp-2 break-words" title={scan.title}>{scan.title}</h3>
-                    {detail.description && (
-                        <p
-                            className="mt-1 text-xs text-slate-400 leading-relaxed line-clamp-2 break-words"
-                            title={detail.description}
-                        >
-                            {detail.description}
-                        </p>
-                    )}
+            <div data-tier="scan" className="flex items-start justify-between gap-4">
+                <h3
+                    className={`min-w-0 flex-1 font-heading text-white line-clamp-2 break-words ${density.title}`}
+                    title={scan.title}
+                >
+                    {scan.title}
+                </h3>
+                <div className="flex shrink-0 items-center gap-3">
+                    <Chip tone={scan.status.tone} pulse={scan.status.active} size="sm">
+                        {scan.status.label}
+                    </Chip>
+                    <span
+                        className={`flex items-center gap-1 font-mono font-medium text-white ${density.elapsed}`}
+                        title="Elapsed"
+                    >
+                        <Clock className="w-3 h-3 text-slate-500" />
+                        {scan.elapsed}
+                    </span>
+                    <ChevronRight className="w-4 h-4 text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
+            </div>
 
-                <div className="flex gap-6 text-right shrink-0 pt-1">
-                    <div>
-                        <div className="text-xs text-slate-500 font-mono flex items-center gap-1 justify-end"><Clock className="w-3 h-3" /> Duration</div>
-                        <div className="text-sm font-medium text-white">{scan.elapsed}</div>
-                    </div>
-                    <div>
-                        <div className="text-xs text-slate-500 font-mono flex items-center gap-1 justify-end"><Zap className="w-3 h-3 text-cyan-400 animate-pulse" /> Tokens</div>
-                        <div className="text-sm font-medium text-white">{context.tokens}</div>
-                    </div>
-                    <ChevronRight className="w-5 h-5 text-slate-500 mt-2 opacity-0 group-hover:opacity-100 transition-opacity" />
-                </div>
+            <div
+                data-tier="context"
+                className={`mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 font-mono text-slate-400 ${density.meta}`}
+            >
+                {context.workflow.variant === 'fallback' ? (
+                    <Chip tone="slate" size="sm" title="Workflow reference missing">
+                        Workflow: unknown
+                    </Chip>
+                ) : (
+                    <Chip
+                        tone="violet"
+                        size="sm"
+                        maxWidth="220px"
+                        title={`Workflow: ${context.workflow.name} (${context.workflow.is_starter ? 'starter' : 'custom'})`}
+                    >
+                        {context.workflow.name}
+                    </Chip>
+                )}
+                <Chip
+                    tone={context.transport.tone}
+                    size="sm"
+                    icon={<Cpu className="w-3 h-3" />}
+                    title={context.transport.title}
+                >
+                    {context.transport.label}
+                </Chip>
+                <span className="text-slate-300" title="Cost so far">{context.cost}</span>
+                <span className="flex items-center gap-1" title="Tokens">
+                    <Zap className="w-3 h-3 text-cyan-400" />
+                    {context.tokens}
+                </span>
+            </div>
+
+            <div
+                data-tier="detail"
+                className={`mt-2 flex items-center gap-2 text-slate-500 ${density.meta}`}
+            >
+                <span className="font-mono shrink-0">{detail.featureId}</span>
+                {detail.description && (
+                    <p className="min-w-0 truncate" title={detail.description}>
+                        {detail.description}
+                    </p>
+                )}
             </div>
         </div>
     );

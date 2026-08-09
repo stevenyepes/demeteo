@@ -28,6 +28,7 @@ import {
 } from '../context';
 import { PipelineCard, type PipelineCardProps } from './PipelineCard';
 import ProjectHome from './ProjectHome';
+import { pipelineDensityClasses } from '../lib/density';
 import { buildWorkflowById } from '../lib/workflowBadge';
 import type { Feature, Project } from '../types';
 
@@ -175,40 +176,137 @@ function renderCard(overrides: Partial<PipelineCardProps> = {}) {
   return { container, onOpen, card: container.firstElementChild as HTMLElement };
 }
 
+function tier(card: HTMLElement, name: 'scan' | 'context' | 'detail'): HTMLElement {
+  const el = card.querySelector<HTMLElement>(`[data-tier="${name}"]`);
+  if (!el) throw new Error(`the card rendered no ${name} tier`);
+  return el;
+}
+
+// The tiers are asserted by *which* tier a field landed in, not by its classes.
+// `pipelineCardMeta` has grouped these three ways since Phase 0 and the row
+// still rendered all eight at one weight, so a test that only checks a field is
+// present passes on exactly the layout this phase exists to replace.
+describe('three-tier read', () => {
+  it('keeps the scan tier to the title, the status and the elapsed time', () => {
+    const { card } = renderCard();
+    const scan = tier(card, 'scan');
+
+    expect(scan).toHaveTextContent('Add a retry budget to the verifier');
+    expect(scan).toHaveTextContent('Running');
+    expect(scan).toHaveTextContent('2m 10s');
+
+    expect(scan).not.toHaveTextContent('Standard Feature Pipeline');
+    expect(scan).not.toHaveTextContent('Local');
+    expect(scan).not.toHaveTextContent('$1.25');
+    expect(scan).not.toHaveTextContent('f-1');
+    expect(scan).not.toHaveTextContent('Cap agent retries per step.');
+  });
+
+  it('groups the workflow, transport, cost and tokens as context', () => {
+    const { card } = renderCard();
+    const context = tier(card, 'context');
+
+    expect(context).toHaveTextContent('Standard Feature Pipeline');
+    expect(context).toHaveTextContent('Local');
+    expect(context).toHaveTextContent('$1.25');
+    expect(context).toHaveTextContent('12.5k');
+  });
+
+  // Audit Opportunity 5: `pipelineCardMeta` has formatted this all along and
+  // the row rendered duration and tokens beside it and never the cost.
+  it('renders the cost', () => {
+    renderCard({ feature: feature({ total_cost: 12.5 }) });
+
+    expect(screen.getByText('$12.50')).toBeInTheDocument();
+  });
+
+  it('drops the feature id and the description to the detail tier', () => {
+    const { card } = renderCard();
+    const detail = tier(card, 'detail');
+
+    expect(detail).toHaveTextContent('f-1');
+    expect(detail).toHaveTextContent('Cap agent retries per step.');
+  });
+
+  // "On demand" is the hover title, not a disclosure: one line of prose costs
+  // less to read than to reveal, and a per-row open/closed state in a memoized
+  // list buys the click back in re-renders.
+  it('carries the full description in a title rather than behind a click', () => {
+    const { card } = renderCard({
+      feature: feature({ description: 'Cap agent retries per step, then fail the run.' }),
+    });
+
+    expect(card.querySelector('p')).toHaveAttribute(
+      'title',
+      'Cap agent retries per step, then fail the run.',
+    );
+    expect(card.querySelector('button')).toBeNull();
+  });
+
+  it('renders no description block when there is nothing to show', () => {
+    const { card } = renderCard({ feature: feature({ description: '   ' }) });
+
+    expect(card.querySelector('p')).toBeNull();
+  });
+});
+
 describe('card contents', () => {
-  it('renders the status chip, workflow, transport, id, title and metrics', () => {
+  it('accents the row with the run tone and skips the row off screen', () => {
     const { card } = renderCard();
 
     expect(card.className).toContain('glass-panel glass-panel-hover');
+    expect(card.className).toContain('pipeline-card');
     expect(card.firstElementChild?.className).toContain('bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.8)]');
+  });
 
-    const status = screen.getByText('Running');
-    expect(status.className).toContain('bg-cyan-500/10 text-cyan-400 border-cyan-500/20');
+  it('spells the status through Chip so the tone stays in one registry', () => {
+    renderCard();
+
+    const status = screen.getByText('Running').closest('[data-testid="chip"]');
+    expect(status?.className).toContain('bg-cyan-500/10 text-cyan-400 border-cyan-500/20');
     // The pulse dot is the `active` affordance, and only active runs get one.
-    expect(status.querySelector('.animate-pulse')).not.toBeNull();
+    expect(status?.querySelector('[data-testid="chip-dot"]')).not.toBeNull();
+  });
 
-    expect(screen.getByText('Standard Feature Pipeline')).toBeInTheDocument();
-    expect(screen.getByText('Custom')).toBeInTheDocument();
-    expect(screen.getByText('f-1')).toBeInTheDocument();
-    expect(screen.getByText('Add a retry budget to the verifier')).toBeInTheDocument();
-    expect(screen.getByText('Cap agent retries per step.')).toBeInTheDocument();
-    expect(screen.getByText('2m 10s')).toBeInTheDocument();
-    expect(screen.getByText('12.5k')).toBeInTheDocument();
+  it('leaves a settled run without a pulse', () => {
+    renderCard({ feature: feature({ status: 'completed' }) });
+
+    const status = screen.getByText('Completed').closest('[data-testid="chip"]');
+    expect(status?.querySelector('[data-testid="chip-dot"]')).toBeNull();
+  });
+
+  // §3.2: the list sorts these to the top, so the row has to look like the
+  // reason it is there. `segmentFor` decides it — the card never re-derives it.
+  it('rings a row that is waiting on a human', () => {
+    const { card } = renderCard({ feature: feature({ status: 'awaiting_gate' }) });
+
+    expect(card.className).toContain('ring-amber-500/40');
+    expect(renderCard().card.className).not.toContain('ring-amber-500/40');
   });
 
   it('mutes the workflow badge when the reference is missing', () => {
     renderCard({ feature: feature({ workflow_id: 'wf-gone' }) });
 
-    expect(screen.getByText('Workflow: unknown')).toHaveAttribute('title', 'Workflow reference missing');
+    expect(screen.getByTitle('Workflow reference missing')).toHaveTextContent('Workflow: unknown');
+    expect(screen.queryByText('Standard Feature Pipeline')).not.toBeInTheDocument();
+  });
+
+  // Starter-vs-custom is a fact about the workflow, not about this run, and it
+  // was a second pill nested inside the first one.
+  it('keeps the workflow origin in the tooltip rather than a nested pill', () => {
+    renderCard();
+
+    expect(screen.getByText('Standard Feature Pipeline').closest('[data-testid="chip"]'))
+      .toHaveAttribute('title', 'Workflow: Standard Feature Pipeline (custom)');
     expect(screen.queryByText('Custom')).not.toBeInTheDocument();
   });
 
-  it('labels a local run without competing with the status chip', () => {
+  it('labels a local run', () => {
     renderCard();
 
     const transport = screen.getByTitle('Executes on this machine');
     expect(transport).toHaveTextContent('Local');
-    expect(transport.className).toContain('bg-white/5 text-slate-500 border-white/10');
+    expect(transport.className).toContain('bg-slate-500/10 text-slate-400 border-slate-500/20');
   });
 
   it('names the host for an attached remote run', () => {
@@ -225,18 +323,36 @@ describe('card contents', () => {
     expect(screen.getByText(/Detached/)).toBeInTheDocument();
   });
 
-  it('renders no description block when there is nothing to show', () => {
-    const { card } = renderCard({ feature: feature({ description: '   ' }) });
-
-    expect(card.querySelector('p')).toBeNull();
-  });
-
   it('reports the row it was clicked for without the parent closing over it', async () => {
     const { onOpen } = renderCard();
 
     await userEvent.click(screen.getByText('Add a retry budget to the verifier'));
 
     expect(onOpen).toHaveBeenCalledWith('f-1', 'Add a retry budget to the verifier');
+  });
+});
+
+describe('density', () => {
+  it('opens comfortable when the caller offers no control', () => {
+    const { card } = renderCard();
+
+    expect(card.className).toContain('p-5');
+    expect(card.querySelector('h3')?.className).toContain('text-lg');
+  });
+
+  it('sizes the card and the title from the classes it is handed', () => {
+    const { card } = renderCard({ density: pipelineDensityClasses('compact') });
+
+    expect(card.className).toContain('p-3');
+    expect(card.className).not.toContain('p-5');
+    expect(card.querySelector('h3')?.className).toContain('text-sm');
+  });
+
+  it('sizes the context and detail tiers too, so nothing stays comfortable', () => {
+    const { card } = renderCard({ density: pipelineDensityClasses('compact') });
+
+    expect(tier(card, 'context').className).toContain('text-[10px]');
+    expect(tier(card, 'detail').className).toContain('text-[10px]');
   });
 });
 

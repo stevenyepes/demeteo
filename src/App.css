@@ -945,6 +945,22 @@ body {
   contain-intrinsic-size: 640px 28px;
 }
 
+/* Same trade again, for the project view's pipeline list. The placement
+   question the rule above has does not arise here: the row already sets
+   overflow-hidden so its accent bar's glow stays inside the card, so paint
+   containment clips nothing that was not clipped before it.
+
+   80px is the *content* box of a comfortable row, which is the default and so
+   the one worth reserving for: a 28px title line, then the context chips at
+   20px and the detail line at 16px with an 8px gap above each. p-5's 40px and
+   2px of border ride on top, so a skipped row holds ~122px. A compact row
+   over-reserves by a few pixels, which costs nothing; under-reserving is the
+   scroll thumb moving under the cursor. */
+.pipeline-card {
+  content-visibility: auto;
+  contain-intrinsic-size: 720px 80px;
+}
+
 .supervisor-stream-content {
   max-width: 1024px !important; /* 5xl width */
   margin-left: auto !important;
