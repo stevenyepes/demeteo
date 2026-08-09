@@ -158,7 +158,7 @@ function ProjectRail() {
               }`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <StatusBadge status={p.status} variant="dot" />
+                <StatusBadge status={p.status} />
                 <div className="min-w-0">
                   <div className="text-xs font-medium truncate max-w-[120px]">{p.name}</div>
                   <div className="text-[9px] text-slate-500 font-mono">

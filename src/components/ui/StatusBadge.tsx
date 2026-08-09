@@ -1,4 +1,13 @@
-import { runStatusMeta, TONE_CHIP, type RunStatusTone } from '../../lib/runStatus';
+/**
+ * StatusBadge — the standalone glow dot (UI redesign plan §5.1).
+ *
+ * `Chip` owns every labelled pill; this badge kept the one job a pill cannot
+ * do — a label-less liveness mark in a rail or list row, where the row's own
+ * text is the label. It is not a smaller `Chip`: `Chip`'s dot is `bg-current`
+ * and only exists inside a pill, so neither substitutes for the other.
+ */
+
+import { runStatusMeta, type RunStatusTone } from '../../lib/runStatus';
 
 /** Statuses StatusBadge renders that aren't run statuses (machine /
  *  step vocabulary), mapped straight to a tone. Everything else defers
@@ -24,27 +33,18 @@ const TONE_DOT: Record<RunStatusTone, string> = {
 
 interface StatusBadgeProps {
   status: string;
-  variant?: 'dot' | 'pill';
-  label?: string;
   className?: string;
 }
 
-export function StatusBadge({ status, variant = 'dot', label, className = '' }: StatusBadgeProps) {
+export function StatusBadge({ status, className = '' }: StatusBadgeProps) {
   const normalized = status.toLowerCase();
   const tone = NON_RUN_TONES[normalized] ?? runStatusMeta(normalized).tone;
 
-  if (variant === 'dot') {
-    return (
-      <div className={`w-2 h-2 rounded-full shrink-0 ${TONE_DOT[tone]} ${className}`} />
-    );
-  }
-
-  const display = label ?? status.replace(/_/g, ' ');
   return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border capitalize ${TONE_CHIP[tone]} ${className}`}
-    >
-      {display}
-    </span>
+    <div
+      data-testid="status-badge"
+      data-tone={tone}
+      className={`w-2 h-2 rounded-full shrink-0 ${TONE_DOT[tone]} ${className}`}
+    />
   );
 }

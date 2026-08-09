@@ -13,9 +13,9 @@ import {
   ListTree,
 } from 'lucide-react';
 import type { Machine, RemoteRunMirror } from '../types';
-import { StatusBadge } from './ui/StatusBadge';
+import { Chip } from './ui/Chip';
 import { RemoteGateActions, ReinjectCredentials } from './RunEventTimeline';
-import { runStatusMeta, TONE_BORDER_L, TONE_TEXT, type RunStatusTone } from '../lib/runStatus';
+import { TONE_BORDER_L, TONE_TEXT, type RunStatusTone } from '../lib/runStatus';
 import { relativeTime } from '../lib/utils';
 import { useNavigation } from '../context';
 import { formatError } from '../lib/errors';
@@ -285,12 +285,7 @@ const RemoteRunInbox: React.FC = () => {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 text-slate-200 text-sm font-medium">
                             <span className="truncate">{run.title}</span>
-                            <StatusBadge
-                              status={run.status}
-                              variant="pill"
-                              label={runStatusMeta(run.status).label}
-                              className="shrink-0"
-                            />
+                            <Chip status={run.status} />
                           </div>
                           <div className="text-[11px] text-slate-500 font-mono mt-0.5 flex flex-wrap gap-x-3">
                             <span>{machineName(run.machine_id)}</span>
