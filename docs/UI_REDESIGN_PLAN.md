@@ -15,31 +15,39 @@ into this codebase's palette, primitives and hexagon discipline.
 
 ## 0. Status
 
-Branch `feat/ui-redesign-pipeline-project`. **Phases 0 and 1 are done; 2–6 are not
+Branch `feat/ui-redesign-pipeline-project`. **Phases 0–2 are implemented; 3–6 are not
 started.** Read §6 for what each phase covers and §7 for the decisions already taken.
+§1's "Status here today" column is the pre-Phase-2 snapshot this plan was written
+against — read it as the starting position, not as the tree.
 
 | Phase | State | Commit |
 |---|---|---|
 | 0 — foundations | done | `4e785c6` (audit F17), `32a42c4` (primitives + `lib/` modules) |
 | 1 — performance | done | `7a0b45f` |
 | — | unplanned, done | `c40fde3` — dead utility classes + `scripts/check-classes.mjs` |
-| 2 — pipeline shell | **next** | |
-| 3 — timeline slim-down | | |
+| 2 — pipeline shell | code complete, **never rendered**; one item deferred to Phase 3 | |
+| 3 — timeline slim-down | **next** | |
 | 4 — project view | | |
 | 5 — activity & motion | | |
 | 6 — keyboard & persistence | | |
 
 `npm run checks` is green at `c40fde3`.
 
-**Outstanding before Phase 2, and the reason it matters:** none of this has been seen
-running. Phase 1 reworked the live agent stream onto `requestAnimationFrame` +
-`useSyncExternalStore`, and `c40fde3` moved 103 headings from Inter to Outfit — different
-metrics, so text reflows. Neither is observable from `npm run checks`, which compiles and
-tests but never renders. Phase 2 then restructures the same files again. One
-`npm run dev:tauri` pass with a streaming agent clears both; skipping it means a later
-visual defect has three unobserved changes to choose from instead of one. Heaviest
-heading concentrations for a look: `settings/ProjectSettingsShell` (9),
-`settings/StrategyTab` (8), `PreferencesScreen` (7).
+**Deferred out of Phase 2:** the sticky collapsed header on scroll, listed in §6's
+Phase 2 scope. It is Phase 3's now and §6 says so there — a deferral that no phase
+claims is a deletion nobody decided on.
+
+**Outstanding, and the reason it matters:** none of this has been seen running, and
+the debt is now three changes deep rather than two. Phase 1 reworked the live agent
+stream onto `requestAnimationFrame` + `useSyncExternalStore`; `c40fde3` moved 103
+headings from Inter to Outfit — different metrics, so text reflows; Phase 2 has now
+restructured the same run view again behind a `SplitPane` the user drags, a docked
+inspector and a `MetricStrip` header. None of it is observable from `npm run checks`,
+which compiles and tests but never renders. One `npm run dev:tauri` pass with a
+streaming agent clears all three; skipping it means the first visual defect anyone
+reports has three unobserved changes to choose from instead of one. Heaviest heading
+concentrations for a look: `settings/ProjectSettingsShell` (9), `settings/StrategyTab`
+(8), `PreferencesScreen` (7).
 
 macOS and Windows appearance is unverified by any gate — `pr-checks.yml` runs
 `ubuntu-22.04` only (AGENTS.md §3, Cross-OS).
@@ -60,7 +68,8 @@ Stripping the styling, five structural changes:
 
 **The headline finding: most of the mock's right-hand panel already exists.**
 `NodePanel` has the exact `Overview | Live | Output | Actions` tabs the mock draws
-(`canvas/NodePanel.tsx:117`), the attempt-history table, and the ticket rows. The gap
+(its `TABS` in `canvas/NodePanel.tsx`, the bodies in `canvas/nodePanel/`), the
+attempt-history table, and the ticket rows. The gap
 is not "build an inspector" — it is **"the inspector serves one of two views."** That
 reframes the whole job from a rewrite into a wiring change plus a slim-down, which is
 both cheaper and lower-risk.
@@ -416,8 +425,9 @@ stability, visibility-gated poll.
 ### Phase 2 — Pipeline view shell
 `SplitPane` + the unified `Inspector`; `NodePanel` split into its four tab modules
 behind it; Timeline rows become selectable and drive the same inspector; collapsible
-prompt (**B**); `MetricStrip` header (**C**); sticky collapsed header on scroll;
-selection moved into navigation state (§3.5).
+prompt (**B**); `MetricStrip` header (**C**); selection moved into navigation state
+(§3.5). The sticky collapsed header on scroll was scoped here and deferred to
+Phase 3, where the rest of the header work lands.
 Reconcile with `runLayout.ts`: automatic split at 1600 px becomes the *default* width
 for a pane the user can now resize. `pickRunLayout` keeps deciding the initial state;
 it stops being the final word. Update its doc comment accordingly — AGENTS.md §3, you
@@ -431,7 +441,8 @@ Both settled decisions in §7 land here: the splitter clamps rather than collaps
 ### Phase 3 — Timeline & step-card slim-down
 `StepCard` down to scan tier + one CTA; stream, artifacts, rerun and environment
 panels served by the inspector; gate strip (§3.2); density toggle (§3.7);
-`content-visibility` on rows.
+`content-visibility` on rows; the sticky collapsed header on scroll deferred out of
+Phase 2 (§0).
 
 **Two things Phase 1 deliberately left here**, because moving these panels out of the
 card is what actually fixes them:
@@ -507,19 +518,19 @@ density, last view mode and filter. Audit *Opportunity 2* notes
 - **The inspector clamps to a minimum width — it never collapses to zero.** So the
   pane is always on screen and always has a home. Two consequences worth stating,
   because each removes something this plan had planned for:
-  - `splitPaneGeometry.ts` currently models a collapse zone that *snaps* the pane
-    shut past its minimum. Phase 2 replaces that with a clamp. The "restore the last
-    width on reopen" problem recorded above then stops existing — there is no closed
-    state to reopen from, so nothing needs to survive a remount and Phase 6 has one
-    less value to persist.
+  - `splitPaneGeometry.ts` had modelled a collapse zone that *snapped* the pane shut
+    past its minimum; Phase 2 made it a clamp. The "restore the last width on reopen"
+    problem recorded above stops existing with it — there is no closed state to reopen
+    from, so nothing needs to survive a remount and Phase 6 has one less value to
+    persist.
   - Closing a step (`NodePanel`'s dismiss, deselecting a node) empties the pane
     instead of hiding it, which makes `inspectorTarget`'s distinct empty *reasons*
     load-bearing rather than speculative — an always-present pane that says nothing
     is exactly how an empty panel comes to feel broken.
-- **Graph is the default view.** `useRunGraph` initialises `viewMode` to `'timeline'`
-  and its comment says the graph "is opt-in until Phase-2 parity is signed off" —
-  Phase 2 *is* that parity, so both the value and the comment change together, and
-  [docs/PRD_DAG_WORKFLOWS.md](PRD_DAG_WORKFLOWS.md) §6.1 needs the same correction.
-  What must NOT change: `canShowGraph` still requires a definition and at least one
-  step, so a legacy feature with no workflow graph continues to open on the timeline.
-  That is a fallback, not a default.
+- **Graph is the default view.** The graph had been opt-in "until Phase-2 parity is
+  signed off"; Phase 2 *is* that parity, so `useRunGraph` now initialises `viewMode`
+  to `'graph'`, and [docs/PRD_DAG_WORKFLOWS.md](PRD_DAG_WORKFLOWS.md) §6.1 carries the
+  same correction. What did NOT change: `canShowGraph` still requires a definition and
+  at least one step, so a legacy feature with no workflow graph continues to open on
+  the timeline. That is a fallback, not a default — an agent finding the graph-first
+  initialiser and reading it as a regression is the mistake this row exists to prevent.
