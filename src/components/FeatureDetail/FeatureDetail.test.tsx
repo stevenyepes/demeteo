@@ -131,14 +131,16 @@ function mount() {
     </NavigationProvider>,
   );
 
-  /** Re-renders the same tree with a gate pending on the detail view. */
-  const openGate = () =>
+  /** Re-renders the same tree with, or without, a gate pending on the detail
+   *  view — both directions, because "the modal is withheld rather than
+   *  cleared" is only observable by resolving the gate and watching it return. */
+  const setGate = (open: boolean) =>
     view.rerender(
       <NavigationProvider>
         <ProjectProvider>
           <UIStateProvider>
             <TerminalPanelProvider>
-              <NavigationSeed openGate={true}>
+              <NavigationSeed openGate={open}>
                 <FeatureDetail />
               </NavigationSeed>
             </TerminalPanelProvider>
@@ -147,7 +149,7 @@ function mount() {
       </NavigationProvider>,
     );
 
-  return { openGate };
+  return { setGate };
 }
 
 /**
@@ -189,30 +191,46 @@ function mountAlwaysOn() {
   );
 }
 
+/** Artifacts are the inspector's Output tab now, not a block inside the step
+ *  card (UI_REDESIGN_PLAN §3.1) — so reaching one is two clicks, and the run
+ *  has to have loaded far enough for the inspector to have resolved a step. */
+async function openArtifact() {
+  await userEvent.click(await screen.findByRole('tab', { name: 'Output' }));
+  await userEvent.click(await screen.findByRole('button', { name: /research-report\.md/ }));
+}
+
+/** The detail view has rendered its run, as opposed to merely its chrome. */
+function stepRow(): HTMLElement | null {
+  return document.querySelector('[data-step-row="se-1"]');
+}
+
 beforeEach(() => {
   mockBackend();
 });
 
 describe('FeatureDetail', () => {
   it('suppresses the artifact modal while a gate overlay is open', async () => {
-    const { openGate } = mount();
+    const { setGate } = mount();
 
-    const artifact = await screen.findByTitle('research-report.md');
-    await userEvent.click(artifact);
+    await openArtifact();
 
     // Baseline: with no gate pending the modal is the artifact surface.
     expect(await screen.findByTestId('artifact-modal-title')).toHaveTextContent(
       'research-report.md',
     );
 
-    openGate();
-
-    // The selection is untouched — the modal is withheld, not cleared — so the
-    // artifact returns when the gate is resolved.
+    setGate(true);
     await waitFor(() => {
       expect(screen.queryByTestId('artifact-modal-title')).not.toBeInTheDocument();
     });
-    expect(screen.getByTitle('research-report.md')).toBeInTheDocument();
+
+    // The artifact selection is untouched — the modal is withheld, not cleared.
+    // Asserting that requires resolving the gate: a `FeatureDetail` that closed
+    // the artifact instead of hiding it satisfies every assertion above.
+    setGate(false);
+    expect(await screen.findByTestId('artifact-modal-title')).toHaveTextContent(
+      'research-report.md',
+    );
   });
 
   it('renders nothing while the view is not a detail view', async () => {
@@ -239,15 +257,13 @@ describe('FeatureDetail', () => {
     mountAlwaysOn();
 
     await userEvent.click(screen.getByRole('button', { name: 'to detail' }));
-    expect(await screen.findByTitle('research-report.md')).toBeInTheDocument();
+    await waitFor(() => expect(stepRow()).toBeInTheDocument());
 
     await userEvent.click(screen.getByRole('button', { name: 'to home' }));
-    await waitFor(() => {
-      expect(screen.queryByTitle('research-report.md')).not.toBeInTheDocument();
-    });
+    await waitFor(() => expect(stepRow()).not.toBeInTheDocument());
 
     await userEvent.click(screen.getByRole('button', { name: 'to detail' }));
-    expect(await screen.findByTitle('research-report.md')).toBeInTheDocument();
+    await waitFor(() => expect(stepRow()).toBeInTheDocument());
 
     expect(consoleError).not.toHaveBeenCalled();
     consoleError.mockRestore();

@@ -7,12 +7,10 @@
  * the same steps and the same `run_events` overlay, so this toggle chooses a
  * view and never a source.
  *
- * It lives in its own file because it is also *chrome* — one of the two
- * elements `useRunColumnLayout` measures to work out how much height is left
- * for the graph box. That is why the positioning
- * classes ride on `SegmentedControl`'s own group element via `className`
- * rather than an enclosing div: `chromeRef` must land on the node whose
- * `offsetHeight` is the height the hook subtracts.
+ * Placement and spacing are the caller's. The run view seats this in a chrome
+ * row beside the density toggle and measures *that row* for the height it has to
+ * subtract from the graph box, so a margin or an alignment spelled here would
+ * either be invisible to `offsetHeight` or fight the row it sits in.
  *
  * The selected segment's treatment is `SegmentedControl`'s `TONE_CHIP.cyan` and
  * nothing local (UI_REDESIGN_PLAN §5.1). Colours resolve through
@@ -29,8 +27,6 @@ export type RunViewMode = 'graph' | 'timeline';
 interface RunViewToggleProps {
   mode: RunViewMode;
   onSelect: (mode: RunViewMode) => void;
-  /** `setToggleChromeEl` from `useRunColumnLayout`. */
-  chromeRef: (el: HTMLDivElement | null) => void;
 }
 
 const OPTIONS: readonly SegmentedOption<RunViewMode>[] = [
@@ -38,15 +34,8 @@ const OPTIONS: readonly SegmentedOption<RunViewMode>[] = [
   { value: 'timeline', label: 'Timeline', icon: List },
 ];
 
-export function RunViewToggle({ mode, onSelect, chromeRef }: RunViewToggleProps) {
+export function RunViewToggle({ mode, onSelect }: RunViewToggleProps) {
   return (
-    <SegmentedControl
-      options={OPTIONS}
-      value={mode}
-      onChange={onSelect}
-      ariaLabel="Run view"
-      className="mb-6 self-start"
-      ref={chromeRef}
-    />
+    <SegmentedControl options={OPTIONS} value={mode} onChange={onSelect} ariaLabel="Run view" />
   );
 }

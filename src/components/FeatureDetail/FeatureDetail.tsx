@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { RefreshCw, ShieldAlert } from 'lucide-react';
 import type { AppView } from '../../types';
 import type { NavigationMode } from '../../context/NavigationContext';
+import { DEFAULT_DENSITY, type Density } from '../../lib/density';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import { useNavigation, useProject, useUIState } from '../../context';
 import { ArtifactModal } from '../ArtifactModal';
@@ -10,8 +11,10 @@ import { defaultInspectorWidth, pickInspectorLayout } from '../runLayout';
 import { useRunColumnLayout } from '../useRunColumnLayout';
 import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { AttachmentsPanel } from './AttachmentsPanel';
+import { DensityToggle } from './DensityToggle';
 import { FeatureHeader } from './FeatureHeader';
 import { FeatureStatusBanners } from './FeatureStatusBanners';
+import { GateStrip } from './GateStrip';
 import { InitialPromptPanel } from './InitialPromptPanel';
 import { ReplayModal } from './ReplayModal';
 import { RunGraphPanel } from './RunGraphPanel';
@@ -27,8 +30,9 @@ import { useFeatureMr } from './useFeatureMr';
 import { useFeatureRun } from './useFeatureRun';
 import { useGateCardScroll } from './useGateCardScroll';
 import { useHarnessOverrides } from './useHarnessOverrides';
+import { useHeaderCollapse } from './useHeaderCollapse';
 import { useRemoteRun } from './useRemoteRun';
-import { useRerunActions, type ReplayTarget } from './useRerunActions';
+import { useRerunActions } from './useRerunActions';
 import { useRunGraph } from './useRunGraph';
 import { useStepSelection } from './useStepSelection';
 import { useWorktreeRouting } from './useWorktreeRouting';
@@ -125,6 +129,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
    *  hands out the refs and renders what comes back. */
   const {
     setRunColumnEl,
+    runColumnEl,
     setMetaChromeEl,
     setToggleChromeEl,
     runColumnSize,
@@ -132,6 +137,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     graphBoxPx,
     surfaceBoxPx,
   } = useRunColumnLayout(graph.graphDef);
+  const headerCollapsed = useHeaderCollapse(runColumnEl);
 
   /** `null` until the user drags, and then theirs for good. Until then the
    *  opening width tracks the measured column, so a window resized before
@@ -140,6 +146,9 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
    *  asks of its callers. Phase 6 owns persisting it — this outlives a resize,
    *  not a remount. */
   const [draggedInspectorWidth, setDraggedInspectorWidth] = useState<number | null>(null);
+  /** Phase 6 persists this through `get_app_session`/`set_app_session`; until
+   *  then it is the session's, not the user's. */
+  const [density, setDensity] = useState<Density>(DEFAULT_DENSITY);
   const inspectorLayout = pickInspectorLayout(runColumnSize);
   const inspectorWidth = draggedInspectorWidth ?? defaultInspectorWidth(runColumnSize);
 
@@ -158,17 +167,6 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     (stepExecutionId: string) =>
       navigate({ kind: 'detail', featureId, featureTitle: run.featureTitle, gateStepExecutionId: stepExecutionId }),
     [navigate, featureId, run.featureTitle],
-  );
-
-  const toggleStream = useCallback(
-    (stepExecutionId: string) =>
-      stream.setActiveStreamId((open) => (open === stepExecutionId ? null : stepExecutionId)),
-    [stream.setActiveStreamId],
-  );
-
-  const startReplayFromCard = useCallback(
-    (target: ReplayTarget) => rerun.startReplay(target, null),
-    [rerun.startReplay],
   );
 
   const deselectStep = useCallback(() => selection.selectStep(null), [selection.selectStep]);
@@ -191,6 +189,8 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       statusByNode={graph.runStatusByNode}
       runEvents={panelRunEvents}
       streamStore={stream.store}
+      harnessBaseline={run.harnessBaseline}
+      overrides={overrides}
       onDeselect={deselectStep}
       onOpenEditorForPath={routing.openEditorForPath}
       onOpenArtifact={artifact.openArtifact}
@@ -218,18 +218,9 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         hasBootstrapPhases={bootstrap.bootstrapPhases.size > 0}
         gateStepExecutionId={view.gateStepExecutionId}
         stepCardRefs={stepCardRefs}
-        harnessBaseline={run.harnessBaseline}
-        overrides={overrides}
-        selectedArtifactPath={artifact.selectedArtifactPath}
         selectedStepId={selection.selectedExecutionId}
-        activeStreamId={stream.activeStreamId}
-        streamStore={stream.store}
+        density={density}
         onSelect={selection.selectStep}
-        onToggleStream={toggleStream}
-        onOpenArtifact={artifact.openArtifact}
-        onStartReplay={startReplayFromCard}
-        onRetry={rerun.handleRetryStep}
-        onStop={rerun.handleStopStep}
         onDecideGate={decideGate}
       />
     );
@@ -246,6 +237,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   return (
     <div className="h-full w-full bg-[#08090c] text-slate-100 flex flex-col font-sans">
       <FeatureHeader
+        collapsed={headerCollapsed}
         featureId={featureId}
         featureTitle={run.featureTitle}
         status={run.status}
@@ -282,6 +274,11 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         mrState={mr.mrState}
         onRefreshMrState={mr.refreshMrState}
       />
+
+      {/* Above the run rather than inside it: a gate is the run asking a
+          question, and it was previously findable only by scrolling to the card
+          holding it (UI_REDESIGN_PLAN §3.2). */}
+      <GateStrip steps={run.steps} onDecideGate={decideGate} className="mx-6 mt-4" />
 
       <InitialPromptPanel featureDescription={run.featureDescription} />
 
@@ -321,6 +318,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
               from. */}
           <div
             ref={setRunColumnEl}
+            data-run-scroll
             className={`flex w-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-8 ${
               runLayout === 'split' ? 'flex-row-reverse items-start gap-8' : 'flex-col'
             }`}
@@ -338,8 +336,25 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
               harnessEvidence={run.harnessEvidence}
             />
             <div className={runLayout === 'split' ? 'flex min-w-0 flex-1 flex-col' : 'contents'}>
-              {graph.canShowGraph && (
-                <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} chromeRef={setToggleChromeEl} />
+              {/* One chrome row above the surface, and the element
+                  `useRunColumnLayout` measures — the graph box is the column
+                  minus this. The gap below it is `pb-6` rather than a margin so
+                  that it lands inside `offsetHeight`; spelled as a margin it is
+                  space the hook cannot see and hands to the graph twice.
+                  The density control belongs to the timeline's rows, so it is
+                  offered only where there are rows to compact, and the row
+                  itself disappears when neither control applies rather than
+                  reserving height for nothing. */}
+              {(graph.canShowGraph || !graph.graphMode) && (
+                <div
+                  ref={setToggleChromeEl}
+                  className="flex flex-wrap items-center justify-between gap-3 pb-6"
+                >
+                  {graph.canShowGraph && (
+                    <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} />
+                  )}
+                  {!graph.graphMode && <DensityToggle value={density} onChange={setDensity} />}
+                </div>
               )}
               <RunPanes
                 layout={inspectorLayout}

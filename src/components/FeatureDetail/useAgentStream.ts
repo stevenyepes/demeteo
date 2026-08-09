@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { appendCapped, wasTruncated } from '../../lib/streamBuffer';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 
@@ -56,9 +56,15 @@ export function useStreamTruncated(store: AgentStreamStore, stepExecutionId: str
   return useStreamSlice(store, stepExecutionId, selectTruncated, false);
 }
 
+/**
+ * The buffers only. Which step's output is on screen is not this hook's
+ * business any more: it used to hold an `activeStreamId` because each timeline
+ * card had a stream to open and close, and Phase 3 left the stream one mount
+ * site driven by the inspector's selection (UI_REDESIGN_PLAN §3.1). A second
+ * piece of "which step is showing" state would be free to disagree with that
+ * selection.
+ */
 export function useAgentStream(featureId: string) {
-  const [activeStreamId, setActiveStreamId] = useState<string | null>(null);
-
   const buffers = useRef(new Map<string, string>());
   const truncated = useRef(new Set<string>());
   const listeners = useRef(new Map<string, Set<() => void>>());
@@ -112,5 +118,5 @@ export function useAgentStream(featureId: string) {
     isTruncated: (stepExecutionId) => truncated.current.has(stepExecutionId),
   }), []);
 
-  return { store, activeStreamId, setActiveStreamId };
+  return { store };
 }

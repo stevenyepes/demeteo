@@ -1,14 +1,24 @@
 /**
- * A streaming agent may only re-render its own card, and the text it streams
- * may not grow without bound.
+ * No card re-renders while an agent streams, and moving the selection re-renders
+ * only the two rows whose selected state changed.
  *
- * The defect these cover: the stream buffer was flushed into state as
- * `setStreamContent({ ...bufferRef.current })` once per animation frame, and
- * that record reached every `StepCard` — so a single agent's chunks re-rendered
- * the whole run at frame rate, including the cards that read nothing from it.
- * Counting renders of the real subtree (via a counting `StepArtifactList`, the
- * one child every card renders unconditionally) is the point: asserting that
- * `memo` is present passes even when an unstable prop defeats it.
+ * The original defect was `setStreamContent({ ...bufferRef.current })` once per
+ * animation frame reaching every `StepCard`; Phase 1 answered it with a per-step
+ * subscription plus `memo`, and Phase 3 left the stream a single mount site in
+ * the inspector, so the assertion is now zero card renders rather than "only the
+ * streaming one".
+ *
+ * **What actually fails this file is an unstable card prop** — a fresh object,
+ * array or closure passed to a memoized row — which is what both describes below
+ * detect and why they count renders of the real subtree, via a counting
+ * `StepMetrics` (the one child every card renders unconditionally). Asserting
+ * that `memo` is present passes even when a prop defeats it.
+ *
+ * What this file cannot see: a subscription re-introduced *inside*
+ * `StepTimeline`. `memo` absorbs it, so no card renders and every claim here
+ * still holds. The structural version of that claim — nothing around the
+ * inspector wakes on a chunk — is `FeatureDetail.liveStream.test.tsx`'s, which
+ * mounts the whole detail view for exactly that reason.
  */
 import { act, render, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -17,7 +27,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
 import { loadAgentCatalog } from '../../lib/agentCatalog';
-import { STREAM_CAP_CHARS } from '../../lib/streamBuffer';
+import { DEFAULT_DENSITY } from '../../lib/density';
 import type { StepExecution } from '../../types';
 
 const handlers: Record<string, Array<(e: { payload: unknown }) => void>> = {};
@@ -31,8 +41,8 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 
 const cardRenders: Record<string, number> = {};
-vi.mock('./StepArtifactList', () => ({
-  StepArtifactList: ({ step }: { step: StepExecution }) => {
+vi.mock('./StepMetrics', () => ({
+  StepMetrics: ({ step }: { step: StepExecution }) => {
     cardRenders[step.id] = (cardRenders[step.id] ?? 0) + 1;
     return null;
   },
@@ -41,8 +51,6 @@ vi.mock('./StepArtifactList', () => ({
 import { StepCard } from './StepCard';
 import { StepTimeline } from './StepTimeline';
 import { useAgentStream } from './useAgentStream';
-import { useHarnessOverrides } from './useHarnessOverrides';
-import { useRerunActions } from './useRerunActions';
 
 const FEATURE_ID = 'f-1';
 const STREAMING_ID = 'se-3';
@@ -75,34 +83,17 @@ const noop = () => {};
 /**
  * `FeatureDetail`'s wiring of the timeline, reproduced rather than approximated.
  *
- * The three props the cards get from a hook — `overrides`, `onRetry`, `onStop` —
- * are taken from the real hooks, and the two inputs `FeatureDetailView` rebuilds
- * on every render (`reload`, `refreshRemoteRun`) are passed as fresh literals
- * here for the same reason. Held constant instead, this file asserted against a
- * wiring the app does not have: a hook returning a new object literal per render
- * defeats every `memo` below and every claim here still passed.
- *
- * `onSelect` is `useCallback`-stable exactly as `useStepSelection`'s is.
+ * The stream store is built from the real `useAgentStream` so the chunks below
+ * travel the path the app's do — the timeline no longer takes the store as a
+ * prop, and mounting the hook here is what proves that a stream arriving at this
+ * subtree reaches no card. `onSelect` is `useCallback`-stable exactly as
+ * `useStepSelection`'s is.
  */
 function Harness() {
-  const stream = useAgentStream(FEATURE_ID);
+  useAgentStream(FEATURE_ID);
   const stepCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  const toggleStream = useCallback(
-    (id: string) => stream.setActiveStreamId((prev) => (prev === id ? null : id)),
-    [stream.setActiveStreamId],
-  );
   const onSelect = useCallback((id: string) => setSelectedStepId(id), []);
-
-  const overrides = useHarnessOverrides();
-  const rerun = useRerunActions({
-    featureId: FEATURE_ID,
-    remoteRun: null,
-    refreshRemoteRun: () => {},
-    reload: () => {},
-    setFeatureStatus: () => {},
-    overrides,
-  });
 
   return (
     <StepTimeline
@@ -112,18 +103,9 @@ function Harness() {
       hasBootstrapPhases={false}
       gateStepExecutionId={null}
       stepCardRefs={stepCardRefs}
-      harnessBaseline={null}
-      overrides={overrides}
-      selectedArtifactPath={null}
       selectedStepId={selectedStepId}
-      activeStreamId={stream.activeStreamId}
-      streamStore={stream.store}
+      density={DEFAULT_DENSITY}
       onSelect={onSelect}
-      onToggleStream={toggleStream}
-      onOpenArtifact={noop}
-      onStartReplay={noop}
-      onRetry={rerun.handleRetryStep}
-      onStop={rerun.handleStopStep}
       onDecideGate={noop}
     />
   );
@@ -145,27 +127,6 @@ async function flushFrame() {
   });
 }
 
-function findButton(container: HTMLElement, label: string): HTMLButtonElement {
-  const button = [...container.querySelectorAll('button')].find((b) =>
-    (b.textContent ?? '').includes(label),
-  );
-  if (!button) throw new Error(`no button matching "${label}"`);
-  return button;
-}
-
-async function mountWithStreamOpen() {
-  const { container } = render(<Harness />);
-  await waitFor(() => expect(handlers.agent_stream?.length).toBeGreaterThan(0));
-  await userEvent.click(findButton(container, 'View Agent Reasoning'));
-  return container;
-}
-
-function streamText(container: HTMLElement): string {
-  const pre = container.querySelector('pre');
-  if (!pre) throw new Error('the live stream block is not rendered');
-  return pre.textContent ?? '';
-}
-
 /** `useAgentCatalog` seeds itself from this module-level cache synchronously, so
  *  priming it here is what keeps the catalog fetch from landing mid-test as a
  *  re-render nobody asked for — and makes the counts below the harness's own. */
@@ -181,12 +142,13 @@ afterEach(() => {
 });
 
 describe('StepTimeline under a live agent stream', () => {
-  it('re-renders only the streaming step’s card', async () => {
-    const container = await mountWithStreamOpen();
+  it('re-renders no card at all', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(handlers.agent_stream?.length).toBeGreaterThan(0));
 
     const before = { ...cardRenders };
-    // Otherwise "nobody else re-rendered" would also hold for a timeline that
-    // rendered no other cards at all.
+    // Otherwise "nobody re-rendered" would also hold for a timeline that
+    // rendered no cards at all.
     expect(Object.keys(before).sort()).toEqual([...IDLE_IDS, STREAMING_ID].sort());
 
     for (let i = 0; i < 10; i += 1) {
@@ -194,29 +156,9 @@ describe('StepTimeline under a live agent stream', () => {
       await flushFrame();
     }
 
-    // The stream really did arrive — otherwise "nobody re-rendered" would be
-    // satisfied by a timeline that never received a chunk at all.
-    expect(streamText(container)).toContain('chunk 9');
-    expect(cardRenders[STREAMING_ID]).toBeGreaterThan(before[STREAMING_ID] ?? 0);
-
-    for (const id of IDLE_IDS) {
+    for (const id of [...IDLE_IDS, STREAMING_ID]) {
       expect(cardRenders[id] - (before[id] ?? 0)).toBe(0);
     }
-  });
-
-  it('keeps the retained stream inside the buffer cap and says so', async () => {
-    const container = await mountWithStreamOpen();
-
-    const chunk = `${'x'.repeat(64 * 1024)}\n`;
-    for (let i = 0; i < 8; i += 1) {
-      emitChunk(STREAMING_ID, chunk);
-      await flushFrame();
-    }
-
-    const retained = streamText(container);
-    expect(retained.length).toBeLessThanOrEqual(STREAM_CAP_CHARS);
-    expect(retained.length).toBeGreaterThan(STREAM_CAP_CHARS / 2);
-    expect(container.textContent).toContain('Earlier output dropped');
   });
 
   it('keeps StepCard memoized', () => {

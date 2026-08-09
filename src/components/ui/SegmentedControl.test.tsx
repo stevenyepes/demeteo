@@ -3,7 +3,7 @@
 // The load-bearing parts are the ones a later migration could silently break:
 // the radiogroup/aria-checked contract, roving tabindex plus arrow movement,
 // the callback carrying the option's own typed value, and the forwarded ref
-// (`useRunColumnLayout` measures the element RunViewToggle hands it).
+// (`useRunColumnLayout` measures the run view's chrome row through it).
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';

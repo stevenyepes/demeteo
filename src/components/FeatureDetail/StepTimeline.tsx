@@ -1,12 +1,8 @@
-import { useMemo, useRef, type MutableRefObject } from 'react';
+import { useRef, type MutableRefObject } from 'react';
 import { RefreshCw } from 'lucide-react';
-import type { HarnessBaseline, RemoteRunMirror, StepExecution } from '../../types';
-import { findActivePredecessor } from '../../lib/features';
+import type { RemoteRunMirror, StepExecution } from '../../types';
+import { densityClasses, type Density } from '../../lib/density';
 import { StepCard } from './StepCard';
-import type { AgentStreamStore } from './useAgentStream';
-import { useStreamText, useStreamTruncated } from './useAgentStream';
-import type { HarnessOverrides } from './useHarnessOverrides';
-import type { ReplayTarget } from './useRerunActions';
 
 interface StepTimelineProps {
   steps: StepExecution[];
@@ -15,21 +11,12 @@ interface StepTimelineProps {
   hasBootstrapPhases: boolean;
   gateStepExecutionId: string | null | undefined;
   stepCardRefs: MutableRefObject<Record<string, HTMLDivElement | null>>;
-  harnessBaseline: HarnessBaseline | null;
-  overrides: HarnessOverrides;
-  selectedArtifactPath: string | null;
   /** Execution id the inspector *resolved* to, not the raw selection: a node id
    *  picked on the canvas matches several rows once a step has been retried,
    *  and only the attempt on screen may read as selected. */
   selectedStepId: string | null;
-  activeStreamId: string | null;
-  streamStore: AgentStreamStore;
+  density: Density;
   onSelect: (stepExecutionId: string) => void;
-  onToggleStream: (stepExecutionId: string) => void;
-  onOpenArtifact: (path: string, stepTitle: string) => void;
-  onStartReplay: (target: ReplayTarget) => void;
-  onRetry: (stepExecutionId: string) => void;
-  onStop: () => void;
   onDecideGate: (stepExecutionId: string) => void;
 }
 
@@ -42,9 +29,17 @@ interface StepTimelineProps {
  * pre-hydration banner above it is not an item in the list.
  *
  * Selection is `aria-current`, deliberately not the `listbox`/`option` pair it
- * was first written as: a card carries its own replay, gate, stream and stop
- * buttons, and an `option` may not own interactive children — so no placement
- * of that role is valid here, including on the card root.
+ * was first written as: a card carries its own gate button, and an `option` may
+ * not own interactive children — so no placement of that role is valid here,
+ * including on the card root.
+ *
+ * **Nothing here subscribes to the agent stream any more, and that is the
+ * point.** Phase 1 could only *guard* the fan-out that a live stream caused
+ * across every card, because the card was the thing rendering the stream; with
+ * the stream mounted once in the inspector's Live tab there is no subscription
+ * on this path to guard (§4.2's last bullet). A `useStreamText` call
+ * reintroduced anywhere at or above this component re-opens it, memoized cards
+ * or not.
  */
 export function StepTimeline({
   steps,
@@ -53,31 +48,12 @@ export function StepTimeline({
   hasBootstrapPhases,
   gateStepExecutionId,
   stepCardRefs,
-  harnessBaseline,
-  overrides,
-  selectedArtifactPath,
   selectedStepId,
-  activeStreamId,
-  streamStore,
+  density,
   onSelect,
-  onToggleStream,
-  onOpenArtifact,
-  onStartReplay,
-  onRetry,
-  onStop,
   onDecideGate,
 }: StepTimelineProps) {
-  // Only the open card renders a stream, so this is the one subscription the
-  // timeline needs — and with no card open it subscribes to nothing at all.
-  const openStream = useStreamText(streamStore, activeStreamId);
-  const openStreamTruncated = useStreamTruncated(streamStore, activeStreamId);
-
-  // Aligned with `steps` by index. Recomputed only when the list itself
-  // changes, rather than once per card per stream frame.
-  const predecessors = useMemo(
-    () => steps.map((step) => findActivePredecessor(steps, step)),
-    [steps],
-  );
+  const classes = densityClasses(density);
 
   /** One ref callback per step, cached: a fresh closure per render would change
    *  a memoized card's props on every frame. */
@@ -93,7 +69,7 @@ export function StepTimeline({
   };
 
   return (
-    <div className="relative shrink-0 border-l border-white/5 ml-4 pl-8 space-y-6">
+    <div className={`relative shrink-0 border-l border-white/5 ml-4 pl-8 ${classes.list}`}>
       {remoteRun && steps.length === 0 && !hasBootstrapPhases && (
         /* Eager shadow, pre-hydration: the run was submitted a
            moment ago and the runner hasn't bootstrapped a
@@ -116,29 +92,17 @@ export function StepTimeline({
           </div>
         </div>
       )}
-      <ul aria-label="Run steps" className="space-y-6">
+      <ul aria-label="Run steps" className={classes.list}>
         {steps.map((step, idx) => (
           <StepCard
             key={step.id}
             step={step}
             index={idx}
-            downstreamCount={steps.length - idx - 1}
-            activePredecessor={predecessors[idx]}
             isActiveGate={gateStepExecutionId === step.id}
             isSelected={selectedStepId === step.id}
             cardRef={cardRefFor(step.id)}
-            harnessBaseline={harnessBaseline}
-            overrides={overrides}
-            selectedArtifactPath={selectedArtifactPath}
-            isStreamOpen={activeStreamId === step.id}
-            stream={activeStreamId === step.id ? openStream : ''}
-            streamTruncated={activeStreamId === step.id ? openStreamTruncated : false}
+            density={classes}
             onSelect={onSelect}
-            onToggleStream={onToggleStream}
-            onOpenArtifact={onOpenArtifact}
-            onStartReplay={onStartReplay}
-            onRetry={onRetry}
-            onStop={onStop}
             onDecideGate={onDecideGate}
           />
         ))}

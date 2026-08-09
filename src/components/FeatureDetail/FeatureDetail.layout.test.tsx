@@ -16,12 +16,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
 let columnWidth = 1600;
+/** The element the view offers the hook as "the chrome above the surface". */
+let toggleChromeEl: HTMLElement | null = null;
 
 vi.mock('../useRunColumnLayout', () => ({
   useRunColumnLayout: () => ({
     setRunColumnEl: () => {},
+    runColumnEl: null,
     setMetaChromeEl: () => {},
-    setToggleChromeEl: () => {},
+    setToggleChromeEl: (el: HTMLElement | null) => {
+      toggleChromeEl = el;
+    },
     runColumnSize: { width: columnWidth, height: 900 },
     runLayout: 'stacked' as const,
     graphPlan: { direction: 'DOWN' as const, graph: { width: 0, height: 0 }, fitScale: 1 },
@@ -109,11 +114,37 @@ function mount(onResize?: (resize: () => void) => void) {
 
 beforeEach(() => {
   columnWidth = 1600;
+  toggleChromeEl = null;
   mockBackend();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+/**
+ * Inherited from `RunViewToggle.test.tsx`, where it was an assertion about a
+ * `chromeRef` prop that no longer exists: the chrome above the run surface is a
+ * row holding the view toggle *and* the density toggle now, so the row is what
+ * has to be measured. The claim is unchanged — chrome the hook cannot see is
+ * height the graph box claims twice.
+ */
+describe('the chrome the graph box is measured against', () => {
+  it('offers the hook the whole row, spacing included', async () => {
+    mount();
+
+    // This feature has no graph definition, so the view toggle is absent and the
+    // density control is the only occupant — the case that previously had no
+    // chrome row at all and so had nothing to measure.
+    const density = await screen.findByRole('radiogroup', { name: 'Timeline density' });
+    await waitFor(() => expect(toggleChromeEl).not.toBeNull());
+    expect(toggleChromeEl).toContainElement(density);
+
+    // `offsetHeight` excludes margin. The gap under this row must therefore be
+    // padding, or the hook reports a row shorter than the space it occupies.
+    expect(toggleChromeEl?.className).toMatch(/\bpb-\d/);
+    expect(toggleChromeEl?.className).not.toMatch(/\bmb-\d/);
+  });
 });
 
 describe('the inspector’s place in the run column', () => {
