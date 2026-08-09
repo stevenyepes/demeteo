@@ -15,7 +15,7 @@ into this codebase's palette, primitives and hexagon discipline.
 
 ## 0. Status
 
-Branch `feat/ui-redesign-pipeline-project`. **Phases 0–2 are implemented; 3–6 are not
+Branch `feat/ui-redesign-pipeline-project`. **Phases 0–3 are implemented; 4–6 are not
 started.** Read §6 for what each phase covers and §7 for the decisions already taken.
 §1's "Status here today" column is the pre-Phase-2 snapshot this plan was written
 against — read it as the starting position, not as the tree.
@@ -25,29 +25,29 @@ against — read it as the starting position, not as the tree.
 | 0 — foundations | done | `4e785c6` (audit F17), `32a42c4` (primitives + `lib/` modules) |
 | 1 — performance | done | `7a0b45f` |
 | — | unplanned, done | `c40fde3` — dead utility classes + `scripts/check-classes.mjs` |
-| 2 — pipeline shell | code complete, **never rendered**; one item deferred to Phase 3 | |
-| 3 — timeline slim-down | **next** | |
-| 4 — project view | | |
+| 2 — pipeline shell | done, **confirmed visually 2026-08-09** | |
+| 3 — timeline slim-down | code complete, **never rendered** | |
+| 4 — project view | **next** | |
 | 5 — activity & motion | | |
 | 6 — keyboard & persistence | | |
 
-`npm run checks` is green at `c40fde3`.
+**The Phase 2 deferral is closed.** The sticky collapsed header on scroll landed in
+Phase 3 (`lib/headerCollapse.ts` + `FeatureDetail/useHeaderCollapse.ts`), which is
+where §6 said it would.
 
-**Deferred out of Phase 2:** the sticky collapsed header on scroll, listed in §6's
-Phase 2 scope. It is Phase 3's now and §6 says so there — a deferral that no phase
-claims is a deletion nobody decided on.
+**Outstanding:** Phase 2 has now been looked at in `dev:tauri`, so the three-deep
+unobserved debt this section used to carry is paid. Phase 3 replaces it with one
+change of its own, and it is a large one — the step card lost every panel it used to
+expand inline, the timeline gained a density switch, and the header now changes shape
+as the run column scrolls. `npm run checks` compiles and tests all of it and renders
+none of it. What a `dev:tauri` pass has to answer, because no gate can:
 
-**Outstanding, and the reason it matters:** none of this has been seen running, and
-the debt is now three changes deep rather than two. Phase 1 reworked the live agent
-stream onto `requestAnimationFrame` + `useSyncExternalStore`; `c40fde3` moved 103
-headings from Inter to Outfit — different metrics, so text reflows; Phase 2 has now
-restructured the same run view again behind a `SplitPane` the user drags, a docked
-inspector and a `MetricStrip` header. None of it is observable from `npm run checks`,
-which compiles and tests but never renders. One `npm run dev:tauri` pass with a
-streaming agent clears all three; skipping it means the first visual defect anyone
-reports has three unobserved changes to choose from instead of one. Heaviest heading
-concentrations for a look: `settings/ProjectSettingsShell` (9), `settings/StrategyTab`
-(8), `PreferencesScreen` (7).
+- the collapsed header's transition on a `backdrop-blur-md` surface under WebKitGTK;
+- `content-visibility: auto` on `.timeline-step-card` — an intrinsic size that is too
+  small shows up as a jumping scroll thumb on a 30-step run, not as an error;
+- the inspector's Actions tab at a narrow docked width: `HarnessModelPicker`'s grid
+  is `sm:`-gated, and `sm:` is viewport-based, so the three selects do not know the
+  pane is 320 px wide.
 
 macOS and Windows appearance is unverified by any gate — `pr-checks.yml` runs
 `ubuntu-22.04` only (AGENTS.md §3, Cross-OS).
@@ -190,6 +190,13 @@ inline `keydown` is worse than shipping no shortcuts.
 
 A long run is 30+ steps. Offer comfortable/compact for the timeline and the pipeline
 list, persisted. Compact is a padding + font-size token swap, not a second component.
+
+Phase 3 built `lib/density.ts` and the timeline's toggle; the value is session state in
+`FeatureDetailView` until Phase 6 persists it, and the pipeline list's toggle is
+Phase 4's. One trap `lib/density.ts` records rather than repeats: `check-classes.mjs`
+reads `className` attributes, so class names that live only as strings in that module
+are outside what it verifies — Tailwind's scanner does see them, which is why they
+resolve at all.
 
 ---
 
@@ -438,25 +445,37 @@ Both settled decisions in §7 land here: the splitter clamps rather than collaps
 `splitPaneGeometry`'s collapse zone, and the default flip makes `useRunGraph`'s
 "graph is opt-in" comment false the moment it changes.
 
-### Phase 3 — Timeline & step-card slim-down
+### Phase 3 — Timeline & step-card slim-down *(done)*
 `StepCard` down to scan tier + one CTA; stream, artifacts, rerun and environment
 panels served by the inspector; gate strip (§3.2); density toggle (§3.7);
 `content-visibility` on rows; the sticky collapsed header on scroll deferred out of
 Phase 2 (§0).
 
-**Two things Phase 1 deliberately left here**, because moving these panels out of the
-card is what actually fixes them:
+**Two things Phase 1 deliberately left here**, both now closed by the move rather than
+by a fix of their own: the card no longer receives `overrides` or
+`handleRetryStep`/`handleStopStep`, so those hooks' unstable identities can no longer
+reach a memoized row; and the stream's single mount site in the inspector's Live tab is
+where the truncation notice now lives, instead of only on the timeline's copy.
 
-- `StepCard` is memoized, but two of its props are still fresh every render and both
-  come from hooks Phase 1 did not touch: `overrides` (`useHarnessOverrides` returns a
-  new object literal) and `handleRetryStep` / `handleStopStep` (`useRerunActions`
-  returns bare async functions). So the memo holds on the stream path — where it
-  mattered, at frame rate — but not on the reload path, which is now ≤2 renders/sec.
-  Stabilizing those hooks is possible, but Phase 3 removes both props from the card
-  entirely, so doing it earlier is work Phase 3 deletes.
-- The graph's Live tab renders the same capped tail as the timeline but **without** the
-  truncation notice, because `NodePanel` was outside Phase 1's file set. Once the stream
-  has one mount site in the inspector there is one place to say it.
+**What Phase 3 settled that the plan had left open:**
+
+- **The card's one CTA is the gate decision, and only that.** Retry, replay and stop are
+  the inspector's Actions tab, which already guarded them against a live ancestor; a
+  waiting gate is the run asking a question, so it may not wait behind a selection.
+- **`StepRerunPanel` and `StepArtifactList` are deleted, not relocated.** The harness /
+  model / effort selects became `FeatureDetail/RerunOptions.tsx` over the existing
+  `ui/HarnessModelPicker`, mounted in the Actions tab; the artifact split rule (an agent
+  step lists its markdown and folds the rest into "N files changed") became the pure
+  `lib/stepArtifacts.ts`, which the Output tab consumes.
+- **`useAgentStream` lost `activeStreamId`.** "Which step's output is on screen" is the
+  inspector's selection now, and a second copy of that state would be free to disagree
+  with it.
+- **`.timeline-step-card` carries `content-visibility`, and it may not move to the
+  `li`.** The rule implies paint containment on screen as well as off it, and the
+  connector circle hangs outside the card at `-left-[41px]` — contained on the `li`, the
+  timeline's spine is clipped away.
+- **The step card's pulsing gate block is gone**, which is one of the two items §5 names
+  by line number. What replaced it does not pulse; the gate strip pulses a 2×2 dot only.
 
 ### Phase 4 — Project view
 `PipelineCard` (memoized, three-tier read per §3.3, cost column);
@@ -470,7 +489,8 @@ A redesign that repaints a lie is worse than one that fixes it.
 ### Phase 5 — Activity surface & motion budget
 Collapsible activity block with sync affordance (**D**); every always-on animation
 audited to opacity-only per `App.css:758-771`; pulse confined to small dots, never a
-container holding text (`StepCard.tsx:160` currently pulses a whole gate block);
+container holding text (Phase 3 removed the step card's pulsing gate block, which was
+this item's worked example — the rest of the tree is still unaudited);
 `prefers-reduced-motion` coverage for anything new.
 
 ### Phase 6 — Keyboard & persistence
