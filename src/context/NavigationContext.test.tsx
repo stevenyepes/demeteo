@@ -24,7 +24,9 @@ function initial(current: AppView = { kind: 'empty-state' }): NavigationState {
 
 const home = initial({ kind: 'home' });
 
-function detailView(featureId: string, gateStepExecutionId: string | null = null): AppView {
+type DetailView = Extract<AppView, { kind: 'detail' }>;
+
+function detailView(featureId: string, gateStepExecutionId: string | null = null): DetailView {
   return {
     kind: 'detail',
     featureId,
@@ -78,6 +80,73 @@ describe('NAVIGATE (push)', () => {
       view: detailView('feat-1', 'gate-1'),
     });
     expect(differentGate.backStack).toHaveLength(2);
+  });
+});
+
+// ── Step selection as a destination (plan §3.5) ───────────────────────────────
+//
+// Selection lives on the view so that "which step was I looking at" survives a
+// navigation. That only works if the reducer treats it as part of the
+// destination: a field `shallowEqualView` does not compare is a field the push
+// path collapses away, and the symptom is not an error — it is a click on a
+// step that does nothing, with the previous step still in the inspector.
+
+describe('selectedStepId', () => {
+  function selecting(stepId: string | null): AppView {
+    return { ...detailView('feat-1'), selectedStepId: stepId };
+  }
+
+  it('pushes a step selection as its own entry', () => {
+    const a = navigationReducer(home, { type: 'NAVIGATE', view: selecting('step-1') });
+    const b = navigationReducer(a, { type: 'NAVIGATE', view: selecting('step-2') });
+
+    expect(b.current).toEqual(selecting('step-2'));
+    expect(b.backStack).toHaveLength(2);
+    expect(b.backStack[1]).toEqual(selecting('step-1'));
+  });
+
+  it('collapses a re-selection of the step already showing', () => {
+    const a = navigationReducer(home, { type: 'NAVIGATE', view: selecting('step-1') });
+
+    const again = navigationReducer(a, { type: 'NAVIGATE', view: selecting('step-1') });
+
+    expect(again).toBe(a);
+  });
+
+  it('distinguishes a selection from the same view with none', () => {
+    const a = navigationReducer(home, { type: 'NAVIGATE', view: detailView('feat-1') });
+
+    const selected = navigationReducer(a, { type: 'NAVIGATE', view: selecting('step-1') });
+    expect(selected.backStack).toHaveLength(2);
+
+    const cleared = navigationReducer(selected, { type: 'NAVIGATE', view: selecting(null) });
+    expect(cleared.backStack).toHaveLength(3);
+  });
+
+  it('carries the selection back and forward', () => {
+    const a = navigationReducer(home, { type: 'NAVIGATE', view: selecting('step-1') });
+    const b = navigationReducer(a, { type: 'NAVIGATE', view: selecting('step-2') });
+
+    const back = navigationReducer(b, { type: 'BACK' });
+    expect(back.current).toEqual(selecting('step-1'));
+
+    const fwd = navigationReducer(back, { type: 'FORWARD' });
+    expect(fwd.current).toEqual(selecting('step-2'));
+  });
+
+  // Selection changes as the user moves down a run, so it is the field most
+  // likely to be swapped in place; `replace` keeps that out of the back stack.
+  it('swaps in place under replace, leaving the stacks alone', () => {
+    const a = navigationReducer(home, { type: 'NAVIGATE', view: selecting('step-1') });
+
+    const replaced = navigationReducer(a, {
+      type: 'NAVIGATE',
+      view: selecting('step-2'),
+      mode: 'replace',
+    });
+
+    expect(replaced.current).toEqual(selecting('step-2'));
+    expect(replaced.backStack).toHaveLength(1);
   });
 });
 

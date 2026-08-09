@@ -68,6 +68,26 @@ const NODE_TYPES = { workflow: WorkflowNode };
  *  from `layoutDirection`, which is why neither is spelled here. */
 const FIT_VIEW_OPTIONS = { maxZoom: MAX_ZOOM, padding: 1 - FIT_PADDING };
 
+/**
+ * Trailing window the canvas's self-measurement is coalesced over.
+ *
+ * `SplitPane` deliberately keeps the inspector-divider drag out of React
+ * (UI_REDESIGN_PLAN §4.1), but that only spares the observer watching the *run
+ * column*, which the drag does not resize. The grid track it does resize is
+ * this canvas's own box, so the observer here fires at pointer frequency: an
+ * 8px-rounded 400px drag commits ~50 sizes, each one re-planning the layout and
+ * restarting the previous `fitView` animation, so the graph never settles until
+ * release — and flipping elk between `RIGHT` and `DOWN` wherever the drag
+ * crosses the threshold.
+ *
+ * Damping here rather than plumbing a drag flag in keeps the rule
+ * transport-free: any burst settles into one re-fit, whether it came from a
+ * divider, a window edge, or a devtools dock. The cost is that an ordinary
+ * window resize re-fits this long after the user stops, which is below the
+ * `fitView` animation's own duration and so reads as part of it.
+ */
+const RESIZE_SETTLE_MS = 150;
+
 export type CanvasMode = 'run' | 'design';
 
 export interface WorkflowCanvasProps {
@@ -191,15 +211,35 @@ function CanvasInner({
   useEffect(() => {
     const el = wrapperRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(([entry]) => {
-      const box = entry.contentRect;
-      const next = { width: Math.round(box.width / 8) * 8, height: Math.round(box.height / 8) * 8 };
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let pending: ContainerSize | null = null;
+    let measured = false;
+    const commit = () => {
+      timer = null;
+      const next = pending;
+      if (!next) return;
       setContainerSize((prev) =>
         prev && prev.width === next.width && prev.height === next.height ? prev : next,
       );
+    };
+    const observer = new ResizeObserver(([entry]) => {
+      const box = entry.contentRect;
+      pending = { width: Math.round(box.width / 8) * 8, height: Math.round(box.height / 8) * 8 };
+      // The first measurement is what the graph gets its layout from at all, so
+      // it lands now; waiting out the window would show as a visible jump.
+      if (!measured) {
+        measured = true;
+        commit();
+        return;
+      }
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(commit, RESIZE_SETTLE_MS);
     });
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      if (timer !== null) clearTimeout(timer);
+      observer.disconnect();
+    };
   }, []);
 
   // Reflect externally-controlled selection onto the node `selected` flag.

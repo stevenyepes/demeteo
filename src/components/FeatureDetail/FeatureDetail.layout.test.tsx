@@ -1,0 +1,171 @@
+/**
+ * Where the inspector sits, and who owns its width once the user has said.
+ *
+ * The measurement is mocked and the policy is not: `useRunColumnLayout` is the
+ * one part of this that needs a laid-out DOM, and jsdom lays nothing out — its
+ * `ResizeObserver` stub never reports a box, so every run column would measure
+ * as unmeasured and the side-by-side branch would be unreachable from a test.
+ * `pickInspectorLayout` and `defaultInspectorWidth` are already covered as pure
+ * functions in `runLayout.test.ts`; what is left, and what this file is for, is
+ * that the view asks them and then honours the answer.
+ */
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useEffect, useState, type ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
+
+let columnWidth = 1600;
+
+vi.mock('../useRunColumnLayout', () => ({
+  useRunColumnLayout: () => ({
+    setRunColumnEl: () => {},
+    setMetaChromeEl: () => {},
+    setToggleChromeEl: () => {},
+    runColumnSize: { width: columnWidth, height: 900 },
+    runLayout: 'stacked' as const,
+    graphPlan: { direction: 'DOWN' as const, graph: { width: 0, height: 0 }, fitScale: 1 },
+    graphBoxPx: 448,
+    surfaceBoxPx: 700,
+  }),
+}));
+
+vi.mock('react-markdown', () => ({
+  default: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+}));
+
+import {
+  NavigationProvider,
+  ProjectProvider,
+  TerminalPanelProvider,
+  UIStateProvider,
+  useNavigation,
+} from '../../context';
+import type { StepExecution } from '../../types';
+import { FeatureDetail } from './FeatureDetail';
+
+const FEATURE_ID = 'f-1';
+
+const STEP: StepExecution = {
+  id: 'se-1',
+  feature_id: FEATURE_ID,
+  step_id: 's-research',
+  step_index: 0,
+  step_kind: 'agent',
+  status: 'completed',
+  artifact_paths: [],
+  created_at: 0,
+  updated_at: 0,
+};
+
+function mockBackend() {
+  vi.mocked(invoke).mockImplementation(((cmd: string) => {
+    switch (cmd) {
+      case 'step_list_for_run':
+        return Promise.resolve([STEP]);
+      case 'feature_get':
+        return Promise.resolve({ id: FEATURE_ID, status: 'completed' });
+      case 'feature_workflow_graph':
+        return Promise.resolve(null);
+      case 'feature_list_attachments':
+      case 'get_machines':
+      case 'list_agents':
+      case 'list_terminal_sessions':
+      case 'step_attempts_list':
+        return Promise.resolve([]);
+      case 'remote_run_for_feature':
+        return Promise.resolve(null);
+      default:
+        return Promise.reject(new Error(`unexpected IPC command: ${cmd}`));
+    }
+  }) as unknown as typeof invoke);
+}
+
+/** Re-renders the tree when `bump` changes, which is how a column resize
+ *  reaches the view through the mocked hook. */
+function Seed({ onResize }: { onResize?: (resize: () => void) => void }) {
+  const { navigate } = useNavigation();
+  const [, setBump] = useState(0);
+  useEffect(() => {
+    navigate({ kind: 'detail', featureId: FEATURE_ID, featureTitle: 'Run' });
+    onResize?.(() => setBump((n) => n + 1));
+  }, [navigate, onResize]);
+  return <FeatureDetail />;
+}
+
+function mount(onResize?: (resize: () => void) => void) {
+  return render(
+    <NavigationProvider>
+      <ProjectProvider>
+        <UIStateProvider>
+          <TerminalPanelProvider>
+            <Seed onResize={onResize} />
+          </TerminalPanelProvider>
+        </UIStateProvider>
+      </ProjectProvider>
+    </NavigationProvider>,
+  );
+}
+
+beforeEach(() => {
+  columnWidth = 1600;
+  mockBackend();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('the inspector’s place in the run column', () => {
+  it('sits beside the run surface in a column wide enough for both', async () => {
+    mount();
+
+    const inspector = await screen.findByTestId('inspector');
+    expect(screen.getByTestId('split-pane-secondary')).toContainElement(inspector);
+    // The run surface is the primary pane, not a sibling of the split.
+    expect(screen.getByTestId('split-pane')).toContainElement(
+      screen.getByRole('list', { name: 'Run steps' }),
+    );
+  });
+
+  it('drops below it in a column that cannot seat two panes', async () => {
+    columnWidth = 700;
+    mount();
+
+    expect(await screen.findByTestId('inspector')).toBeInTheDocument();
+    // Never hidden, never behind an affordance — only moved (§7).
+    expect(screen.queryByTestId('split-pane')).not.toBeInTheDocument();
+  });
+
+  it('opens at a proportion of the column and hands it over on the first drag', async () => {
+    // The divider refuses every key while its container is unmeasured, and
+    // jsdom measures nothing — so the box has to be given a width by hand for
+    // the keyboard path to exist at all.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const width = this.dataset.testid === 'split-pane' ? 1200 : 0;
+      return { width, height: 0, top: 0, left: 0, right: width, bottom: 0, x: 0, y: 0 } as DOMRect;
+    });
+
+    let resize = () => {};
+    mount((fn) => {
+      resize = fn;
+    });
+
+    const handle = await screen.findByTestId('split-pane-handle');
+    const opening = handle.getAttribute('aria-valuenow');
+    expect(Number(opening)).toBeGreaterThanOrEqual(320);
+
+    handle.focus();
+    await userEvent.keyboard('{End}');
+    const chosen = handle.getAttribute('aria-valuenow');
+    expect(chosen).not.toBe(opening);
+
+    // A width the user chose outranks every number the layout module produces,
+    // so a re-measure may not quietly reset it (`runLayout.ts`: ask once).
+    columnWidth = 1900;
+    await waitFor(() => resize());
+    expect(handle.getAttribute('aria-valuenow')).toBe(chosen);
+  });
+});

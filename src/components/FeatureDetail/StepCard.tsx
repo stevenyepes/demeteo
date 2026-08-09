@@ -5,19 +5,13 @@ import {
 import type { HarnessBaseline, StepExecution } from '../../types';
 import { formatCost, formatDuration, formatTokens } from '../../lib/utils';
 import { isBaselineEnvironmentFailure, parseEnvironmentFailure } from '../../lib/harnessVerdict';
+import { TONE_CHIP } from '../../lib/runStatus';
 import { EnvironmentNotReadyPanel } from '../EnvironmentNotReadyPanel';
 import { StepArtifactList } from './StepArtifactList';
 import { StepRerunPanel } from './StepRerunPanel';
+import { humanizeStepId } from './stepIdentity';
 import type { HarnessOverrides } from './useHarnessOverrides';
 import type { ReplayTarget } from './useRerunActions';
-
-const humanizeStepId = (id: string) => {
-  return id
-    .replace(/^s-/, '')
-    .split('-')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-};
 
 interface StepCardProps {
   step: StepExecution;
@@ -26,6 +20,8 @@ interface StepCardProps {
   downstreamCount: number;
   activePredecessor: StepExecution | null;
   isActiveGate: boolean;
+  /** True while this step is the one the inspector is reading. */
+  isSelected: boolean;
   cardRef: (el: HTMLDivElement | null) => void;
   harnessBaseline: HarnessBaseline | null;
   overrides: HarnessOverrides;
@@ -34,6 +30,7 @@ interface StepCardProps {
   /** This step's own buffered output — never the whole run's. */
   stream: string;
   streamTruncated: boolean;
+  onSelect: (stepExecutionId: string) => void;
   onToggleStream: (stepExecutionId: string) => void;
   onOpenArtifact: (path: string, stepTitle: string) => void;
   onStartReplay: (target: ReplayTarget) => void;
@@ -48,6 +45,7 @@ function StepCardInner({
   downstreamCount,
   activePredecessor,
   isActiveGate,
+  isSelected,
   cardRef,
   harnessBaseline,
   overrides,
@@ -55,6 +53,7 @@ function StepCardInner({
   isStreamOpen,
   stream,
   streamTruncated,
+  onSelect,
   onToggleStream,
   onOpenArtifact,
   onStartReplay,
@@ -94,8 +93,10 @@ function StepCardInner({
     [onOpenArtifact, step.step_id],
   );
 
+  const selectSelf = useCallback(() => onSelect(step.id), [onSelect, step.id]);
+
   return (
-    <div className="relative group">
+    <li className="relative group">
       {/* Connector node circle */}
       <span className="absolute -left-[41px] top-1.5 flex items-center justify-center w-6 h-6 rounded-full bg-[#08090c] border border-white/10">
         <span className="text-[10px] text-slate-400 font-bold">{index + 1}</span>
@@ -104,7 +105,7 @@ function StepCardInner({
       <div
         ref={cardRef}
         data-step-id={step.id}
-        className={`p-5 rounded-xl border transition-all duration-300 ${statusBg} ${isActiveGate ? 'ring-2 ring-amber-500/40' : ''}`}
+        className={`p-5 rounded-xl border transition-all duration-300 ${statusBg} ${ring(isActiveGate, isSelected)}`}
       >
         {/* Title and metrics are one row while they fit and two
             when they don't — a half-width window squeezes the
@@ -116,21 +117,35 @@ function StepCardInner({
               button still reserves its width, and with a truncate
               here it spent that width shortening the step name to
               "Resea…" in a card that had room for it. */}
-          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="shrink-0">{icon}</span>
-            <span className="font-semibold text-white tracking-wide text-sm break-words">{humanizeStepId(step.step_id)}</span>
-            <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono shrink-0">
-              {step.step_kind}
-            </span>
-            {(step.iteration_count ?? 0) > 0 && (
-              <span
-                className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono"
-                title={`This step has been retried ${step.iteration_count} time${step.iteration_count !== 1 ? 's' : ''}`}
-              >
-                <RefreshCw className="w-2.5 h-2.5" />
-                {step.iteration_count}x
+          <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1">
+            {/* The row's identity *is* the select control, so the affordance
+                sits on the thing the user reads rather than on a separate
+                widget beside it. The actions below stay outside it — nesting
+                them would make one button contain four. */}
+            <button
+              type="button"
+              data-step-row={step.id}
+              aria-current={isSelected ? 'step' : undefined}
+              onClick={selectSelf}
+              className={`-mx-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-2 py-1 text-left transition ${
+                isSelected ? TONE_CHIP.cyan : 'border-transparent hover:bg-white/5'
+              }`}
+            >
+              <span className="shrink-0">{icon}</span>
+              <span className="font-semibold text-white tracking-wide text-sm break-words">{humanizeStepId(step.step_id)}</span>
+              <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono shrink-0">
+                {step.step_kind}
               </span>
-            )}
+              {(step.iteration_count ?? 0) > 0 && (
+                <span
+                  className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono"
+                  title={`This step has been retried ${step.iteration_count} time${step.iteration_count !== 1 ? 's' : ''}`}
+                >
+                  <RefreshCw className="w-2.5 h-2.5" />
+                  {step.iteration_count}x
+                </span>
+              )}
+            </button>
             <button
               onClick={() => onStartReplay({
                 id: step.id,
@@ -261,8 +276,16 @@ function StepCardInner({
           </>
         )}
       </div>
-    </div>
+    </li>
   );
+}
+
+/** An awaiting gate outranks the selection: the gate ring is the run telling
+ *  the user it is stuck, and the selection is only where they happen to be
+ *  looking. Two rings on one card read as one indeterminate colour. */
+function ring(isActiveGate: boolean, isSelected: boolean): string {
+  if (isActiveGate) return 'ring-2 ring-amber-500/40';
+  return isSelected ? 'ring-1 ring-cyan-500/40' : '';
 }
 
 /**

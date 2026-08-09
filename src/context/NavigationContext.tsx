@@ -36,6 +36,16 @@ export type Action =
   | { type: 'FORWARD' }
   | { type: 'DROP_INVALID'; replacement: AppView };
 
+/**
+ * Whether two views are the same destination, which is what the push path uses
+ * to collapse a re-navigation to where the user already is.
+ *
+ * Every field of an arm has to be listed, and a missing one fails silently in
+ * the worse direction: two views that differ only in the forgotten field
+ * compare equal, so the push collapses and the navigation never happens. There
+ * is no test that catches an omission generically — a new field on `AppView`
+ * needs a case here and a case in the suite.
+ */
 function shallowEqualView(a: AppView, b: AppView): boolean {
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
@@ -54,7 +64,8 @@ function shallowEqualView(a: AppView, b: AppView): boolean {
       return b.kind === 'detail'
         && a.featureId === (b as Extract<AppView, { kind: 'detail' }>).featureId
         && a.featureTitle === (b as Extract<AppView, { kind: 'detail' }>).featureTitle
-        && a.gateStepExecutionId === (b as Extract<AppView, { kind: 'detail' }>).gateStepExecutionId;
+        && a.gateStepExecutionId === (b as Extract<AppView, { kind: 'detail' }>).gateStepExecutionId
+        && a.selectedStepId === (b as Extract<AppView, { kind: 'detail' }>).selectedStepId;
     case 'editor':
       return b.kind === 'editor'
         && a.featureId === (b as Extract<AppView, { kind: 'editor' }>).featureId

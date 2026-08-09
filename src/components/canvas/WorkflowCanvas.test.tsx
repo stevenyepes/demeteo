@@ -12,7 +12,7 @@
  * errors.
  */
 import type { ComponentProps } from 'react';
-import { render, screen, cleanup } from '@testing-library/react';
+import { act, render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkflowCanvas } from './WorkflowCanvas';
@@ -43,6 +43,24 @@ vi.mock('@xyflow/react', async (importOriginal) => {
     return <actual.ReactFlow {...props} />;
   };
   return { ...actual, ReactFlow: Recording };
+});
+
+/** How many times the canvas has re-planned its layout. `plan` is a `useMemo`
+ *  whose only volatile dependency is the measured container, and the
+ *  auto-layout effect takes that memo's identity as a dependency in turn — so
+ *  this count is both the re-plan count and an upper bound on the `fitView` /
+ *  elk re-entries a resize can trigger. */
+const { planLayoutCalls } = vi.hoisted(() => ({ planLayoutCalls: { count: 0 } }));
+
+vi.mock('./layoutDirection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./layoutDirection')>();
+  return {
+    ...actual,
+    planLayout: (...args: Parameters<typeof actual.planLayout>) => {
+      planLayoutCalls.count += 1;
+      return actual.planLayout(...args);
+    },
+  };
 });
 
 import bugfix from './__fixtures__/bugfix-pipeline.v2.json';
@@ -136,14 +154,45 @@ describe('toFlowGraph', () => {
 // Shared by every mounting suite in this file (the fixture mounts and the zoom
 // / minimap cases below), which is why it sits at file scope rather than inside
 // one `describe`.
+/** Every observer the mounted tree created. The setup file's shared stub fires
+ *  with an empty entry list, which the canvas's own observer cannot read — it
+ *  takes its size from `entry.contentRect` — so this file keeps its own and
+ *  hands the callback entries with a box in them. */
+const observers: RO[] = [];
+
+class RO implements ResizeObserver {
+  targets: Element[] = [];
+
+  constructor(readonly callback: ResizeObserverCallback) {
+    observers.push(this);
+  }
+
+  observe(el: Element) {
+    this.targets.push(el);
+  }
+  unobserve() {}
+  disconnect() {}
+
+  /** Drive one resize tick. jsdom lays nothing out, so every box under test is
+   *  the one stated here. */
+  tick(width: number, height: number): void {
+    const rect = { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height };
+    this.callback([{ contentRect: rect } as unknown as ResizeObserverEntry], this);
+  }
+}
+
+/** The observer watching the canvas wrapper, as opposed to the ones React Flow
+ *  installs on the viewport and the panes. */
+function canvasObserver(): RO {
+  const wrapper = screen.getByTestId('workflow-canvas');
+  const found = observers.find((o) => o.targets.includes(wrapper));
+  if (!found) throw new Error('the canvas installed no ResizeObserver');
+  return found;
+}
+
 beforeAll(() => {
   // React Flow reaches for browser APIs jsdom doesn't implement. Stub the
   // minimal set so a mount renders node DOM without env warnings.
-  class RO {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
   vi.stubGlobal('ResizeObserver', RO);
 
   class DOMMatrixStub {
@@ -280,5 +329,72 @@ describe('WorkflowCanvas minimap', () => {
       </div>,
     );
     expect(container.querySelector('.react-flow__minimap')).toBeNull();
+  });
+});
+
+/**
+ * Dragging the inspector divider resizes this canvas's grid track directly, so
+ * `SplitPane` holding the drag out of React (UI_REDESIGN_PLAN §4.1) spares the
+ * run column's observer but not the canvas's own. Undamped, a 400px drag
+ * commits ~50 sizes past the 8px rounding, and each one re-plans the layout and
+ * restarts the `fitView` animation the last one began.
+ */
+describe('WorkflowCanvas resize damping', () => {
+  beforeEach(() => {
+    observers.length = 0;
+    planLayoutCalls.count = 0;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+  });
+
+  it('re-plans once for a burst of resize ticks, not once per tick', () => {
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas definition={simpleTask as unknown as WorkflowDefinitionV2} />
+      </div>,
+    );
+    const observer = canvasObserver();
+
+    // Settle the mount: the canvas has no layout at all until it has been
+    // measured once, so that first tick is expected to land immediately.
+    act(() => observer.tick(800, 600));
+    act(() => void vi.advanceTimersByTime(1000));
+    planLayoutCalls.count = 0;
+
+    // The drag: 50 distinct boxes, every one of them past the rounding. Each
+    // tick gets its own `act` because each pointer move is its own task in the
+    // browser — batching the burst into one would let React coalesce the very
+    // renders this is measuring.
+    for (let width = 792; width >= 400; width -= 8) {
+      act(() => observer.tick(width, 600));
+    }
+    expect(planLayoutCalls.count).toBe(0);
+
+    act(() => void vi.advanceTimersByTime(1000));
+    expect(planLayoutCalls.count).toBe(1);
+  });
+
+  it('still re-plans for a resize that ends where the last one did not', () => {
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas definition={simpleTask as unknown as WorkflowDefinitionV2} />
+      </div>,
+    );
+    const observer = canvasObserver();
+
+    act(() => observer.tick(800, 600));
+    act(() => void vi.advanceTimersByTime(1000));
+    planLayoutCalls.count = 0;
+
+    act(() => observer.tick(400, 600));
+    act(() => void vi.advanceTimersByTime(1000));
+    act(() => observer.tick(1600, 600));
+    act(() => void vi.advanceTimersByTime(1000));
+
+    expect(planLayoutCalls.count).toBe(2);
   });
 });

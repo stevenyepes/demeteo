@@ -18,8 +18,13 @@ interface StepTimelineProps {
   harnessBaseline: HarnessBaseline | null;
   overrides: HarnessOverrides;
   selectedArtifactPath: string | null;
+  /** Execution id the inspector *resolved* to, not the raw selection: a node id
+   *  picked on the canvas matches several rows once a step has been retried,
+   *  and only the attempt on screen may read as selected. */
+  selectedStepId: string | null;
   activeStreamId: string | null;
   streamStore: AgentStreamStore;
+  onSelect: (stepExecutionId: string) => void;
   onToggleStream: (stepExecutionId: string) => void;
   onOpenArtifact: (path: string, stepTitle: string) => void;
   onStartReplay: (target: ReplayTarget) => void;
@@ -28,7 +33,19 @@ interface StepTimelineProps {
   onDecideGate: (stepExecutionId: string) => void;
 }
 
-/** The run as a vertical list — the default view, best for skimming a long linear run. */
+/**
+ * The run as a vertical list — best for skimming a long linear run, and the
+ * only surface a feature with no workflow graph has.
+ *
+ * Clicking a row selects the step the shared inspector reads
+ * (UI_REDESIGN_PLAN §3.1). The `steps.map` gets its own element so the
+ * pre-hydration banner above it is not an item in the list.
+ *
+ * Selection is `aria-current`, deliberately not the `listbox`/`option` pair it
+ * was first written as: a card carries its own replay, gate, stream and stop
+ * buttons, and an `option` may not own interactive children — so no placement
+ * of that role is valid here, including on the card root.
+ */
 export function StepTimeline({
   steps,
   remoteRun,
@@ -39,8 +56,10 @@ export function StepTimeline({
   harnessBaseline,
   overrides,
   selectedArtifactPath,
+  selectedStepId,
   activeStreamId,
   streamStore,
+  onSelect,
   onToggleStream,
   onOpenArtifact,
   onStartReplay,
@@ -97,29 +116,33 @@ export function StepTimeline({
           </div>
         </div>
       )}
-      {steps.map((step, idx) => (
-        <StepCard
-          key={step.id}
-          step={step}
-          index={idx}
-          downstreamCount={steps.length - idx - 1}
-          activePredecessor={predecessors[idx]}
-          isActiveGate={gateStepExecutionId === step.id}
-          cardRef={cardRefFor(step.id)}
-          harnessBaseline={harnessBaseline}
-          overrides={overrides}
-          selectedArtifactPath={selectedArtifactPath}
-          isStreamOpen={activeStreamId === step.id}
-          stream={activeStreamId === step.id ? openStream : ''}
-          streamTruncated={activeStreamId === step.id ? openStreamTruncated : false}
-          onToggleStream={onToggleStream}
-          onOpenArtifact={onOpenArtifact}
-          onStartReplay={onStartReplay}
-          onRetry={onRetry}
-          onStop={onStop}
-          onDecideGate={onDecideGate}
-        />
-      ))}
+      <ul aria-label="Run steps" className="space-y-6">
+        {steps.map((step, idx) => (
+          <StepCard
+            key={step.id}
+            step={step}
+            index={idx}
+            downstreamCount={steps.length - idx - 1}
+            activePredecessor={predecessors[idx]}
+            isActiveGate={gateStepExecutionId === step.id}
+            isSelected={selectedStepId === step.id}
+            cardRef={cardRefFor(step.id)}
+            harnessBaseline={harnessBaseline}
+            overrides={overrides}
+            selectedArtifactPath={selectedArtifactPath}
+            isStreamOpen={activeStreamId === step.id}
+            stream={activeStreamId === step.id ? openStream : ''}
+            streamTruncated={activeStreamId === step.id ? openStreamTruncated : false}
+            onSelect={onSelect}
+            onToggleStream={onToggleStream}
+            onOpenArtifact={onOpenArtifact}
+            onStartReplay={onStartReplay}
+            onRetry={onRetry}
+            onStop={onStop}
+            onDecideGate={onDecideGate}
+          />
+        ))}
+      </ul>
     </div>
   );
 }

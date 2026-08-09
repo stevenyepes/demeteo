@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
 import type { RemoteRunMirror } from '../../types';
 import { formatError } from '../../lib/errors';
@@ -21,6 +21,12 @@ export interface ReplayTarget {
 /**
  * Stopping, retrying and replaying the run — the actions that rewind or end
  * it, each of which has to pick the local or the runner-side RPC.
+ *
+ * `handleRetryStep` and `handleStopStep` reach every memoized `StepCard`, so
+ * they never change identity. That rules out depending on the inputs: `reload`
+ * and `refreshRemoteRun` are rebuilt by their own hooks on every render, so a
+ * dependency array naming them would stabilize nothing. They are read at call
+ * time through a ref instead, the shape `useStepSelection` uses for `navigate`.
  */
 export function useRerunActions(input: {
   featureId: string;
@@ -30,7 +36,8 @@ export function useRerunActions(input: {
   setFeatureStatus: (status: string) => void;
   overrides: HarnessOverrides;
 }) {
-  const { featureId, remoteRun, refreshRemoteRun, reload, setFeatureStatus, overrides } = input;
+  const latest = useRef(input);
+  latest.current = input;
   const [replayTarget, setReplayTarget] = useState<ReplayTarget | null>(null);
   // The replay cone (target + descendants) ringed on the canvas while the
   // replay confirm modal is open (P2.4). Null when no panel-initiated replay.
@@ -54,7 +61,8 @@ export function useRerunActions(input: {
    * signal (the laptop holds a read-only shadow), so it must be cancelled
    * on the runner over the tunnel instead; the local call would find no
    * cancel sender for the feature and return `Ok` having done nothing. */
-  const cancelRun = async (failureTitle: string) => {
+  const cancelRun = useCallback(async (failureTitle: string) => {
+    const { featureId, remoteRun, refreshRemoteRun, setFeatureStatus } = latest.current;
     try {
       if (remoteRun) {
         await remoteCancelRun({
@@ -70,9 +78,9 @@ export function useRerunActions(input: {
     } catch (err) {
       await messageDialog(formatError(err), { title: failureTitle, kind: 'error' });
     }
-  };
+  }, []);
 
-  const handleCancelFeature = async () => {
+  const handleCancelFeature = useCallback(async () => {
     const ok = await confirmDialog('Are you sure you want to cancel the execution of this feature?', {
       title: 'Cancel Feature',
       kind: 'warning',
@@ -81,9 +89,9 @@ export function useRerunActions(input: {
     });
     if (!ok) return;
     await cancelRun('Cancel Failed');
-  };
+  }, [cancelRun]);
 
-  const handleStopStep = async () => {
+  const handleStopStep = useCallback(async () => {
     const ok = await confirmDialog('Are you sure you want to stop the execution of this step?', {
       title: 'Stop Step',
       kind: 'warning',
@@ -92,9 +100,10 @@ export function useRerunActions(input: {
     });
     if (!ok) return;
     await cancelRun('Stop Failed');
-  };
+  }, [cancelRun]);
 
-  const handleRetryStep = async (stepExecutionId: string) => {
+  const handleRetryStep = useCallback(async (stepExecutionId: string) => {
+    const { remoteRun, refreshRemoteRun, reload, overrides } = latest.current;
     try {
       const modelParam = overrides.selectedModel || null;
       const agentParam = overrides.selectedAgent || null;
@@ -127,10 +136,11 @@ export function useRerunActions(input: {
         kind: isBlocking ? 'warning' : 'error',
       });
     }
-  };
+  }, []);
 
-  const handleReplayFromStep = async () => {
+  const handleReplayFromStep = useCallback(async () => {
     if (!replayTarget) return;
+    const { remoteRun, refreshRemoteRun, reload, overrides } = latest.current;
     try {
       const modelParam = overrides.selectedModel || null;
       const agentParam = overrides.selectedAgent || null;
@@ -159,7 +169,7 @@ export function useRerunActions(input: {
     } catch (err) {
       await messageDialog(formatError(err), { title: 'Replay Failed', kind: 'error' });
     }
-  };
+  }, [replayTarget]);
 
   return {
     replayTarget,

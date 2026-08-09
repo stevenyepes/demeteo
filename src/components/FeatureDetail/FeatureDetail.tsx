@@ -1,10 +1,12 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { RefreshCw, ShieldAlert } from 'lucide-react';
 import type { AppView } from '../../types';
+import type { NavigationMode } from '../../context/NavigationContext';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import { useNavigation, useProject, useUIState } from '../../context';
 import { ArtifactModal } from '../ArtifactModal';
 import { RunViewToggle } from '../RunViewToggle';
+import { defaultInspectorWidth, pickInspectorLayout } from '../runLayout';
 import { useRunColumnLayout } from '../useRunColumnLayout';
 import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { AttachmentsPanel } from './AttachmentsPanel';
@@ -14,8 +16,10 @@ import { InitialPromptPanel } from './InitialPromptPanel';
 import { ReplayModal } from './ReplayModal';
 import { RunGraphPanel } from './RunGraphPanel';
 import { RunMetaColumn } from './RunMetaColumn';
+import { RunPanes } from './RunPanes';
+import { StepInspector } from './StepInspector';
 import { StepTimeline } from './StepTimeline';
-import { useAgentStream, useStreamText } from './useAgentStream';
+import { useAgentStream } from './useAgentStream';
 import { useArtifactSelection } from './useArtifactSelection';
 import { useAttachmentPreview } from './useAttachmentPreview';
 import { useBootstrapPhases } from './useBootstrapPhases';
@@ -26,13 +30,14 @@ import { useHarnessOverrides } from './useHarnessOverrides';
 import { useRemoteRun } from './useRemoteRun';
 import { useRerunActions, type ReplayTarget } from './useRerunActions';
 import { useRunGraph } from './useRunGraph';
+import { useStepSelection } from './useStepSelection';
 import { useWorktreeRouting } from './useWorktreeRouting';
 
 type DetailView = Extract<AppView, { kind: 'detail' }>;
 
 interface FeatureDetailViewProps {
   view: DetailView;
-  navigate: (view: AppView) => void;
+  navigate: (view: AppView, mode?: NavigationMode) => void;
 }
 
 /**
@@ -89,13 +94,15 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     setFeatureStatus: run.setFeatureStatus,
     overrides,
   });
+  const selection = useStepSelection({ view, steps: run.steps, navigate });
   const graph = useRunGraph({
     featureId,
     featureTitle: run.featureTitle,
     steps: run.steps,
     navigate,
     startReplay: rerun.startReplay,
-    openArtifact: artifact.openArtifact,
+    selectedNodeId: selection.selectedNodeId,
+    toggleNode: selection.toggleStep,
   });
   const mr = useFeatureMr({
     featureId,
@@ -116,8 +123,25 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   /** Measuring the column, measuring the chrome above the graph, and turning
    *  both into verdicts lives in `useRunColumnLayout` — this component only
    *  hands out the refs and renders what comes back. */
-  const { setRunColumnEl, setMetaChromeEl, setToggleChromeEl, runLayout, graphBoxPx } =
-    useRunColumnLayout(graph.graphDef);
+  const {
+    setRunColumnEl,
+    setMetaChromeEl,
+    setToggleChromeEl,
+    runColumnSize,
+    runLayout,
+    graphBoxPx,
+    surfaceBoxPx,
+  } = useRunColumnLayout(graph.graphDef);
+
+  /** `null` until the user drags, and then theirs for good. Until then the
+   *  opening width tracks the measured column, so a window resized before
+   *  anyone touched the divider still opens at a sensible proportion; after a
+   *  drag nothing re-derives it, which is the discipline `runLayout.ts`'s doc
+   *  asks of its callers. Phase 6 owns persisting it — this outlives a resize,
+   *  not a remount. */
+  const [draggedInspectorWidth, setDraggedInspectorWidth] = useState<number | null>(null);
+  const inspectorLayout = pickInspectorLayout(runColumnSize);
+  const inspectorWidth = draggedInspectorWidth ?? defaultInspectorWidth(runColumnSize);
 
   useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
     if (feature_id === featureId) {
@@ -147,21 +171,77 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     [rerun.startReplay],
   );
 
-  // The unified feed the node panel reads: local runs push it through
+  const deselectStep = useCallback(() => selection.selectStep(null), [selection.selectStep]);
+
+  // The unified feed the inspector reads: local runs push it through
   // `useRunEvents`; remote runs fill `remoteRunEvents` from the poll above.
   const panelRunEvents = remote.remoteRun ? remote.remoteRunEvents : graph.localRunEvents;
 
-  const { graphDef, selectedNode, selectedRun, selectedStep } = graph;
-  const gateStepId =
-    selectedNode?.type === 'gate' ? selectedRun?.stepExecutionId ?? null : null;
+  const { graphDef } = graph;
 
-  // The node panel's Live tab is the only stream this component reads, and it
-  // is mounted in graph mode alone — subscribing outside it would wake the whole
-  // detail view once per animation frame for a surface nobody is looking at.
-  const liveStream = useStreamText(
-    stream.store,
-    graph.graphMode && selectedStep ? selectedStep.id : null,
+  /** The one inspector, docked beside whichever run surface is showing
+   *  (UI_REDESIGN_PLAN §3.1). It subscribes to the live stream itself — see
+   *  `StepInspector`'s header for why that subscription may not live here. */
+  const inspector = (
+    <StepInspector
+      className="h-full"
+      featureId={featureId}
+      target={selection.target}
+      graphDef={graphDef}
+      statusByNode={graph.runStatusByNode}
+      runEvents={panelRunEvents}
+      streamStore={stream.store}
+      onDeselect={deselectStep}
+      onOpenEditorForPath={routing.openEditorForPath}
+      onOpenArtifact={artifact.openArtifact}
+      onRetry={rerun.handleRetryStep}
+      onReplay={graph.startReplayFromInspector}
+      onStop={rerun.handleStopStep}
+      onDecideGate={decideGate}
+    />
   );
+
+  const runSurface =
+    graph.graphMode && graphDef ? (
+      <RunGraphPanel
+        definition={graphDef}
+        statusByNode={graph.runStatusByNode}
+        highlightedNodeIds={rerun.replayPreviewNodes}
+        selectedNodeId={selection.selectedNodeId}
+        onNodeActivate={graph.onNodeActivate}
+      />
+    ) : (
+      <StepTimeline
+        steps={run.steps}
+        remoteRun={remote.remoteRun}
+        remoteMachineName={remote.remoteMachineName}
+        hasBootstrapPhases={bootstrap.bootstrapPhases.size > 0}
+        gateStepExecutionId={view.gateStepExecutionId}
+        stepCardRefs={stepCardRefs}
+        harnessBaseline={run.harnessBaseline}
+        overrides={overrides}
+        selectedArtifactPath={artifact.selectedArtifactPath}
+        selectedStepId={selection.selectedExecutionId}
+        activeStreamId={stream.activeStreamId}
+        streamStore={stream.store}
+        onSelect={selection.selectStep}
+        onToggleStream={toggleStream}
+        onOpenArtifact={artifact.openArtifact}
+        onStartReplay={startReplayFromCard}
+        onRetry={rerun.handleRetryStep}
+        onStop={rerun.handleStopStep}
+        onDecideGate={decideGate}
+      />
+    );
+
+  /** The graph states the height its elk plan settled on; a timeline states one
+   *  only when it shares a row with the inspector, and otherwise flows in the
+   *  column's own scroll as it always has. */
+  const surfaceHeightPx = graph.graphMode
+    ? graphBoxPx
+    : inspectorLayout === 'side'
+      ? surfaceBoxPx
+      : null;
 
   return (
     <div className="h-full w-full bg-[#08090c] text-slate-100 flex flex-col font-sans">
@@ -224,11 +304,16 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
           {/* The run column. Chrome — stepper, gate table, graph — takes the
               window, however wide it is; prose panels carry their own `ch` cap.
               Artifact preview is an overlay (`ArtifactModal`) rather than a
-              second track, so the only width to negotiate is the meta track's.
-              Direction is `pickRunLayout`'s verdict on the measured width, not
-              a breakpoint; `flex-row-reverse` keeps the meta panels first in
-              the DOM — the order stacked reading needs — while painting them
-              to the right of the run.
+              second track, so the two widths to negotiate are the meta track's
+              and the inspector's — and they are decided by different rules on
+              purpose: `pickRunLayout` answers for the meta track and cannot be
+              dragged, `pickInspectorLayout` answers for the inspector and only
+              until the user drags it.
+
+              Direction is the measured width's verdict, not a breakpoint;
+              `flex-row-reverse` keeps the meta panels first in the DOM — the
+              order stacked reading needs — while painting them to the right of
+              the run.
 
               `overflow-x-hidden` pairs with `overflow-y-auto` on purpose: set
               alone, `overflow-y` leaves `overflow-x` computed as `auto`, which
@@ -256,59 +341,14 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
               {graph.canShowGraph && (
                 <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} chromeRef={setToggleChromeEl} />
               )}
-              {graph.graphMode && graphDef ? (
-                <RunGraphPanel
-                  featureId={featureId}
-                  definition={graphDef}
-                  statusByNode={graph.runStatusByNode}
-                  highlightedNodeIds={rerun.replayPreviewNodes}
-                  graphBoxPx={graphBoxPx}
-                  selectedNodeId={graph.selectedNodeId}
-                  selectedNode={selectedNode}
-                  selectedRun={selectedRun}
-                  selectedStep={selectedStep}
-                  selectedBlockedBy={graph.selectedBlockedBy}
-                  runEvents={panelRunEvents}
-                  liveStream={liveStream}
-                  onNodeActivate={graph.onNodeActivate}
-                  onCloseNode={() => graph.setSelectedNodeId(null)}
-                  onOpenEditorForPath={routing.openEditorForPath}
-                  onOpenArtifact={graph.openArtifactFromPanel}
-                  onRetry={
-                    selectedStep &&
-                    (selectedStep.status === 'failed' || selectedStep.status === 'interrupted')
-                      ? () => rerun.handleRetryStep(selectedStep.id)
-                      : undefined
-                  }
-                  onReplay={selectedStep ? graph.startReplayFromPanel : undefined}
-                  onStop={
-                    selectedStep?.status === 'running' || selectedStep?.status === 'verifying'
-                      ? rerun.handleStopStep
-                      : undefined
-                  }
-                  onDecideGate={gateStepId ? () => decideGate(gateStepId) : undefined}
-                />
-              ) : (
-                <StepTimeline
-                  steps={run.steps}
-                  remoteRun={remote.remoteRun}
-                  remoteMachineName={remote.remoteMachineName}
-                  hasBootstrapPhases={bootstrap.bootstrapPhases.size > 0}
-                  gateStepExecutionId={view.gateStepExecutionId}
-                  stepCardRefs={stepCardRefs}
-                  harnessBaseline={run.harnessBaseline}
-                  overrides={overrides}
-                  selectedArtifactPath={artifact.selectedArtifactPath}
-                  activeStreamId={stream.activeStreamId}
-                  streamStore={stream.store}
-                  onToggleStream={toggleStream}
-                  onOpenArtifact={artifact.openArtifact}
-                  onStartReplay={startReplayFromCard}
-                  onRetry={rerun.handleRetryStep}
-                  onStop={rerun.handleStopStep}
-                  onDecideGate={decideGate}
-                />
-              )}
+              <RunPanes
+                layout={inspectorLayout}
+                surfaceHeightPx={surfaceHeightPx}
+                runSurface={runSurface}
+                inspector={inspector}
+                inspectorWidth={inspectorWidth}
+                onInspectorWidthCommit={setDraggedInspectorWidth}
+              />
             </div>
           </div>
         </div>

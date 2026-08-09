@@ -8,9 +8,29 @@
  * and are answerable from a test with a few numbers. Everything that needs a
  * live element is here, so `FeatureDetail` consumes one hook instead of
  * carrying four pieces of state and two observers of its own.
+ *
+ * What it measures is now an *opening position* for a pane the user drags, not
+ * a settlement: `runColumnSize` feeds `pickInspectorLayout` and
+ * `defaultInspectorWidth` in `runLayout.ts`, and a committed inspector width
+ * outranks every number produced here. Nothing in this hook may be used to
+ * overwrite one.
+ *
+ * The graph plan is still measured against the *column*, not against the pane
+ * the canvas ends up in — the inspector standing beside it is not subtracted.
+ * That over-states the canvas's width by roughly the inspector's, which biases
+ * `pickDirection` toward `RIGHT`; it is the same approximation that held while
+ * the panel was docked inside the graph box, kept deliberately rather than
+ * re-measured per drag, since the alternative is a plan that re-runs elk while
+ * the divider moves.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { graphBoxHeight, graphContainer, MAX_ZOOM, planLayout } from './canvas/layoutDirection';
+import {
+  graphBoxHeight,
+  graphContainer,
+  MAX_ZOOM,
+  MIN_GRAPH_BOX_PX,
+  planLayout,
+} from './canvas/layoutDirection';
 import type { LayoutPlan } from './canvas/layoutDirection';
 import type { WorkflowDefinitionV2 } from './canvas/types';
 import { pickRunLayout, type RunColumnSize, type RunLayoutMode } from './runLayout';
@@ -23,10 +43,21 @@ export interface RunColumnLayout {
   setMetaChromeEl: (el: HTMLDivElement | null) => void;
   /** `ref` for the Graph|Timeline toggle, which always stacks above the graph. */
   setToggleChromeEl: (el: HTMLDivElement | null) => void;
+  /** The measured column, `null` until an observer has reported one. Handed
+   *  back raw because the inspector's verdicts (`pickInspectorLayout`,
+   *  `defaultInspectorWidth`) read the same measurement the meta track's does,
+   *  and deriving it twice is how two answers about one column start to
+   *  disagree. */
+  runColumnSize: RunColumnSize | null;
   runLayout: RunLayoutMode;
   graphPlan: LayoutPlan;
   /** Height, in px, for the graph box element. */
   graphBoxPx: number;
+  /** Height, in px, for a run surface that shares its row with the inspector:
+   *  the column minus the chrome above it, floored at `MIN_GRAPH_BOX_PX`. The
+   *  graph asks for less than this when its layout is short (`graphBoxPx`); a
+   *  timeline always wants all of it and scrolls inside. */
+  surfaceBoxPx: number;
 }
 
 export function useRunColumnLayout(graphDef: WorkflowDefinitionV2 | null): RunColumnLayout {
@@ -83,8 +114,10 @@ export function useRunColumnLayout(graphDef: WorkflowDefinitionV2 | null): RunCo
     setRunColumnEl,
     setMetaChromeEl,
     setToggleChromeEl,
+    runColumnSize,
     runLayout,
     graphPlan,
     graphBoxPx,
+    surfaceBoxPx: graphBox?.height ?? MIN_GRAPH_BOX_PX,
   };
 }

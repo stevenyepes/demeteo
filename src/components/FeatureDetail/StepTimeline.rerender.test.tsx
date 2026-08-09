@@ -12,9 +12,11 @@
  */
 import { act, render, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useCallback, useRef } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useCallback, useRef, useState } from 'react';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
 
+import { loadAgentCatalog } from '../../lib/agentCatalog';
 import { STREAM_CAP_CHARS } from '../../lib/streamBuffer';
 import type { StepExecution } from '../../types';
 
@@ -38,8 +40,9 @@ vi.mock('./StepArtifactList', () => ({
 
 import { StepCard } from './StepCard';
 import { StepTimeline } from './StepTimeline';
-import type { HarnessOverrides } from './useHarnessOverrides';
 import { useAgentStream } from './useAgentStream';
+import { useHarnessOverrides } from './useHarnessOverrides';
+import { useRerunActions } from './useRerunActions';
 
 const FEATURE_ID = 'f-1';
 const STREAMING_ID = 'se-3';
@@ -69,31 +72,37 @@ const IDLE_IDS = ['se-1', 'se-2', 'se-4', 'se-5'] as const;
 
 const noop = () => {};
 
-const OVERRIDES: HarnessOverrides = {
-  availableModels: [],
-  selectedModel: '',
-  setSelectedModel: noop,
-  isLoadingModels: false,
-  availableAgents: [],
-  selectedAgent: '',
-  selectedEffort: '',
-  setSelectedEffort: noop,
-  featureAgentKind: 'opencode',
-  retryEffortLevels: [],
-  onAgentChange: noop,
-  adoptFeatureModel: noop,
-  probeForFeature: noop,
-};
-
-/** `FeatureDetail`'s wiring of the timeline, with everything the cards do not
- *  read held constant so a re-render can only come from the stream. */
+/**
+ * `FeatureDetail`'s wiring of the timeline, reproduced rather than approximated.
+ *
+ * The three props the cards get from a hook — `overrides`, `onRetry`, `onStop` —
+ * are taken from the real hooks, and the two inputs `FeatureDetailView` rebuilds
+ * on every render (`reload`, `refreshRemoteRun`) are passed as fresh literals
+ * here for the same reason. Held constant instead, this file asserted against a
+ * wiring the app does not have: a hook returning a new object literal per render
+ * defeats every `memo` below and every claim here still passed.
+ *
+ * `onSelect` is `useCallback`-stable exactly as `useStepSelection`'s is.
+ */
 function Harness() {
   const stream = useAgentStream(FEATURE_ID);
   const stepCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const toggleStream = useCallback(
     (id: string) => stream.setActiveStreamId((prev) => (prev === id ? null : id)),
     [stream.setActiveStreamId],
   );
+  const onSelect = useCallback((id: string) => setSelectedStepId(id), []);
+
+  const overrides = useHarnessOverrides();
+  const rerun = useRerunActions({
+    featureId: FEATURE_ID,
+    remoteRun: null,
+    refreshRemoteRun: () => {},
+    reload: () => {},
+    setFeatureStatus: () => {},
+    overrides,
+  });
 
   return (
     <StepTimeline
@@ -104,15 +113,17 @@ function Harness() {
       gateStepExecutionId={null}
       stepCardRefs={stepCardRefs}
       harnessBaseline={null}
-      overrides={OVERRIDES}
+      overrides={overrides}
       selectedArtifactPath={null}
+      selectedStepId={selectedStepId}
       activeStreamId={stream.activeStreamId}
       streamStore={stream.store}
+      onSelect={onSelect}
       onToggleStream={toggleStream}
       onOpenArtifact={noop}
       onStartReplay={noop}
-      onRetry={noop}
-      onStop={noop}
+      onRetry={rerun.handleRetryStep}
+      onStop={rerun.handleStopStep}
       onDecideGate={noop}
     />
   );
@@ -154,6 +165,15 @@ function streamText(container: HTMLElement): string {
   if (!pre) throw new Error('the live stream block is not rendered');
   return pre.textContent ?? '';
 }
+
+/** `useAgentCatalog` seeds itself from this module-level cache synchronously, so
+ *  priming it here is what keeps the catalog fetch from landing mid-test as a
+ *  re-render nobody asked for — and makes the counts below the harness's own. */
+beforeAll(async () => {
+  vi.mocked(invoke).mockImplementation((async (cmd: string) =>
+    cmd === 'list_agents' ? [] : undefined) as unknown as typeof invoke);
+  await loadAgentCatalog();
+});
 
 afterEach(() => {
   for (const key of Object.keys(handlers)) delete handlers[key];
@@ -201,5 +221,42 @@ describe('StepTimeline under a live agent stream', () => {
 
   it('keeps StepCard memoized', () => {
     expect(StepCard).toHaveProperty('$$typeof', Symbol.for('react.memo'));
+  });
+});
+
+describe('StepTimeline selection', () => {
+  it('re-renders only the rows whose selected state changed', async () => {
+    const { container } = render(<Harness />);
+    await waitFor(() => expect(handlers.agent_stream?.length).toBeGreaterThan(0));
+
+    const rows = [...container.querySelectorAll('[data-step-row]')] as HTMLButtonElement[];
+    expect(rows).toHaveLength(STEPS.length);
+
+    await userEvent.click(rows[0]);
+    const afterFirst = { ...cardRenders };
+    await userEvent.click(rows[2]);
+
+    // Two cards change: the one losing the selection and the one taking it.
+    // Everything else must sit still — a fresh `onSelect` identity, or a
+    // selection prop derived per render, re-renders the whole run instead.
+    for (const [id, renders] of Object.entries(cardRenders)) {
+      const moved = renders - (afterFirst[id] ?? 0);
+      expect(moved).toBe(id === 'se-1' || id === STREAMING_ID ? 1 : 0);
+    }
+  });
+
+  it('marks exactly the selected row', async () => {
+    const { container } = render(<Harness />);
+    await waitFor(() => expect(handlers.agent_stream?.length).toBeGreaterThan(0));
+
+    const rows = () => [...container.querySelectorAll('[data-step-row]')] as HTMLButtonElement[];
+    expect(rows().map((r) => r.getAttribute('aria-current'))).toEqual(
+      STEPS.map(() => null),
+    );
+
+    await userEvent.click(rows()[3]);
+    expect(rows().map((r) => r.getAttribute('aria-current'))).toEqual(
+      STEPS.map((_, i) => (i === 3 ? 'step' : null)),
+    );
   });
 });

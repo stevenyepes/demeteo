@@ -82,6 +82,7 @@ function mockBackend() {
       case 'get_machines':
       case 'list_agents':
       case 'list_terminal_sessions':
+      case 'step_attempts_list':
         return Promise.resolve([]);
       case 'artifact_body':
         return Promise.resolve('# Research report');
@@ -250,5 +251,50 @@ describe('FeatureDetail', () => {
 
     expect(consoleError).not.toHaveBeenCalled();
     consoleError.mockRestore();
+  });
+});
+
+/**
+ * `viewMode` now starts on `'graph'`, and this feature has no workflow
+ * definition — `feature_workflow_graph` answers null above. `canShowGraph`
+ * therefore has to keep it on the timeline, with no toggle offered at all. That
+ * is a fallback rather than a default (UI_REDESIGN_PLAN §7), and it is the only
+ * thing standing between the default flip and a legacy run rendering nothing.
+ */
+describe('FeatureDetail — a run with no workflow graph', () => {
+  it('opens on the timeline and offers no view toggle', async () => {
+    mount();
+
+    expect(await screen.findByRole('list', { name: 'Run steps' })).toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Run view' })).not.toBeInTheDocument();
+  });
+
+  it('seeds the inspector on a step rather than opening it empty', async () => {
+    mount();
+
+    // One step, completed: `defaultInspectorSelection` falls through to it, and
+    // the timeline row it selected is the one marked.
+    expect(await screen.findByTestId('inspector')).toHaveTextContent('Research');
+    expect(screen.getByRole('button', { name: /Research/ })).toHaveAttribute('aria-current', 'step');
+  });
+
+  it('empties the inspector without hiding it when the step is dismissed', async () => {
+    mount();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Close panel' }));
+
+    // The pane stays on screen and says why it is empty — §7 settled that it
+    // never collapses, which is what makes the wording load-bearing.
+    expect(await screen.findByTestId('inspector-empty')).toHaveTextContent('No step selected');
+    expect(screen.getByRole('button', { name: /Research/ })).not.toHaveAttribute('aria-current');
+  });
+
+  it('drives the inspector from a timeline row', async () => {
+    mount();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Close panel' }));
+    await userEvent.click(screen.getByRole('button', { name: /Research/ }));
+
+    expect(await screen.findByTestId('inspector')).toHaveTextContent('Research');
   });
 });

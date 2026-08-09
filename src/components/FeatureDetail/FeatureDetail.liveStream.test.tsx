@@ -1,19 +1,19 @@
 /**
- * The graph's Live tab gets the selected step's stream, not a stranded prop.
+ * One inspector, both run surfaces, and a stream that wakes only it.
  *
- * Both run surfaces read the same per-step subscription, and they reach it by
- * different routes: the timeline subscribes for the card it has open, while the
- * graph path subscribes here in `FeatureDetail` and hands the text down through
- * `RunGraphPanel` to `NodePanel`. Two consumers of one store is the shape where
- * fixing one and stranding the other stays green — nothing else asserts that
- * the graph route carries text at all, and the key it subscribes with (a step
- * *execution* id, matching `agent_stream`'s `step_execution_id`) is invisible
- * from either end.
+ * Two claims, and the mount has to be this wide for either. One inspector
+ * serves both surfaces, so neither surface may leave its Live tab empty; and
+ * the run around it must stay asleep while chunks arrive, which is the ceiling
+ * `StepInspector.tsx`'s header argues for. That argument is why the render
+ * count is taken from the whole detail view here —
+ * `StepTimeline.rerender.test.tsx` mounts the timeline alone, so a subscription
+ * placed above it is exactly what that file cannot see.
  *
- * `RunGraphPanel` stands in for the canvas rather than rendering it: the real
- * one mounts xyflow and runs ELK, none of which this claim depends on. The stub
- * exposes the two things it does depend on — a way to activate a node, and what
- * `liveStream` arrived as.
+ * `RunGraphPanel` and `StepTimeline` stand in for the two surfaces rather than
+ * rendering them: the real canvas mounts xyflow and runs ELK, and the real
+ * timeline is a second render-count subject. Each stub exposes only what the
+ * claims depend on — a way to select a step, and (for the timeline) a render
+ * counter. The inspector itself is real, because it is the thing under test.
  */
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -36,27 +36,22 @@ vi.mock('react-markdown', () => ({
 }));
 
 vi.mock('./RunGraphPanel', () => ({
-  RunGraphPanel: ({
-    liveStream,
-    onNodeActivate,
-  }: {
-    liveStream: string | undefined;
-    onNodeActivate: (nodeId: string) => void;
-  }) => (
-    <div>
-      <button type="button" onClick={() => onNodeActivate(NODE_ID)}>
-        activate node
-      </button>
-      <div data-testid="live-stream">{liveStream}</div>
-    </div>
+  RunGraphPanel: ({ onNodeActivate }: { onNodeActivate: (nodeId: string) => void }) => (
+    <button type="button" onClick={() => onNodeActivate(NODE_ID)}>
+      activate node
+    </button>
   ),
 }));
 
 let timelineRenders = 0;
 vi.mock('./StepTimeline', () => ({
-  StepTimeline: () => {
+  StepTimeline: ({ onSelect }: { onSelect: (stepExecutionId: string) => void }) => {
     timelineRenders += 1;
-    return null;
+    return (
+      <button type="button" onClick={() => onSelect(STEP_EXECUTION_ID)}>
+        select row
+      </button>
+    );
   },
 }));
 
@@ -106,6 +101,7 @@ function mockBackend() {
       case 'list_agents':
       case 'list_terminal_sessions':
       case 'run_events_since':
+      case 'step_attempts_list':
         return Promise.resolve([]);
       case 'remote_run_for_feature':
         return Promise.resolve(null);
@@ -156,55 +152,77 @@ function emitChunk(content: string) {
   });
 }
 
+/** The inspector opens on Overview; the stream lives one tab over. */
+async function openLiveTab(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('tab', { name: 'Live' }));
+}
+
 beforeEach(() => {
   for (const key of Object.keys(handlers)) delete handlers[key];
   timelineRenders = 0;
   mockBackend();
 });
 
-describe('the graph path’s live stream', () => {
-  it('reaches RunGraphPanel for the selected step', async () => {
+describe('the inspector’s live stream', () => {
+  it('carries the selected step’s output in graph mode', async () => {
     const user = userEvent.setup();
     mount();
 
     await user.click(screen.getByText('open detail'));
-    await waitFor(() => expect(screen.getByText('Graph')).toBeInTheDocument());
-    await user.click(screen.getByText('Graph'));
+    // The run opens with its live step already selected, so the first
+    // activation clears it and the second re-selects — by *node* id, which is
+    // the other of the two id flavours one selection key has to serve.
     await user.click(await screen.findByText('activate node'));
-
-    expect(screen.getByTestId('live-stream')).toHaveTextContent('');
+    expect(await screen.findByTestId('inspector-empty')).toBeInTheDocument();
+    await user.click(screen.getByText('activate node'));
+    await openLiveTab(user);
 
     await emitChunk('reading src/lib/runStatus.ts');
 
     // Fails if the subscription keys off the node id, a stale selection, or
-    // nothing at all — each of which leaves the timeline path working.
+    // nothing at all — none of which the surface itself would reveal.
     await waitFor(() =>
-      expect(screen.getByTestId('live-stream')).toHaveTextContent('reading src/lib/runStatus.ts'),
+      expect(screen.getByTestId('inspector')).toHaveTextContent('reading src/lib/runStatus.ts'),
     );
   });
 
-  it('does not wake the detail view while the timeline is the active surface', async () => {
+  it('carries it in timeline mode too', async () => {
     const user = userEvent.setup();
     mount();
 
     await user.click(screen.getByText('open detail'));
-    await waitFor(() => expect(screen.getByText('Graph')).toBeInTheDocument());
-    // Select a node, then leave the graph. The selection outlives the view
-    // switch, so this is the only state where the mode gate is what decides
-    // whether a subscription exists — with nothing selected there is no
-    // subscription either way and the assertion below would prove nothing.
-    await user.click(screen.getByText('Graph'));
-    await user.click(await screen.findByText('activate node'));
+    await waitFor(() => expect(screen.getByText('Timeline')).toBeInTheDocument());
     await user.click(screen.getByText('Timeline'));
+    await user.click(await screen.findByText('select row'));
+    await openLiveTab(user);
+
+    await emitChunk('running cargo test');
+
+    // The timeline reaches the same buffer the graph does: which surface is
+    // showing is not something the subscription is allowed to know.
+    await waitFor(() =>
+      expect(screen.getByTestId('inspector')).toHaveTextContent('running cargo test'),
+    );
+  });
+
+  it('does not wake the detail view around it', async () => {
+    const user = userEvent.setup();
+    mount();
+
+    await user.click(screen.getByText('open detail'));
+    await waitFor(() => expect(screen.getByText('Timeline')).toBeInTheDocument());
+    await user.click(screen.getByText('Timeline'));
+    await user.click(await screen.findByText('select row'));
+    await openLiveTab(user);
+    // Prove the subscription is live before asserting on what it does *not*
+    // do — otherwise a component that subscribed to nothing would pass.
+    await emitChunk('first');
+    await waitFor(() => expect(screen.getByTestId('inspector')).toHaveTextContent('first'));
+
     const settled = timelineRenders;
+    for (let i = 0; i < 5; i += 1) await emitChunk(`chunk ${i}\n`);
+    await waitFor(() => expect(screen.getByTestId('inspector')).toHaveTextContent('chunk 4'));
 
-    await emitChunk('output nobody is watching');
-
-    // Asserting `RunGraphPanel` is absent would prove nothing — it is unmounted
-    // in timeline mode whether or not the subscription exists. The subscription
-    // is only observable through what it wakes: an ungated one re-renders
-    // `FeatureDetailView`, and with it the timeline, once per frame for a
-    // surface nobody is looking at.
     expect(timelineRenders).toBe(settled);
   });
 });
