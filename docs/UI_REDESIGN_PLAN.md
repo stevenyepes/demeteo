@@ -13,6 +13,39 @@ into this codebase's palette, primitives and hexagon discipline.
 
 ---
 
+## 0. Status
+
+Branch `feat/ui-redesign-pipeline-project`. **Phases 0 and 1 are done; 2–6 are not
+started.** Read §6 for what each phase covers and §7 for the decisions already taken.
+
+| Phase | State | Commit |
+|---|---|---|
+| 0 — foundations | done | `4e785c6` (audit F17), `32a42c4` (primitives + `lib/` modules) |
+| 1 — performance | done | `7a0b45f` |
+| — | unplanned, done | `c40fde3` — dead utility classes + `scripts/check-classes.mjs` |
+| 2 — pipeline shell | **next** | |
+| 3 — timeline slim-down | | |
+| 4 — project view | | |
+| 5 — activity & motion | | |
+| 6 — keyboard & persistence | | |
+
+`npm run checks` is green at `c40fde3`.
+
+**Outstanding before Phase 2, and the reason it matters:** none of this has been seen
+running. Phase 1 reworked the live agent stream onto `requestAnimationFrame` +
+`useSyncExternalStore`, and `c40fde3` moved 103 headings from Inter to Outfit — different
+metrics, so text reflows. Neither is observable from `npm run checks`, which compiles and
+tests but never renders. Phase 2 then restructures the same files again. One
+`npm run dev:tauri` pass with a streaming agent clears both; skipping it means a later
+visual defect has three unobserved changes to choose from instead of one. Heaviest
+heading concentrations for a look: `settings/ProjectSettingsShell` (9),
+`settings/StrategyTab` (8), `PreferencesScreen` (7).
+
+macOS and Windows appearance is unverified by any gate — `pr-checks.yml` runs
+`ubuntu-22.04` only (AGENTS.md §3, Cross-OS).
+
+---
+
 ## 1. What the mock actually proposes
 
 Stripping the styling, five structural changes:
