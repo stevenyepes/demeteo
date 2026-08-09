@@ -327,6 +327,7 @@ Read the relevant doc before modifying that area.
 | Terminal agent activity | [docs/TERMINAL_ACTIVITY.md](docs/TERMINAL_ACTIVITY.md) |
 | User stories & agent tasks | [docs/USER_STORIES.md](docs/USER_STORIES.md) |
 | UX spec & journeys | [docs/UX_JOURNEYS.md](docs/UX_JOURNEYS.md) · as-built audit in [docs/ux-audit/](docs/ux-audit/README.md) |
+| Pipeline/project view redesign plan | [docs/UI_REDESIGN_PLAN.md](docs/UI_REDESIGN_PLAN.md) |
 | Product roadmap & agent-ready stories | [docs/roadmap/](docs/roadmap/README.md) |
 | Known platform issues | [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |
 | Contributing, PR flow, full commit spec | [CONTRIBUTING.md](CONTRIBUTING.md) |
