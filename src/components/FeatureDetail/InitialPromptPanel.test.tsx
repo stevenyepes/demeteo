@@ -1,7 +1,7 @@
 // Collapse behaviour for the initial-prompt panel (UI_REDESIGN_PLAN §1 idea B).
 //
 // The unpersisted-across-remount case is an assertion about a decision, not an
-// oversight: Phase 6 owns session persistence for every Disclosure at once.
+// oversight — see the component's own doc for why this one does not survive.
 
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';

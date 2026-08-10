@@ -1,13 +1,20 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { RefreshCw, ShieldAlert } from 'lucide-react';
 import type { AppView } from '../../types';
 import type { NavigationMode } from '../../context/NavigationContext';
-import { DEFAULT_DENSITY, type Density } from '../../lib/density';
+import { DEFAULT_DENSITY } from '../../lib/density';
+import { densityPref, inspectorWidthPref } from '../../lib/uiPrefs';
+import { usePersistedPref } from '../../hooks/usePersistedPref';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import { useNavigation, useProject, useUIState } from '../../context';
 import { ArtifactModal } from '../ArtifactModal';
 import { RunViewToggle } from '../RunViewToggle';
-import { defaultInspectorWidth, pickInspectorLayout } from '../runLayout';
+import {
+  defaultInspectorWidth,
+  metaTrackWidth,
+  pickInspectorLayout,
+  runPairSize,
+} from '../runLayout';
 import { DensityToggle } from '../ui/DensityToggle';
 import { useRunColumnLayout } from '../useRunColumnLayout';
 import { AttachmentPreviewModal } from './AttachmentPreviewModal';
@@ -34,6 +41,7 @@ import { useHeaderCollapse } from './useHeaderCollapse';
 import { useRemoteRun } from './useRemoteRun';
 import { useRerunActions } from './useRerunActions';
 import { useRunGraph } from './useRunGraph';
+import { useRunShortcuts } from './useRunShortcuts';
 import { useStepSelection } from './useStepSelection';
 import { useWorktreeRouting } from './useWorktreeRouting';
 
@@ -59,7 +67,14 @@ export function FeatureDetail() {
 
 function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   const { state: { currentProjectId, projects } } = useProject();
-  const { ui: { sidebarCollapsed: _sidebarCollapsed } } = useUIState();
+  const {
+    ui: {
+      sidebarCollapsed: _sidebarCollapsed,
+      commandPaletteOpen,
+      docsPanelOpen,
+      startFeatureOpen,
+    },
+  } = useUIState();
   // The legacy `AgentTerminalDrawer` mount consumed `sidebarCollapsed`
   // to size its drawer; the panel-mounted surface does not need it.
   // We keep the field on `UIStateSlice` for back-compat with the
@@ -135,26 +150,34 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     runColumnSize,
     runLayout,
     graphBoxPx,
-    surfaceBoxPx,
   } = useRunColumnLayout(graph.graphDef);
   const headerCollapsed = useHeaderCollapse(runColumnEl);
 
-  /** `null` until the user drags, and then theirs for good. Until then the
-   *  opening width tracks the measured column, so a window resized before
-   *  anyone touched the divider still opens at a sensible proportion; after a
-   *  drag nothing re-derives it, which is the discipline `runLayout.ts`'s doc
-   *  asks of its callers. Phase 6 owns persisting it — this outlives a resize,
-   *  not a remount. */
-  const [draggedInspectorWidth, setDraggedInspectorWidth] = useState<number | null>(null);
-  /** Phase 6 persists this through `get_app_session`/`set_app_session`; until
-   *  then it is the session's, not the user's. */
-  const [density, setDensity] = useState<Density>(DEFAULT_DENSITY);
-  /** Open by default: the activity log is what a run *is* doing, and a detached
-   *  run's tail only advances while it is (`ActivityPanel`). Phase 6 persists
-   *  this alongside the rest. */
+  /** `null` until the user has chosen a width, and then theirs for good — a
+   *  stored one arrives by the same door a drag does and outranks the column
+   *  identically. Until then the opening width tracks the measured column, so a
+   *  window resized before anyone touched the divider still opens at a sensible
+   *  proportion; once chosen nothing re-derives it, which is the discipline
+   *  `runLayout.ts`'s doc asks of its callers. The write rides `SplitPane`'s
+   *  per-release commit, keeping IPC out of the pointer path that drag
+   *  deliberately keeps `setState` out of (UI_REDESIGN_PLAN §4.1). */
+  const [chosenInspectorWidth, setChosenInspectorWidth] = usePersistedPref(inspectorWidthPref, null);
+  const [density, setDensity] = usePersistedPref(densityPref, DEFAULT_DENSITY);
+  /** Open by default, and deliberately *not* persisted alongside the rest.
+   *  `ActivityPanel`'s remote tail runs only while the panel is open, and that
+   *  tail is the only source of a detached run's bootstrap phases — so a
+   *  collapse that survived the mount would leave every future remote run with
+   *  a blank feed and no stepper, days after the click that caused it, with
+   *  nothing on screen to connect the two. Per-mount it costs one click; stored
+   *  it is a silent break. Persist this only once that poll no longer hangs off
+   *  the disclosure (`useRemoteRun`, at the `onEvents` tap). */
   const [activityOpen, setActivityOpen] = useState(true);
-  const inspectorLayout = pickInspectorLayout(runColumnSize);
-  const inspectorWidth = draggedInspectorWidth ?? defaultInspectorWidth(runColumnSize);
+  /** Split, the meta track and the gap are already spent — so every inspector
+   *  verdict is asked of what is left, never of the column. */
+  const runPair = runPairSize(runColumnSize, runLayout);
+  const metaWidth = metaTrackWidth(runColumnSize, runLayout);
+  const inspectorLayout = pickInspectorLayout(runPair);
+  const inspectorWidth = chosenInspectorWidth ?? defaultInspectorWidth(runPair);
 
   useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
     if (feature_id === featureId) {
@@ -182,27 +205,70 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
 
   const { graphDef } = graph;
 
+  const inspectorPaneRef = useRef<HTMLDivElement | null>(null);
+
+  /** Anything covering the run takes the keyboard with it, and this view is not
+   *  where most of it is mounted: `App.tsx` renders the palette, the docs panel
+   *  and the start-feature modal as siblings of this component, so it stays
+   *  mounted underneath them and its window listener stays live. None of the
+   *  three moves focus, so `typingTarget` alone reads `document.body` and lets
+   *  the keys through — which is how `g`/`t` came to write a *global* view-mode
+   *  preference from a surface the user cannot see. */
+  const overlayOpen =
+    commandPaletteOpen ||
+    docsPanelOpen ||
+    startFeatureOpen ||
+    Boolean(view.gateStepExecutionId) ||
+    Boolean(artifact.selectedArtifactPath) ||
+    Boolean(attachments.viewingAttachmentId) ||
+    Boolean(rerun.replayTarget);
+
+  useRunShortcuts({
+    enabled: !overlayOpen,
+    steps: run.steps,
+    selectedStepId: selection.selectedExecutionId,
+    selectStep: selection.selectStep,
+    inspectorRef: inspectorPaneRef,
+    canShowGraph: graph.canShowGraph,
+    setViewMode: graph.setViewMode,
+  });
+
   /** The one inspector, docked beside whichever run surface is showing
    *  (UI_REDESIGN_PLAN §3.1). It subscribes to the live stream itself — see
-   *  `StepInspector`'s header for why that subscription may not live here. */
+   *  `StepInspector`'s header for why that subscription may not live here.
+   *
+   *  The wrapper is a focus target, not a box: `Enter` aims at the tab strip's
+   *  roving entry, and an *empty* inspector has neither a tab strip nor any
+   *  other focusable child, so `tabIndex={-1}` covers that case. It carries its
+   *  own ring because that case is the one nothing else draws — the populated
+   *  pane lands on a real tab button that brings its own, while a bare
+   *  `outline-none` div would take the keypress and leave the screen identical.
+   *  It states no size of its own — both seats size the pane through `h-full`
+   *  (`RunPanes`), and breaking that chain collapses the tabs inside it. */
   const inspector = (
-    <StepInspector
-      className="h-full"
-      featureId={featureId}
-      target={selection.target}
-      graphDef={graphDef}
-      statusByNode={graph.runStatusByNode}
-      streamStore={stream.store}
-      harnessBaseline={run.harnessBaseline}
-      overrides={overrides}
-      onDeselect={deselectStep}
-      onOpenEditorForPath={routing.openEditorForPath}
-      onOpenArtifact={artifact.openArtifact}
-      onRetry={rerun.handleRetryStep}
-      onReplay={graph.startReplayFromInspector}
-      onStop={rerun.handleStopStep}
-      onDecideGate={decideGate}
-    />
+    <div
+      ref={inspectorPaneRef}
+      tabIndex={-1}
+      className="h-full min-h-0 outline-none focus-visible:ring-1 focus-visible:ring-cyan-500/50"
+    >
+      <StepInspector
+        className="h-full"
+        featureId={featureId}
+        target={selection.target}
+        graphDef={graphDef}
+        statusByNode={graph.runStatusByNode}
+        streamStore={stream.store}
+        harnessBaseline={run.harnessBaseline}
+        overrides={overrides}
+        onDeselect={deselectStep}
+        onOpenEditorForPath={routing.openEditorForPath}
+        onOpenArtifact={artifact.openArtifact}
+        onRetry={rerun.handleRetryStep}
+        onReplay={graph.startReplayFromInspector}
+        onStop={rerun.handleStopStep}
+        onDecideGate={decideGate}
+      />
+    </div>
   );
 
   const runSurface =
@@ -229,14 +295,12 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       />
     );
 
-  /** The graph states the height its elk plan settled on; a timeline states one
-   *  only when it shares a row with the inspector, and otherwise flows in the
-   *  column's own scroll as it always has. */
-  const surfaceHeightPx = graph.graphMode
-    ? graphBoxPx
-    : inspectorLayout === 'side'
-      ? surfaceBoxPx
-      : null;
+  /** Only the stacked layout takes a stated height, and only for the graph: the
+   *  column scrolls there, so a box that asked to fill it would have nothing to
+   *  fill. Side by side the row is handed the window's remaining height and the
+   *  graph fits itself into its share — the plan's height stopped being the
+   *  row's the moment it was also deciding the inspector's. */
+  const surfaceHeightPx = inspectorLayout === 'side' || !graph.graphMode ? null : graphBoxPx;
 
   return (
     <div className="h-full w-full bg-[#08090c] text-slate-100 flex flex-col font-sans">
@@ -323,12 +387,15 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
           <div
             ref={setRunColumnEl}
             data-run-scroll
-            className={`flex w-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-8 ${
-              runLayout === 'split' ? 'flex-row-reverse items-start gap-8' : 'flex-col'
+            className={`flex w-full min-h-0 min-w-0 p-8 ${
+              runLayout === 'split'
+                ? 'h-full flex-row-reverse items-stretch gap-8 overflow-hidden'
+                : 'flex-col overflow-y-auto overflow-x-hidden'
             }`}
           >
             <RunMetaColumn
               runLayout={runLayout}
+              widthPx={metaWidth}
               setMetaChromeEl={setMetaChromeEl}
               remoteRun={remote.remoteRun}
               remoteMachineName={remote.remoteMachineName}
@@ -343,7 +410,11 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
               harnessBaseline={run.harnessBaseline}
               harnessEvidence={run.harnessEvidence}
             />
-            <div className={runLayout === 'split' ? 'flex min-w-0 flex-1 flex-col' : 'contents'}>
+            <div
+              className={
+                runLayout === 'split' ? 'flex h-full min-h-0 min-w-0 flex-1 flex-col' : 'contents'
+              }
+            >
               {/* One chrome row above the surface, and the element
                   `useRunColumnLayout` measures — the graph box is the column
                   minus this. The gap below it is `pb-6` rather than a margin so
@@ -370,7 +441,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
                 runSurface={runSurface}
                 inspector={inspector}
                 inspectorWidth={inspectorWidth}
-                onInspectorWidthCommit={setDraggedInspectorWidth}
+                onInspectorWidthCommit={setChosenInspectorWidth}
               />
             </div>
           </div>

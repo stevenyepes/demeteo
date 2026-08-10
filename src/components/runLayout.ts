@@ -74,6 +74,57 @@ export function pickRunLayout(size: RunColumnSize | null): RunLayoutMode {
 }
 
 /**
+ * The meta track's share of a split run column, and its floor.
+ *
+ * A share rather than the fixed `26rem` this started as: fixed, every pixel a
+ * wider window added went to the run surface, and the run surface is a
+ * fit-to-view canvas that answers extra width with extra empty space. The floor
+ * is what a gate block's command line and an activity row need before they
+ * start wrapping into unreadability.
+ *
+ * Deliberately **no ceiling.** One was tried at `32rem` and it re-created the
+ * defect at 4K: past ~2300px of column the track stopped growing and the
+ * surplus went back to the canvas. A track that stays at 22% cannot crowd the
+ * run, which is the only thing a ceiling was protecting.
+ */
+export const META_TRACK_FRACTION = 0.22;
+export const META_TRACK_MIN_WIDTH = 336;
+
+/** `gap-8` between the tracks, in px. Spelled here because the pair's width is
+ *  the column minus the track *and* the gap, and a pair measured without it
+ *  hands the divider a range wider than the row it has to fit in. */
+export const TRACK_GAP = 32;
+
+/** The meta track's width for a measured column, or `null` when it is not a
+ *  track at all — stacked, it is a full-width block and states no width. */
+export function metaTrackWidth(
+  size: RunColumnSize | null,
+  layout: RunLayoutMode,
+): number | null {
+  if (layout !== 'split' || !size || size.width <= 0) return null;
+  return Math.round(Math.max(size.width * META_TRACK_FRACTION, META_TRACK_MIN_WIDTH));
+}
+
+/**
+ * The space the run surface and the inspector actually share.
+ *
+ * Every inspector verdict below is asked of *this*, not of the column: split,
+ * the meta track and the gap are already spent, so a fraction of the column
+ * over-states the inspector's share of the row it is really in — and a clamp
+ * resolved against the column can return a width the divider, which knows only
+ * the row, is unable to honour.
+ */
+export function runPairSize(
+  size: RunColumnSize | null,
+  layout: RunLayoutMode,
+): RunColumnSize | null {
+  if (!size) return null;
+  const meta = metaTrackWidth(size, layout);
+  if (meta === null) return size;
+  return { width: Math.max(size.width - meta - TRACK_GAP, 0), height: size.height };
+}
+
+/**
  * Where the step inspector sits: beside the run surface, or beneath it.
  *
  * The inspector is always present — it clamps to a minimum width and never
@@ -106,17 +157,29 @@ export function pickInspectorLayout(size: RunColumnSize | null): InspectorLayout
 /**
  * Share of the run column the inspector opens at, before any drag.
  *
- * A third, because the run surface is the subject and the inspector annotates
- * it; half would invert that on every column the app is actually used in. The
- * fraction only does work in the middle of the range, and the ends say why it
- * is this one: at the `INSPECTOR_SIDE_MIN_WIDTH` floor a third is below
- * `DEFAULT_MIN_SECONDARY` and the clamp decides instead, so a smaller fraction
- * would change nothing there; at 1440 px it opens at 480 px, which holds the
- * inspector's tab row without wrapping while leaving the graph its ELK layout
- * width. Above that the graph is the block that keeps benefiting from
- * width, which is the argument against a larger share, not for one.
+ * Half **of the pane pair** — not of the column, see {@link runPairSize}.
+ *
+ * It read as a third for as long as the denominator was the column, which is
+ * the number this replaces. That was never the ratio it produced: a third of a
+ * column is closer to 45% of the row once the meta track is out of it, so
+ * "a third" described an arrangement the user never saw. Correcting the
+ * denominator without correcting the fraction would have *narrowed* the
+ * inspector on every wide window while claiming to fix the layout.
+ *
+ * Parity rather than 45%, because the argument for keeping the inspector
+ * smaller does not survive the wide case it was made about. The run surface is
+ * the subject, so the graph should never be the *narrower* pane — but a graph
+ * is fit-to-view and converts surplus width into empty canvas, while the
+ * inspector's attempt table and artifact list convert it into rows. Past the
+ * split threshold there is surplus by definition, and the pane that can use it
+ * should not be the one starved of it.
+ *
+ * The ends are the clamp's, not this fraction's: at the
+ * `INSPECTOR_SIDE_MIN_WIDTH` floor half the pair still leaves the primary below
+ * `DEFAULT_MIN_PRIMARY`, so `resolveSecondaryWidth` decides and any fraction
+ * answers the same there.
  */
-export const INSPECTOR_WIDTH_FRACTION = 1 / 3;
+export const INSPECTOR_WIDTH_FRACTION = 1 / 2;
 
 /**
  * Initial secondary-pane width for a run column opening on `'side'`.

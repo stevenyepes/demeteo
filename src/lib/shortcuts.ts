@@ -4,8 +4,10 @@
 //
 //   1. A *declarative* registry (`SHORTCUTS` + `SHORTCUT_GROUPS`) that the
 //      `ShortcutHelp` overlay renders — adds, removes, and badge changes
-//      happen in exactly one place and the help panel + the docs file stay
-//      consistent automatically.
+//      happen in exactly one place for the overlay. `src/docs/keyboard-shortcuts.md`
+//      is *not* generated from this registry: it is hand-written prose that
+//      has drifted from it before (it advertised chords nothing ever bound),
+//      so an entry added here has to be written there by hand as well.
 //
 //   2. A *procedural* matcher (`matchesKeyEvent` / `matchesMouseButton`)
 //      for any consumer that wants to ask "did the user just press this
@@ -38,6 +40,7 @@
 export type ShortcutCategory =
   | 'navigation'
   | 'feature'
+  | 'run'
   | 'project'
   | 'view'
   | 'palette'
@@ -254,6 +257,54 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
     category: 'feature',
   },
 
+  // ── run view ──
+  //
+  // The only scoped entries in the registry: these fire on a feature's run
+  // view, never globally. `category: 'run'` is the entire representation —
+  // there is no scope field — so the group's copy in `SHORTCUT_GROUPS` is the
+  // only thing stopping the overlay from promising the user that `j` works
+  // everywhere. Reword it and the overlay starts lying.
+  //
+  // Bare `g` / `t` sit directly above `Cmd/Ctrl + G` (next feature) and
+  // `Cmd/Ctrl + T` (New Feature) and do not shadow them, because `primary` is
+  // compared as an exact boolean. Relaxing that one comparison collides four
+  // chords at once.
+  {
+    id: 'j-next-step',
+    chords: [{ primary: false, shift: false, alt: false, key: 'j' }],
+    label: 'Next step',
+    description: 'Select the next step in the run.',
+    category: 'run',
+  },
+  {
+    id: 'k-previous-step',
+    chords: [{ primary: false, shift: false, alt: false, key: 'k' }],
+    label: 'Previous step',
+    description: 'Select the previous step in the run.',
+    category: 'run',
+  },
+  {
+    id: 'enter-focus-inspector',
+    chords: [{ primary: false, shift: false, alt: false, key: 'Enter' }],
+    label: 'Focus the inspector',
+    description: 'Move focus off the run and into the step inspector pane.',
+    category: 'run',
+  },
+  {
+    id: 'g-graph-view',
+    chords: [{ primary: false, shift: false, alt: false, key: 'g' }],
+    label: 'Graph view',
+    description: 'Show the run as the workflow graph.',
+    category: 'run',
+  },
+  {
+    id: 't-timeline-view',
+    chords: [{ primary: false, shift: false, alt: false, key: 't' }],
+    label: 'Timeline view',
+    description: 'Show the run as the step timeline.',
+    category: 'run',
+  },
+
   // ── help / overlay ──
   {
     id: 'f1-help',
@@ -353,6 +404,14 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
     title: 'Features',
     description: 'Start and step through features inside the current project.',
     entries: SHORTCUTS.filter((entry) => entry.category === 'feature'),
+  },
+  {
+    id: 'run',
+    title: 'Run view',
+    description:
+      "Single keys, live only while a feature's run view is open and focus is " +
+      'outside a text field. They do nothing anywhere else in the app.',
+    entries: SHORTCUTS.filter((entry) => entry.category === 'run'),
   },
   {
     id: 'project',

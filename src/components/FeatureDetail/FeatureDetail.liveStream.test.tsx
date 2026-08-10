@@ -104,7 +104,10 @@ function mockBackend() {
       case 'step_attempts_list':
         return Promise.resolve([]);
       case 'remote_run_for_feature':
+      case 'get_app_session':
         return Promise.resolve(null);
+      case 'set_app_session':
+        return Promise.resolve(undefined);
       default:
         return Promise.reject(new Error(`unexpected IPC command: ${cmd}`));
     }

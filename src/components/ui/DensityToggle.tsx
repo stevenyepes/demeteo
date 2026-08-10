@@ -16,9 +16,8 @@ export interface DensityToggleProps {
 /**
  * Comfortable/compact picker for a long list (`docs/UI_REDESIGN_PLAN.md` §3.7).
  *
- * Value and setter are props: the choice is persisted in Phase 6, through
- * `get_app_session`/`set_app_session` rather than component state, so owning it
- * here would be a second home to unpick.
+ * Value and setter are props: the choice outlives the control (`lib/uiPrefs.ts`),
+ * so holding it here would be a second home to unpick.
  *
  * Generic because the run timeline and the project view's pipeline list both
  * offer one, and §5.1 spends its length on what happens when a second copy of a

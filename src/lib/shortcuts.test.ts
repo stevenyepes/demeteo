@@ -265,6 +265,11 @@ const EXPECTED_CHORDS: { id: string; key: string; primary: boolean; shift: boole
   { id: 'cmd-backtick-toggle-terminal-panel', key: '`', primary: true, shift: false, alt: false },
   { id: 'cmd-g-next-feature', key: 'g', primary: true, shift: false, alt: false },
   { id: 'cmd-shift-g-previous-feature', key: 'g', primary: true, shift: true, alt: false },
+  { id: 'j-next-step', key: 'j', primary: false, shift: false, alt: false },
+  { id: 'k-previous-step', key: 'k', primary: false, shift: false, alt: false },
+  { id: 'enter-focus-inspector', key: 'Enter', primary: false, shift: false, alt: false },
+  { id: 'g-graph-view', key: 'g', primary: false, shift: false, alt: false },
+  { id: 't-timeline-view', key: 't', primary: false, shift: false, alt: false },
   { id: 'f1-help', key: 'F1', primary: false, shift: false, alt: false },
   { id: 'question-mark-help', key: '?', primary: false, shift: false, alt: false },
   { id: 'escape-close-overlay', key: 'Escape', primary: false, shift: false, alt: false },
@@ -293,10 +298,94 @@ describe('mandatory entry coverage', () => {
   });
 });
 
+describe('the run-view group', () => {
+  const RUN_ENTRY_IDS = [
+    'j-next-step',
+    'k-previous-step',
+    'enter-focus-inspector',
+    'g-graph-view',
+    't-timeline-view',
+  ];
+
+  it('carries all five run entries', () => {
+    const group = SHORTCUT_GROUPS.find((candidate) => candidate.id === 'run');
+
+    expect(group).toBeDefined();
+    expect(group!.entries.map((entry) => entry.id)).toEqual(RUN_ENTRY_IDS);
+  });
+
+  // The overlay skips empty groups, and these keys are the registry's only
+  // non-global ones — a group with no copy would advertise them as app-wide.
+  it('tells the reader the keys are scoped to the run view', () => {
+    const group = SHORTCUT_GROUPS.find((candidate) => candidate.id === 'run')!;
+
+    expect(group.description).toBeTruthy();
+    expect(group.description!.toLowerCase()).toContain('run view');
+  });
+
+  it('renders in a fixed slot, right after Features', () => {
+    const ids = SHORTCUT_GROUPS.map((group) => group.id);
+
+    expect(ids.indexOf('run')).toBe(ids.indexOf('feature') + 1);
+  });
+
+  it.each(RUN_ENTRY_IDS)('%s fires on its bare key with no modifier held', (id) => {
+    const entry = findShortcutById(id)!;
+    const { key } = entry.chords[0];
+
+    expect(matchesEntryKeyboard(ev({ key }), entry)).toBe(true);
+    expect(matchesEntryKeyboard(ev({ key, metaKey: true }), entry)).toBe(false);
+    expect(matchesEntryKeyboard(ev({ key, ctrlKey: true }), entry)).toBe(false);
+    expect(matchesEntryKeyboard(ev({ key, shiftKey: true }), entry)).toBe(false);
+    expect(matchesEntryKeyboard(ev({ key, altKey: true }), entry)).toBe(false);
+  });
+});
+
+/**
+ * Bare `g`/`t` and `Cmd/Ctrl + G`/`Cmd/Ctrl + T` share a key and mean four
+ * different things. Nothing separates them but `matchesKeyEvent` comparing
+ * `primary` as an exact boolean, so this pins that comparison: a matcher that
+ * grows a "don't care" modifier mode makes every pair below fire twice.
+ */
+describe('bare run-view keys versus their Cmd/Ctrl twins', () => {
+  it('keeps bare g out of the next-feature entry and Cmd+G out of the graph entry', () => {
+    const nextFeature = findShortcutById('cmd-g-next-feature')!;
+    const graphView = findShortcutById('g-graph-view')!;
+
+    expect(matchesEntryKeyboard(ev({ key: 'g' }), nextFeature)).toBe(false);
+    expect(matchesEntryKeyboard(ev({ key: 'g', metaKey: true }), graphView)).toBe(false);
+    expect(matchesEntryKeyboard(ev({ key: 'g', ctrlKey: true }), graphView)).toBe(false);
+
+    expect(matchesEntryKeyboard(ev({ key: 'g' }), graphView)).toBe(true);
+    expect(matchesEntryKeyboard(ev({ key: 'g', metaKey: true }), nextFeature)).toBe(true);
+  });
+
+  it('keeps bare t out of the new-feature entry and Cmd+T out of the timeline entry', () => {
+    const newFeature = findShortcutById('cmd-t-new-feature')!;
+    const timelineView = findShortcutById('t-timeline-view')!;
+
+    expect(matchesEntryKeyboard(ev({ key: 't' }), newFeature)).toBe(false);
+    expect(matchesEntryKeyboard(ev({ key: 't', metaKey: true }), timelineView)).toBe(false);
+    expect(matchesEntryKeyboard(ev({ key: 't', ctrlKey: true }), timelineView)).toBe(false);
+
+    expect(matchesEntryKeyboard(ev({ key: 't' }), timelineView)).toBe(true);
+    expect(matchesEntryKeyboard(ev({ key: 't', metaKey: true }), newFeature)).toBe(true);
+  });
+
+  // Cmd+Shift+G is a third meaning for the same key; the run entries must not
+  // reach it either.
+  it('keeps bare g out of the previous-feature entry', () => {
+    expect(
+      matchesEntryKeyboard(ev({ key: 'g' }), findShortcutById('cmd-shift-g-previous-feature')!),
+    ).toBe(false);
+  });
+});
+
 describe('group coverage', () => {
   it.each([
     'navigation',
     'feature',
+    'run',
     'project',
     'view',
     'palette',

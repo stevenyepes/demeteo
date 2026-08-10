@@ -15,8 +15,8 @@ into this codebase's palette, primitives and hexagon discipline.
 
 ## 0. Status
 
-Branch `feat/ui-redesign-pipeline-project`. **Phases 0–5 are implemented; 6 is not
-started.** Read §6 for what each phase covers and §7 for the decisions already taken.
+Branch `feat/ui-redesign-pipeline-project`. **Every phase is implemented.**
+Read §6 for what each phase covers and §7 for the decisions already taken.
 §1's "Status here today" column is the pre-Phase-2 snapshot this plan was written
 against — read it as the starting position, not as the tree.
 
@@ -26,41 +26,25 @@ against — read it as the starting position, not as the tree.
 | 1 — performance | done | `7a0b45f` |
 | — | unplanned, done | `c40fde3` — dead utility classes + `scripts/check-classes.mjs` |
 | 2 — pipeline shell | done, **confirmed visually 2026-08-09** | |
-| 3 — timeline slim-down | code complete, **never rendered** | |
-| 4 — project view | code complete, **never rendered** | |
-| 5 — activity & motion | code complete, **never rendered** | |
-| 6 — keyboard & persistence | **next** | |
+| 3 — timeline slim-down | done, **confirmed visually 2026-08-10** | |
+| 4 — project view | done, **confirmed visually 2026-08-10** | |
+| 5 — activity & motion | done, **confirmed visually 2026-08-10** | |
+| 6 — keyboard & persistence | code complete, **never rendered** | |
 
 **The Phase 2 deferral is closed.** The sticky collapsed header on scroll landed in
 Phase 3 (`lib/headerCollapse.ts` + `FeatureDetail/useHeaderCollapse.ts`), which is
 where §6 said it would.
 
-**Outstanding:** Phase 2 has been looked at in `dev:tauri`. Phases 3, 4 and 5 have not,
-and between them they restructure both of the app's main surfaces. `npm run checks`
-compiles and tests all of it and renders none of it. What a `dev:tauri` pass has to
-answer, because no gate can:
+**Outstanding:** Phases 2–5 have been looked at in `dev:tauri`; Phase 6 has not.
+`npm run checks` compiles and tests all of it and renders none of it. What a
+`dev:tauri` pass still has to answer for Phase 6, because no gate can:
 
-- the collapsed header's transition on a `backdrop-blur-md` surface under WebKitGTK;
-- `content-visibility: auto` on `.timeline-step-card` and `.pipeline-card` — an
-  intrinsic size that is too small shows up as a jumping scroll thumb on a long list,
-  not as an error;
-- the inspector's Actions tab at a narrow docked width: `HarnessModelPicker`'s grid
-  is `sm:`-gated, and `sm:` is viewport-based, so the three selects do not know the
-  pane is 320 px wide;
-- **the deliberate visual changes the `Chip` migration made**, which are not
-  regressions and would otherwise read as some: the pipeline row's workflow chip is now
-  uppercase mono and has lost its nested Starter/Custom pill (moved to the tooltip); the
-  local-transport chip lost its deliberately-weaker slate now that tier separation does
-  that job; and `RemoteRunInbox`'s status pill changed typeface and casing and gained a
-  pulsing dot for live runs. §5.1 predicted exactly this and said to record it.
-- **Phase 5's two visible changes**, for the same reason: `FeatureHeader`'s status and
-  transport pills are now `Chip`s — uppercase mono, square-cornered, and pulsing a dot
-  instead of the whole pill — and roughly a dozen always-on `animate-pulse`es on settled
-  error/empty states are simply gone. Both should read as calmer, not as missing.
-- **The reduced-motion path itself**, which is now reachable for `animate-pulse` and was
-  not before: `GTK_THEME`-independent, set `gsettings set org.gnome.desktop.interface
-  enable-animations false` (or the WebKit inspector's emulation) and confirm the live
-  dots go static rather than disappearing.
+- **Phase 6's one change with layout surface**: the inspector is now wrapped in a
+  `tabIndex={-1}` div so `Enter` has somewhere to land when the pane is empty. The
+  `h-full` chain into `RunPanes` is preserved on paper and in jsdom, but only a look
+  at both the side and stacked seats can confirm the pane still fills its box.
+- **Where `Enter` actually puts the focus ring** under WebKitGTK, in both the
+  populated case (the tab strip's roving entry) and the empty one (the wrapper).
 
 macOS and Windows appearance is unverified by any gate — `pr-checks.yml` runs
 `ubuntu-22.04` only (AGENTS.md §3, Cross-OS).
@@ -646,3 +630,95 @@ density, last view mode and filter. Audit *Opportunity 2* notes
   at least one step, so a legacy feature with no workflow graph continues to open on
   the timeline. That is a fallback, not a default — an agent finding the graph-first
   initialiser and reading it as a regression is the mistake this row exists to prevent.
+
+**Settled (2026-08-10), by Phase 6:**
+
+- **Preferences are global, one flat `app_session` row each** (`lib/uiPrefs.ts`).
+  The store is `string -> string`, so per-project or per-feature scoping could only
+  be faked by building keys — and a density re-chosen on every run is not a
+  preference. Density is deliberately **one** row for the timeline and the pipeline
+  list, which is what `lib/density.ts` means by keeping `Density` shared.
+- **The pipeline filter stores its segment and sort and not its query.** A search
+  string restored days later hides rows for a reason the user cannot see, so it reads
+  as features having disappeared rather than as a filter still on.
+- **A write is dropped until that preference has been read.** A view mounts on the
+  in-memory default and learns the stored value afterwards, so persisting from an
+  effect on the state makes every mount write back what it just read. `read()` arms
+  `write()`, which puts that rule in one place instead of in five effects.
+- **`j`/`k` clamp, they do not wrap**, and `g`/`t` are not bound at all on a run with
+  no graph to switch to: the view mode preference is global, so firing them there
+  would choose a mode on a surface that showed no sign of having changed.
+- **`src/docs/keyboard-shortcuts.md` is hand-written, not generated** from
+  `lib/shortcuts.ts`, and had drifted far enough to advertise three chords nothing
+  ever bound. It is reconciled now; an entry added to the registry still has to be
+  written there by hand. It also inherits the known `SimpleMarkdown` defect that
+  drops `|` table rows, so the page renders empty in-app until that is fixed.
+
+**What the review pass changed, all of it the same shape:** a bare printable key is
+only as scoped as the thing that switches it off, and each of these was a way for one
+to fire where nothing on screen accounted for it.
+
+- **`enabled` is composed in `FeatureDetail`, not derived in the hook.** The palette,
+  the docs panel and the start-feature modal are `App.tsx`'s siblings of the run view,
+  so it stays mounted and its window listener stays live underneath them — and none of
+  the three moves focus, which is exactly what makes the editable-target guard
+  insufficient on its own. `g`/`t` were reachable from a fully occluded surface, and
+  because the view-mode row is global, one press there would have chosen the opening
+  view for every future run.
+- **A run surface that claimed the key first keeps it.** The window listener stands
+  down on `event.defaultPrevented`, because React delegates at the root and the graph
+  canvas binds `Enter` on the selected node: one press used to toggle that node's
+  selection off and then move focus into the inspector it had just emptied.
+- **`activityOpen` is deliberately not persisted** — the one preference dropped rather
+  than added. `ActivityPanel`'s tail runs only while the panel is open and is a
+  detached run's only source of bootstrap phases (Phase 5 recorded that coupling), so
+  a stored collapse would blank the feed and the stepper for every later remote run,
+  days after the click that caused it. Per-mount it costs one click. Revisit when that
+  poll no longer hangs off the disclosure.
+- **`read()` answers from a pending write.** The store is one mount behind for the
+  length of the debounce, and `ui.density` is read by two surfaces — choosing Compact
+  in the project view and opening a feature inside 400 ms restored the value the user
+  had just replaced, and kept it for the life of that mount.
+- **`UiPref` exposes `cancelPendingWrite()`, drained per test.** These are module
+  singletons, so a debounced write outlives the component *and* the test that armed
+  it; one landed 400 ms later inside an unrelated test, where the global
+  `clearAllMocks` made it read as that test's own. It surfaced as a suite that failed
+  three runs in five and passed in isolation every time.
+
+**Settled (2026-08-10), by the wide-window pass.** Phases 2–5 were confirmed at one
+window size. A 4K screenshot showed the run view had no answer for a large one: a
+quarter of the viewport empty below the panes, the graph illegible in a box it used
+15% of, and the harness panel clipped inside its own track. Four causes, and the
+shape they share is that **the layout spent new width on the pane least able to use
+it, and spent no new height at all.**
+
+- **A pane's content may size that pane and no other.** `surfaceHeightPx` was
+  `graphBoxPx`, and `RunPanes` put it on the row holding *both* panes — so a graph
+  whose elk plan came out short shrank the inspector with it, which is how a nine-row
+  attempt table came to scroll inside 370 px with a quarter of the window empty
+  underneath. Side by side the row now takes the height it is given; only the stacked
+  layout states one, because there the column scrolls and `h-full` means nothing.
+- **Three full-height tracks, each scrolling itself** — run surface | inspector |
+  meta. The run column stops being the scroller when it is a row.
+- **The meta track is a share (22%) with a floor and no ceiling.** Fixed at `26rem`,
+  every pixel a wider window added went to the canvas. A ceiling was tried at `32rem`
+  and re-created the same defect past ~2300 px, which is why there is not one.
+- **`INSPECTOR_WIDTH_FRACTION` is half of the *pane pair*, not a third of the
+  column.** The two changes are one change: a third of the column was already ~45% of
+  the row, so the old name never described what rendered, and correcting the
+  denominator alone would have narrowed the inspector on exactly the windows this
+  pass was fixing. `runPairSize` is what the inspector's verdicts are asked of now —
+  a clamp resolved against the column can return an opening width the divider, which
+  knows only the row, refuses to reproduce.
+- **Run mode always auto-orients; `isUnarranged` is gone.** One node nudged in the
+  builder used to pin every later *reading* of that run to the builder's proportions.
+  Design mode still owns authored positions.
+- **`HarnessGateTable` is blocks, not a table.** It carried a `min-w-[36rem]` inside a
+  track that never had 36rem, so its third column was clipped and the escape hatch was
+  a horizontal scrollbar inside a side panel.
+- **What this pass did *not* fix**, because the fix is a drag and the width persists:
+  the graph is still the widest thing on screen at 4K while a linear pipeline lays out
+  vertically inside it. Auto-orienting against an honest box keeps answering `DOWN` for
+  a chain of eleven — correctly, since `RIGHT` at that length fits only at a smaller
+  scale. Capping the graph pane and giving the surplus to the other two tracks is the
+  option this pass considered and did not take.

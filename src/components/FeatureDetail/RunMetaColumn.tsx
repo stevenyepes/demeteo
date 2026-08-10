@@ -11,6 +11,8 @@ import { ActivityPanel } from './ActivityPanel';
 
 interface RunMetaColumnProps {
   runLayout: RunLayoutMode;
+  /** The track's width in px when it is one (`metaTrackWidth`), `null` stacked. */
+  widthPx: number | null;
   setMetaChromeEl: (el: HTMLDivElement | null) => void;
   remoteRun: RemoteRunMirror | null;
   remoteMachineName: string | null;
@@ -37,6 +39,7 @@ interface RunMetaColumnProps {
  */
 export function RunMetaColumn({
   runLayout,
+  widthPx,
   setMetaChromeEl,
   remoteRun,
   remoteMachineName,
@@ -60,7 +63,16 @@ export function RunMetaColumn({
   return (
     <div
       ref={runLayout === 'split' ? undefined : setMetaChromeEl}
-      className={`flex shrink-0 flex-col ${runLayout === 'split' ? 'w-[26rem]' : 'w-full min-w-0'}`}
+      // Split, this is one of three full-height tracks and scrolls itself. The
+      // width arrives as a number rather than a class because `runLayout.ts`
+      // has to subtract it to size the pane pair beside it, and a share spelled
+      // once in CSS and once in TypeScript is two answers waiting to disagree.
+      style={widthPx === null ? undefined : { width: widthPx }}
+      className={`flex shrink-0 flex-col ${
+        runLayout === 'split'
+          ? 'h-full min-h-0 overflow-y-auto overflow-x-hidden'
+          : 'w-full min-w-0'
+      }`}
     >
       {showActivity && (
         <div className="mb-6 w-full shrink-0 space-y-1.5">

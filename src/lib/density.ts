@@ -19,7 +19,7 @@
  * something plausible; a shared set of knobs ties the timeline's proportions to
  * the project view's for no reason beyond both being lists. `Density`,
  * `DEFAULT_DENSITY` and `isDensity` stay shared — that part *is* one decision,
- * and it is the one Phase 6 persists.
+ * and `uiPrefs.ts` stores it under one key for both surfaces.
  */
 
 export type Density = 'comfortable' | 'compact';
@@ -74,7 +74,7 @@ export function pipelineDensityClasses(density: Density): PipelineDensityClasses
   return PIPELINE_CLASSES[density];
 }
 
-/** For a persisted value coming back as an unknown string (Phase 6). */
+/** For a stored value coming back as an unknown string (`uiPrefs.ts`). */
 export function isDensity(value: unknown): value is Density {
   return value === 'comfortable' || value === 'compact';
 }

@@ -18,6 +18,8 @@ import { invoke } from '@tauri-apps/api/core';
 let columnWidth = 1600;
 /** The element the view offers the hook as "the chrome above the surface". */
 let toggleChromeEl: HTMLElement | null = null;
+/** The `app_session` rows this mount finds already written. */
+let stored: Record<string, string> = {};
 
 vi.mock('../useRunColumnLayout', () => ({
   useRunColumnLayout: () => ({
@@ -29,9 +31,7 @@ vi.mock('../useRunColumnLayout', () => ({
     },
     runColumnSize: { width: columnWidth, height: 900 },
     runLayout: 'stacked' as const,
-    graphPlan: { direction: 'DOWN' as const, graph: { width: 0, height: 0 }, fitScale: 1 },
     graphBoxPx: 448,
-    surfaceBoxPx: 700,
   }),
 }));
 
@@ -46,7 +46,9 @@ import {
   UIStateProvider,
   useNavigation,
 } from '../../context';
+import { inspectorWidthPref } from '../../lib/uiPrefs';
 import type { StepExecution } from '../../types';
+import { defaultInspectorWidth } from '../runLayout';
 import { FeatureDetail } from './FeatureDetail';
 
 const FEATURE_ID = 'f-1';
@@ -64,7 +66,7 @@ const STEP: StepExecution = {
 };
 
 function mockBackend() {
-  vi.mocked(invoke).mockImplementation(((cmd: string) => {
+  vi.mocked(invoke).mockImplementation(((cmd: string, args?: Record<string, unknown>) => {
     switch (cmd) {
       case 'step_list_for_run':
         return Promise.resolve([STEP]);
@@ -72,6 +74,10 @@ function mockBackend() {
         return Promise.resolve({ id: FEATURE_ID, status: 'completed' });
       case 'feature_workflow_graph':
         return Promise.resolve(null);
+      case 'get_app_session':
+        return Promise.resolve(stored[String(args?.key)] ?? null);
+      case 'set_app_session':
+        return Promise.resolve(undefined);
       case 'feature_list_attachments':
       case 'get_machines':
       case 'list_agents':
@@ -115,6 +121,7 @@ function mount(onResize?: (resize: () => void) => void) {
 beforeEach(() => {
   columnWidth = 1600;
   toggleChromeEl = null;
+  stored = {};
   mockBackend();
 });
 
@@ -198,5 +205,26 @@ describe('the inspector’s place in the run column', () => {
     columnWidth = 1900;
     await waitFor(() => resize());
     expect(handle.getAttribute('aria-valuenow')).toBe(chosen);
+  });
+
+  it('opens at a stored width, which outranks the column exactly as a drag would', async () => {
+    stored[inspectorWidthPref.key] = '640';
+    let resize = () => {};
+    mount((fn) => {
+      resize = fn;
+    });
+
+    const handle = await screen.findByTestId('split-pane-handle');
+    await waitFor(() => expect(handle.getAttribute('aria-valuenow')).toBe('640'));
+    // A restored width that merely *looked* right would pass the line above by
+    // coincidence if it were the proportion this column derives anyway.
+    expect(defaultInspectorWidth({ width: columnWidth, height: 900 })).not.toBe(640);
+
+    // The half of the claim a restore could plausibly get wrong: arriving as
+    // state rather than through a drag, it must still stop the column from
+    // re-deriving a width — a restore is a choice, not an opening default.
+    columnWidth = 1900;
+    await waitFor(() => resize());
+    expect(handle.getAttribute('aria-valuenow')).toBe('640');
   });
 });

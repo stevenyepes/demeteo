@@ -44,7 +44,12 @@ export function GateStrip({
     <div
       data-testid="gate-strip"
       role="status"
-      className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg border px-4 py-2.5 ${TONE_CHIP.amber} ${className}`}
+      // The CTA sits next to the message, not at the far end of the strip. The
+      // strip spans the window, and pinning the button right put a metre of
+      // empty amber between "1 gate needs you" and the thing that answers it on
+      // a 4K display — a banner reads as one sentence or it reads as two
+      // unrelated things.
+      className={`flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border px-4 py-2.5 ${TONE_CHIP.amber} ${className}`}
     >
       <div className="flex min-w-0 items-center gap-2.5">
         <span

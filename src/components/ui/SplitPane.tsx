@@ -53,9 +53,8 @@ interface Drag {
  * would re-plan graph layout at pointer frequency. `SplitPane.test.tsx` pins
  * the property; the geometry it drags through lives in `splitPaneGeometry.ts`.
  *
- * The committed width is *not* owned here, so nothing persists it (that is the
- * redesign's Phase 6) and a caller is free to hold it in a reducer, a session
- * record, or nothing at all.
+ * The committed width is *not* owned here, so a caller is free to hold it in a
+ * reducer, a stored preference, or nothing at all.
  */
 export function SplitPane({
   primary,

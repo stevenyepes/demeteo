@@ -13,8 +13,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { afterEach, describe, expect, it, beforeEach, vi } from 'vitest';
 import { invoke, type InvokeArgs } from '@tauri-apps/api/core';
+import { UI_PREF_WRITE_DEBOUNCE_MS } from '../lib/uiPrefs';
 
 import {
   NavigationProvider,
@@ -919,5 +920,135 @@ describe('the pipeline list’s filter', () => {
     expect(screen.getByText('Waiting on a human')).toBeInTheDocument();
     expect(screen.queryByText('Landed already')).not.toBeInTheDocument();
     expect(screen.queryByText('Still moving')).not.toBeInTheDocument();
+
+    // Waited for, not merely allowed: the write a segment click schedules is
+    // debounced and held on a module-scoped preference, so it outlives this
+    // component. Left in flight it fires 400 ms later, inside whatever test is
+    // running by then, and `clearAllMocks` has made it look like that test's.
+    await waitFor(() =>
+      expect(commandsOf('set_app_session')).toEqual([
+        { key: 'ui.pipeline_segment', value: 'needs-you' },
+      ]),
+    );
+  });
+});
+
+/**
+ * What the project view remembers between launches (`docs/UI_REDESIGN_PLAN.md`
+ * §6 Phase 6). Every stored row seeded here differs from the in-memory default,
+ * so a build that ignored the store — or wrote over it on first paint — fails
+ * these rather than passing on a value that happens to match.
+ *
+ * Fake timers, and therefore `fireEvent` and no `findBy*`: the write debounce is
+ * a `setTimeout`, and Testing Library's async helpers do not detect vitest's
+ * clock, so a `waitFor` here would poll on an interval that never fires.
+ */
+describe('the project view’s persisted list preferences', () => {
+  const FEATURES: Feature[] = [
+    feature({ id: 'f-done', title: 'Landed already', status: 'completed', created_at: 3 }),
+    feature({ id: 'f-gate', title: 'Waiting on a human', status: 'gated', created_at: 2 }),
+    feature({ id: 'f-run', title: 'Still moving', status: 'running', created_at: 1 }),
+  ];
+
+  function mockStore(rows: Record<string, string>) {
+    vi.mocked(invoke).mockImplementation((cmd: string, args?: InvokeArgs) => {
+      switch (cmd) {
+        case 'fetch_active_features':
+          return Promise.resolve(FEATURES);
+        case 'get_app_session': {
+          const { key } = (args ?? {}) as { key?: string };
+          return Promise.resolve(rows[key ?? ''] ?? null);
+        }
+        default:
+          return Promise.resolve([]);
+      }
+    });
+  }
+
+  function writes(): Array<{ key: string; value: string }> {
+    return commandsOf('set_app_session').map((args) => ({
+      key: String(args?.key),
+      value: String(args?.value),
+    }));
+  }
+
+  /** Resolve the mounted reads and run out any debounce they armed. */
+  async function settle() {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_PREF_WRITE_DEBOUNCE_MS);
+    });
+  }
+
+  function queryBox(): HTMLElement {
+    return screen.getByLabelText('Filter pipelines by text');
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('opens on the segment and the sort the last session left behind', async () => {
+    mockStore({ 'ui.pipeline_segment': 'needs-you', 'ui.pipeline_sort': 'oldest' });
+    mount(baseProject({ compute_type: 'local' }));
+    await settle();
+
+    expect(screen.getByText('Waiting on a human')).toBeInTheDocument();
+    expect(screen.queryByText('Landed already')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Sort pipelines')).toHaveValue('oldest');
+  });
+
+  it('opens compact when compact is what was stored, and stores the next choice', async () => {
+    mockStore({ 'ui.density': 'compact' });
+    mount(baseProject({ compute_type: 'local' }));
+    await settle();
+
+    expect(screen.getByRole('radio', { name: 'Compact' })).toHaveAttribute('aria-checked', 'true');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Comfortable' }));
+    await settle();
+
+    expect(writes()).toEqual([{ key: 'ui.density', value: 'comfortable' }]);
+  });
+
+  it('stores nothing when the view merely opens', async () => {
+    mockStore({ 'ui.density': 'compact', 'ui.pipeline_segment': 'needs-you' });
+    mount(baseProject({ compute_type: 'local' }));
+    await settle();
+
+    expect(commandsOf('get_app_session').length).toBeGreaterThan(0);
+    expect(writes()).toEqual([]);
+  });
+
+  it('filters on the typed query without ever storing it', async () => {
+    mockStore({});
+    mount(baseProject({ compute_type: 'local' }));
+    await settle();
+
+    fireEvent.change(queryBox(), { target: { value: 'waiting' } });
+    await settle();
+
+    expect(screen.getByText('Waiting on a human')).toBeInTheDocument();
+    expect(screen.queryByText('Still moving')).not.toBeInTheDocument();
+    expect(writes()).toEqual([]);
+  });
+
+  it('stores the cleared segment when the reset link puts the list back', async () => {
+    mockStore({ 'ui.pipeline_segment': 'needs-you' });
+    mount(baseProject({ compute_type: 'local' }));
+    await settle();
+
+    fireEvent.change(queryBox(), { target: { value: 'matches nothing at all' } });
+    await settle();
+    expect(writes()).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await settle();
+
+    expect(writes()).toEqual([{ key: 'ui.pipeline_segment', value: 'all' }]);
+    expect(screen.getByText('Landed already')).toBeInTheDocument();
   });
 });

@@ -2,8 +2,8 @@
 //
 // It owns almost nothing — the point of these is that it stays that way: it is
 // the shared SegmentedControl (§5.1 forbids a second one), it reports the
-// typed density rather than a string, and it holds no state of its own, so
-// Phase 6 can persist the value without unpicking a local copy.
+// typed density rather than a string, and it holds no state of its own, which
+// is what lets the value be stored once for both surfaces that offer one.
 
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';

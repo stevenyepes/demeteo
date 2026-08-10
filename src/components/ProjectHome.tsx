@@ -16,12 +16,11 @@ import { PipelineListSkeleton } from './PipelineListSkeleton';
 import { ProjectTelemetry } from './ProjectTelemetry';
 import { StartSessionButton } from './StartSessionButton';
 import { DensityToggle } from './ui/DensityToggle';
-import { DEFAULT_DENSITY, pipelineDensityClasses, type Density } from '../lib/density';
-import {
-    DEFAULT_PIPELINE_FILTER,
-    filterPipelines,
-    type PipelineFilterOptions,
-} from '../lib/pipelineFilter';
+import { DEFAULT_DENSITY, pipelineDensityClasses } from '../lib/density';
+import { filterPipelines } from '../lib/pipelineFilter';
+import { densityPref } from '../lib/uiPrefs';
+import { usePersistedPref } from '../hooks/usePersistedPref';
+import { usePersistedPipelineFilter } from '../hooks/usePersistedPipelineFilter';
 import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
 import { buildWorkflowById } from '../lib/workflowBadge';
 import { describeProjectProvenance } from '../lib/projectProvenance';
@@ -40,9 +39,8 @@ const ProjectHome = () => {
     const [features, setFeatures] = useState<Feature[]>([]);
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
     const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
-    /** Both are the session's until Phase 6 persists them. */
-    const [pipelineFilter, setPipelineFilter] = useState<PipelineFilterOptions>(DEFAULT_PIPELINE_FILTER);
-    const [density, setDensity] = useState<Density>(DEFAULT_DENSITY);
+    const [pipelineFilter, setPipelineFilter] = usePersistedPipelineFilter();
+    const [density, setDensity] = usePersistedPref(densityPref, DEFAULT_DENSITY);
     const [activeRepositoryId, setActiveRepositoryId] = useState<string>('');
     // Feature ids that have a remote-run mirror → they execute detached under
     // the runner rather than on this machine. Drives the per-card transport

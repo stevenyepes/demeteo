@@ -12,14 +12,13 @@ interface RunGraphPanelProps {
 /**
  * The run-mode canvas, and nothing else.
  *
- * `min-h-[28rem]` is the CSS half of `MIN_GRAPH_BOX_PX` (`layoutDirection.ts`),
- * which floors the computed height at the same 448px so the container elk is
- * planned against is the space the box will really have. One decision spelled
- * in two languages: move either and the plan starts describing a box that does
- * not exist.
- *
- * Every other pixel of height is the host's to state, because the box shares a
- * `SplitPane` row with the inspector and only the row knows what is left.
+ * **It states no height, not even a minimum.** It used to carry a
+ * `min-h-[28rem]` mirroring `MIN_GRAPH_BOX_PX`, which was right while the host
+ * always handed it a computed box; side by side the host now hands it a share
+ * of the window instead, and a floor taller than that share overflows a row
+ * whose parent clips — a short, wide window would lose the bottom of the graph
+ * with no scrollbar to reach it. The floor still exists where it can be honoured:
+ * `graphBoxHeight` clamps the stacked layout's stated height to the same 448px.
  */
 export function RunGraphPanel({
   definition,
@@ -29,7 +28,7 @@ export function RunGraphPanel({
   onNodeActivate,
 }: RunGraphPanelProps) {
   return (
-    <div className="h-full min-h-[28rem] w-full overflow-hidden rounded-xl border border-white/5 bg-[#050608]/40">
+    <div className="h-full min-h-0 w-full overflow-hidden rounded-xl border border-white/5 bg-[#050608]/40">
       <WorkflowCanvas
         definition={definition}
         statusByNode={statusByNode}

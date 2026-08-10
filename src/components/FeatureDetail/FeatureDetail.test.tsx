@@ -75,6 +75,12 @@ function mockBackend() {
         return Promise.resolve({ id: FEATURE_ID, status: 'awaiting_gate' });
       case 'feature_workflow_graph':
         return Promise.resolve(null);
+      // Nothing stored: every view preference opens on its default here, and
+      // `FeatureDetail.prefs.test.tsx` carries the cases where one was.
+      case 'get_app_session':
+        return Promise.resolve(null);
+      case 'set_app_session':
+        return Promise.resolve(undefined);
       case 'feature_list_attachments':
         return Promise.resolve([]);
       case 'remote_run_for_feature':
@@ -271,8 +277,9 @@ describe('FeatureDetail', () => {
 });
 
 /**
- * `viewMode` now starts on `'graph'`, and this feature has no workflow
- * definition — `feature_workflow_graph` answers null above. `canShowGraph`
+ * `viewMode` starts on `'graph'` — nothing is stored for it here — and this
+ * feature has no workflow definition: `feature_workflow_graph` answers null
+ * above, as does `get_app_session` for every key. `canShowGraph`
  * therefore has to keep it on the timeline, with no toggle offered at all. That
  * is a fallback rather than a default (UI_REDESIGN_PLAN §7), and it is the only
  * thing standing between the default flip and a legacy run rendering nothing.

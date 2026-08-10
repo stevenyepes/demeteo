@@ -5,9 +5,11 @@ import { SplitPane } from '../ui/SplitPane';
 
 interface RunPanesProps {
   layout: InspectorLayoutMode;
-  /** The run surface's own height in px, for the cases that state one: a graph
-   *  box, or a `'side'` row where both panes have to agree on one. `null` lets
-   *  the surface flow and the run column carry the scroll. */
+  /** The run surface's own height in px, for the **stacked** case only — a graph
+   *  box below the inspector still has to state one, because the run column
+   *  carries the scroll there and `h-full` means nothing inside it. `null` lets
+   *  the surface flow. Side by side the row takes the height it is given and
+   *  neither pane states one. */
   surfaceHeightPx: number | null;
   runSurface: ReactNode;
   inspector: ReactNode;
@@ -18,12 +20,17 @@ interface RunPanesProps {
 /**
  * The run surface and the step inspector, placed (UI_REDESIGN_PLAN §3.1, §4.1).
  *
- * Side by side, the pair owns a fixed box and the run surface scrolls *inside*
- * it, so the inspector holds a stable reading position while a 30-step run
- * moves past it. Stacked, the run keeps the column's own scroll and the
- * inspector drops below with a height of its own — the tabs inside it size
- * against their container rather than their content, so an auto-height box
- * would collapse them.
+ * Side by side, the pair fills the height it is given and the run surface
+ * scrolls *inside* it, so the inspector holds a stable reading position while a
+ * 30-step run moves past it. It takes that height rather than stating one for a
+ * reason worth keeping: the row used to be sized by `graphBoxPx`, so a graph
+ * whose elk plan came out short shrank the *inspector* with it — a nine-row
+ * attempt table scrolling inside 370px with a quarter of the window empty
+ * beneath it. A pane's content may decide that pane's size and no other's.
+ *
+ * Stacked, the run keeps the column's own scroll and the inspector drops below
+ * with a height of its own — the tabs inside it size against their container
+ * rather than their content, so an auto-height box would collapse them.
  *
  * Either way the inspector is rendered. It has no closed state to fall into
  * (§7, settled 2026-08-08); a narrow column moves it, and nothing hides it.
@@ -42,10 +49,7 @@ export function RunPanes({
 }: RunPanesProps) {
   if (layout === 'side') {
     return (
-      <div
-        className="w-full shrink-0"
-        style={surfaceHeightPx === null ? undefined : { height: surfaceHeightPx }}
-      >
+      <div className="flex min-h-0 w-full flex-1">
         <SplitPane
           label="Resize step inspector"
           primary={

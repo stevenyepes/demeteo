@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AppView, StepExecution } from '../../types';
+import { usePersistedPref } from '../../hooks/usePersistedPref';
 import { useRunEvents } from '../../hooks/useRunEvents';
 import { getFeatureWorkflowGraph } from '../../lib/featureDetail';
+import { runViewModePref } from '../../lib/uiPrefs';
 import { replayCone, descendantIds } from '../canvas/graphOps';
 import type { WorkflowDefinitionV2 } from '../canvas/types';
-import { type RunViewMode } from '../RunViewToggle';
 import { humanizeStepId } from './stepIdentity';
 import type { ReplayTarget } from './useRerunActions';
 
@@ -32,8 +33,11 @@ export function useRunGraph(input: {
   /** Graph first: Phase 2 gives both surfaces the same inspector, which was the
    *  parity the timeline default was waiting on (UI_REDESIGN_PLAN §7,
    *  PRD §6.1). `canShowGraph` still gates it, so a run with no definition
-   *  opens on the timeline — a fallback, not a default. */
-  const [viewMode, setViewMode] = useState<RunViewMode>('graph');
+   *  opens on the timeline — a fallback, not a default. The gate sits
+   *  downstream of this value, so a stored `'graph'` cannot defeat it, and a
+   *  run that falls back stores nothing: neither the toggle nor `g`/`t` is
+   *  offered there. */
+  const [viewMode, setViewMode] = usePersistedPref(runViewModePref, 'graph');
   // The pinned version's schema-v2 graph (P1.15 + `feature_workflow_graph`),
   // migrated backend-side. Null until loaded / when the feature has none.
   const [graphDef, setGraphDef] = useState<WorkflowDefinitionV2 | null>(null);

@@ -43,7 +43,6 @@ import '@xyflow/react/dist/style.css';
 import { WorkflowNode } from './nodes/WorkflowNode';
 import { toFlowGraph, type GraphOrientation, type WorkflowFlowNode } from './flowGraph';
 import {
-  isUnarranged,
   needsMiniMap,
   planLayout,
   FIT_PADDING,
@@ -321,12 +320,17 @@ function CanvasInner({
     [plan, getEdges, getNodes, layout, setNodes, fitView],
   );
 
-  /** Nobody arranged this graph, so the canvas may arrange it for the window.
-   *  A hand-positioned graph is shown the way its author left it. */
-  const autoArrange = useMemo(
-    () => !design && isUnarranged(definition.nodes.map((n) => n.position)),
-    [design, definition],
-  );
+  /** Run mode always orients for the space it has; design mode never does.
+   *
+   *  The gate used to be `isUnarranged` as well — hand-placed positions were
+   *  shown the way their author left them. That deferred to a decision made in
+   *  a different container: one node nudged in the builder pinned every later
+   *  *reading* of that run to the builder's proportions, which is how an
+   *  eleven-node chain stayed vertical in a pane three times wider than tall.
+   *  Design mode is where positions are authored and is still authoritative
+   *  there; the run view renders a run, and the arrangement that reads best
+   *  depends on the window, not on the author. */
+  const autoArrange = !design;
 
   // Orient an unarranged graph for the space available, and re-orient when a
   // resize actually changes the verdict — `runAutoLayout` no-ops the rest of

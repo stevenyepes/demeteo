@@ -3,9 +3,9 @@
 // Three of these guard decisions the surfaces that adopt it depend on and that
 // a refactor could quietly undo: the body must be *absent* when closed (the
 // panels it wraps poll and parse markdown, so hiding them with CSS keeps that
-// work running), the open state must live with the caller (Phase 6 persists
-// it), and the meta slot must sit outside the trigger button so an interactive
-// affordance there is not nested inside a button.
+// work running), the open state must live with the caller (which is what lets
+// one caller store it), and the meta slot must sit outside the trigger button
+// so an interactive affordance there is not nested inside a button.
 
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';

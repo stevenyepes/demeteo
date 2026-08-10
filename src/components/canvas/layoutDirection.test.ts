@@ -8,7 +8,6 @@ import { describe, expect, it } from 'vitest';
 import {
   graphBoxHeight,
   graphContainer,
-  isUnarranged,
   MAX_ZOOM as CANVAS_MAX_ZOOM,
   MINIMAP_MIN_SCALE,
   MINIMAP_NODE_THRESHOLD,
@@ -281,32 +280,5 @@ describe('needsMiniMap', () => {
 
   it('does not demand a minimap for an unmeasured canvas', () => {
     expect(needsMiniMap(planLayout([], [], null, CANVAS_MAX_ZOOM), 0)).toBe(false);
-  });
-});
-
-describe('isUnarranged', () => {
-  it('accepts the migration output — one column, every node at the same x', () => {
-    expect(
-      isUnarranged([
-        { x: 0, y: 0 },
-        { x: 0, y: 160 },
-        { x: 0, y: 320 },
-      ]),
-    ).toBe(true);
-  });
-
-  it('accepts a graph nobody has positioned at all', () => {
-    expect(isUnarranged([undefined, undefined])).toBe(true);
-    expect(isUnarranged([])).toBe(true);
-  });
-
-  it('refuses a graph someone laid out by hand', () => {
-    expect(
-      isUnarranged([
-        { x: 0, y: 0 },
-        { x: 320, y: 160 },
-        { x: 0, y: 320 },
-      ]),
-    ).toBe(false);
   });
 });

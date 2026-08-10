@@ -18,9 +18,9 @@ function promptSummary(description: string): string {
  * costs header height for the rest of it, so the summary line carries what a
  * returning user actually needs and the body stays one click away.
  *
- * Open state is deliberately local and unpersisted: Phase 6 owns session
- * persistence for every Disclosure at once, and a bespoke store here is work
- * it would delete.
+ * Open state is local and unpersisted, unlike the activity log's: restoring it
+ * would re-expand for a returning user the block the paragraph above collapses
+ * for them.
  */
 export function InitialPromptPanel({ featureDescription }: { featureDescription: string }) {
   const [open, setOpen] = useState(false);

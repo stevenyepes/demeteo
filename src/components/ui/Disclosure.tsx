@@ -27,7 +27,7 @@ export interface DisclosureProps {
  * runner over the tunnel, the initial prompt renders a long markdown block —
  * and CSS hiding leaves both running behind a collapsed summary line.
  *
- * Open state is the caller's; Phase 6 persists it through the app session.
+ * Open state is the caller's, and so is whether it survives a restart.
  *
  * Height is not animated. The content is of unknown size, so an animated
  * `max-height` would force layout every frame over a list that may hold
