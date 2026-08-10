@@ -302,6 +302,52 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
    *  row's the moment it was also deciding the inspector's. */
   const surfaceHeightPx = inspectorLayout === 'side' || !graph.graphMode ? null : graphBoxPx;
 
+  const metaColumn = (
+    <RunMetaColumn
+      runLayout={runLayout}
+      widthPx={metaWidth}
+      setMetaChromeEl={setMetaChromeEl}
+      remoteRun={remote.remoteRun}
+      remoteMachineName={remote.remoteMachineName}
+      runEvents={panelRunEvents}
+      activityOpen={activityOpen}
+      onActivityOpenChange={setActivityOpen}
+      onRunEvents={remote.handleRunEvents}
+      onRemoteResolved={remote.refreshRemoteRun}
+      runStatus={run.status}
+      showBootstrap={bootstrap.showBootstrap}
+      bootstrapPhases={bootstrap.orderedBootstrapPhases}
+      harnessBaseline={run.harnessBaseline}
+      harnessEvidence={run.harnessEvidence}
+    />
+  );
+
+  /** The run's own controls, and the element `useRunColumnLayout` measures as
+   *  the chrome above the graph. The gap below is `pb-6` rather than a margin so
+   *  it lands inside `offsetHeight`; as a margin it is space the hook cannot see
+   *  and hands to the graph twice. The density control belongs to the timeline's
+   *  rows, so it appears only where there are rows to compact, and the row
+   *  disappears entirely rather than reserving height for nothing. */
+  const chromeRow = (graph.canShowGraph || !graph.graphMode) && (
+    <div ref={setToggleChromeEl} className="flex flex-wrap items-center justify-between gap-3 pb-6">
+      {graph.canShowGraph && <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} />}
+      {!graph.graphMode && (
+        <DensityToggle value={density} onChange={setDensity} ariaLabel="Timeline density" />
+      )}
+    </div>
+  );
+
+  const panes = (
+    <RunPanes
+      layout={inspectorLayout}
+      surfaceHeightPx={surfaceHeightPx}
+      runSurface={runSurface}
+      inspector={inspector}
+      inspectorWidth={inspectorWidth}
+      onInspectorWidthCommit={setChosenInspectorWidth}
+    />
+  );
+
   return (
     <div className="h-full w-full bg-[#08090c] text-slate-100 flex flex-col font-sans">
       <FeatureHeader
@@ -376,9 +422,9 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
               until the user drags it.
 
               Direction is the measured width's verdict, not a breakpoint;
-              `flex-row-reverse` keeps the meta panels first in the DOM — the
-              order stacked reading needs — while painting them to the right of
-              the run.
+              `flex-row-reverse` on the track row keeps the meta panels first in
+              the DOM — the order stacked reading needs — while painting them to
+              the right of the run.
 
               `overflow-x-hidden` pairs with `overflow-y-auto` on purpose: set
               alone, `overflow-y` leaves `overflow-x` computed as `auto`, which
@@ -387,63 +433,38 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
           <div
             ref={setRunColumnEl}
             data-run-scroll
-            className={`flex w-full min-h-0 min-w-0 p-8 ${
-              runLayout === 'split'
-                ? 'h-full flex-row-reverse items-stretch gap-8 overflow-hidden'
-                : 'flex-col overflow-y-auto overflow-x-hidden'
+            // `p-6`, matching the header, the banners, the gate strip and the
+            // prompt above it. It was `p-8`, so the run sat 8px inside every
+            // block of chrome stacked over it and the whole view stepped in at
+            // the point the eye is most likely to be tracking a vertical edge.
+            // One gutter, and aligning down rather than up because five blocks
+            // already used this one.
+            className={`flex w-full min-h-0 min-w-0 flex-col p-6 ${
+              runLayout === 'split' ? 'h-full overflow-hidden' : 'overflow-y-auto overflow-x-hidden'
             }`}
           >
-            <RunMetaColumn
-              runLayout={runLayout}
-              widthPx={metaWidth}
-              setMetaChromeEl={setMetaChromeEl}
-              remoteRun={remote.remoteRun}
-              remoteMachineName={remote.remoteMachineName}
-              runEvents={panelRunEvents}
-              activityOpen={activityOpen}
-              onActivityOpenChange={setActivityOpen}
-              onRunEvents={remote.handleRunEvents}
-              onRemoteResolved={remote.refreshRemoteRun}
-              runStatus={run.status}
-              showBootstrap={bootstrap.showBootstrap}
-              bootstrapPhases={bootstrap.orderedBootstrapPhases}
-              harnessBaseline={run.harnessBaseline}
-              harnessEvidence={run.harnessEvidence}
-            />
-            <div
-              className={
-                runLayout === 'split' ? 'flex h-full min-h-0 min-w-0 flex-1 flex-col' : 'contents'
-              }
-            >
-              {/* One chrome row above the surface, and the element
-                  `useRunColumnLayout` measures — the graph box is the column
-                  minus this. The gap below it is `pb-6` rather than a margin so
-                  that it lands inside `offsetHeight`; spelled as a margin it is
-                  space the hook cannot see and hands to the graph twice.
-                  The density control belongs to the timeline's rows, so it is
-                  offered only where there are rows to compact, and the row
-                  itself disappears when neither control applies rather than
-                  reserving height for nothing. */}
-              {(graph.canShowGraph || !graph.graphMode) && (
-                <div
-                  ref={setToggleChromeEl}
-                  className="flex flex-wrap items-center justify-between gap-3 pb-6"
-                >
-                  {graph.canShowGraph && (
-                    <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} />
-                  )}
-                  {!graph.graphMode && <DensityToggle value={density} onChange={setDensity} ariaLabel="Timeline density" />}
+            {runLayout === 'split' ? (
+              <>
+                {/* Above the tracks, not inside one of them. Nested in the graph's
+                    track it pushed two of the three tracks down and left the meta
+                    panels starting a chrome row higher than the panes they sit
+                    beside — three peer cards with one of them floating. */}
+                {chromeRow}
+                <div className="flex min-h-0 flex-1 flex-row-reverse items-stretch gap-8">
+                  {metaColumn}
+                  <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">{panes}</div>
                 </div>
-              )}
-              <RunPanes
-                layout={inspectorLayout}
-                surfaceHeightPx={surfaceHeightPx}
-                runSurface={runSurface}
-                inspector={inspector}
-                inspectorWidth={inspectorWidth}
-                onInspectorWidthCommit={setChosenInspectorWidth}
-              />
-            </div>
+              </>
+            ) : (
+              <>
+                {/* Stacked, the meta panels *are* the graph's chrome and read
+                    above it, so the toggle stays next to the surface it switches
+                    rather than being hoisted away from it. */}
+                {metaColumn}
+                {chromeRow}
+                {panes}
+              </>
+            )}
           </div>
         </div>
       )}

@@ -53,7 +53,7 @@ export function Disclosure({
     <div
       data-testid="disclosure"
       data-open={open ? 'true' : 'false'}
-      className={`glass-panel border border-white/5 overflow-hidden ${className}`}
+      className={`glass-panel overflow-hidden ${className}`}
     >
       <div className="flex items-center gap-2">
         <button

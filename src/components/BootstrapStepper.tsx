@@ -41,7 +41,7 @@ export function BootstrapStepper({ phases }: { phases: BootstrapPhaseView[] }) {
   const failed = phases.some((p) => p.status === 'failed');
 
   return (
-    <div className="glass-panel border border-white/5 rounded-xl p-4 mb-6 animate-fade-in">
+    <div className="glass-panel p-4 mb-6 animate-fade-in">
       <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-[11px] mb-3">
         {failed ? 'Bootstrap failed' : 'Bringing your pipeline online'}
       </h3>

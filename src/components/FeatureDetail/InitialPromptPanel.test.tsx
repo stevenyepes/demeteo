@@ -7,6 +7,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
+import { PROSE_CH } from '../runLayout';
 import { InitialPromptPanel } from './InitialPromptPanel';
 
 const PROMPT = 'Add a metric strip to the run header.\nKeep the tooltips.';
@@ -72,6 +73,28 @@ describe('InitialPromptPanel', () => {
     expect(screen.getByTestId('disclosure-body')).toHaveTextContent(
       'No initial prompt was recorded for this run.',
     );
+  });
+
+  it('caps the reading measure on the prose and not on the panel', async () => {
+    // The cap sat on the `Disclosure` itself, so the title bar, the chevron and
+    // the summary were capped with the body — a band of chrome stopping two
+    // thirds of the way across a wide window with nothing beside it. A measure
+    // governs a line length; it is not a width for the card carrying it.
+    const { container } = render(<InitialPromptPanel featureDescription={PROMPT} />);
+
+    const panel = container.querySelector('[data-testid="disclosure-trigger"]')?.closest('div');
+    expect(panel?.className ?? '').not.toMatch(/max-w-/);
+
+    await userEvent.click(screen.getByTestId('disclosure-trigger'));
+    const body = screen.getByTestId('disclosure-body');
+    expect(body.className).not.toMatch(/max-w-/);
+    // The prose keeps it, spelled from the exported constant rather than a
+    // second copy of the number.
+    const prose = body.firstElementChild as HTMLElement;
+    expect(prose).toHaveTextContent('Add a metric strip to the run header.');
+    // The inline value, not the computed one: jsdom resolves no `ch` unit, so
+    // `toHaveStyle` compares against an empty string and passes for anything.
+    expect(prose.style.maxWidth).toBe(`${PROSE_CH}ch`);
   });
 
   it('does not carry the open state across a remount', async () => {

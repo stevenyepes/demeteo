@@ -135,7 +135,7 @@ export function FeatureHeader({
       </div>
 
       <div className="flex min-w-0 flex-col items-end gap-3">
-        <MetricStrip className="justify-end">
+        <MetricStrip variant="inset" className="justify-end">
           <Metric label="Elapsed" value={duration} />
           <Metric
             label="Cost"

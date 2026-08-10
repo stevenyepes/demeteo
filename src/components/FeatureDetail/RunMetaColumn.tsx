@@ -62,6 +62,7 @@ export function RunMetaColumn({
 
   return (
     <div
+      data-testid="run-meta-column"
       ref={runLayout === 'split' ? undefined : setMetaChromeEl}
       // Split, this is one of three full-height tracks and scrolls itself. The
       // width arrives as a number rather than a class because `runLayout.ts`

@@ -19,6 +19,11 @@ interface RunGraphPanelProps {
  * whose parent clips — a short, wide window would lose the bottom of the graph
  * with no scrollbar to reach it. The floor still exists where it can be honoured:
  * `graphBoxHeight` clamps the stacked layout's stated height to the same 448px.
+ *
+ * The card is `glass-panel` because this is one of the run's three tracks and
+ * they are peers; the canvas inside it is a `panel-field`, which is the same
+ * well the terminal uses and was previously spelled here as a raw `#050608`
+ * — a hex of a token that already existed (AGENTS.md §4).
  */
 export function RunGraphPanel({
   definition,
@@ -28,14 +33,16 @@ export function RunGraphPanel({
   onNodeActivate,
 }: RunGraphPanelProps) {
   return (
-    <div className="h-full min-h-0 w-full overflow-hidden rounded-xl border border-white/5 bg-[#050608]/40">
-      <WorkflowCanvas
-        definition={definition}
-        statusByNode={statusByNode}
-        onNodeActivate={onNodeActivate}
-        selectedNodeId={selectedNodeId}
-        highlightedNodeIds={highlightedNodeIds}
-      />
+    <div className="glass-panel h-full min-h-0 w-full overflow-hidden">
+      <div className="panel-field h-full w-full">
+        <WorkflowCanvas
+          definition={definition}
+          statusByNode={statusByNode}
+          onNodeActivate={onNodeActivate}
+          selectedNodeId={selectedNodeId}
+          highlightedNodeIds={highlightedNodeIds}
+        />
+      </div>
     </div>
   );
 }

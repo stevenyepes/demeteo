@@ -49,7 +49,7 @@ export function GateStrip({
       // empty amber between "1 gate needs you" and the thing that answers it on
       // a 4K display — a banner reads as one sentence or it reads as two
       // unrelated things.
-      className={`flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border px-4 py-2.5 ${TONE_CHIP.amber} ${className}`}
+      className={`flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border px-4 py-2.5 ${TONE_CHIP.amber} ${className}`}
     >
       <div className="flex min-w-0 items-center gap-2.5">
         <span

@@ -70,16 +70,39 @@ export function Metric({
   );
 }
 
+/**
+ * `panel` is a card in its own right, for a strip sitting on the app
+ * background. `inset` is for one sitting *inside* another surface — a flat
+ * fill and a hairline, no blur and no shadow.
+ *
+ * The distinction is not cosmetic. A `glass-panel` inside the feature header,
+ * which is itself `backdrop-blur-md`, is a blur reading a blur: the effect is
+ * invisible because the thing behind it is already frosted, and the plan's §7
+ * names stacked translucency as a budget rather than a free finish. A metric
+ * strip is chrome inside chrome, and was never a card of its own.
+ */
+export type MetricStripVariant = 'panel' | 'inset';
+
+const SURFACE: Record<MetricStripVariant, string> = {
+  panel: 'glass-panel',
+  inset: 'rounded-xl border border-white/5 bg-white/[0.03]',
+};
+
 export interface MetricStripProps {
   children: ReactNode;
+  variant?: MetricStripVariant;
   className?: string;
 }
 
-export function MetricStrip({ children, className = '' }: MetricStripProps): React.ReactElement {
+export function MetricStrip({
+  children,
+  variant = 'panel',
+  className = '',
+}: MetricStripProps): React.ReactElement {
   return (
     <div
       data-testid="metric-strip"
-      className={`glass-panel inline-flex flex-wrap items-center gap-x-5 gap-y-2 min-w-0 px-4 py-2 ${className}`}
+      className={`${SURFACE[variant]} inline-flex flex-wrap items-center gap-x-5 gap-y-2 min-w-0 px-4 py-2 ${className}`}
     >
       {children}
     </div>

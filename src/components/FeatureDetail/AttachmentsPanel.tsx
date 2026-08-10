@@ -11,8 +11,11 @@ export function AttachmentsPanel({
 }) {
   if (attachments.length === 0) return null;
   return (
-    <div className="px-6 py-4 bg-[#08090c] border-b border-white/5">
-      <div className="max-w-[96ch] flex flex-col gap-2">
+    <div className="px-6 py-4 bg-[var(--bg-app)] border-b border-white/5">
+      {/* No reading measure here: these are chips, and a cap that stops them
+          wrapping at the width prose wants leaves rows breaking early against a
+          band of empty space. `PROSE_CH` belongs to the prompt's body. */}
+      <div className="flex flex-col gap-2">
         <div className="text-xs text-violet-400 font-bold uppercase tracking-widest flex items-center gap-2">
           Attachments
           <span className="text-[10px] text-slate-500 font-mono normal-case tracking-tight">

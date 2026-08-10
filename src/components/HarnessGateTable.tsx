@@ -170,7 +170,7 @@ export function HarnessGateTable({ baseline, evidence }: Props) {
   return (
     <section
       data-testid="harness-gate-table"
-      className="glass-panel mb-6 w-full shrink-0 border border-white/10 p-5"
+      className="glass-panel mb-6 w-full shrink-0 p-5"
     >
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="font-heading text-sm font-semibold tracking-wide text-white">

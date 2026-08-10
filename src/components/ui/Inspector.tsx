@@ -45,8 +45,18 @@ export interface InspectorProps<T extends string> {
  *  can render the same surface without a tab strip — an always-present pane
  *  whose empty state looked like a different component would read as broken
  *  rather than as empty. */
-export const INSPECTOR_SURFACE =
-  'flex h-full flex-col border-l border-white/5 bg-[var(--bg-sidebar)]/80 backdrop-blur-xl';
+/**
+ * The inspector is a card, not a sidebar.
+ *
+ * It read as one for as long as it was docked against an edge — a left border,
+ * no radius, a sidebar fill and a heavier `backdrop-blur-xl` than any panel in
+ * the app. Seated as the middle of the run's three tracks, that made the one
+ * surface between two cards the only thing on screen with square corners and
+ * a border on a single side. `glass-panel` brings all four decisions back to
+ * the card language, and the blur down from 24px to the panel's 12 — the run
+ * column already stacks translucency and the plan's §7 treats it as a budget.
+ */
+export const INSPECTOR_SURFACE = 'glass-panel flex h-full flex-col overflow-hidden';
 
 export function Inspector<T extends string>({
   title,

@@ -76,6 +76,13 @@
   --border-glass: rgba(255, 255, 255, 0.05);
   --border-glass-focus: rgba(139, 92, 246, 0.4);
 
+  /* One corner radius for every panel-level surface. A card, a canvas well and
+     a banner are the same object at different depths, and a run view showing
+     all three at once is where a second value reads as a mistake rather than
+     as variety. Smaller radii still belong to controls — chips, buttons and
+     inputs are not panels. */
+  --radius-panel: 12px;
+
   /* Neon Accents (Vibrant HSL tailoring) */
   --accent-purple: #8b5cf6;          /* Violet: Active Connections */
   --accent-purple-glow: rgba(139, 92, 246, 0.25);
@@ -154,14 +161,26 @@ body {
    GLASSMORPHISM & CORE PANEL UI UTILITIES
    ---------------------------------------------------- */
 
+/* The card. It already states its own border and radius, so a call site adding
+   `border border-white/5` is re-spelling this rule and one adding
+   `border-white/10` is silently leaving the card language — which is how the
+   harness panel came to read heavier than the panels beside it. */
 .glass-panel {
   background: var(--bg-panel);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--border-glass);
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+/* A field sunk *into* a card rather than a card of its own: the graph canvas,
+   a stream log. It carries no border and no radius, because it fills a panel
+   that already has both — the run view's three tracks are peers, and a canvas
+   ringed by a second border inside the first reads as a fourth surface. */
+.panel-field {
+  background: var(--bg-well);
 }
 
 .glass-panel-hover:hover {

@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
 let columnWidth = 1600;
+let runLayoutMode: 'stacked' | 'split' = 'stacked';
 /** The element the view offers the hook as "the chrome above the surface". */
 let toggleChromeEl: HTMLElement | null = null;
 /** The `app_session` rows this mount finds already written. */
@@ -30,7 +31,7 @@ vi.mock('../useRunColumnLayout', () => ({
       toggleChromeEl = el;
     },
     runColumnSize: { width: columnWidth, height: 900 },
-    runLayout: 'stacked' as const,
+    runLayout: runLayoutMode,
     graphBoxPx: 448,
   }),
 }));
@@ -120,6 +121,7 @@ function mount(onResize?: (resize: () => void) => void) {
 
 beforeEach(() => {
   columnWidth = 1600;
+  runLayoutMode = 'stacked';
   toggleChromeEl = null;
   stored = {};
   mockBackend();
@@ -154,7 +156,31 @@ describe('the chrome the graph box is measured against', () => {
   });
 });
 
-describe('the inspector’s place in the run column', () => {
+describe('where the run\u2019s three tracks begin', () => {
+  it('starts the meta track on the same line as the panes beside it', async () => {
+    // The chrome row used to sit *inside* the graph\u2019s track, so it pushed two
+    // of the three tracks down and left the meta panels beginning a row higher
+    // than the cards they stand next to \u2014 three peers with one of them floating.
+    // jsdom lays nothing out, so the claim is structural: nothing between the
+    // chrome and the tracks, and both tracks under one parent that starts below
+    // it.
+    runLayoutMode = 'split';
+    mount();
+    await waitFor(() => expect(toggleChromeEl).not.toBeNull());
+
+    const meta = screen.getByTestId('run-meta-column');
+    const panes = await screen.findByTestId('split-pane');
+    const tracks = toggleChromeEl?.nextElementSibling ?? null;
+
+    expect(tracks).not.toBeNull();
+    expect(tracks).toContainElement(meta);
+    expect(tracks).toContainElement(panes);
+    expect(meta).not.toContainElement(toggleChromeEl);
+    expect(panes).not.toContainElement(toggleChromeEl);
+  });
+});
+
+describe('the inspector\u2019s place in the run column', () => {
   it('sits beside the run surface in a column wide enough for both', async () => {
     mount();
 
@@ -196,7 +222,11 @@ describe('the inspector’s place in the run column', () => {
     expect(Number(opening)).toBeGreaterThanOrEqual(320);
 
     handle.focus();
-    await userEvent.keyboard('{End}');
+    // `Home`, not `End`: the pane opens at half the row it is given, and this
+    // box is stubbed narrow enough that half of it *is* the divider's ceiling —
+    // so `End` asks for the width the pane already has and the assertion below
+    // passes or fails on whether the observer happened to fire first.
+    await userEvent.keyboard('{Home}');
     const chosen = handle.getAttribute('aria-valuenow');
     expect(chosen).not.toBe(opening);
 

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { MessageSquareText } from 'lucide-react';
 
 import { Disclosure } from '../ui/Disclosure';
+import { PROSE_CH } from '../runLayout';
 import { TONE_TEXT } from '../../lib/runStatus';
 
 const SUMMARY_CHARS = 72;
@@ -43,10 +44,18 @@ export function InitialPromptPanel({ featureDescription }: { featureDescription:
             </span>
           )
         }
-        className="max-w-[96ch]"
         bodyClassName="max-h-48 overflow-y-auto"
       >
-        <div className="p-4 text-sm text-slate-300 font-mono whitespace-pre-wrap leading-relaxed">
+        {/* The measure caps the *line*, not the card. It sat on the panel until
+            now, so the title bar, the chevron and the summary were capped with
+            the prose — which left a band of chrome ending two thirds of the way
+            across a wide window with nothing beside it. `PROSE_CH` rather than a
+            second spelling of 96: it is exported for this and both call sites
+            used to re-state the number instead. */}
+        <div
+          style={{ maxWidth: `${PROSE_CH}ch` }}
+          className="p-4 text-sm text-slate-300 font-mono whitespace-pre-wrap leading-relaxed"
+        >
           {featureDescription
             ? featureDescription
             : <span className="text-slate-500 italic">No initial prompt was recorded for this run.</span>}

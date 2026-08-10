@@ -716,6 +716,39 @@ it, and spent no new height at all.**
 - **`HarnessGateTable` is blocks, not a table.** It carried a `min-w-[36rem]` inside a
   track that never had 36rem, so its third column was clipped and the escape hatch was
   a horizontal scrollbar inside a side panel.
+- **The surface pass, same day.** Three tracks side by side made the app's card
+  vocabulary legible for the first time, and it was four languages: a sunken well
+  (graph), a borderless sidebar blurred at 24px (inspector), glass cards, and an
+  8px-radius banner. The cause is that `.glass-panel` bakes `border` and
+  `border-radius` into CSS, so it cannot be composed — **39 call sites add a
+  `border` on top of the one it already sets**, and the harness panel's
+  `border-white/10` was a silent departure from the card language that read as
+  "heavier" without saying why. `--radius-panel` is the token now; the graph and
+  the inspector are `glass-panel` like their neighbour, and the canvas inside the
+  graph is `panel-field` — the same well the terminal uses, previously spelled as
+  a raw `#050608` (a hex of a token that already existed, AGENTS.md §4).
+- **A measure caps the line, not the box.** `max-w-[96ch]` sat on the
+  `InitialPromptPanel`'s *card*, so its title bar, chevron and summary were capped
+  with the prose — a band of chrome ending two thirds across a wide window with
+  nothing beside it. It moves to the body, and reads `PROSE_CH`: the constant was
+  exported and unit-tested while **both** call sites re-spelled the number.
+  `AttachmentsPanel` loses the cap outright, since chips are not prose.
+- **One gutter.** Header, banners, gate strip, prompt and attachments were all
+  `px-6`; the run column was `p-8`, so the view stepped in by 8px exactly where the
+  eye tracks a vertical edge. Aligned down, because five blocks already agreed.
+- **A metric strip is chrome inside chrome.** `MetricStrip` gains an `inset`
+  variant and the feature header uses it: a `glass-panel` inside a `backdrop-blur-md`
+  header is a blur reading a blur — invisible, and §7 treats stacked translucency
+  as a budget.
+- **The `Graph | Timeline` chrome row sits above all three tracks, not inside one.**
+  Nested in the graph's track it pushed two of the three tracks down, so the meta
+  panels began a chrome row higher than the cards they stand beside — three peers
+  with one of them floating. Stacked it stays next to the surface it switches,
+  because there the meta panels *are* the graph's chrome and read above it.
+- **The meta track stays a column of cards, not one card with sections** — the one
+  place this pass departs from the shape it was signed off against. Its panels
+  (activity, bootstrap, gates) appear and disappear independently, so a wrapper
+  would assert they are one thing and would need an empty state of its own.
 - **What this pass did *not* fix**, because the fix is a drag and the width persists:
   the graph is still the widest thing on screen at 4K while a linear pipeline lays out
   vertically inside it. Auto-orienting against an honest box keeps answering `DOWN` for
