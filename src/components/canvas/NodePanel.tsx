@@ -29,7 +29,7 @@ import { runStatusMeta, TONE_CHIP, TONE_TEXT } from '../../lib/runStatus';
 import { listStepArtifacts } from '../../lib/stepArtifacts';
 import type { AgentStreamStore } from '../FeatureDetail/useAgentStream';
 import type { HarnessOverrides } from '../FeatureDetail/useHarnessOverrides';
-import type { HarnessBaseline, RunEvent, StepAttempt, StepExecution } from '../../types';
+import type { HarnessBaseline, StepAttempt, StepExecution } from '../../types';
 import { nodeTypeMeta, type NodeConfigV2, type NodeRunStatus } from './types';
 import { ActionsTab, type BlockingAncestor } from './nodePanel/ActionsTab';
 import { LiveTab } from './nodePanel/LiveTab';
@@ -55,10 +55,6 @@ export interface NodePanelProps {
    *  renders no `ArtifactViewer` of its own, so the graph drill-down and the
    *  timeline open the same surface. Omitted = today's inline preview. */
   onOpenArtifact?: (artifactPath: string) => void;
-  /** The run's unified `run_events` feed (P1.13) — local push or remote poll,
-   *  same shape either way (P2.6). Rendered raw in the Overview tab, replacing
-   *  the standalone `RunEventTimeline` as a separate surface. */
-  runEvents?: RunEvent[];
   /** What the run's gates said at the base commit, so the Output tab can tell a
    *  machine that was already broken from one that broke during the run. Both
    *  this and `overrides` below are optional because the canvas mounts this
@@ -110,7 +106,6 @@ export function NodePanel({
   onClose,
   onOpenEditorForPath,
   onOpenArtifact,
-  runEvents,
   harnessBaseline,
   overrides,
   streamStore,
@@ -217,7 +212,6 @@ export function NodePanel({
           nodeId={node.id}
           stepExecutionId={stepExecutionId}
           version={version}
-          runEvents={runEvents}
         />
       )}
       {tab === 'live' && (

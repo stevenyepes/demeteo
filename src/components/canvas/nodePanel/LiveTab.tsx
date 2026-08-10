@@ -20,8 +20,8 @@ const NO_STREAM: AgentStreamStore = {
  * this tab is mounted only while it is the selected one — so the other three
  * tabs cost nothing during a stream. One level up in `NodePanel` renders
  * identically and pays that wake on every tab, which for Overview means
- * re-parsing and re-formatting the whole capped run-event feed per frame.
- * Higher still is worse for a second reason: see `StepInspector`'s header.
+ * re-formatting the whole attempt history per frame. Higher still is worse for
+ * a second reason: see `StepInspector`'s header.
  *
  * Being the only mount site is also why the truncation line is this tab's to
  * say: `lib/streamBuffer.ts` keeps a bounded tail, and left unsaid, a long

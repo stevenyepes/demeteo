@@ -4,17 +4,24 @@ import { TERMINAL_STATUSES } from '../../lib/runStatus';
 import { relativeTime } from '../../lib/utils';
 import { BootstrapStepper, type BootstrapPhaseView } from '../BootstrapStepper';
 import { HarnessGateTable } from '../HarnessGateTable';
-import { RemoteGateActions, ReinjectCredentials, RunEventTimeline } from '../RunEventTimeline';
+import { RemoteGateActions, ReinjectCredentials } from '../RemoteRunActions';
 import { bucketFor } from '../RemoteRunInbox';
 import type { RunLayoutMode } from '../runLayout';
+import { ActivityPanel } from './ActivityPanel';
 
 interface RunMetaColumnProps {
   runLayout: RunLayoutMode;
   setMetaChromeEl: (el: HTMLDivElement | null) => void;
   remoteRun: RemoteRunMirror | null;
   remoteMachineName: string | null;
+  /** The unified run-event feed, whichever transport filled it. */
+  runEvents: RunEvent[];
+  activityOpen: boolean;
+  onActivityOpenChange: (open: boolean) => void;
   onRunEvents: (events: RunEvent[]) => void;
   onRemoteResolved: () => void;
+  /** Display status of the local run — decides whether its feed can still grow. */
+  runStatus: string;
   showBootstrap: boolean;
   bootstrapPhases: BootstrapPhaseView[];
   harnessBaseline: HarnessBaseline | null;
@@ -33,44 +40,68 @@ export function RunMetaColumn({
   setMetaChromeEl,
   remoteRun,
   remoteMachineName,
+  runEvents,
+  activityOpen,
+  onActivityOpenChange,
   onRunEvents,
   onRemoteResolved,
+  runStatus,
   showBootstrap,
   bootstrapPhases,
   harnessBaseline,
   harnessEvidence,
 }: RunMetaColumnProps) {
+  const remoteTerminal = remoteRun !== null && TERMINAL_STATUSES.includes(remoteRun.status);
+  // A local run with nothing in its feed yet gets no panel at all: the push
+  // starts on mount and is never backfilled, so an empty Activity block on a
+  // finished feature would be a permanent, unexplained blank.
+  const showActivity = remoteRun !== null || runEvents.length > 0;
+
   return (
     <div
       ref={runLayout === 'split' ? undefined : setMetaChromeEl}
       className={`flex shrink-0 flex-col ${runLayout === 'split' ? 'w-[26rem]' : 'w-full min-w-0'}`}
     >
-      {remoteRun && (
-        /* Activity feed for a detached run: the runner's own event
-           log (submitted → cloned → gates → pushed → PR), inline
-           where the run lives instead of a separate modal. */
+      {showActivity && (
         <div className="mb-6 w-full shrink-0 space-y-1.5">
-          <RunEventTimeline
-            run={remoteRun}
-            machineName={remoteMachineName ?? remoteRun.machine_id}
-            onEvents={onRunEvents}
+          <ActivityPanel
+            events={runEvents}
+            remote={
+              remoteRun
+                ? {
+                    run: remoteRun,
+                    machineName: remoteMachineName ?? remoteRun.machine_id,
+                    onEvents: onRunEvents,
+                  }
+                : null
+            }
+            terminal={remoteRun ? remoteTerminal : TERMINAL_STATUSES.includes(runStatus)}
+            open={activityOpen}
+            onOpenChange={onActivityOpenChange}
           />
-          <div className="flex items-center justify-between gap-3 px-1">
-            <p className="text-[10px] font-mono text-slate-500">
-              {TERMINAL_STATUSES.includes(remoteRun.status)
-                ? `Final state synced ${relativeTime(remoteRun.updated_at)}`
-                : `Last synced ${relativeTime(remoteRun.updated_at)} · polling every 3s`}
-            </p>
-            {/* Same grouping as the Runs inbox: `over-budget` parks
-                too, and RemoteGateActions already renders its
-                no-gate explanation for it. */}
-            {bucketFor(remoteRun.status) === 'parked' && (
-              <RemoteGateActions run={remoteRun} onResolved={onRemoteResolved} />
-            )}
-            {bucketFor(remoteRun.status) === 'needs_credentials' && (
-              <ReinjectCredentials run={remoteRun} onResolved={onRemoteResolved} />
-            )}
-          </div>
+          {remoteRun && (
+            <div className="flex items-center justify-between gap-3 px-1">
+              {/* The mirror's own freshness, which is a different poll from the
+                  event tail the panel names: this one backs off to 48s and stops
+                  while the window is hidden, so it states when it last landed
+                  rather than an interval it would spend most of its life not
+                  keeping. */}
+              <p className="text-[10px] font-mono text-slate-500">
+                {remoteTerminal
+                  ? `Final state synced ${relativeTime(remoteRun.updated_at)}`
+                  : `Status last synced ${relativeTime(remoteRun.updated_at)}`}
+              </p>
+              {/* Same grouping as the Runs inbox: `over-budget` parks
+                  too, and RemoteGateActions already renders its
+                  no-gate explanation for it. */}
+              {bucketFor(remoteRun.status) === 'parked' && (
+                <RemoteGateActions run={remoteRun} onResolved={onRemoteResolved} />
+              )}
+              {bucketFor(remoteRun.status) === 'needs_credentials' && (
+                <ReinjectCredentials run={remoteRun} onResolved={onRemoteResolved} />
+              )}
+            </div>
+          )}
         </div>
       )}
       {showBootstrap && (

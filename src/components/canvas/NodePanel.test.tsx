@@ -135,7 +135,11 @@ describe('NodePanel — Overview', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it('renders the unified run-event feed (P2.6) when events are passed', async () => {
+  // The unified run-event feed used to render at the bottom of this tab. It is
+  // run-level, not node-level, and now lives in the run's own `ActivityPanel`
+  // (UI_REDESIGN_PLAN §1 D) — `ActivityPanel.test.tsx` carries what this
+  // asserted. Pinned here so the tab does not re-grow a run-level section.
+  it('keeps the Overview tab node-scoped — no run-level activity log', async () => {
     invoke.mockResolvedValue([]);
     const run: NodeRunStatus = { status: 'completed', stepExecutionId: 'se-1' };
     render(
@@ -145,14 +149,10 @@ describe('NodePanel — Overview', () => {
         run={run}
         step={step({ status: 'completed' })}
         onClose={() => {}}
-        runEvents={[
-          { offset: 1, run_id: 'f1', kind: 'pr_opened', payload_json: JSON.stringify('https://ex/pr/1'), created_at: 0 },
-        ]}
       />,
     );
     await waitFor(() => expect(invoke).toHaveBeenCalled());
-    expect(screen.getByText('Run activity')).toBeInTheDocument();
-    expect(screen.getByText('PR opened')).toBeInTheDocument();
+    expect(screen.queryByText('Run activity')).not.toBeInTheDocument();
   });
 });
 

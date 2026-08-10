@@ -3,12 +3,10 @@
  * run-event log (P1.13). One `RunEvent` becomes one scannable line
  * ("s-impl running · 12k tok · $0.04"), tone-colored by outcome.
  *
- * Extracted from `RunEventTimeline` (P2.6) so the same rows render in two
- * places without a second copy: the remote **Activity** strip (the runner's
- * milestone feed) and the node drill-down panel's **Overview** tab (the raw
- * feed, per PRD §6.2). Both transports emit the same `RunEvent` shape — local
- * rows keyed by feature id (P1.13), remote rows polled from the runner — so
- * this component is transport-agnostic: hand it events, it renders them.
+ * Presentation only, and deliberately transport-agnostic: both transports emit
+ * the same `RunEvent` shape — local rows keyed by feature id (P1.13), remote
+ * rows polled from the runner — so `ActivityPanel` hands it either one and gets
+ * identical rows. Height and scroll are the caller's.
  */
 import React from 'react';
 import type { RunEvent } from '../types';

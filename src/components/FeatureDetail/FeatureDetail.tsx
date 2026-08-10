@@ -149,6 +149,10 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   /** Phase 6 persists this through `get_app_session`/`set_app_session`; until
    *  then it is the session's, not the user's. */
   const [density, setDensity] = useState<Density>(DEFAULT_DENSITY);
+  /** Open by default: the activity log is what a run *is* doing, and a detached
+   *  run's tail only advances while it is (`ActivityPanel`). Phase 6 persists
+   *  this alongside the rest. */
+  const [activityOpen, setActivityOpen] = useState(true);
   const inspectorLayout = pickInspectorLayout(runColumnSize);
   const inspectorWidth = draggedInspectorWidth ?? defaultInspectorWidth(runColumnSize);
 
@@ -171,8 +175,9 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
 
   const deselectStep = useCallback(() => selection.selectStep(null), [selection.selectStep]);
 
-  // The unified feed the inspector reads: local runs push it through
-  // `useRunEvents`; remote runs fill `remoteRunEvents` from the poll above.
+  // The unified feed the Activity panel reads: local runs push it through
+  // `useRunEvents`; remote runs fill `remoteRunEvents` from that panel's own
+  // tail, which hands each batch to `useRemoteRun` rather than keeping it.
   const panelRunEvents = remote.remoteRun ? remote.remoteRunEvents : graph.localRunEvents;
 
   const { graphDef } = graph;
@@ -187,7 +192,6 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       target={selection.target}
       graphDef={graphDef}
       statusByNode={graph.runStatusByNode}
-      runEvents={panelRunEvents}
       streamStore={stream.store}
       harnessBaseline={run.harnessBaseline}
       overrides={overrides}
@@ -328,8 +332,12 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
               setMetaChromeEl={setMetaChromeEl}
               remoteRun={remote.remoteRun}
               remoteMachineName={remote.remoteMachineName}
+              runEvents={panelRunEvents}
+              activityOpen={activityOpen}
+              onActivityOpenChange={setActivityOpen}
               onRunEvents={remote.handleRunEvents}
               onRemoteResolved={remote.refreshRemoteRun}
+              runStatus={run.status}
               showBootstrap={bootstrap.showBootstrap}
               bootstrapPhases={bootstrap.orderedBootstrapPhases}
               harnessBaseline={run.harnessBaseline}

@@ -3,7 +3,7 @@ import { useCallback } from 'react';
 import { NodePanel } from '../canvas/NodePanel';
 import type { NodeRunStatus, WorkflowDefinitionV2 } from '../canvas/types';
 import type { InspectorTarget } from '../../lib/inspectorTarget';
-import type { HarnessBaseline, RunEvent, StepExecution } from '../../types';
+import type { HarnessBaseline, StepExecution } from '../../types';
 import { InspectorEmpty } from './InspectorEmpty';
 import { inspectorNodeConfig, inspectorRunStatus } from './stepIdentity';
 import type { AgentStreamStore } from './useAgentStream';
@@ -14,7 +14,6 @@ interface StepInspectorProps {
   target: InspectorTarget;
   graphDef: WorkflowDefinitionV2 | null;
   statusByNode: Record<string, NodeRunStatus>;
-  runEvents: RunEvent[];
   streamStore: AgentStreamStore;
   /** What the gates said at the base commit, for the Output tab's reading of an
    *  environment failure. Optional here because `NodePanel` is served to the
@@ -60,7 +59,6 @@ export function StepInspector({
   target,
   graphDef,
   statusByNode,
-  runEvents,
   streamStore,
   harnessBaseline,
   overrides,
@@ -94,7 +92,6 @@ export function StepInspector({
       onClose={onDeselect}
       onOpenEditorForPath={onOpenEditorForPath}
       onOpenArtifact={openArtifact}
-      runEvents={runEvents}
       harnessBaseline={harnessBaseline}
       overrides={overrides}
       streamStore={streamStore}

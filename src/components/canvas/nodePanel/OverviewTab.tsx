@@ -1,13 +1,17 @@
-import { RunEventFeed } from '../../RunEventFeed';
 import { formatDuration } from '../../../lib/utils';
-import type { RunEvent, StepAttempt } from '../../../types';
+import type { StepAttempt } from '../../../types';
 import type { NodeRunStatus } from '../types';
 import { AttemptTable } from './AttemptTable';
 import { SequenceTasks } from './SequenceTasks';
 import { formatCost } from './format';
 
 /** Overview: node totals + the per-attempt history table (`step_attempts`),
- *  plus — for a sequence node — its landed-vs-pending task list (P2.5). */
+ *  plus — for a sequence node — its landed-vs-pending task list (P2.5).
+ *
+ *  Everything here is scoped to the node. The unified run-event feed used to
+ *  hang off the bottom of this tab and was the exception — a run-level log
+ *  under a node-level heading, shown "whenever there's a feed to read"; it is
+ *  now the run's own `ActivityPanel` (UI_REDESIGN_PLAN §1 D). */
 export function OverviewTab({
   run,
   hasExecution,
@@ -19,7 +23,6 @@ export function OverviewTab({
   nodeId,
   stepExecutionId,
   version,
-  runEvents,
 }: {
   run: NodeRunStatus | null;
   hasExecution: boolean;
@@ -31,7 +34,6 @@ export function OverviewTab({
   nodeId: string;
   stepExecutionId: string | null;
   version: string;
-  runEvents?: RunEvent[];
 }) {
   return (
     <div className="h-full space-y-5 overflow-y-auto px-5 py-4">
@@ -60,21 +62,6 @@ export function OverviewTab({
         loading={loading}
         error={error}
       />
-
-      {/* Raw run-event log (P1.13). The standalone `RunEventTimeline` is no
-          longer a separate surface (P2.6) — its feed lives here, one shape for
-          both transports (local push / remote poll). Run-level, not per-node,
-          so it's shown whenever there's a feed to read. */}
-      {runEvents && runEvents.length > 0 && (
-        <div>
-          <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-            Run activity
-          </div>
-          <div className="max-h-48 space-y-2 overflow-y-auto rounded-xl border border-white/5 bg-[#050608] p-3 font-mono text-[11px]">
-            <RunEventFeed events={runEvents} />
-          </div>
-        </div>
-      )}
     </div>
   );
 }

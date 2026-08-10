@@ -14,12 +14,12 @@ vi.mock('../ArtifactViewer', () => ({
   ArtifactViewer: () => null,
 }));
 
-/** The Overview tab's most expensive child, counted rather than rendered: it
- *  JSON-parses and time-formats every row of a 500-event feed, so it is what a
- *  stream-driven re-render of a tab that reads no stream actually costs. */
+/** The Overview tab's body, counted rather than rendered: it formats a row per
+ *  attempt, so it is what a stream-driven re-render of a tab that reads no
+ *  stream actually costs. */
 const feed = { renders: 0 };
-vi.mock('../RunEventFeed', () => ({
-  RunEventFeed: () => {
+vi.mock('../canvas/nodePanel/AttemptTable', () => ({
+  AttemptTable: () => {
     feed.renders += 1;
     return null;
   },
@@ -33,7 +33,7 @@ import type { AgentStreamStore } from './useAgentStream';
 import type { InspectorTarget } from '../../lib/inspectorTarget';
 import type { HarnessOverrides } from './useHarnessOverrides';
 import type { WorkflowDefinitionV2 } from '../canvas/types';
-import type { HarnessBaseline, RunEvent, StepExecution } from '../../types';
+import type { HarnessBaseline, StepExecution } from '../../types';
 
 const step = (over: Partial<StepExecution> = {}): StepExecution => ({
   id: 'se-1',
@@ -140,10 +140,6 @@ const OVERRIDES: HarnessOverrides = {
   probeForFeature: () => {},
 };
 
-const RUN_EVENTS: RunEvent[] = [
-  { offset: 0, run_id: 'r-1', kind: 'step_progress', payload_json: '"implement"', created_at: 0 },
-];
-
 function mount(
   target: InspectorTarget,
   graphDef: WorkflowDefinitionV2 | null = GRAPH,
@@ -156,7 +152,6 @@ function mount(
       target={target}
       graphDef={graphDef}
       statusByNode={{ 's-implement': { status: 'failed', errorClass: 'environment' } }}
-      runEvents={RUN_EVENTS}
       streamStore={streamStore}
       onDeselect={() => {}}
       onOpenEditorForPath={() => {}}

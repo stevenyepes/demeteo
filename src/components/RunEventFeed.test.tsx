@@ -1,8 +1,7 @@
 /**
- * `RunEventFeed` (P2.6): the shared renderer for the unified run-event log,
- * extracted from `RunEventTimeline` so the remote Activity strip and the node
- * panel's Overview render identical rows. These pin the compact per-kind
- * rendering (`describeEvent`) both surfaces now depend on.
+ * `RunEventFeed` (P2.6): the renderer for the unified run-event log, shared by
+ * both transports so a local run and a detached one produce identical rows.
+ * These pin the compact per-kind rendering (`describeEvent`) it depends on.
  */
 import { render, screen, cleanup } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';

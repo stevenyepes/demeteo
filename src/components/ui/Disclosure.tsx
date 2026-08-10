@@ -23,9 +23,9 @@ export interface DisclosureProps {
 /**
  * Collapsible section whose body **unmounts** when closed (UI_REDESIGN_PLAN
  * §5.1). That is the whole reason this exists rather than a `hidden` class:
- * the panels it wraps are expensive and *active* — `RunEventTimeline` polls the
- * runner every 2s, the initial prompt renders a long markdown block — and CSS
- * hiding leaves both running behind a collapsed summary line.
+ * the panels it wraps are expensive and *active* — `ActivityPanel` tails the
+ * runner over the tunnel, the initial prompt renders a long markdown block —
+ * and CSS hiding leaves both running behind a collapsed summary line.
  *
  * Open state is the caller's; Phase 6 persists it through the app session.
  *

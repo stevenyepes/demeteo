@@ -168,10 +168,15 @@ export function useRemoteRun(input: {
   }, [remoteRun?.machine_id, remoteRun?.run_id, remoteRun?.status]);
 
   // Remote (detached) path: bootstrap sub-steps live in the run-event log.
-  // `RunEventTimeline` polls it; we tap the same batch via `onEvents` (no
-  // second poll), lift `bootstrap_progress` entries into the phase map, and
-  // retain the raw feed so the node panel's Overview (P2.6) shows the same
-  // unified log a local run gets from its Tauri `run_event` pushes.
+  // `ActivityPanel` polls it; we tap the same batch via `onEvents` (no second
+  // poll), lift `bootstrap_progress` entries into the phase map, and retain the
+  // raw feed — which is what the panel then renders, so this is the run's one
+  // accumulation of it rather than a second copy beside the panel's own.
+  //
+  // The tail only runs while that panel is open, so a collapsed Activity block
+  // also freezes the bootstrap stepper. That is stated where a user can read
+  // it (`activitySync`), not fixed here: a second poll to keep the stepper warm
+  // is the duplicate this arrangement exists to avoid.
   const handleRunEvents = useCallback(
     (evts: RunEvent[]) => {
       for (const e of evts) {

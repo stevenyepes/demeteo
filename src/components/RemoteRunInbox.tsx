@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import type { Machine, RemoteRunMirror } from '../types';
 import { Chip } from './ui/Chip';
-import { RemoteGateActions, ReinjectCredentials } from './RunEventTimeline';
+import { RemoteGateActions, ReinjectCredentials } from './RemoteRunActions';
 import { TONE_BORDER_L, TONE_TEXT, type RunStatusTone } from '../lib/runStatus';
 import { relativeTime } from '../lib/utils';
 import { useNavigation } from '../context';
