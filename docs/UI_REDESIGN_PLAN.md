@@ -15,7 +15,7 @@ into this codebase's palette, primitives and hexagon discipline.
 
 ## 0. Status
 
-Branch `feat/ui-redesign-pipeline-project`. **Phases 0–4 are implemented; 5–6 are not
+Branch `feat/ui-redesign-pipeline-project`. **Phases 0–5 are implemented; 6 is not
 started.** Read §6 for what each phase covers and §7 for the decisions already taken.
 §1's "Status here today" column is the pre-Phase-2 snapshot this plan was written
 against — read it as the starting position, not as the tree.
@@ -28,17 +28,17 @@ against — read it as the starting position, not as the tree.
 | 2 — pipeline shell | done, **confirmed visually 2026-08-09** | |
 | 3 — timeline slim-down | code complete, **never rendered** | |
 | 4 — project view | code complete, **never rendered** | |
-| 5 — activity & motion | **next** | |
-| 6 — keyboard & persistence | | |
+| 5 — activity & motion | code complete, **never rendered** | |
+| 6 — keyboard & persistence | **next** | |
 
 **The Phase 2 deferral is closed.** The sticky collapsed header on scroll landed in
 Phase 3 (`lib/headerCollapse.ts` + `FeatureDetail/useHeaderCollapse.ts`), which is
 where §6 said it would.
 
-**Outstanding:** Phase 2 has been looked at in `dev:tauri`. Phases 3 and 4 have not, and
-between them they restructure both of the app's main surfaces. `npm run checks` compiles
-and tests all of it and renders none of it. What a `dev:tauri` pass has to answer,
-because no gate can:
+**Outstanding:** Phase 2 has been looked at in `dev:tauri`. Phases 3, 4 and 5 have not,
+and between them they restructure both of the app's main surfaces. `npm run checks`
+compiles and tests all of it and renders none of it. What a `dev:tauri` pass has to
+answer, because no gate can:
 
 - the collapsed header's transition on a `backdrop-blur-md` surface under WebKitGTK;
 - `content-visibility: auto` on `.timeline-step-card` and `.pipeline-card` — an
@@ -53,6 +53,14 @@ because no gate can:
   local-transport chip lost its deliberately-weaker slate now that tier separation does
   that job; and `RemoteRunInbox`'s status pill changed typeface and casing and gained a
   pulsing dot for live runs. §5.1 predicted exactly this and said to record it.
+- **Phase 5's two visible changes**, for the same reason: `FeatureHeader`'s status and
+  transport pills are now `Chip`s — uppercase mono, square-cornered, and pulsing a dot
+  instead of the whole pill — and roughly a dozen always-on `animate-pulse`es on settled
+  error/empty states are simply gone. Both should read as calmer, not as missing.
+- **The reduced-motion path itself**, which is now reachable for `animate-pulse` and was
+  not before: `GTK_THEME`-independent, set `gsettings set org.gnome.desktop.interface
+  enable-animations false` (or the WebKit inspector's emulation) and confirm the live
+  dots go static rather than disappearing.
 
 macOS and Windows appearance is unverified by any gate — `pr-checks.yml` runs
 `ubuntu-22.04` only (AGENTS.md §3, Cross-OS).
@@ -68,7 +76,7 @@ Stripping the styling, five structural changes:
 | **A** | Pipeline view is a **resizable two-pane split**: run on the left, a persistent step inspector on the right | Inspector exists (`canvas/NodePanel.tsx`) but is reachable **only** from the Graph view; the Timeline duplicates its job inline. Split is automatic and non-negotiable at ≥1600 px (`components/runLayout.ts`) |
 | **B** | Feature prompt collapses into the title block | `FeatureDetail/InitialPromptPanel.tsx` is always expanded |
 | **C** | Telemetry is one compact metric strip in the top chrome | `FeatureDetail/FeatureHeader.tsx` renders four large stacked stat blocks that wrap and eat header height |
-| **D** | Activity log is a collapsible block with a live "polling every 3s" affordance | `RunEventTimeline.tsx` exists; no disclosure, no sync affordance |
+| **D** | Activity log is a collapsible block with a live "polling every 3s" affordance | A remote-only `RunEventTimeline.tsx` existed, with a hand-rolled disclosure and its sync line detached below it; Phase 5 replaced it with `FeatureDetail/ActivityPanel.tsx` |
 | **E** | Subtasks render as ticket rows with landed / running / queued state | Already built as `SequenceTasks` **inside** `NodePanel`, so it is graph-only |
 
 **The headline finding: most of the mock's right-hand panel already exists.**
@@ -89,9 +97,9 @@ both cheaper and lower-risk.
 - **`style={{ width: '65%' }}` + `setState` per mouse-move.** §4.1 replaces it.
 - **`React.cloneElement`** for icon sizing, untyped props, and the injected
   `<style>` block — all three are hard "no" against AGENTS.md §3.
-- **Always-on animation on containers.** The mock pulses whole cards; `App.css:758-771`
-  records a real incident where animating `box-shadow`/`scale` pinned the WKWebView GPU
-  process at idle. §5.6.
+- **Always-on animation on containers.** The mock pulses whole cards; the note above
+  `@keyframes pulse-glow` in `src/App.css` records a real incident where animating
+  `box-shadow`/`scale` pinned the WKWebView GPU process at idle. §5.6.
 
 ---
 
@@ -116,8 +124,8 @@ Token values live in `src/App.css`; colour *semantics* are AGENTS.md §4. Mappin
 re-introducing F27. New surfaces get a tone from `runStatusMeta()` and read the class
 out of `TONE_CHIP` / `TONE_TEXT` / `TONE_BORDER_L`.
 
-**WebKitGTK caveat.** `App.css:823-880` carries an `!important` safelist of specific
-utility classes for the Linux webview. Any *new* arbitrary-value colour utility is
+**WebKitGTK caveat.** The `WEBKITGTK / TAURI COMPATIBILITY LAYER` block in `src/App.css`
+carries an `!important` safelist of specific utility classes for the Linux webview. Any *new* arbitrary-value colour utility is
 outside it. Either express the colour as a token or verify it renders under
 `npm run dev:tauri` on Linux before calling the phase done — a class that silently
 no-ops there is invisible to `npm run checks`.
@@ -266,8 +274,8 @@ out on every flush.
 
 Fix: cap at accumulate time — keep the last N KB / last N lines, dropping from the
 front (agents' useful output is the tail). Add `content-visibility: auto` +
-`contain-intrinsic-size` to the log block; `App.css:896` already establishes that
-pattern for `.stream-event`.
+`contain-intrinsic-size` to the log block; `.stream-event` in `src/App.css` already
+establishes that pattern.
 
 ### 4.4 Full reload on every progress tick (audit F19)
 
@@ -524,12 +532,58 @@ A redesign that repaints a lie is worse than one that fixes it.
   global `keydown` listeners disagreed about that guard, which is audit F5's shape; they
   now share `isEditableTarget` in `lib/shortcuts.ts`. The rest of F5 is untouched.
 
-### Phase 5 — Activity surface & motion budget
+### Phase 5 — Activity surface & motion budget *(done)*
 Collapsible activity block with sync affordance (**D**); every always-on animation
-audited to opacity-only per `App.css:758-771`; pulse confined to small dots, never a
-container holding text (Phase 3 removed the step card's pulsing gate block, which was
-this item's worked example — the rest of the tree is still unaudited);
+audited to opacity-only per the note above `@keyframes pulse-glow` in `src/App.css`;
+pulse confined to small dots, never a container holding text (Phase 3 removed the step
+card's pulsing gate block, which was this item's worked example);
 `prefers-reduced-motion` coverage for anything new.
+
+**What Phase 5 settled:**
+
+- **The activity log is run-level, so it left the inspector.** §1's status column called
+  it "no disclosure, no sync affordance", which by Phase 2 was wrong twice over: there
+  *was* a disclosure, hand-rolled next to the `Disclosure` primitive built to replace it,
+  and there was an affordance — sitting *outside* the panel, in `RunMetaColumn`, naming a
+  different poll's interval. The real finding underneath was structural: the unified feed
+  rendered in `nodePanel/OverviewTab`, a **node**-scoped tab, "whenever there's a feed to
+  read". `ActivityPanel` is now one surface for both transports in the run's own meta
+  column, and the Overview tab is node-scoped again.
+- **The affordance is a pure module because the truth differs by transport.** A local run
+  is pushed and a detached one is polled, so collapsing the panel *pauses* one and merely
+  *hides* the other — same gesture, opposite consequence, and `lib/activitySync.ts` is the
+  only place a user can learn which they got. It takes the poll interval as an argument
+  rather than spelling one, which is what made the old caption wrong.
+- **A tail that only runs while the panel is open also freezes the bootstrap stepper.**
+  Stated in the affordance rather than fixed: a second poll to keep the stepper warm is
+  precisely the duplicate this arrangement removes. Recorded in `useRemoteRun`, at the
+  `onEvents` tap, which is where the wrong edit would be made.
+- **The panel keeps no feed of its own.** It renders what it is handed and pushes fetched
+  rows up to `useRemoteRun`, which already caps and de-dupes them. The copy it used to
+  keep beside that one was unbounded — §4.3's cap rule, absent from the one log most
+  likely to be long.
+- **The motion rule that was applied, since "opacity-only" turned out to be half of it.**
+  An infinite animation is a claim that something is still moving, so it is allowed only
+  when that is true, and only on a small glyph — never on a container that also holds
+  text, never on a settled state. `animate-pulse` on an `AlertTriangle` costs nothing to
+  render and still says "working on it" forever.
+- **Three findings the sweep turned up that no call site would have shown:**
+  - The four tone-keyed `.pulse-indicator` glows animated `transform` **and**
+    `box-shadow` together — the exact pair the WKWebView incident note forbids, four rules
+    above the note itself — and no call site had referenced them for as long as the note
+    has existed. Deleted, along with `.animate-slide-in` and `.animate-spin-slow`, which
+    were also unreferenced.
+  - `animate-pulse` is **Tailwind's** utility, so the `prefers-reduced-motion` block in
+    `src/App.css` — which lists this file's own animations — never covered any of its ~25
+    call sites. `check-classes.mjs` cannot see this: the class resolves, it just does not
+    stop. It is named in the block now.
+  - `FeatureHeader`'s status and transport pills animated *whole*, label included, for the
+    length of every run, and are the two largest live pills in the app. Migrated to `Chip`,
+    which pulses only its dot. Phase 4 migrated the pill call sites it could see; these two
+    were spelled by hand in a file it did not touch.
+- **`animate-progress-shimmer` is a deliberate exception**, kept and documented where it
+  is defined: an indeterminate progress bar cannot be expressed with opacity, and it
+  mounts only while a terminal session is connecting.
 
 ### Phase 6 — Keyboard & persistence
 `j`/`k`/`Enter`/`g`/`t` through the existing registry (§3.6); persist split width,
