@@ -41,7 +41,7 @@
       "step_id": "s-implement",
       "kind": "sequence",
       "status": "completed",
-      "iterations": 0,
+      "iterations": 1,
       "error": null
     },
     {
@@ -93,16 +93,6 @@
       "s-gate-ship",
       "critic-review.md",
       "# stub artifact\n\npath: artifacts/critic-review.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
-      "s-implement",
-      "implementation-spec.md",
-      "# stub artifact\n\npath: artifacts/implementation-spec.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
-      "s-implement",
-      "research-report.md",
-      "# stub artifact\n\npath: artifacts/research-report.md\ngenerated-by: demeteo stub agent\n"
     ],
     [
       "s-research",
