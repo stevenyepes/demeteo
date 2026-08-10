@@ -221,7 +221,7 @@ export function StrategyTab() {
       <div className="glass-panel p-6 rounded-xl md:col-span-2 space-y-4">
         <div className="flex items-center justify-between border-b border-white/5 pb-2">
           <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-            <Activity className="w-4 h-4 text-cyan-400 animate-pulse" /> Coding Agent Configuration
+            <Activity className="w-4 h-4 text-cyan-400" /> Coding Agent Configuration
           </h3>
           <button type="button" onClick={() => s.fetchAgentConfigs(true)} disabled={s.isRefreshingAgents} className="p-1 rounded text-slate-500 hover:text-cyan-400 hover:bg-white/5 transition-all disabled:opacity-50" title="Re-check agent availability">
             <RotateCw className={`w-3.5 h-3.5 ${s.isRefreshingAgents ? 'animate-spin text-cyan-400' : ''}`} />

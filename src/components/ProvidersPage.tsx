@@ -60,7 +60,7 @@ export default function ProvidersPage() {
       <div className="space-y-4 z-10">
         {providers.length === 0 ? (
           <div className="glass-panel p-12 text-center flex flex-col items-center justify-center">
-            <Globe className="w-12 h-12 text-slate-500 mb-4 animate-pulse" />
+            <Globe className="w-12 h-12 text-slate-500 mb-4" />
             <h3 className="text-lg font-heading font-semibold text-white mb-2">No Providers Mapped</h3>
             <p className="text-sm text-slate-400 max-w-md mb-6">Connect your GitHub or GitLab workspace to enable repository cloning, branch management, and automatic pull requests.</p>
             <button onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true })} className="bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-sm px-5 py-2.5 rounded-lg transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)]">

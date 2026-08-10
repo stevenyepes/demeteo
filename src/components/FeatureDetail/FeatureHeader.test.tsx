@@ -128,3 +128,50 @@ describe('FeatureHeader collapsed variant', () => {
     expect(screen.getByRole('button', { name: /cancel feature/i })).toBeInTheDocument();
   });
 });
+
+/**
+ * The header carries the two most prominent live pills in the app, and both
+ * used to animate whole — label included — for the entire length of a run
+ * (UI_REDESIGN_PLAN §6, Phase 5). `Chip` moves the pulse onto its dot; these
+ * pin that it stayed there, in the one place where re-spelling the pill by hand
+ * is most tempting.
+ */
+describe('FeatureHeader motion budget', () => {
+  function chip(label: string): HTMLElement {
+    const found = screen
+      .getAllByTestId('chip')
+      .find((c) => c.textContent?.includes(label));
+    if (!found) throw new Error(`no chip labelled ${label}`);
+    return found;
+  }
+
+  it('pulses the status dot while a run is live, never the pill around it', () => {
+    renderHeader();
+
+    const status = chip(runStatusMeta('running').label);
+    expect(status.className).not.toMatch(/animate-pulse/);
+    expect(status.querySelector('[data-testid="chip-dot"]')).toHaveClass('animate-pulse');
+  });
+
+  it('leaves a settled run with no animation at all', () => {
+    renderHeader({ status: 'completed', statusMeta: runStatusMeta('completed') });
+
+    const status = chip(runStatusMeta('completed').label);
+    expect(status.className).not.toMatch(/animate-pulse/);
+    expect(status.querySelector('[data-testid="chip-dot"]')).toBeNull();
+  });
+
+  it('pulses the transport dot only while a detached run is still going', () => {
+    const mirror = (status: string) =>
+      ({ machine_id: 'm-1', run_id: 'r-1', status }) as never;
+
+    const live = renderHeader({ remoteRun: mirror('running'), remoteMachineName: 'gpu-box' });
+    expect(chip('Remote · Detached').querySelector('[data-testid="chip-dot"]')).toHaveClass(
+      'animate-pulse',
+    );
+    live.unmount();
+
+    renderHeader({ remoteRun: mirror('completed'), remoteMachineName: 'gpu-box' });
+    expect(chip('Remote · Detached').querySelector('[data-testid="chip-dot"]')).toBeNull();
+  });
+});

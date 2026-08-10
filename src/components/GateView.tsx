@@ -119,7 +119,7 @@ export const GateView: React.FC<GateViewProps> = ({
         <div className="p-6 border-b border-white/5 bg-white/[0.01] flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="p-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.1)]">
-              <ShieldAlert className="w-5 h-5 animate-pulse" />
+              <ShieldAlert className="w-5 h-5" />
             </span>
             <div>
               <h2 className="text-lg font-bold font-heading text-white tracking-wide">Manual Approval Gate</h2>

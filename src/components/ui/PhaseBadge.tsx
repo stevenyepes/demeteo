@@ -24,7 +24,7 @@ interface PhaseMeta {
 
 const PHASE_META: Record<TerminalPhase, PhaseMeta> = {
   connecting: { Icon: RotateCw, iconClassName: 'animate-spin', label: 'Connecting', color: 'text-amber-400' },
-  running: { Icon: Wifi, iconClassName: 'animate-pulse', label: 'Running', color: 'text-emerald-400' },
+  running: { Icon: Wifi, label: 'Running', color: 'text-emerald-400' },
   disconnected: { Icon: WifiOff, label: 'Disconnected', color: 'text-amber-400' },
   closed: { Icon: WifiOff, label: 'Closed', color: 'text-slate-500' },
   error: { Icon: AlertCircle, label: 'Error', color: 'text-ruby-400' },

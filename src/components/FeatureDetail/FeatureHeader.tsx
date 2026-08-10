@@ -1,7 +1,8 @@
 import { Cpu, GitBranch, GitPullRequest, RefreshCw, Terminal } from 'lucide-react';
 import type { Project, RemoteRunMirror } from '../../types';
-import { runStatusMeta, TERMINAL_STATUSES, TONE_CHIP } from '../../lib/runStatus';
+import { runStatusMeta, TERMINAL_STATUSES } from '../../lib/runStatus';
 import { formatCost, formatTokens } from '../../lib/utils';
+import { Chip } from '../ui/Chip';
 import { Metric, MetricStrip } from '../ui/MetricStrip';
 
 interface FeatureHeaderProps {
@@ -100,23 +101,19 @@ export function FeatureHeader({
           >
             {featureTitle}
           </h1>
-          <span
-            className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
-              TONE_CHIP[statusMeta.tone]
-            } ${statusMeta.active ? 'animate-pulse' : ''}`}
-          >
+          <Chip status={status} tone={statusMeta.tone} pulse={statusMeta.active}>
             {statusMeta.label}
-          </span>
-          {/* Transport badge: where this run executes. Detached runs
-              (mirror-listed) pulse while the 3s poll live-tails them;
-              attached-remote is a project-level fact; everything else
-              is a plain local run. */}
-          <span
-            className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider flex items-center gap-1 ${
-              remoteRun || currentProject?.compute_type === 'remote'
-                ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
-                : 'bg-white/5 text-slate-500 border-white/10'
-            } ${remoteRun && !TERMINAL_STATUSES.includes(remoteRun.status) ? 'animate-pulse' : ''}`}
+          </Chip>
+          {/* Transport badge: where this run executes. A detached run is live
+              while its mirror is non-terminal; attached-remote is a
+              project-level fact; everything else is a plain local run.
+              Cyan for either remote flavour, slate for local — a transport is
+              not a run status, so it takes a tone directly rather than
+              resolving one. */}
+          <Chip
+            tone={remoteRun || currentProject?.compute_type === 'remote' ? 'cyan' : 'slate'}
+            icon={<Cpu className="w-3 h-3" />}
+            pulse={remoteRun !== null && !TERMINAL_STATUSES.includes(remoteRun.status)}
             title={
               remoteRun
                 ? `Detached run on ${remoteMachineName ?? remoteRun.machine_id}${
@@ -127,13 +124,12 @@ export function FeatureHeader({
                 : 'Executes on this machine'
             }
           >
-            <Cpu className="w-3 h-3" />
             {remoteRun
               ? 'Remote · Detached'
               : currentProject?.compute_type === 'remote'
               ? 'Remote · SSH'
               : 'Local'}
-          </span>
+          </Chip>
         </div>
         {!collapsed && <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>}
       </div>

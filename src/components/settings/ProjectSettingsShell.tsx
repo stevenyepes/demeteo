@@ -57,7 +57,7 @@ function Shell() {
         <div className="absolute bottom-1/4 left-1/4 w-[300px] h-[300px] bg-violet-600/10 rounded-full blur-[100px] pointer-events-none" />
         <div className="glass-panel max-w-lg w-full p-8 rounded-2xl flex flex-col items-center text-center relative border border-emerald-500/20 shadow-2xl">
           <div className="relative mb-6">
-            <div className="w-20 h-20 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center animate-pulse">
+            <div className="w-20 h-20 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
               <div className="w-14 h-14 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
                 <Check className="w-8 h-8 text-emerald-400 stroke-[2.5]" />
               </div>
@@ -176,7 +176,7 @@ function Shell() {
       {/* Dirty Warning Modal */}
       {s.dirtyWarningRepos.length > 0 && (
         <Modal onClose={() => { s.setDirtyWarningRepos([]); s.setPendingActionAfterConfirm(null); }} className="glass-panel w-[500px] border border-ruby-500/20 rounded-xl overflow-hidden shadow-2xl flex flex-col p-6 space-y-4">
-          <div className="flex items-center gap-3 text-ruby-400"><AlertTriangle className="w-8 h-8 shrink-0 animate-pulse" /><h3 className="font-heading font-bold text-lg text-white">Potential Data Loss Warning</h3></div>
+          <div className="flex items-center gap-3 text-ruby-400"><AlertTriangle className="w-8 h-8 shrink-0" /><h3 className="font-heading font-bold text-lg text-white">Potential Data Loss Warning</h3></div>
           <p className="text-sm text-slate-300 leading-relaxed">{s.pendingActionAfterConfirm === 'delete' ? 'The workspace has repositories with uncommitted changes or unpushed commits. Deleting the workspace will permanently erase these directories:' : 'You are about to remove the following repositories, but they contain uncommitted changes or unpushed commits on the local server. Removing them will permanently erase these folders:'}</p>
           <div className="bg-black/40 border border-white/5 rounded-lg p-3 max-h-[200px] overflow-y-auto space-y-2">
             {s.dirtyWarningRepos.map(repo => (
@@ -223,7 +223,7 @@ function Shell() {
 
       {s.activeProject.status === 'error' && (
         <div className="mb-6 bg-ruby-500/10 border border-ruby-500/20 rounded-xl p-4 flex items-start gap-3 shadow-lg z-10">
-          <AlertTriangle className="w-5 h-5 text-ruby-400 shrink-0 mt-0.5 animate-pulse" />
+          <AlertTriangle className="w-5 h-5 text-ruby-400 shrink-0 mt-0.5" />
           <div>
             <h4 className="font-heading font-bold text-white text-sm">Workspace Bootstrap Failed</h4>
             <p className="text-xs text-slate-300 mt-1">The build for this workspace could not complete. Verify target compute availability, credentials, and mapped repository paths, then click <strong>Save Changes</strong> to retry the build.</p>

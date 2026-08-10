@@ -377,7 +377,7 @@ const ProjectHome = () => {
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
                 <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-ruby-500/20 shadow-2xl">
-                    <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4 animate-pulse" />
+                    <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4" />
                     <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap Failed</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
                         Demeteo could not clone configured repositories or analyze workspace structures. Verify target compute availability, credentials, and mapped repository paths.
@@ -392,7 +392,7 @@ const ProjectHome = () => {
                             <Settings className="w-4 h-4" /> Configure Workspace
                         </button>
                         <button onClick={handleRetryBootstrap} className="px-5 py-2.5 text-sm bg-ruby-600 hover:bg-ruby-500 text-white rounded-lg transition-all font-semibold shadow-[0_0_15px_rgba(239,68,68,0.3)] flex items-center gap-1.5">
-                            <RotateCw className="w-4 h-4 animate-pulse" /> Retry Bootstrap
+                            <RotateCw className="w-4 h-4" /> Retry Bootstrap
                         </button>
                     </div>
                 </div>

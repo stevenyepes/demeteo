@@ -30,7 +30,7 @@ function StepCardInner({
   onSelect,
   onDecideGate,
 }: StepCardProps) {
-  let icon = <Hourglass className="w-4 h-4 text-slate-500 animate-pulse" />;
+  let icon = <Hourglass className="w-4 h-4 text-slate-500" />;
   let statusBg = 'border-white/5 bg-white/[0.01]';
 
   if (step.status === 'completed') {

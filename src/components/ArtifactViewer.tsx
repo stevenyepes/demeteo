@@ -151,7 +151,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
   if (error) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-rose-400 text-center space-y-3">
-        <AlertCircle className="w-8 h-8 text-rose-500 animate-pulse" />
+        <AlertCircle className="w-8 h-8 text-rose-500" />
         <div className="text-sm font-semibold">Failed to load step execution output</div>
         <pre className="text-xs font-mono bg-rose-950/20 border border-rose-500/20 p-4 rounded-xl max-w-md overflow-x-auto text-left leading-relaxed">
           {error}

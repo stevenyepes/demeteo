@@ -1,4 +1,4 @@
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, RotateCw } from 'lucide-react';
 import { Modal } from '../ui/Modal';
 import { EFFORT_LABELS, type EffortLevel } from '../../lib/effortLevels';
 import type { HarnessOverrides } from './useHarnessOverrides';
@@ -59,7 +59,9 @@ export function ReplayModal({
       )}
 
       {overrides.isLoadingModels ? (
-        <div className="text-[10px] text-slate-500 font-mono animate-pulse mb-5 px-1">Probing available models…</div>
+        <div className="mb-5 flex items-center gap-1.5 px-1 font-mono text-[10px] text-slate-500">
+          <RotateCw className="w-3 h-3 animate-spin text-cyan-400" /> Probing available models…
+        </div>
       ) : overrides.availableModels.length > 0 && (
         <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5 mb-5">
           <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Model:</label>

@@ -201,61 +201,11 @@ body {
   color: var(--accent-purple);
 }
 
-/* Micro-animations */
-@keyframes pulseGlowPurple {
-  0% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-purple-glow); }
-  50% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 16px var(--accent-purple); }
-  100% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-purple-glow); }
-}
-
-@keyframes pulseGlowCyan {
-  0% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-cyan-glow); }
-  50% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 16px var(--accent-cyan); }
-  100% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-cyan-glow); }
-}
-
-@keyframes pulseGlowEmerald {
-  0% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-emerald-glow); }
-  50% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 16px var(--accent-emerald); }
-  100% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-emerald-glow); }
-}
-
-@keyframes pulseGlowRuby {
-  0% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-ruby-glow); }
-  50% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 16px var(--accent-ruby); }
-  100% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-ruby-glow); }
-}
-
-.pulse-indicator.glow-purple {
-  animation: pulseGlowPurple 2.2s infinite ease-in-out;
-}
-
-.pulse-indicator.glow-cyan {
-  animation: pulseGlowCyan 2.2s infinite ease-in-out;
-}
-
-.pulse-indicator.glow-emerald {
-  animation: pulseGlowEmerald 2.2s infinite ease-in-out;
-}
-
-.pulse-indicator.glow-ruby {
-  animation: pulseGlowRuby 2.2s infinite ease-in-out;
-}
-
-@keyframes slideInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-slide-in {
-  animation: slideInUp 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
+/* The tree's infinite animations are all further down, beside the note that
+   says why every one of them moves opacity and nothing else. Four tone-keyed
+   `.pulse-indicator` glows used to live here animating `transform` and
+   `box-shadow` together — the pair that pinned the WKWebView GPU process — and
+   no call site had referenced them since before that was known. */
 
 /* ----------------------------------------------------
    APP LAYOUT (GRID STRUCTURE)
@@ -759,15 +709,18 @@ body {
   animation: spin 1s linear infinite;
 }
 
-.animate-spin-slow {
-  animation: spin 3s linear infinite;
-}
-
 /* Compositor-cheap pulse: animate ONLY opacity (GPU-composited, no per-frame
    repaint/raster). The glow is a STATIC box-shadow on the element, faded in and
    out by the opacity keyframe — so we get the same visual pulse without
    re-rasterizing box-shadow/scale every frame. Animating box-shadow or scale
-   here previously pinned the WKWebView GPU process at idle. */
+   here previously pinned the WKWebView GPU process at idle.
+
+   That is the cheap half of the motion budget (UI_REDESIGN_PLAN §6, Phase 5).
+   The other half is not about cost: an animation that never stops is a claim
+   that something is still happening, so an infinite one belongs on a small
+   liveness dot or an in-flight spinner and nowhere else. Put on a container
+   holding text it fades the words the user is trying to read, and put on the
+   icon of a settled error it says "working on it" forever. */
 @keyframes pulse-glow {
   0%, 100% { opacity: 0.4; }
   50%      { opacity: 1; }
@@ -795,6 +748,12 @@ body {
   animation: fade-in 0.2s ease-out;
 }
 
+/* The one infinite animation here that is not opacity-only, kept deliberately:
+   `background-position` repaints, but this is a 2px bar that mounts only while a
+   terminal session is being established and unmounts the moment it is. An
+   indeterminate progress bar is the shape that cannot be expressed with opacity
+   — a fade says "waiting", not "still going". Do not reach for it as a general
+   affordance; a spinner is the cheap one. */
 @keyframes progress-shimmer {
   0%   { background-position: -200% 0; }
   100% { background-position: 200% 0; }
@@ -830,20 +789,25 @@ body {
    When the OS requests reduced motion, stop every always-on/infinite
    animation. This is both the accessibility default and a battery win: it
    lets the WKWebView compositor go fully idle. One-shot enter animations
-   (fade-in, slide-in) are collapsed to instant. */
+   (fade-in) are collapsed to instant.
+
+   `.animate-pulse` is Tailwind's, not this file's, and it is listed here for
+   that reason: nothing about defining the rest of these locally extends to a
+   utility the framework emits, so every `animate-pulse` in the tree kept
+   running under a reduced-motion request until it was named. `motion-reduce:`
+   at a call site does the same job for one element; this covers the ones that
+   do not spell it. */
 @media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
   .animate-pulse-glow,
   .animate-pulse-glow-amber,
   .animate-spin,
-  .animate-spin-slow,
   .animate-progress-shimmer,
-  .animate-skeleton-pulse,
-  .pulse-indicator {
+  .animate-skeleton-pulse {
     animation: none !important;
   }
 
-  .animate-fade-in,
-  .animate-slide-in {
+  .animate-fade-in {
     animation-duration: 0.01ms !important;
   }
 }

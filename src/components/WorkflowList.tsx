@@ -389,7 +389,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
           </div>
         ) : (
           <div className="h-full flex flex-col items-center justify-center text-slate-500 text-sm">
-            <Cpu className="w-12 h-12 text-slate-700 mb-3 animate-pulse" />
+            <Cpu className="w-12 h-12 text-slate-700 mb-3" />
             Select a workflow to preview details.
           </div>
         )}
