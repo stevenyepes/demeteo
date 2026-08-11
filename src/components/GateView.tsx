@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { RemoteRunMirror, StepExecution } from '../types';
 import { Check, ArrowRight, X, ShieldAlert, Terminal, Sparkles, AlertTriangle } from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
+import { GateArtifactPicker } from './GateArtifactPicker';
+import { useArtifactSelection } from './FeatureDetail/useArtifactSelection';
 import { useErrorBus } from '../lib/errorBus';
 import {
   decideGate,
@@ -41,6 +43,14 @@ export const GateView: React.FC<GateViewProps> = ({
   // so the decision has to go over the tunnel instead. `null` = ordinary
   // local run.
   const [remoteRun, setRemoteRun] = useState<RemoteRunMirror | null>(null);
+  // Every step of the run, kept alongside `blockedBy` so the artifact
+  // picker below has the full predecessor set to choose from. The
+  // blocking-predecessor probe below reads this same list independently —
+  // neither derivation may be made to depend on the other.
+  const [allSteps, setAllSteps] = useState<StepExecution[]>([]);
+
+  const { selectedArtifactPath, selectedArtifactVersion, openArtifact } =
+    useArtifactSelection(allSteps);
 
   const loadGateData = useCallback(async () => {
     try {
@@ -52,6 +62,7 @@ export const GateView: React.FC<GateViewProps> = ({
       // navigation effect, so the banner clears within one tick of
       // the blocking predecessor transitioning to `completed`.
       const all = await listStepsForRun(execDetails.feature_id);
+      setAllSteps(all);
       const blocker = findActivePredecessor(all, execDetails);
       setBlockedBy(
         blocker
@@ -73,6 +84,21 @@ export const GateView: React.FC<GateViewProps> = ({
   useEffect(() => {
     loadGateData();
   }, [loadGateData]);
+
+  // Default the picker to today's behavior — the immediate predecessor's
+  // first artifact — the first time both the step list and the gate step
+  // itself have loaded. Once the reviewer picks a row, `selectedArtifactPath`
+  // is no longer null and this effect never fires again for this mount.
+  useEffect(() => {
+    if (selectedArtifactPath !== null) return;
+    if (!stepExec || allSteps.length === 0) return;
+    const defaultPath = stepExec.artifact_paths?.length
+      ? stepExec.artifact_paths[0]
+      : stepExec.artifact_path;
+    if (defaultPath) {
+      openArtifact(defaultPath, stepExec.step_id);
+    }
+  }, [stepExec, allSteps, selectedArtifactPath, openArtifact]);
 
   const submitDecision = async (decision: 'approve' | 'redirect' | 'cancel') => {
     // Defence-in-depth: also short-circuit in the modal so a double-click
@@ -156,27 +182,22 @@ export const GateView: React.FC<GateViewProps> = ({
                 the editor below inherits a height of zero — which is how the
                 artifact rendered as an empty black panel. `vh` keeps it
                 proportional to the window instead of a magic pixel count. */}
+            {stepExec && (
+              <GateArtifactPicker
+                steps={allSteps}
+                gateStepIndex={stepExec.step_index}
+                selectedArtifactPath={selectedArtifactPath}
+                onSelectArtifact={openArtifact}
+              />
+            )}
             <div className="flex h-[46vh] min-h-[240px] flex-col p-4 rounded-lg border border-white/5 bg-[#050608] overflow-hidden">
-              {(() => {
-                const gatePath = stepExec?.artifact_paths?.length
-                  ? stepExec.artifact_paths[0]
-                  : stepExec?.artifact_path;
-                // Same cache-busting signal as FeatureDetail's viewer — a
-                // forced re-pull can overwrite this artifact in place at
-                // the same path (see `cache_step_artifacts` on the
-                // backend), so key on the fields that change when a fresh
-                // attempt lands rather than on the unchanged path alone.
-                const contentVersion = stepExec
-                  ? `${stepExec.status}:${stepExec.tokens}:${stepExec.wall_clock_secs}:${stepExec.cost_usd}`
-                  : undefined;
-                return gatePath ? (
-                  <ArtifactViewer artifactPath={gatePath} contentVersion={contentVersion} />
-                ) : (
-                  <div className="text-slate-500 font-mono text-xs italic flex items-center justify-center h-full">
-                    No artifact outputs saved for this gate step.
-                  </div>
-                );
-              })()}
+              {selectedArtifactPath ? (
+                <ArtifactViewer artifactPath={selectedArtifactPath} contentVersion={selectedArtifactVersion} />
+              ) : (
+                <div className="text-slate-500 font-mono text-xs italic flex items-center justify-center h-full">
+                  No artifact outputs saved for this gate step.
+                </div>
+              )}
             </div>
           </div>
 
