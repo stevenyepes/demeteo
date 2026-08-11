@@ -41,7 +41,7 @@
       "step_id": "s-implement",
       "kind": "sequence",
       "status": "completed",
-      "iterations": 1,
+      "iterations": 0,
       "error": null
     },
     {
@@ -93,6 +93,11 @@
       "s-gate-ship",
       "critic-review.md",
       "# stub artifact\n\npath: artifacts/critic-review.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-implement",
+      "code-diff.diff",
+      "diff --git a/src/s-implement.txt b/src/s-implement.txt\nnew file mode 100644\nindex 0000000..d0166fe\n--- /dev/null\n+++ b/src/s-implement.txt\n@@ -0,0 +1,4 @@\n+# stub artifact\n+\n+path: src/s-implement.txt\n+generated-by: demeteo stub agent\n"
     ],
     [
       "s-research",

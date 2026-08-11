@@ -4,6 +4,7 @@ use crate::adapters::step_executor::artifacts::{
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::artifact::Artifact;
+use crate::domain::artifact_capture::captures_file_bodies;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::staged_deliverable::{is_under_prefix, normalize_artifact_subdir};
 
@@ -46,16 +47,24 @@ impl ExecutionDriver {
             .filter(|p| !is_under_prefix(p, trimmed_subdir))
             .cloned()
             .collect();
-        for rel_path in changed {
-            let name = std::path::Path::new(&rel_path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("artifact")
-                .to_string();
-            if let Some(content) =
-                read_worktree_file(&*self.exec, machine_str, wt_path, &rel_path).await
-            {
-                produced_artifacts.push(Artifact::tool_write(name, rel_path, content));
+        // Reading a body nothing declared is not a cheap no-op: it is one
+        // transport round trip and one whole file per changed path, and the
+        // result is dropped by `resolve_declared_artifacts` a few lines below.
+        // On a step that scaffolds a project that is the entire tree held in
+        // memory to be thrown away. `captures_file_bodies` names the four
+        // captures that can actually consume one.
+        if captures_file_bodies(decls) {
+            for rel_path in changed {
+                let name = std::path::Path::new(&rel_path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("artifact")
+                    .to_string();
+                if let Some(content) =
+                    read_worktree_file(&*self.exec, machine_str, wt_path, &rel_path).await
+                {
+                    produced_artifacts.push(Artifact::tool_write(name, rel_path, content));
+                }
             }
         }
 

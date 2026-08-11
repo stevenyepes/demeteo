@@ -69,19 +69,14 @@
       "# stub artifact\n\npath: artifacts/s-hypothesis.md\ngenerated-by: demeteo stub agent\n"
     ],
     [
-      "s-harden",
-      "s-evaluate.md",
-      "# stub artifact\n\npath: artifacts/s-evaluate.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
       "s-hypothesis",
       "s-hypothesis.md",
       "# stub artifact\n\npath: artifacts/s-hypothesis.md\ngenerated-by: demeteo stub agent\n"
     ],
     [
       "s-prototype",
-      "s-hypothesis.md",
-      "# stub artifact\n\npath: artifacts/s-hypothesis.md\ngenerated-by: demeteo stub agent\n"
+      "prototype-notes.md",
+      "# stub artifact\n\npath: artifacts/prototype-notes.md\ngenerated-by: demeteo stub agent\n"
     ]
   ]
 }

@@ -11,6 +11,7 @@ use crate::adapters::step_executor::steps::agent::{
 
 use super::context::{RunTarget, StepCtx, StepWorktree, TaskRun};
 use crate::domain::platform_context::place_platform_context;
+use crate::domain::review_base::{needs_review_base, place_review_base};
 use crate::domain::sequence::tasks::PlanKind;
 
 /// What one finished task contributed, carried forward so the next task's
@@ -89,6 +90,24 @@ impl ExecutionDriver {
         let acceptance_str = format_acceptance_criteria(&task.acceptance);
         let platform_placement = place_platform_context(target.platform, template);
 
+        // A sequence step implements, so its capability never auto-places the
+        // block — only a template naming the token pays for the merge-base,
+        // and then once per task rather than once per step. That is the cost
+        // of building each task's prompt independently; a rework ticket that
+        // asks where the reviewer was looking is worth one git call.
+        let capability = step_conf.effective_capability();
+        let fork_point = if needs_review_base(capability, template) {
+            self.resolve_fork_point_ref(target.machine).await
+        } else {
+            None
+        };
+        let review_placement = place_review_base(
+            fork_point.as_deref(),
+            &self.branch_name,
+            capability,
+            template,
+        );
+
         let rendered = self
             .base_ctx
             .clone()
@@ -115,6 +134,7 @@ impl ExecutionDriver {
             .set("iteration", &iteration)
             .set("max_iterations", &max_iterations)
             .set("platform_context", &platform_placement.bound)
+            .set("review_base_section", &review_placement.bound)
             .render(template);
 
         let prompt = if rendered.trim().is_empty() {
@@ -144,7 +164,10 @@ impl ExecutionDriver {
         } else {
             append_retry_feedback_section(prompt, effective_retry_ctx.as_ref())
         };
-        let prompt = format!("{}{}", platform_placement.prefix, prompt);
+        let prompt = format!(
+            "{}{}{}",
+            platform_placement.prefix, review_placement.prefix, prompt
+        );
 
         crate::adapters::step_executor::artifacts::materialize_external_artifact_paths(
             &prompt,

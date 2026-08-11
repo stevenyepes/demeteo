@@ -156,7 +156,7 @@ mod tests {
             "name": "chain",
             "nodes": [
                 { "id": "plan", "type": "agent", "title": "Plan",
-                  "config": { "prompt_template": "do the thing" } },
+                  "config": { "prompt_template": "do the thing", "capability": "artifacts" } },
                 { "id": "publish", "type": "finalize", "title": "Publish", "config": {} }
             ],
             "edges": [{ "from": "plan", "to": "publish" }]
@@ -243,7 +243,7 @@ mod tests {
             "name": "warn",
             "nodes": [
                 { "id": "plan", "type": "agent", "title": "Plan",
-                  "config": { "prompt_template": "p" } }
+                  "config": { "prompt_template": "p", "capability": "artifacts" } }
             ],
             "edges": []
         })));

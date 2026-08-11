@@ -46,6 +46,7 @@ pub mod platform_context;
 pub mod prompt_budget;
 pub mod prompt_context;
 pub mod restart_reconcile;
+pub(crate) mod review_base;
 pub mod rework;
 pub mod run_control;
 pub mod run_spec;

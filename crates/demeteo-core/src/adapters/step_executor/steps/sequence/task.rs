@@ -7,6 +7,7 @@ use crate::adapters::step_executor::artifacts::{
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::artifact::Artifact;
+use crate::domain::artifact_capture::captures_file_bodies;
 use crate::domain::sequence::outcome::SequenceError;
 use crate::domain::sequence::progress::TaskContribution;
 use crate::ports::notification::DomainEvent;
@@ -34,10 +35,15 @@ impl ExecutionDriver {
 
         let decls: &[crate::domain::artifact::ArtifactDecl] =
             step_conf.artifacts.as_deref().unwrap_or(&[]);
-        let snapshot = if decls.is_empty() {
-            None
-        } else {
+        // Both the snapshot and the `pre_head` below exist only to name the
+        // paths whose bodies get read back, so they are gated on the same
+        // question the agent step asks — a step declaring only a `Diff` was
+        // paying for a whole delta whose every body was then discarded.
+        let reads_bodies = captures_file_bodies(decls);
+        let snapshot = if reads_bodies {
             Some(WorktreeSnapshot::capture(&*self.exec, target.machine, wt.path).await)
+        } else {
+            None
         };
         // The worktree's HEAD *before* the agent runs. The snapshot delta
         // misses work the agent committed itself, and diffing against the
@@ -46,14 +52,14 @@ impl ExecutionDriver {
         // see it. Diffing against the feature branch instead would over-report
         // here in a way it could not in the old parallel step: this worktree
         // already carries every earlier task's commits.
-        let pre_head = if decls.is_empty() {
-            None
-        } else {
+        let pre_head = if reads_bodies {
             self.sequence_git(target.machine)
                 .rev_parse(wt.path, "HEAD")
                 .await
                 .ok()
                 .filter(|s| !s.is_empty())
+        } else {
+            None
         };
 
         let prompt = self.build_task_prompt(step, target, wt, run).await;

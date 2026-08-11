@@ -287,3 +287,73 @@ fn the_total_fallback_detail_is_the_generic_wording() {
         CaptureOutcome::Skip(None)
     ));
 }
+
+/// The four captures that consume a `ToolWrite` body, stated one at a time so
+/// a new capture kind added to the wrong side of the split shows up here and
+/// not as a step that silently stopped delivering its artifact.
+#[test]
+fn every_body_consuming_capture_asks_for_the_reads() {
+    for capture in [
+        ArtifactCapture::AllWrites,
+        ArtifactCapture::ChangedFiles {
+            base: DiffBase::WorktreeBase,
+            path_filter: None,
+        },
+        ArtifactCapture::ByName {
+            name: "spec".into(),
+        },
+        ArtifactCapture::LastWriteTo {
+            path: "docs/spec.md".into(),
+        },
+    ] {
+        assert!(
+            captures_file_bodies(&[decl("d", capture.clone())]),
+            "{capture:?} is satisfied from a file body, so the reads must happen"
+        );
+    }
+}
+
+/// The captures derived from git and branch state, plus the step that declares
+/// nothing. This is the case the whole predicate exists for: a scaffolding
+/// step whose every changed file would otherwise be read back and dropped.
+#[test]
+fn a_git_derived_or_empty_declaration_reads_nothing() {
+    assert!(
+        !captures_file_bodies(&[]),
+        "a step declaring nothing has nothing to satisfy from a body"
+    );
+    for capture in [
+        ArtifactCapture::Diff {
+            base: DiffBase::WorktreeBase,
+            path_filter: None,
+        },
+        ArtifactCapture::Worktree { path: None },
+    ] {
+        assert!(
+            !captures_file_bodies(&[decl("d", capture.clone())]),
+            "{capture:?} is derived, not read"
+        );
+    }
+}
+
+/// One body-consuming declaration among derived ones still buys the reads —
+/// the predicate is an `any`, and a step that mixes them must not lose the
+/// half that needs them.
+#[test]
+fn one_body_consumer_among_derived_declarations_is_enough() {
+    assert!(captures_file_bodies(&[
+        decl(
+            "diff",
+            ArtifactCapture::Diff {
+                base: DiffBase::WorktreeBase,
+                path_filter: None,
+            },
+        ),
+        decl(
+            "report",
+            ArtifactCapture::LastWriteTo {
+                path: "r.md".into()
+            }
+        ),
+    ]));
+}

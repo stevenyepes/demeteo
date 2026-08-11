@@ -16,7 +16,7 @@
 //! 4. the retry-feedback safety net
 //! 5. the artifact contract
 //! 6. the Operating Boundary block
-//! 7. the platform block
+//! 7. the platform block, then the review-base block
 //!
 //! and then, once the worktree exists and only then:
 //!
@@ -31,8 +31,9 @@
 use crate::adapters::step_executor::driver::{ExecutionDriver, RetryContext};
 use crate::domain::attachment::AttachedFile;
 use crate::domain::harness_outcome::HarnessOutcome;
-use crate::domain::models::Platform;
+use crate::domain::models::{Platform, StepConfig};
 use crate::domain::platform_context::place_platform_context;
+use crate::domain::review_base::place_review_base;
 use crate::domain::verifier::VerifierConfig;
 
 use super::context::{AgentStepCtx, AgentWorktree};
@@ -169,14 +170,38 @@ pub(crate) fn append_retry_feedback_section(
 }
 
 impl ExecutionDriver {
+    /// Whether this step's prompt will render the review-base block.
+    ///
+    /// The gate on resolving a fork point: [`build_agent_prompt`] is
+    /// synchronous, so the `git merge-base` has to happen at the async call
+    /// site, which cannot otherwise know whether the answer will be used. The
+    /// two lines below have to agree with the ones in `build_agent_prompt` —
+    /// a rework cycle renders a different template, and asking the ordinary
+    /// one here would gate on a prompt this attempt is not sending.
+    ///
+    /// [`build_agent_prompt`]: Self::build_agent_prompt
+    pub(crate) fn wants_review_base(&self, step_conf: &StepConfig) -> bool {
+        let mode = self.rework_mode(step_conf);
+        let template = crate::adapters::step_executor::driver::rework::effective_prompt_template(
+            step_conf, mode,
+        );
+        crate::domain::review_base::needs_review_base(step_conf.effective_capability(), template)
+    }
+
     /// Steps 1–7: everything sayable before a worktree exists.
     ///
     /// `platform` is the machine's OS as the execution port answered it;
     /// [`place_platform_context`] decides what that is worth saying and where.
+    /// `fork_point` is the commit this feature left the default branch at —
+    /// `None` both when it could not be resolved and when
+    /// [`wants_review_base`](Self::wants_review_base) said not to look, which
+    /// [`place_review_base`] does not need to tell apart: a step that renders
+    /// no block is unaffected by what the block would have said.
     pub(crate) fn build_agent_prompt(
         &self,
         ctx: AgentStepCtx<'_>,
         platform: Option<Platform>,
+        fork_point: Option<&str>,
     ) -> String {
         let step_conf = ctx.step_conf;
 
@@ -212,6 +237,12 @@ impl ExecutionDriver {
         let retry_section = format_retry_feedback_section(self.retry_ctx.as_ref());
         let uses_retry_section = template_uses_retry_section(template);
         let platform_placement = place_platform_context(platform, template);
+        let review_placement = place_review_base(
+            fork_point,
+            &self.branch_name,
+            step_conf.effective_capability(),
+            template,
+        );
 
         // Pull the per-feature user attachment manifest fresh on every
         // agent turn (the same live-query pattern used for the gate
@@ -258,6 +289,7 @@ impl ExecutionDriver {
             .set("harness_baseline", &harness_briefing)
             .set("retry_feedback_section", &retry_section)
             .set("platform_context", &platform_placement.bound)
+            .set("review_base_section", &review_placement.bound)
             .set("gate_feedback", &gate_feedback)
             .set("gate_decision", &gate_decision)
             .set("retry_feedback", &retry_feedback)
@@ -313,7 +345,12 @@ impl ExecutionDriver {
             &prompt, capability, &profile,
         );
 
-        format!("{}{}", platform_placement.prefix, prompt)
+        // Platform first: it reframes command text appearing later, and the
+        // review-base block quotes commands of its own.
+        format!(
+            "{}{}{}",
+            platform_placement.prefix, review_placement.prefix, prompt
+        )
     }
 
     /// Steps 8–9: the part that could not be said until the worktree existed

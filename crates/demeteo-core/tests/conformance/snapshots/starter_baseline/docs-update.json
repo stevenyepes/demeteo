@@ -71,16 +71,6 @@
       "# stub artifact\n\npath: artifacts/s-draft.md\ngenerated-by: demeteo stub agent\n"
     ],
     [
-      "s-draft",
-      "s-draft.md",
-      "# stub artifact\n\npath: artifacts/s-draft.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
-      "s-draft",
-      "s-survey.md",
-      "# stub artifact\n\npath: artifacts/s-survey.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
       "s-gate-review",
       "s-validate.md",
       "# stub artifact\n\npath: artifacts/s-validate.md\ngenerated-by: demeteo stub agent\n"
@@ -92,28 +82,8 @@
     ],
     [
       "s-polish",
-      "s-draft.md",
-      "# stub artifact\n\npath: artifacts/s-draft.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
-      "s-polish",
       "s-polish.md",
       "# stub artifact\n\npath: artifacts/s-polish.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
-      "s-polish",
-      "s-polish.md",
-      "# stub artifact\n\npath: artifacts/s-polish.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
-      "s-polish",
-      "s-survey.md",
-      "# stub artifact\n\npath: artifacts/s-survey.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
-      "s-polish",
-      "s-validate.md",
-      "# stub artifact\n\npath: artifacts/s-validate.md\ngenerated-by: demeteo stub agent\n"
     ],
     [
       "s-survey",

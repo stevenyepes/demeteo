@@ -112,7 +112,16 @@ impl ExecutionDriver {
             crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), &machine_str)
                 .await;
 
-        let prompt = self.build_agent_prompt(ctx, platform);
+        // Resolved before the worktree exists because the prompt is: the fork
+        // point is a property of the feature branch, which every step worktree
+        // is cut from, so asking the main checkout now and asking this step's
+        // worktree later give the same commit.
+        let fork_point = if self.wants_review_base(step_conf) {
+            self.resolve_fork_point_ref(&machine_str).await
+        } else {
+            None
+        };
+        let prompt = self.build_agent_prompt(ctx, platform, fork_point.as_deref());
 
         // Subtask id must include the feature id so two features running on
         // the same project concurrently get distinct worktree directories

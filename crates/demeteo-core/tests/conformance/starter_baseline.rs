@@ -124,6 +124,23 @@ fn augment_starter(mut wf: serde_json::Value) -> serde_json::Value {
                 }
             }
         }
+        // …and one to a *source* path for every step that implements.
+        //
+        // An implement step's deliverable is the commit, not a file it was
+        // told to name, so nothing above emits a directive for one — and a
+        // stub that writes nothing leaves the branch empty, which the
+        // sequence step's no-op guard correctly fails on the first attempt.
+        // The starter would then baseline "implement fails, then recovers"
+        // as its expected shape, and stop proving the first-attempt path for
+        // every implement step in every starter.
+        //
+        // Deliberately outside the artifact subdir: a write under
+        // `artifacts/` is what `judge_stage` calls a stranded deliverable,
+        // so a path there would exercise the failure it is meant to avoid.
+        if step["capability"] == "implement" {
+            let id = step["id"].as_str().unwrap_or("step");
+            writes.push_str(&format!("\n@stub-write src/{id}.txt"));
+        }
         if !writes.is_empty() {
             if let Some(prompt) = step["prompt_template"].as_str() {
                 step["prompt_template"] = format!("{prompt}\n{writes}\n").into();
