@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::adapters::step_executor::driver::{ExecutionDriver, RetryContext};
 use crate::adapters::step_executor::gate_waiter::GateWaiter;
@@ -14,6 +14,24 @@ use crate::ports::notification::DomainEvent;
 mod redirect_reset;
 
 use redirect_reset::{reset_gate_target, GateWriters, RedirectReset};
+
+/// How often a parked gate re-reads its own decision row.
+///
+/// [`GateWaiter`]'s docs call the DB the source of truth and the waiter a
+/// fast-path wakeup, but until this poll existed that was only true across a
+/// process boundary: in-process, a lost waiter was a lost run. The map is
+/// shared by every driver and lives as long as the app, so every way an entry
+/// can go missing — a peer run's teardown sweeping too widely, a future
+/// registry edit, a race nobody has thought of — ended the same way: the
+/// decision durable in SQLite, the driver parked on a rendezvous no
+/// `gate_decide` can find, and `ensure_driver_running` declining to spawn a
+/// replacement because the wedged driver is still alive. Reading the row the
+/// human's click already wrote costs one indexed lookup per parked gate and
+/// bounds every one of those to this interval.
+///
+/// Not a substitute for delivering the wakeup: a human waits on the fast path,
+/// and this is the floor under it.
+const GATE_POLL_INTERVAL: Duration = Duration::from_secs(10);
 
 /// What the gate inherited and what the run has spent reaching it —
 /// everything [`ExecutionDriver::apply_gate_decision`] needs that is not the
@@ -154,9 +172,17 @@ impl ExecutionDriver {
             .insert(step_exec.id.0.clone(), waiter.clone());
 
         let mut cancel_watch_gate = self.cancel_watch.clone();
-        let decision = tokio::select! {
-            d = waiter.wait() => d,
-            _ = cancel_watch_gate.changed() => None,
+        let decision = loop {
+            tokio::select! {
+                d = waiter.wait() => break d,
+                _ = cancel_watch_gate.changed() => break None,
+                _ = tokio::time::sleep(GATE_POLL_INTERVAL) => {
+                    match self.gates.latest_for_step(&step_exec.id) {
+                        Ok(Some(rec)) if rec.decision.is_some() => break Some(rec),
+                        _ => continue,
+                    }
+                }
+            }
         };
 
         // Remove our waiter regardless of how we woke up. A late
