@@ -18,9 +18,28 @@ import { nextHeaderCollapsed } from '../../lib/headerCollapse';
  * the way down. `data-run-scroll` is what narrows that to the run surface —
  * without it the inspector's own tab bodies and the meta track would drive the
  * header too, and a user reading an artifact would watch the title shrink.
+ *
+ * **`gateStepExecutionId` is an input because one scroll here is not a
+ * reading gesture.** Routing to a gate runs `useGateCardScroll`, which centres
+ * the gate card underneath the full-window overlay — so the column arrives
+ * scrolled deep into the run without the user having touched it, and closing
+ * the gate hands back a header with the feature id already gone. Nothing
+ * re-fires on close (the scroll is over, and the offset that would restore the
+ * id is one the user has no reason to suspect they need), so the id stays
+ * missing until the whole view remounts. Re-establishing the header whenever
+ * the overlay opens or closes trades a transient disagreement with the offset —
+ * settled by the next real scroll — for a header that always names what is
+ * under it.
  */
-export function useHeaderCollapse(runColumnEl: HTMLElement | null): boolean {
+export function useHeaderCollapse(
+  runColumnEl: HTMLElement | null,
+  gateStepExecutionId?: string | null,
+): boolean {
   const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    setCollapsed(false);
+  }, [gateStepExecutionId]);
 
   useEffect(() => {
     if (!runColumnEl) return;

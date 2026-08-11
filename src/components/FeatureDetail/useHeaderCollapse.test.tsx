@@ -16,9 +16,9 @@ import { useHeaderCollapse } from './useHeaderCollapse';
 /** The column mounts through state exactly as `useRunColumnLayout` reports it,
  *  so the hook is exercised across the `null` render every real mount begins
  *  with rather than being handed a live element it never sees first. */
-function Harness() {
+function Harness({ gateStepExecutionId = null }: { gateStepExecutionId?: string | null }) {
   const [el, setEl] = useState<HTMLDivElement | null>(null);
-  const collapsed = useHeaderCollapse(el);
+  const collapsed = useHeaderCollapse(el, gateStepExecutionId);
   return (
     <div ref={setEl} data-testid="column">
       <span data-testid="state">{collapsed ? 'collapsed' : 'full'}</span>
@@ -64,6 +64,17 @@ describe('useHeaderCollapse', () => {
     const { getByTestId } = render(<Harness />);
 
     await scroll(getByTestId('inspector-body'), 400);
+
+    expect(getByTestId('state')).toHaveTextContent('full');
+  });
+
+  it('re-establishes the header when a gate overlay closes', async () => {
+    const { getByTestId, rerender } = render(<Harness gateStepExecutionId="se-f1-s-gate" />);
+    // What `useGateCardScroll` does under the overlay, which no user asked for.
+    await scroll(getByTestId('surface'), 400);
+    expect(getByTestId('state')).toHaveTextContent('collapsed');
+
+    rerender(<Harness gateStepExecutionId={null} />);
 
     expect(getByTestId('state')).toHaveTextContent('full');
   });
