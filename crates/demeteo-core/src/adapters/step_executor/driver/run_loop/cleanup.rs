@@ -3,10 +3,11 @@
 //! Called by `mod.rs::run()` when the per-step loop ends without
 //! `RunAction::Terminate` — every step done, step_index past the end.
 //! Decides the terminal feature status (completed vs awaiting_mr) and
-//! finishes the feature row, then sweeps live sessions and the gate
-//! waiter map, and finally deregisters from the live-driver registry.
+//! finishes the feature row, then sweeps this feature's live sessions and
+//! gate waiters, and finally deregisters from the live-driver registry.
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::gate_waiter::sweep_feature;
 use crate::adapters::step_executor::updates;
 
 impl ExecutionDriver {
@@ -42,10 +43,18 @@ impl ExecutionDriver {
         // them for the life of the app.
         self.registry.kill_all_for_feature(self.f_id.as_str()).await;
 
-        // Drop any stale gate waiter left behind — the loop above
-        // consumes them on success, but cancellation / failure paths
+        // Drop any stale gate waiter *this feature* left behind — the loop
+        // above consumes them on success, but cancellation / failure paths
         // can leak. Idempotent; an already-absent entry is fine.
-        self.gate_waiters.lock().unwrap().clear();
+        //
+        // Scoped, never `clear()`: the map is one process-global registry
+        // shared by every live driver, so a wipe here unregisters whatever
+        // *other* run is parked at a gate right now. That is not a lost
+        // notification; it is a run no click can ever finish — the driver
+        // stays alive, so `gate_decide` records the decision, finds no
+        // waiter, and `ensure_driver_running` declines to spawn a
+        // replacement for a driver that has not died.
+        sweep_feature(&self.gate_waiters, &self.f_id);
 
         // Deregister so a follow-up `ensure_driver_running` for this
         // feature knows to start a fresh driver instead of trusting a
