@@ -3,6 +3,8 @@
 
 use super::*;
 use crate::domain::artifact::{ArtifactCapture, ArtifactDecl, ArtifactMode};
+use crate::domain::models::StepConfig;
+use crate::domain::permission::StepCapability;
 
 fn last_write_to(name: &str, path: &str) -> ArtifactDecl {
     ArtifactDecl {
@@ -22,62 +24,86 @@ fn all_writes(name: &str) -> ArtifactDecl {
     }
 }
 
-#[test]
-fn derive_returns_explicit_paths_for_last_write_to() {
-    let decls = vec![last_write_to("report", "artifacts/research-report.md")];
-    let paths = derive_writable_paths(Some(&decls), &no_extras());
-    assert_eq!(paths, vec![PathBuf::from("artifacts/research-report.md")]);
+// ── writable_paths_for_step (what the fence and the guard both call) ─
+
+fn sequence_step(artifacts: Option<Vec<ArtifactDecl>>) -> StepConfig {
+    StepConfig {
+        id: "s-implement".into(),
+        kind: "sequence".into(),
+        artifacts,
+        ..StepConfig::default()
+    }
 }
 
 #[test]
-fn derive_returns_all_writes_sentinel_for_unconstrained_capture() {
-    let decls = vec![all_writes("implemented-files")];
-    let paths = derive_writable_paths(Some(&decls), &no_extras());
-    assert_eq!(paths, vec![PathBuf::from("__ALL_WRITES__")]);
-    assert!(step_declares_full_write(Some(&decls)));
+fn sequence_step_is_fully_writable_without_an_artifact_declaration() {
+    // The regression: `s-implement` dropped its `all_writes` declaration,
+    // and a capability-blind derivation read that as "extras only" — so
+    // the guard reverted every source file the tickets wrote.
+    let paths = writable_paths_for_step(
+        &sequence_step(None),
+        &["src-tauri/target".to_string(), "node_modules".to_string()],
+    );
+    assert_eq!(paths, vec![PathBuf::from(ALL_WRITES)]);
 }
 
 #[test]
-fn derive_empty_for_no_artifacts_declared() {
-    let paths = derive_writable_paths(None, &no_extras());
-    assert!(paths.is_empty());
-    assert!(!step_declares_full_write(None));
+fn sequence_step_is_fully_writable_with_a_last_write_to_declaration() {
+    // A declaration names a deliverable; it must not narrow an implement
+    // step to that one path.
+    let decls = vec![last_write_to("summary", "artifacts/implement-summary.md")];
+    let paths = writable_paths_for_step(&sequence_step(Some(decls)), &no_extras());
+    assert_eq!(paths, vec![PathBuf::from(ALL_WRITES)]);
 }
 
 #[test]
-fn derive_returns_extras_when_no_artifacts_declared() {
-    // No artifacts but the project opted into extra writable paths.
-    let paths = derive_writable_paths(None, &["target".to_string(), "node_modules".to_string()]);
+fn artifacts_step_stays_fenced_to_its_declared_paths() {
+    let step = StepConfig {
+        id: "s-research".into(),
+        kind: "agent".into(),
+        capability: Some(StepCapability::Artifacts),
+        artifacts: Some(vec![last_write_to(
+            "report",
+            "artifacts/research-report.md",
+        )]),
+        ..StepConfig::default()
+    };
     assert_eq!(
-        paths,
-        vec![PathBuf::from("target"), PathBuf::from("node_modules")]
+        writable_paths_for_step(&step, &no_extras()),
+        vec![
+            PathBuf::from(ARTIFACTS_DIR),
+            PathBuf::from("artifacts/research-report.md"),
+        ]
     );
 }
 
 #[test]
-fn derive_mixed_list_with_unconstrained_returns_all_writes_sentinel() {
-    // If any capture is unconstrained, the whole worktree is
-    // writable. We don't try to merge constraints.
-    let decls = vec![
-        last_write_to("report", "artifacts/spec.md"),
-        all_writes("all"),
-    ];
-    let paths = derive_writable_paths(Some(&decls), &no_extras());
-    assert_eq!(paths, vec![PathBuf::from("__ALL_WRITES__")]);
+fn an_unconstrained_capture_still_infers_implement_for_an_agent_step() {
+    // Back-compat: a pre-capability workflow declaring `all_writes` and no
+    // capability keeps the whole worktree, via `effective_capability`.
+    let step = StepConfig {
+        id: "s-legacy".into(),
+        kind: "agent".into(),
+        artifacts: Some(vec![all_writes("implemented-files")]),
+        ..StepConfig::default()
+    };
+    assert_eq!(
+        writable_paths_for_step(&step, &no_extras()),
+        vec![PathBuf::from(ALL_WRITES)]
+    );
 }
 
 #[test]
-fn derive_handles_by_name_as_unconstrained() {
-    let decls = vec![ArtifactDecl {
-        name: "by-name".into(),
-        capture: ArtifactCapture::ByName {
-            name: "report".into(),
-        },
-        mode: ArtifactMode::Full,
-        inline: false,
-    }];
-    let paths = derive_writable_paths(Some(&decls), &no_extras());
-    assert_eq!(paths, vec![PathBuf::from("__ALL_WRITES__")]);
+fn an_agent_step_declaring_nothing_falls_back_to_artifacts_only() {
+    let step = StepConfig {
+        id: "s-plain".into(),
+        kind: "agent".into(),
+        ..StepConfig::default()
+    };
+    assert_eq!(
+        writable_paths_for_step(&step, &no_extras()),
+        vec![PathBuf::from(ARTIFACTS_DIR)]
+    );
 }
 
 // ── derive_writable_paths_for_scope (capability-authoritative) ───────

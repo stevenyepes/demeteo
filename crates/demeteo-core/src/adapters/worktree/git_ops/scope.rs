@@ -31,12 +31,12 @@
 //! sandbox, and [`GitOpsHelper::verify_and_revert_out_of_scope_writes`] is the
 //! gate that actually decides what reaches the feature branch.
 //!
-//! Writable paths are derived from `StepConfig::artifacts[*].capture`:
-//! - `LastWriteTo { path }` → the explicit path
-//! - `ByName { .. }`, `AllWrites`, `ChangedFiles`, `Diff` → whole worktree
-//!   (declaration doesn't constrain where the artifact ends up, so we
-//!   allow full write). Today this means `AllWrites` (the sequence
-//!   implement step's capture) opts out of scope enforcement — by design.
+//! Writable paths come from the step's **capability**
+//! ([`writable_paths_for_step`]), never from its artifact declarations
+//! alone: `Implement` is the whole worktree, `ReadOnly` is nothing, and
+//! `Artifacts`/`Verify` is `artifacts/` refined by any declared
+//! `LastWriteTo` path. A capture shape cannot widen or narrow that — an
+//! artifact declaration says what the step delivers, not what it may write.
 
 use std::path::{Path, PathBuf};
 
@@ -164,70 +164,27 @@ pub(crate) fn derive_writable_paths_for_scope(
     }
 }
 
-/// Derive the set of relative paths the step is allowed to write, from
-/// its declared `artifacts` config plus project-level extras. Returns
-/// an empty vec if the step declares no artifacts and has no extras
-/// (caller decides whether to allow all or fail).
+/// The writable-path set for `step` — the single entry point both the
+/// fence and the diff guard resolve their scope through.
 ///
-/// `extra_paths` widens the writable set with project-declared tool
-/// side-effect directories (e.g. `target/`). Normalised and deduped.
-/// Inconsequential when an unconstrained capture short-circuits to
-/// `__ALL_WRITES__` — that's an explicit "whole worktree" opt-out.
-pub(crate) fn derive_writable_paths(
-    artifacts: Option<&Vec<crate::domain::artifact::ArtifactDecl>>,
+/// It is one function on purpose. The capability-blind variant it replaced
+/// read the posture off `artifacts[*].capture` alone, so a step declaring
+/// no artifacts fell through to "extras only" — a set that is *narrower*
+/// than no scope at all, and silently so: with a project that declares
+/// `extra_writable_paths`, an `Implement` sequence step was fenced out of
+/// the source tree and had every source write reverted by the guard.
+/// Declaring an artifact was what made an implement step writable, which
+/// inverts the intended relationship — the capability decides the posture,
+/// declarations only refine where within it the output lands.
+pub(crate) fn writable_paths_for_step(
+    step_conf: &crate::domain::models::StepConfig,
     extra_paths: &[String],
 ) -> Vec<PathBuf> {
-    let Some(artifacts) = artifacts else {
-        // No artifacts declared — only extras remain as writable paths.
-        return normalised_extras(extra_paths);
-    };
-    let mut paths = Vec::new();
-    for decl in artifacts {
-        match &decl.capture {
-            ArtifactCapture::LastWriteTo { path } => {
-                paths.push(PathBuf::from(path));
-            }
-            ArtifactCapture::ByName { .. }
-            | ArtifactCapture::AllWrites
-            | ArtifactCapture::ChangedFiles { .. }
-            | ArtifactCapture::Diff { .. } => {
-                // Unconstrained capture shape → caller must treat the
-                // whole worktree as writable (e.g. `s-implement`
-                // implement steps writing across the source tree).
-                // Returning a sentinel that means "no scope" — the
-                // apply function interprets an empty `writable_paths`
-                // AND a "all_writes" present as full-write.
-                return vec![PathBuf::from("__ALL_WRITES__")];
-            }
-            _ => {}
-        }
-    }
-    for ex in normalised_extras(extra_paths) {
-        if !paths.contains(&ex) {
-            paths.push(ex);
-        }
-    }
-    paths
-}
-
-/// True if the step's artifact declaration opts out of scope enforcement
-/// (i.e. uses `AllWrites` / `ChangedFiles` / `Diff` / `ByName`).
-#[cfg(test)]
-pub(crate) fn step_declares_full_write(
-    artifacts: Option<&Vec<crate::domain::artifact::ArtifactDecl>>,
-) -> bool {
-    let Some(artifacts) = artifacts else {
-        return false;
-    };
-    artifacts.iter().any(|d| {
-        matches!(
-            d.capture,
-            ArtifactCapture::ByName { .. }
-                | ArtifactCapture::AllWrites
-                | ArtifactCapture::ChangedFiles { .. }
-                | ArtifactCapture::Diff { .. }
-        )
-    })
+    derive_writable_paths_for_scope(
+        step_conf.effective_capability().write_scope(),
+        step_conf.artifacts.as_ref(),
+        extra_paths,
+    )
 }
 
 impl GitOpsHelper {
