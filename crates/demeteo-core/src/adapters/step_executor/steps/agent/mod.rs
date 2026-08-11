@@ -214,12 +214,10 @@ impl ExecutionDriver {
         // policy already denies the relevant tools, but the OS fence
         // enforces the artifacts-vs-source line that tool names can't
         // express. The post-step diff guard catches any chmod-escape.
-        let writable_paths =
-            crate::adapters::worktree::git_ops::scope::derive_writable_paths_for_scope(
-                step_conf.effective_capability().write_scope(),
-                step_conf.artifacts.as_ref(),
-                &self.extra_writable_paths,
-            );
+        let writable_paths = crate::adapters::worktree::git_ops::scope::writable_paths_for_step(
+            step_conf,
+            &self.extra_writable_paths,
+        );
         if let Err(e) = self
             .git_ops
             .apply_artifact_scope(self.machine_id_opt.as_deref(), wt.path, &writable_paths)

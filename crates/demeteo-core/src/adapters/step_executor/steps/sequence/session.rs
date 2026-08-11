@@ -78,8 +78,8 @@ impl ExecutionDriver {
         &self,
         step_conf: &StepConfig,
     ) -> Vec<std::path::PathBuf> {
-        crate::adapters::worktree::git_ops::scope::derive_writable_paths(
-            step_conf.artifacts.as_ref(),
+        crate::adapters::worktree::git_ops::scope::writable_paths_for_step(
+            step_conf,
             &self.extra_writable_paths,
         )
     }
