@@ -109,7 +109,7 @@ function ProjectRail() {
   return (
     <aside className="w-60 border-r border-white/5 bg-[#0d0f14]/50 backdrop-blur-xl flex flex-col z-10 shrink-0">
       <div className="p-3 border-b border-white/5 flex justify-between items-center">
-        <h2 className="text-[10px] font-outfit font-semibold text-slate-500 tracking-wider uppercase">Workspaces</h2>
+        <h2 className="text-[10px] font-heading font-semibold text-slate-500 tracking-wider uppercase">Workspaces</h2>
         <div className="flex gap-1">
           <button onClick={() => setView('new-project')} className="p-1 text-slate-400 hover:text-white rounded hover:bg-white/5 transition-colors" title="Bootstrap Project">
             <Plus className="w-4 h-4" />
@@ -158,7 +158,7 @@ function ProjectRail() {
               }`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <StatusBadge status={p.status} variant="dot" />
+                <StatusBadge status={p.status} />
                 <div className="min-w-0">
                   <div className="text-xs font-medium truncate max-w-[120px]">{p.name}</div>
                   <div className="text-[9px] text-slate-500 font-mono">

@@ -56,6 +56,15 @@ npx tsc --noEmit
 step "Frontend lint (biome check)"
 npx --no-install biome check .
 
+# The one AGENTS.md §4 rule nothing above can see: a class name is just a string
+# to tsc, to Biome, and to jsdom, and Tailwind emits no rule and no warning for a
+# candidate it cannot resolve. That is how `font-outfit` stayed on headings
+# across 32 files while they all rendered in Inter. This compiles the real
+# stylesheet and fails on a class used but never defined; what it deliberately
+# does not cover is recorded in its own header.
+step "Frontend class names (used vs defined)"
+node scripts/check-classes.mjs
+
 step "Frontend tests (vitest run)"
 npx vitest run
 

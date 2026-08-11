@@ -68,7 +68,7 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
                 </button>
 
                 <div className="mb-6 border-b border-white/10 pb-4">
-                    <h2 className="text-2xl font-outfit font-bold text-white mb-2">{initialProvider ? 'Edit Provider' : 'Connect a Provider'}</h2>
+                    <h2 className="text-2xl font-heading font-bold text-white mb-2">{initialProvider ? 'Edit Provider' : 'Connect a Provider'}</h2>
                     <p className="text-sm text-slate-400">Authenticate with GitHub or GitLab so the orchestrator can securely sync your worktrees.</p>
                 </div>
 

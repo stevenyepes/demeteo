@@ -67,13 +67,8 @@
     ],
     [
       "s-fix",
-      "s-reproduce.md",
-      "# stub artifact\n\npath: artifacts/s-reproduce.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
-      "s-gate-confirm",
-      "s-reproduce.md",
-      "# stub artifact\n\npath: artifacts/s-reproduce.md\ngenerated-by: demeteo stub agent\n"
+      "code-diff.diff",
+      "diff --git a/src/s-fix.txt b/src/s-fix.txt\nnew file mode 100644\nindex 0000000..b91e7da\n--- /dev/null\n+++ b/src/s-fix.txt\n@@ -0,0 +1,4 @@\n+# stub artifact\n+\n+path: src/s-fix.txt\n+generated-by: demeteo stub agent\ndiff --git a/src/s-reproduce.txt b/src/s-reproduce.txt\nnew file mode 100644\nindex 0000000..8e8b19a\n--- /dev/null\n+++ b/src/s-reproduce.txt\n@@ -0,0 +1,4 @@\n+# stub artifact\n+\n+path: src/s-reproduce.txt\n+generated-by: demeteo stub agent\n"
     ],
     [
       "s-gate-confirm",
@@ -89,11 +84,6 @@
       "s-plan-fix",
       "task-list.json",
       "{\"tasks\":[{\"id\":\"stub-task-1\",\"title\":\"Stub task one\",\"description\":\"Deterministic stub task one.\",\"files\":[],\"acceptance\":[\"stub task one ran\"],\"blocked_by\":[]},{\"id\":\"stub-task-2\",\"title\":\"Stub task two\",\"description\":\"Deterministic stub task two.\",\"files\":[],\"acceptance\":[\"stub task two ran\"],\"blocked_by\":[\"stub-task-1\"]}]}\n"
-    ],
-    [
-      "s-reproduce",
-      "s-reproduce.md",
-      "# stub artifact\n\npath: artifacts/s-reproduce.md\ngenerated-by: demeteo stub agent\n"
     ],
     [
       "s-reproduce",

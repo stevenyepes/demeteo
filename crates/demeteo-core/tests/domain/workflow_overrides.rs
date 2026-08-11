@@ -28,6 +28,7 @@ fn settings() -> ProjectSettings {
         default_agent_kind: Some("opencode".to_string()),
         default_model: Some("project-model".to_string()),
         default_effort: Some(EffortLevel::Low),
+        default_workflow_id: None,
         default_loop_iterations: None,
         default_max_budget_usd: None,
         artifact_subdir: "artifacts/".to_string(),

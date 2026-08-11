@@ -112,6 +112,31 @@ failed / cancelled) here.
 Workflow: Standard Feature Pipeline" regardless of the actual provider (possibly GitLab,
 possibly none) and the actual default workflow.
 
+**Closed.** Both halves resolved differently, and the difference is the finding's real
+content:
+
+- The provider *is* knowable — `Repository.provider_id` resolves against the provider
+  instances the app already loads at startup — so the header now names it, with the
+  stored host and never an inferred edition. A dangling `provider_id` drops the clause
+  rather than filling it (`src/lib/projectProvenance.ts`).
+- **A project had no default workflow at all**, which made the second clause not a
+  formatting bug but a claim about a setting that did not exist. Migration **V40** adds
+  `project_settings.default_workflow_id`, the Strategy settings tab lets a user choose
+  one, and the header names it only when it resolves.
+
+  The deeper defect was underneath: `StartFeatureModal` fell through to
+  `workflows[0]` — whatever `workflow_list` returned first — so every project already
+  had a default, decided by table order and moving whenever a workflow was added or
+  deleted. `src/lib/workflowDefault.ts` replaces that with a stated ladder. **Repainting
+  the header without this would have made the lie truthful and left the behaviour it
+  described unchanged.**
+
+  Two consequences worth keeping: the column carries no foreign key, because the remote
+  runner re-ingests a workflow under a fresh id and persists the launching client's
+  settings verbatim — a constraint would abort every remote run from a project that had
+  chosen a default. So a dangling id is reachable in normal use, and every reader
+  degrades it to unset.
+
 ### F11. About tab lists wrong data paths
 `PreferencesScreen.tsx:348-352` claims `~/.demeteo/` for data/logs/artifacts. The README
 and Tauri identifier put the database at

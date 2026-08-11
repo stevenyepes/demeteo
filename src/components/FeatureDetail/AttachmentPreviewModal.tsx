@@ -64,7 +64,7 @@ export function AttachmentPreviewModal({
             <div className="flex items-center gap-3 min-w-0">
               <Paperclip className="w-5 h-5 text-violet-300 shrink-0" />
               <span
-                className="font-display text-sm font-bold text-white tracking-wide truncate"
+                className="font-heading text-sm font-bold text-white tracking-wide truncate"
                 title={attachment.source_filename}
               >
                 {attachment.source_filename}

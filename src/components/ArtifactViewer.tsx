@@ -151,7 +151,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
   if (error) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-rose-400 text-center space-y-3">
-        <AlertCircle className="w-8 h-8 text-rose-500 animate-pulse" />
+        <AlertCircle className="w-8 h-8 text-rose-500" />
         <div className="text-sm font-semibold">Failed to load step execution output</div>
         <pre className="text-xs font-mono bg-rose-950/20 border border-rose-500/20 p-4 rounded-xl max-w-md overflow-x-auto text-left leading-relaxed">
           {error}
@@ -221,22 +221,22 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
             components={{
               // Headings
               h1: ({ children }) => (
-                <h1 className="text-xl font-bold font-display text-white mt-6 mb-3 tracking-wide select-text break-words">
+                <h1 className="text-xl font-bold font-heading text-white mt-6 mb-3 tracking-wide select-text break-words">
                   {children}
                 </h1>
               ),
               h2: ({ children }) => (
-                <h2 className="text-lg font-bold font-display text-white mt-5 mb-2.5 border-b border-white/5 pb-1 tracking-wide select-text break-words">
+                <h2 className="text-lg font-bold font-heading text-white mt-5 mb-2.5 border-b border-white/5 pb-1 tracking-wide select-text break-words">
                   {children}
                 </h2>
               ),
               h3: ({ children }) => (
-                <h3 className="text-md font-bold font-display text-white mt-4 mb-2 tracking-wide select-text break-words">
+                <h3 className="text-base font-bold font-heading text-white mt-4 mb-2 tracking-wide select-text break-words">
                   {children}
                 </h3>
               ),
               h4: ({ children }) => (
-                <h4 className="text-sm font-semibold font-display text-violet-300 mt-4 mb-2 uppercase tracking-wider select-text break-words">
+                <h4 className="text-sm font-semibold font-heading text-violet-300 mt-4 mb-2 uppercase tracking-wider select-text break-words">
                   {children}
                 </h4>
               ),
@@ -303,7 +303,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
                 </tr>
               ),
               th: ({ children }) => (
-                <th className="px-4 py-3 font-semibold font-display uppercase tracking-wider text-slate-200 border-r border-white/5 last:border-0 [overflow-wrap:anywhere]">
+                <th className="px-4 py-3 font-semibold font-heading uppercase tracking-wider text-slate-200 border-r border-white/5 last:border-0 [overflow-wrap:anywhere]">
                   {children}
                 </th>
               ),

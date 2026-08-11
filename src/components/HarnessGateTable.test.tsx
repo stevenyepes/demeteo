@@ -70,9 +70,8 @@ function failedStep(errorMessage: string | null): StepExecution {
 }
 
 function rowFor(name: string): HTMLElement {
-  const cell = screen.getByText(name, { selector: 'div' });
-  const row = cell.closest('tr');
-  if (!row) throw new Error(`no table row for gate '${name}'`);
+  const row = document.querySelector<HTMLElement>(`[data-gate-row="${name}"]`);
+  if (!row) throw new Error(`no gate block for '${name}'`);
   return row;
 }
 

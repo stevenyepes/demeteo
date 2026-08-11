@@ -8,24 +8,51 @@
  * and are answerable from a test with a few numbers. Everything that needs a
  * live element is here, so `FeatureDetail` consumes one hook instead of
  * carrying four pieces of state and two observers of its own.
+ *
+ * What it measures is now an *opening position* for a pane the user drags, not
+ * a settlement: `runColumnSize` feeds `pickInspectorLayout` and
+ * `defaultInspectorWidth` in `runLayout.ts`, and a committed inspector width
+ * outranks every number produced here. Nothing in this hook may be used to
+ * overwrite one.
+ *
+ * The plan below is measured against the *column*, and that is now exact rather
+ * than an approximation: its only consumer is `graphBoxPx`, which only the
+ * stacked layout applies, and stacked the graph box **is** the full column
+ * wide. Side by side the canvas measures its own pane in `WorkflowCanvas` and
+ * plans against that. Reading this number in the side layout would reintroduce
+ * the error it used to carry — there the column is wider than the canvas by the
+ * meta track plus the inspector, which was enough to plan a 4K graph for a box
+ * two and a half times the one it got.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { graphBoxHeight, graphContainer, MAX_ZOOM, planLayout } from './canvas/layoutDirection';
-import type { LayoutPlan } from './canvas/layoutDirection';
 import type { WorkflowDefinitionV2 } from './canvas/types';
 import { pickRunLayout, type RunColumnSize, type RunLayoutMode } from './runLayout';
 
 export interface RunColumnLayout {
   /** `ref` for the run column itself. */
   setRunColumnEl: (el: HTMLDivElement | null) => void;
+  /** The column element, for the one consumer that needs to *listen* to it
+   *  rather than measure it: the header's collapse watches a scroll offset, and
+   *  a second piece of state holding the same element in `FeatureDetail` would
+   *  be two answers to "which element is the run column". */
+  runColumnEl: HTMLDivElement | null;
   /** `ref` for the meta track — pass `undefined` when it sits *beside* the
    *  graph rather than above it, since then it is not the graph's chrome. */
   setMetaChromeEl: (el: HTMLDivElement | null) => void;
   /** `ref` for the Graph|Timeline toggle, which always stacks above the graph. */
   setToggleChromeEl: (el: HTMLDivElement | null) => void;
+  /** The measured column, `null` until an observer has reported one. Handed
+   *  back raw because the inspector's verdicts (`pickInspectorLayout`,
+   *  `defaultInspectorWidth`) read the same measurement the meta track's does,
+   *  and deriving it twice is how two answers about one column start to
+   *  disagree. */
+  runColumnSize: RunColumnSize | null;
   runLayout: RunLayoutMode;
-  graphPlan: LayoutPlan;
-  /** Height, in px, for the graph box element. */
+  /** Height, in px, for the graph box element — the **stacked** layout's only.
+   *  Side by side the row is handed the window's remaining height and states
+   *  none, which is also what keeps the plan below honest: the box is the full
+   *  column wide exactly when this number is the one being used. */
   graphBoxPx: number;
 }
 
@@ -81,10 +108,11 @@ export function useRunColumnLayout(graphDef: WorkflowDefinitionV2 | null): RunCo
 
   return {
     setRunColumnEl,
+    runColumnEl,
     setMetaChromeEl,
     setToggleChromeEl,
+    runColumnSize,
     runLayout,
-    graphPlan,
     graphBoxPx,
   };
 }

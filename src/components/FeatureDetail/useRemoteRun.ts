@@ -13,6 +13,21 @@ function isBootstrapPhasePayload(value: unknown): value is BootstrapPhasePayload
   );
 }
 
+const POLL_BASE_MS = 3_000;
+const POLL_CEILING_MS = 48_000;
+
+/**
+ * How long to wait before the next tick given the run of failures behind it.
+ * A tick costs a tunnel round trip plus the two IPC calls in `reload()`, so a
+ * tunnel that is gone must not be charged the same rate as a runner that is
+ * merely busy; the ceiling keeps a recovered tunnel from taking minutes to be
+ * noticed.
+ */
+function pollDelayMs(consecutiveFailures: number): number {
+  if (consecutiveFailures < 1) return POLL_BASE_MS;
+  return Math.min(POLL_BASE_MS * 2 ** consecutiveFailures, POLL_CEILING_MS);
+}
+
 /**
  * Remote (shadow) run live refresh (docs/REMOTE_EXECUTION.md M6.4). A feature
  * that ran on a remote machine receives none of the local `step_progress` /
@@ -23,6 +38,13 @@ function isBootstrapPhasePayload(value: unknown): value is BootstrapPhasePayload
  * mirrored steps, driving the exact same timeline UI a local run gets from
  * its events. `remoteRun` is `null` for a locally-run feature (not in the
  * mirror) — the poll never starts.
+ *
+ * The poll is gated on `document.hidden` and backs off on failure
+ * (docs/UI_REDESIGN_PLAN.md §4.8): nobody reads a timeline behind a hidden
+ * window, and an unattended laptop left on a running feature would otherwise
+ * spend hours of tunnel traffic and battery on frames no one sees. Becoming
+ * visible ticks at once rather than joining the schedule, because the reason to
+ * come back to the window is to see the current state.
  */
 export function useRemoteRun(input: {
   featureId: string;
@@ -67,8 +89,8 @@ export function useRemoteRun(input: {
   }, [remoteRun?.machine_id]);
 
   // Immediate re-sync after a user action on the remote run (gate
-  // decided from the Activity section) — the 3s poll would catch up
-  // anyway, but the decision should reflect instantly.
+  // decided from the Activity section) — the poll would catch up on its
+  // own schedule, but the decision should reflect instantly.
   const refreshRemoteRun = async () => {
     if (!remoteRun) return;
     try {
@@ -93,27 +115,68 @@ export function useRemoteRun(input: {
       return;
     }
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let consecutiveFailures = 0;
+    let inFlight = false;
+
+    const clearPending = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    };
+    const schedule = (delayMs: number) => {
+      clearPending();
+      timer = setTimeout(() => { timer = undefined; void poll(); }, delayMs);
+    };
+
     const poll = async () => {
+      // A visibility flip can land while a tick is awaiting the tunnel; that
+      // tick reschedules itself on settling, so a second one here would only
+      // double the traffic.
+      if (cancelled || inFlight) return;
+      inFlight = true;
       try {
         const updated = await remoteRefreshRun({ machineId, runId });
         if (cancelled) return;
+        consecutiveFailures = 0;
         if (updated) setRemoteRun(updated);
         reload();
       } catch {
         // Transient tunnel hiccup — the next tick retries. Nothing to
         // surface: the shadow keeps showing the last good state.
+        if (cancelled) return;
+        consecutiveFailures += 1;
+      } finally {
+        inFlight = false;
       }
+      if (document.hidden) return;
+      schedule(pollDelayMs(consecutiveFailures));
     };
-    const interval = setInterval(poll, 3000);
-    return () => { cancelled = true; clearInterval(interval); };
+
+    const onVisibilityChange = () => {
+      clearPending();
+      if (!document.hidden) void poll();
+    };
+
+    if (!document.hidden) schedule(pollDelayMs(0));
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      cancelled = true;
+      clearPending();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remoteRun?.machine_id, remoteRun?.run_id, remoteRun?.status]);
 
   // Remote (detached) path: bootstrap sub-steps live in the run-event log.
-  // `RunEventTimeline` polls it; we tap the same batch via `onEvents` (no
-  // second poll), lift `bootstrap_progress` entries into the phase map, and
-  // retain the raw feed so the node panel's Overview (P2.6) shows the same
-  // unified log a local run gets from its Tauri `run_event` pushes.
+  // `ActivityPanel` polls it; we tap the same batch via `onEvents` (no second
+  // poll), lift `bootstrap_progress` entries into the phase map, and retain the
+  // raw feed — which is what the panel then renders, so this is the run's one
+  // accumulation of it rather than a second copy beside the panel's own.
+  //
+  // The tail only runs while that panel is open, so a collapsed Activity block
+  // also freezes the bootstrap stepper. That is stated where a user can read
+  // it (`activitySync`), not fixed here: a second poll to keep the stepper warm
+  // is the duplicate this arrangement exists to avoid.
   const handleRunEvents = useCallback(
     (evts: RunEvent[]) => {
       for (const e of evts) {

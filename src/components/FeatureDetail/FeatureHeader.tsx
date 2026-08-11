@@ -1,7 +1,9 @@
 import { Cpu, GitBranch, GitPullRequest, RefreshCw, Terminal } from 'lucide-react';
 import type { Project, RemoteRunMirror } from '../../types';
-import { runStatusMeta, TERMINAL_STATUSES, TONE_CHIP } from '../../lib/runStatus';
+import { runStatusMeta, TERMINAL_STATUSES } from '../../lib/runStatus';
 import { formatCost, formatTokens } from '../../lib/utils';
+import { Chip } from '../ui/Chip';
+import { Metric, MetricStrip } from '../ui/MetricStrip';
 
 interface FeatureHeaderProps {
   featureId: string;
@@ -21,6 +23,8 @@ interface FeatureHeaderProps {
   resolving: boolean;
   publishing: boolean;
   mrUrl: string | null;
+  /** Quieter chrome for a scrolled run column; `lib/headerCollapse.ts` decides it. */
+  collapsed?: boolean;
   onBack: () => void;
   onOpenTerminalTab: () => void;
   onBrowseCode: () => void;
@@ -36,6 +40,16 @@ interface FeatureHeaderProps {
  * level: a run with every action available (sync / publish / cleanup) is
  * wider than a half-window, and it should wrap rather than push the header
  * off-screen.
+ *
+ * Collapsed is the same header, quieter — it gives back the id line, half the
+ * vertical padding and one title size step, and nothing else. Status, transport,
+ * telemetry and the actions are the reason someone scrolls back up to this, so
+ * hiding them would trade one scroll for another; every element that survives
+ * keeps its position, which makes the change a restyle rather than a remount.
+ * The transition stays on padding: this element is `backdrop-blur-md` over a
+ * translucent surface, and animating `box-shadow` or `scale` on one of those
+ * cost a WKWebView GPU incident already — src/App.css records it above
+ * `pulse-glow`.
  */
 export function FeatureHeader({
   featureId,
@@ -55,6 +69,7 @@ export function FeatureHeader({
   resolving,
   publishing,
   mrUrl,
+  collapsed = false,
   onBack,
   onOpenTerminalTab,
   onBrowseCode,
@@ -64,7 +79,12 @@ export function FeatureHeader({
   onCleanup,
 }: FeatureHeaderProps) {
   return (
-    <div className="p-6 border-b border-white/5 bg-[#0d0f14]/80 flex flex-wrap items-start justify-between gap-x-6 gap-y-4 backdrop-blur-md">
+    <div
+      data-testid="feature-header"
+      className={`px-6 ${
+        collapsed ? 'py-3' : 'py-6'
+      } border-b border-white/5 bg-[#0d0f14]/80 flex flex-wrap items-start justify-between gap-x-6 gap-y-4 backdrop-blur-md transition-[padding] duration-200 ease-out motion-reduce:transition-none`}
+    >
       <div className="space-y-1 min-w-0 flex-1">
         <div className="flex items-center gap-3 min-w-0">
           <button
@@ -73,24 +93,27 @@ export function FeatureHeader({
           >
             Back
           </button>
-          <h1 className="text-xl font-bold font-display text-white tracking-wide line-clamp-2 break-words min-w-0 flex-1" title={featureTitle}>{featureTitle}</h1>
-          <span
-            className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider ${
-              TONE_CHIP[statusMeta.tone]
-            } ${statusMeta.active ? 'animate-pulse' : ''}`}
+          <h1
+            className={`${
+              collapsed ? 'text-lg' : 'text-xl'
+            } font-bold font-heading text-white tracking-wide line-clamp-2 break-words min-w-0 flex-1 transition-[font-size] duration-200 ease-out motion-reduce:transition-none`}
+            title={featureTitle}
           >
+            {featureTitle}
+          </h1>
+          <Chip status={status} tone={statusMeta.tone} pulse={statusMeta.active}>
             {statusMeta.label}
-          </span>
-          {/* Transport badge: where this run executes. Detached runs
-              (mirror-listed) pulse while the 3s poll live-tails them;
-              attached-remote is a project-level fact; everything else
-              is a plain local run. */}
-          <span
-            className={`shrink-0 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase border tracking-wider flex items-center gap-1 ${
-              remoteRun || currentProject?.compute_type === 'remote'
-                ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
-                : 'bg-white/5 text-slate-500 border-white/10'
-            } ${remoteRun && !TERMINAL_STATUSES.includes(remoteRun.status) ? 'animate-pulse' : ''}`}
+          </Chip>
+          {/* Transport badge: where this run executes. A detached run is live
+              while its mirror is non-terminal; attached-remote is a
+              project-level fact; everything else is a plain local run.
+              Cyan for either remote flavour, slate for local — a transport is
+              not a run status, so it takes a tone directly rather than
+              resolving one. */}
+          <Chip
+            tone={remoteRun || currentProject?.compute_type === 'remote' ? 'cyan' : 'slate'}
+            icon={<Cpu className="w-3 h-3" />}
+            pulse={remoteRun !== null && !TERMINAL_STATUSES.includes(remoteRun.status)}
             title={
               remoteRun
                 ? `Detached run on ${remoteMachineName ?? remoteRun.machine_id}${
@@ -101,45 +124,35 @@ export function FeatureHeader({
                 : 'Executes on this machine'
             }
           >
-            <Cpu className="w-3 h-3" />
             {remoteRun
               ? 'Remote · Detached'
               : currentProject?.compute_type === 'remote'
               ? 'Remote · SSH'
               : 'Local'}
-          </span>
+          </Chip>
         </div>
-        <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>
+        {!collapsed && <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>}
       </div>
 
       <div className="flex min-w-0 flex-col items-end gap-3">
-        <div className="flex flex-wrap items-center justify-end gap-x-6 gap-y-2">
-          <div className="text-right">
-            <div className="text-[10px] text-slate-500 uppercase font-bold">Elapsed Duration</div>
-            <div className="text-lg font-bold font-mono text-white">{duration}</div>
-          </div>
-          <div className="text-right">
-            <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Cost</div>
-            <div className="text-lg font-bold font-mono text-emerald-400" title={`${totalCost.toFixed(4)} USD across ${stepCount} steps`}>
-              {formatCost(totalCost)}
-            </div>
-          </div>
-          <div className="text-right">
-            <div className="text-[10px] text-slate-500 uppercase font-bold">Pipeline Tokens</div>
-            <div className="text-lg font-bold font-mono text-cyan-400">{formatTokens(tokens)}</div>
-          </div>
+        <MetricStrip variant="inset" className="justify-end">
+          <Metric label="Elapsed" value={duration} />
+          <Metric
+            label="Cost"
+            value={formatCost(totalCost)}
+            tone="emerald"
+            tooltip={`${totalCost.toFixed(4)} USD across ${stepCount} steps`}
+          />
+          <Metric label="Tokens" value={formatTokens(tokens)} tone="cyan" />
           {cacheReadTokens > 0 && (
-            <div className="text-right">
-              <div className="text-[10px] text-slate-500 uppercase font-bold">Cache Reads</div>
-              <div
-                className="text-lg font-bold font-mono text-violet-400"
-                title={`${cacheReadTokens.toLocaleString()} tokens served from prompt cache (billed at ~10% of base input price) across this pipeline. ${cacheCreationTokens.toLocaleString()} tokens written to cache.`}
-              >
-                {formatTokens(cacheReadTokens)}
-              </div>
-            </div>
+            <Metric
+              label="Cache Reads"
+              value={formatTokens(cacheReadTokens)}
+              tone="violet"
+              tooltip={`${cacheReadTokens.toLocaleString()} tokens served from prompt cache (billed at ~10% of base input price) across this pipeline. ${cacheCreationTokens.toLocaleString()} tokens written to cache.`}
+            />
           )}
-        </div>
+        </MetricStrip>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             onClick={onOpenTerminalTab}

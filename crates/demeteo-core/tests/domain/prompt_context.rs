@@ -161,3 +161,70 @@ fn an_executable_template_demands_every_distinct_token() {
         .expect_err("the second token is unset");
     assert!(err.contains("test_command"), "{err}");
 }
+
+/// Every `{{token}}` the shipped starters reference must be one some builder
+/// binds.
+///
+/// The gate exists because the failure it catches is invisible everywhere
+/// else: `render` collapses an unknown token to `""`, so a typo produces a
+/// prompt that is merely missing a sentence — no error, no warning in the
+/// build, and an agent that behaves slightly worse for a reason nobody can
+/// see. `check-classes.mjs` gates the same shape on the CSS side (AGENTS.md
+/// §7); this is the prompt-template side of it.
+#[test]
+fn every_token_the_starters_reference_is_bound() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/workflows");
+    let mut unbound: Vec<String> = Vec::new();
+    let mut seen_any = false;
+
+    for name in [
+        "bugfix-pipeline",
+        "ci-fix",
+        "docs-update",
+        "experiment",
+        "refactor",
+        "simple-task",
+        "standard-feature-pipeline",
+    ] {
+        let raw = std::fs::read_to_string(dir.join(format!("{name}.json"))).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        for step in doc["steps"].as_array().unwrap() {
+            for field in ["prompt_template", "rework_prompt_template"] {
+                let Some(template) = step[field].as_str() else {
+                    continue;
+                };
+                seen_any = true;
+                for token in referenced_tokens(template) {
+                    if !BOUND_TOKENS.contains(&token.as_str()) {
+                        unbound.push(format!("{name}/{} {field}: {{{{{token}}}}}", step["id"]));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        seen_any,
+        "read no templates at all — the gate proved nothing"
+    );
+    assert!(
+        unbound.is_empty(),
+        "these tokens render as empty strings, silently:\n  {}",
+        unbound.join("\n  ")
+    );
+}
+
+/// The other direction is deliberately *not* asserted: a bound token no
+/// starter uses is not a defect. `{{coverage_command}}` and the subtask
+/// aliases exist for user-authored workflows, and failing on an unused
+/// binding would delete the extension point the list is documenting.
+#[test]
+fn the_review_base_token_is_bound_and_used() {
+    assert!(BOUND_TOKENS.contains(&"review_base_section"));
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/workflows");
+    let raw = std::fs::read_to_string(dir.join("standard-feature-pipeline.json")).unwrap();
+    assert!(
+        raw.contains("{{review_base_section}}"),
+        "the reviewing steps must place the block, or the reviewer is back to guessing a base"
+    );
+}

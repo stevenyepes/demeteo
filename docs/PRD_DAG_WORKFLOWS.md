@@ -262,6 +262,8 @@ A single `WorkflowCanvas` component renders the graph in two modes:
 
 Shared elements: minimap (auto-hidden under ~8 nodes), fit-view, elk auto-layout button, keyboard nav (arrows between nodes, Enter to open panel). The list timeline **remains available as a toggle** ("Graph | Timeline") — it is better for skimming long sequential runs and preserves muscle memory; both read the same store.
 
+**Which mode a run opens in:** the graph, since the UI redesign's Phase 2 gave both surfaces the same step inspector (`FeatureDetail/StepInspector.tsx`) and the timeline stopped being the only place a step's detail was reachable. The toggle itself is offered only when there is a pinned definition *and* the run has at least one step, so a feature predating workflows opens on the timeline with no toggle at all — a fallback, not a second default.
+
 ### 6.2 Run mode: drill-down
 
 Clicking a node opens a right side panel (same split-panel pattern as `ArtifactViewer` today) with tabs:
@@ -328,7 +330,7 @@ breakdown in [`TASKS_DAG_WORKFLOWS.md`](TASKS_DAG_WORKFLOWS.md).
 | Risk | Mitigation |
 |---|---|
 | Engine rewrite destabilizes the hard-won reliability behavior | Phase 1 changes representation, not semantics; existing integration + conformance suites are the gate; starters must run bit-identical |
-| Graph UI is worse than the list for simple linear runs | Keep the timeline toggle permanently; graph only becomes default after parity sign-off |
+| Graph UI is worse than the list for simple linear runs | Keep the timeline toggle permanently. Parity was signed off with the UI redesign's Phase 2 — both surfaces now drive one step inspector — so the graph is the default where there is one to draw; a feature with no pinned definition still opens on the timeline |
 | Parallel nodes resurrect the merge-storm problem | Write-scope exclusion is a scheduler invariant, not a convention; same-repo implement concurrency is impossible by construction |
 | React Flow bundle/perf cost in a battery-sensitive webview | Graphs are tens of nodes; virtualization unnecessary; reuse opacity-only animation rules from the webview perf work; elk in a worker |
 | Schema v2 breaks exported/community workflows | v1 import auto-migrates forever; JSON Schema published in docs-site |

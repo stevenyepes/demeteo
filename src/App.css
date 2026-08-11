@@ -31,6 +31,14 @@
   font-display: block;
 }
 
+/*
+ * These keys are the utility namespace, not only values: `--font-heading` is
+ * what makes `font-heading` resolve, `--color-ruby-500` what makes
+ * `text-ruby-500` resolve. Rename or drop one and nothing fails to build —
+ * every call site keeps a class that now matches no rule and silently
+ * inherits. `scripts/check-classes.mjs` is what catches that; AGENTS.md §4
+ * covers how to name a key.
+ */
 @theme {
   --font-sans: 'Inter', -apple-system, sans-serif;
   --font-mono: 'Fira Code', 'JetBrains Mono', monospace;
@@ -67,6 +75,13 @@
   
   --border-glass: rgba(255, 255, 255, 0.05);
   --border-glass-focus: rgba(139, 92, 246, 0.4);
+
+  /* One corner radius for every panel-level surface. A card, a canvas well and
+     a banner are the same object at different depths, and a run view showing
+     all three at once is where a second value reads as a mistake rather than
+     as variety. Smaller radii still belong to controls — chips, buttons and
+     inputs are not panels. */
+  --radius-panel: 12px;
 
   /* Neon Accents (Vibrant HSL tailoring) */
   --accent-purple: #8b5cf6;          /* Violet: Active Connections */
@@ -146,14 +161,26 @@ body {
    GLASSMORPHISM & CORE PANEL UI UTILITIES
    ---------------------------------------------------- */
 
+/* The card. It already states its own border and radius, so a call site adding
+   `border border-white/5` is re-spelling this rule and one adding
+   `border-white/10` is silently leaving the card language — which is how the
+   harness panel came to read heavier than the panels beside it. */
 .glass-panel {
   background: var(--bg-panel);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--border-glass);
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+/* A field sunk *into* a card rather than a card of its own: the graph canvas,
+   a stream log. It carries no border and no radius, because it fills a panel
+   that already has both — the run view's three tracks are peers, and a canvas
+   ringed by a second border inside the first reads as a fourth surface. */
+.panel-field {
+  background: var(--bg-well);
 }
 
 .glass-panel-hover:hover {
@@ -193,61 +220,11 @@ body {
   color: var(--accent-purple);
 }
 
-/* Micro-animations */
-@keyframes pulseGlowPurple {
-  0% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-purple-glow); }
-  50% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 16px var(--accent-purple); }
-  100% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-purple-glow); }
-}
-
-@keyframes pulseGlowCyan {
-  0% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-cyan-glow); }
-  50% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 16px var(--accent-cyan); }
-  100% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-cyan-glow); }
-}
-
-@keyframes pulseGlowEmerald {
-  0% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-emerald-glow); }
-  50% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 16px var(--accent-emerald); }
-  100% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-emerald-glow); }
-}
-
-@keyframes pulseGlowRuby {
-  0% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-ruby-glow); }
-  50% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 16px var(--accent-ruby); }
-  100% { transform: scale(1); opacity: 0.8; box-shadow: 0 0 6px var(--accent-ruby-glow); }
-}
-
-.pulse-indicator.glow-purple {
-  animation: pulseGlowPurple 2.2s infinite ease-in-out;
-}
-
-.pulse-indicator.glow-cyan {
-  animation: pulseGlowCyan 2.2s infinite ease-in-out;
-}
-
-.pulse-indicator.glow-emerald {
-  animation: pulseGlowEmerald 2.2s infinite ease-in-out;
-}
-
-.pulse-indicator.glow-ruby {
-  animation: pulseGlowRuby 2.2s infinite ease-in-out;
-}
-
-@keyframes slideInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-slide-in {
-  animation: slideInUp 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
+/* The tree's infinite animations are all further down, beside the note that
+   says why every one of them moves opacity and nothing else. Four tone-keyed
+   `.pulse-indicator` glows used to live here animating `transform` and
+   `box-shadow` together — the pair that pinned the WKWebView GPU process — and
+   no call site had referenced them since before that was known. */
 
 /* ----------------------------------------------------
    APP LAYOUT (GRID STRUCTURE)
@@ -751,15 +728,18 @@ body {
   animation: spin 1s linear infinite;
 }
 
-.animate-spin-slow {
-  animation: spin 3s linear infinite;
-}
-
 /* Compositor-cheap pulse: animate ONLY opacity (GPU-composited, no per-frame
    repaint/raster). The glow is a STATIC box-shadow on the element, faded in and
    out by the opacity keyframe — so we get the same visual pulse without
    re-rasterizing box-shadow/scale every frame. Animating box-shadow or scale
-   here previously pinned the WKWebView GPU process at idle. */
+   here previously pinned the WKWebView GPU process at idle.
+
+   That is the cheap half of the motion budget (UI_REDESIGN_PLAN §6, Phase 5).
+   The other half is not about cost: an animation that never stops is a claim
+   that something is still happening, so an infinite one belongs on a small
+   liveness dot or an in-flight spinner and nowhere else. Put on a container
+   holding text it fades the words the user is trying to read, and put on the
+   icon of a settled error it says "working on it" forever. */
 @keyframes pulse-glow {
   0%, 100% { opacity: 0.4; }
   50%      { opacity: 1; }
@@ -767,6 +747,11 @@ body {
 
 .animate-pulse-glow {
   box-shadow: 0 0 10px 1px rgba(6, 182, 212, 0.5);
+  animation: pulse-glow 1.2s ease-in-out infinite;
+}
+
+.animate-pulse-glow-amber {
+  box-shadow: 0 0 10px 1px rgba(245, 158, 11, 0.5);
   animation: pulse-glow 1.2s ease-in-out infinite;
 }
 
@@ -782,6 +767,12 @@ body {
   animation: fade-in 0.2s ease-out;
 }
 
+/* The one infinite animation here that is not opacity-only, kept deliberately:
+   `background-position` repaints, but this is a 2px bar that mounts only while a
+   terminal session is being established and unmounts the moment it is. An
+   indeterminate progress bar is the shape that cannot be expressed with opacity
+   — a fade says "waiting", not "still going". Do not reach for it as a general
+   affordance; a spinner is the cheap one. */
 @keyframes progress-shimmer {
   0%   { background-position: -200% 0; }
   100% { background-position: 200% 0; }
@@ -798,24 +789,44 @@ body {
   animation: progress-shimmer 1.6s linear infinite;
 }
 
+/* Loading-placeholder shimmer. Same constraint as `pulse-glow` above, for the
+   same reason and at higher stakes: a skeleton stands in for a whole column, so
+   dozens of these animate at once. Only opacity moves; the tint is static. */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 0.85; }
+}
+
+.animate-skeleton-pulse {
+  background-color: rgba(255, 255, 255, 0.07);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
 /* ----------------------------------------------------
    REDUCED MOTION
    ----------------------------------------------------
    When the OS requests reduced motion, stop every always-on/infinite
    animation. This is both the accessibility default and a battery win: it
    lets the WKWebView compositor go fully idle. One-shot enter animations
-   (fade-in, slide-in) are collapsed to instant. */
+   (fade-in) are collapsed to instant.
+
+   `.animate-pulse` is Tailwind's, not this file's, and it is listed here for
+   that reason: nothing about defining the rest of these locally extends to a
+   utility the framework emits, so every `animate-pulse` in the tree kept
+   running under a reduced-motion request until it was named. `motion-reduce:`
+   at a call site does the same job for one element; this covers the ones that
+   do not spell it. */
 @media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
   .animate-pulse-glow,
+  .animate-pulse-glow-amber,
   .animate-spin,
-  .animate-spin-slow,
   .animate-progress-shimmer,
-  .pulse-indicator {
+  .animate-skeleton-pulse {
     animation: none !important;
   }
 
-  .animate-fade-in,
-  .animate-slide-in {
+  .animate-fade-in {
     animation-duration: 0.01ms !important;
   }
 }
@@ -896,6 +907,41 @@ body {
 .stream-event {
   content-visibility: auto;
   contain-intrinsic-size: 80px 180px;
+}
+
+/* Same trade as .stream-event, for a 30+ step run (docs/UI_REDESIGN_PLAN.md
+   §4.9). Two things it is easy to get wrong:
+
+   Put it on the step card, NEVER on the <li> around it. content-visibility
+   implies paint containment at all times, on-screen included, and the timeline
+   hangs its connector circle outside the row at -41px — contained, that circle
+   is clipped away and the run loses its spine.
+
+   28px is the *content* box: contain-intrinsic-size stands in for the contents
+   and box-sizing:border-box adds the card's own 40px of padding and 2px of
+   border back on top, so a skipped comfortable row still reserves ~70px. It is
+   the height of the identity/metric row — one 20px text-sm line in a py-1
+   button. Raising it to the whole card over-reserves every off-screen row,
+   which is the scrollbar jumping under the thumb as you scroll. */
+.timeline-step-card {
+  content-visibility: auto;
+  contain-intrinsic-size: 640px 28px;
+}
+
+/* Same trade again, for the project view's pipeline list. The placement
+   question the rule above has does not arise here: the row already sets
+   overflow-hidden so its accent bar's glow stays inside the card, so paint
+   containment clips nothing that was not clipped before it.
+
+   80px is the *content* box of a comfortable row, which is the default and so
+   the one worth reserving for: a 28px title line, then the context chips at
+   20px and the detail line at 16px with an 8px gap above each. p-5's 40px and
+   2px of border ride on top, so a skipped row holds ~122px. A compact row
+   over-reserves by a few pixels, which costs nothing; under-reserving is the
+   scroll thumb moving under the cursor. */
+.pipeline-card {
+  content-visibility: auto;
+  contain-intrinsic-size: 720px 80px;
 }
 
 .supervisor-stream-content {

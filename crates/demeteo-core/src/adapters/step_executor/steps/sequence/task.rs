@@ -7,6 +7,7 @@ use crate::adapters::step_executor::artifacts::{
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::artifact::Artifact;
+use crate::domain::artifact_capture::captures_file_bodies;
 use crate::domain::sequence::outcome::SequenceError;
 use crate::domain::sequence::progress::TaskContribution;
 use crate::ports::notification::DomainEvent;
@@ -32,7 +33,18 @@ impl ExecutionDriver {
         let step_conf = step.step_conf;
         let task = run.task;
 
-        let snapshot = WorktreeSnapshot::capture(&*self.exec, target.machine, wt.path).await;
+        let decls: &[crate::domain::artifact::ArtifactDecl] =
+            step_conf.artifacts.as_deref().unwrap_or(&[]);
+        // Both the snapshot and the `pre_head` below exist only to name the
+        // paths whose bodies get read back, so they are gated on the same
+        // question the agent step asks — a step declaring only a `Diff` was
+        // paying for a whole delta whose every body was then discarded.
+        let reads_bodies = captures_file_bodies(decls);
+        let snapshot = if reads_bodies {
+            Some(WorktreeSnapshot::capture(&*self.exec, target.machine, wt.path).await)
+        } else {
+            None
+        };
         // The worktree's HEAD *before* the agent runs. The snapshot delta
         // misses work the agent committed itself, and diffing against the
         // worktree's own HEAD afterwards would miss it too — the commit moved
@@ -40,12 +52,15 @@ impl ExecutionDriver {
         // see it. Diffing against the feature branch instead would over-report
         // here in a way it could not in the old parallel step: this worktree
         // already carries every earlier task's commits.
-        let pre_head = self
-            .sequence_git(target.machine)
-            .rev_parse(wt.path, "HEAD")
-            .await
-            .ok()
-            .filter(|s| !s.is_empty());
+        let pre_head = if reads_bodies {
+            self.sequence_git(target.machine)
+                .rev_parse(wt.path, "HEAD")
+                .await
+                .ok()
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        };
 
         let prompt = self.build_task_prompt(step, target, wt, run).await;
 
@@ -138,45 +153,45 @@ impl ExecutionDriver {
         // Artifact capture: snapshot delta, falling back to a diff against
         // the pre-turn HEAD when the snapshot saw nothing — which is exactly
         // what happens when the agent committed its own work.
-        let decls: &[crate::domain::artifact::ArtifactDecl] =
-            step_conf.artifacts.as_deref().unwrap_or(&[]);
-        let always: Vec<&str> = decls
-            .iter()
-            .filter_map(|d| match &d.capture {
-                crate::domain::artifact::ArtifactCapture::LastWriteTo { path } => {
-                    Some(path.as_str())
-                }
-                _ => None,
-            })
-            .collect();
-        let mut changed = snapshot
-            .delta(&*self.exec, target.machine, wt.path, &always, &[])
-            .await;
-        if changed.is_empty() {
-            if let Some(ref base) = pre_head {
-                if let Ok(diff_files) = self
-                    .sequence_git(target.machine)
-                    .diff_name_only(wt.path, base)
-                    .await
-                {
-                    changed = diff_files
-                        .lines()
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
+        if let Some(snapshot) = snapshot {
+            let always: Vec<&str> = decls
+                .iter()
+                .filter_map(|d| match &d.capture {
+                    crate::domain::artifact::ArtifactCapture::LastWriteTo { path } => {
+                        Some(path.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let mut changed = snapshot
+                .delta(&*self.exec, target.machine, wt.path, &always, &[])
+                .await;
+            if changed.is_empty() {
+                if let Some(ref base) = pre_head {
+                    if let Ok(diff_files) = self
+                        .sequence_git(target.machine)
+                        .diff_name_only(wt.path, base)
+                        .await
+                    {
+                        changed = diff_files
+                            .lines()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    }
                 }
             }
-        }
-        for rel_path in changed {
-            let name = std::path::Path::new(&rel_path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("artifact")
-                .to_string();
-            if let Some(content) =
-                read_worktree_file(&*self.exec, target.machine, wt.path, &rel_path).await
-            {
-                produced_artifacts.push(Artifact::tool_write(name, rel_path, content));
+            for rel_path in changed {
+                let name = std::path::Path::new(&rel_path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("artifact")
+                    .to_string();
+                if let Some(content) =
+                    read_worktree_file(&*self.exec, target.machine, wt.path, &rel_path).await
+                {
+                    produced_artifacts.push(Artifact::tool_write(name, rel_path, content));
+                }
             }
         }
 

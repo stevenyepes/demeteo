@@ -13,9 +13,9 @@ import {
   ListTree,
 } from 'lucide-react';
 import type { Machine, RemoteRunMirror } from '../types';
-import { StatusBadge } from './ui/StatusBadge';
-import { RemoteGateActions, ReinjectCredentials } from './RunEventTimeline';
-import { runStatusMeta, TONE_BORDER_L, TONE_TEXT, type RunStatusTone } from '../lib/runStatus';
+import { Chip } from './ui/Chip';
+import { RemoteGateActions, ReinjectCredentials } from './RemoteRunActions';
+import { TONE_BORDER_L, TONE_TEXT, type RunStatusTone } from '../lib/runStatus';
 import { relativeTime } from '../lib/utils';
 import { useNavigation } from '../context';
 import { formatError } from '../lib/errors';
@@ -219,7 +219,7 @@ const RemoteRunInbox: React.FC = () => {
       <div className="max-w-4xl mx-auto relative z-10">
         <div className="flex items-end justify-between mb-6 border-b border-white/5 pb-4">
           <div>
-            <h2 className="text-2xl font-outfit font-bold text-white mb-1 flex items-center gap-2">
+            <h2 className="text-2xl font-heading font-bold text-white mb-1 flex items-center gap-2">
               <Inbox className="w-6 h-6 text-cyan-400" />
               Runs
             </h2>
@@ -254,7 +254,7 @@ const RemoteRunInbox: React.FC = () => {
         ) : runs.length === 0 ? (
           <div className="glass-panel p-8 text-center flex flex-col items-center justify-center">
             <Inbox className="w-8 h-8 text-slate-500 mb-3" />
-            <h3 className="text-base font-outfit font-semibold text-white mb-1">No remote runs yet</h3>
+            <h3 className="text-base font-heading font-semibold text-white mb-1">No remote runs yet</h3>
             <p className="text-sm text-slate-400 max-w-md">
               Pick a remote machine under "Where to run" in the Start Feature modal and the run will show up here.
             </p>
@@ -285,12 +285,7 @@ const RemoteRunInbox: React.FC = () => {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 text-slate-200 text-sm font-medium">
                             <span className="truncate">{run.title}</span>
-                            <StatusBadge
-                              status={run.status}
-                              variant="pill"
-                              label={runStatusMeta(run.status).label}
-                              className="shrink-0"
-                            />
+                            <Chip status={run.status} />
                           </div>
                           <div className="text-[11px] text-slate-500 font-mono mt-0.5 flex flex-wrap gap-x-3">
                             <span>{machineName(run.machine_id)}</span>

@@ -275,6 +275,7 @@ export interface ProjectSettingsInput {
   default_agent_kind?: string | null;
   default_model?: string | null;
   default_effort?: EffortLevel | null;
+  default_workflow_id?: string | null;
   default_loop_iterations?: number | null;
   default_max_budget_usd?: number | null;
   artifact_subdir?: string;
@@ -366,6 +367,10 @@ export async function saveProjectSettings(
       input.default_effort !== undefined
         ? input.default_effort
         : (existing?.default_effort ?? null),
+    default_workflow_id:
+      input.default_workflow_id !== undefined
+        ? input.default_workflow_id
+        : (existing?.default_workflow_id ?? null),
     default_loop_iterations:
       input.default_loop_iterations !== undefined
         ? input.default_loop_iterations

@@ -101,7 +101,7 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 select-none">
-      <div className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-fade-in">
         <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between bg-[#050508]">
           <h3 className="text-sm font-semibold text-white flex items-center gap-2">
             {title}

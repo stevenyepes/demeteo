@@ -14,6 +14,18 @@ use serde::{Deserialize, Serialize};
 /// How much of the artifact the executor should persist and how the
 /// next step should consume it. Set per artifact via `ArtifactDecl.mode`
 /// in the workflow JSON.
+///
+/// **Nothing reads this today.** It parses, defaults, serializes and
+/// round-trips, and no executor path consults it — a declaration asking for
+/// [`SummaryOnly`](Self::SummaryOnly) persists and injects the full body like
+/// any other. That is worth stating here because the field reads as a working
+/// control at every call site, and the cost of believing it is a workflow
+/// author who thinks a large deliverable is being summarised on the way into
+/// the next prompt when it is being passed whole. What actually bounds that
+/// hand-off is [`ArtifactDecl::inline`], which decides body-versus-path-manifest
+/// and is wired. Decision 28 in `docs/DECISIONS.md` is the standing intent;
+/// until something consumes this, the honest reading is "declared, not
+/// implemented".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactMode {

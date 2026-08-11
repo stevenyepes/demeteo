@@ -127,7 +127,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
       {/* Left Column: List */}
       <div className="w-1/3 border-r border-white/5 bg-[#0d0f14]/50 flex flex-col h-full">
         <div className="p-6 flex items-center justify-between border-b border-white/5">
-          <h2 className="text-xl font-bold font-display text-white tracking-wide">Workflow Library</h2>
+          <h2 className="text-xl font-bold font-heading text-white tracking-wide">Workflow Library</h2>
           <div className="flex items-center gap-2">
             <input
               ref={importInput}
@@ -252,7 +252,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
             <div className="p-6 rounded-xl border border-white/5 bg-white/[0.02] backdrop-blur-xl flex justify-between items-start">
               <div className="space-y-2">
                 <div className="flex items-center gap-3">
-                  <h1 className="text-2xl font-bold font-display text-white">{selectedWorkflow.name}</h1>
+                  <h1 className="text-2xl font-bold font-heading text-white">{selectedWorkflow.name}</h1>
                   <span className="text-xs px-2 py-0.5 rounded bg-white/10 text-slate-300 font-mono">
                     v{selectedWorkflow.version}
                   </span>
@@ -328,7 +328,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
             {/* Graph shape — what the run will actually follow. */}
             {graph && graph.nodes.length > 0 && (
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold font-display text-white tracking-wide">Shape</h3>
+                <h3 className="text-lg font-semibold font-heading text-white tracking-wide">Shape</h3>
                 <div className="rounded-xl border border-white/5 bg-white/[0.02] p-5">
                   <MiniGraph definition={graph} />
                 </div>
@@ -337,7 +337,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
 
             {/* Steps Timeline preview */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold font-display text-white tracking-wide">Steps Configuration</h3>
+              <h3 className="text-lg font-semibold font-heading text-white tracking-wide">Steps Configuration</h3>
               <div className="relative border-l border-white/5 ml-4 pl-8 space-y-6">
                 {selectedWorkflow.steps.map((step, idx) => {
                   let badgeColor = 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20';
@@ -389,7 +389,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
           </div>
         ) : (
           <div className="h-full flex flex-col items-center justify-center text-slate-500 text-sm">
-            <Cpu className="w-12 h-12 text-slate-700 mb-3 animate-pulse" />
+            <Cpu className="w-12 h-12 text-slate-700 mb-3" />
             Select a workflow to preview details.
           </div>
         )}

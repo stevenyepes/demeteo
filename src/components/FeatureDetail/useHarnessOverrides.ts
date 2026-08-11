@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { getAgentModels } from '../../lib/agentModels';
 import { useErrorBus } from '../../lib/errorBus';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
@@ -24,6 +24,13 @@ export interface HarnessOverrides {
 /**
  * The model / harness / effort a retry or replay will re-pin, and the probe
  * that discovers which of each the feature's machine can actually offer.
+ *
+ * **Every member of the returned object is identity-stable across a render that
+ * changed none of them, and so is the object.** `FeatureDetailView` hands this
+ * straight to memoized `StepCard`s, and it re-renders on every step click now
+ * that selection routes through `navigate` — a fresh object literal here fails
+ * `Object.is` for all of them and re-renders the whole run to move one row's
+ * highlight.
  */
 export function useHarnessOverrides(): HarnessOverrides {
   const { reportError } = useErrorBus();
@@ -46,15 +53,18 @@ export function useHarnessOverrides(): HarnessOverrides {
   // The effort levels the harness the rerun will actually use accepts. Empty
   // (hermes) disables the control rather than offering a level the adapter
   // would drop on the floor.
-  const retryEffortLevels = effortLevelsFor(agentCatalog, selectedAgent || featureAgentKind);
+  const retryEffortLevels = useMemo(
+    () => effortLevelsFor(agentCatalog, selectedAgent || featureAgentKind),
+    [agentCatalog, selectedAgent, featureAgentKind],
+  );
 
-  const adoptFeatureModel = (model: string | null | undefined) => {
+  const adoptFeatureModel = useCallback((model: string | null | undefined) => {
     if (selectedModel === '') {
       setSelectedModel(model || '');
     }
-  };
+  }, [selectedModel]);
 
-  const probeForFeature = (input: { agentKind: string | null | undefined; projectId: string }) => {
+  const probeForFeature = useCallback((input: { agentKind: string | null | undefined; projectId: string }) => {
     if (availableModels.length > 0 || isLoadingModels) return;
     setIsLoadingModels(true);
     const agentKind = input.agentKind || 'opencode';
@@ -84,12 +94,12 @@ export function useHarnessOverrides(): HarnessOverrides {
         setIsLoadingModels(false);
       }
     })();
-  };
+  }, [availableModels.length, isLoadingModels, reportError]);
 
   // Switching the harness invalidates the probed model list (models are
   // harness-specific), so clear the model selection and re-probe for the
   // chosen harness. An empty choice falls back to the feature's current harness.
-  const onAgentChange = (agentKind: string) => {
+  const onAgentChange = useCallback((agentKind: string) => {
     setSelectedAgent(agentKind);
     setSelectedModel('');
     // Clamp the re-pinned effort to what the rerun's harness actually accepts,
@@ -107,21 +117,36 @@ export function useHarnessOverrides(): HarnessOverrides {
         setIsLoadingModels(false);
       }
     })();
-  };
+  }, [agentCatalog, featureAgentKind, featureMachineId, reportError]);
 
-  return {
-    availableModels,
-    selectedModel,
-    setSelectedModel,
-    isLoadingModels,
-    availableAgents,
-    selectedAgent,
-    selectedEffort,
-    setSelectedEffort,
-    featureAgentKind,
-    retryEffortLevels,
-    onAgentChange,
-    adoptFeatureModel,
-    probeForFeature,
-  };
+  return useMemo(
+    () => ({
+      availableModels,
+      selectedModel,
+      setSelectedModel,
+      isLoadingModels,
+      availableAgents,
+      selectedAgent,
+      selectedEffort,
+      setSelectedEffort,
+      featureAgentKind,
+      retryEffortLevels,
+      onAgentChange,
+      adoptFeatureModel,
+      probeForFeature,
+    }),
+    [
+      availableModels,
+      isLoadingModels,
+      availableAgents,
+      selectedAgent,
+      selectedEffort,
+      selectedModel,
+      featureAgentKind,
+      retryEffortLevels,
+      onAgentChange,
+      adoptFeatureModel,
+      probeForFeature,
+    ],
+  );
 }

@@ -337,6 +337,40 @@ pub fn lint_workflow_v2(def: &WorkflowDefinitionV2, known_types: &[&str]) -> Vec
                     format!("agent node '{}' has no prompt_template", node.id),
                 ));
             }
+
+            // `StepConfig::effective_capability` infers `Implement` from an
+            // unconstrained artifact capture, so an implement step used to be
+            // able to say what it was purely by declaring `all_writes`. Steps
+            // that declare nothing now — which is the shape a step gets when
+            // its inventory capture is removed — fall through to `Artifacts`
+            // instead: read-only source, no shell. That is the safe default and
+            // it stays, but arriving at it silently costs a whole run, because
+            // the agent reports that it cannot write the files it was asked to
+            // and nothing names the fence as the reason.
+            //
+            // Only the doubly-silent case warns. A node naming a capability has
+            // said what it is, and one declaring an artifact has said what it
+            // produces; a node doing neither has said nothing at all.
+            let names_capability = node.config.get("capability").is_some_and(|c| !c.is_null());
+            let declares_artifact = node
+                .config
+                .get("artifacts")
+                .and_then(|a| a.as_array())
+                .is_some_and(|a| !a.is_empty());
+            if !names_capability && !declares_artifact {
+                findings.push(LintFinding::node_warning(
+                    "capability-inferred-read-only",
+                    &node.id,
+                    format!(
+                        "agent node '{}' declares neither a capability nor an artifact, so it \
+                         runs as 'artifacts': it may read the repo and write under artifacts/, \
+                         but source is read-only and it has no shell. Set \
+                         capability: 'implement' if it is meant to change code, or declare what \
+                         it produces.",
+                        node.id
+                    ),
+                ));
+            }
         }
 
         for (class, rule) in [

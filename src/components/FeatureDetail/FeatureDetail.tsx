@@ -1,17 +1,33 @@
+import { useCallback, useRef, useState } from 'react';
 import { RefreshCw, ShieldAlert } from 'lucide-react';
+import type { AppView } from '../../types';
+import type { NavigationMode } from '../../context/NavigationContext';
+import { DEFAULT_DENSITY } from '../../lib/density';
+import { densityPref, inspectorWidthPref } from '../../lib/uiPrefs';
+import { usePersistedPref } from '../../hooks/usePersistedPref';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import { useNavigation, useProject, useUIState } from '../../context';
 import { ArtifactModal } from '../ArtifactModal';
 import { RunViewToggle } from '../RunViewToggle';
+import {
+  defaultInspectorWidth,
+  metaTrackWidth,
+  pickInspectorLayout,
+  runPairSize,
+} from '../runLayout';
+import { DensityToggle } from '../ui/DensityToggle';
 import { useRunColumnLayout } from '../useRunColumnLayout';
 import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { AttachmentsPanel } from './AttachmentsPanel';
 import { FeatureHeader } from './FeatureHeader';
 import { FeatureStatusBanners } from './FeatureStatusBanners';
+import { GateStrip } from './GateStrip';
 import { InitialPromptPanel } from './InitialPromptPanel';
 import { ReplayModal } from './ReplayModal';
 import { RunGraphPanel } from './RunGraphPanel';
 import { RunMetaColumn } from './RunMetaColumn';
+import { RunPanes } from './RunPanes';
+import { StepInspector } from './StepInspector';
 import { StepTimeline } from './StepTimeline';
 import { useAgentStream } from './useAgentStream';
 import { useArtifactSelection } from './useArtifactSelection';
@@ -21,22 +37,50 @@ import { useFeatureMr } from './useFeatureMr';
 import { useFeatureRun } from './useFeatureRun';
 import { useGateCardScroll } from './useGateCardScroll';
 import { useHarnessOverrides } from './useHarnessOverrides';
+import { useHeaderCollapse } from './useHeaderCollapse';
 import { useRemoteRun } from './useRemoteRun';
 import { useRerunActions } from './useRerunActions';
 import { useRunGraph } from './useRunGraph';
+import { useRunShortcuts } from './useRunShortcuts';
+import { useStepSelection } from './useStepSelection';
 import { useWorktreeRouting } from './useWorktreeRouting';
 
+type DetailView = Extract<AppView, { kind: 'detail' }>;
+
+interface FeatureDetailViewProps {
+  view: DetailView;
+  navigate: (view: AppView, mode?: NavigationMode) => void;
+}
+
+/**
+ * The narrowing is the whole job of this component: `FeatureDetailView` cannot
+ * mount without a detail view, so none of its ~20 hooks is reachable
+ * conditionally. Guarding inside the body instead reads as safe only while
+ * `App.tsx` mounts this for `kind: 'detail'` alone — the first caller that keeps
+ * it mounted across a view change gets a hooks-order crash (audit F17).
+ */
 export function FeatureDetail() {
   const { view, navigate } = useNavigation();
+  if (view.kind !== 'detail') return null;
+  return <FeatureDetailView view={view} navigate={navigate} />;
+}
+
+function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   const { state: { currentProjectId, projects } } = useProject();
-  const { ui: { sidebarCollapsed: _sidebarCollapsed } } = useUIState();
+  const {
+    ui: {
+      sidebarCollapsed: _sidebarCollapsed,
+      commandPaletteOpen,
+      docsPanelOpen,
+      startFeatureOpen,
+    },
+  } = useUIState();
   // The legacy `AgentTerminalDrawer` mount consumed `sidebarCollapsed`
   // to size its drawer; the panel-mounted surface does not need it.
   // We keep the field on `UIStateSlice` for back-compat with the
   // `pickEscapeAction` helper exported from `App.tsx`.
   void _sidebarCollapsed;
 
-  if (view.kind !== 'detail') return null;
   const { featureId } = view;
   const projectId = currentProjectId ?? undefined;
   const currentProject = projects.find(p => p.id === currentProjectId) ?? null;
@@ -69,13 +113,15 @@ export function FeatureDetail() {
     setFeatureStatus: run.setFeatureStatus,
     overrides,
   });
+  const selection = useStepSelection({ view, steps: run.steps, navigate });
   const graph = useRunGraph({
     featureId,
     featureTitle: run.featureTitle,
     steps: run.steps,
     navigate,
     startReplay: rerun.startReplay,
-    openArtifact: artifact.openArtifact,
+    selectedNodeId: selection.selectedNodeId,
+    toggleNode: selection.toggleStep,
   });
   const mr = useFeatureMr({
     featureId,
@@ -96,8 +142,42 @@ export function FeatureDetail() {
   /** Measuring the column, measuring the chrome above the graph, and turning
    *  both into verdicts lives in `useRunColumnLayout` — this component only
    *  hands out the refs and renders what comes back. */
-  const { setRunColumnEl, setMetaChromeEl, setToggleChromeEl, runLayout, graphBoxPx } =
-    useRunColumnLayout(graph.graphDef);
+  const {
+    setRunColumnEl,
+    runColumnEl,
+    setMetaChromeEl,
+    setToggleChromeEl,
+    runColumnSize,
+    runLayout,
+    graphBoxPx,
+  } = useRunColumnLayout(graph.graphDef);
+  const headerCollapsed = useHeaderCollapse(runColumnEl);
+
+  /** `null` until the user has chosen a width, and then theirs for good — a
+   *  stored one arrives by the same door a drag does and outranks the column
+   *  identically. Until then the opening width tracks the measured column, so a
+   *  window resized before anyone touched the divider still opens at a sensible
+   *  proportion; once chosen nothing re-derives it, which is the discipline
+   *  `runLayout.ts`'s doc asks of its callers. The write rides `SplitPane`'s
+   *  per-release commit, keeping IPC out of the pointer path that drag
+   *  deliberately keeps `setState` out of (UI_REDESIGN_PLAN §4.1). */
+  const [chosenInspectorWidth, setChosenInspectorWidth] = usePersistedPref(inspectorWidthPref, null);
+  const [density, setDensity] = usePersistedPref(densityPref, DEFAULT_DENSITY);
+  /** Open by default, and deliberately *not* persisted alongside the rest.
+   *  `ActivityPanel`'s remote tail runs only while the panel is open, and that
+   *  tail is the only source of a detached run's bootstrap phases — so a
+   *  collapse that survived the mount would leave every future remote run with
+   *  a blank feed and no stepper, days after the click that caused it, with
+   *  nothing on screen to connect the two. Per-mount it costs one click; stored
+   *  it is a silent break. Persist this only once that poll no longer hangs off
+   *  the disclosure (`useRemoteRun`, at the `onEvents` tap). */
+  const [activityOpen, setActivityOpen] = useState(true);
+  /** Split, the meta track and the gap are already spent — so every inspector
+   *  verdict is asked of what is left, never of the column. */
+  const runPair = runPairSize(runColumnSize, runLayout);
+  const metaWidth = metaTrackWidth(runColumnSize, runLayout);
+  const inspectorLayout = pickInspectorLayout(runPair);
+  const inspectorWidth = chosenInspectorWidth ?? defaultInspectorWidth(runPair);
 
   useTauriEvent<{ feature_id: string; step_execution_id: string }>('gate_required', ({ feature_id, step_execution_id }) => {
     if (feature_id === featureId) {
@@ -110,20 +190,168 @@ export function FeatureDetail() {
     }
   });
 
-  const decideGate = (stepExecutionId: string) =>
-    navigate({ kind: 'detail', featureId, featureTitle: run.featureTitle, gateStepExecutionId: stepExecutionId });
+  const decideGate = useCallback(
+    (stepExecutionId: string) =>
+      navigate({ kind: 'detail', featureId, featureTitle: run.featureTitle, gateStepExecutionId: stepExecutionId }),
+    [navigate, featureId, run.featureTitle],
+  );
 
-  // The unified feed the node panel reads: local runs push it through
-  // `useRunEvents`; remote runs fill `remoteRunEvents` from the poll above.
+  const deselectStep = useCallback(() => selection.selectStep(null), [selection.selectStep]);
+
+  // The unified feed the Activity panel reads: local runs push it through
+  // `useRunEvents`; remote runs fill `remoteRunEvents` from that panel's own
+  // tail, which hands each batch to `useRemoteRun` rather than keeping it.
   const panelRunEvents = remote.remoteRun ? remote.remoteRunEvents : graph.localRunEvents;
 
-  const { graphDef, selectedNode, selectedRun, selectedStep } = graph;
-  const gateStepId =
-    selectedNode?.type === 'gate' ? selectedRun?.stepExecutionId ?? null : null;
+  const { graphDef } = graph;
+
+  const inspectorPaneRef = useRef<HTMLDivElement | null>(null);
+
+  /** Anything covering the run takes the keyboard with it, and this view is not
+   *  where most of it is mounted: `App.tsx` renders the palette, the docs panel
+   *  and the start-feature modal as siblings of this component, so it stays
+   *  mounted underneath them and its window listener stays live. None of the
+   *  three moves focus, so `typingTarget` alone reads `document.body` and lets
+   *  the keys through — which is how `g`/`t` came to write a *global* view-mode
+   *  preference from a surface the user cannot see. */
+  const overlayOpen =
+    commandPaletteOpen ||
+    docsPanelOpen ||
+    startFeatureOpen ||
+    Boolean(view.gateStepExecutionId) ||
+    Boolean(artifact.selectedArtifactPath) ||
+    Boolean(attachments.viewingAttachmentId) ||
+    Boolean(rerun.replayTarget);
+
+  useRunShortcuts({
+    enabled: !overlayOpen,
+    steps: run.steps,
+    selectedStepId: selection.selectedExecutionId,
+    selectStep: selection.selectStep,
+    inspectorRef: inspectorPaneRef,
+    canShowGraph: graph.canShowGraph,
+    setViewMode: graph.setViewMode,
+  });
+
+  /** The one inspector, docked beside whichever run surface is showing
+   *  (UI_REDESIGN_PLAN §3.1). It subscribes to the live stream itself — see
+   *  `StepInspector`'s header for why that subscription may not live here.
+   *
+   *  The wrapper is a focus target, not a box: `Enter` aims at the tab strip's
+   *  roving entry, and an *empty* inspector has neither a tab strip nor any
+   *  other focusable child, so `tabIndex={-1}` covers that case. It carries its
+   *  own ring because that case is the one nothing else draws — the populated
+   *  pane lands on a real tab button that brings its own, while a bare
+   *  `outline-none` div would take the keypress and leave the screen identical.
+   *  It states no size of its own — both seats size the pane through `h-full`
+   *  (`RunPanes`), and breaking that chain collapses the tabs inside it. */
+  const inspector = (
+    <div
+      ref={inspectorPaneRef}
+      tabIndex={-1}
+      className="h-full min-h-0 outline-none focus-visible:ring-1 focus-visible:ring-cyan-500/50"
+    >
+      <StepInspector
+        className="h-full"
+        featureId={featureId}
+        target={selection.target}
+        graphDef={graphDef}
+        statusByNode={graph.runStatusByNode}
+        streamStore={stream.store}
+        harnessBaseline={run.harnessBaseline}
+        overrides={overrides}
+        onDeselect={deselectStep}
+        onOpenEditorForPath={routing.openEditorForPath}
+        onOpenArtifact={artifact.openArtifact}
+        onRetry={rerun.handleRetryStep}
+        onReplay={graph.startReplayFromInspector}
+        onStop={rerun.handleStopStep}
+        onDecideGate={decideGate}
+      />
+    </div>
+  );
+
+  const runSurface =
+    graph.graphMode && graphDef ? (
+      <RunGraphPanel
+        definition={graphDef}
+        statusByNode={graph.runStatusByNode}
+        highlightedNodeIds={rerun.replayPreviewNodes}
+        selectedNodeId={selection.selectedNodeId}
+        onNodeActivate={graph.onNodeActivate}
+      />
+    ) : (
+      <StepTimeline
+        steps={run.steps}
+        remoteRun={remote.remoteRun}
+        remoteMachineName={remote.remoteMachineName}
+        hasBootstrapPhases={bootstrap.bootstrapPhases.size > 0}
+        gateStepExecutionId={view.gateStepExecutionId}
+        stepCardRefs={stepCardRefs}
+        selectedStepId={selection.selectedExecutionId}
+        density={density}
+        onSelect={selection.selectStep}
+        onDecideGate={decideGate}
+      />
+    );
+
+  /** Only the stacked layout takes a stated height, and only for the graph: the
+   *  column scrolls there, so a box that asked to fill it would have nothing to
+   *  fill. Side by side the row is handed the window's remaining height and the
+   *  graph fits itself into its share — the plan's height stopped being the
+   *  row's the moment it was also deciding the inspector's. */
+  const surfaceHeightPx = inspectorLayout === 'side' || !graph.graphMode ? null : graphBoxPx;
+
+  const metaColumn = (
+    <RunMetaColumn
+      runLayout={runLayout}
+      widthPx={metaWidth}
+      setMetaChromeEl={setMetaChromeEl}
+      remoteRun={remote.remoteRun}
+      remoteMachineName={remote.remoteMachineName}
+      runEvents={panelRunEvents}
+      activityOpen={activityOpen}
+      onActivityOpenChange={setActivityOpen}
+      onRunEvents={remote.handleRunEvents}
+      onRemoteResolved={remote.refreshRemoteRun}
+      runStatus={run.status}
+      showBootstrap={bootstrap.showBootstrap}
+      bootstrapPhases={bootstrap.orderedBootstrapPhases}
+      harnessBaseline={run.harnessBaseline}
+      harnessEvidence={run.harnessEvidence}
+    />
+  );
+
+  /** The run's own controls, and the element `useRunColumnLayout` measures as
+   *  the chrome above the graph. The gap below is `pb-6` rather than a margin so
+   *  it lands inside `offsetHeight`; as a margin it is space the hook cannot see
+   *  and hands to the graph twice. The density control belongs to the timeline's
+   *  rows, so it appears only where there are rows to compact, and the row
+   *  disappears entirely rather than reserving height for nothing. */
+  const chromeRow = (graph.canShowGraph || !graph.graphMode) && (
+    <div ref={setToggleChromeEl} className="flex flex-wrap items-center justify-between gap-3 pb-6">
+      {graph.canShowGraph && <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} />}
+      {!graph.graphMode && (
+        <DensityToggle value={density} onChange={setDensity} ariaLabel="Timeline density" />
+      )}
+    </div>
+  );
+
+  const panes = (
+    <RunPanes
+      layout={inspectorLayout}
+      surfaceHeightPx={surfaceHeightPx}
+      runSurface={runSurface}
+      inspector={inspector}
+      inspectorWidth={inspectorWidth}
+      onInspectorWidthCommit={setChosenInspectorWidth}
+    />
+  );
 
   return (
     <div className="h-full w-full bg-[#08090c] text-slate-100 flex flex-col font-sans">
       <FeatureHeader
+        collapsed={headerCollapsed}
         featureId={featureId}
         featureTitle={run.featureTitle}
         status={run.status}
@@ -161,6 +389,11 @@ export function FeatureDetail() {
         onRefreshMrState={mr.refreshMrState}
       />
 
+      {/* Above the run rather than inside it: a gate is the run asking a
+          question, and it was previously findable only by scrolling to the card
+          holding it (UI_REDESIGN_PLAN §3.2). */}
+      <GateStrip steps={run.steps} onDecideGate={decideGate} className="mx-6 mt-4" />
+
       <InitialPromptPanel featureDescription={run.featureDescription} />
 
       <AttachmentsPanel
@@ -182,11 +415,16 @@ export function FeatureDetail() {
           {/* The run column. Chrome — stepper, gate table, graph — takes the
               window, however wide it is; prose panels carry their own `ch` cap.
               Artifact preview is an overlay (`ArtifactModal`) rather than a
-              second track, so the only width to negotiate is the meta track's.
-              Direction is `pickRunLayout`'s verdict on the measured width, not
-              a breakpoint; `flex-row-reverse` keeps the meta panels first in
-              the DOM — the order stacked reading needs — while painting them
-              to the right of the run.
+              second track, so the two widths to negotiate are the meta track's
+              and the inspector's — and they are decided by different rules on
+              purpose: `pickRunLayout` answers for the meta track and cannot be
+              dragged, `pickInspectorLayout` answers for the inspector and only
+              until the user drags it.
+
+              Direction is the measured width's verdict, not a breakpoint;
+              `flex-row-reverse` on the track row keeps the meta panels first in
+              the DOM — the order stacked reading needs — while painting them to
+              the right of the run.
 
               `overflow-x-hidden` pairs with `overflow-y-auto` on purpose: set
               alone, `overflow-y` leaves `overflow-x` computed as `auto`, which
@@ -194,80 +432,39 @@ export function FeatureDetail() {
               from. */}
           <div
             ref={setRunColumnEl}
-            className={`flex w-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-8 ${
-              runLayout === 'split' ? 'flex-row-reverse items-start gap-8' : 'flex-col'
+            data-run-scroll
+            // `p-6`, matching the header, the banners, the gate strip and the
+            // prompt above it. It was `p-8`, so the run sat 8px inside every
+            // block of chrome stacked over it and the whole view stepped in at
+            // the point the eye is most likely to be tracking a vertical edge.
+            // One gutter, and aligning down rather than up because five blocks
+            // already used this one.
+            className={`flex w-full min-h-0 min-w-0 flex-col p-6 ${
+              runLayout === 'split' ? 'h-full overflow-hidden' : 'overflow-y-auto overflow-x-hidden'
             }`}
           >
-            <RunMetaColumn
-              runLayout={runLayout}
-              setMetaChromeEl={setMetaChromeEl}
-              remoteRun={remote.remoteRun}
-              remoteMachineName={remote.remoteMachineName}
-              onRunEvents={remote.handleRunEvents}
-              onRemoteResolved={remote.refreshRemoteRun}
-              showBootstrap={bootstrap.showBootstrap}
-              bootstrapPhases={bootstrap.orderedBootstrapPhases}
-              harnessBaseline={run.harnessBaseline}
-              harnessEvidence={run.harnessEvidence}
-            />
-            <div className={runLayout === 'split' ? 'flex min-w-0 flex-1 flex-col' : 'contents'}>
-              {graph.canShowGraph && (
-                <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} chromeRef={setToggleChromeEl} />
-              )}
-              {graph.graphMode && graphDef ? (
-                <RunGraphPanel
-                  featureId={featureId}
-                  definition={graphDef}
-                  statusByNode={graph.runStatusByNode}
-                  highlightedNodeIds={rerun.replayPreviewNodes}
-                  graphBoxPx={graphBoxPx}
-                  selectedNodeId={graph.selectedNodeId}
-                  selectedNode={selectedNode}
-                  selectedRun={selectedRun}
-                  selectedStep={selectedStep}
-                  selectedBlockedBy={graph.selectedBlockedBy}
-                  runEvents={panelRunEvents}
-                  liveStream={selectedStep ? stream.streamContent[selectedStep.id] : undefined}
-                  onNodeActivate={graph.onNodeActivate}
-                  onCloseNode={() => graph.setSelectedNodeId(null)}
-                  onOpenEditorForPath={routing.openEditorForPath}
-                  onOpenArtifact={graph.openArtifactFromPanel}
-                  onRetry={
-                    selectedStep &&
-                    (selectedStep.status === 'failed' || selectedStep.status === 'interrupted')
-                      ? () => rerun.handleRetryStep(selectedStep.id)
-                      : undefined
-                  }
-                  onReplay={selectedStep ? graph.startReplayFromPanel : undefined}
-                  onStop={
-                    selectedStep?.status === 'running' || selectedStep?.status === 'verifying'
-                      ? rerun.handleStopStep
-                      : undefined
-                  }
-                  onDecideGate={gateStepId ? () => decideGate(gateStepId) : undefined}
-                />
-              ) : (
-                <StepTimeline
-                  steps={run.steps}
-                  remoteRun={remote.remoteRun}
-                  remoteMachineName={remote.remoteMachineName}
-                  hasBootstrapPhases={bootstrap.bootstrapPhases.size > 0}
-                  gateStepExecutionId={view.gateStepExecutionId}
-                  stepCardRefs={stepCardRefs}
-                  harnessBaseline={run.harnessBaseline}
-                  overrides={overrides}
-                  selectedArtifactPath={artifact.selectedArtifactPath}
-                  activeStreamId={stream.activeStreamId}
-                  streamContent={stream.streamContent}
-                  onToggleStream={(id) => stream.setActiveStreamId(stream.activeStreamId === id ? null : id)}
-                  onOpenArtifact={artifact.openArtifact}
-                  onStartReplay={(target) => rerun.startReplay(target, null)}
-                  onRetry={rerun.handleRetryStep}
-                  onStop={rerun.handleStopStep}
-                  onDecideGate={decideGate}
-                />
-              )}
-            </div>
+            {runLayout === 'split' ? (
+              <>
+                {/* Above the tracks, not inside one of them. Nested in the graph's
+                    track it pushed two of the three tracks down and left the meta
+                    panels starting a chrome row higher than the panes they sit
+                    beside — three peer cards with one of them floating. */}
+                {chromeRow}
+                <div className="flex min-h-0 flex-1 flex-row-reverse items-stretch gap-8">
+                  {metaColumn}
+                  <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">{panes}</div>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Stacked, the meta panels *are* the graph's chrome and read
+                    above it, so the toggle stays next to the surface it switches
+                    rather than being hoisted away from it. */}
+                {metaColumn}
+                {chromeRow}
+                {panes}
+              </>
+            )}
           </div>
         </div>
       )}

@@ -6,8 +6,20 @@ import { afterEach, vi } from "vitest";
 // Setup files run once per test file, so mocks registered here apply to every
 // suite without each one re-declaring the same Tauri/browser scaffolding.
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // A `UiPref` is a module singleton, so its debounced write outlives the
+  // component that armed it *and* the test that mounted it: a suite that
+  // toggles a persisted control under real timers had its `set_app_session`
+  // land 400 ms later inside an unrelated test, where `clearAllMocks` below
+  // made it read as that test's own write. Draining here keeps the leak
+  // inside the test that caused it.
+  //
+  // Imported here rather than at the top of the file: `uiPrefs` imports the
+  // Tauri core module this file mocks, and a static import of it runs before
+  // the hoisted `vi.mock` factory's own dependencies exist.
+  const { UI_PREFS } = await import("../lib/uiPrefs");
+  for (const pref of UI_PREFS) pref.cancelPendingWrite();
   vi.clearAllMocks();
   webglAddonStubs.length = 0;
   terminalStubs.length = 0;

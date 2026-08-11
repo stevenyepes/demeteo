@@ -1,16 +1,22 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { AppView, StepExecution } from '../../types';
+import { usePersistedPref } from '../../hooks/usePersistedPref';
 import { useRunEvents } from '../../hooks/useRunEvents';
 import { getFeatureWorkflowGraph } from '../../lib/featureDetail';
-import { findActivePredecessor } from '../../lib/features';
+import { runViewModePref } from '../../lib/uiPrefs';
 import { replayCone, descendantIds } from '../canvas/graphOps';
 import type { WorkflowDefinitionV2 } from '../canvas/types';
-import { type RunViewMode } from '../RunViewToggle';
+import { humanizeStepId } from './stepIdentity';
 import type { ReplayTarget } from './useRerunActions';
 
 /**
  * The run-mode graph: the pinned version's schema-v2 definition, the live
- * status overlay both run surfaces read, and the drill-down panel's selection.
+ * status overlay both run surfaces read, and what a click on a node means.
+ *
+ * The selection itself is not here. It lives on the `detail` view in navigation
+ * state so it survives back/forward and a deep link, and so the timeline and
+ * the canvas share one (UI_REDESIGN_PLAN §3.5) — this hook is handed the
+ * resolved node id and a writer, and never holds either.
  */
 export function useRunGraph(input: {
   featureId: string;
@@ -18,19 +24,23 @@ export function useRunGraph(input: {
   steps: StepExecution[];
   navigate: (view: AppView) => void;
   startReplay: (target: ReplayTarget, previewNodes: Set<string> | null) => void;
-  openArtifact: (path: string, stepTitle: string | null) => void;
+  /** The node id the current selection resolves to, for the canvas overlay. */
+  selectedNodeId: string | null;
+  /** Select the node, or clear the selection when it is already the one shown. */
+  toggleNode: (nodeId: string) => void;
 }) {
-  const { featureId, featureTitle, steps, navigate, startReplay, openArtifact } = input;
-  // Run-mode visualization toggle (P2.2). The list timeline stays the default
-  // — it's better for skimming long linear runs and preserves muscle memory;
-  // the graph is opt-in until Phase-2 parity is signed off (PRD §6.1).
-  const [viewMode, setViewMode] = useState<RunViewMode>('timeline');
+  const { featureId, featureTitle, steps, navigate, startReplay, toggleNode } = input;
+  /** Graph first: Phase 2 gives both surfaces the same inspector, which was the
+   *  parity the timeline default was waiting on (UI_REDESIGN_PLAN §7,
+   *  PRD §6.1). `canShowGraph` still gates it, so a run with no definition
+   *  opens on the timeline — a fallback, not a default. The gate sits
+   *  downstream of this value, so a stored `'graph'` cannot defeat it, and a
+   *  run that falls back stores nothing: neither the toggle nor `g`/`t` is
+   *  offered there. */
+  const [viewMode, setViewMode] = usePersistedPref(runViewModePref, 'graph');
   // The pinned version's schema-v2 graph (P1.15 + `feature_workflow_graph`),
   // migrated backend-side. Null until loaded / when the feature has none.
   const [graphDef, setGraphDef] = useState<WorkflowDefinitionV2 | null>(null);
-  // The node whose drill-down panel is open on the run-mode canvas (P2.3).
-  // Null = no panel. A gate node routes to the full-screen `GateView` instead.
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   // Single run-event consumer both run-mode surfaces share: the canvas overlay
   // reads node status from here, derived from the same `steps` snapshot the
   // timeline renders (plus failure classes from the `run_events` stream, P1.13).
@@ -47,8 +57,7 @@ export function useRunGraph(input: {
         if (!cancelled) setGraphDef(def && def.nodes.length > 0 ? def : null);
       } catch (err) {
         // Soft failure: no graph → the toggle simply doesn't appear and the
-        // timeline (the default) carries on. Legacy features with no workflow
-        // land here.
+        // timeline carries on. Legacy features with no workflow land here.
         if (!cancelled) setGraphDef(null);
         console.warn('feature_workflow_graph failed:', err);
       }
@@ -60,7 +69,7 @@ export function useRunGraph(input: {
 
   // The graph is offered only once there's a run to overlay and a definition
   // to draw. An *awaiting* gate node opens the existing full-screen `GateView`
-  // (the actionable HITL path); every other node opens the drill-down panel.
+  // (the actionable HITL path); every other node selects into the inspector.
   const canShowGraph = graphDef !== null && steps.length > 0;
   const graphMode = canShowGraph && viewMode === 'graph';
 
@@ -76,59 +85,34 @@ export function useRunGraph(input: {
         });
         return;
       }
-      setSelectedNodeId((prev) => (prev === nodeId ? null : nodeId));
+      toggleNode(nodeId);
     },
-    [runStatusByNode, navigate, featureId, featureTitle],
+    [runStatusByNode, navigate, featureId, featureTitle, toggleNode],
   );
 
-  // The node + its backing rows for the open drill-down panel. Prefer the exact
-  // execution the overlay tracks (`stepExecutionId`); fall back to the newest
-  // row for the node id when the run hasn't been observed live.
-  const selectedNode = useMemo(
-    () => graphDef?.nodes.find((n) => n.id === selectedNodeId) ?? null,
-    [graphDef, selectedNodeId],
-  );
-  const selectedRun = selectedNodeId ? runStatusByNode[selectedNodeId] ?? null : null;
-  const selectedStep = useMemo(() => {
-    if (!selectedNodeId) return null;
-    if (selectedRun?.stepExecutionId) {
-      const exact = steps.find((s) => s.id === selectedRun.stepExecutionId);
-      if (exact) return exact;
-    }
-    const matches = steps.filter((s) => s.step_id === selectedNodeId);
-    return matches.length
-      ? matches.reduce((a, b) => (b.updated_at >= a.updated_at ? b : a))
-      : null;
-  }, [selectedNodeId, selectedRun, steps]);
-
-  // Replay initiated from the panel (P2.4): ring the whole downstream cone on
-  // the canvas while the confirm modal is open, and count downstream by the
-  // *graph* (accurate for DAGs) rather than the timeline's index arithmetic.
-  const startReplayFromPanel = useCallback(() => {
-    if (!selectedNode || !selectedStep) return;
-    const cone = graphDef ? replayCone(graphDef, selectedNode.id) : null;
-    const downstreamCount = graphDef ? descendantIds(graphDef, selectedNode.id).size : 0;
-    startReplay({ id: selectedStep.id, name: selectedNode.title, downstreamCount }, cone);
-  }, [selectedNode, selectedStep, graphDef, startReplay]);
-
-  // An artifact clicked in the graph drill-down opens the same `ArtifactModal`
-  // the timeline uses — one artifact surface, not two that drift apart. The
-  // step title comes from the panel's own node so the modal captions it.
-  const openArtifactFromPanel = useCallback(
-    (artifactPath: string) => {
-      openArtifact(artifactPath, selectedNodeId);
+  /**
+   * Replay initiated from the inspector (P2.4): ring the whole downstream cone
+   * on the canvas while the confirm modal is open, and count downstream by the
+   * *graph*, which is accurate for a DAG where index arithmetic is not.
+   *
+   * A run with no definition has no cone to ring and falls back to the
+   * timeline's own count — the steps after this one in index order — so the
+   * confirm modal states a number either way rather than claiming zero.
+   */
+  const startReplayFromInspector = useCallback(
+    (step: StepExecution) => {
+      const node = graphDef?.nodes.find((n) => n.id === step.step_id) ?? null;
+      const cone = graphDef ? replayCone(graphDef, step.step_id) : null;
+      const downstreamCount = graphDef
+        ? descendantIds(graphDef, step.step_id).size
+        : Math.max(steps.length - 1 - step.step_index, 0);
+      startReplay(
+        { id: step.id, name: node?.title ?? humanizeStepId(step.step_id), downstreamCount },
+        cone,
+      );
     },
-    [openArtifact, selectedNodeId],
+    [graphDef, steps, startReplay],
   );
-
-  // The active ancestor (if any) blocking a retry/gate decision on the selected
-  // node — the same guard the timeline's Retry button uses, surfaced as the
-  // panel's disabled-button explanation (PRD §6.4).
-  const selectedBlockedBy = useMemo(() => {
-    if (!selectedStep) return null;
-    const pred = findActivePredecessor(steps, selectedStep);
-    return pred ? { step_id: pred.step_id, status: pred.status } : null;
-  }, [selectedStep, steps]);
 
   return {
     viewMode,
@@ -138,14 +122,7 @@ export function useRunGraph(input: {
     graphMode,
     runStatusByNode,
     localRunEvents,
-    selectedNodeId,
-    setSelectedNodeId,
-    selectedNode,
-    selectedRun,
-    selectedStep,
-    selectedBlockedBy,
     onNodeActivate,
-    startReplayFromPanel,
-    openArtifactFromPanel,
+    startReplayFromInspector,
   };
 }

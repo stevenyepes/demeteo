@@ -1,7 +1,7 @@
 /**
- * Artifact classification shared by every run surface — the timeline
- * (`StepArtifactList`), the node drill-down panel (`NodePanel`), and the
- * canvas — so a file cannot read as one kind here and another there.
+ * Artifact classification shared by every run surface — the step inspector
+ * (`NodePanel`, via `lib/stepArtifacts.ts`) and the canvas — so a file cannot
+ * read as one kind here and another there.
  *
  * One quirk is load-bearing and deliberate: `.worktree-ref.json` is matched
  * *after* plain `.json`, so today it classifies as `json`. Surfaces render

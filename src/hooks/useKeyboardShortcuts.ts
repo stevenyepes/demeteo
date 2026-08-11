@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 
+import { isEditableTarget } from '../lib/shortcuts';
+
 interface ShortcutMap {
   onNewProject?: () => void;
   onNewFeature?: () => void;
@@ -40,7 +42,10 @@ export function useKeyboardShortcuts(handlers: ShortcutMap) {
         return;
       }
 
-      if (e.key === '?' && !mod && !e.shiftKey && !e.altKey) {
+      // `?` is a character, so this dispatcher may not consume it out of a
+      // field the user is typing into — `preventDefault` below would otherwise
+      // swallow the keystroke and open the docs panel over their work.
+      if (e.key === '?' && !mod && !e.shiftKey && !e.altKey && !isEditableTarget(e.target)) {
         e.preventDefault();
         h.onOpenDocs?.();
         return;

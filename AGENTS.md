@@ -147,9 +147,16 @@ and primary actions · **cyan** = terminal streams and interactive states · **e
 running agents and healthy statuses · **ruby** = errors, stopped tasks, failures.
 
 Cards are glassmorphism — `backdrop-filter: blur(12px)` over the card-surface token.
-Headings `Outfit`, UI `Inter`, terminal/code `Fira Code` / `JetBrains Mono`. Status dots
-pulse; view switches transition smoothly. **Never** plain system colors, `style=` props
-for design tokens, or flat grey cards with no depth.
+Type has exactly three utilities: `font-heading` (Outfit), `font-mono` (Fira Code /
+JetBrains Mono) and `font-sans` (Inter), which `body` already sets — so UI text needs no
+class. Tailwind v4 derives those names from the `--font-*` keys in the `@theme` block of
+`src/App.css`, and a utility naming a face with no key there matches no rule at all: the
+element silently inherits Inter, and nothing — not the build, not the console — says so.
+Name a key for the role rather than the typeface (`--font-heading`, never
+`--font-outfit`), so changing the face is one token instead of every call site. §7 gates
+the dead-class case mechanically. Status dots pulse; view switches transition smoothly.
+**Never** plain system colors, `style=` props for design tokens, or flat grey cards with
+no depth.
 
 ---
 
@@ -244,6 +251,20 @@ test double that answers every call successfully: the e2e `FakeExec` returns
 asserted against a default rather than an answer. Prefer a double that errors
 on anything it was not explicitly told to say.
 
+### Class names are gated too
+
+The same rot in a different medium: `tsc`, biome and vitest all pass on a
+`className` no stylesheet defines, and the browser reports nothing either — the
+element just inherits, so a heading renders in `body`'s Inter and only an eye
+catches it. §4 has the mechanism that makes it silent.
+
+- **`scripts/check-classes.mjs`** (inside `npm run checks`) compiles the
+  stylesheet and fails on a design-system class `src/` uses that resolves to no
+  rule. It matches a class *selector*, not a bare token — `font-display: block`
+  is a real property in the `@font-face` rule of `src/App.css`, so a substring
+  grep "finds" a `font-display` utility that has never existed. Check by hand the
+  same way, and never blind-replace one of these names across the tree.
+
 ### The parity gates are not in `npm run checks`
 
 `pr-checks.yml` runs **three** jobs: `scripts/checks.sh`, plus two conformance suites
@@ -327,6 +348,7 @@ Read the relevant doc before modifying that area.
 | Terminal agent activity | [docs/TERMINAL_ACTIVITY.md](docs/TERMINAL_ACTIVITY.md) |
 | User stories & agent tasks | [docs/USER_STORIES.md](docs/USER_STORIES.md) |
 | UX spec & journeys | [docs/UX_JOURNEYS.md](docs/UX_JOURNEYS.md) · as-built audit in [docs/ux-audit/](docs/ux-audit/README.md) |
+| Pipeline/project view redesign plan | [docs/UI_REDESIGN_PLAN.md](docs/UI_REDESIGN_PLAN.md) |
 | Product roadmap & agent-ready stories | [docs/roadmap/](docs/roadmap/README.md) |
 | Known platform issues | [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |
 | Contributing, PR flow, full commit spec | [CONTRIBUTING.md](CONTRIBUTING.md) |

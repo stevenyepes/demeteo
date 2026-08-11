@@ -18,7 +18,7 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ projects, currentProject, setCurrentProject, setView }) => (
     <aside className="w-64 border-r border-white/5 bg-[#0d0f14]/50 backdrop-blur-xl flex flex-col z-10 shrink-0">
         <div className="p-4 border-b border-white/5 flex justify-between items-center">
-            <h2 className="text-xs font-outfit font-semibold text-slate-500 tracking-wider uppercase">Workspaces</h2>
+            <h2 className="text-xs font-heading font-semibold text-slate-500 tracking-wider uppercase">Workspaces</h2>
             <div className="flex gap-1">
                 <button onClick={() => setView('new-project')} className="p-1 text-slate-400 hover:text-white rounded hover:bg-white/5 transition-colors" title="Bootstrap Project">
                     <Plus className="w-4 h-4" />

@@ -97,13 +97,8 @@
     ],
     [
       "s-refactor",
-      "s-analyse.md",
-      "# stub artifact\n\npath: artifacts/s-analyse.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
-      "s-refactor",
-      "task-list.json",
-      "{\"tasks\":[{\"id\":\"stub-task-1\",\"title\":\"Stub task one\",\"description\":\"Deterministic stub task one.\",\"files\":[],\"acceptance\":[\"stub task one ran\"],\"blocked_by\":[]},{\"id\":\"stub-task-2\",\"title\":\"Stub task two\",\"description\":\"Deterministic stub task two.\",\"files\":[],\"acceptance\":[\"stub task two ran\"],\"blocked_by\":[\"stub-task-1\"]}]}\n"
+      "code-diff.diff",
+      "diff --git a/src/s-refactor.txt b/src/s-refactor.txt\nnew file mode 100644\nindex 0000000..9b888c0\n--- /dev/null\n+++ b/src/s-refactor.txt\n@@ -0,0 +1,4 @@\n+# stub artifact\n+\n+path: src/s-refactor.txt\n+generated-by: demeteo stub agent\n"
     ],
     [
       "s-regression",

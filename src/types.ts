@@ -75,7 +75,31 @@ export interface WorkflowSummary {
 export type AppView =
   | { kind: 'empty-state' }
   | { kind: 'home' }
-  | { kind: 'detail'; featureId: string; featureTitle: string; gateStepExecutionId?: string | null }
+  | {
+      kind: 'detail';
+      featureId: string;
+      featureTitle: string;
+      gateStepExecutionId?: string | null;
+      /**
+       * Which step the inspector is showing, held here so it survives
+       * back/forward and a deep link (UI redesign plan §3.5).
+       *
+       * One key serves two surfaces, so the id is either a `step_executions`
+       * id (what the timeline selects) or a graph node id (what the canvas
+       * selects); `src/lib/inspectorTarget.ts` resolves both against the run's
+       * steps. An id that resolves to neither is routine rather than a fault —
+       * a reload can replace every execution row under a still-valid link — and
+       * degrades to a named empty state there, never an error.
+       *
+       * Optional *and* nullable, and the two are not interchangeable: absent
+       * and `null` are the inputs the seeding policy in
+       * `components/FeatureDetail/useStepSelection.ts` (see `SelectionIntent`)
+       * tells apart. Normalising one to the other here — a `?? null`, a
+       * required field, a route that fills the gap — collapses that policy from
+       * a distance where nothing fails loudly.
+       */
+      selectedStepId?: string | null;
+    }
   | { kind: 'editor'; editorContext: EditorContext; featureId: string; featureTitle: string }
   | { kind: 'new-project' }
   | { kind: 'create-project' }
@@ -827,6 +851,11 @@ export interface ProjectSettingsData {
   /** Project-wide default reasoning effort. `null` = no project default,
    *  which resolves to the engine default (`high`) at run time. */
   default_effort?: EffortLevel | null;
+  /** The workflow a new feature in this project starts on. `null`/absent = the
+   *  project has not chosen one, which is not the same as having none: the
+   *  launch modal then falls back explicitly rather than taking whatever
+   *  `workflow_list` returned first. See migration V40. */
+  default_workflow_id?: string | null;
   default_loop_iterations?: number | null;
   /** Project-wide default per-turn dollar budget passed to the agent as
    *  `--max-budget-usd`. `null` = no project default, which resolves to the

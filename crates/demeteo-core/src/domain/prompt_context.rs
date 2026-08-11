@@ -126,6 +126,71 @@ impl Clone for PromptContext {
 /// literally rather than treating it as a token, and the two must agree or
 /// [`PromptContext::render_executable`] would reject a command over a brace
 /// that renders as an ordinary character.
+/// Every `{{token}}` some prompt builder binds.
+///
+/// There is no way to derive this from the `set` calls, so it is a hand-kept
+/// list — and the reason to keep one is that the alternative is silent.
+/// [`render`](PromptContext::render) collapses an unknown token to `""`,
+/// deliberately (a prompt must never reach an agent with `{{…}}` in it), which
+/// means a typo'd or retired token is indistinguishable from one that rendered
+/// empty on purpose. Nothing else in the tree can tell them apart: a template
+/// is data, so neither the compiler nor a lint sees it, and the run merely
+/// produces a prompt missing a sentence.
+///
+/// The starters are gated against this list, so a token added to a template
+/// without a binding fails the suite instead of shipping a prompt with a hole
+/// in it. Adding a binding means adding it here too.
+///
+/// `cfg(test)` because nothing in a shipped build reads it — it exists to be
+/// asserted against. It lives here rather than in the test file so that it is
+/// in front of whoever is adding the `set` call that needs registering.
+#[cfg(test)]
+pub(crate) const BOUND_TOKENS: &[&str] = &[
+    // Feature-level base context (`build_base_ctx`).
+    "feature_description",
+    "feature_slug",
+    "feature_branch",
+    "repo_list",
+    "test_command",
+    "build_command",
+    "coverage_command",
+    "project_conventions",
+    "project_memory",
+    "artifact_dir",
+    "report_dir",
+    "session_resume_summary",
+    // Agent step (`build_agent_prompt`).
+    "harness_baseline",
+    "retry_feedback_section",
+    "platform_context",
+    "review_base_section",
+    "gate_feedback",
+    "gate_decision",
+    "retry_feedback",
+    "iteration",
+    "max_iterations",
+    // Rework binding (`bind_rework_context`).
+    "rework_mode",
+    "rework_cycle",
+    "retry_origin",
+    "implicated_files",
+    "failing_tests",
+    // Sequence task (`build_task_prompt`).
+    "task_id",
+    "task_title",
+    "task_description",
+    "task_files",
+    "task_acceptance",
+    "task_index",
+    "task_total",
+    "completed_tasks",
+    "subtask_description",
+    "subtask_files",
+    "other_subtask_files",
+    "partition_id",
+];
+
+/// The `{{token}}`s a template references, in first-seen order, deduplicated.
 fn referenced_tokens(template: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut chars = template.chars().peekable();

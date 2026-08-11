@@ -1,0 +1,757 @@
+# UI Redesign Plan — Pipeline View & Project View
+
+> Source of the visual direction: `ui-mocks/orchestrator_mockup.tsx`.
+> Design language, token values and colour semantics: **AGENTS.md §4** and
+> `src/App.css` — this plan defers to both and never restates them.
+> Existing UX defects it folds in: [`docs/ux-audit/findings.md`](ux-audit/findings.md).
+
+The mock is a *direction*, not an implementation. It is untyped JS on a GitHub-dark
+palette with hard-coded hex, layout in `style=` props, a `dangerouslySetInnerHTML`
+`<style>` block, and a resize handler that pushes a state update per mouse-move pixel.
+None of that ships. What ships is the four structural ideas it gets right, translated
+into this codebase's palette, primitives and hexagon discipline.
+
+---
+
+## 0. Status
+
+Branch `feat/ui-redesign-pipeline-project`. **Every phase is implemented.**
+Read §6 for what each phase covers and §7 for the decisions already taken.
+§1's "Status here today" column is the pre-Phase-2 snapshot this plan was written
+against — read it as the starting position, not as the tree.
+
+| Phase | State | Commit |
+|---|---|---|
+| 0 — foundations | done | `4e785c6` (audit F17), `32a42c4` (primitives + `lib/` modules) |
+| 1 — performance | done | `7a0b45f` |
+| — | unplanned, done | `c40fde3` — dead utility classes + `scripts/check-classes.mjs` |
+| 2 — pipeline shell | done, **confirmed visually 2026-08-09** | |
+| 3 — timeline slim-down | done, **confirmed visually 2026-08-10** | |
+| 4 — project view | done, **confirmed visually 2026-08-10** | |
+| 5 — activity & motion | done, **confirmed visually 2026-08-10** | |
+| 6 — keyboard & persistence | code complete, **never rendered** | |
+
+**The Phase 2 deferral is closed.** The sticky collapsed header on scroll landed in
+Phase 3 (`lib/headerCollapse.ts` + `FeatureDetail/useHeaderCollapse.ts`), which is
+where §6 said it would.
+
+**Outstanding:** Phases 2–5 have been looked at in `dev:tauri`; Phase 6 has not.
+`npm run checks` compiles and tests all of it and renders none of it. What a
+`dev:tauri` pass still has to answer for Phase 6, because no gate can:
+
+- **Phase 6's one change with layout surface**: the inspector is now wrapped in a
+  `tabIndex={-1}` div so `Enter` has somewhere to land when the pane is empty. The
+  `h-full` chain into `RunPanes` is preserved on paper and in jsdom, but only a look
+  at both the side and stacked seats can confirm the pane still fills its box.
+- **Where `Enter` actually puts the focus ring** under WebKitGTK, in both the
+  populated case (the tab strip's roving entry) and the empty one (the wrapper).
+
+macOS and Windows appearance is unverified by any gate — `pr-checks.yml` runs
+`ubuntu-22.04` only (AGENTS.md §3, Cross-OS).
+
+---
+
+## 1. What the mock actually proposes
+
+Stripping the styling, five structural changes:
+
+| # | Idea | Status here today |
+|---|------|-------------------|
+| **A** | Pipeline view is a **resizable two-pane split**: run on the left, a persistent step inspector on the right | Inspector exists (`canvas/NodePanel.tsx`) but is reachable **only** from the Graph view; the Timeline duplicates its job inline. Split is automatic and non-negotiable at ≥1600 px (`components/runLayout.ts`) |
+| **B** | Feature prompt collapses into the title block | `FeatureDetail/InitialPromptPanel.tsx` is always expanded |
+| **C** | Telemetry is one compact metric strip in the top chrome | `FeatureDetail/FeatureHeader.tsx` renders four large stacked stat blocks that wrap and eat header height |
+| **D** | Activity log is a collapsible block with a live "polling every 3s" affordance | A remote-only `RunEventTimeline.tsx` existed, with a hand-rolled disclosure and its sync line detached below it; Phase 5 replaced it with `FeatureDetail/ActivityPanel.tsx` |
+| **E** | Subtasks render as ticket rows with landed / running / queued state | Already built as `SequenceTasks` **inside** `NodePanel`, so it is graph-only |
+
+**The headline finding: most of the mock's right-hand panel already exists.**
+`NodePanel` has the exact `Overview | Live | Output | Actions` tabs the mock draws
+(its `TABS` in `canvas/NodePanel.tsx`, the bodies in `canvas/nodePanel/`), the
+attempt-history table, and the ticket rows. The gap
+is not "build an inspector" — it is **"the inspector serves one of two views."** That
+reframes the whole job from a rewrite into a wiring change plus a slim-down, which is
+both cheaper and lower-risk.
+
+### Rejected from the mock
+
+- **The palette.** Teal is not in this design language; `#0d1117 / #161b22 / #30363d`
+  are not tokens. Translation table in §2.
+- **The fake graph.** The mock's "graph" is a vertical list of divs. This app has real
+  ELK layout over `@xyflow/react` (`canvas/WorkflowCanvas.tsx`, `canvas/useElkLayout.ts`)
+  with auto-layout and zoom already. Adopting the mock's version is a regression.
+- **`style={{ width: '65%' }}` + `setState` per mouse-move.** §4.1 replaces it.
+- **`React.cloneElement`** for icon sizing, untyped props, and the injected
+  `<style>` block — all three are hard "no" against AGENTS.md §3.
+- **Always-on animation on containers.** The mock pulses whole cards; the note above
+  `@keyframes pulse-glow` in `src/App.css` records a real incident where animating
+  `box-shadow`/`scale` pinned the WKWebView GPU process at idle. §5.6.
+
+---
+
+## 2. Design translation
+
+Token values live in `src/App.css`; colour *semantics* are AGENTS.md §4. Mapping:
+
+| Mock literal | Use instead | Why |
+|---|---|---|
+| `#0d1117`, `#090c10` | `--bg-app`, `--bg-well` | App shell / sunk wells |
+| `#161b22`, `#1c2128` | `--bg-panel`, `--bg-panel-hover` | Glass card surfaces |
+| `#30363d`, `#484f58` | `--border-glass` (+ hover variant) | One border language |
+| `teal-400/500` | `--accent-cyan` | Cyan = terminal streams, interactive states |
+| `purple-600` | `--accent-purple` (violet) | Violet = active connections, primary actions |
+| `green-500` | `--accent-emerald` | Emerald = running agents, healthy status |
+| `red-400/500` | `--accent-ruby` / `ruby-*` scale | Ruby = errors, stopped, failures |
+| Flat card + `border-l-4` | `.glass-panel` + tone accent bar | Glassmorphism is the card language; `TONE_ACCENT` in `ProjectHome.tsx:28` already implements the bar |
+| Ad-hoc chip colours | `TONE_CHIP` from `lib/runStatus.ts` | F27 fixed status-colour drift once; do not re-open it |
+
+**Rule for the whole redesign:** every status colour resolves through
+`lib/runStatus.ts`. A component that spells its own `bg-emerald-500/10 text-…` chip is
+re-introducing F27. New surfaces get a tone from `runStatusMeta()` and read the class
+out of `TONE_CHIP` / `TONE_TEXT` / `TONE_BORDER_L`.
+
+**WebKitGTK caveat.** The `WEBKITGTK / TAURI COMPATIBILITY LAYER` block in `src/App.css`
+carries an `!important` safelist of specific utility classes for the Linux webview. Any *new* arbitrary-value colour utility is
+outside it. Either express the colour as a token or verify it renders under
+`npm run dev:tauri` on Linux before calling the phase done — a class that silently
+no-ops there is invisible to `npm run checks`.
+
+---
+
+## 3. UX improvements beyond the mock
+
+The mock is a visual refresh. These are the changes that alter what the app is *like
+to use*, and several of them are also the performance fix (§4) — the same move.
+
+### 3.1 One inspector, both views — selection instead of expansion
+
+Today the Timeline expands in place: the live stream, the artifact list, the rerun
+panel and the environment panel all mount *inside* `StepCard`, which is why that card
+is 246 lines of conditional panels. Expansion is the worst option available:
+
+- It reflows every sibling card below it.
+- It can only show one step's detail at a time anyway — the same constraint an
+  inspector has, without the inspector's stable reading position.
+- It forces `StepCard` to receive the whole `streamContent` record, which is the
+  single worst render bug in the view (§4.2).
+
+Selecting a row and rendering detail in the inspector fixes all three at once. The
+`StepCard` becomes identity + status + metrics + one primary CTA; everything else
+already has a home in `NodePanel`'s four tabs.
+
+### 3.2 "Needs you" is the app's promise — make it structural
+
+Gates are the product's core value proposition, and they are currently something you
+find by scrolling. Three cheap changes:
+
+- **Project view:** segment/sort the pipeline list so `gated` and `needs-credentials`
+  float to the top. `runStatusMeta().tone === 'amber'` already identifies them.
+- **Pipeline view:** a persistent gate strip under the header while any step is
+  `awaiting_gate`, with the decide CTA — not only the per-card block.
+- **Rail:** the amber count already exists for terminals (`RailNavItem` `attentionCount`);
+  extend the same affordance to gated runs.
+
+### 3.3 Progressive disclosure in the project view
+
+The pipeline card currently shows status chip + workflow chip + transport chip +
+feature id + title + 2-line description + duration + tokens. That is eight competing
+elements per row, all at similar weight. Restructure to a three-tier read:
+
+1. **Scan tier** (always): tone accent bar, title, status chip, elapsed.
+2. **Context tier** (secondary weight): workflow, transport, cost, tokens.
+3. **Detail tier** (on demand): description, feature id, branch.
+
+Add cost — audit *Opportunity 5* notes it is the number users actually watch and it is
+already summed per feature.
+
+### 3.4 Skeletons, not spinners
+
+`FeatureDetail.tsx:171` swaps the entire run column for a centred spinner, and
+`ProjectHome.tsx:604` does the same for the list. Both **unmount** their subtree, so
+returning re-mounts the graph and re-runs ELK. A skeleton that preserves the layout
+box avoids the remount and reads as faster even when it isn't.
+
+### 3.5 Deep-linkable selection
+
+`selectedNodeId` is local state in `useRunGraph`. Move it onto the `detail` view in
+the navigation reducer, alongside `gateStepExecutionId` which already lives there.
+Then back/forward, the gate deep-link and the inspector all use one mechanism, and
+"which step was I looking at" survives a navigation.
+
+### 3.6 Keyboard
+
+`j`/`k` to move the step selection, `Enter` to focus the inspector, `g`/`t` to switch
+Graph/Timeline. **Register these in the existing registry** — audit F5 records that the
+shortcut system already has three disagreeing sources of truth. Adding a fourth
+inline `keydown` is worse than shipping no shortcuts.
+
+### 3.7 Density
+
+A long run is 30+ steps. Offer comfortable/compact for the timeline and the pipeline
+list, persisted. Compact is a padding + font-size token swap, not a second component.
+
+Phase 3 built `lib/density.ts` and the timeline's toggle; the value is session state in
+`FeatureDetailView` until Phase 6 persists it, and the pipeline list's toggle is
+Phase 4's. One trap `lib/density.ts` records rather than repeats: `check-classes.mjs`
+reads `className` attributes, so class names that live only as strings in that module
+are outside what it verifies — Tailwind's scanner does see them, which is why they
+resolve at all.
+
+---
+
+## 4. Performance
+
+These are specific defects in the current code, each with the file that carries it.
+Fixing them **before** the visual work is deliberate: otherwise the redesign inherits
+the blame for jank it did not cause.
+
+### 4.1 Resize must not render (new code — get it right the first time)
+
+The mock's approach re-subscribes `document` listeners on a state flag and calls
+`setLeftPaneWidth` per mouse-move — a full React render tree per pixel, at pointer
+frequency, with the ELK-driven graph inside it.
+
+The `SplitPane` primitive instead:
+
+- `onPointerDown` → `setPointerCapture` on the handle. No document listeners, no
+  subscribe/unsubscribe churn, and the drag survives the pointer leaving the window.
+- During the drag, write `--inspector-w` **directly onto the container element via
+  its ref**. Zero React renders; the browser recalculates one custom property.
+- `onPointerUp` → commit the final value to state once and persist it.
+- `role="separator"` + `aria-valuenow` + arrow-key resize, so it is not mouse-only.
+- Min/max clamps in a pure function so the constraint is unit-testable.
+
+This matters more here than in a generic app: `useRunColumnLayout` observes the run
+column with a `ResizeObserver` and feeds the result into `planLayout`, so a
+state-per-pixel drag would run graph layout planning per pixel too. Committing once
+means the observer fires once.
+
+### 4.2 Stream flushes re-render every step card — **the worst current bug**
+
+The chain:
+
+1. `useAgentStream.ts:22` flushes `setStreamContent({ ...streamBufferRef.current })`
+   once per animation frame while an agent streams — a **new object identity** each
+   time.
+2. `FeatureDetail.tsx:261` passes that whole record into `StepTimeline`.
+3. `StepTimeline.tsx:83` passes it into **every** `StepCard`.
+4. `StepCard` is not memoized.
+
+So while any agent is streaming, every step card in the run re-renders up to 60×/s —
+including all the cards that render nothing from that record.
+
+Fix, in order of value:
+
+- Pass **the selected step's stream string**, never the record. One consumer, one
+  `string` prop, changes only when that step's text changes.
+- Keep the buffer in the ref as today and expose it through `useSyncExternalStore`
+  with a per-step selector, so the subscription is per-consumer instead of
+  broadcast-to-all.
+- `memo` `StepCard`.
+- Once §3.1 lands, the stream has exactly one mount site (the inspector's Live tab)
+  and the fan-out is structurally gone, not just guarded.
+
+### 4.3 The stream buffer is unbounded
+
+`useAgentStream.ts:18` appends forever with no cap, and `StepCard.tsx:237-241`
+renders it into a `<pre className="whitespace-pre-wrap">` inside a `max-h-64`
+scroller. A long agent turn means megabytes of text whose full height must be laid
+out on every flush.
+
+Fix: cap at accumulate time — keep the last N KB / last N lines, dropping from the
+front (agents' useful output is the tail). Add `content-visibility: auto` +
+`contain-intrinsic-size` to the log block; `.stream-event` in `src/App.css` already
+establishes that pattern.
+
+### 4.4 Full reload on every progress tick (audit F19)
+
+`useFeatureRun.ts:130-139` calls `reload()` on every `step_progress` event.
+`reload()` is two IPC round trips (`listStepsForRun` + `getFeature`) plus eight
+`setState` calls plus a models probe.
+
+And the Tauri event is **not** throttled. `PROGRESS_THROTTLE_MS = 8_000` in
+`crates/demeteo-core/src/adapters/run_event_log.rs:60` gates only the *persisted*
+run-event append; `RunEventRecorder::emit` forwards every event unchanged to the UI
+notifier — including every mid-turn token/cost refresh.
+
+Fix:
+
+- Coalesce `reload()` behind a trailing-edge scheduler — at most one in flight, at
+  most one queued, floor of ~500 ms. (Backend throttling is the wrong lever: the log
+  wants a readable narrative, the UI wants smooth telemetry. Different jobs.)
+- Patch the single step from the event payload for the interim, so the UI stays live
+  between reloads without a fetch.
+- Delete `setTotalCost(payload.cost_usd)` (`useFeatureRun.ts:136`) — it sets the
+  *pipeline* total to one step's cost, so the header visibly drops until the next
+  reload. This is F19 and it is a correctness bug, not just perf.
+
+### 4.5 `steps` identity churn defeats every memo
+
+`setSteps(list)` replaces the array and every row object on each reload, so
+`harnessEvidence`, `runStatusByNode`, the graph overlay and all cards recompute even
+when nothing changed. Reconcile by id and return the previous object when a row is
+unchanged — then memoized cards genuinely skip. Put the reconcile in a pure,
+tested function in `lib/`; it is exactly the kind of policy that should not live
+inside an async fetch.
+
+### 4.6 Unstable callback props
+
+`StepTimeline.tsx:79` creates `cardRef={(el) => …}` per render per card;
+`StepCard.tsx:207` creates `onSelect={(path) => …}`. Both defeat `memo` before it is
+added. Handlers take the id as an argument and are created once with `useCallback`;
+ref collection goes through one stable callback that closes over the ref map only.
+
+### 4.7 Project view
+
+- `ProjectHome.tsx:642-693` runs two IIFEs per card per render to derive the workflow
+  and transport badges. Hoist to pure functions in `lib/` (`workflowBadge.ts` already
+  set this precedent) and extract a memoized `PipelineCard`.
+- `stageClipboardFiles` (`ProjectHome.tsx:76`) depends on `attachments`, so the paste
+  handler is rebuilt on every attachment change. Use the functional form of
+  `setAttachments` and drop the dependency.
+
+### 4.8 Poll while hidden
+
+`useRemoteRun.ts:107` polls every 3 s regardless of window visibility. Gate on
+`document.hidden`, and back off on consecutive failures instead of retrying at a flat
+3 s into a dead tunnel.
+
+### 4.9 Long lists, without a new dependency
+
+Virtualization would want a dependency, and **that is an AGENTS.md §6 gate**. It is
+also not needed yet: `content-visibility: auto` with `contain-intrinsic-size` gets
+most of the win for the timeline and the pipeline list with zero deps, using the
+pattern already in `App.css`. Revisit only with a measurement showing it is
+insufficient — and then ask before adding the dep.
+
+---
+
+## 5. Component architecture
+
+### 5.1 New primitives in `src/components/ui/`
+
+Each is generic, typed, one per file, documented in the `.design-sync` docs map so it
+joins the existing catalogue.
+
+| Component | Replaces | Notes |
+|---|---|---|
+| `SplitPane` | mock's hand-rolled resizer | §4.1. Controlled, persisted by key, keyboard-accessible |
+| `Chip` | four separate re-spellings of the same pill | Tone from `runStatus.ts`. Does **not** subsume `StatusBadge` — see the division recorded below |
+| `MetricStrip` + `Metric` | `FeatureHeader`'s four stat blocks, mock's `MetricItem` | Label + value + tone + optional tooltip |
+| `Disclosure` | `InitialPromptPanel`, activity block | One animation, one a11y contract (`aria-expanded`, `aria-controls`) |
+| `SegmentedControl` | `RunViewToggle` (which *is* one), new list filter | Generalize the existing component; do not add a second |
+| `Skeleton` | centred spinners | Layout-preserving |
+| `Inspector` | shell around `NodePanel` | Header + tab strip + body; `NodePanel`'s tabs move into it |
+
+`ScrollArea`, `SectionCard`, `TabBar`, `Modal`, `OverlayPortal`, `EmptyStateCard` and
+`StatusBadge` already exist — reuse, don't re-create. Audit F28 and F36 are both about
+parallel implementations drifting; every new component here has to justify why an
+existing one couldn't take the job.
+
+#### Two overlaps Phase 0 surfaced, and how they resolve
+
+Both are cases where "one primitive" was the plan and two components exist in fact.
+Recorded here because a migration that changes appearance is not the "no visual change"
+Phase 0 claimed, and pretending otherwise is how a redesign loses its audit trail.
+
+- **`Chip` vs `StatusBadge`.** They do *not* do the same job, and `Chip` was wrong to
+  imply it. `StatusBadge`'s `dot` variant is a standalone glow dot with no label —
+  a rail/list-row affordance. `Chip`'s dot is `bg-current` and exists only inside a
+  pill. **Division:** `Chip` owns every labelled pill; `StatusBadge` narrows to the
+  standalone dot. Both already resolve colour through `runStatusMeta` + `TONE_CHIP`,
+  so there is no F27 drift either way — this is about typography and scope, not colour.
+  Phase 4 migrates the pill call sites and drops `StatusBadge`'s `pill` variant then.
+- **`SegmentedControl` vs `RunViewToggle`.** §5.1 said generalize, don't add a second;
+  a second landed and `RunViewToggle` is untouched. Their selected states differ —
+  `RunViewToggle` uses `bg-cyan-500/15 text-cyan-300` plus a glow, `SegmentedControl`
+  uses `TONE_CHIP.cyan`. **So Phase 2's migration is a deliberate visual change, not a
+  pure swap.** Decide the selected-state treatment once, there, and apply it to both
+  call sites; do not let the two drift further apart in the meantime.
+- **`SplitPane` restore-on-reopen.** The width to restore after a collapse currently
+  lives in a component-local ref, so it does not survive a remount. §7's
+  "collapse fully, restore last width" therefore needs Phase 6 to own that value as
+  state, not the component. Phase 2 should pass it in rather than build on the ref.
+
+### 5.2 Where the decisions live
+
+Mirror the Rust discipline in AGENTS.md §3: a `match` that decides *what should
+happen* does not belong inside the component that renders it. Frontend precedent
+already exists — `runLayout.ts`, `workflowBadge.ts`, `runStatus.ts`, `runLayout`'s
+tests. New pure modules under `src/lib/`:
+
+- `pipelineCard.ts` — status/workflow/transport/metric derivation for one feature row.
+- `pipelineFilter.ts` — filter + sort + "needs you first" ordering.
+- `inspectorTarget.ts` — given steps, selection and view mode, which step the
+  inspector shows (and the empty/blocked cases).
+- `streamBuffer.ts` — the cap-and-append rule from §4.3.
+- `stepReconcile.ts` — the identity-preserving merge from §4.5.
+
+Each gets a unit test. This is what makes the redesign reviewable: the interesting
+logic is testable without mounting a component or stubbing twenty ports.
+
+### 5.3 React rules this redesign holds itself to
+
+- `memo` on every row component in a list that re-renders from a live feed
+  (`StepCard`, `PipelineCard`, `SubtaskRow`, `RunEventRow`), with a
+  re-render-count test where the render is expensive.
+  `ArtifactViewer.rerender.test.tsx` is the pattern to copy — it counts renders of the
+  real subtree instead of asserting that `memo` exists.
+- No object/array/function literal in a prop passed to a memoized child.
+- Derived values via `useMemo` only where the input identity is actually stable —
+  a `useMemo` over a fresh array every render is cost with no benefit (§4.5 is the
+  prerequisite).
+- Live-feed state stays in a ref plus `useSyncExternalStore`, not in state that
+  broadcasts to a whole subtree.
+- No `any` (AGENTS.md §3); `unknown` + a type guard for anything crossing IPC.
+- One component per file; extract past ~400 LOC. `NodePanel` at 956 lines is already
+  over and gets split as part of Phase 2.
+
+---
+
+## 6. Phases
+
+Each phase ends green on `npm run checks` and smoke-tested with `npm run dev:tauri`,
+and each is independently shippable. Conventional Commits per AGENTS.md §5 —
+note the `subject-case` trap: no capitalized leading token.
+
+### Phase 0 — Foundations (no visual change)
+`ui/` primitives from §5.1 with tests; pure modules from §5.2 with tests; add them to
+`.design-sync/config.json`. Fix audit **F17** first — `FeatureDetail.tsx:39` returns
+before ~20 hook calls, which makes every subsequent restructure a hooks-order crash
+waiting to happen.
+*Verify:* new unit tests fail before the implementation exists (AGENTS.md §7 — a test
+you have not watched fail is not coverage).
+
+### Phase 1 — Performance (§4.2–4.8), still no visual change
+Stream fan-out, buffer cap, reload coalescing + F19, step reconcile, callback
+stability, visibility-gated poll.
+*Verify:* re-render-count tests for `StepCard` under a simulated stream and under a
+`step_progress` burst. Both must fail on today's code.
+
+### Phase 2 — Pipeline view shell
+`SplitPane` + the unified `Inspector`; `NodePanel` split into its four tab modules
+behind it; Timeline rows become selectable and drive the same inspector; collapsible
+prompt (**B**); `MetricStrip` header (**C**); selection moved into navigation state
+(§3.5). The sticky collapsed header on scroll was scoped here and deferred to
+Phase 3, where the rest of the header work lands.
+Reconcile with `runLayout.ts`: automatic split at 1600 px becomes the *default* width
+for a pane the user can now resize. `pickRunLayout` keeps deciding the initial state;
+it stops being the final word. Update its doc comment accordingly — AGENTS.md §3, you
+changed the code, you own the comment.
+
+Both settled decisions in §7 land here: the splitter clamps rather than collapses, and
+`viewMode` starts on `'graph'`. Neither is a free switch — the clamp replaces
+`splitPaneGeometry`'s collapse zone, and the default flip makes `useRunGraph`'s
+"graph is opt-in" comment false the moment it changes.
+
+### Phase 3 — Timeline & step-card slim-down *(done)*
+`StepCard` down to scan tier + one CTA; stream, artifacts, rerun and environment
+panels served by the inspector; gate strip (§3.2); density toggle (§3.7);
+`content-visibility` on rows; the sticky collapsed header on scroll deferred out of
+Phase 2 (§0).
+
+**Two things Phase 1 deliberately left here**, both now closed by the move rather than
+by a fix of their own: the card no longer receives `overrides` or
+`handleRetryStep`/`handleStopStep`, so those hooks' unstable identities can no longer
+reach a memoized row; and the stream's single mount site in the inspector's Live tab is
+where the truncation notice now lives, instead of only on the timeline's copy.
+
+**What Phase 3 settled that the plan had left open:**
+
+- **The card's one CTA is the gate decision, and only that.** Retry, replay and stop are
+  the inspector's Actions tab, which already guarded them against a live ancestor; a
+  waiting gate is the run asking a question, so it may not wait behind a selection.
+- **`StepRerunPanel` and `StepArtifactList` are deleted, not relocated.** The harness /
+  model / effort selects became `FeatureDetail/RerunOptions.tsx` over the existing
+  `ui/HarnessModelPicker`, mounted in the Actions tab; the artifact split rule (an agent
+  step lists its markdown and folds the rest into "N files changed") became the pure
+  `lib/stepArtifacts.ts`, which the Output tab consumes.
+- **`useAgentStream` lost `activeStreamId`.** "Which step's output is on screen" is the
+  inspector's selection now, and a second copy of that state would be free to disagree
+  with it.
+- **`.timeline-step-card` carries `content-visibility`, and it may not move to the
+  `li`.** The rule implies paint containment on screen as well as off it, and the
+  connector circle hangs outside the card at `-left-[41px]` — contained on the `li`, the
+  timeline's spine is clipped away.
+- **The step card's pulsing gate block is gone**, which is one of the two items §5 names
+  by line number. What replaced it does not pulse; the gate strip pulses a 2×2 dot only.
+
+### Phase 4 — Project view *(done)*
+`PipelineCard` (memoized, three-tier read per §3.3, cost column);
+filter + sort + needs-you-first via `SegmentedControl` and `pipelineFilter.ts`;
+`MetricStrip` for the telemetry cluster; skeletons; empty state through
+`EmptyStateCard`. Fix audit **F10** while here — the header hard-codes
+"Connected via GitHub Enterprise • Default Workflow: Standard Feature Pipeline"
+(`ProjectHome.tsx:468`) for every project regardless of the real provider and workflow.
+A redesign that repaints a lie is worse than one that fixes it.
+
+**What Phase 4 settled:**
+
+- **F10's two halves resolved differently.** The provider is knowable and is now named
+  truthfully with its stored host and no inferred edition. A project had **no default
+  workflow at all**, so that clause was a claim about a setting that did not exist —
+  migration **V40** adds it, the Strategy tab lets a user set it, and the header names it
+  only when it resolves. The finding in
+  [`docs/ux-audit/findings.md`](ux-audit/findings.md) carries the detail, including why
+  the column deliberately has no foreign key.
+
+  Worth keeping in mind for the phases after this one: the header string was the
+  *symptom*. `StartFeatureModal` was falling through to `workflows[0]`, so every project
+  already had a default decided by table order. **Repainting the header without that
+  would have made the lie truthful and left the behaviour it described untouched** —
+  which is the failure mode "a redesign that repaints a lie" was written to warn about,
+  one level deeper than it was aimed.
+- **The detail tier is a quiet line, not a disclosure.** The description is one truncated
+  line whose full text is already free via `title`, and a per-row open/closed state in a
+  memoized list buys the click back as the fan-out §4.2 spent Phase 1 removing.
+- **§3.3's "branch" has no data source.** `Feature` carries no branch field, so the
+  detail tier is the feature id and the description. Nothing was invented to fill it.
+- **`DensityToggle` moved to `ui/` and took a required `ariaLabel`.** Two surfaces carry
+  one now, and a control whose accessible name says "timeline" while it sizes the
+  pipeline list is worse than an unnamed one — §5.1's rule, applied to itself.
+- **The `Chip`/`StatusBadge` split from §5.1 is executed**: pills migrated,
+  `StatusBadge`'s `pill` variant deleted so the two cannot drift back together. The
+  visible consequences are listed in §0.
+- **Out of scope but fixed, because Phase 4 shipped the input it broke:** bare `?` is
+  bound to the docs panel with `preventDefault` and had no editable-target guard, so it
+  ate the character out of any text field — including the new filter query. The two
+  global `keydown` listeners disagreed about that guard, which is audit F5's shape; they
+  now share `isEditableTarget` in `lib/shortcuts.ts`. The rest of F5 is untouched.
+
+### Phase 5 — Activity surface & motion budget *(done)*
+Collapsible activity block with sync affordance (**D**); every always-on animation
+audited to opacity-only per the note above `@keyframes pulse-glow` in `src/App.css`;
+pulse confined to small dots, never a container holding text (Phase 3 removed the step
+card's pulsing gate block, which was this item's worked example);
+`prefers-reduced-motion` coverage for anything new.
+
+**What Phase 5 settled:**
+
+- **The activity log is run-level, so it left the inspector.** §1's status column called
+  it "no disclosure, no sync affordance", which by Phase 2 was wrong twice over: there
+  *was* a disclosure, hand-rolled next to the `Disclosure` primitive built to replace it,
+  and there was an affordance — sitting *outside* the panel, in `RunMetaColumn`, naming a
+  different poll's interval. The real finding underneath was structural: the unified feed
+  rendered in `nodePanel/OverviewTab`, a **node**-scoped tab, "whenever there's a feed to
+  read". `ActivityPanel` is now one surface for both transports in the run's own meta
+  column, and the Overview tab is node-scoped again.
+- **The affordance is a pure module because the truth differs by transport.** A local run
+  is pushed and a detached one is polled, so collapsing the panel *pauses* one and merely
+  *hides* the other — same gesture, opposite consequence, and `lib/activitySync.ts` is the
+  only place a user can learn which they got. It takes the poll interval as an argument
+  rather than spelling one, which is what made the old caption wrong.
+- **A tail that only runs while the panel is open also freezes the bootstrap stepper.**
+  Stated in the affordance rather than fixed: a second poll to keep the stepper warm is
+  precisely the duplicate this arrangement removes. Recorded in `useRemoteRun`, at the
+  `onEvents` tap, which is where the wrong edit would be made.
+- **The panel keeps no feed of its own.** It renders what it is handed and pushes fetched
+  rows up to `useRemoteRun`, which already caps and de-dupes them. The copy it used to
+  keep beside that one was unbounded — §4.3's cap rule, absent from the one log most
+  likely to be long.
+- **The motion rule that was applied, since "opacity-only" turned out to be half of it.**
+  An infinite animation is a claim that something is still moving, so it is allowed only
+  when that is true, and only on a small glyph — never on a container that also holds
+  text, never on a settled state. `animate-pulse` on an `AlertTriangle` costs nothing to
+  render and still says "working on it" forever.
+- **Three findings the sweep turned up that no call site would have shown:**
+  - The four tone-keyed `.pulse-indicator` glows animated `transform` **and**
+    `box-shadow` together — the exact pair the WKWebView incident note forbids, four rules
+    above the note itself — and no call site had referenced them for as long as the note
+    has existed. Deleted, along with `.animate-slide-in` and `.animate-spin-slow`, which
+    were also unreferenced.
+  - `animate-pulse` is **Tailwind's** utility, so the `prefers-reduced-motion` block in
+    `src/App.css` — which lists this file's own animations — never covered any of its ~25
+    call sites. `check-classes.mjs` cannot see this: the class resolves, it just does not
+    stop. It is named in the block now.
+  - `FeatureHeader`'s status and transport pills animated *whole*, label included, for the
+    length of every run, and are the two largest live pills in the app. Migrated to `Chip`,
+    which pulses only its dot. Phase 4 migrated the pill call sites it could see; these two
+    were spelled by hand in a file it did not touch.
+- **`animate-progress-shimmer` is a deliberate exception**, kept and documented where it
+  is defined: an indeterminate progress bar cannot be expressed with opacity, and it
+  mounts only while a terminal session is connecting.
+
+### Phase 6 — Keyboard & persistence
+`j`/`k`/`Enter`/`g`/`t` through the existing registry (§3.6); persist split width,
+density, last view mode and filter. Audit *Opportunity 2* notes
+`get_app_session`/`set_app_session` already exist — use them rather than
+`localStorage`.
+
+---
+
+## 7. Gates, risks and what this plan does not decide
+
+**AGENTS.md §6 gates — none of these are mine to take:**
+
+- **No new npm dependency** is assumed anywhere. If measurement later says
+  virtualization (`@tanstack/react-virtual`) or a spring animation library earns its
+  place, that is a question, not a commit.
+- Nothing here touches `src-tauri/capabilities/`, agent spawn logic, migrations, or
+  `OPENCODE_PERMISSION`. Phase 6's persistence uses existing session commands; if it
+  needs a schema change, that is a gate.
+
+**Risks:**
+
+- **WebKitGTK invisibility.** `npm run checks` compiles for the host and never renders.
+  A new arbitrary-value utility outside the `App.css` safelist can silently no-op on
+  Linux. Every phase with new colour classes needs a `dev:tauri` look on Linux.
+- **Glassmorphism cost.** `backdrop-filter: blur(12px)` is cheap once and expensive
+  nested. The inspector sitting inside the run column must not stack a third blur
+  layer over the two already there. `App.css` records a real WKWebView GPU incident;
+  treat blur as a budget.
+- **Cross-OS (AGENTS.md §3).** Pointer capture, `ResizeObserver` and
+  `content-visibility` behave differently across WebKitGTK / WKWebView / WebView2, and
+  PR checks run on `ubuntu-22.04` only. macOS and Windows appearance is unverified by
+  any gate — say so explicitly when handing a phase back rather than implying it was
+  checked.
+- **Existing tests.** `FeatureDetail.test.tsx` and `ProjectHome.test.tsx` will need
+  updating. Updating an assertion because the DOM moved is fine; deleting one because
+  it now fails is a regression in disguise.
+- **Scope creep into the audit backlog.** F17, F19, F10 are on this plan's critical
+  path and are in scope. The other ~40 findings are not, and are scheduled separately
+  under roadmap Theme F.
+
+**Settled (2026-08-08), both against this plan's original recommendation:**
+
+- **The inspector clamps to a minimum width — it never collapses to zero.** So the
+  pane is always on screen and always has a home. Two consequences worth stating,
+  because each removes something this plan had planned for:
+  - `splitPaneGeometry.ts` had modelled a collapse zone that *snapped* the pane shut
+    past its minimum; Phase 2 made it a clamp. The "restore the last width on reopen"
+    problem recorded above stops existing with it — there is no closed state to reopen
+    from, so nothing needs to survive a remount and Phase 6 has one less value to
+    persist.
+  - Closing a step (`NodePanel`'s dismiss, deselecting a node) empties the pane
+    instead of hiding it, which makes `inspectorTarget`'s distinct empty *reasons*
+    load-bearing rather than speculative — an always-present pane that says nothing
+    is exactly how an empty panel comes to feel broken.
+- **Graph is the default view.** The graph had been opt-in "until Phase-2 parity is
+  signed off"; Phase 2 *is* that parity, so `useRunGraph` now initialises `viewMode`
+  to `'graph'`, and [docs/PRD_DAG_WORKFLOWS.md](PRD_DAG_WORKFLOWS.md) §6.1 carries the
+  same correction. What did NOT change: `canShowGraph` still requires a definition and
+  at least one step, so a legacy feature with no workflow graph continues to open on
+  the timeline. That is a fallback, not a default — an agent finding the graph-first
+  initialiser and reading it as a regression is the mistake this row exists to prevent.
+
+**Settled (2026-08-10), by Phase 6:**
+
+- **Preferences are global, one flat `app_session` row each** (`lib/uiPrefs.ts`).
+  The store is `string -> string`, so per-project or per-feature scoping could only
+  be faked by building keys — and a density re-chosen on every run is not a
+  preference. Density is deliberately **one** row for the timeline and the pipeline
+  list, which is what `lib/density.ts` means by keeping `Density` shared.
+- **The pipeline filter stores its segment and sort and not its query.** A search
+  string restored days later hides rows for a reason the user cannot see, so it reads
+  as features having disappeared rather than as a filter still on.
+- **A write is dropped until that preference has been read.** A view mounts on the
+  in-memory default and learns the stored value afterwards, so persisting from an
+  effect on the state makes every mount write back what it just read. `read()` arms
+  `write()`, which puts that rule in one place instead of in five effects.
+- **`j`/`k` clamp, they do not wrap**, and `g`/`t` are not bound at all on a run with
+  no graph to switch to: the view mode preference is global, so firing them there
+  would choose a mode on a surface that showed no sign of having changed.
+- **`src/docs/keyboard-shortcuts.md` is hand-written, not generated** from
+  `lib/shortcuts.ts`, and had drifted far enough to advertise three chords nothing
+  ever bound. It is reconciled now; an entry added to the registry still has to be
+  written there by hand. It also inherits the known `SimpleMarkdown` defect that
+  drops `|` table rows, so the page renders empty in-app until that is fixed.
+
+**What the review pass changed, all of it the same shape:** a bare printable key is
+only as scoped as the thing that switches it off, and each of these was a way for one
+to fire where nothing on screen accounted for it.
+
+- **`enabled` is composed in `FeatureDetail`, not derived in the hook.** The palette,
+  the docs panel and the start-feature modal are `App.tsx`'s siblings of the run view,
+  so it stays mounted and its window listener stays live underneath them — and none of
+  the three moves focus, which is exactly what makes the editable-target guard
+  insufficient on its own. `g`/`t` were reachable from a fully occluded surface, and
+  because the view-mode row is global, one press there would have chosen the opening
+  view for every future run.
+- **A run surface that claimed the key first keeps it.** The window listener stands
+  down on `event.defaultPrevented`, because React delegates at the root and the graph
+  canvas binds `Enter` on the selected node: one press used to toggle that node's
+  selection off and then move focus into the inspector it had just emptied.
+- **`activityOpen` is deliberately not persisted** — the one preference dropped rather
+  than added. `ActivityPanel`'s tail runs only while the panel is open and is a
+  detached run's only source of bootstrap phases (Phase 5 recorded that coupling), so
+  a stored collapse would blank the feed and the stepper for every later remote run,
+  days after the click that caused it. Per-mount it costs one click. Revisit when that
+  poll no longer hangs off the disclosure.
+- **`read()` answers from a pending write.** The store is one mount behind for the
+  length of the debounce, and `ui.density` is read by two surfaces — choosing Compact
+  in the project view and opening a feature inside 400 ms restored the value the user
+  had just replaced, and kept it for the life of that mount.
+- **`UiPref` exposes `cancelPendingWrite()`, drained per test.** These are module
+  singletons, so a debounced write outlives the component *and* the test that armed
+  it; one landed 400 ms later inside an unrelated test, where the global
+  `clearAllMocks` made it read as that test's own. It surfaced as a suite that failed
+  three runs in five and passed in isolation every time.
+
+**Settled (2026-08-10), by the wide-window pass.** Phases 2–5 were confirmed at one
+window size. A 4K screenshot showed the run view had no answer for a large one: a
+quarter of the viewport empty below the panes, the graph illegible in a box it used
+15% of, and the harness panel clipped inside its own track. Four causes, and the
+shape they share is that **the layout spent new width on the pane least able to use
+it, and spent no new height at all.**
+
+- **A pane's content may size that pane and no other.** `surfaceHeightPx` was
+  `graphBoxPx`, and `RunPanes` put it on the row holding *both* panes — so a graph
+  whose elk plan came out short shrank the inspector with it, which is how a nine-row
+  attempt table came to scroll inside 370 px with a quarter of the window empty
+  underneath. Side by side the row now takes the height it is given; only the stacked
+  layout states one, because there the column scrolls and `h-full` means nothing.
+- **Three full-height tracks, each scrolling itself** — run surface | inspector |
+  meta. The run column stops being the scroller when it is a row.
+- **The meta track is a share (22%) with a floor and no ceiling.** Fixed at `26rem`,
+  every pixel a wider window added went to the canvas. A ceiling was tried at `32rem`
+  and re-created the same defect past ~2300 px, which is why there is not one.
+- **`INSPECTOR_WIDTH_FRACTION` is half of the *pane pair*, not a third of the
+  column.** The two changes are one change: a third of the column was already ~45% of
+  the row, so the old name never described what rendered, and correcting the
+  denominator alone would have narrowed the inspector on exactly the windows this
+  pass was fixing. `runPairSize` is what the inspector's verdicts are asked of now —
+  a clamp resolved against the column can return an opening width the divider, which
+  knows only the row, refuses to reproduce.
+- **Run mode always auto-orients; `isUnarranged` is gone.** One node nudged in the
+  builder used to pin every later *reading* of that run to the builder's proportions.
+  Design mode still owns authored positions.
+- **`HarnessGateTable` is blocks, not a table.** It carried a `min-w-[36rem]` inside a
+  track that never had 36rem, so its third column was clipped and the escape hatch was
+  a horizontal scrollbar inside a side panel.
+- **The surface pass, same day.** Three tracks side by side made the app's card
+  vocabulary legible for the first time, and it was four languages: a sunken well
+  (graph), a borderless sidebar blurred at 24px (inspector), glass cards, and an
+  8px-radius banner. The cause is that `.glass-panel` bakes `border` and
+  `border-radius` into CSS, so it cannot be composed — **39 call sites add a
+  `border` on top of the one it already sets**, and the harness panel's
+  `border-white/10` was a silent departure from the card language that read as
+  "heavier" without saying why. `--radius-panel` is the token now; the graph and
+  the inspector are `glass-panel` like their neighbour, and the canvas inside the
+  graph is `panel-field` — the same well the terminal uses, previously spelled as
+  a raw `#050608` (a hex of a token that already existed, AGENTS.md §4).
+- **A measure caps the line, not the box.** `max-w-[96ch]` sat on the
+  `InitialPromptPanel`'s *card*, so its title bar, chevron and summary were capped
+  with the prose — a band of chrome ending two thirds across a wide window with
+  nothing beside it. It moves to the body, and reads `PROSE_CH`: the constant was
+  exported and unit-tested while **both** call sites re-spelled the number.
+  `AttachmentsPanel` loses the cap outright, since chips are not prose.
+- **One gutter.** Header, banners, gate strip, prompt and attachments were all
+  `px-6`; the run column was `p-8`, so the view stepped in by 8px exactly where the
+  eye tracks a vertical edge. Aligned down, because five blocks already agreed.
+- **A metric strip is chrome inside chrome.** `MetricStrip` gains an `inset`
+  variant and the feature header uses it: a `glass-panel` inside a `backdrop-blur-md`
+  header is a blur reading a blur — invisible, and §7 treats stacked translucency
+  as a budget.
+- **The `Graph | Timeline` chrome row sits above all three tracks, not inside one.**
+  Nested in the graph's track it pushed two of the three tracks down, so the meta
+  panels began a chrome row higher than the cards they stand beside — three peers
+  with one of them floating. Stacked it stays next to the surface it switches,
+  because there the meta panels *are* the graph's chrome and read above it.
+- **The meta track stays a column of cards, not one card with sections** — the one
+  place this pass departs from the shape it was signed off against. Its panels
+  (activity, bootstrap, gates) appear and disappear independently, so a wrapper
+  would assert they are one thing and would need an empty state of its own.
+- **What this pass did *not* fix**, because the fix is a drag and the width persists:
+  the graph is still the widest thing on screen at 4K while a linear pipeline lays out
+  vertically inside it. Auto-orienting against an honest box keeps answering `DOWN` for
+  a chain of eleven — correctly, since `RIGHT` at that length fits only at a smaller
+  scale. Capping the graph pane and giving the surplus to the other two tracks is the
+  option this pass considered and did not take.

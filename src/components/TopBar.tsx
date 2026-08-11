@@ -46,7 +46,7 @@ function TopBar({ connectedProvider }: TopBarProps) {
     <header className="h-14 border-b border-white/5 bg-[#0d0f14]/80 backdrop-blur-md flex items-center justify-between px-6 z-20 relative shrink-0">
       <div className="flex items-center gap-4">
         <img src="/icon.png" alt="Demeteo" className="w-8 h-8 rounded-lg" />
-        <h1 className="font-outfit font-bold tracking-wide text-lg text-white">demeteo</h1>
+        <h1 className="font-heading font-bold tracking-wide text-lg text-white">demeteo</h1>
       </div>
 
       <div className="flex items-center gap-4">

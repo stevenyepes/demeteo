@@ -384,7 +384,7 @@ export function TerminalSurface({
             </span>
           ) : phase === 'running' ? (
             <span className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-mono">
-              <Wifi className="w-3 h-3 animate-pulse" />
+              <Wifi className="w-3 h-3" />
               <span>Connected</span>
             </span>
           ) : phase === 'disconnected' ? (

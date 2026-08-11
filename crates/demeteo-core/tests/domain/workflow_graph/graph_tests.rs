@@ -578,3 +578,69 @@ fn error_summary_is_none_when_nothing_blocks() {
     );
     assert_eq!(error_summary(&lint_workflow_v2(&d, &CORE_NODE_TYPES)), None);
 }
+
+// ---------- capability-inferred-read-only ----------
+//
+// `all_writes` was doing two jobs: naming what a step captured, and telling
+// `effective_capability` the step writes across the source tree. Removing the
+// capture to stop the inventory export therefore also removes the second
+// signal, and the step silently becomes read-only. This is the only place that
+// says so before a run spends a budget discovering it.
+
+#[test]
+fn a_node_saying_nothing_about_what_it_is_warns() {
+    let d = def(serde_json::json!([{ "id": "a" }]), serde_json::json!([]));
+    let findings = lint_workflow_v2(&d, &CORE_NODE_TYPES);
+    let hits: Vec<_> = findings
+        .iter()
+        .filter(|f| f.code == "capability-inferred-read-only")
+        .collect();
+    assert_eq!(hits.len(), 1, "got: {findings:#?}");
+    assert_eq!(
+        hits[0].severity,
+        LintSeverity::Warning,
+        "never blocks a save"
+    );
+    assert!(
+        hits[0].message.contains("implement"),
+        "the fix has to be named, not just the symptom: {}",
+        hits[0].message
+    );
+}
+
+/// Either declaration is enough. A capability says what the step is; an
+/// artifact says what it produces, and `effective_capability` reads an
+/// unconstrained capture as 'implement' — so neither shape is ambiguous.
+#[test]
+fn either_a_capability_or_an_artifact_silences_it() {
+    for config in [
+        serde_json::json!({ "prompt_template": "x", "capability": "implement" }),
+        serde_json::json!({ "prompt_template": "x", "capability": "artifacts" }),
+        serde_json::json!({
+            "prompt_template": "x",
+            "artifacts": [{ "name": "r", "capture": { "kind": "all_writes" } }]
+        }),
+    ] {
+        let d = def(
+            serde_json::json!([{ "id": "a", "config": config }]),
+            serde_json::json!([]),
+        );
+        let findings = lint_workflow_v2(&d, &CORE_NODE_TYPES);
+        assert!(
+            !codes(&findings).contains(&"capability-inferred-read-only"),
+            "{config} is unambiguous, got: {findings:#?}"
+        );
+    }
+}
+
+/// A sequence node reaches `Implement` through `is_sequence()` whatever it
+/// declares, so the warning would be false there.
+#[test]
+fn a_sequence_node_is_never_warned_about() {
+    let d = def(
+        serde_json::json!([{ "id": "a", "type": "sequence", "config": {} }]),
+        serde_json::json!([]),
+    );
+    let findings = lint_workflow_v2(&d, &CORE_NODE_TYPES);
+    assert!(!codes(&findings).contains(&"capability-inferred-read-only"));
+}

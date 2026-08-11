@@ -1,0 +1,36 @@
+/*
+ * Appended to the compiled app stylesheet by cfg.buildCmd, so it is the last
+ * thing in the styles.css closure that every preview card and every design
+ * built with this DS receives.
+ *
+ * Two jobs, both about translating an *application* stylesheet into a
+ * *design system* one:
+ *
+ * 1. Force the dark ground. Demeteo is dark-only (App.tsx's root shell is
+ *    `bg-[#08090c] text-white font-sans`), but the generated preview card
+ *    template ends its <head> with an inline `body{background:#fff}` that
+ *    wins on source order. Without !important every card renders slate-300
+ *    text and glass panels on white — legible nowhere, and misleading as a
+ *    reference for the design agent.
+ *
+ * 2. Undo the app shell's viewport lock. The app's own body is
+ *    `height:100vh; overflow:hidden; display:flex` because it hosts a
+ *    full-screen desktop UI. A preview card and an agent-built page must
+ *    both grow with their content instead; inheriting the lock clips
+ *    anything taller than the viewport and stretches children as flex
+ *    items. The palette is the design language here — the viewport
+ *    behaviour is not.
+ *
+ * Deliberately no `min-height` — a preview card should shrink to its
+ * content, and the body background already propagates to the canvas, so
+ * the card stays dark to the edges without one. An earlier `min-height:100%`
+ * left every card padded out to a full viewport of empty black.
+ */
+html body {
+  background-color: var(--bg-app) !important;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  height: auto !important;
+  overflow: visible !important;
+  display: block !important;
+}

@@ -52,9 +52,9 @@ export function OverridesTab() {
   const s = useSettings();
 
   return (
-    <div className="space-y-4 animate-fadeIn">
+    <div className="space-y-4 animate-fade-in">
       <div className="glass-panel p-6 rounded-xl space-y-2">
-        <h3 className="font-outfit text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2"><WorkflowIcon className="w-4 h-4 text-violet-400" /> Workflow &amp; Step Harness, Model &amp; Effort</h3>
+        <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2"><WorkflowIcon className="w-4 h-4 text-violet-400" /> Workflow &amp; Step Harness, Model &amp; Effort</h3>
         <p className="text-xs text-slate-400 leading-relaxed">Workflows are shared across projects. Pin a coding agent (<span className="text-slate-300">harness</span>), a model and a reasoning <span className="text-slate-300">effort</span> for a whole workflow — or a single step — <span className="text-white font-medium">when it runs in {s.activeProject.name}</span>. Models are probed live from your {s.computeType === 'remote' ? 'remote machine' : 'local machine'}, so you only pick what's actually available; effort levels come from what each agent declares.</p>
         <p className="text-[11px] text-slate-500 leading-relaxed">Precedence, most specific first: a choice made at launch → a step override here → the workflow author's step setting → a workflow override here → the project default. Expand a workflow to override individual steps. Changes save instantly.</p>
       </div>

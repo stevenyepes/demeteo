@@ -454,7 +454,7 @@ function AppInner() {
               {initialLoadError && (
                 <div className="mx-8 mt-6 rounded-xl border border-ruby-500/30 bg-ruby-500/5 p-4">
                   <div className="flex items-center gap-2 mb-2">
-                    <span className="font-outfit text-sm font-semibold text-ruby-300 uppercase tracking-wider">Failed to load workspace</span>
+                    <span className="font-heading text-sm font-semibold text-ruby-300 uppercase tracking-wider">Failed to load workspace</span>
                   </div>
                   <pre className="font-mono text-xs text-ruby-200/80 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{initialLoadError}</pre>
                 </div>

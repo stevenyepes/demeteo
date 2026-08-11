@@ -170,7 +170,7 @@ export function HarnessGateTable({ baseline, evidence }: Props) {
   return (
     <section
       data-testid="harness-gate-table"
-      className="glass-panel mb-6 w-full shrink-0 border border-white/10 p-5"
+      className="glass-panel mb-6 w-full shrink-0 p-5"
     >
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="font-heading text-sm font-semibold tracking-wide text-white">
@@ -197,44 +197,51 @@ export function HarnessGateTable({ baseline, evidence }: Props) {
         A gate with no measurement is <span className="text-slate-200">unknown</span>, not passing.
       </p>
 
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[36rem] border-collapse text-left">
-          <thead>
-            <tr className="border-b border-white/10 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              <th className="pb-2 pr-4 font-sans">Gate</th>
-              <th className="pb-2 pr-4 font-sans">At the base commit</th>
-              <th className="pb-2 font-sans">This run</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(row => (
-              <tr key={row.name} className="border-b border-white/5 last:border-0 align-top">
-                <td className="py-3 pr-4">
-                  <div className="font-mono text-xs text-slate-200">{row.name}</div>
-                  <div className="mt-0.5 font-mono text-[10px] text-slate-500 break-all">
-                    {row.command}
-                  </div>
-                </td>
-                <td className="py-3 pr-4">
-                  <StatusChip chip={baselineChip(row.baseline)} />
-                  {row.baselineReason && (
-                    <p className="mt-1.5 font-sans text-[11px] leading-relaxed text-amber-400/80">
-                      {row.baselineReason}
-                    </p>
+      {/* One block per gate rather than a three-column table. The panel's seat
+          is the run's meta track, which is a fraction of the window and narrow
+          at every window the app opens in — the table carried a `min-w-[36rem]`
+          that its own track could not honour, so the third column was clipped
+          and the escape hatch was a horizontal scrollbar inside a side panel.
+          Blocks read the same comparison at any width and cannot clip; the
+          before/now pair keeps its own two-column grid, which is the part that
+          is genuinely tabular. */}
+      <ul className="mt-4 space-y-2.5">
+        {rows.map(row => (
+          <li
+            key={row.name}
+            data-gate-row={row.name}
+            className="rounded-lg border border-white/5 bg-white/[0.02] p-3"
+          >
+            <div className="font-mono text-xs text-slate-200">{row.name}</div>
+            <div className="mt-0.5 font-mono text-[10px] text-slate-500 break-all">
+              {row.command}
+            </div>
+            <div className="mt-2.5 grid grid-cols-2 gap-3">
+              <div className="min-w-0">
+                <div className="mb-1 font-sans text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  At the base commit
+                </div>
+                <StatusChip chip={baselineChip(row.baseline)} />
+                {row.baselineReason && (
+                  <p className="mt-1.5 font-sans text-[11px] leading-relaxed text-amber-400/80">
+                    {row.baselineReason}
+                  </p>
+                )}
+              </div>
+              <div className="min-w-0">
+                <div className="mb-1 font-sans text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  This run
+                </div>
+                <StatusChip chip={nowChip(row.now)} />
+                {row.baseline === 'failed' &&
+                  (row.now === 'excluded' || row.now === 'not-reported') && (
+                    <ExclusionNote row={row} baseSha={baseSha} />
                   )}
-                </td>
-                <td className="py-3">
-                  <StatusChip chip={nowChip(row.now)} />
-                  {row.baseline === 'failed' &&
-                    (row.now === 'excluded' || row.now === 'not-reported') && (
-                      <ExclusionNote row={row} baseSha={baseSha} />
-                    )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

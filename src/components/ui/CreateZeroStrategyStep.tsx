@@ -50,7 +50,7 @@ export function CreateZeroStrategyStep(props: CreateZeroStrategyStepProps) {
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="font-outfit font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">
+        <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">
           Strategy detected
         </h3>
         <p className="text-sm text-slate-300">

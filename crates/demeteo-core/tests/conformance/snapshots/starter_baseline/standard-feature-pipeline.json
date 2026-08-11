@@ -96,13 +96,8 @@
     ],
     [
       "s-implement",
-      "implementation-spec.md",
-      "# stub artifact\n\npath: artifacts/implementation-spec.md\ngenerated-by: demeteo stub agent\n"
-    ],
-    [
-      "s-implement",
-      "research-report.md",
-      "# stub artifact\n\npath: artifacts/research-report.md\ngenerated-by: demeteo stub agent\n"
+      "code-diff.diff",
+      "diff --git a/src/s-implement.txt b/src/s-implement.txt\nnew file mode 100644\nindex 0000000..d0166fe\n--- /dev/null\n+++ b/src/s-implement.txt\n@@ -0,0 +1,4 @@\n+# stub artifact\n+\n+path: src/s-implement.txt\n+generated-by: demeteo stub agent\n"
     ],
     [
       "s-research",

@@ -81,16 +81,6 @@
         "agent_kind": null,
         "allow_network": false,
         "allow_shell": false,
-        "artifacts": [
-          {
-            "capture": {
-              "kind": "all_writes"
-            },
-            "inline": false,
-            "mode": "summary_only",
-            "name": "changed-files"
-          }
-        ],
         "capability": "implement",
         "prompt_template": "You are a senior engineer applying a targeted fix to make CI green.\n\nDiagnosis artifact: [attached — from s-diagnose]\n\n## Rules (non-negotiable)\n1. Touch ONLY the files in the Fix Boundary from the diagnosis artifact.\n2. Do NOT fix unrelated issues — one CI failure, one fix.\n3. If the failure type is FLAKY_TEST: make the test deterministic, do not disable it.\n4. If the failure type is REGRESSION: fix the root cause in the source code, not just the test.\n\n## After applying the fix\nRun the specific failing check locally: {{test_command}}\nReport the result.\n\n## On Retry (only when retry feedback is present)\nIf the following feedback is non-empty, this is attempt {{iteration}} of {{max_iterations}} — local verification failed previously:\n{{retry_feedback}}\nFocus exclusively on resolving what the feedback describes; do not redo unrelated work. If the feedback is empty, this is the first attempt — ignore this section.\n\n## Output artifact\n- Files changed (list)\n- Specific lines modified (diff summary)\n- Local check result: PASS / FAIL\n- Confidence: HIGH / MEDIUM / LOW (with reason)\n\n## Stop condition\nYou are done when the local check passes and the output artifact is written.",
         "verifier": null

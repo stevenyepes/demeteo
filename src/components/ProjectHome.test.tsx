@@ -13,8 +13,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { afterEach, describe, expect, it, beforeEach, vi } from 'vitest';
 import { invoke, type InvokeArgs } from '@tauri-apps/api/core';
+import { UI_PREF_WRITE_DEBOUNCE_MS } from '../lib/uiPrefs';
 
 import {
   NavigationProvider,
@@ -25,7 +26,7 @@ import {
   useUIState,
 } from '../context';
 import ProjectHome from './ProjectHome';
-import type { Project } from '../types';
+import type { Feature, Project, Provider } from '../types';
 
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
@@ -280,6 +281,23 @@ describe('ProjectHome inline composer paste', () => {
     await waitFor(() => {
       expect(screen.getByText(/alpha\.png/)).toBeInTheDocument();
       expect(screen.getByText(/bravo\.webp/)).toBeInTheDocument();
+    });
+  });
+
+  // Two pastes fired before either has staged: both handlers are in flight
+  // across the `await`, so a handler that computes the next stage list from the
+  // `attachments` it captured at creation time overwrites the first result with
+  // the second.
+  it('keeps both images when a second paste lands before the first has staged', async () => {
+    renderHome();
+    const composer = await screen.findByTestId('project-home-composer');
+
+    paste(composer, [imageItem(new File(['first'], 'first.png', { type: 'image/png' }))]);
+    paste(composer, [imageItem(new File(['second'], 'second.png', { type: 'image/png' }))]);
+
+    await waitFor(() => {
+      expect(screen.getByText(/first\.png/)).toBeInTheDocument();
+      expect(screen.getByText(/second\.png/)).toBeInTheDocument();
     });
   });
 
@@ -713,5 +731,324 @@ describe('ProjectHome — handleRetryBootstrap defaultBranch/branchPrefix preced
 
     expect(getInputByLabel('Default Branch')).toHaveValue(typedBranch);
     expect(getInputByLabel('Branch Prefix')).toHaveValue(typedPrefix);
+  });
+});
+
+/**
+ * The project header and the pipeline list, wired in Phase 4 of
+ * `docs/UI_REDESIGN_PLAN.md`.
+ *
+ * The provenance claim is audit F10's regression guard, and it is a claim about
+ * a *lie* rather than about formatting: the header used to name a provider
+ * edition and a default workflow for every project regardless of either, and a
+ * project has no default workflow to name at all. Asserting the truthful string
+ * would pass on a template that happened to contain it, so the assertions on
+ * what must be absent carry the finding.
+ */
+function ProvenanceSeed({ project, providers, children }: {
+  project: Project;
+  providers: Provider[];
+  children: ReactNode;
+}): ReactElement | null {
+  const { dispatch } = useProject();
+  const [seeded, setSeeded] = useState(false);
+  useEffect(() => {
+    dispatch({ type: 'LOAD_PROJECTS', projects: [project], reposByProject: {} });
+    dispatch({ type: 'SET_CURRENT', id: project.id });
+    dispatch({ type: 'SET_PROVIDERS', providers });
+    setSeeded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  if (!seeded) return null;
+  return <>{children}</>;
+}
+
+function mountWithProviders(project: Project, providers: Provider[]) {
+  render(
+    <NavigationProvider>
+      <ProjectProvider>
+        <UIStateProvider>
+          <TerminalPanelProvider>
+            <ProvenanceSeed project={project} providers={providers}>
+              <ProjectHome />
+            </ProvenanceSeed>
+          </TerminalPanelProvider>
+        </UIStateProvider>
+      </ProjectProvider>
+    </NavigationProvider>,
+  );
+}
+
+function provider(overrides: Partial<Provider> = {}): Provider {
+  return {
+    id: 'provider-1',
+    type: 'github',
+    name: 'GitHub',
+    host: 'git.acme.dev',
+    pat: '',
+    username: 'octo',
+    avatarUrl: '',
+    ...overrides,
+  };
+}
+
+function feature(overrides: Partial<Feature> = {}): Feature {
+  return {
+    id: 'f-1',
+    project_id: 'proj-1',
+    title: 'Feature one',
+    status: 'completed',
+    total_cost: 0,
+    tokens: 0,
+    duration: '1m',
+    created_at: 1,
+    ...overrides,
+  };
+}
+
+describe('the project header’s provenance line', () => {
+  beforeEach(() => {
+    mockBackend(['/repo/a']);
+  });
+
+  it('names the provider the project is actually connected to', async () => {
+    mountWithProviders(baseProject(), [provider()]);
+
+    const line = await screen.findByTestId('project-provenance');
+    expect(line).toHaveTextContent('Connected via GitHub (git.acme.dev)');
+  });
+
+  it('never claims an edition or a default workflow', async () => {
+    mountWithProviders(baseProject(), [provider()]);
+
+    const line = await screen.findByTestId('project-provenance');
+    // Both halves of F10. A self-hosted host is *probably* Enterprise, and
+    // "probably" is what the finding was made of; a default workflow is not a
+    // property a project has at all.
+    expect(line.textContent).not.toMatch(/enterprise/i);
+    expect(line.textContent).not.toMatch(/workflow/i);
+  });
+
+  it('names the project’s chosen default workflow', async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case 'workflow_list':
+          return Promise.resolve([{ id: 'wf-2', name: 'Docs Update', is_starter: true }]);
+        case 'get_proposed_strategy':
+          return Promise.resolve({ project_id: 'proj-1', default_workflow_id: 'wf-2' });
+        case 'get_repositories_for_project':
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve([]);
+      }
+    });
+    mountWithProviders(baseProject(), []);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('project-provenance')).toHaveTextContent(
+        'Default workflow: Docs Update',
+      ),
+    );
+  });
+
+  it('omits the workflow clause when the chosen one has been deleted', async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case 'workflow_list':
+          return Promise.resolve([{ id: 'wf-2', name: 'Docs Update', is_starter: true }]);
+        case 'get_proposed_strategy':
+          // The column carries no foreign key on purpose, so a deleted
+          // workflow leaves this id behind — reachable in normal use.
+          return Promise.resolve({ project_id: 'proj-1', default_workflow_id: 'wf-gone' });
+        case 'get_repositories_for_project':
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve([]);
+      }
+    });
+    mountWithProviders(baseProject(), []);
+
+    await waitFor(() => expect(screen.getByTestId('project-provenance')).toBeInTheDocument());
+    expect(screen.getByTestId('project-provenance').textContent).not.toMatch(/workflow/i);
+  });
+
+  it('says where the run executes rather than inventing a machine', async () => {
+    mountWithProviders(baseProject({ compute_type: 'remote' }), [provider()]);
+
+    const line = await screen.findByTestId('project-provenance');
+    expect(line).toHaveTextContent('Runs remotely');
+  });
+});
+
+describe('the pipeline list’s filter', () => {
+  const FEATURES: Feature[] = [
+    feature({ id: 'f-done', title: 'Landed already', status: 'completed' }),
+    feature({ id: 'f-gate', title: 'Waiting on a human', status: 'gated' }),
+    feature({ id: 'f-run', title: 'Still moving', status: 'running' }),
+  ];
+
+  beforeEach(() => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case 'fetch_active_features':
+          return Promise.resolve(FEATURES);
+        case 'get_repositories_for_project':
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve([]);
+      }
+    });
+  });
+
+  it('shows every pipeline until a segment is chosen', async () => {
+    mountWithProviders(baseProject(), []);
+
+    expect(await screen.findByText('Landed already')).toBeInTheDocument();
+    expect(screen.getByText('Waiting on a human')).toBeInTheDocument();
+    expect(screen.getByText('Still moving')).toBeInTheDocument();
+  });
+
+  it('narrows the rendered rows to the chosen segment', async () => {
+    mountWithProviders(baseProject(), []);
+    await screen.findByText('Landed already');
+
+    await userEvent.click(screen.getByRole('radio', { name: /needs you/i }));
+
+    // The filter has to reach the rendered list, not merely the control: the
+    // policy is already covered in `pipelineFilter.test.ts`, so what is worth
+    // asserting here is that `ProjectHome` renders what it returns.
+    expect(screen.getByText('Waiting on a human')).toBeInTheDocument();
+    expect(screen.queryByText('Landed already')).not.toBeInTheDocument();
+    expect(screen.queryByText('Still moving')).not.toBeInTheDocument();
+
+    // Waited for, not merely allowed: the write a segment click schedules is
+    // debounced and held on a module-scoped preference, so it outlives this
+    // component. Left in flight it fires 400 ms later, inside whatever test is
+    // running by then, and `clearAllMocks` has made it look like that test's.
+    await waitFor(() =>
+      expect(commandsOf('set_app_session')).toEqual([
+        { key: 'ui.pipeline_segment', value: 'needs-you' },
+      ]),
+    );
+  });
+});
+
+/**
+ * What the project view remembers between launches (`docs/UI_REDESIGN_PLAN.md`
+ * §6 Phase 6). Every stored row seeded here differs from the in-memory default,
+ * so a build that ignored the store — or wrote over it on first paint — fails
+ * these rather than passing on a value that happens to match.
+ *
+ * Fake timers, and therefore `fireEvent` and no `findBy*`: the write debounce is
+ * a `setTimeout`, and Testing Library's async helpers do not detect vitest's
+ * clock, so a `waitFor` here would poll on an interval that never fires.
+ */
+describe('the project view’s persisted list preferences', () => {
+  const FEATURES: Feature[] = [
+    feature({ id: 'f-done', title: 'Landed already', status: 'completed', created_at: 3 }),
+    feature({ id: 'f-gate', title: 'Waiting on a human', status: 'gated', created_at: 2 }),
+    feature({ id: 'f-run', title: 'Still moving', status: 'running', created_at: 1 }),
+  ];
+
+  function mockStore(rows: Record<string, string>) {
+    vi.mocked(invoke).mockImplementation((cmd: string, args?: InvokeArgs) => {
+      switch (cmd) {
+        case 'fetch_active_features':
+          return Promise.resolve(FEATURES);
+        case 'get_app_session': {
+          const { key } = (args ?? {}) as { key?: string };
+          return Promise.resolve(rows[key ?? ''] ?? null);
+        }
+        default:
+          return Promise.resolve([]);
+      }
+    });
+  }
+
+  function writes(): Array<{ key: string; value: string }> {
+    return commandsOf('set_app_session').map((args) => ({
+      key: String(args?.key),
+      value: String(args?.value),
+    }));
+  }
+
+  /** Resolve the mounted reads and run out any debounce they armed. */
+  async function settle() {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_PREF_WRITE_DEBOUNCE_MS);
+    });
+  }
+
+  function queryBox(): HTMLElement {
+    return screen.getByLabelText('Filter pipelines by text');
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('opens on the segment and the sort the last session left behind', async () => {
+    mockStore({ 'ui.pipeline_segment': 'needs-you', 'ui.pipeline_sort': 'oldest' });
+    mount(baseProject({ compute_type: 'local' }));
+    await settle();
+
+    expect(screen.getByText('Waiting on a human')).toBeInTheDocument();
+    expect(screen.queryByText('Landed already')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Sort pipelines')).toHaveValue('oldest');
+  });
+
+  it('opens compact when compact is what was stored, and stores the next choice', async () => {
+    mockStore({ 'ui.density': 'compact' });
+    mount(baseProject({ compute_type: 'local' }));
+    await settle();
+
+    expect(screen.getByRole('radio', { name: 'Compact' })).toHaveAttribute('aria-checked', 'true');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Comfortable' }));
+    await settle();
+
+    expect(writes()).toEqual([{ key: 'ui.density', value: 'comfortable' }]);
+  });
+
+  it('stores nothing when the view merely opens', async () => {
+    mockStore({ 'ui.density': 'compact', 'ui.pipeline_segment': 'needs-you' });
+    mount(baseProject({ compute_type: 'local' }));
+    await settle();
+
+    expect(commandsOf('get_app_session').length).toBeGreaterThan(0);
+    expect(writes()).toEqual([]);
+  });
+
+  it('filters on the typed query without ever storing it', async () => {
+    mockStore({});
+    mount(baseProject({ compute_type: 'local' }));
+    await settle();
+
+    fireEvent.change(queryBox(), { target: { value: 'waiting' } });
+    await settle();
+
+    expect(screen.getByText('Waiting on a human')).toBeInTheDocument();
+    expect(screen.queryByText('Still moving')).not.toBeInTheDocument();
+    expect(writes()).toEqual([]);
+  });
+
+  it('stores the cleared segment when the reset link puts the list back', async () => {
+    mockStore({ 'ui.pipeline_segment': 'needs-you' });
+    mount(baseProject({ compute_type: 'local' }));
+    await settle();
+
+    fireEvent.change(queryBox(), { target: { value: 'matches nothing at all' } });
+    await settle();
+    expect(writes()).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await settle();
+
+    expect(writes()).toEqual([{ key: 'ui.pipeline_segment', value: 'all' }]);
+    expect(screen.getByText('Landed already')).toBeInTheDocument();
   });
 });

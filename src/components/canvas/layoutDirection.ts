@@ -68,11 +68,6 @@ export interface ContainerSize {
   height: number;
 }
 
-interface PositionLike {
-  x: number;
-  y: number;
-}
-
 /**
  * Longest-path layering — the same ranking elk's `layered` algorithm starts
  * from. Returns how many nodes land in each layer.
@@ -279,18 +274,4 @@ export function graphBoxHeight(plan: LayoutPlan, availableHeight: number): numbe
 export function needsMiniMap(plan: LayoutPlan, nodeCount: number): boolean {
   if (nodeCount >= MINIMAP_NODE_THRESHOLD) return true;
   return plan.fitScale > 0 && plan.fitScale < MINIMAP_MIN_SCALE;
-}
-
-/**
- * True when nobody has arranged this graph — every node sits on the same
- * column, which is exactly what the v1→v2 migration produces.
- *
- * Run mode auto-orients only these: a graph someone positioned by hand in the
- * builder is shown the way they left it.
- */
-export function isUnarranged(positions: (PositionLike | null | undefined)[]): boolean {
-  const known = positions.filter((p): p is PositionLike => p != null);
-  if (known.length <= 1) return true;
-  const first = known[0].x;
-  return known.every((p) => Math.abs(p.x - first) < 1);
 }

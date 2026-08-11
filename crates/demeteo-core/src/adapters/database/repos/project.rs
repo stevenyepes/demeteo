@@ -249,7 +249,7 @@ impl ProjectRepository for SqliteAdapter {
                         conventions_file, default_agent_kind, default_model, harnesses,
                         artifact_subdir, commit_artifacts, default_loop_iterations,
                         extra_writable_paths, prepare_command, default_effort,
-                        default_max_budget_usd
+                        default_max_budget_usd, default_workflow_id
                  FROM project_settings WHERE project_id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -282,6 +282,7 @@ impl ProjectRepository for SqliteAdapter {
                     default_agent_kind: row.get(10)?,
                     default_model: row.get(11)?,
                     default_effort: effort_from_row(row, 18)?,
+                    default_workflow_id: row.get(20)?,
                     artifact_subdir: row.get(13)?,
                     commit_artifacts: commit_artifacts != 0,
                     default_loop_iterations: default_loop_iterations.map(|v| v as u32),
@@ -313,8 +314,8 @@ impl ProjectRepository for SqliteAdapter {
               coverage_command, conventions_file, pr_template, conflict_policy, feature_lifecycle,
               default_agent_kind, default_model, harnesses, artifact_subdir, commit_artifacts,
               default_loop_iterations, extra_writable_paths, prepare_command, default_effort,
-              default_max_budget_usd)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+              default_max_budget_usd, default_workflow_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 s.project_id,
                 s.worktree_strategy.default_branch,
@@ -336,6 +337,7 @@ impl ProjectRepository for SqliteAdapter {
                 s.worktree_strategy.prepare_command,
                 s.default_effort.map(|e| e.as_str()),
                 s.default_max_budget_usd,
+                s.default_workflow_id,
             ],
         )
         .map_err(|e| e.to_string())?;

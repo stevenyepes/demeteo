@@ -274,7 +274,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
       <div className="max-w-4xl mx-auto relative z-10">
         <div className="flex items-end justify-between mb-6 border-b border-white/5 pb-4">
           <div>
-            <h2 className="text-2xl font-outfit font-bold text-white mb-1">Machines</h2>
+            <h2 className="text-2xl font-heading font-bold text-white mb-1">Machines</h2>
             <p className="text-sm text-slate-400">
               Environments that Demeteo can run agents on. The local machine is always available; add remote SSH hosts below.
             </p>
@@ -331,7 +331,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h4 className="text-base font-semibold text-white font-outfit">This Machine</h4>
+                <h4 className="text-base font-semibold text-white font-heading">This Machine</h4>
                 <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">Built-in</span>
               </div>
               <div className="text-xs text-slate-400 mt-1 font-mono">
@@ -350,7 +350,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
         ) : machines.length === 0 ? (
           <div className="glass-panel p-8 text-center flex flex-col items-center justify-center">
             <Server className="w-8 h-8 text-slate-500 mb-3" />
-            <h3 className="text-base font-outfit font-semibold text-white mb-1">No remote machines</h3>
+            <h3 className="text-base font-heading font-semibold text-white mb-1">No remote machines</h3>
             <p className="text-sm text-slate-400 max-w-md mb-5">
               Add a remote SSH host to run agents on cloud instances or other servers.
             </p>
@@ -389,7 +389,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                       )}
                     </div>
                     <div className="min-w-0">
-                      <h4 className="text-base font-semibold text-white font-outfit truncate">{m.name}</h4>
+                      <h4 className="text-base font-semibold text-white font-heading truncate">{m.name}</h4>
                       <div className="text-xs text-slate-400 mt-1 space-y-0.5 font-mono">
                         <p>
                           {m.username ? <><span className="text-slate-200">{m.username}</span>@</> : null}

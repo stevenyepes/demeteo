@@ -3,7 +3,8 @@
  * read-only tabs surface the right Phase-1 data — the Overview tab's per-attempt
  * table from `step_attempts_list` (the row the timeline overwrites on retry) and
  * the failure class, and the Output tab's harness/verifier output + artifact
- * list — so a failure's root cause is reachable without leaving the graph.
+ * list — so a failure's root cause is reachable from whichever run surface is
+ * showing, without opening another one.
  *
  * `ArtifactViewer` is mocked out: it only mounts when an artifact is selected
  * (these tests assert the chooser, not the body) and pulls Monaco otherwise.
@@ -22,7 +23,9 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => invoke(
 
 import { NodePanel } from './NodePanel';
 import type { NodeConfigV2, NodeRunStatus } from './types';
-import type { StepAttempt, StepExecution } from '../../types';
+import type { AgentStreamStore } from '../FeatureDetail/useAgentStream';
+import type { HarnessOverrides } from '../FeatureDetail/useHarnessOverrides';
+import type { HarnessBaseline, StepAttempt, StepExecution } from '../../types';
 
 const node = (over: Partial<NodeConfigV2> = {}): NodeConfigV2 => ({
   id: 'implement',
@@ -49,6 +52,48 @@ const step = (over: Partial<StepExecution> = {}): StepExecution => ({
   artifact_paths: [],
   created_at: 0,
   updated_at: 1,
+  ...over,
+});
+
+/** Byte-for-byte the shape `build_environment_message` composes, since
+ *  `parseEnvironmentFailure` reports nothing for anything else and a panel that
+ *  never renders would pass an "and not the raw block" assertion by itself. */
+const ENVIRONMENT_MESSAGE =
+  'Environment not ready — this failure is not something editing the code can fix.\n\n' +
+  'cargo is not on the PATH of the login shell.\n' +
+  'Remediation: install rustup on the machine.\n\n' +
+  'Failing command: cargo test\n' +
+  'Machine: local\n' +
+  'Reproduce:\n  cd /wt && cargo test\n';
+
+const BASELINE: HarnessBaseline = {
+  base_sha: 'abc123',
+  harnesses: [
+    {
+      name: 'unit',
+      command: 'cargo test',
+      exit_ok: false,
+      measured_at: 1,
+      producer: 'node',
+      environment: { reason: 'cargo missing', remediation: 'install rustup' },
+    },
+  ],
+};
+
+const overrides = (over: Partial<HarnessOverrides> = {}): HarnessOverrides => ({
+  availableModels: [],
+  selectedModel: '',
+  setSelectedModel: vi.fn(),
+  isLoadingModels: false,
+  availableAgents: ['opencode'],
+  selectedAgent: '',
+  selectedEffort: '',
+  setSelectedEffort: vi.fn(),
+  featureAgentKind: 'opencode',
+  retryEffortLevels: ['low', 'high'],
+  onAgentChange: vi.fn(),
+  adoptFeatureModel: vi.fn(),
+  probeForFeature: vi.fn(),
   ...over,
 });
 
@@ -90,7 +135,11 @@ describe('NodePanel — Overview', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it('renders the unified run-event feed (P2.6) when events are passed', async () => {
+  // The unified run-event feed used to render at the bottom of this tab. It is
+  // run-level, not node-level, and now lives in the run's own `ActivityPanel`
+  // (UI_REDESIGN_PLAN §1 D) — `ActivityPanel.test.tsx` carries what this
+  // asserted. Pinned here so the tab does not re-grow a run-level section.
+  it('keeps the Overview tab node-scoped — no run-level activity log', async () => {
     invoke.mockResolvedValue([]);
     const run: NodeRunStatus = { status: 'completed', stepExecutionId: 'se-1' };
     render(
@@ -100,30 +149,33 @@ describe('NodePanel — Overview', () => {
         run={run}
         step={step({ status: 'completed' })}
         onClose={() => {}}
-        runEvents={[
-          { offset: 1, run_id: 'f1', kind: 'pr_opened', payload_json: JSON.stringify('https://ex/pr/1'), created_at: 0 },
-        ]}
       />,
     );
     await waitFor(() => expect(invoke).toHaveBeenCalled());
-    expect(screen.getByText('Run activity')).toBeInTheDocument();
-    expect(screen.getByText('PR opened')).toBeInTheDocument();
+    expect(screen.queryByText('Run activity')).not.toBeInTheDocument();
   });
 });
 
 describe('NodePanel — layout', () => {
-  it('clamps its width', () => {
-    // A flat `w-[62%]` is a ~2100px panel at 4K and squeezes the canvas to 38%
-    // in a side-by-side window. The basis needs a floor and a ceiling.
+  it('states no width of its own and takes the one its host gives it', () => {
+    // The pane's floor and ceiling belong to the `SplitPane` divider's clamp
+    // (`splitPaneGeometry.ts`), which the user drags. A width spelled on the
+    // panel as well would fight that clamp, so the panel carries none.
     const { container } = render(
-      <NodePanel featureId="f1" node={node()} run={null} step={null} onClose={() => {}} />,
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={null}
+        step={null}
+        onClose={() => {}}
+        className="h-full"
+      />,
     );
     const root = container.firstElementChild;
     expect(root).not.toBeNull();
     const cls = root!.className;
-    expect(cls).toContain('min-w-[20rem]');
-    expect(cls).toContain('max-w-[38rem]');
-    expect(cls).not.toContain('w-[62%]');
+    expect(cls).toContain('h-full');
+    expect(cls).not.toMatch(/(^|\s)(w-|min-w-|max-w-|basis-)/);
   });
 });
 
@@ -182,6 +234,102 @@ describe('NodePanel — Output', () => {
     await waitFor(() => expect(invoke).toHaveBeenCalled()); // settle the Overview fetch first
     fireEvent.click(screen.getByText('Output'));
     expect(screen.getByText(/No output produced/i)).toBeInTheDocument();
+  });
+});
+
+describe('NodePanel — Output: artifacts an agent step declared', () => {
+  const openOutput = async (over: Partial<StepExecution>) => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'completed', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'completed', ...over })}
+        onClose={() => {}}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Output'));
+  };
+
+  it('lists the document and folds the files it touched into a count', async () => {
+    await openOutput({
+      artifact_paths: ['artifacts/report.md', 'src/lib/auth.ts', 'src/lib/auth.test.ts'],
+    });
+    expect(screen.getByText('report.md')).toBeInTheDocument();
+    expect(screen.queryByText('auth.ts')).not.toBeInTheDocument();
+    expect(screen.getByText(/2 files changed/)).toBeInTheDocument();
+  });
+
+  it('still counts as output when every declared path was folded away', async () => {
+    // The empty state and the fold rule are derived from the same list, so a
+    // step that produced only source edits must not read as having produced
+    // nothing at all.
+    await openOutput({ artifact_paths: ['src/lib/auth.ts'] });
+    expect(screen.queryByText(/No output produced/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/1 file changed/)).toBeInTheDocument();
+  });
+
+  it('lists every path a non-agent step declared', async () => {
+    await openOutput({
+      step_kind: 'gate',
+      artifact_paths: ['artifacts/verdict.json', 'changes.patch'],
+    });
+    expect(screen.getByText('verdict.json')).toBeInTheDocument();
+    expect(screen.getByText('changes.patch')).toBeInTheDocument();
+    expect(screen.queryByText(/files? changed/)).not.toBeInTheDocument();
+  });
+});
+
+describe('NodePanel — Output: environment failures', () => {
+  const openOutput = async (over: Partial<StepExecution>, baseline?: HarnessBaseline) => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'failed', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'failed', ...over })}
+        onClose={() => {}}
+        harnessBaseline={baseline}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Output'));
+  };
+
+  it('presents the remediation instead of the raw failure text', async () => {
+    await openOutput({ error_message: ENVIRONMENT_MESSAGE });
+    expect(screen.getByTestId('environment-not-ready')).toBeInTheDocument();
+    expect(screen.getByTestId('environment-remediation')).toHaveTextContent(
+      'install rustup on the machine.',
+    );
+    expect(screen.queryByText(/Verifier \/ harness output/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the raw block for a failure the feature actually caused', async () => {
+    await openOutput({ error_message: '2 tests failed: auth_spec.rs' });
+    expect(screen.queryByTestId('environment-not-ready')).not.toBeInTheDocument();
+    expect(screen.getByText(/2 tests failed: auth_spec.rs/)).toBeInTheDocument();
+  });
+
+  it('says the run stopped at the baseline when the baseline already knew', async () => {
+    await openOutput({ error_message: ENVIRONMENT_MESSAGE }, BASELINE);
+    expect(screen.getByTestId('environment-not-ready')).toHaveTextContent(
+      /already failing at the base commit/i,
+    );
+  });
+
+  it('reads as a run-time fault with no baseline in hand', async () => {
+    // The canvas mounts this panel with no baseline at all, and the two
+    // wordings are different claims about what was spent.
+    await openOutput({ error_message: ENVIRONMENT_MESSAGE });
+    expect(screen.getByTestId('environment-not-ready')).toHaveTextContent(
+      /never produced a result here/i,
+    );
   });
 });
 
@@ -311,6 +459,18 @@ describe('NodePanel — Overview: sequence task list (P2.5)', () => {
 });
 
 describe('NodePanel — Live', () => {
+  /** Answers for one execution id only: a store that returns the same text for
+   *  any id would pass even if the tab subscribed to the wrong step. */
+  const storeFor = (
+    stepExecutionId: string,
+    text: string,
+    truncated = false,
+  ): AgentStreamStore => ({
+    subscribe: () => () => {},
+    read: (id) => (id === stepExecutionId ? text : ''),
+    isTruncated: (id) => id === stepExecutionId && truncated,
+  });
+
   it('shows the agent-stream buffer while running', () => {
     invoke.mockResolvedValue([]);
     const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
@@ -321,12 +481,50 @@ describe('NodePanel — Live', () => {
         run={run}
         step={step({ status: 'running' })}
         onClose={() => {}}
-        liveStream={'thinking about the change…'}
+        streamStore={storeFor('se-1', 'thinking about the change…')}
         isStreaming
       />,
     );
     fireEvent.click(screen.getByText('Live'));
     expect(screen.getByText(/thinking about the change/)).toBeInTheDocument();
+  });
+
+  it('says the buffer is a tail once the cap has dropped anything', () => {
+    // Without it the last N KB of a long turn reads as everything the agent
+    // said, and this tab is the only place the stream is now mounted.
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'running' })}
+        onClose={() => {}}
+        streamStore={storeFor('se-1', 'later output', true)}
+        isStreaming
+      />,
+    );
+    fireEvent.click(screen.getByText('Live'));
+    expect(screen.getByText(/Earlier output dropped/i)).toBeInTheDocument();
+  });
+
+  it('stays silent about truncation while the whole turn is still buffered', () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'running' })}
+        onClose={() => {}}
+        streamStore={storeFor('se-1', 'the whole turn')}
+        isStreaming
+      />,
+    );
+    fireEvent.click(screen.getByText('Live'));
+    expect(screen.queryByText(/Earlier output dropped/i)).not.toBeInTheDocument();
   });
 
   it('hints when the node is not running and has no buffer', async () => {
@@ -409,6 +607,68 @@ describe('NodePanel — Actions', () => {
     fireEvent.click(screen.getByText('Actions'));
     fireEvent.click(screen.getByRole('button', { name: 'Decide' }));
     expect(onDecideGate).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a retry be re-pinned onto another harness before it fires', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'failed', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'failed' })}
+        onClose={() => {}}
+        onRetry={() => {}}
+        overrides={overrides()}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+    expect(screen.getByLabelText('Harness')).toBeInTheDocument();
+    expect(screen.getByLabelText('Effort')).toBeInTheDocument();
+  });
+
+  it('offers no rerun controls where no retry is offered', async () => {
+    // Selects that re-pin a run nothing is going to fire are three questions
+    // with no answer.
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'running' })}
+        onClose={() => {}}
+        onStop={() => {}}
+        overrides={overrides()}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Harness')).not.toBeInTheDocument();
+  });
+
+  it('keeps the retry a caller passed no overrides for', async () => {
+    // The canvas mounts this panel with none in hand.
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'failed', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'failed' })}
+        onClose={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Harness')).not.toBeInTheDocument();
   });
 
   it('shows an empty state when no actions apply', async () => {

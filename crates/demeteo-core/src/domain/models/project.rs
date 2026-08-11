@@ -99,6 +99,18 @@ pub struct ProjectSettings {
     /// workflow override all beat it. See migration V29.
     #[serde(default)]
     pub default_effort: Option<EffortLevel>,
+    /// The Workflow a new Feature starts with unless the launcher picks
+    /// another. `None` = **unset**, not "no workflow": the launch path then
+    /// falls back to the first entry of the workflow list, which is what
+    /// every project did implicitly before this field existed.
+    ///
+    /// Read at launch time only. Unlike `default_effort` and `default_model`
+    /// it feeds no resolution chain during a run, and a workflow deleted
+    /// after being chosen leaves this id dangling by design — the caller
+    /// resolves it against the workflow list and treats an unresolvable id
+    /// as unset. See migration V40 for why there is no foreign key.
+    #[serde(default)]
+    pub default_workflow_id: Option<String>,
     /// Project-level default loop iteration budget for `on_failure` retry
     /// loops. `None` = use the engine default (3). Overridable per run via
     /// `Feature::loop_iterations`. See migration V13.

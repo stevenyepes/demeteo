@@ -256,6 +256,7 @@ fn project_settings_default_effort_round_trips() {
         default_agent_kind: None,
         default_model: None,
         default_effort: effort,
+        default_workflow_id: None,
         default_loop_iterations: None,
         // A sub-dollar value that also exercises the REAL column's precision
         // alongside the effort round-trip (both are the last-added columns,
@@ -275,6 +276,86 @@ fn project_settings_default_effort_round_trips() {
     adapter.save_settings(settings(None)).unwrap();
     assert_eq!(
         adapter.get_settings(&pid).unwrap().unwrap().default_effort,
+        None
+    );
+}
+
+/// The project's chosen default Workflow survives the settings upsert/select
+/// pair, and an unset one reads back as `None` — the state the launch path
+/// resolves to "first workflow in the list". The neighbouring columns are
+/// asserted alongside it because this is the newest column on both statements
+/// and therefore the one a positional-index slip in the row mapping would
+/// shift everything else past.
+#[test]
+fn project_settings_default_workflow_id_round_trips() {
+    let conn = Connection::open_in_memory().unwrap();
+    let adapter = SqliteAdapter::new(conn).unwrap();
+    let pid = ProjectId::from("p_settings_wf".to_string());
+    adapter
+        .add(Project {
+            id: pid.clone(),
+            name: "default workflow settings".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 1000,
+        })
+        .unwrap();
+
+    let settings = |workflow: Option<String>| ProjectSettings {
+        project_id: pid.clone(),
+        worktree_strategy: WorktreeStrategy {
+            default_branch: "main".to_string(),
+            branch_prefix: "feat/".to_string(),
+            test_command: None,
+            build_command: None,
+            coverage_command: None,
+            conventions_file: None,
+            pr_template: None,
+            harnesses: None,
+            validation_gates: None,
+            prepare_command: Some("npm ci".to_string()),
+            extra_writable_paths: Vec::new(),
+        },
+        conflict_policy: "manual".to_string(),
+        feature_lifecycle: "keep".to_string(),
+        default_agent_kind: None,
+        default_model: None,
+        default_effort: Some(EffortLevel::Low),
+        default_workflow_id: workflow,
+        default_loop_iterations: None,
+        default_max_budget_usd: Some(3.5),
+        artifact_subdir: "artifacts/".to_string(),
+        commit_artifacts: false,
+    };
+
+    adapter
+        .save_settings(settings(Some("wf_starter_feature".to_string())))
+        .unwrap();
+    let saved = adapter.get_settings(&pid).unwrap().unwrap();
+    assert_eq!(
+        saved.default_workflow_id,
+        Some("wf_starter_feature".to_string())
+    );
+    assert_eq!(saved.default_effort, Some(EffortLevel::Low));
+    assert_eq!(saved.default_max_budget_usd, Some(3.5));
+    assert_eq!(
+        saved.worktree_strategy.prepare_command,
+        Some("npm ci".to_string())
+    );
+
+    // A workflow id is never rewritten to something else on the way out, so a
+    // project that clears its choice must read back unset, not the last one.
+    adapter.save_settings(settings(None)).unwrap();
+    assert_eq!(
+        adapter
+            .get_settings(&pid)
+            .unwrap()
+            .unwrap()
+            .default_workflow_id,
         None
     );
 }
@@ -330,6 +411,7 @@ fn project_settings_harnesses_and_validation_gates_round_trip() {
         default_agent_kind: None,
         default_model: None,
         default_effort: None,
+        default_workflow_id: None,
         default_loop_iterations: None,
         default_max_budget_usd: None,
         artifact_subdir: "artifacts/".to_string(),

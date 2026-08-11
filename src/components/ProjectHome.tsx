@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
-import { Zap, Cpu, Clock, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
+import { Zap, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
 import { Feature, Repository } from '../types';
-import { formatTokens } from '../lib/utils';
 import { formatError } from '../lib/errors';
 import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } from '../lib/project';
 import { bootstrapProject } from '../lib/createProjectWizard';
@@ -10,39 +9,38 @@ import { fetchActiveFeatures } from '../lib/features';
 import { listMirroredRuns } from '../lib/remoteRuns';
 import { listWorkflows } from '../lib/workflows';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
+import EmptyStateCard from './EmptyStateCard';
+import { PipelineCard } from './PipelineCard';
+import { PipelineFilterBar } from './PipelineFilterBar';
+import { PipelineListSkeleton } from './PipelineListSkeleton';
+import { ProjectTelemetry } from './ProjectTelemetry';
 import { StartSessionButton } from './StartSessionButton';
+import { DensityToggle } from './ui/DensityToggle';
+import { DEFAULT_DENSITY, pipelineDensityClasses } from '../lib/density';
+import { filterPipelines } from '../lib/pipelineFilter';
+import { densityPref } from '../lib/uiPrefs';
+import { usePersistedPref } from '../hooks/usePersistedPref';
+import { usePersistedPipelineFilter } from '../hooks/usePersistedPipelineFilter';
 import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
-import { featureRunStatus, runStatusMeta, TONE_CHIP, type RunStatusTone } from '../lib/runStatus';
-import { buildWorkflowById, classifyWorkflowBadge } from '../lib/workflowBadge';
+import { buildWorkflowById } from '../lib/workflowBadge';
+import { describeProjectProvenance } from '../lib/projectProvenance';
 import {
     extractClipboardImageFiles,
     recoverClipboardImageFile,
     stageBrowserFilesForLaunch,
 } from '../lib/attachments';
 
-/**
- * Left accent bar per tone. Local to this component (the way StatusBadge
- * keeps its own TONE_DOT) because the glow is specific to these cards —
- * the shared registry only carries the flat `TONE_BORDER_L` border.
- */
-const TONE_ACCENT: Record<RunStatusTone, string> = {
-    emerald: 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]',
-    cyan:    'bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.8)]',
-    violet:  'bg-violet-500 shadow-[0_0_10px_rgba(139,92,246,0.8)]',
-    amber:   'bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.8)]',
-    ruby:    'bg-ruby-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]',
-    slate:   'bg-slate-600 shadow-[0_0_10px_rgba(100,116,139,0.6)]',
-};
-
 const ProjectHome = () => {
     const { navigate } = useNavigation();
-    const { state: { currentProjectId, projects }, dispatch: projDispatch } = useProject();
+    const { state: { currentProjectId, projects, providers }, dispatch: projDispatch } = useProject();
     const { uiDispatch } = useUIState();
     const activeProject = projects.find(p => p.id === currentProjectId)!;
     const [featureInput, setFeatureInput] = useState('');
     const [features, setFeatures] = useState<Feature[]>([]);
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
     const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
+    const [pipelineFilter, setPipelineFilter] = usePersistedPipelineFilter();
+    const [density, setDensity] = usePersistedPref(densityPref, DEFAULT_DENSITY);
     const [activeRepositoryId, setActiveRepositoryId] = useState<string>('');
     // Feature ids that have a remote-run mirror → they execute detached under
     // the runner rather than on this machine. Drives the per-card transport
@@ -62,6 +60,8 @@ const ProjectHome = () => {
     const [repositoriesProjectId, setRepositoriesProjectId] = useState<string | null>(null);
     // Workflow id → display meta, used to label the Active Pipelines list.
     const [workflowById, setWorkflowById] = useState<Map<string, { name: string; is_starter: boolean }>>(new Map());
+    // `ProjectSettings.default_workflow_id` (migration V40), for the header.
+    const [defaultWorkflowId, setDefaultWorkflowId] = useState<string | null>(null);
 
     // Staged attachments for the inline composer. Handed to the Start
     // Feature modal as a seed on launch; see AttachmentDropzone.tsx for
@@ -73,13 +73,23 @@ const ProjectHome = () => {
     // surface (Alternative A): it captures a title + attachments and
     // hands off to the Start Feature modal, which owns every launch
     // knob (repos, runner, overrides) and the actual start_feature call.
+    //
+    // Staging is async, so the merge into the current list belongs in the
+    // updater and not around the `await`: two pastes in flight would otherwise
+    // both read the `attachments` this callback captured, and the second
+    // result would erase the first.
     const stageClipboardFiles = useCallback(async (files: File[]) => {
         try {
-            setAttachments(await stageBrowserFilesForLaunch(files, attachments));
+            const staged = await stageBrowserFilesForLaunch(files, []);
+            const stagedHashes = new Set(staged.map((entry) => entry.sha256));
+            setAttachments((prev) => [
+                ...prev.filter((entry) => !stagedHashes.has(entry.sha256)),
+                ...staged,
+            ]);
         } catch (err) {
             console.error('ProjectHome: failed to stage pasted attachment', err);
         }
-    }, [attachments]);
+    }, []);
 
     const handleComposerPaste = useCallback(
         async (e: React.ClipboardEvent<HTMLDivElement>) => {
@@ -106,6 +116,23 @@ const ProjectHome = () => {
         },
         [stageClipboardFiles],
     );
+    // Takes the row's identity as arguments so the memoized `PipelineCard`
+    // receives the same handler across an unrelated render of this component.
+    const openFeature = useCallback((featureId: string, featureTitle: string) => {
+        navigate({ kind: 'detail', featureId, featureTitle });
+    }, [navigate]);
+
+    /** `filterPipelines` returns `features` itself when nothing was dropped and
+     *  nothing moved, so this memo genuinely holds across a keystroke in the
+     *  composer — which is the same component's state. `pipelineDensityClasses`
+     *  returns one stable object per density for the same reason: both feed
+     *  memoized rows. */
+    const visibleFeatures = useMemo(
+        () => filterPipelines(features, pipelineFilter),
+        [features, pipelineFilter],
+    );
+    const densityClasses = pipelineDensityClasses(density);
+
     const openStartFeature = () => {
         uiDispatch({
             type: 'OPEN_START_FEATURE',
@@ -199,11 +226,12 @@ const ProjectHome = () => {
         const fetchWorkspaceData = async () => {
             setIsLoadingFeatures(true);
 
-            const [featuresRes, reposRes, workflowsRes, mirrorsRes] = await Promise.allSettled([
+            const [featuresRes, reposRes, workflowsRes, mirrorsRes, settingsRes] = await Promise.allSettled([
                 fetchActiveFeatures(activeProject.id),
                 getRepositoriesForProject(activeProject.id),
                 listWorkflows(),
                 listMirroredRuns(),
+                getProposedStrategy(activeProject.id),
             ]);
 
             if (cancelled) return;
@@ -274,6 +302,17 @@ const ProjectHome = () => {
                 console.error("Failed to fetch workflows:", workflowsRes.reason);
                 setWorkflowById(new Map());
             }
+
+            // The header's default-workflow clause. A project saved before V40,
+            // or one that has never been saved at all, reads as unset — which
+            // is the state the clause is omitted for, so a failure here costs
+            // the clause and nothing else.
+            if (settingsRes.status === 'fulfilled') {
+                setDefaultWorkflowId(settingsRes.value?.default_workflow_id ?? null);
+            } else {
+                console.error("Failed to fetch project settings:", settingsRes.reason);
+                setDefaultWorkflowId(null);
+            }
         };
         fetchWorkspaceData();
         return () => {
@@ -309,7 +348,7 @@ const ProjectHome = () => {
                 <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
                 <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-white/10 shadow-2xl">
                     <RotateCw className="w-12 h-12 text-cyan-400 animate-spin mb-6" />
-                    <h2 className="text-2xl font-outfit font-bold text-white mb-2">Workspace Bootstrap In Progress</h2>
+                    <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap In Progress</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
                         Demeteo is securely checking out your repositories and running structural analysis.
                     </p>
@@ -336,8 +375,8 @@ const ProjectHome = () => {
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
                 <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-ruby-500/20 shadow-2xl">
-                    <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4 animate-pulse" />
-                    <h2 className="text-2xl font-outfit font-bold text-white mb-2">Workspace Bootstrap Failed</h2>
+                    <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4" />
+                    <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap Failed</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
                         Demeteo could not clone configured repositories or analyze workspace structures. Verify target compute availability, credentials, and mapped repository paths.
                     </p>
@@ -351,7 +390,7 @@ const ProjectHome = () => {
                             <Settings className="w-4 h-4" /> Configure Workspace
                         </button>
                         <button onClick={handleRetryBootstrap} className="px-5 py-2.5 text-sm bg-ruby-600 hover:bg-ruby-500 text-white rounded-lg transition-all font-semibold shadow-[0_0_15px_rgba(239,68,68,0.3)] flex items-center gap-1.5">
-                            <RotateCw className="w-4 h-4 animate-pulse" /> Retry Bootstrap
+                            <RotateCw className="w-4 h-4" /> Retry Bootstrap
                         </button>
                     </div>
                 </div>
@@ -365,7 +404,7 @@ const ProjectHome = () => {
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
                 <div className="glass-panel max-w-xl w-full p-6 rounded-xl flex flex-col border-white/10 shadow-2xl text-left">
                     <div className="mb-6 border-b border-white/5 pb-4">
-                        <h3 className="font-outfit font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
+                        <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
                         <h2 className="text-xl font-bold text-white">Configure Worktree Strategy</h2>
                     </div>
 
@@ -456,7 +495,7 @@ const ProjectHome = () => {
                 <div className="flex justify-between items-end shrink-0">
                     <div>
                         <div className="flex items-center gap-2 mb-2">
-                            <h1 className="text-3xl font-outfit font-bold text-white tracking-tight">{activeProject.name}</h1>
+                            <h1 className="text-3xl font-heading font-bold text-white tracking-tight">{activeProject.name}</h1>
                             <button
                                 onClick={() => navigate({ kind: 'project-settings' })}
                                 className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-white/5 transition-all"
@@ -465,13 +504,27 @@ const ProjectHome = () => {
                                 <Settings className="w-5 h-5" />
                             </button>
                         </div>
-                        <p className="text-sm text-slate-400">Connected via GitHub Enterprise &bull; Default Workflow: Standard Feature Pipeline</p>
+                        {/* Audit F10. Every clause here is a stored fact or is
+                            absent — the string this replaced named a provider
+                            edition and a default workflow for every project
+                            regardless of either, and a project has no default
+                            workflow to name at all (`projectProvenance.ts`). */}
+                        <p className="text-sm text-slate-400" data-testid="project-provenance">
+                            {describeProjectProvenance({
+                                repositories,
+                                providers,
+                                defaultWorkflowId,
+                                workflowsById: workflowById,
+                                computeType: activeProject.compute_type,
+                                remoteHost: activeProject.remote_host,
+                            }).text}
+                        </p>
                     </div>
-                    <div className="glass-panel px-4 py-2 rounded-lg flex gap-4 text-xs font-mono">
-                        <div className="flex flex-col"><span className="text-slate-500">Fleet Active</span><span className="text-emerald-400 font-bold">{features.filter(f => f.status === 'running').length} Nodes</span></div>
-                        <div className="w-px bg-white/10"></div>
-                        <div className="flex flex-col"><span className="text-slate-500">Token Spend</span><span className="text-white">{formatTokens(features.reduce((sum, f) => sum + (f.tokens || 0), 0))}</span></div>
-                    </div>
+                    {/* Summed over every feature, not the filtered view: the
+                        strip reports the project, and a total that moved when
+                        you typed in the search box would be reporting the
+                        query instead. */}
+                    <ProjectTelemetry features={features} />
                 </div>
 
                 {/* Persistent Start Session affordance — visible for both local
@@ -599,126 +652,52 @@ const ProjectHome = () => {
                     returns everything that isn't archived/deleted, so completed,
                     failed and gated runs are here too, each wearing its own chip. */}
                 <div>
-                    <h2 className="font-outfit text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Feature Pipelines</h2>
-                    <div className="space-y-4">
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                        <h2 className="font-heading text-sm font-semibold text-slate-400 uppercase tracking-widest">Feature Pipelines</h2>
+                        {features.length > 0 && (
+                            <DensityToggle value={density} onChange={setDensity} ariaLabel="Pipeline list density" />
+                        )}
+                    </div>
+
+                    {/* The bar self-suppresses on an empty project, so the
+                        "no pipelines at all" state below stays the only one
+                        this component owns; "your filter matched nothing" is
+                        the bar's, next to the controls that caused it. */}
+                    {!isLoadingFeatures && (
+                        <PipelineFilterBar
+                            value={pipelineFilter}
+                            onChange={setPipelineFilter}
+                            features={features}
+                            resultCount={visibleFeatures.length}
+                            className="mb-4"
+                        />
+                    )}
+
+                    <div className={densityClasses.list}>
                         {isLoadingFeatures ? (
-                            <div className="flex items-center justify-center p-8">
-                                <RotateCw className="w-6 h-6 text-cyan-400 animate-spin" />
-                            </div>
+                            /* A skeleton, not a spinner: the spinner replaced
+                               the whole list, so coming back re-mounted every
+                               row (§3.4). */
+                            <PipelineListSkeleton />
                         ) : features.length === 0 ? (
-                            <div className="glass-panel p-8 rounded-2xl border border-white/5 text-center bg-black/20 flex flex-col items-center justify-center space-y-4 relative overflow-hidden">
-                                <div className="absolute -top-10 -left-10 w-40 h-40 bg-violet-600/5 rounded-full blur-2xl pointer-events-none"></div>
-                                <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-cyan-600/5 rounded-full blur-2xl pointer-events-none"></div>
-                                <div className="w-12 h-12 rounded-full bg-violet-500/10 border border-violet-500/25 flex items-center justify-center text-violet-400 mb-2">
-                                    <Cpu className="w-6 h-6 animate-pulse" />
-                                </div>
-                                <h3 className="font-outfit text-white font-medium text-base">No feature pipelines yet</h3>
-                                <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
-                                    There are no agent orchestration workflows running in this workspace right now. Use the tool above to start a new pipeline.
-                                </p>
-                            </div>
+                            <EmptyStateCard
+                                variant="inline"
+                                title="No feature pipelines yet"
+                                description="There are no agent orchestration workflows running in this workspace right now. Use the tool above to start a new pipeline."
+                            />
                         ) : (
-                            features.map((feature) => {
-                                const meta = runStatusMeta(featureRunStatus(feature));
-                                return (
-                                <div
+                            visibleFeatures.map((feature) => (
+                                <PipelineCard
                                     key={feature.id}
-                                    onClick={() => {
-                                        navigate({ kind: 'detail', featureId: feature.id, featureTitle: feature.title });
-                                    }}
-                                    className="glass-panel glass-panel-hover rounded-xl p-5 cursor-pointer relative overflow-hidden group"
-                                >
-                                    <div className={`absolute left-0 top-0 bottom-0 w-1 ${TONE_ACCENT[meta.tone]}`}></div>
-
-                                    <div className="flex justify-between items-start gap-4">
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-center gap-3 mb-1 flex-wrap">
-                                                <span className={`px-2 py-0.5 rounded text-[10px] font-mono border uppercase flex items-center gap-1 ${TONE_CHIP[meta.tone]}`}>
-                                                    {meta.active && (
-                                                        <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
-                                                    )}
-                                                    {meta.label}
-                                                </span>
-                                                {(() => {
-                                                    const badge = classifyWorkflowBadge(feature, workflowById);
-                                                    if (badge.variant === 'fallback') {
-                                                        return (
-                                                            <span
-                                                                className="px-2 py-0.5 rounded text-[10px] font-mono bg-white/5 border border-white/10 text-slate-500 uppercase"
-                                                                title="Workflow reference missing"
-                                                            >
-                                                                Workflow: unknown
-                                                            </span>
-                                                        );
-                                                    }
-                                                    return (
-                                                        <span
-                                                            className="px-2 py-0.5 rounded text-[10px] font-mono bg-violet-500/10 border border-violet-500/30 text-violet-300 font-outfit truncate max-w-[220px] inline-flex items-center gap-1"
-                                                            title={`Workflow: ${badge.name}`}
-                                                        >
-                                                            <span className="text-violet-400/80">Workflow:</span>
-                                                            <span className="truncate">{badge.name}</span>
-                                                            <span className="text-[9px] px-1 rounded bg-violet-500/20 text-violet-300 font-medium font-mono uppercase">
-                                                                {badge.is_starter ? 'Starter' : 'Custom'}
-                                                            </span>
-                                                        </span>
-                                                    );
-                                                })()}
-                                                {(() => {
-                                                    const detached = detachedIds.has(feature.id);
-                                                    const remote = detached || activeProject.compute_type === 'remote';
-                                                    const label = detached
-                                                        ? 'Detached'
-                                                        : activeProject.compute_type === 'remote'
-                                                        ? 'Remote · SSH'
-                                                        : 'Local';
-                                                    return (
-                                                        <span
-                                                            className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase border inline-flex items-center gap-1 ${
-                                                                remote
-                                                                    ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
-                                                                    : 'bg-white/5 text-slate-500 border-white/10'
-                                                            }`}
-                                                            title={
-                                                                detached
-                                                                    ? 'Runs detached under the runner — continues even if this app is closed'
-                                                                    : activeProject.compute_type === 'remote'
-                                                                    ? `Executes on ${activeProject.remote_host ?? 'the project machine'} over SSH`
-                                                                    : 'Executes on this machine'
-                                                            }
-                                                        >
-                                                            <Cpu className="w-3 h-3" /> {label}
-                                                        </span>
-                                                    );
-                                                })()}
-                                                <span className="text-xs text-slate-500 font-mono truncate">{feature.id}</span>
-                                            </div>
-                                            <h3 className="text-lg font-outfit text-white line-clamp-2 break-words" title={feature.title}>{feature.title}</h3>
-                                            {feature.description?.trim() && (
-                                                <p
-                                                    className="mt-1 text-xs text-slate-400 leading-relaxed line-clamp-2 break-words"
-                                                    title={feature.description}
-                                                >
-                                                    {feature.description}
-                                                </p>
-                                            )}
-                                        </div>
-
-                                        <div className="flex gap-6 text-right shrink-0 pt-1">
-                                            <div>
-                                                <div className="text-xs text-slate-500 font-mono flex items-center gap-1 justify-end"><Clock className="w-3 h-3" /> Duration</div>
-                                                <div className="text-sm font-medium text-white">{feature.duration}</div>
-                                            </div>
-                                            <div>
-                                                <div className="text-xs text-slate-500 font-mono flex items-center gap-1 justify-end"><Zap className="w-3 h-3 text-cyan-400 animate-pulse" /> Tokens</div>
-                                                <div className="text-sm font-medium text-white">{formatTokens(feature.tokens || 0)}</div>
-                                            </div>
-                                            <ChevronRight className="w-5 h-5 text-slate-500 mt-2 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                        </div>
-                                    </div>
-                                </div>
-                                );
-                            })
+                                    feature={feature}
+                                    workflowById={workflowById}
+                                    detached={detachedIds.has(feature.id)}
+                                    computeType={activeProject.compute_type}
+                                    remoteHost={activeProject.remote_host}
+                                    density={densityClasses}
+                                    onOpen={openFeature}
+                                />
+                            ))
                         )}
                     </div>
                 </div>

@@ -130,6 +130,41 @@ pub(crate) fn all_writes_selection<'a>(
         .collect()
 }
 
+/// True when some declaration can only be satisfied by the *bodies* of the
+/// files the step changed.
+///
+/// The executor reads every changed path out of the worktree before it consults
+/// a single declaration — one round trip and one full file body each, which on
+/// a step that scaffolds a project is the whole tree, over SSH, twice. Almost
+/// all of it is then discarded, because only these four captures ever look at a
+/// `ToolWrite` body:
+///
+/// * `AllWrites` and `ChangedFiles` are the inventories, so every body is one.
+/// * `ByName` matches the artifact's name, and a body read out of the worktree
+///   is named from its file stem — so a declaration for `spec` is satisfied by
+///   a read of `artifacts/spec.md` and by nothing else.
+/// * `LastWriteTo` can also be satisfied by an `ArtifactProduced` event from
+///   the turn, but not reliably: the read is force-included for exactly that
+///   path (the `always` list) because a harness that reports no write event
+///   still leaves the file on disk.
+///
+/// `Diff` and `Worktree` are derived from git and branch state, and a step
+/// declaring only those — or declaring nothing at all — needs no body read.
+/// The changed-path *list* is still worth computing either way: it costs one
+/// `git status`, and it is what tells `commit_worktree_changes` whether the
+/// agent's deliverable reached the index (see `judge_stage`).
+pub(crate) fn captures_file_bodies(declarations: &[ArtifactDecl]) -> bool {
+    declarations.iter().any(|d| {
+        matches!(
+            d.capture,
+            ArtifactCapture::AllWrites
+                | ArtifactCapture::ChangedFiles { .. }
+                | ArtifactCapture::ByName { .. }
+                | ArtifactCapture::LastWriteTo { .. }
+        )
+    })
+}
+
 fn strip_extension(name: &str) -> Option<String> {
     std::path::Path::new(name)
         .file_stem()

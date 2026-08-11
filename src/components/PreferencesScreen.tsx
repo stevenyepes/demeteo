@@ -133,12 +133,12 @@ const PreferencesScreen = () => {
     }
   };
 
-  const tabs: TabDef[] = [
-    { key: 'machines', label: 'Machines', icon: <Server className="w-4 h-4" /> },
-    { key: 'providers', label: 'Providers', icon: <Globe className="w-4 h-4" /> },
-    { key: 'defaults', label: 'Defaults', icon: <Cpu className="w-4 h-4" /> },
-    { key: 'memory', label: 'Memory', icon: <Brain className="w-4 h-4" /> },
-    { key: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
+  const tabs: TabDef<PrefTab>[] = [
+    { value: 'machines', label: 'Machines', icon: <Server className="w-4 h-4" /> },
+    { value: 'providers', label: 'Providers', icon: <Globe className="w-4 h-4" /> },
+    { value: 'defaults', label: 'Defaults', icon: <Cpu className="w-4 h-4" /> },
+    { value: 'memory', label: 'Memory', icon: <Brain className="w-4 h-4" /> },
+    { value: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
   ];
 
   return (
@@ -151,7 +151,7 @@ const PreferencesScreen = () => {
           <div className="flex items-center gap-3">
             <Settings className="w-6 h-6 text-cyan-400" />
             <div>
-              <h1 className="text-2xl font-outfit font-bold text-white">Preferences</h1>
+              <h1 className="text-2xl font-heading font-bold text-white">Preferences</h1>
               <p className="text-sm text-slate-400">Global settings for Demeteo orchestrator</p>
             </div>
           </div>
@@ -164,7 +164,13 @@ const PreferencesScreen = () => {
         </div>
 
         {/* Tab bar */}
-        <TabBar tabs={tabs} activeTab={activeTab} onChange={(k) => setActiveTab(k as PrefTab)} className="mb-6" />
+        <TabBar
+          tabs={tabs}
+          activeTab={activeTab}
+          onChange={setActiveTab}
+          ariaLabel="Preferences sections"
+          className="mb-6"
+        />
 
         {/* Tab content */}
         {activeTab === 'machines' && (
@@ -173,7 +179,7 @@ const PreferencesScreen = () => {
         {activeTab === 'providers' && (
           <div className="glass-panel p-6 text-center">
             <Globe className="w-8 h-8 text-slate-500 mx-auto mb-3" />
-            <h3 className="text-sm font-outfit font-semibold text-white mb-1">Provider Management</h3>
+            <h3 className="text-sm font-heading font-semibold text-white mb-1">Provider Management</h3>
             <p className="text-xs text-slate-400 mb-4">Manage Git hosting provider connections.</p>
             <button
               onClick={() => onNavigate('providers')}
@@ -187,7 +193,7 @@ const PreferencesScreen = () => {
           <div className="space-y-4">
             {/* Workspace Storage */}
             <div className="glass-panel p-6">
-              <h3 className="text-sm font-outfit font-semibold text-white mb-1 flex items-center gap-2">
+              <h3 className="text-sm font-heading font-semibold text-white mb-1 flex items-center gap-2">
                 <FolderOpen className="w-4 h-4 text-cyan-400" />
                 Workspace Storage
               </h3>
@@ -250,7 +256,7 @@ const PreferencesScreen = () => {
 
             {/* Default Agent & Model */}
             <div className="glass-panel p-6">
-              <h3 className="text-sm font-outfit font-semibold text-white mb-3 flex items-center gap-2">
+              <h3 className="text-sm font-heading font-semibold text-white mb-3 flex items-center gap-2">
                 <Cpu className="w-4 h-4 text-violet-400" />
                 Default Agent & Model
               </h3>
@@ -271,7 +277,7 @@ const PreferencesScreen = () => {
 
             {/* Agent Timeouts */}
             <div className="glass-panel p-6">
-              <h3 className="text-sm font-outfit font-semibold text-white mb-1 flex items-center gap-2">
+              <h3 className="text-sm font-heading font-semibold text-white mb-1 flex items-center gap-2">
                 <Timer className="w-4 h-4 text-cyan-400" />
                 Agent Timeouts
               </h3>
@@ -334,7 +340,7 @@ const PreferencesScreen = () => {
 
             {/* Run in background */}
             <div className="glass-panel p-6">
-              <h3 className="text-sm font-outfit font-semibold text-white mb-1 flex items-center gap-2">
+              <h3 className="text-sm font-heading font-semibold text-white mb-1 flex items-center gap-2">
                 <Minimize2 className="w-4 h-4 text-cyan-400" />
                 Run in background
               </h3>
@@ -386,7 +392,7 @@ const PreferencesScreen = () => {
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-base font-outfit font-bold text-white">Demeteo</h3>
+                  <h3 className="text-base font-heading font-bold text-white">Demeteo</h3>
                   <span
                     data-testid="channel-badge"
                     className={`text-[10px] flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold uppercase tracking-wider ${

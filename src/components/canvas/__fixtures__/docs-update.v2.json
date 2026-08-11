@@ -90,26 +90,6 @@
             "inline": false,
             "mode": "full",
             "name": "draft-report"
-          },
-          {
-            "capture": {
-              "base": {
-                "kind": "worktree_base"
-              },
-              "kind": "changed_files",
-              "path_filter": "\\.md$"
-            },
-            "inline": false,
-            "mode": "summary_only",
-            "name": "changed-files"
-          },
-          {
-            "capture": {
-              "kind": "all_writes"
-            },
-            "inline": false,
-            "mode": "summary_only",
-            "name": "all-writes"
           }
         ],
         "capability": "implement",
@@ -203,26 +183,6 @@
             "inline": false,
             "mode": "full",
             "name": "polish-report"
-          },
-          {
-            "capture": {
-              "base": {
-                "kind": "worktree_base"
-              },
-              "kind": "changed_files",
-              "path_filter": "\\.md$"
-            },
-            "inline": false,
-            "mode": "summary_only",
-            "name": "changed-files"
-          },
-          {
-            "capture": {
-              "kind": "all_writes"
-            },
-            "inline": false,
-            "mode": "summary_only",
-            "name": "all-writes"
           }
         ],
         "capability": "implement",
