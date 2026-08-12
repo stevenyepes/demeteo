@@ -31,7 +31,7 @@
 //! GNU `sed -i` is the standing candidate) would be a new arm here, not a new
 //! mechanism.
 
-use crate::domain::models::Platform;
+use crate::domain::models::{AgentKind, Platform};
 
 /// The `{{platform_context}}` token a template may use to place the block
 /// itself.
@@ -59,17 +59,38 @@ The worktree you are working in is on **Windows**. It is not Linux and not macOS
 
 "#;
 
-/// The platform block for `platform`, or `""` when this platform needs no
-/// correction.
+const CODEX_WINDOWS_BLOCK: &str = r#"## Platform — Windows
+
+The worktree you are working in is on **Windows**. It is not Linux and not macOS.
+
+- Commands you author through the Codex command tool run in PowerShell. Use
+  PowerShell cmdlets or native programs. Do not use bare POSIX-only utilities
+  such as `printf`, `sed`, or `find`, and do not invoke bare `bash`.
+- Demeteo's configured prepare, test, gate, and harness commands are a separate
+  execution lane. They are POSIX script bodies that Demeteo runs through the
+  resolved Git for Windows bash. Do not translate a configured command into
+  PowerShell. For checks you author yourself, prefer a cross-platform project
+  script or a PowerShell-native command.
+- Paths you are given — the worktree, artifacts, attachments — are Windows-shaped:
+  drive-lettered and `\`-separated. `\` is this machine's path separator. Hand them
+  to Windows programs as written and quote paths containing spaces.
+
+---
+
+"#;
+
+/// The platform block for `platform` and `agent_kind`, or `""` when this
+/// combination needs no correction.
 ///
 /// Self-contained: it carries its own trailing `---` rule and blank line, so the
 /// text a template places through `{{platform_context}}` and the text
 /// [`PlatformPlacement::prefix`] carries are the same bytes. Two renderings that
 /// differed by a separator would be two blocks to keep in step.
-fn platform_context_section(platform: Platform) -> String {
-    match platform {
-        Platform::Windows => WINDOWS_BLOCK.to_string(),
-        Platform::Linux | Platform::MacOS => String::new(),
+fn platform_context_section(platform: Platform, agent_kind: Option<AgentKind>) -> String {
+    match (platform, agent_kind) {
+        (Platform::Windows, Some(AgentKind::Codex)) => CODEX_WINDOWS_BLOCK.to_string(),
+        (Platform::Windows, _) => WINDOWS_BLOCK.to_string(),
+        (Platform::Linux | Platform::MacOS, _) => String::new(),
     }
 }
 
@@ -118,11 +139,18 @@ pub(crate) struct PlatformPlacement {
 /// OS. Nothing is placed then rather than a guess: an agent told the wrong OS is
 /// worse off than one told nothing, which is the state every prompt was in
 /// before the block existed.
+///
+/// `agent_kind` is `None` only for an unsupported legacy identifier. It keeps
+/// the generic Windows correction rather than guessing that the unknown
+/// harness shares Codex's PowerShell command tool.
 pub(crate) fn place_platform_context(
     platform: Option<Platform>,
+    agent_kind: Option<AgentKind>,
     template: &str,
 ) -> PlatformPlacement {
-    let section = platform.map(platform_context_section).unwrap_or_default();
+    let section = platform
+        .map(|platform| platform_context_section(platform, agent_kind))
+        .unwrap_or_default();
     if template_uses_platform_context(template) {
         PlatformPlacement {
             bound: section,

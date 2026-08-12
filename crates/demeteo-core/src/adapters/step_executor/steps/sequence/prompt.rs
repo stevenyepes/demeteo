@@ -10,6 +10,7 @@ use crate::adapters::step_executor::steps::agent::{
 };
 
 use super::context::{RunTarget, StepCtx, StepWorktree, TaskRun};
+use crate::domain::models::AgentKind;
 use crate::domain::platform_context::place_platform_context;
 use crate::domain::review_base::{needs_review_base, place_review_base};
 use crate::domain::sequence::tasks::PlanKind;
@@ -88,7 +89,11 @@ impl ExecutionDriver {
             .unwrap_or_else(|| self.base_ctx.get("test_command").to_string());
 
         let acceptance_str = format_acceptance_criteria(&task.acceptance);
-        let platform_placement = place_platform_context(target.platform, template);
+        let platform_placement = place_platform_context(
+            target.platform,
+            AgentKind::parse(target.agent_kind),
+            template,
+        );
 
         // A sequence step implements, so its capability never auto-places the
         // block — only a template naming the token pays for the merge-base,

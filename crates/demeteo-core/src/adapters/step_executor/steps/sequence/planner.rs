@@ -9,6 +9,7 @@ use crate::adapters::step_executor::artifacts::{
 };
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
+use crate::domain::models::AgentKind;
 use crate::domain::platform_context::place_platform_context;
 use crate::domain::sequence::tasks::{extract_task_plan, task_list_json_shape_example, TaskPlan};
 use crate::ports::agent_runtime::AgentContext;
@@ -124,7 +125,12 @@ impl ExecutionDriver {
         // below it a command the machine will not run.
         let planner_prompt = format!(
             "{}{}",
-            place_platform_context(target.platform, &planner_prompt).prefix,
+            place_platform_context(
+                target.platform,
+                AgentKind::parse(target.agent_kind),
+                &planner_prompt,
+            )
+            .prefix,
             planner_prompt
         );
 
