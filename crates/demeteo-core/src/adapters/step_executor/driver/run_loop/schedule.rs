@@ -33,7 +33,7 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::scheduler::NodeState;
 use crate::adapters::step_executor::step_status::{try_update_step_status, StepTransition};
 use crate::domain::ids::StepId;
-use crate::domain::models::StepExecution;
+use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::workflow_graph::WorkflowGraph;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
@@ -78,6 +78,15 @@ pub(crate) fn derive_states(
         .collect()
 }
 
+/// Whether `node` is a gate, per the run's own step list.
+///
+/// Asked of the configured node rather than the `step_executions` row's
+/// `step_kind`: the row's copy is a snapshot taken at seed time, and a rewind
+/// is precisely the moment a stale copy would be trusted.
+pub(crate) fn is_gate(steps: &[StepConfig], node: &StepId) -> bool {
+    steps.iter().any(|s| s.id == *node && s.kind == "gate")
+}
+
 /// The nodes a redirect to `target` rewinds: the target plus all its
 /// descendants, in topological order. For a chain this is exactly the v1
 /// cursor jump — every step from the target to the end of the list gets
@@ -119,14 +128,29 @@ impl ExecutionDriver {
     /// at `pending` so the next ready-set evaluation re-schedules them,
     /// and mirror each write with a `StepProgress` event (the same
     /// rewind-visibility event `replay_steps_from` emits). Statuses only:
-    /// error messages, artifacts, iteration counts, and gate-decision
-    /// rows all stay — v1's cursor jump left them for the re-dispatch to
-    /// overwrite, and the retry accounting reads `iteration_count`.
+    /// error messages, artifacts and iteration counts all stay — v1's
+    /// cursor jump left them for the re-dispatch to overwrite, and the
+    /// retry accounting reads `iteration_count`.
+    ///
+    /// **A rewound gate's decision row does not stay.** It is the one piece
+    /// of state whose survival changes what happens rather than what is
+    /// displayed: `handle_gate_step` reconciles a decided row on entry — the
+    /// fast path that makes a decision survive a restart — so a gate rewound
+    /// with yesterday's `approve` still on it re-approves in zero seconds and
+    /// the human is never asked. That is silent, and it compounds: an
+    /// `on_failure` chain pointing at a gate re-approves once per failed
+    /// attempt, so the retry loop the gate exists to interrupt runs to its
+    /// budget unattended. A gate-*initiated* redirect already clears its own
+    /// row (`reset_gate_target`); this closes the same hole for every other
+    /// way a gate gets rewound.
     pub(crate) fn reset_for_redirect(&self, step_execs: &[StepExecution], target: &StepId) {
         for id in redirect_reset_set(&self.graph, target) {
             let Some(row) = step_execs.iter().find(|s| s.step_id == id) else {
                 continue;
             };
+            if is_gate(&self.steps, &id) {
+                let _ = self.gates.reset_for_step_execution(&row.id);
+            }
             if row.status == "pending" {
                 continue;
             }

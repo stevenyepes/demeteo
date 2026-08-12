@@ -9,6 +9,24 @@
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::models::{StepConfig, StepExecution};
 
+/// Whether `step_execution_id` names one of `feature_id`'s rows.
+///
+/// A driver shares its in-memory registries — the gate waiters above all —
+/// with every other driver in the process, and they are keyed by
+/// step-execution id. So a run tearing itself down is holding another run's
+/// keys, and the difference between sweeping its own and sweeping the map is
+/// the difference between a leak and a wedge: clearing a live waiter leaves
+/// that driver parked on a rendezvous nobody can reach, its `gate_decide`
+/// recording decisions that nothing applies and `ensure_driver_running`
+/// declining to help because the driver is, technically, alive.
+///
+/// Spelled here rather than at the sweep so it sits against the `format!`
+/// below that derives the id; a prefix rule kept anywhere else is a rule that
+/// drifts the day the id gains a field.
+pub fn belongs_to_feature(feature_id: &FeatureId, step_execution_id: &str) -> bool {
+    step_execution_id.starts_with(&format!("se-{}-", feature_id.as_str()))
+}
+
 /// One `pending` row per configured step, `step_index` following the slice
 /// order, spend measured at zero rather than unknown.
 ///

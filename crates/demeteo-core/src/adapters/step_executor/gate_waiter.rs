@@ -13,11 +13,29 @@
 //! "wakeup" from "payload" lets the DB reconcile any decision the in-memory
 //! waiters never saw.
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use tokio::sync::Notify;
 
+use crate::domain::ids::FeatureId;
 use crate::domain::models::GateDecision;
+use crate::domain::step_seed::belongs_to_feature;
+
+/// Drop `feature_id`'s waiters from the process-wide registry, and no one
+/// else's — the map is keyed by step-execution id and shared by every live
+/// driver, so a teardown holds its peers' keys as well as its own.
+///
+/// A free function over the map alone because the only caller is a driver
+/// teardown, and reaching that in a test means constructing an
+/// `ExecutionDriver` — twenty-odd ports, none of which this reads. The
+/// scoping is the part that was wrong; this is where it can be asserted.
+pub fn sweep_feature(waiters: &Mutex<HashMap<String, Arc<GateWaiter>>>, feature_id: &FeatureId) {
+    let Ok(mut map) = waiters.lock() else {
+        return;
+    };
+    map.retain(|key, _| !belongs_to_feature(feature_id, key));
+}
 
 #[derive(Default)]
 pub struct GateWaiter {
@@ -62,3 +80,7 @@ impl GateWaiter {
 }
 
 use std::sync::Arc;
+
+#[cfg(test)]
+#[path = "../../../tests/infrastructure/step_executor/gate_waiter.rs"]
+mod tests;

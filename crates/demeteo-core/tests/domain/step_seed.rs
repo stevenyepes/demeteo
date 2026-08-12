@@ -74,3 +74,33 @@ fn a_seeded_row_is_pending_with_zeroed_spend() {
     assert_eq!(first.created_at, 7);
     assert_eq!(first.updated_at, 7);
 }
+
+#[test]
+fn a_seeded_id_belongs_to_the_feature_that_seeded_it() {
+    let f = FeatureId::from("f-42".to_string());
+
+    for row in seed_step_executions(&f, &steps(), 0) {
+        assert!(belongs_to_feature(&f, row.id.0.as_str()));
+    }
+}
+
+#[test]
+fn another_features_rows_do_not_belong_to_it() {
+    let mine = FeatureId::from("f-42".to_string());
+    let theirs = FeatureId::from("f-43".to_string());
+
+    for row in seed_step_executions(&theirs, &steps(), 0) {
+        assert!(!belongs_to_feature(&mine, row.id.0.as_str()));
+    }
+}
+
+/// The separator is load-bearing: without it every `f-4*` row would answer to
+/// `f-4`, and a teardown would reach into runs it has no relationship to.
+#[test]
+fn a_feature_id_that_prefixes_another_does_not_claim_its_rows() {
+    let short = FeatureId::from("f-4".to_string());
+
+    for row in seed_step_executions(&FeatureId::from("f-42".to_string()), &steps(), 0) {
+        assert!(!belongs_to_feature(&short, row.id.0.as_str()));
+    }
+}

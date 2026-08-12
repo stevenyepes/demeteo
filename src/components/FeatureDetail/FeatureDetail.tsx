@@ -151,7 +151,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     runLayout,
     graphBoxPx,
   } = useRunColumnLayout(graph.graphDef);
-  const headerCollapsed = useHeaderCollapse(runColumnEl);
+  const headerCollapsed = useHeaderCollapse(runColumnEl, view.gateStepExecutionId);
 
   /** `null` until the user has chosen a width, and then theirs for good — a
    *  stored one arrives by the same door a drag does and outranks the column
