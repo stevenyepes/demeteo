@@ -1,6 +1,10 @@
 import React, { useState, useEffect, memo } from 'react';
 import { formatError } from '../lib/errors';
 import { artifactBody } from '../lib/features';
+import { classifyArtifact } from '../lib/artifacts';
+import { parseTaskPlan } from '../lib/taskPlan';
+import { TaskListArtifact } from './artifacts/TaskListArtifact';
+import type { TaskPlan } from '../types';
 import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -36,28 +40,41 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [viewType, setViewType] = useState<'markdown' | 'diff' | 'code' | 'worktree-ref'>('code');
+  const [viewType, setViewType] = useState<'markdown' | 'diff' | 'code' | 'worktree-ref' | 'task-list'>('code');
   const [language, setLanguage] = useState<string>('plaintext');
   const [worktreeRef, setWorktreeRef] = useState<{ machine_id: string; branch: string; path: string } | null>(null);
+  const [taskPlan, setTaskPlan] = useState<TaskPlan | null>(null);
 
   useEffect(() => {
     if (!artifactPath) {
       setContent('');
       setError(null);
       setWorktreeRef(null);
+      setTaskPlan(null);
       return;
     }
+
+    // Every `setState` below is guarded by this flag. The gate picker made
+    // switching artifacts a first-class interaction on one memoized viewer, so
+    // two reads are routinely in flight at once — a remote `task-list.json`
+    // and a local `.md` resolve in whichever order the transports finish, and
+    // the loser used to win the last write. That renders one artifact's body
+    // under the other's name: the panel showed ticket cards while the header
+    // and the highlighted picker row both said `implementation-spec.md`.
+    let cancelled = false;
 
     const loadArtifact = async () => {
       setLoading(true);
       setError(null);
       setWorktreeRef(null);
+      setTaskPlan(null);
       try {
         // Run-artifact display read goes through the RunView-backed
         // `artifact_body` command (C3), not `sftp_read_file` directly — so a
         // runner-owned feature's artifact can later resolve from the laptop
         // shadow without this component knowing where the run executed.
         const fileContent = await artifactBody('local', artifactPath);
+        if (cancelled) return;
 
         // Worktree-ref dispatch via explicit mime prop
         if (mime === 'application/x-demeteo-worktree-ref') {
@@ -82,6 +99,18 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
         }
 
         setContent(fileContent);
+
+        if (classifyArtifact(artifactPath).kind === 'task-list') {
+          const parsed = parseTaskPlan(fileContent);
+          if (parsed) {
+            setViewType('task-list');
+            setTaskPlan(parsed);
+            setLoading(false);
+            return;
+          }
+          // Malformed JSON or shape mismatch — fall through to the code/JSON
+          // Monaco detection below exactly as any other artifact.
+        }
 
         // Detect type and language
         const ext = artifactPath.split('.').pop()?.toLowerCase() || '';
@@ -127,14 +156,19 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
           setLanguage(langMap[ext] || 'plaintext');
         }
       } catch (err) {
+        if (cancelled) return;
         console.error('Failed to read artifact:', err);
         setError(formatError(err) || 'Failed to read artifact file from disk.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     loadArtifact();
+
+    return () => {
+      cancelled = true;
+    };
   }, [artifactPath, mime, contentVersion]);
 
   // Loader state
@@ -383,6 +417,27 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
           >
             {content}
           </ReactMarkdown>
+          </div>
+        </div>
+      ) : viewType === 'task-list' && taskPlan ? (
+        <div className="flex-1 min-h-0 min-w-0 rounded-xl border border-white/5 overflow-hidden shadow-lg bg-[#050608]/85 flex flex-col">
+          <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider shrink-0">
+            <span className="flex items-center gap-2 truncate">
+              <span className="text-violet-400/80 font-mono normal-case tracking-tight truncate" title={artifactPath ?? ''}>
+                {artifactPath ? artifactPath.split('/').pop() : ''}
+              </span>
+              <span className="text-slate-600">·</span>
+              <span>Ticket List</span>
+            </span>
+            <button
+              onClick={() => navigator.clipboard.writeText(content)}
+              className="hover:text-white transition duration-150 shrink-0"
+            >
+              Copy Complete Output
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-3">
+            <TaskListArtifact plan={taskPlan} />
           </div>
         </div>
       ) : (

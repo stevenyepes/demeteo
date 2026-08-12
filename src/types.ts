@@ -499,6 +499,46 @@ export interface SequenceState {
   tasks: SequenceTaskView[];
 }
 
+/** Mirror of the Rust `TaskPlan`/`PlannedTask`/`PlanCycle`
+ *  (`crates/demeteo-core/src/domain/sequence/tasks.rs:20-153`) — the
+ *  `task-list.json` artifact a `sequence` node's decomposition step writes.
+ *  The artifact is agent-written, not compiler-checked, so only `id`/
+ *  `title`/`description` on a task and `tasks` on the plan may be assumed
+ *  present; everything else mirrors a Rust `#[serde(default)]` field.
+ *
+ *  `kind`/`cycle`/`history` are optional for a sharper reason than serde
+ *  defaults: no artifact on disk carries them at all. The shape the producer
+ *  is shown is tasks-only (`task_list_json_shape_example`), and the sequence
+ *  step assigns cycle bookkeeping into its own DB plan cache without ever
+ *  writing it back to the file. A reader of this artifact must therefore
+ *  supply its own label, not trust one to be there. */
+export type PlanKind = 'greenfield' | 'rework';
+
+export interface PlannedTask {
+  id: string;
+  title: string;
+  description: string;
+  files?: string[];
+  test_command?: string | null;
+  acceptance?: string[];
+  blocked_by?: string[];
+  retry_note?: string | null;
+}
+
+export interface PlanCycle {
+  tasks: PlannedTask[];
+  cycle?: number;
+  kind?: PlanKind;
+}
+
+export interface TaskPlan {
+  tasks: PlannedTask[];
+  kind?: PlanKind;
+  cycle?: number;
+  history?: PlanCycle[];
+  notes?: string | null;
+}
+
 export interface GateDecision {
   id: string;
   step_execution_id: string;

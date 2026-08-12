@@ -13,12 +13,14 @@ import {
   FileJson,
   FileQuestion,
   GitMerge,
+  ListChecks,
 } from 'lucide-react';
 
 export type ArtifactKind =
   | 'markdown'
   | 'diff'
   | 'json'
+  | 'task-list'
   | 'code'
   | 'text'
   | 'worktree-ref'
@@ -28,6 +30,7 @@ export const ARTIFACT_KIND_LABELS: Record<ArtifactKind, string> = {
   markdown: 'Markdown',
   diff: 'Code Diff',
   json: 'JSON',
+  'task-list': 'Ticket List',
   code: 'Code',
   text: 'Text',
   'worktree-ref': 'File Reference',
@@ -38,6 +41,7 @@ export const ARTIFACT_KIND_COLORS: Record<ArtifactKind, string> = {
   markdown: 'text-cyan-400',
   diff: 'text-violet-400',
   json: 'text-amber-400',
+  'task-list': 'text-violet-400',
   code: 'text-emerald-400',
   text: 'text-slate-400',
   'worktree-ref': 'text-cyan-400',
@@ -61,6 +65,17 @@ export function classifyArtifact(
   }
   if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
     return { kind: 'markdown', ext: 'md', basename: filename };
+  }
+  // Exact name, case-insensitively — every other branch here tests `lower`,
+  // and two of the three shipped targets have a case-insensitive filesystem
+  // (AGENTS §3). Deliberately *not* the engine's `contains("task-list")`
+  // (`steps/sequence/plan.rs`): that is a recovery heuristic over stored refs,
+  // where a near-miss name beats failing the run, whereas a near-miss here
+  // renders `task-list-schema.json` as a ticket list. The store writes this
+  // file from the declaration name, which the engine requires to be exactly
+  // `task-list`, so the exact name is the one that reaches a surface.
+  if (filename.toLowerCase() === 'task-list.json') {
+    return { kind: 'task-list', ext: 'json', basename: filename };
   }
   if (lower.endsWith('.json')) {
     return { kind: 'json', ext: 'json', basename: filename };
@@ -90,6 +105,8 @@ export function ArtifactIcon({
       return <FileText className={className} />;
     case 'diff':
       return <GitMerge className={className} />;
+    case 'task-list':
+      return <ListChecks className={className} />;
     case 'json':
     case 'code':
       return <FileCode className={className} />;
