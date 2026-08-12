@@ -53,6 +53,12 @@
  * itself width-dependent, and UI_REDESIGN_PLAN §5.1 carries the crossover. Tightening the header to `gap-2` was measured too and is not
  * enough on its own: 1.5px at 1440, i.e. a collision one font metric away.
  *
+ * What a wrong figure costs is bounded in the markup rather than here: the nav
+ * grid track carries a `min-content` floor (`src/components/TopBar.tsx`), so a
+ * cluster that outgrows its share moves the search box off centre instead of
+ * drawing over it. That is a floor under the damage, not a reason to skip the
+ * re-measure.
+ *
  * A band whose *lower* edge sits under the fit point is not a jitter damper, it
  * is a licence to overlap: the band holds `labels` across a whole resize drag,
  * so anywhere inside it the labelled cluster has to fit. The icons threshold

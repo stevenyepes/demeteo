@@ -36,7 +36,7 @@ afterEach(() => {
 
 describe('AccountMenu', () => {
   it('exposes a menu trigger whose aria-expanded tracks the open state', async () => {
-    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} />);
+    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={false} />);
 
     const trigger = screen.getByTestId('topbar-account-trigger');
     expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
@@ -49,7 +49,7 @@ describe('AccountMenu', () => {
   it('reveals the menu on click and routes its Settings item to the settings view', async () => {
     const { navigate, onNavigateSettings } = navigateDouble();
     render(
-      <AccountMenu connectedProvider={provider} onNavigateSettings={onNavigateSettings} />,
+      <AccountMenu connectedProvider={provider} onNavigateSettings={onNavigateSettings} overlayOpen={false} />,
     );
 
     expect(screen.queryByTestId('topbar-account-menu')).toBeNull();
@@ -72,7 +72,7 @@ describe('AccountMenu', () => {
   it('returns focus to the trigger when the Settings item is activated', async () => {
     const { onNavigateSettings } = navigateDouble();
     render(
-      <AccountMenu connectedProvider={provider} onNavigateSettings={onNavigateSettings} />,
+      <AccountMenu connectedProvider={provider} onNavigateSettings={onNavigateSettings} overlayOpen={false} />,
     );
 
     const trigger = screen.getByTestId('topbar-account-trigger');
@@ -90,7 +90,7 @@ describe('AccountMenu', () => {
   });
 
   it('carries the provider identity line and nothing but Settings', async () => {
-    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} />);
+    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={false} />);
 
     await userEvent.click(screen.getByTestId('topbar-account-trigger'));
 
@@ -100,7 +100,7 @@ describe('AccountMenu', () => {
   });
 
   it('closes on Escape and returns focus to the trigger', async () => {
-    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} />);
+    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={false} />);
 
     const trigger = screen.getByTestId('topbar-account-trigger');
     await userEvent.click(trigger);
@@ -124,7 +124,7 @@ describe('AccountMenu', () => {
   // never runs and the menu is stuck open. WKWebView reaches the same state
   // without any click: Safari does not focus a `<button>` on mousedown.
   it('closes on Escape after focus has blurred to the document body', async () => {
-    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} />);
+    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={false} />);
 
     const trigger = screen.getByTestId('topbar-account-trigger');
     await userEvent.click(trigger);
@@ -142,8 +142,61 @@ describe('AccountMenu', () => {
     expect(trigger).toHaveFocus();
   });
 
+  // The menu swallows Escape, so leaving it open under a modal costs that modal
+  // its only dismissal — `DocsPanel` has no Escape handler of its own and relies
+  // entirely on the `window` listener one hop above this one. `rerender` with a
+  // `window` spy is the only way to see it: the layers this yields to are App's,
+  // and mounting App to open one would drag in the whole tree.
+  it('closes itself when a layer above it opens', async () => {
+    const { rerender } = render(
+      <AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={false} />,
+    );
+
+    await userEvent.click(screen.getByTestId('topbar-account-trigger'));
+    expect(screen.getByTestId('topbar-account-menu')).toBeInTheDocument();
+
+    rerender(
+      <AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={true} />,
+    );
+
+    expect(screen.queryByTestId('topbar-account-menu')).toBeNull();
+    // Focus stays where the overlay put it — restoring it here would yank the
+    // caret out of a modal the user just opened.
+    expect(screen.getByTestId('topbar-account-trigger')).not.toHaveFocus();
+
+    const seen = vi.fn();
+    window.addEventListener('keydown', seen);
+    await userEvent.keyboard('{Escape}');
+    window.removeEventListener('keydown', seen);
+
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  // Last-opened wins: reaching the trigger at all means the overlay left the
+  // header clickable, and then Escape belongs to this menu first. Pins the
+  // effect to the `overlayOpen` *transition* — a guard on every render would
+  // make the menu unopenable for as long as any overlay is up.
+  it('still opens, and still owns Escape, while a layer above it is up', async () => {
+    render(
+      <AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={true} />,
+    );
+
+    const trigger = screen.getByTestId('topbar-account-trigger');
+    await userEvent.click(trigger);
+    expect(screen.getByTestId('topbar-account-menu')).toBeInTheDocument();
+
+    const seen = vi.fn();
+    window.addEventListener('keydown', seen);
+    await userEvent.keyboard('{Escape}');
+    window.removeEventListener('keydown', seen);
+
+    expect(screen.queryByTestId('topbar-account-menu')).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(seen).not.toHaveBeenCalled();
+  });
+
   it('closes on a mousedown outside the control', async () => {
-    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} />);
+    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={false} />);
 
     await userEvent.click(screen.getByTestId('topbar-account-trigger'));
     expect(screen.getByTestId('topbar-account-menu')).toBeInTheDocument();
@@ -158,7 +211,7 @@ describe('AccountMenu', () => {
     const addSpy = vi.spyOn(document, 'addEventListener');
     const removeSpy = vi.spyOn(document, 'removeEventListener');
 
-    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} />);
+    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={false} />);
     const mousedownAdds = () =>
       addSpy.mock.calls.filter(([type]) => type === 'mousedown').length;
 
@@ -175,7 +228,7 @@ describe('AccountMenu', () => {
     const addSpy = vi.spyOn(document, 'addEventListener');
     const removeSpy = vi.spyOn(document, 'removeEventListener');
 
-    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} />);
+    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={false} />);
     const keydownCalls = (spy: typeof addSpy) =>
       spy.mock.calls.filter(([type]) => type === 'keydown').length;
 
@@ -190,7 +243,7 @@ describe('AccountMenu', () => {
   });
 
   it('scopes the menu role to the items and links it to the trigger', async () => {
-    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} />);
+    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={false} />);
 
     const trigger = screen.getByTestId('topbar-account-trigger');
     await userEvent.click(trigger);
@@ -202,7 +255,7 @@ describe('AccountMenu', () => {
   });
 
   it('renders the gradient fallback and still names the trigger without a provider', () => {
-    render(<AccountMenu connectedProvider={null} onNavigateSettings={() => {}} />);
+    render(<AccountMenu connectedProvider={null} onNavigateSettings={() => {}} overlayOpen={false} />);
 
     expect(screen.getByTestId('topbar-account-avatar-fallback')).toBeInTheDocument();
     expect(screen.queryByRole('img')).toBeNull();
@@ -212,7 +265,7 @@ describe('AccountMenu', () => {
   });
 
   it("renders the provider's avatar with the username as alt text", () => {
-    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} />);
+    render(<AccountMenu connectedProvider={provider} onNavigateSettings={() => {}} overlayOpen={false} />);
 
     const avatar = screen.getByAltText('octocat');
     expect(avatar).toHaveAttribute('src', provider.avatarUrl);

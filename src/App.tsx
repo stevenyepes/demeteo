@@ -3,6 +3,7 @@ import TopBar from "./components/TopBar";
 import ProjectRail from "./components/ProjectRail";
 import { formatError } from "./lib/errors";
 import { ErrorBusProvider } from "./lib/errorBus";
+import { pickEscapeAction } from "./lib/escapeLadder";
 import { fetchActiveFeatures } from "./lib/features";
 import { getProjects, getRepositoriesForProject, seedSampleProject } from "./lib/project";
 import { listProviderInstances } from "./lib/providers";
@@ -26,7 +27,7 @@ import CreateProjectWizard from "./components/wizard/CreateProjectWizard";
 import PreferencesScreen from "./components/PreferencesScreen";
 import CommandPalette from "./components/CommandPalette";
 import DocsPanel from "./components/DocsPanel";
-import type { AppView, Feature, Project, Provider } from "./types";
+import type { Feature, Project, Provider } from "./types";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useLaunchRun } from "./hooks/useLaunchRun";
 import { useTauriEvent } from "./hooks/useTauriEvent";
@@ -43,11 +44,11 @@ import "./App.css";
 // ── Pure helpers (exported for unit tests in src/App.test.tsx) ─────────
 //
 // These are extracted as standalone functions so the per-spec
-// invariants (priority order of Escape, wrap-around cycling, "no-op
-// when list is empty") can be pinned down without rendering the full
-// app. `AppInner` dispatches the result of `pickEscapeAction` to
-// `uiDispatch` / `navigate` / `goBack`; the helpers themselves are
-// pure and own no React state.
+// invariants (wrap-around cycling, "no-op when list is empty") can be
+// pinned down without rendering the full app; they are pure and own no
+// React state. The Escape ladder `AppInner` dispatches lives one step
+// further out, in `src/lib/escapeLadder.ts`, so components App renders
+// can consult it too.
 
 /**
  * Return the feature that comes AFTER `currentId` in the list, wrapping
@@ -76,67 +77,6 @@ export function pickPreviousFeature(features: readonly Feature[], currentId: str
   const idx = features.findIndex(f => f.id === currentId);
   if (idx === -1) return features[features.length - 1];
   return features[(idx - 1 + features.length) % features.length];
-}
-
-/**
- * Minimal UIState slice consumed by `pickEscapeAction`. The helper
- * only needs the open flags (and the editing-provider boolean), so
- * the slice stays narrow and the helper remains decoupled from the
- * full UIState shape. Mirrors the relevant fields of
- * `src/context/UIStateContext.tsx`.
- */
-export interface UIStateSlice {
-  commandPaletteOpen: boolean;
-  docsPanelOpen: boolean;
-  isConnectModalOpen: boolean;
-  editingProvider: Provider | null;
-  startFeatureOpen: boolean;
-}
-
-/**
- * Discriminated union of every state mutation a single Escape press
- * can perform. The caller (AppInner) translates each variant into a
- * concrete `uiDispatch` / `navigate` / `goBack` call.
- */
-export type EscapeAction =
-  | { type: 'close-command-palette' }
-  | { type: 'close-docs-panel' }
-  | { type: 'close-connect-modal' }
-  | { type: 'close-start-feature' }
-  | { type: 'close-gate-view'; featureId: string; featureTitle: string }
-  | { type: 'navigate-back' };
-
-/**
- * Decide which overlay (if any) a single Escape press should close.
- *
- * Priority order (topmost first, per the implementation spec AC-3):
- *   1. command palette     (ui.commandPaletteOpen)
- *   2. docs panel          (ui.docsPanelOpen)
- *   3. provider connect    (ui.isConnectModalOpen || ui.editingProvider)
- *   4. start-feature modal (ui.startFeatureOpen)
- *   5. gate view overlay   (view.kind === 'detail' && view.gateStepExecutionId)
- *   6. fallback            (navigate back)
- *
- * Per-modal ESC handlers in `CommandPalette`, `StartFeatureModal`,
- * `DocsPanel`, `EnvModal`, `GateView`, etc. are expected to call
- * `event.stopPropagation()` so the global hook only fires once. The
- * notification-bell popover is owned by `NotificationBell` and
- * dismisses itself on the same keypress; the prompt dialog
- * (`FeatureDetail`'s local modal) is handled the same way.
- */
-export function pickEscapeAction(ui: UIStateSlice, view: AppView): EscapeAction {
-  if (ui.commandPaletteOpen) return { type: 'close-command-palette' };
-  if (ui.docsPanelOpen) return { type: 'close-docs-panel' };
-  if (ui.isConnectModalOpen || ui.editingProvider !== null) return { type: 'close-connect-modal' };
-  if (ui.startFeatureOpen) return { type: 'close-start-feature' };
-  if (view.kind === 'detail' && view.gateStepExecutionId) {
-    return {
-      type: 'close-gate-view',
-      featureId: view.featureId,
-      featureTitle: view.featureTitle,
-    };
-  }
-  return { type: 'navigate-back' };
 }
 
 function AppInner() {

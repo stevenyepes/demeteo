@@ -16,11 +16,14 @@ import type { Provider } from '../types';
 export interface AccountMenuProps {
   connectedProvider: Provider | null;
   onNavigateSettings: () => void;
+  /** True while a layer in the Escape ladder (`src/lib/escapeLadder.ts`) is up. */
+  overlayOpen: boolean;
 }
 
 export function AccountMenu({
   connectedProvider,
   onNavigateSettings,
+  overlayOpen,
 }: AccountMenuProps): React.ReactElement {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -69,6 +72,21 @@ export function AccountMenu({
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [open, closeAndRestoreFocus]);
+
+  // Swallowing Escape is only defensible while this menu is the top layer, and
+  // an open menu does not otherwise notice a modal opening over it: `F1` opens
+  // the docs panel from anywhere and the panel has no Escape handler of its own,
+  // so the swallow above would strand it — one press closes the menu, and only a
+  // second reaches the panel.
+  //
+  // The dependency list is the whole mechanism: this fires on the *transition*
+  // into an overlay, not on every render, so last-opened still wins. Menu then
+  // overlay closes the menu; overlay then menu leaves the menu on top, which is
+  // where Escape should reach it first. Focus is not restored — the overlay that
+  // just opened owns it.
+  useEffect(() => {
+    if (overlayOpen) setOpen(false);
+  }, [overlayOpen]);
 
   // What earns the `menu` role rather than claiming it: opening moves focus onto
   // the first item, so the menu is operable from the keyboard alone. With one

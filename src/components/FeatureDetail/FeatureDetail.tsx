@@ -78,7 +78,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   // The legacy `AgentTerminalDrawer` mount consumed `sidebarCollapsed`
   // to size its drawer; the panel-mounted surface does not need it.
   // We keep the field on `UIStateSlice` for back-compat with the
-  // `pickEscapeAction` helper exported from `App.tsx`.
+  // `pickEscapeAction` helper in `src/lib/escapeLadder.ts`.
   void _sidebarCollapsed;
 
   const { featureId } = view;

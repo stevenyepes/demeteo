@@ -4,6 +4,7 @@ import { NotificationBell } from './NotificationBell';
 import { AccountMenu } from './AccountMenu';
 import { HeaderNavItem } from './ui/HeaderNavItem';
 import { bucketFor } from '../lib/remoteRunBuckets';
+import { hasEscapeOverlay } from '../lib/escapeLadder';
 import { useHeaderDensity } from '../hooks/useHeaderDensity';
 import { useNavigation, useUIState, useTerminalPanel } from '../context';
 import { listMirroredRuns } from '../lib/remoteRuns';
@@ -15,7 +16,7 @@ interface TopBarProps {
 
 function TopBar({ connectedProvider }: TopBarProps) {
   const { navigate, view } = useNavigation();
-  const { uiDispatch } = useUIState();
+  const { ui, uiDispatch } = useUIState();
   const { state: terminalState } = useTerminalPanel();
   const { setHeaderEl, density } = useHeaderDensity();
   const terminalsActive = view.kind === 'terminals';
@@ -62,7 +63,7 @@ function TopBar({ connectedProvider }: TopBarProps) {
   return (
     <header
       ref={setHeaderEl}
-      className="h-14 border-b border-white/5 bg-[#0d0f14]/80 backdrop-blur-md grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 px-6 z-20 relative shrink-0"
+      className="h-14 border-b border-white/5 bg-[#0d0f14]/80 backdrop-blur-md grid grid-cols-[minmax(0,1fr)_auto_minmax(min-content,1fr)] items-center gap-4 px-6 z-20 relative shrink-0"
     >
       <div data-testid="topbar-brand" className="flex items-center gap-4 min-w-0">
         <img src="/icon.png" alt="Demeteo" className="w-8 h-8 rounded-lg shrink-0" />
@@ -90,7 +91,23 @@ function TopBar({ connectedProvider }: TopBarProps) {
         </button>
       </div>
 
-      <div data-testid="topbar-nav" className="flex items-center gap-2 min-w-0 justify-self-end">
+      {/* `min-content` on this track, not `minmax(0,1fr)`: every entry is
+          `shrink-0`, so a cluster too wide for its share does not degrade, it
+          draws over the centred search box. The floor makes the grid narrow the
+          *brand* track instead, which truncates — the search slides off centre
+          and nothing overlaps.
+
+          Worth having because the clearance that would otherwise prevent it is
+          a few pixels of text shaping (4px at the bottom of the density band,
+          22px at the 1440 default — src/lib/headerLayout.ts), measured once in
+          WebKitGTK. The face is the same everywhere, being bundled, but the
+          rounding is not, and if the webfont ever fails to load the fallback
+          blows through both figures at once.
+
+          `overflow-hidden` here is the other way to bound it and is wrong: the
+          account menu is absolutely positioned inside this track and would be
+          clipped out of existence. */}
+      <div data-testid="topbar-nav" className="flex items-center gap-2 justify-self-end">
         <HeaderNavItem
           icon={Sliders}
           label="Workflows"
@@ -143,6 +160,7 @@ function TopBar({ connectedProvider }: TopBarProps) {
         <AccountMenu
           connectedProvider={connectedProvider}
           onNavigateSettings={() => navigate({ kind: 'settings' })}
+          overlayOpen={hasEscapeOverlay(ui, view)}
         />
       </div>
     </header>
