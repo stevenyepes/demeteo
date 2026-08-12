@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
@@ -14,6 +15,31 @@ const xtermHeadlessEntry = fileURLToPath(
     import.meta.url,
   ),
 );
+
+// A Demeteo step worktree gets `node_modules` as a symlink into a per-feature
+// cache dir that sits *beside* the repo, never inside it
+// (`DEPENDENCY_CACHE_DIRS` / `feature_cache_dir` in
+// `crates/demeteo-core/src/paths.rs`). Vite realpaths a request before testing
+// it against `server.fs.allow`, whose default is the project root — so inside a
+// worktree every dependency the browser loads by URL is served a 403: the
+// `@fontsource` faces, `xterm.css`, `@xyflow`'s stylesheet, and Vite's own HMR
+// client. Nothing fails loudly. The app boots, every `--font-*` stack falls
+// through to its generic tail, and the run reads as a working smoke test of a
+// header whose typefaces never loaded — the same silent miss
+// `scripts/check-classes.mjs` exists for, arriving by a different route.
+//
+// Allowing the realpath of *this* checkout's `node_modules` covers the symlink
+// without widening the list to a parent directory. It resolves to the ordinary
+// path in an ordinary clone, where this is a no-op.
+const projectRoot = fileURLToPath(new URL(".", import.meta.url));
+const resolvedModules = (() => {
+  try {
+    return [realpathSync(fileURLToPath(new URL("./node_modules", import.meta.url)))];
+  } catch {
+    // Pre-install, or a tree with no local `node_modules` at all.
+    return [];
+  }
+})();
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -62,6 +88,7 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    fs: { allow: [projectRoot, ...resolvedModules] },
     hmr: host
       ? {
           protocol: "ws",
