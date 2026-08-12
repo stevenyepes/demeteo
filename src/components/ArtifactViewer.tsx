@@ -54,6 +54,15 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
       return;
     }
 
+    // Every `setState` below is guarded by this flag. The gate picker made
+    // switching artifacts a first-class interaction on one memoized viewer, so
+    // two reads are routinely in flight at once — a remote `task-list.json`
+    // and a local `.md` resolve in whichever order the transports finish, and
+    // the loser used to win the last write. That renders one artifact's body
+    // under the other's name: the panel showed ticket cards while the header
+    // and the highlighted picker row both said `implementation-spec.md`.
+    let cancelled = false;
+
     const loadArtifact = async () => {
       setLoading(true);
       setError(null);
@@ -65,6 +74,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
         // runner-owned feature's artifact can later resolve from the laptop
         // shadow without this component knowing where the run executed.
         const fileContent = await artifactBody('local', artifactPath);
+        if (cancelled) return;
 
         // Worktree-ref dispatch via explicit mime prop
         if (mime === 'application/x-demeteo-worktree-ref') {
@@ -146,14 +156,19 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
           setLanguage(langMap[ext] || 'plaintext');
         }
       } catch (err) {
+        if (cancelled) return;
         console.error('Failed to read artifact:', err);
         setError(formatError(err) || 'Failed to read artifact file from disk.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     loadArtifact();
+
+    return () => {
+      cancelled = true;
+    };
   }, [artifactPath, mime, contentVersion]);
 
   // Loader state

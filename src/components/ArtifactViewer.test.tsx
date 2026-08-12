@@ -55,6 +55,41 @@ describe('ArtifactViewer task-list viewType', () => {
     expect(screen.queryByText(/Failed to/)).not.toBeInTheDocument();
   });
 
+  // Two reads are routinely in flight at once now that the gate picker makes
+  // switching artifacts a click: the viewer is memoized and kept mounted, so
+  // only the effect's own cleanup can tell the loser to stay quiet.
+  it('discards a read that resolves after the path already changed', async () => {
+    const plan = {
+      tasks: [{ id: 't1', title: 'Stale ticket', description: 'From the abandoned read' }],
+    };
+    let releaseSlowRead: (body: string) => void = () => {};
+
+    vi.mocked(invoke).mockImplementation((_cmd: string, args?: unknown) => {
+      const path = String((args as { path?: string } | undefined)?.path ?? '');
+      if (path.endsWith('task-list.json')) {
+        return new Promise<string>((resolve) => {
+          releaseSlowRead = resolve;
+        });
+      }
+      return Promise.resolve('# The spec the reviewer actually asked for');
+    });
+
+    const { rerender } = render(<ArtifactViewer artifactPath="/tmp/artifacts/task-list.json" />);
+    rerender(<ArtifactViewer artifactPath="/tmp/artifacts/implementation-spec.md" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('The spec the reviewer actually asked for')).toBeInTheDocument();
+    });
+
+    releaseSlowRead(JSON.stringify(plan));
+
+    await waitFor(() => {
+      expect(screen.getByText('implementation-spec.md')).toBeInTheDocument();
+    });
+    // The abandoned read must not paint its body under the current header.
+    expect(screen.queryByText('Stale ticket')).not.toBeInTheDocument();
+  });
+
   it('renders plain Monaco code view for a non-task-list.json JSON artifact', async () => {
     const payload = { kind: 'greenfield', cycle: 0, tasks: [{ id: 't1', title: 'Nope', description: 'x' }] };
     vi.mocked(invoke).mockResolvedValue(JSON.stringify(payload));

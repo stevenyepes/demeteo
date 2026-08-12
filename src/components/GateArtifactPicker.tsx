@@ -1,6 +1,6 @@
 import { ArtifactRow } from './ArtifactRow';
 import { Chip } from './ui/Chip';
-import { listStepArtifacts } from '../lib/stepArtifacts';
+import { listReviewableGateArtifacts } from '../lib/stepArtifacts';
 import type { StepExecution } from '../types';
 
 interface GateArtifactPickerProps {
@@ -26,11 +26,7 @@ export function GateArtifactPicker({
   selectedArtifactPath,
   onSelectArtifact,
 }: GateArtifactPickerProps) {
-  const reviewable = steps
-    .filter((step) => step.step_index < gateStepIndex)
-    .map((step) => ({ step, listed: listStepArtifacts(step).listed }))
-    .filter(({ listed }) => listed.length > 0)
-    .sort((a, b) => a.step.step_index - b.step.step_index);
+  const reviewable = listReviewableGateArtifacts(steps, gateStepIndex);
 
   if (reviewable.length === 0) {
     return (

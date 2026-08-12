@@ -14,6 +14,7 @@ import {
   type GateBlocker,
 } from '../lib/features';
 import { decideRemoteGate, remoteRunForFeature } from '../lib/remoteRuns';
+import { listReviewableGateArtifacts } from '../lib/stepArtifacts';
 
 interface GateViewProps {
   stepExecutionId: string;
@@ -51,6 +52,9 @@ export const GateView: React.FC<GateViewProps> = ({
 
   const { selectedArtifactPath, selectedArtifactVersion, openArtifact } =
     useArtifactSelection(allSteps);
+
+  const hasReviewableArtifacts =
+    stepExec !== null && listReviewableGateArtifacts(allSteps, stepExec.step_index).length > 0;
 
   const loadGateData = useCallback(async () => {
     try {
@@ -194,8 +198,16 @@ export const GateView: React.FC<GateViewProps> = ({
               {selectedArtifactPath ? (
                 <ArtifactViewer artifactPath={selectedArtifactPath} contentVersion={selectedArtifactVersion} />
               ) : (
+                // Nothing selected does not mean nothing to review: the gate
+                // step's own inherited paths can be empty (a `command`
+                // predecessor, or a redirect reset that writes back an empty
+                // list) while every predecessor artifact is listed in the
+                // picker directly above. Asserting "none saved" there is a
+                // message contradicted by the clickable rows above it.
                 <div className="text-slate-500 font-mono text-xs italic flex items-center justify-center h-full">
-                  No artifact outputs saved for this gate step.
+                  {hasReviewableArtifacts
+                    ? 'Select an artifact above to review it.'
+                    : 'No artifact outputs saved for this gate step.'}
                 </div>
               )}
             </div>

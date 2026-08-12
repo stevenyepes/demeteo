@@ -1,4 +1,4 @@
-import type { PlannedTask, TaskPlan } from '../types';
+import type { PlanCycle, PlanKind, PlannedTask, TaskPlan } from '../types';
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
@@ -10,6 +10,14 @@ function isOptionalStringArray(value: unknown): value is string[] | undefined {
 
 function isOptionalNullableString(value: unknown): value is string | null | undefined {
   return value === undefined || value === null || typeof value === 'string';
+}
+
+function isOptionalNumber(value: unknown): value is number | undefined {
+  return value === undefined || typeof value === 'number';
+}
+
+function isOptionalPlanKind(value: unknown): value is PlanKind | undefined {
+  return value === undefined || value === 'greenfield' || value === 'rework';
 }
 
 function isPlannedTask(value: unknown): value is PlannedTask {
@@ -27,16 +35,44 @@ function isPlannedTask(value: unknown): value is PlannedTask {
   );
 }
 
+function isPlanCycle(value: unknown): value is PlanCycle {
+  if (typeof value !== 'object' || value === null) return false;
+  const cycle = value as Record<string, unknown>;
+  return (
+    Array.isArray(cycle.tasks) &&
+    cycle.tasks.every(isPlannedTask) &&
+    isOptionalNumber(cycle.cycle) &&
+    isOptionalPlanKind(cycle.kind)
+  );
+}
+
 /** Structural check for the `task-list.json` artifact shape. Only `tasks`
  *  (and each task's `id`/`title`/`description`) is required — `kind`/`cycle`/
  *  other `TaskPlan` fields are agent-written and not guaranteed present, per
  *  the mirror comment on `TaskPlan` in `src/types.ts`. A legacy `subtasks`
  *  payload (the Rust `#[serde(alias = "subtasks")]` shape) has no `tasks`
- *  key and deliberately fails this guard so callers fall back to Monaco. */
+ *  key and deliberately fails this guard so callers fall back to Monaco.
+ *
+ *  Optional does not mean unchecked. A `true` here licenses a renderer to
+ *  dereference every field of the plan, so a *present* field must be the
+ *  right type or the whole verdict is a lie: `notes` as an object or
+ *  `history` as anything but well-formed cycles reaches the renderer as a
+ *  `TypeError`, and with no `ErrorBoundary` anywhere in `src/` that blanks
+ *  the window while a run sits parked at the gate. Failing the guard costs
+ *  the reviewer a card view and leaves the raw JSON readable in Monaco;
+ *  passing a payload the renderer cannot survive costs them the app. */
 export function isTaskPlan(value: unknown): value is TaskPlan {
   if (typeof value !== 'object' || value === null) return false;
   const plan = value as Record<string, unknown>;
-  return Array.isArray(plan.tasks) && plan.tasks.every(isPlannedTask);
+  return (
+    Array.isArray(plan.tasks) &&
+    plan.tasks.every(isPlannedTask) &&
+    isOptionalNumber(plan.cycle) &&
+    isOptionalPlanKind(plan.kind) &&
+    isOptionalNullableString(plan.notes) &&
+    (plan.history === undefined ||
+      (Array.isArray(plan.history) && plan.history.every(isPlanCycle)))
+  );
 }
 
 export function parseTaskPlan(raw: string): TaskPlan | null {
@@ -49,23 +85,54 @@ export function parseTaskPlan(raw: string): TaskPlan | null {
   return isTaskPlan(parsed) ? parsed : null;
 }
 
-/** Best-effort, non-blocking lint over an already-parsed `TaskPlan` — not a
- *  port of the Rust `validate_task_plan` (`tasks.rs:260-302`); see spec Open
- *  Questions §7.4. Returns one human-readable string per problem found. */
+/** Non-blocking lint over an already-parsed `TaskPlan`, covering the same
+ *  rules as the Rust `validate_task_plan` (`domain/sequence/tasks.rs`) —
+ *  blank ids, duplicate ids, and a `blocked_by` naming itself, nothing, or a
+ *  task further down the list.
+ *
+ *  Same rules, opposite disposition, and that is the whole point: the
+ *  executor's version returns on the *first* violation and fails the step
+ *  non-retryably — after a human approved the gate, at which point only the
+ *  producing step can fix it and the run is spent. This one reports every
+ *  violation at once, while the reviewer is still looking at the plan and a
+ *  redirect is free. It stays advisory rather than disabling Approve because
+ *  the reviewer may legitimately know better than the lint; what they may not
+ *  do is approve a plan whose defects nobody showed them.
+ *
+ *  Keep the two in step. A rule that lands there and not here is a plan this
+ *  gate renders clean and the next step refuses. Returns one human-readable
+ *  string per problem found. */
 export function findPlanIssues(plan: TaskPlan): string[] {
   const issues: string[] = [];
   const seenIds = new Set<string>();
 
-  for (const task of plan.tasks) {
-    if (seenIds.has(task.id)) {
-      issues.push(`Duplicate task id: ${task.id}`);
+  plan.tasks.forEach((task, i) => {
+    const id = task.id.trim();
+    if (!id) {
+      issues.push(`Task at position ${i + 1} has an empty id`);
     }
-    seenIds.add(task.id);
+    if (seenIds.has(id)) {
+      issues.push(`Duplicate task id: ${id}`);
+    }
+    seenIds.add(id);
 
-    if (task.blocked_by?.includes(task.id)) {
-      issues.push(`Task ${task.id} is blocked by itself`);
+    // `Array.isArray` rather than `?? []`: a scalar `blocked_by` string is a
+    // shape this renderer can be handed directly (see the guard's contract
+    // above), and iterating one yields a bogus issue per character.
+    const blockedBy = Array.isArray(task.blocked_by) ? task.blocked_by : [];
+    for (const dep of blockedBy) {
+      const target = dep.trim();
+      if (!target) continue;
+      if (target === id) {
+        issues.push(`Task ${id} is blocked by itself`);
+      } else if (!seenIds.has(target)) {
+        // `seenIds` holds exactly the earlier tasks' ids, so "not seen" is
+        // both "no such task" and "declared later" — one message, because
+        // tasks run in list order and the fix is the same either way.
+        issues.push(`Task ${id} is blocked by ${target}, which is not an earlier task in the list`);
+      }
     }
-  }
+  });
 
   return issues;
 }

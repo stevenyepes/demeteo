@@ -39,10 +39,14 @@ const SPEC = step({
   artifact_paths: ['artifacts/implementation-spec.md'],
 });
 
+// The path the standard pipeline actually declares for this step, and its only
+// one — an earlier fixture used `artifacts/tickets.md`, a file no workflow
+// writes, which is precisely what hid the markdown-only fold that dropped this
+// step (and with it the ticket list) out of the picker entirely.
 const TICKETS = step({
   step_id: 's-tickets',
   step_index: 3,
-  artifact_paths: ['artifacts/tickets.md'],
+  artifact_paths: ['artifacts/task-list.json'],
 });
 
 const STEPS = [BASELINE, RESEARCH, SPEC, TICKETS];
@@ -63,7 +67,24 @@ describe('GateArtifactPicker', () => {
     expect(screen.getByText('s-spec')).toBeInTheDocument();
     expect(screen.getByText('implementation-spec.md')).toBeInTheDocument();
     expect(screen.getByText('s-tickets')).toBeInTheDocument();
-    expect(screen.getByText('tickets.md')).toBeInTheDocument();
+    expect(screen.getByText('task-list.json')).toBeInTheDocument();
+  });
+
+  it('lists the ticket list of a step that declares nothing else, in the shipped pipeline shape', () => {
+    render(
+      <GateArtifactPicker
+        steps={[BASELINE, RESEARCH, SPEC, TICKETS]}
+        gateStepIndex={4}
+        selectedArtifactPath="artifacts/implementation-spec.md"
+        onSelectArtifact={vi.fn()}
+      />,
+    );
+
+    // The reviewer has clicked away to the spec. Without a row for the ticket
+    // list there is no way back to it short of closing the modal.
+    const row = screen.getByText('task-list.json').closest('button');
+    expect(row).not.toBeNull();
+    expect(screen.queryByText(/no reviewable artifacts/i)).not.toBeInTheDocument();
   });
 
   it('omits a step with nothing listable entirely, not as an empty group', () => {

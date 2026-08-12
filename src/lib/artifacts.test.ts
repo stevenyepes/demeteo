@@ -20,6 +20,14 @@ describe('classifyArtifact', () => {
     });
   });
 
+  it('classifies task-list.json case-insensitively, like every other branch', () => {
+    expect(classifyArtifact('artifacts/Task-List.JSON').kind).toBe('task-list');
+  });
+
+  it('does not classify a merely task-list-ish name as a task list', () => {
+    expect(classifyArtifact('artifacts/task-list-schema.json').kind).toBe('json');
+  });
+
   it('classifies other .json files as json', () => {
     expect(classifyArtifact('artifacts/validation-report.json')).toEqual({
       kind: 'json',

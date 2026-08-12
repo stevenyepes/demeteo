@@ -68,6 +68,48 @@ describe('isTaskPlan', () => {
     ).toBe(true);
   });
 
+  // Every rejection below is a field the renderer dereferences unguarded, so
+  // a `true` verdict here is a TypeError there and — with no ErrorBoundary in
+  // `src/` — a blank window at a gate awaiting a decision.
+  it('rejects a plan whose `notes` is an object rather than a string', () => {
+    expect(isTaskPlan({ tasks: [], notes: { reason: 'x' } })).toBe(false);
+  });
+
+  it('accepts a plan whose `notes` is explicitly null', () => {
+    expect(isTaskPlan({ tasks: [], notes: null })).toBe(true);
+  });
+
+  it('rejects a plan whose `history` is an object rather than an array', () => {
+    expect(isTaskPlan({ tasks: [], history: { cycle: 0 } })).toBe(false);
+  });
+
+  it('rejects a history entry with no `tasks` array', () => {
+    expect(isTaskPlan({ tasks: [], history: [{ cycle: 0, kind: 'greenfield' }] })).toBe(false);
+  });
+
+  it('rejects a history entry whose `kind` is not a PlanKind', () => {
+    expect(isTaskPlan({ tasks: [], history: [{ cycle: 0, kind: 'Greenfield', tasks: [] }] })).toBe(false);
+  });
+
+  it('accepts a well-formed history entry', () => {
+    expect(
+      isTaskPlan({
+        kind: 'rework',
+        cycle: 1,
+        tasks: [],
+        history: [{ cycle: 0, kind: 'greenfield', tasks: [{ id: 't1', title: 'x', description: 'y' }] }],
+      })
+    ).toBe(true);
+  });
+
+  it('rejects a plan whose `kind` is not a PlanKind', () => {
+    expect(isTaskPlan({ tasks: [], kind: 'brownfield' })).toBe(false);
+  });
+
+  it('rejects a plan whose `cycle` is a string', () => {
+    expect(isTaskPlan({ tasks: [], cycle: '1' })).toBe(false);
+  });
+
   it('accepts a task with well-typed optional fields', () => {
     expect(
       isTaskPlan({
@@ -134,5 +176,54 @@ describe('findPlanIssues', () => {
     const issues = findPlanIssues(plan);
     expect(issues.length).toBeGreaterThan(0);
     expect(issues.some((issue) => issue.includes('t1'))).toBe(true);
+  });
+
+  // The three below are the rules the Rust `validate_task_plan` fails the
+  // sequence step on, non-retryably, *after* the gate was approved. Missing
+  // them here is a plan shown clean and then refused.
+  it('flags a blocked_by naming a task that does not exist', () => {
+    const plan: TaskPlan = { tasks: [
+      { id: 't1', title: 'First', description: 'desc', blocked_by: ['t9'] },
+    ] };
+    expect(findPlanIssues(plan)).toEqual([
+      'Task t1 is blocked by t9, which is not an earlier task in the list',
+    ]);
+  });
+
+  it('flags a blocked_by naming a task declared later in the list', () => {
+    const plan: TaskPlan = { tasks: [
+      { id: 't1', title: 'First', description: 'desc', blocked_by: ['t2'] },
+      { id: 't2', title: 'Second', description: 'desc' },
+    ] };
+    expect(findPlanIssues(plan)).toEqual([
+      'Task t1 is blocked by t2, which is not an earlier task in the list',
+    ]);
+  });
+
+  it('flags a blank task id', () => {
+    const plan: TaskPlan = { tasks: [{ id: '   ', title: 'First', description: 'desc' }] };
+    expect(findPlanIssues(plan)).toEqual(['Task at position 1 has an empty id']);
+  });
+
+  it('reports every violation rather than stopping at the first', () => {
+    const plan: TaskPlan = { tasks: [
+      { id: 't1', title: 'First', description: 'desc', blocked_by: ['nope'] },
+      { id: 't1', title: 'Dup', description: 'desc' },
+    ] };
+    expect(findPlanIssues(plan)).toHaveLength(2);
+  });
+
+  it('ignores a blank blocked_by entry, as the executor does', () => {
+    const plan: TaskPlan = { tasks: [
+      { id: 't1', title: 'First', description: 'desc', blocked_by: ['', '  '] },
+    ] };
+    expect(findPlanIssues(plan)).toEqual([]);
+  });
+
+  it('does not iterate a scalar blocked_by string per character', () => {
+    const plan = { tasks: [
+      { id: 't1', title: 'First', description: 'desc', blocked_by: 'abc' },
+    ] } as unknown as TaskPlan;
+    expect(findPlanIssues(plan)).toEqual([]);
   });
 });

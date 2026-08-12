@@ -14,6 +14,15 @@ const CYCLE_BORDER: Record<PlanKind, string> = {
   rework: 'border-cyan-500/50',
 };
 
+/** A `Record` lookup on an agent-written value yields `undefined`, and
+ *  `undefined` interpolated into a `className` is the literal string
+ *  "undefined" — a class no stylesheet defines, which the browser silently
+ *  ignores and every gate in `npm run checks` passes (AGENTS §7). The border
+ *  falls back to `currentColor` and nothing anywhere reports it. */
+function cycleBorder(kind: PlanKind): string {
+  return CYCLE_BORDER[kind] ?? CYCLE_BORDER.greenfield;
+}
+
 /**
  * `plan.history` (if present) plus the current cycle, synthesized the same
  * way `SequenceTasks.tsx`'s `groupByCycle` treats a flat task list — see
@@ -21,10 +30,20 @@ const CYCLE_BORDER: Record<PlanKind, string> = {
  * helper this one has no boundary to detect: the artifact already carries
  * cycles as discrete `PlanCycle` records, so history is concatenated with the
  * synthesized current group in order.
+ *
+ * Every label is supplied here rather than read: no `task-list.json` on disk
+ * carries `cycle`/`kind`/`history` (see `TaskPlan` in `src/types.ts`), so the
+ * production shape is exactly the one that would default. Tasks arrays are
+ * re-checked because this component is also handed plans that bypassed
+ * `isTaskPlan` entirely.
  */
 function buildCycleGroups(plan: TaskPlan): CycleGroup[] {
-  const history = plan.history ?? [];
-  return [...history, { cycle: plan.cycle, kind: plan.kind, tasks: plan.tasks }];
+  const history = Array.isArray(plan.history) ? plan.history : [];
+  return [...history, plan].map((cycle) => ({
+    cycle: cycle.cycle ?? 0,
+    kind: cycle.kind ?? 'greenfield',
+    tasks: Array.isArray(cycle.tasks) ? cycle.tasks : [],
+  }));
 }
 
 /**
@@ -37,16 +56,18 @@ export function TaskListArtifact({ plan }: { plan: TaskPlan }) {
   const groups = buildCycleGroups(plan);
   const labelled = groups.length > 1;
   const issues = findPlanIssues(plan);
+  const notes = typeof plan.notes === 'string' ? plan.notes.trim() : '';
+  const empty = groups.every((group) => group.tasks.length === 0) && !notes;
 
   return (
     <div className="space-y-4">
-      {plan.notes && plan.notes.trim() && (
+      {notes && (
         // Load-bearing for a rework cycle with no tasks: without this, a
         // decomposition that decided no ticket was warranted renders as a
         // bare empty state instead of explaining why.
         <div className="glass-panel flex items-start gap-2.5 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-cyan-200">
           <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-400" />
-          <p className="leading-relaxed">{plan.notes}</p>
+          <p className="leading-relaxed">{notes}</p>
         </div>
       )}
 
@@ -64,8 +85,18 @@ export function TaskListArtifact({ plan }: { plan: TaskPlan }) {
         </div>
       )}
 
-      {groups.map((group) => (
-        <div key={group.cycle} className="space-y-3">
+      {/* A plan with no tickets and nothing to say about it renders no cards
+          and — as the single group — no label either, so the panel body was
+          blank. Blank is indistinguishable from a broken viewer, and this one
+          is read at a gate where the reviewer's next click is Approve. */}
+      {empty && (
+        <div className="glass-panel rounded-xl border border-white/5 p-6 text-center text-xs text-slate-400">
+          This decomposition produced no tickets, and left no note explaining why.
+        </div>
+      )}
+
+      {groups.map((group, groupIndex) => (
+        <div key={`${groupIndex}-${group.cycle}`} className="space-y-3">
           {labelled && (
             <div className="flex items-baseline justify-between px-1">
               <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400/70">
@@ -80,7 +111,7 @@ export function TaskListArtifact({ plan }: { plan: TaskPlan }) {
             // Index, not just id, in the key: findPlanIssues below flags a
             // duplicate task id as non-blocking, so two cards can legitimately
             // share one and must not collide as React children.
-            <TaskCard key={`${group.cycle}-${i}-${task.id}`} index={i + 1} kind={group.kind} task={task} />
+            <TaskCard key={`${groupIndex}-${i}-${task.id}`} index={i + 1} kind={group.kind} task={task} />
           ))}
         </div>
       ))}
@@ -90,7 +121,7 @@ export function TaskListArtifact({ plan }: { plan: TaskPlan }) {
 
 function TaskCard({ index, kind, task }: { index: number; kind: PlanKind; task: PlannedTask }) {
   return (
-    <div className={`glass-panel border-l-2 p-4 ${CYCLE_BORDER[kind]}`}>
+    <div className={`glass-panel border-l-2 p-4 ${cycleBorder(kind)}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="shrink-0 font-mono text-[10px] text-slate-500">{index}</span>

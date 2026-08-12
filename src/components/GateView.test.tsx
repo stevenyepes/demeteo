@@ -137,6 +137,47 @@ describe('GateView artifact picker wiring', () => {
     expect(screen.getByRole('button', { name: /approve step/i })).toBeDisabled();
   });
 
+  it('prompts the reviewer to pick a row when the gate step carries no artifact of its own', async () => {
+    // A redirect reset writes back an empty `artifact_paths` (see
+    // `redirect_reset.rs`), so there is no default to select — but the
+    // predecessors' artifacts are all listed in the picker above.
+    const gateWithNoArtifact = step({
+      id: 'se-gate',
+      step_id: 's-gate-review',
+      step_index: 2,
+      artifact_paths: [],
+    });
+    mount({ gateStep: gateWithNoArtifact, allSteps: [RESEARCH, SPEC, gateWithNoArtifact] });
+
+    await waitFor(() => {
+      expect(screen.getByText('s-research')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/select an artifact above/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no artifact outputs saved/i)).not.toBeInTheDocument();
+  });
+
+  it('still says nothing was saved when there is genuinely nothing to review', async () => {
+    const lonelyGate = step({
+      id: 'se-gate',
+      step_id: 's-gate-review',
+      step_index: 1,
+      artifact_paths: [],
+    });
+    const baseline = step({
+      id: 'se-baseline',
+      step_id: 's-baseline-harness',
+      step_index: 0,
+      step_kind: 'command',
+      artifact_paths: [],
+    });
+    mount({ gateStep: lonelyGate, allSteps: [baseline, lonelyGate] });
+
+    await waitFor(() => {
+      expect(screen.getByText(/no artifact outputs saved/i)).toBeInTheDocument();
+    });
+  });
+
   it('keeps the redirect feedback textarea working alongside the picker state', async () => {
     mount();
 
