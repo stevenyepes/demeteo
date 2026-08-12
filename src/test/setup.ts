@@ -74,9 +74,23 @@ vi.mock("@tauri-apps/api/core", () => ({
   Channel: ChannelStub,
 }));
 
+// The implementation is passed to `vi.fn(...)` rather than layered on with
+// `.mockResolvedValue(...)`, because those two differ under a test file's own
+// `vi.restoreAllMocks()`: restore returns a mock to the implementation it was
+// *constructed* with, so a `.mockResolvedValue` mock comes back disarmed and
+// `listen(...)` starts returning `undefined`. `useTauriEvent` calls `.then` on
+// the result, so a mount after the restore dies in a passive effect — which
+// reads as a component bug, not a harness one.
+//
+// Measured by putting `.mockResolvedValue` back and running the whole suite:
+// `FeatureDetail.layout.test.tsx` spies on `getBoundingClientRect` and so
+// restores in `afterEach`, and 5 of its 6 tests fail on `Cannot read properties
+// of undefined (reading 'then')` — every one after the first. The four other
+// files that restore pass either way, so that file is the only measured cost,
+// not the only reachable one.
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
-  emit: vi.fn().mockResolvedValue(undefined),
+  listen: vi.fn(async () => () => {}),
+  emit: vi.fn(async () => undefined),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
