@@ -138,9 +138,9 @@ function TaskCard({ index, kind, task }: { index: number; kind: PlanKind; task: 
 
       {Array.isArray(task.files) && task.files.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {task.files.map((file) => (
+          {task.files.map((file, i) => (
             <span
-              key={file}
+              key={`${i}-${file}`}
               className="rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-slate-300"
             >
               {file}
@@ -163,9 +163,12 @@ function TaskCard({ index, kind, task }: { index: number; kind: PlanKind; task: 
       {Array.isArray(task.blocked_by) && task.blocked_by.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
           <span className="font-bold uppercase tracking-wider">Blocked by</span>
-          {task.blocked_by.map((id) => (
+          {/* Indexed for the same reason the task cards are: these lists are
+              agent-written and nothing rejects a repeat, so `blocked_by:
+              ["t1","t1"]` collides as two children under one key. */}
+          {task.blocked_by.map((id, i) => (
             <span
-              key={id}
+              key={`${i}-${id}`}
               className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-slate-300"
             >
               {id}

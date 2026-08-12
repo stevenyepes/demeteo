@@ -7,6 +7,11 @@ interface GateArtifactPickerProps {
   steps: StepExecution[];
   gateStepIndex: number;
   selectedArtifactPath: string | null;
+  /** `step_id` the selected path was opened from — one path can be declared by
+   *  more than one step (a fetched remote artifact caches under its basename,
+   *  and a rework cycle re-declares the path it rewrote), and matching on the
+   *  path alone then paints every one of those rows as the current selection. */
+  selectedStepId: string | null;
   onSelectArtifact: (path: string, stepTitle: string) => void;
 }
 
@@ -24,6 +29,7 @@ export function GateArtifactPicker({
   steps,
   gateStepIndex,
   selectedArtifactPath,
+  selectedStepId,
   onSelectArtifact,
 }: GateArtifactPickerProps) {
   const reviewable = listReviewableGateArtifacts(steps, gateStepIndex);
@@ -51,7 +57,7 @@ export function GateArtifactPicker({
               <ArtifactRow
                 key={path}
                 path={path}
-                selected={selectedArtifactPath === path}
+                selected={selectedArtifactPath === path && selectedStepId === step.step_id}
                 onSelect={() => onSelectArtifact(path, step.step_id)}
               />
             ))}

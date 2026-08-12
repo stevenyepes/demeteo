@@ -106,23 +106,38 @@ export function findPlanIssues(plan: TaskPlan): string[] {
   const issues: string[] = [];
   const seenIds = new Set<string>();
 
-  plan.tasks.forEach((task, i) => {
-    const id = task.id.trim();
+  // Same reason `buildCycleGroups` re-checks its arrays: this runs on plans
+  // that reached the renderer without passing `isTaskPlan`, where `tasks` may
+  // be absent and an `id` may be any JSON scalar. A throw here blanks the
+  // window — there is no `ErrorBoundary` in `src/` — at the gate where the
+  // reviewer's next click is Approve.
+  const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
+
+  tasks.forEach((task, i) => {
+    const id = typeof task.id === 'string' ? task.id.trim() : '';
     if (!id) {
+      // Not entered into `seenIds`: two blank ids would otherwise report
+      // "Duplicate task id: " with nothing after the colon, in a panel whose
+      // job is to mirror the executor's verdict. The Rust `validate_task_plan`
+      // returns before inserting (`domain/sequence/tasks.rs`).
       issues.push(`Task at position ${i + 1} has an empty id`);
+    } else {
+      if (seenIds.has(id)) {
+        issues.push(`Duplicate task id: ${id}`);
+      }
+      seenIds.add(id);
     }
-    if (seenIds.has(id)) {
-      issues.push(`Duplicate task id: ${id}`);
-    }
-    seenIds.add(id);
 
     // `Array.isArray` rather than `?? []`: a scalar `blocked_by` string is a
     // shape this renderer can be handed directly (see the guard's contract
     // above), and iterating one yields a bogus issue per character.
     const blockedBy = Array.isArray(task.blocked_by) ? task.blocked_by : [];
+    // A dep repeated in the list is one defect, not one per mention.
+    const reported = new Set<string>();
     for (const dep of blockedBy) {
-      const target = dep.trim();
-      if (!target) continue;
+      const target = typeof dep === 'string' ? dep.trim() : '';
+      if (!target || reported.has(target)) continue;
+      reported.add(target);
       if (target === id) {
         issues.push(`Task ${id} is blocked by itself`);
       } else if (!seenIds.has(target)) {

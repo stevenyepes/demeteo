@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { RemoteRunMirror, StepExecution } from '../types';
 import { Check, ArrowRight, X, ShieldAlert, Terminal, Sparkles, AlertTriangle } from 'lucide-react';
 import { ArtifactViewer } from './ArtifactViewer';
@@ -50,11 +50,14 @@ export const GateView: React.FC<GateViewProps> = ({
   // neither derivation may be made to depend on the other.
   const [allSteps, setAllSteps] = useState<StepExecution[]>([]);
 
-  const { selectedArtifactPath, selectedArtifactVersion, openArtifact } =
+  const { selectedArtifactPath, selectedStepTitle, selectedArtifactVersion, openArtifact } =
     useArtifactSelection(allSteps);
 
-  const hasReviewableArtifacts =
-    stepExec !== null && listReviewableGateArtifacts(allSteps, stepExec.step_index).length > 0;
+  const reviewable = useMemo(
+    () => (stepExec ? listReviewableGateArtifacts(allSteps, stepExec.step_index) : []),
+    [allSteps, stepExec],
+  );
+  const hasReviewableArtifacts = reviewable.length > 0;
 
   const loadGateData = useCallback(async () => {
     try {
@@ -93,16 +96,35 @@ export const GateView: React.FC<GateViewProps> = ({
   // first artifact — the first time both the step list and the gate step
   // itself have loaded. Once the reviewer picks a row, `selectedArtifactPath`
   // is no longer null and this effect never fires again for this mount.
+  //
+  // The gate's own paths are its predecessor's copied verbatim, and the picker
+  // folds an agent step's source edits away — so the inherited path is not
+  // necessarily a row. Opening one that isn't strands the reviewer on an
+  // artifact nothing highlights, with no way back to it after their first click
+  // elsewhere. So attribute it to the step that actually declared it, and when
+  // no step lists it, open the nearest predecessor's first row instead.
+  //
+  // A gate carrying no inherited path at all is a different case and keeps its
+  // own behaviour: nothing is selected and the panel asks the reviewer to pick.
   useEffect(() => {
     if (selectedArtifactPath !== null) return;
     if (!stepExec || allSteps.length === 0) return;
-    const defaultPath = stepExec.artifact_paths?.length
+    const inherited = stepExec.artifact_paths?.length
       ? stepExec.artifact_paths[0]
       : stepExec.artifact_path;
-    if (defaultPath) {
-      openArtifact(defaultPath, stepExec.step_id);
+    if (!inherited) return;
+    const owner = [...reviewable].reverse().find(({ listed }) => listed.includes(inherited));
+    if (owner) {
+      openArtifact(inherited, owner.step.step_id);
+      return;
     }
-  }, [stepExec, allSteps, selectedArtifactPath, openArtifact]);
+    const nearest = reviewable[reviewable.length - 1];
+    if (nearest) {
+      openArtifact(nearest.listed[0], nearest.step.step_id);
+    } else {
+      openArtifact(inherited, stepExec.step_id);
+    }
+  }, [stepExec, allSteps, reviewable, selectedArtifactPath, openArtifact]);
 
   const submitDecision = async (decision: 'approve' | 'redirect' | 'cancel') => {
     // Defence-in-depth: also short-circuit in the modal so a double-click
@@ -191,6 +213,7 @@ export const GateView: React.FC<GateViewProps> = ({
                 steps={allSteps}
                 gateStepIndex={stepExec.step_index}
                 selectedArtifactPath={selectedArtifactPath}
+                selectedStepId={selectedStepTitle}
                 onSelectArtifact={openArtifact}
               />
             )}

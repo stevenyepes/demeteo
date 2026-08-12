@@ -226,4 +226,38 @@ describe('findPlanIssues', () => {
     ] } as unknown as TaskPlan;
     expect(findPlanIssues(plan)).toEqual([]);
   });
+
+  // The executor returns before inserting a blank id, so two of them are two
+  // empty-id violations — never "Duplicate task id: " with nothing after it.
+  it('does not report a second blank id as a duplicate of the first', () => {
+    const plan: TaskPlan = { tasks: [
+      { id: '', title: 'First', description: 'desc' },
+      { id: '  ', title: 'Second', description: 'desc' },
+    ] };
+    expect(findPlanIssues(plan)).toEqual([
+      'Task at position 1 has an empty id',
+      'Task at position 2 has an empty id',
+    ]);
+  });
+
+  it('reports a repeated blocked_by entry once', () => {
+    const plan: TaskPlan = { tasks: [
+      { id: 't1', title: 'First', description: 'desc', blocked_by: ['t9', 't9'] },
+    ] };
+    expect(findPlanIssues(plan)).toEqual([
+      'Task t1 is blocked by t9, which is not an earlier task in the list',
+    ]);
+  });
+
+  // Same contract as the renderer's array re-checks: this runs on plans that
+  // never passed `isTaskPlan`, where a throw blanks the window at the gate.
+  it('answers empty rather than throwing when tasks is absent', () => {
+    expect(findPlanIssues({} as unknown as TaskPlan)).toEqual([]);
+    expect(findPlanIssues({ tasks: 'nope' } as unknown as TaskPlan)).toEqual([]);
+  });
+
+  it('treats a non-string task id as blank rather than throwing', () => {
+    const plan = { tasks: [{ id: 7, title: 'First', description: 'desc' }] } as unknown as TaskPlan;
+    expect(findPlanIssues(plan)).toEqual(['Task at position 1 has an empty id']);
+  });
 });

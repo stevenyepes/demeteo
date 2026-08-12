@@ -62,13 +62,16 @@ const SPEC = step({
   artifact_paths: ['artifacts/implementation-spec.md'],
 });
 
-// The step under gate review — its own artifact is today's default, and it
-// sits strictly after both predecessors above.
+// The step under gate review, in the shape the executor writes: a gate step
+// carries its predecessor's `artifact_paths` copied verbatim (`steps/gate/
+// mod.rs`), never a path of its own. A fixture that invents one hides whether
+// the default lands on a row the picker actually renders.
 const GATE_STEP = step({
   id: 'se-gate',
   step_id: 's-gate-review',
   step_index: 2,
-  artifact_paths: ['artifacts/gate-review.md'],
+  step_kind: 'gate',
+  artifact_paths: ['artifacts/implementation-spec.md'],
 });
 
 function mount(overrides: { gateStep?: StepExecution; allSteps?: StepExecution[] } = {}) {
@@ -82,11 +85,13 @@ function mount(overrides: { gateStep?: StepExecution; allSteps?: StepExecution[]
 }
 
 describe('GateView artifact picker wiring', () => {
-  it('defaults to the reviewed step\'s own artifact once data loads, with the picker rendered above the viewer', async () => {
+  it('defaults to the artifact the gate inherited once data loads, with the picker rendered above the viewer', async () => {
     mount();
 
     await waitFor(() => {
-      expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent('artifacts/gate-review.md');
+      expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent(
+        'artifacts/implementation-spec.md',
+      );
     });
 
     // Picker rows for both predecessors are present above the viewer panel.
@@ -99,11 +104,63 @@ describe('GateView artifact picker wiring', () => {
     expect(picker!.compareDocumentPosition(viewer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  // The default now names the step that produced the inherited path, so its row
+  // is the highlighted one — a path-only match would light up every step that
+  // declares it, the gate included.
+  it('highlights the producing step\'s row for the inherited default', async () => {
+    mount();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent(
+        'artifacts/implementation-spec.md',
+      );
+    });
+
+    const rows = screen
+      .getAllByText('implementation-spec.md')
+      .map((el) => el.closest('button'))
+      .filter((row) => row?.classList.contains('border-violet-500/30'));
+    expect(rows).toHaveLength(1);
+    expect(screen.queryByText('s-gate-review')).not.toBeInTheDocument();
+  });
+
+  // The stranding `9ce030b` fixed for `s-tickets`, one step upstream: an agent
+  // step whose first declared path is a source edit hands the gate an inherited
+  // path the picker folds away, so nothing highlights and the reviewer's first
+  // click elsewhere is one-way.
+  it('opens the nearest predecessor\'s listable row when the inherited path has none', async () => {
+    const implement = step({
+      id: 'se-implement',
+      step_id: 's-implement',
+      step_index: 1,
+      artifact_paths: ['src/lib/auth.ts', 'artifacts/implementation-report.md'],
+    });
+    const gate = step({
+      id: 'se-gate',
+      step_id: 's-gate-review',
+      step_index: 2,
+      step_kind: 'gate',
+      artifact_paths: ['src/lib/auth.ts', 'artifacts/implementation-report.md'],
+    });
+    mount({ gateStep: gate, allSteps: [RESEARCH, implement, gate] });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent(
+        'artifacts/implementation-report.md',
+      );
+    });
+
+    const row = screen.getByText('implementation-report.md').closest('button');
+    expect(row).toHaveClass('border-violet-500/30');
+  });
+
   it('changes the artifactPath the viewer receives when a different predecessor row is selected', async () => {
     mount();
 
     await waitFor(() => {
-      expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent('artifacts/gate-review.md');
+      expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent(
+        'artifacts/implementation-spec.md',
+      );
     });
 
     await userEvent.click(screen.getByText('research-report.md'));
@@ -132,7 +189,9 @@ describe('GateView artifact picker wiring', () => {
     // that surfaces the banner, so it needs its own wait rather than a bare
     // assertion right after the banner appears.
     await waitFor(() => {
-      expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent('artifacts/gate-review.md');
+      expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent(
+        'artifacts/implementation-spec.md',
+      );
     });
     expect(screen.getByRole('button', { name: /approve step/i })).toBeDisabled();
   });
@@ -182,7 +241,9 @@ describe('GateView artifact picker wiring', () => {
     mount();
 
     await waitFor(() => {
-      expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent('artifacts/gate-review.md');
+      expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent(
+        'artifacts/implementation-spec.md',
+      );
     });
 
     await userEvent.click(screen.getByRole('button', { name: /redirect \/ loop/i }));

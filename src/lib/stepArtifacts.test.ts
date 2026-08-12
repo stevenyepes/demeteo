@@ -113,6 +113,18 @@ describe('listReviewableGateArtifacts', () => {
     ]);
   });
 
+  it('excludes an earlier gate, whose paths are its own predecessor\'s copied verbatim', () => {
+    const firstGate = step({
+      id: 'se-3',
+      step_id: 's-gate-review',
+      step_index: 4,
+      step_kind: 'gate',
+      artifact_paths: ['artifacts/task-list.json'],
+    });
+    const groups = listReviewableGateArtifacts([research, tickets, firstGate], 5);
+    expect(groups.map((g) => g.step.step_id)).toEqual(['s-research', 's-tickets']);
+  });
+
   it('is empty when no predecessor has anything listable', () => {
     expect(listReviewableGateArtifacts([baseline], 1)).toEqual([]);
   });

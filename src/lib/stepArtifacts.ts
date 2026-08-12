@@ -59,13 +59,19 @@ export function listStepArtifacts(step: StepExecution | null | undefined): StepA
  *  listable, in step order. Shared by `GateArtifactPicker` (which renders the
  *  groups) and `GateView` (which chooses its empty-state copy from whether
  *  there are any) so the modal cannot tell the reviewer there is nothing to
- *  review while rows sit above the message saying so. */
+ *  review while rows sit above the message saying so.
+ *
+ *  An earlier gate is excluded because it never produced anything: a gate step
+ *  copies its predecessor's `artifact_paths` verbatim so its own card can show
+ *  them (`steps/gate/mod.rs`), so listing it renders the producing step's
+ *  artifacts a second time under a step that wrote none of them. Every shipped
+ *  workflow has two gates, so the second one hits this. */
 export function listReviewableGateArtifacts(
   steps: StepExecution[],
   gateStepIndex: number,
 ): { step: StepExecution; listed: string[] }[] {
   return steps
-    .filter((step) => step.step_index < gateStepIndex)
+    .filter((step) => step.step_index < gateStepIndex && step.step_kind !== 'gate')
     .map((step) => ({ step, listed: listStepArtifacts(step).listed }))
     .filter(({ listed }) => listed.length > 0)
     .sort((a, b) => a.step.step_index - b.step.step_index);

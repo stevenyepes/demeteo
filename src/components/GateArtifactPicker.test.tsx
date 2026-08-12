@@ -58,6 +58,7 @@ describe('GateArtifactPicker', () => {
         steps={STEPS}
         gateStepIndex={4}
         selectedArtifactPath={null}
+        selectedStepId={null}
         onSelectArtifact={vi.fn()}
       />,
     );
@@ -76,6 +77,7 @@ describe('GateArtifactPicker', () => {
         steps={[BASELINE, RESEARCH, SPEC, TICKETS]}
         gateStepIndex={4}
         selectedArtifactPath="artifacts/implementation-spec.md"
+        selectedStepId="s-spec"
         onSelectArtifact={vi.fn()}
       />,
     );
@@ -93,6 +95,7 @@ describe('GateArtifactPicker', () => {
         steps={STEPS}
         gateStepIndex={4}
         selectedArtifactPath={null}
+        selectedStepId={null}
         onSelectArtifact={vi.fn()}
       />,
     );
@@ -106,6 +109,7 @@ describe('GateArtifactPicker', () => {
         steps={STEPS}
         gateStepIndex={2}
         selectedArtifactPath={null}
+        selectedStepId={null}
         onSelectArtifact={vi.fn()}
       />,
     );
@@ -122,6 +126,7 @@ describe('GateArtifactPicker', () => {
         steps={STEPS}
         gateStepIndex={4}
         selectedArtifactPath={null}
+        selectedStepId={null}
         onSelectArtifact={onSelectArtifact}
       />,
     );
@@ -139,6 +144,7 @@ describe('GateArtifactPicker', () => {
         steps={STEPS}
         gateStepIndex={4}
         selectedArtifactPath="artifacts/implementation-spec.md"
+        selectedStepId="s-spec"
         onSelectArtifact={vi.fn()}
       />,
     );
@@ -147,12 +153,63 @@ describe('GateArtifactPicker', () => {
     expect(row).toHaveClass('border-violet-500/30');
   });
 
+  // Two steps can declare the same path — a rework cycle rewrites the artifact
+  // its first cycle wrote — and a path-only match then paints both rows as the
+  // current selection, so the reviewer cannot tell which one they are reading.
+  it('selects only the row of the step the path was opened from', () => {
+    const REWORK = step({
+      step_id: 's-tickets-rework',
+      step_index: 4,
+      artifact_paths: ['artifacts/task-list.json'],
+    });
+
+    render(
+      <GateArtifactPicker
+        steps={[TICKETS, REWORK]}
+        gateStepIndex={5}
+        selectedArtifactPath="artifacts/task-list.json"
+        selectedStepId="s-tickets-rework"
+        onSelectArtifact={vi.fn()}
+      />,
+    );
+
+    const rows = screen.getAllByText('task-list.json').map((el) => el.closest('button'));
+    expect(rows).toHaveLength(2);
+    expect(rows.filter((row) => row?.classList.contains('border-violet-500/30'))).toHaveLength(1);
+  });
+
+  // A gate copies its predecessor's artifact_paths verbatim so its own card can
+  // show them, so listing gates repeats the producing step's rows under a step
+  // that wrote nothing. Every shipped workflow has two gates.
+  it('omits an earlier gate rather than repeating its predecessor artifacts', () => {
+    const FIRST_GATE = step({
+      step_id: 's-gate-review',
+      step_index: 4,
+      step_kind: 'gate',
+      artifact_paths: ['artifacts/task-list.json'],
+    });
+
+    render(
+      <GateArtifactPicker
+        steps={[...STEPS, FIRST_GATE]}
+        gateStepIndex={5}
+        selectedArtifactPath={null}
+        selectedStepId={null}
+        onSelectArtifact={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('s-gate-review')).not.toBeInTheDocument();
+    expect(screen.getAllByText('task-list.json')).toHaveLength(1);
+  });
+
   it('renders an empty state, not a crash, when there are zero reviewable predecessors', () => {
     render(
       <GateArtifactPicker
         steps={[BASELINE]}
         gateStepIndex={1}
         selectedArtifactPath={null}
+        selectedStepId={null}
         onSelectArtifact={vi.fn()}
       />,
     );
@@ -166,6 +223,7 @@ describe('GateArtifactPicker', () => {
         steps={STEPS}
         gateStepIndex={4}
         selectedArtifactPath={null}
+        selectedStepId={null}
         onSelectArtifact={vi.fn()}
       />,
     );

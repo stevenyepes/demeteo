@@ -2,7 +2,7 @@
 // `task-list.json` artifact.
 
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { TaskPlan } from '../../types';
 import { TaskListArtifact } from './TaskListArtifact';
@@ -221,6 +221,36 @@ describe('TaskListArtifact', () => {
 
     expect(container.innerHTML).not.toContain('undefined');
     expect(container.querySelector('.border-violet-500\\/50')).not.toBeNull();
+  });
+
+  // Nothing rejects a repeat in these agent-written lists, and React reports a
+  // duplicate key on `console.error` — which no other gate in `npm run checks`
+  // reads, so the unstable reconciliation it warns about lands silently.
+  it('does not emit a duplicate-key warning when a task repeats a file or a dependency', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const plan: TaskPlan = {
+      tasks: [
+        { id: 't0', title: 'First', description: 'Do it' },
+        {
+          id: 't1',
+          title: 'Task',
+          description: 'Do it',
+          files: ['src/foo.ts', 'src/foo.ts'],
+          blocked_by: ['t0', 't0'],
+        },
+      ],
+    };
+
+    render(<TaskListArtifact plan={plan} />);
+
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it('does not throw when the plan carries no tasks array at all', () => {
+    const plan = { kind: 'greenfield' } as unknown as TaskPlan;
+
+    expect(() => render(<TaskListArtifact plan={plan} />)).not.toThrow();
   });
 
   it('states that a zero-ticket plan with no notes produced nothing, rather than rendering blank', () => {
