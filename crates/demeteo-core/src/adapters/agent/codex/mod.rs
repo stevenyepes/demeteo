@@ -386,8 +386,9 @@ pub fn runtime() -> UnifiedCliRuntime {
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Codex),
         static_env: &[],
-        // Codex's command tool composes for PowerShell on Windows. Asserted
-        // from observation, not from a probe — see the type.
+        // `default_user_shell_from_path` returns PowerShell under `cfg!(windows)`
+        // before consulting the user's shell at all, so this is the one
+        // declaration no user configuration can move.
         windows_agent_shell: WindowsAgentShell::PowerShell,
     }
 }

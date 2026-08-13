@@ -477,7 +477,13 @@ impl OpencodeCliRuntime {
                 default_model: None,
                 effort_levels: EffortLevel::supported_for(AgentKind::Opencode),
                 static_env: &[],
-                windows_agent_shell: WindowsAgentShell::Unknown,
+                // `Shell.preferred` takes `$SHELL` first and otherwise the head
+                // of `[pwsh, powershell, gitbash, COMSPEC]` (upstream
+                // `packages/core/src/shell.ts`). Demeteo forwards no `SHELL` to
+                // a Windows agent, and `powershell.exe` is always present, so
+                // the bash candidate is third and unreachable in practice.
+                // A user's own `opencode.json` `shell` still wins over both.
+                windows_agent_shell: WindowsAgentShell::PowerShell,
             },
         }
     }

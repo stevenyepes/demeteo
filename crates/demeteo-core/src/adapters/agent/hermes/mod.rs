@@ -194,6 +194,9 @@ pub fn runtime() -> UnifiedCliRuntime {
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Hermes),
         static_env: &[],
+        // Upstream calls native Windows experimental and points users at WSL2,
+        // so there is no stable answer here to declare — under WSL the agent is
+        // on Linux and this never renders anyway.
         windows_agent_shell: WindowsAgentShell::Unknown,
     }
 }

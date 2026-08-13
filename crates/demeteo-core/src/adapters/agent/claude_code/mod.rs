@@ -553,10 +553,13 @@ pub fn runtime() -> UnifiedCliRuntime {
             ("DISABLE_AUTOUPDATER", "1"),
             ("DISABLE_NONESSENTIAL_TRAFFIC", "1"),
         ],
-        // Claude Code's Bash tool runs through Git for Windows' bash, which it
-        // hard-requires on native Windows. This is also the claim the platform
-        // block already made for every agent, so it is the one declaration here
-        // that changes nothing about what ships.
+        // Git for Windows is *optional* upstream: without it the shell tool is
+        // PowerShell, with it the Bash tool is Git Bash. The condition holds
+        // here because Demeteo requires that same bash for its own lane and
+        // refuses to run without it (`PreflightVerdict::MissingPosixShell`), so
+        // an install that would take the PowerShell branch never reaches a step.
+        // The exception is the opt-in `CLAUDE_CODE_USE_POWERSHELL_TOOL`, which
+        // Demeteo does not set either way.
         windows_agent_shell: WindowsAgentShell::GitBash,
     }
 }

@@ -61,10 +61,24 @@ what the conformance suites compare, and only a rewrite changes them.
 Each harness declares its shell as an `AgentCapabilities` field, never a `match`
 on the agent kind (AGENTS.md §3). The declaration is a claim about a
 third-party binary that no gate here can check, so `WindowsAgentShell::Unknown`
-is the honest value until someone has watched that harness run a command on
-Windows — and it renders a block that promises nothing about syntax. Today only
-`claude-code` and `codex` are declared; `opencode`, `hermes` and `pi` are
-unverified.
+is the honest value where upstream gives no stable answer — and it renders a
+block that promises nothing about syntax.
+
+Four of the five are settled from upstream source or documentation:
+
+| harness | shell | what decides it upstream |
+|---|---|---|
+| `codex` | PowerShell | `default_user_shell_from_path` returns PowerShell under `cfg!(windows)` before reading the user's shell — unconditional |
+| `opencode` | PowerShell | `Shell.preferred` takes `$SHELL`, else the head of `[pwsh, powershell, gitbash, COMSPEC]`; Demeteo sends no `SHELL`, so the bash candidate is third and unreachable |
+| `pi` | Git Bash | resolves the two Program Files roots then `bash.exe` on PATH, and raises rather than falling back to a native shell |
+| `claude-code` | Git Bash | Git for Windows is optional upstream (without it the tool is PowerShell), but Demeteo refuses to run without that same bash, so the condition holds |
+| `hermes` | `Unknown` | upstream calls native Windows experimental and directs users to WSL2 |
+
+Two of these are defaults a user's own config can still move — opencode's
+`shell` key and claude-code's `CLAUDE_CODE_USE_POWERSHELL_TOOL`. Demeteo sets
+neither, so a user who changes one gets a block that is wrong about their
+syntax. It stays followable regardless: the wrapper and the prohibition do not
+depend on which shell the agent turned out to have.
 
 ### Why not two script bodies
 
