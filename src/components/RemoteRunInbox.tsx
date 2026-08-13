@@ -17,6 +17,7 @@ import { Chip } from './ui/Chip';
 import { RemoteGateActions, ReinjectCredentials } from './RemoteRunActions';
 import { TONE_BORDER_L, TONE_TEXT, type RunStatusTone } from '../lib/runStatus';
 import { relativeTime } from '../lib/utils';
+import { bucketFor, type Bucket } from '../lib/remoteRunBuckets';
 import { useNavigation } from '../context';
 import { formatError } from '../lib/errors';
 import { listMachines } from '../lib/machines';
@@ -29,27 +30,14 @@ import {
 
 /**
  * Runs — the cross-machine attention hub (docs/REMOTE_EXECUTION.md
- * M6.2, design §8). Groups every mirrored remote run into the taxonomy
- * from the design doc's table: PR ready / Failed / Parked / Needs
- * credentials / Running / Unreachable. `cancelled` isn't in that table
- * (it's a deliberate user action, not an outcome to chase) so it gets
- * its own low-priority bucket rather than being crowbarred into
- * "Failed".
+ * M6.2, design §8). Groups every mirrored remote run under the buckets
+ * `lib/remoteRunBuckets.ts` defines, and renders each group.
  *
  * This page triages; the run itself lives in `FeatureDetail` — every
  * row deep-links there (the eager shadow feature guarantees an id from
  * submit time), where the step timeline and the Activity event feed
  * render together.
  */
-
-export type Bucket =
-  | 'pr_ready'
-  | 'failed'
-  | 'parked'
-  | 'needs_credentials'
-  | 'running'
-  | 'unreachable'
-  | 'cancelled';
 
 const BUCKET_ORDER: Bucket[] = [
   'parked',
@@ -77,30 +65,6 @@ const BUCKET_META: Record<
   unreachable: { label: 'Unreachable', icon: WifiOff, tone: 'slate' },
   cancelled: { label: 'Cancelled', icon: Ban, tone: 'slate' },
 };
-
-export function bucketFor(status: string): Bucket {
-  switch (status) {
-    case 'awaiting_mr':
-    case 'completed':
-      return 'pr_ready';
-    case 'failed':
-    case 'interrupted':
-      return 'failed';
-    case 'parked':
-    case 'over-budget':
-      return 'parked';
-    case 'needs-credentials':
-      return 'needs_credentials';
-    case 'unreachable':
-      return 'unreachable';
-    case 'cancelled':
-      return 'cancelled';
-    case 'pending':
-    case 'running':
-    default:
-      return 'running';
-  }
-}
 
 /**
  * "View branch diff" (docs/REMOTE_EXECUTION.md M6.2 follow-up): a

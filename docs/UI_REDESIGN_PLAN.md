@@ -755,3 +755,78 @@ it, and spent no new height at all.**
   a chain of eleven — correctly, since `RIGHT` at that length fits only at a smaller
   scale. Capping the graph pane and giving the surplus to the other two tracks is the
   option this pass considered and did not take.
+
+**Settled (2026-08-11), by the header-bar pass.** The top bar was two groups either
+side of a `justify-between`, so the search trigger sat wherever the nav cluster left
+it — its x-position was a function of how many nav entries happened to be rendered,
+which is why it read as off-centre and moved when a badge appeared. It is a three-track
+grid now (`minmax(0,1fr) auto minmax(0,1fr)`; a bare `1fr` takes a min-content minimum
+and hands the wider side the middle, which is the same bug in a new spelling). Three
+decisions came out of it, and only the first is reversible without redoing the work.
+
+- **D1 — one account control, and its menu opens *below the header*, not a second
+  header row.** The avatar was an inert `<img>` and Settings was a standalone `⚙`
+  beside it; the avatar is the trigger now and Settings lives in the panel it opens,
+  anchored under the end of the nav row. That is the geometric reading of "below the
+  Terminals option" — Terminals is the last nav entry. The literal reading is a second
+  band under the bar, which costs permanent vertical space above a scrolling run
+  column, forever, to hold two controls. Reversing this is roughly a day: the grid
+  gains a row and `AccountMenu` becomes a static cluster instead of a popover. The
+  menu carries the provider identity line and Settings and **nothing else** — sign
+  out, switch account and profile each need a backend command that does not exist.
+- **D2 — density comes from a measured element width, with exactly two tiers.** The
+  `hidden md:inline` labels this replaces were live, and rendered at every width the
+  app could be given: `md:` is `min-width: 768px`, `src-tauri/tauri.conf.json` pins
+  `minWidth: 1024`, and 1024 ≥ 768 — the dead half of that pair was the `hidden` base,
+  not the `md:` branch. The old markup was not broken, it was answering the wrong
+  question. A viewport query reports the width of the *window*; what runs short is a
+  side track, which is the window less the padding, the gaps and whatever the centre
+  track claims — and this pass is what made the centre track elastic, so the two
+  stopped being proportional. A third `overflow` tier genuinely would be unreachable:
+  the icon-only cluster measures 232px against a 349px side track at the 1024 floor.
+  `nextHeaderDensity` lives in `src/lib/headerLayout.ts` and is React-free, per §5.2 —
+  the branch that decides is not inside the component that renders.
+- **D3 — Terminals deliberately stays in both the header and the rail footer.** The
+  duplication is real and a tighter header makes it louder, but dropping either surface
+  is a product call, not a layout one, and this pass changed neither. Decide it now that
+  both can be seen side by side. `ProjectRail.tsx` was out of scope on purpose.
+
+**The two constants, and the budget they came from.** `HEADER_ICONS_BELOW_PX = 1392`
+and `HEADER_LABELS_AT_PX = 1440`. They are **measured, not estimated** — laid out in
+WebKitGTK, the engine the Linux desktop build renders in — and measuring moved them:
+the spec shipped with 1344/1440 derived from glyph counts, and the labelled cluster
+came out 45px wider than that arithmetic predicted.
+
+| Quantity | Value |
+|---|---|
+| header padding (`px-6`) + two `gap-4` | 48px + 32px |
+| side track (centre clamp on its `24vw` arm) | `0.38·W − 40` |
+| side track (clamp saturated at 28rem, i.e. `W ≥ 1867`) | `(W − 528) / 2` |
+| right cluster, `labels` | **485px** |
+| right cluster, `icons` | **232px** |
+| labels fit where `0.38·W − 40 ≥ 485` | **W ≥ 1382px** |
+
+**The centre track is what the labels are paid for out of, and its first width cost
+them.** Written as `clamp(13rem,28vw,28rem)`, a side track is `0.36·W − 40` = 478px at
+the 1440 default against a 485px cluster — so the window the app opens at would have
+shown four unlabelled icons where it had always shown names, a loss no user asked for
+and the section above wrongly justified as replacing dead code. `24vw` buys it back:
+507px of track at 1440, 22px of clearance, and a search trigger 346px wide **at that
+width** against the `w-64` (256px) it had before it was centred. That comparison does
+not hold at every width and must not be read as a guarantee: the `24vw` arm crosses
+under 256px below **1067px**, and at the app's own `minWidth: 1024` floor it resolves
+to **246px**, 10px narrower than the box it replaced. The loss is cosmetic at that
+end; it matters because it is the figure to check against when widening the clamp.
+The other two levers were
+measured and are worse — `gap-2` at `28vw` leaves 1.5px at 1440, a collision one font
+metric away, and shortening the labels changes the product's vocabulary to pay for a
+layout.
+
+A band whose lower edge sits *below* the fit point is not a jitter damper, it is a
+licence to overlap: the band holds `labels` across a whole resize drag, so the cluster
+has to fit everywhere inside it. The lower edge is therefore 1392 rather than 1382
+itself — the 10px absorbs the font metrics a Linux measurement cannot see, since macOS
+and Windows resolve `--font-mono`'s stack differently — and the upper edge is the
+default window width, which is the point. Re-measure both cluster widths before
+touching the gaps, the clamp, or the number of nav entries; each one moves the fit
+point, and the arithmetic in the table under-reports the labelled cluster on its own.

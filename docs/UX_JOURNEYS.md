@@ -34,12 +34,12 @@ To ensure Demeteo feels like a premium desktop control center, all mockups must 
 
 The application functions within a single unified shell (no multi-window popouts for standard operations).
 
-- **Top Bar:**
-  - Application Logo.
-  - Command Palette trigger hint (`Cmd/Ctrl+K`).
-  - Global Settings (`⚙` icon).
-  - Documentation/Help (`?` icon).
-  - Notification Bell.
+- **Top Bar:** three tracks — logo, a centred Command Palette trigger
+  (`Cmd/Ctrl+K`), and a nav cluster (Workflows · Providers · Runs · Terminals ·
+  Notification Bell · account avatar). Global Settings lives in the menu the
+  avatar opens; the docs panel has no header control and is reached with `F1`
+  or `?`. See [`ARCHITECTURE.md`](ARCHITECTURE.md) §5 for why neither has an
+  icon of its own.
 - **Left Rail (Project Navigation):**
   - Search/filter input.
   - List of Projects (with active status dots).

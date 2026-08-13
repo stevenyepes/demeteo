@@ -1,4 +1,4 @@
-// Unit tests for the pure helpers exported from `src/App.tsx`.
+// Unit tests for the pure helpers behind `src/App.tsx`'s keyboard wiring.
 //
 // The spec puts the keyboard + mouse wiring in `App.tsx`, but mounting the full
 // `AppInner` would drag in every child (TopBar, ProjectRail, ProjectHome,
@@ -7,19 +7,16 @@
 //
 //   - `pickNextFeature(features, currentId)`     → forward cycling
 //   - `pickPreviousFeature(features, currentId)` → backward cycling
-//   - `pickEscapeAction(ui, view)`               → the Escape priority ladder
+//   - `pickEscapeAction(ui, view)`               → the Escape priority ladder,
+//                                                  from `src/lib/escapeLadder.ts`
 //
 // The reactive wiring in `AppInner` is a thin shell that dispatches the result.
 
 import { describe, expect, it } from 'vitest';
 
 import type { Feature, Provider } from './types';
-import {
-  pickNextFeature,
-  pickPreviousFeature,
-  pickEscapeAction,
-  type UIStateSlice,
-} from './App';
+import { pickNextFeature, pickPreviousFeature } from './App';
+import { pickEscapeAction, type UIStateSlice } from './lib/escapeLadder';
 
 const provider: Provider = {
   id: 'prov-1',

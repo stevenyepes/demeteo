@@ -5,7 +5,7 @@ import { relativeTime } from '../../lib/utils';
 import { BootstrapStepper, type BootstrapPhaseView } from '../BootstrapStepper';
 import { HarnessGateTable } from '../HarnessGateTable';
 import { RemoteGateActions, ReinjectCredentials } from '../RemoteRunActions';
-import { bucketFor } from '../RemoteRunInbox';
+import { bucketFor } from '../../lib/remoteRunBuckets';
 import type { RunLayoutMode } from '../runLayout';
 import { ActivityPanel } from './ActivityPanel';
 

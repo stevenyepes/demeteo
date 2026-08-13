@@ -540,7 +540,7 @@ transitions as events, not streams.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  [≡] Demeteo                  [⌘K]  [⚙]  [?]               │  ← top bar
+│  demeteo              [ ⌘K search ]     nav  bell  avatar  │  ← top bar
 ├──────────┬─────────────────────────────────────────────────┤
 │          │                                                  │
 │ Project  │   <main pane: current project>                  │
@@ -557,8 +557,16 @@ transitions as events, not streams.
 ```
 
 The "Mng" button at the bottom of the rail opens a project list /
-create / delete view. The "⚙" at the top opens global Preferences.
-The "?" opens the docs panel.
+create / delete view. The top bar is a three-track grid — brand, a
+search trigger centred on the header itself rather than on whatever
+the nav cluster leaves over, and the cluster (Workflows · Providers ·
+Runs · Terminals · notifications · account), whose labels drop to
+icons below a measured width. Global Preferences is reached from the
+account menu the avatar opens, a panel anchored under the end of that
+cluster — there is no standalone "⚙" beside it. The docs panel has no
+header control either: `F1` or `?` opens it, from
+`src/hooks/useKeyboardShortcuts.ts`.
+See [`UI_REDESIGN_PLAN.md`](UI_REDESIGN_PLAN.md) §7 for why.
 
 ## 6. Migration Strategy
 
