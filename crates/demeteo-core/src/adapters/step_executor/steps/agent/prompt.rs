@@ -31,7 +31,7 @@
 use crate::adapters::step_executor::driver::{ExecutionDriver, RetryContext};
 use crate::domain::attachment::AttachedFile;
 use crate::domain::harness_outcome::HarnessOutcome;
-use crate::domain::models::{AgentKind, Platform, StepConfig};
+use crate::domain::models::{Platform, StepConfig, WindowsAgentShell};
 use crate::domain::platform_context::place_platform_context;
 use crate::domain::review_base::place_review_base;
 use crate::domain::verifier::VerifierConfig;
@@ -191,9 +191,9 @@ impl ExecutionDriver {
     /// Steps 1–7: everything sayable before a worktree exists.
     ///
     /// `platform` is the machine's OS as the execution port answered it and
-    /// `agent_kind` names the command tool running there;
-    /// [`place_platform_context`] decides what that pair is worth saying and
-    /// where.
+    /// `shell` is what the agent's runtime declares its command tool runs
+    /// there; [`place_platform_context`] decides what that pair is worth saying
+    /// and where.
     /// `fork_point` is the commit this feature left the default branch at —
     /// `None` both when it could not be resolved and when
     /// [`wants_review_base`](Self::wants_review_base) said not to look, which
@@ -203,7 +203,7 @@ impl ExecutionDriver {
         &self,
         ctx: AgentStepCtx<'_>,
         platform: Option<Platform>,
-        agent_kind: Option<AgentKind>,
+        shell: WindowsAgentShell,
         fork_point: Option<&str>,
     ) -> String {
         let step_conf = ctx.step_conf;
@@ -239,7 +239,12 @@ impl ExecutionDriver {
         // copy below.
         let retry_section = format_retry_feedback_section(self.retry_ctx.as_ref());
         let uses_retry_section = template_uses_retry_section(template);
-        let platform_placement = place_platform_context(platform, agent_kind, template);
+        let platform_placement = place_platform_context(
+            platform,
+            shell,
+            crate::shared::win::quotable_bash_path().as_deref(),
+            template,
+        );
         let review_placement = place_review_base(
             fork_point,
             &self.branch_name,

@@ -2,7 +2,7 @@
 
 use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
 use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
-use crate::domain::models::{AgentKind, EffortLevel};
+use crate::domain::models::{AgentKind, EffortLevel, WindowsAgentShell};
 use crate::ports::agent_runtime::AgentContext;
 
 pub const HERMES_INSTALL: &str =
@@ -194,6 +194,7 @@ pub fn runtime() -> UnifiedCliRuntime {
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Hermes),
         static_env: &[],
+        windows_agent_shell: WindowsAgentShell::Unknown,
     }
 }
 

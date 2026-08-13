@@ -10,7 +10,6 @@ use crate::adapters::step_executor::steps::agent::{
 };
 
 use super::context::{RunTarget, StepCtx, StepWorktree, TaskRun};
-use crate::domain::models::AgentKind;
 use crate::domain::platform_context::place_platform_context;
 use crate::domain::review_base::{needs_review_base, place_review_base};
 use crate::domain::sequence::tasks::PlanKind;
@@ -91,7 +90,8 @@ impl ExecutionDriver {
         let acceptance_str = format_acceptance_criteria(&task.acceptance);
         let platform_placement = place_platform_context(
             target.platform,
-            AgentKind::parse(target.agent_kind),
+            self.registry.windows_agent_shell_for(target.agent_kind),
+            crate::shared::win::quotable_bash_path().as_deref(),
             template,
         );
 

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
 use crate::domain::action::ActionKind;
 use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus, Usage};
-use crate::domain::models::{AgentKind, EffortLevel};
+use crate::domain::models::{AgentKind, EffortLevel, WindowsAgentShell};
 use crate::ports::agent_runtime::AgentContext;
 
 /// Parse a Claude Code JSON-lines event into an `AgentEvent`.
@@ -553,6 +553,11 @@ pub fn runtime() -> UnifiedCliRuntime {
             ("DISABLE_AUTOUPDATER", "1"),
             ("DISABLE_NONESSENTIAL_TRAFFIC", "1"),
         ],
+        // Claude Code's Bash tool runs through Git for Windows' bash, which it
+        // hard-requires on native Windows. This is also the claim the platform
+        // block already made for every agent, so it is the one declaration here
+        // that changes nothing about what ships.
+        windows_agent_shell: WindowsAgentShell::GitBash,
     }
 }
 

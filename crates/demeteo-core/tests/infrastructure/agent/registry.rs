@@ -16,6 +16,7 @@ impl AgentRuntime for NoopRuntime {
             model_listing: None,
             default_model: None,
             effort_levels: &[],
+            windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }
     async fn availability(
@@ -75,6 +76,21 @@ fn runtime_for_returns_registered_kind() {
     let reg = AgentRegistry::new(vec![Arc::new(NoopRuntime)]);
     assert!(reg.runtime_for("noop").is_some());
     assert!(reg.runtime_for("opencode").is_none());
+}
+
+/// A kind nobody recognises is the case where nobody has checked what its
+/// command tool runs, so it must answer that rather than inherit a default. A
+/// legacy stored kind reaching a Windows prompt would otherwise be told, on no
+/// evidence, that POSIX syntax works there.
+#[test]
+fn an_unrecognised_kind_declares_no_windows_shell() {
+    use crate::domain::models::WindowsAgentShell;
+
+    let reg = AgentRegistry::new(vec![Arc::new(NoopRuntime)]);
+    assert_eq!(
+        reg.windows_agent_shell_for("antigravity"),
+        WindowsAgentShell::Unknown
+    );
 }
 
 #[tokio::test]
@@ -271,6 +287,7 @@ impl AgentRuntime for FlippableRuntime {
             model_listing: None,
             default_model: None,
             effort_levels: &[],
+            windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }
     async fn availability(
@@ -332,6 +349,7 @@ impl AgentRuntime for FixedRuntime {
             model_listing: None,
             default_model: None,
             effort_levels: &[],
+            windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }
     async fn availability(

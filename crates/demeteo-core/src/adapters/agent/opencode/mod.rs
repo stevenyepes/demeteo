@@ -11,7 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
-use crate::domain::models::{AgentKind, EffortLevel};
+use crate::domain::models::{AgentKind, EffortLevel, WindowsAgentShell};
 use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartError};
 
 pub const OPENCODE_INSTALL: &str = "curl -fsSL https://opencode.ai/install | bash";
@@ -477,6 +477,7 @@ impl OpencodeCliRuntime {
                 default_model: None,
                 effort_levels: EffortLevel::supported_for(AgentKind::Opencode),
                 static_env: &[],
+                windows_agent_shell: WindowsAgentShell::Unknown,
             },
         }
     }

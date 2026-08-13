@@ -48,6 +48,24 @@ and the prohibition on translating them —
 keying on platform is not the transport branch §2 forbids. A change to which
 interpreter runs a user's script is a change to what that block claims.
 
+The prohibition alone is not enough, because the agent's *own* command tool is a
+third author this two-plane split does not cover. Which interpreter sits behind
+that tool is the harness's choice — codex composes for PowerShell where Claude
+Code runs the same bash Demeteo does — and an agent whose shell cannot parse a
+POSIX body has been forbidden the rewrite without being given an alternative,
+while the shipped workflow templates ask it to run `{{test_command}}` by hand.
+So the block also hands it the resolved interpreter to wrap the body in,
+unchanged. **Wrapping is not translating**: the bytes between the quotes are
+what the conformance suites compare, and only a rewrite changes them.
+
+Each harness declares its shell as an `AgentCapabilities` field, never a `match`
+on the agent kind (AGENTS.md §3). The declaration is a claim about a
+third-party binary that no gate here can check, so `WindowsAgentShell::Unknown`
+is the honest value until someone has watched that harness run a command on
+Windows — and it renders a block that promises nothing about syntax. Today only
+`claude-code` and `codex` are declared; `opencode`, `hermes` and `pi` are
+unverified.
+
 ### Why not two script bodies
 
 fc8d65c's `ScriptVariants { posix, powershell }` does not remove the transport

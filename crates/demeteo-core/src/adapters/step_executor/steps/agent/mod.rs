@@ -124,7 +124,7 @@ impl ExecutionDriver {
         let prompt = self.build_agent_prompt(
             ctx,
             platform,
-            crate::domain::models::AgentKind::parse(target.agent_kind),
+            self.registry.windows_agent_shell_for(target.agent_kind),
             fork_point.as_deref(),
         );
 

@@ -104,6 +104,10 @@ pub struct UnifiedCliRuntime {
     /// spawn latency and background network on fleet machines. `&[]` for
     /// agents with nothing to pin.
     pub static_env: &'static [(&'static str, &'static str)],
+    /// The interpreter this CLI runs agent-authored commands under on Windows.
+    /// Declared beside the argv builder because that is the code that knows
+    /// how this harness invokes anything at all.
+    pub windows_agent_shell: crate::domain::models::WindowsAgentShell,
 }
 
 #[async_trait]
@@ -119,6 +123,7 @@ impl AgentRuntime for UnifiedCliRuntime {
             model_listing: self.model_listing,
             default_model: self.default_model,
             effort_levels: self.effort_levels,
+            windows_agent_shell: self.windows_agent_shell,
         }
     }
 
