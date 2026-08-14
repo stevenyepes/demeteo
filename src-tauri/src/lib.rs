@@ -487,6 +487,7 @@ pub fn run() {
             commands::features::step_attempts_list,
             commands::features::sequence_tasks_list,
             commands::features::step_list_for_run,
+            commands::features::run_events_since,
             commands::features::gate_pending_for_run,
             commands::features::gate_decide,
             commands::features::step_retry,

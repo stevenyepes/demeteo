@@ -122,6 +122,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     startReplay: rerun.startReplay,
     selectedNodeId: selection.selectedNodeId,
     toggleNode: selection.toggleStep,
+    detachedAssignments: remote.remoteRun ? remote.remoteRunAssignments : null,
   });
   const mr = useFeatureMr({
     featureId,
@@ -283,6 +284,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     ) : (
       <StepTimeline
         steps={run.steps}
+        assignments={graph.runAssignments}
         remoteRun={remote.remoteRun}
         remoteMachineName={remote.remoteMachineName}
         hasBootstrapPhases={bootstrap.bootstrapPhases.size > 0}

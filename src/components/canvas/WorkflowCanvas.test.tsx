@@ -12,7 +12,7 @@
  * errors.
  */
 import type { ComponentProps } from 'react';
-import { act, render, screen, cleanup } from '@testing-library/react';
+import { act, render, screen, cleanup, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkflowCanvas } from './WorkflowCanvas';
@@ -255,6 +255,116 @@ describe('WorkflowCanvas render', () => {
       expect(screen.getAllByText(node.title).length).toBeGreaterThan(0);
     }
     expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it('shows the observed agent and effective effort on only the matching run node', () => {
+    const longAgentKind = 'custom-agent-kind-with-a-name-longer-than-the-node-badge';
+    const def: WorkflowDefinitionV2 = {
+      schema_version: 2,
+      id: 'wf-assignments',
+      name: 'Assignments',
+      nodes: [
+        { id: 'implement', type: 'agent', title: 'Implement' },
+        { id: 'approval', type: 'gate', title: 'Approval' },
+        { id: 'pending', type: 'agent', title: 'Pending work' },
+      ],
+      edges: [
+        { from: 'implement', to: 'approval' },
+        { from: 'approval', to: 'pending' },
+      ],
+    };
+
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas
+          definition={def}
+          statusByNode={{
+            implement: {
+              status: 'completed',
+              stepExecutionId: 'se-implement',
+              agentKind: longAgentKind,
+              effort: 'xhigh',
+            },
+            approval: { status: 'awaiting_gate', stepExecutionId: 'se-approval' },
+            pending: { status: 'pending', stepExecutionId: 'se-pending' },
+          }}
+        />
+      </div>,
+    );
+
+    const assignment = screen.getByLabelText('Actual assignment for Implement');
+    expect(within(assignment).getByLabelText(`Agent: ${longAgentKind}`)).toHaveAttribute(
+      'title',
+      `Agent: ${longAgentKind}`,
+    );
+    expect(within(assignment).getByText(longAgentKind)).toBeInTheDocument();
+    expect(within(assignment).getByLabelText('Effective effort: Extra high')).toHaveAttribute(
+      'title',
+      'Effective effort: Extra high',
+    );
+    expect(screen.queryByLabelText('Actual assignment for Approval')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Actual assignment for Pending work')).not.toBeInTheDocument();
+    expect(screen.queryByText('Max')).not.toBeInTheDocument();
+  });
+
+  it('shows the neutral wording for an observed null effective effort', () => {
+    const def: WorkflowDefinitionV2 = {
+      schema_version: 2,
+      id: 'wf-null-effort',
+      name: 'Null effort',
+      nodes: [{ id: 'implement', type: 'agent', title: 'Implement' }],
+      edges: [],
+    };
+
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas
+          definition={def}
+          statusByNode={{
+            implement: {
+              status: 'completed',
+              stepExecutionId: 'se-implement',
+              agentKind: 'hermes',
+              effort: null,
+            },
+          }}
+        />
+      </div>,
+    );
+
+    const assignment = screen.getByLabelText('Actual assignment for Implement');
+    expect(within(assignment).getByLabelText('Agent: hermes')).toBeInTheDocument();
+    expect(
+      within(assignment).getByLabelText('Effective effort: No injected effort'),
+    ).toBeInTheDocument();
+    expect(within(assignment).queryByText('High')).not.toBeInTheDocument();
+  });
+
+  it('keeps configured design-mode essence separate from actual assignment metadata', () => {
+    const def: WorkflowDefinitionV2 = {
+      schema_version: 2,
+      id: 'wf-design-assignment',
+      name: 'Design assignment',
+      nodes: [
+        {
+          id: 'implement',
+          type: 'agent',
+          title: 'Implement',
+          config: { agent_kind: 'configured-agent', effort: 'max' },
+        },
+      ],
+      edges: [],
+    };
+
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas definition={def} mode="design" />
+      </div>,
+    );
+
+    expect(screen.getByTestId('node-essence')).toHaveTextContent('configured-agent');
+    expect(screen.getByTestId('node-essence')).toHaveTextContent('max');
+    expect(screen.queryByLabelText('Actual assignment for Implement')).not.toBeInTheDocument();
   });
 });
 

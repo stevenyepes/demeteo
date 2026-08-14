@@ -11,7 +11,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Machine, RemoteRunMirror } from '../../types';
+import type { Machine, RemoteRunMirror, RunEvent } from '../../types';
 
 const remoteRunForFeature = vi.fn<(featureId: string) => Promise<RemoteRunMirror | null>>();
 const remoteRefreshRun =
@@ -47,6 +47,31 @@ const mirror = (over: Partial<RemoteRunMirror> = {}): RemoteRunMirror => ({
   last_notified_status: null,
   ...over,
 });
+
+const runEvent = (over: Partial<RunEvent> = {}): RunEvent => ({
+  offset: 1,
+  run_id: 'r1',
+  kind: 'step_progress',
+  payload_json: null,
+  created_at: 0,
+  ...over,
+});
+
+const spawnedEvent = (
+  offset: number,
+  stepExecutionId: string,
+  agentKind: string,
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null,
+): RunEvent =>
+  runEvent({
+    offset,
+    kind: 'agent_spawned',
+    payload_json: JSON.stringify({
+      step_execution_id: stepExecutionId,
+      agent_kind: agentKind,
+      effort,
+    }),
+  });
 
 async function mount(run: RemoteRunMirror | null) {
   remoteRunForFeature.mockResolvedValue(run);
@@ -194,5 +219,131 @@ describe('useRemoteRun poll scheduling', () => {
     await advance(60_000);
     expect(remoteRefreshRun).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+describe('useRemoteRun detached event folding', () => {
+  it('continues folding bootstrap phases from the Activity-delivered batch', async () => {
+    remoteRunForFeature.mockResolvedValue(mirror());
+    const upsertBootstrapPhase = vi.fn();
+    const { result } = renderHook(() =>
+      useRemoteRun({ featureId: 'f1', reload: () => {}, upsertBootstrapPhase }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    act(() => {
+      result.current.handleRunEvents([
+        runEvent({
+          offset: 1,
+          kind: 'bootstrap_progress',
+          payload_json: JSON.stringify({ phase: 'clone', label: 'Clone', status: 'completed' }),
+        }),
+        spawnedEvent(2, 'se-1', 'opencode', 'high'),
+      ]);
+    });
+
+    expect(upsertBootstrapPhase).toHaveBeenCalledWith({
+      phase: 'clone',
+      label: 'Clone',
+      status: 'completed',
+    });
+    expect(result.current.remoteRunAssignments['se-1']?.agentKind).toBe('opencode');
+  });
+
+  it('keeps the greatest valid assignment across reconnect and out-of-order batches', async () => {
+    const { result } = await mount(mirror());
+
+    act(() => {
+      result.current.handleRunEvents([
+        spawnedEvent(8, 'se-1', 'claude-code', null),
+        spawnedEvent(4, 'se-1', 'opencode', 'high'),
+        runEvent({
+          offset: 9,
+          kind: 'agent_spawned',
+          payload_json: JSON.stringify({
+            step_execution_id: 'se-2',
+            agent_kind: 'hermes',
+            effort: 'unsupported',
+          }),
+        }),
+      ]);
+      result.current.handleRunEvents([
+        spawnedEvent(4, 'se-1', 'duplicate', 'low'),
+        spawnedEvent(9, 'se-2', 'hermes', 'medium'),
+      ]);
+    });
+
+    expect(result.current.remoteRunAssignments).toEqual({
+      'se-1': {
+        stepExecutionId: 'se-1',
+        agentKind: 'claude-code',
+        effort: null,
+        offset: 8,
+      },
+      'se-2': {
+        stepExecutionId: 'se-2',
+        agentKind: 'hermes',
+        effort: 'medium',
+        offset: 9,
+      },
+    });
+    expect(result.current.remoteRunEvents.map((event) => event.offset)).toEqual([8, 4, 9]);
+
+    const stableAssignments = result.current.remoteRunAssignments;
+    act(() => result.current.handleRunEvents([spawnedEvent(9, 'se-2', 'retry', 'low')]));
+    expect(result.current.remoteRunAssignments).toBe(stableAssignments);
+  });
+
+  it('retains an assignment after its spawn row is evicted from the activity window', async () => {
+    const { result } = await mount(mirror());
+    const laterEvents = Array.from({ length: 501 }, (_, index) =>
+      runEvent({ offset: index + 2 }),
+    );
+
+    act(() => {
+      result.current.handleRunEvents([
+        spawnedEvent(1, 'se-1', 'hermes', null),
+        ...laterEvents,
+      ]);
+    });
+
+    expect(result.current.remoteRunEvents).toHaveLength(500);
+    expect(result.current.remoteRunEvents[0]?.offset).toBe(3);
+    expect(result.current.remoteRunAssignments['se-1']).toMatchObject({
+      agentKind: 'hermes',
+      effort: null,
+      offset: 1,
+    });
+  });
+
+  it('isolates accumulated events and assignments when the remote run changes', async () => {
+    const reload = vi.fn();
+    remoteRunForFeature.mockImplementation(async (featureId) =>
+      featureId === 'f1'
+        ? mirror()
+        : mirror({ feature_id: featureId, run_id: 'r2' }),
+    );
+    const { result, rerender } = renderHook(
+      ({ featureId }) =>
+        useRemoteRun({ featureId, reload, upsertBootstrapPhase: () => {} }),
+      { initialProps: { featureId: 'f1' } },
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    act(() => result.current.handleRunEvents([spawnedEvent(1, 'se-1', 'opencode', 'max')]));
+
+    rerender({ featureId: 'f2' });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.remoteRunEvents).toEqual([]);
+    expect(result.current.remoteRunAssignments).toEqual({});
   });
 });

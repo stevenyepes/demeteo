@@ -285,6 +285,7 @@ pub fn build_core_context(
         features_repo.clone(),
         sequence_resume_repo.clone(),
         threads_repo.clone(),
+        run_events_repo.clone(),
         exec_inner.clone(),
     ));
 

@@ -3,6 +3,7 @@ use crate::domain::models::{
     EffortLevel, Feature, GateDecision, SequenceState, StepAttempt, StepExecution,
 };
 use crate::error::AppError;
+use crate::ports::run_events::RunEvent;
 use crate::ports::step_executor::SyncOutcomeView;
 use crate::state::AppContext;
 use tauri::State;
@@ -162,6 +163,17 @@ pub async fn step_list_for_run(
 ) -> Result<Vec<StepExecution>, AppError> {
     ctx.run_view
         .steps(&FeatureId::from(feature_id))
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn run_events_since(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+    from_offset: i64,
+) -> Result<Vec<RunEvent>, AppError> {
+    ctx.run_view
+        .run_events_since(&FeatureId::from(feature_id), from_offset)
         .map_err(AppError::from)
 }
 

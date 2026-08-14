@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AppView, StepExecution } from '../../types';
 import { usePersistedPref } from '../../hooks/usePersistedPref';
 import { useRunEvents } from '../../hooks/useRunEvents';
 import { getFeatureWorkflowGraph } from '../../lib/featureDetail';
+import type { RunEventAssignments } from '../../lib/runEventAssignments';
 import { runViewModePref } from '../../lib/uiPrefs';
 import { replayCone, descendantIds } from '../canvas/graphOps';
 import type { WorkflowDefinitionV2 } from '../canvas/types';
@@ -28,8 +29,17 @@ export function useRunGraph(input: {
   selectedNodeId: string | null;
   /** Select the node, or clear the selection when it is already the one shown. */
   toggleNode: (nodeId: string) => void;
+  detachedAssignments: RunEventAssignments | null;
 }) {
-  const { featureId, featureTitle, steps, navigate, startReplay, toggleNode } = input;
+  const {
+    featureId,
+    featureTitle,
+    steps,
+    navigate,
+    startReplay,
+    toggleNode,
+    detachedAssignments,
+  } = input;
   /** Graph first: Phase 2 gives both surfaces the same inspector, which was the
    *  parity the timeline default was waiting on (UI_REDESIGN_PLAN §7,
    *  PRD §6.1). `canShowGraph` still gates it, so a run with no definition
@@ -44,7 +54,35 @@ export function useRunGraph(input: {
   // Single run-event consumer both run-mode surfaces share: the canvas overlay
   // reads node status from here, derived from the same `steps` snapshot the
   // timeline renders (plus failure classes from the `run_events` stream, P1.13).
-  const { statusByNode: runStatusByNode, events: localRunEvents } = useRunEvents(featureId, steps);
+  const {
+    statusByNode: localStatusByNode,
+    events: localRunEvents,
+    assignments: localAssignments,
+  } = useRunEvents(featureId, steps);
+  const selectedAssignments = detachedAssignments ?? localAssignments;
+  const { runStatusByNode, runAssignments } = useMemo(() => {
+    const statuses = Object.fromEntries(
+      Object.entries(localStatusByNode).map(([nodeId, status]) => {
+        const { agentKind: _agentKind, effort: _effort, ...baseStatus } = status;
+        const assignment = status.stepExecutionId
+          ? selectedAssignments[status.stepExecutionId]
+          : undefined;
+        return [
+          nodeId,
+          assignment
+            ? { ...baseStatus, agentKind: assignment.agentKind, effort: assignment.effort }
+            : baseStatus,
+        ];
+      }),
+    );
+    const assignments: RunEventAssignments = {};
+    for (const status of Object.values(statuses)) {
+      if (!status.stepExecutionId) continue;
+      const assignment = selectedAssignments[status.stepExecutionId];
+      if (assignment) assignments[status.stepExecutionId] = assignment;
+    }
+    return { runStatusByNode: statuses, runAssignments: assignments };
+  }, [localStatusByNode, selectedAssignments]);
 
   // Load the pinned version's v2 graph once per feature id — it's immutable
   // for the run's lifetime (runs pin their version forever, PRD §2), so a
@@ -121,6 +159,7 @@ export function useRunGraph(input: {
     canShowGraph,
     graphMode,
     runStatusByNode,
+    runAssignments,
     localRunEvents,
     onNodeActivate,
     startReplayFromInspector,

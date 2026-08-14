@@ -4,6 +4,8 @@ import {
 } from 'lucide-react';
 import type { StepExecution } from '../../types';
 import type { DensityClasses } from '../../lib/density';
+import type { EffortLevel } from '../../lib/effortLevels';
+import { assignmentEffortLabel } from '../../lib/runEventAssignments';
 import { TONE_CHIP } from '../../lib/runStatus';
 import { StepMetrics } from './StepMetrics';
 import { humanizeStepId } from './stepIdentity';
@@ -16,6 +18,8 @@ interface StepCardProps {
   isSelected: boolean;
   cardRef: (el: HTMLDivElement | null) => void;
   density: DensityClasses;
+  agentKind?: string | null;
+  effort?: EffortLevel | null;
   onSelect: (stepExecutionId: string) => void;
   onDecideGate: (stepExecutionId: string) => void;
 }
@@ -27,6 +31,8 @@ function StepCardInner({
   isSelected,
   cardRef,
   density,
+  agentKind,
+  effort,
   onSelect,
   onDecideGate,
 }: StepCardProps) {
@@ -52,6 +58,10 @@ function StepCardInner({
 
   const selectSelf = useCallback(() => onSelect(step.id), [onSelect, step.id]);
   const decideGate = useCallback(() => onDecideGate(step.id), [onDecideGate, step.id]);
+  const observedAgent =
+    typeof agentKind === 'string' && agentKind.trim().length > 0 ? agentKind : null;
+  const effortLabel =
+    observedAgent && effort !== undefined ? assignmentEffortLabel(effort) : null;
 
   return (
     <li className="relative group">
@@ -99,6 +109,36 @@ function StepCardInner({
               <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono shrink-0">
                 {step.step_kind}
               </span>
+              {observedAgent && effortLabel && (
+                <span
+                  role="group"
+                  aria-label={`Actual assignment: Agent: ${observedAgent}; Effective effort: ${effortLabel}`}
+                  className="flex min-w-0 flex-wrap items-center gap-1 font-mono text-[9px]"
+                >
+                  <span
+                    role="group"
+                    aria-label={`Agent: ${observedAgent}`}
+                    title={`Agent: ${observedAgent}`}
+                    className="flex min-w-0 max-w-[180px] items-center gap-1 rounded border border-slate-600/40 bg-slate-700/20 px-1.5 py-0.5 text-slate-300"
+                  >
+                    <span className="shrink-0 text-slate-400" aria-hidden>
+                      Agent
+                    </span>
+                    <span className="truncate">{observedAgent}</span>
+                  </span>
+                  <span
+                    role="group"
+                    aria-label={`Effective effort: ${effortLabel}`}
+                    title={`Effective effort: ${effortLabel}`}
+                    className="flex min-w-0 items-center gap-1 rounded border border-slate-600/40 bg-slate-700/20 px-1.5 py-0.5 text-slate-300"
+                  >
+                    <span className="shrink-0 text-slate-400" aria-hidden>
+                      Effort
+                    </span>
+                    <span>{effortLabel}</span>
+                  </span>
+                </span>
+              )}
               {(step.iteration_count ?? 0) > 0 && (
                 <span
                   className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono"
