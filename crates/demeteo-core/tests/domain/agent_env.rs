@@ -73,3 +73,22 @@ fn nothing_beyond_the_two_is_taken_from_the_desktop() {
     });
     assert_eq!(names(&env), ["SHELL", "TMPDIR"]);
 }
+
+/// The pin applies where the declaration it defends is load-bearing, and
+/// nowhere else. Both halves matter: dropped on Windows, the Windows block
+/// claims a shell the harness may not have; kept off Windows, Demeteo removes a
+/// tool the user opted into on a platform with no claim to defend.
+#[test]
+fn a_shell_pin_reaches_windows_and_no_other_platform() {
+    use crate::domain::agent_env::pinned_shell_env;
+
+    const PINS: &[(&str, &str)] = &[("CLAUDE_CODE_USE_POWERSHELL_TOOL", "0")];
+
+    assert_eq!(pinned_shell_env(Some(Platform::Windows), PINS), PINS);
+    for elsewhere in [Some(Platform::Linux), Some(Platform::MacOS), None] {
+        assert!(
+            pinned_shell_env(elsewhere, PINS).is_empty(),
+            "{elsewhere:?} has no declaration to defend"
+        );
+    }
+}

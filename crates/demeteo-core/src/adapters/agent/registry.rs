@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::domain::models::{Availability, EffortLevel};
+use crate::domain::models::{Availability, EffortLevel, WindowsAgentShell};
 use crate::ports::agent_runtime::{AgentContext, AgentRuntime, AgentSession, AgentStartError};
 
 /// Thread-id-keyed registry of live agent sessions. Owns the lazy lifecycle:
@@ -145,6 +145,18 @@ impl AgentRegistry {
         self.runtime_for(kind)
             .map(|r| r.capabilities().effort_levels)
             .unwrap_or(&[])
+    }
+
+    /// The interpreter `kind` runs agent-authored commands under on Windows.
+    ///
+    /// An unrecognised kind answers
+    /// [`Unknown`](crate::domain::models::WindowsAgentShell::Unknown) rather
+    /// than a default, on the same reasoning as the variant itself: a legacy
+    /// stored kind is precisely the case where nobody has checked.
+    pub fn windows_agent_shell_for(&self, kind: &str) -> WindowsAgentShell {
+        self.runtime_for(kind)
+            .map(|r| r.capabilities().windows_agent_shell)
+            .unwrap_or(WindowsAgentShell::Unknown)
     }
 
     pub fn runtimes(&self) -> &[Arc<dyn AgentRuntime>] {

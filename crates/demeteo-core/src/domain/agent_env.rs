@@ -64,6 +64,32 @@ pub fn inherited_agent_env(
         .collect()
 }
 
+/// The env a harness pins to make its declared
+/// [`WindowsAgentShell`](crate::domain::models::WindowsAgentShell) true rather
+/// than left to the harness's own default, narrowed to the platform where that
+/// declaration means anything.
+///
+/// The narrowing is the whole function. A pin like claude-code's
+/// `CLAUDE_CODE_USE_POWERSHELL_TOOL=0` reads as Windows-shaped and is not: that
+/// tool is opt-in on Linux and macOS too, so an unconditional pin silently
+/// removes it from Demeteo's agents for a user who deliberately opted in. On
+/// Windows the override is the point — the platform block claims Git Bash and
+/// the harness ships the alternative on a progressive rollout. Off it, there is
+/// no claim to defend and nothing to override.
+///
+/// `None` pins nothing, on the same rule as
+/// [`AgentContext::platform`](crate::ports::agent_runtime::AgentContext::platform):
+/// an unnamed OS is not a POSIX one, and it is not a Windows one either.
+pub fn pinned_shell_env(
+    target: Option<Platform>,
+    pins: &'static [(&'static str, &'static str)],
+) -> &'static [(&'static str, &'static str)] {
+    match target {
+        Some(Platform::Windows) => pins,
+        Some(Platform::Linux | Platform::MacOS) | None => &[],
+    }
+}
+
 #[cfg(test)]
 #[path = "../../tests/domain/agent_env.rs"]
 mod tests;

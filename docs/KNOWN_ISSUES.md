@@ -91,7 +91,11 @@ commands verbatim. The agent drew the obvious conclusion.
 
 **Shipped fix:** a Windows agent inherits neither variable, and its
 prompt now opens by naming the OS, naming the Git Bash that runs
-those commands for it, and forbidding it to translate them.
+those commands for it, and forbidding it to translate them. Where the
+harness runs the agent's own commands through something other than
+that bash — codex uses PowerShell — the block also gives it the
+resolved interpreter to wrap a quoted command in unchanged, so the
+prohibition leaves it a way to run the command at all.
 
 **What this does not settle:** the prompt is an instruction, so an
 agent can still ignore it; the correction makes that less likely

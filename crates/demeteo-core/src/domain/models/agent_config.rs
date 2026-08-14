@@ -73,6 +73,40 @@ impl std::fmt::Display for AgentKind {
     }
 }
 
+/// Which interpreter runs a command the *agent itself* composes, on Windows.
+///
+/// Demeteo's own two execution planes are split by authorship, not by OS
+/// (`docs/WINDOWS_PARITY.md`): user-authored bodies run as POSIX under Git for
+/// Windows' bash, and everything Demeteo spawns is argv with no shell. An agent
+/// with a command tool is a third author, and the interpreter behind that tool
+/// is the harness's choice — codex reaches for PowerShell where claude-code
+/// reaches for the same bash Demeteo uses. Nothing Demeteo controls decides it,
+/// which is why it is declared per runtime rather than derived.
+///
+/// It is declared and not probed because the answer is needed while *composing
+/// the first prompt*, before any agent process exists to ask. That makes every
+/// declaration a claim about a third-party binary, so
+/// [`Unknown`](Self::Unknown) is the honest value until someone has watched
+/// that harness run a command on Windows — see `docs/HARNESS_BASELINE.md`.
+/// Guessing costs more than admitting: an agent told the wrong shell composes
+/// commands that fail, and reads the failure as the *project* being broken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowsAgentShell {
+    /// The harness runs the agent's commands through the bash Git for Windows
+    /// installs — the same interpreter Demeteo runs configured commands under,
+    /// so a POSIX body needs no wrapper to be runnable by hand.
+    GitBash,
+    /// The harness runs them through PowerShell, which cannot parse a POSIX
+    /// body: `&&` is a syntax error in Windows PowerShell 5.1, the only one
+    /// Windows ships.
+    PowerShell,
+    /// Nobody has verified this harness on Windows. Distinct from a shell that
+    /// happens to be neither of the above: the prompt must claim nothing about
+    /// syntax, and say only what holds under any interpreter.
+    Unknown,
+}
+
 /// The answer an availability probe gives for one agent kind on one machine.
 ///
 /// [`Unknown`](Self::Unknown) is the whole reason this is not a `bool`. The

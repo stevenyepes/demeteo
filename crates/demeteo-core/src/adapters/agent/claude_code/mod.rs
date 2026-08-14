@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
 use crate::domain::action::ActionKind;
 use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus, Usage};
-use crate::domain::models::{AgentKind, EffortLevel};
+use crate::domain::models::{AgentKind, EffortLevel, WindowsAgentShell};
 use crate::ports::agent_runtime::AgentContext;
 
 /// Parse a Claude Code JSON-lines event into an `AgentEvent`.
@@ -553,6 +553,25 @@ pub fn runtime() -> UnifiedCliRuntime {
             ("DISABLE_AUTOUPDATER", "1"),
             ("DISABLE_NONESSENTIAL_TRAFFIC", "1"),
         ],
+        // Makes the declaration below true rather than predicted: upstream ships
+        // the PowerShell tool progressively *alongside* Bash wherever Git for
+        // Windows is installed, so Demeteo would otherwise be guessing a rollout
+        // cohort. `0` opts out per invocation, the only form §2 allows — the
+        // alternative is writing the user's own `settings.json`.
+        //
+        // Not in `static_env`, which is unconditional: that same tool is opt-in
+        // on Linux and macOS, so an unconditional `0` would take it away from a
+        // user who asked for it there, on a platform with no declaration to
+        // defend.
+        windows_shell_env: &[("CLAUDE_CODE_USE_POWERSHELL_TOOL", "0")],
+        // Git for Windows is *optional* upstream: without it the shell tool is
+        // PowerShell, with it the Bash tool is Git Bash. The condition holds
+        // here because Demeteo requires that same bash for its own lane and
+        // refuses to run without it (`PreflightVerdict::MissingPosixShell`), so
+        // an install that would take the PowerShell branch never reaches a step.
+        // The remaining variable is pinned in `static_env` above, so this is the
+        // one declaration nothing outside Demeteo can move.
+        windows_agent_shell: WindowsAgentShell::GitBash,
     }
 }
 

@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio_stream::Stream;
 
 use crate::domain::agent_event::AgentEvent;
-use crate::domain::models::{Availability, EffortLevel, Platform, SessionInfo};
+use crate::domain::models::{Availability, EffortLevel, Platform, SessionInfo, WindowsAgentShell};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_execution::AgentExecutionPort;
 
@@ -363,6 +363,12 @@ pub struct AgentCapabilities {
     /// declared in Rust, never read back off the wire.
     #[serde(skip_deserializing)]
     pub effort_levels: &'static [EffortLevel],
+    /// The interpreter this harness runs agent-authored commands under on
+    /// Windows, which decides what the platform block may promise about
+    /// command syntax. Read through
+    /// [`AgentRegistry::windows_agent_shell_for`](crate::adapters::agent::registry::AgentRegistry::windows_agent_shell_for);
+    /// the type's own docs carry why it is declared here and not probed.
+    pub windows_agent_shell: WindowsAgentShell,
 }
 
 /// Transport-neutral runtime for a single agent. The runtime takes a binary

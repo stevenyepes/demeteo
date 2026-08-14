@@ -48,6 +48,61 @@ and the prohibition on translating them —
 keying on platform is not the transport branch §2 forbids. A change to which
 interpreter runs a user's script is a change to what that block claims.
 
+The prohibition alone is not enough, because the agent's *own* command tool is a
+third author this two-plane split does not cover. Which interpreter sits behind
+that tool is the harness's choice — codex composes for PowerShell where Claude
+Code runs the same bash Demeteo does — and an agent whose shell cannot parse a
+POSIX body has been forbidden the rewrite without being given an alternative,
+while the shipped workflow templates ask it to run `{{test_command}}` by hand.
+So the block also hands it the resolved interpreter to wrap the body in,
+unchanged. **Wrapping is not translating**: the bytes between the quotes are
+what the conformance suites compare, and only a rewrite changes them.
+
+Each harness declares its shell as an `AgentCapabilities` field, never a `match`
+on the agent kind (AGENTS.md §3). The declaration is a claim about a
+third-party binary that no gate here can check, so `WindowsAgentShell::Unknown`
+is the honest value where upstream gives no stable answer — and it renders a
+block that promises nothing about syntax.
+
+Four of the five are settled from upstream source or documentation:
+
+| harness | shell | what decides it upstream |
+|---|---|---|
+| `codex` | PowerShell | `default_user_shell_from_path` returns PowerShell under `cfg!(windows)` before reading the user's shell — unconditional |
+| `opencode` | PowerShell | `Shell.preferred` takes `$SHELL`, else the head of `[pwsh, powershell, gitbash, COMSPEC]`; Demeteo sends no `SHELL`, so the bash candidate is third and unreachable |
+| `pi` | Git Bash | resolves the two Program Files roots then `bash.exe` on PATH, and raises rather than falling back to a native shell |
+| `claude-code` | Git Bash | Git for Windows is optional upstream (without it the tool is PowerShell), but Demeteo refuses to run without that same bash, so the condition holds |
+| `hermes` | `Unknown` | upstream calls native Windows experimental and directs users to WSL2 |
+
+`claude-code` is the one Demeteo *makes* true rather than predicts. Upstream is
+rolling the PowerShell tool out progressively alongside Bash on installs that
+have Git for Windows, so the declaration would otherwise rest on guessing a
+rollout cohort. `CLAUDE_CODE_USE_POWERSHELL_TOOL=0` is set per invocation, never
+written to the user's own `settings.json`, which §2 forbids.
+
+That pin looks Windows-shaped and is not, which is why it does not ride
+`static_env` with the hygiene switches: the same tool is **opt-in on Linux and
+macOS**, so an unconditional `0` would strip it from Demeteo's agents for a user
+who deliberately enabled it there — on a platform with no declaration to defend.
+`domain::agent_env::pinned_shell_env` owns that narrowing, so it is a
+synchronous decision with a test rather than a condition buried in a spawn path.
+The general rule: a harness switch is only Demeteo's to override where Demeteo
+makes a claim that depends on it.
+
+One thing this does **not** establish is precedence. Upstream documents the
+variable as settable "in your environment or in `settings.json`" without saying
+which wins when they disagree, so a user who set `1` in `settings.json` may or
+may not be overridden by the process env Demeteo sets. Worth an observation on a
+Windows box before anyone treats the pin as absolute.
+
+`opencode` remains a default its own `shell` key can move, and no equivalent
+per-invocation switch exists: `$SHELL` is the only lever, and Demeteo
+deliberately sends none to a Windows agent (`domain/agent_env.rs`) because that
+variable is the loudest false POSIX claim available. So a user who sets that key
+gets a block that is wrong about their syntax. It stays followable regardless —
+the wrapper and the prohibition do not depend on which shell the agent turned
+out to have.
+
 ### Why not two script bodies
 
 fc8d65c's `ScriptVariants { posix, powershell }` does not remove the transport

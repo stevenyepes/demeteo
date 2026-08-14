@@ -36,7 +36,7 @@
 use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
 use crate::domain::action::ActionKind;
 use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus, Usage};
-use crate::domain::models::{AgentKind, EffortLevel};
+use crate::domain::models::{AgentKind, EffortLevel, WindowsAgentShell};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_runtime::{AgentContext, ModelListing};
 
@@ -423,6 +423,11 @@ pub fn runtime() -> UnifiedCliRuntime {
             ("PI_TELEMETRY", "0"),
             ("PI_CACHE_RETENTION", "long"),
         ],
+        // pi resolves Git Bash and nothing else on Windows — the two Program
+        // Files roots, then `bash.exe` on PATH — and raises rather than falling
+        // back to a native shell when it finds none.
+        windows_agent_shell: WindowsAgentShell::GitBash,
+        windows_shell_env: &[],
     }
 }
 

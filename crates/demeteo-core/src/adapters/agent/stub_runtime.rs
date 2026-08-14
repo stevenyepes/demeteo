@@ -140,6 +140,7 @@ impl AgentRuntime for StubRuntime {
             model_listing: None,
             default_model: None,
             effort_levels: &[],
+            windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }
 

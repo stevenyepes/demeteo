@@ -121,7 +121,12 @@ impl ExecutionDriver {
         } else {
             None
         };
-        let prompt = self.build_agent_prompt(ctx, platform, fork_point.as_deref());
+        let prompt = self.build_agent_prompt(
+            ctx,
+            platform,
+            self.registry.windows_agent_shell_for(target.agent_kind),
+            fork_point.as_deref(),
+        );
 
         // Subtask id must include the feature id so two features running on
         // the same project concurrently get distinct worktree directories

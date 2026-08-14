@@ -90,7 +90,9 @@ impl ExecutionDriver {
              - `files` lists what the task is expected to touch. Tasks MAY share files — a later \
              task building on an earlier one's file is normal and expected.\n\
              - `acceptance` is 1–3 binary pass/fail statements; `test_command` is what proves \
-             the task done.\n\
+             the task done. Write it as a POSIX shell body on every platform, whatever shell \
+             your own commands run in: Demeteo executes it through `sh`, and on Windows that \
+             is the bash Git for Windows installs.\n\
              - If no decomposition makes sense (the work is small), return a single task with id \
              `task-1` that does the whole thing.\
              {retry_note_constraint}\
@@ -119,12 +121,22 @@ impl ExecutionDriver {
             None,
         );
 
-        // The planner writes each task's `test_command`, which the task turns
-        // then run verbatim — so a planner that infers Linux hands every task
-        // below it a command the machine will not run.
+        // The planner both runs commands and *writes* them, and the two do not
+        // share an interpreter. This block covers the first: what its own
+        // command tool will execute. The second is covered in the constraints
+        // above, and cannot be covered here — a `test_command` outlives this
+        // turn in a cached plan, and the agent kind that later runs it is
+        // editable between attempts, so the only safe authorship rule is the
+        // one that holds for every consumer.
         let planner_prompt = format!(
             "{}{}",
-            place_platform_context(target.platform, &planner_prompt).prefix,
+            place_platform_context(
+                target.platform,
+                self.registry.windows_agent_shell_for(target.agent_kind),
+                crate::shared::win::quotable_bash_path().as_deref(),
+                &planner_prompt,
+            )
+            .prefix,
             planner_prompt
         );
 

@@ -26,7 +26,7 @@
 use crate::adapters::agent::cli_runtime::{EventParser, UnifiedCliRuntime};
 use crate::domain::action::ActionKind;
 use crate::domain::agent_event::{AgentEvent, StopReason, ToolCallStatus, Usage};
-use crate::domain::models::{AgentKind, EffortLevel, Platform, SandboxSupport};
+use crate::domain::models::{AgentKind, EffortLevel, Platform, SandboxSupport, WindowsAgentShell};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_runtime::AgentContext;
 
@@ -386,6 +386,11 @@ pub fn runtime() -> UnifiedCliRuntime {
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Codex),
         static_env: &[],
+        // `default_user_shell_from_path` returns PowerShell under `cfg!(windows)`
+        // before consulting the user's shell at all, so this is the one
+        // declaration no user configuration can move.
+        windows_agent_shell: WindowsAgentShell::PowerShell,
+        windows_shell_env: &[],
     }
 }
 

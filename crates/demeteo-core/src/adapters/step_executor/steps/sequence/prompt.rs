@@ -88,7 +88,12 @@ impl ExecutionDriver {
             .unwrap_or_else(|| self.base_ctx.get("test_command").to_string());
 
         let acceptance_str = format_acceptance_criteria(&task.acceptance);
-        let platform_placement = place_platform_context(target.platform, template);
+        let platform_placement = place_platform_context(
+            target.platform,
+            self.registry.windows_agent_shell_for(target.agent_kind),
+            crate::shared::win::quotable_bash_path().as_deref(),
+            template,
+        );
 
         // A sequence step implements, so its capability never auto-places the
         // block — only a template naming the token pays for the merge-base,
