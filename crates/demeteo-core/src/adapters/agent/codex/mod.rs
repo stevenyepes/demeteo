@@ -390,6 +390,7 @@ pub fn runtime() -> UnifiedCliRuntime {
         // before consulting the user's shell at all, so this is the one
         // declaration no user configuration can move.
         windows_agent_shell: WindowsAgentShell::PowerShell,
+        windows_shell_env: &[],
     }
 }
 

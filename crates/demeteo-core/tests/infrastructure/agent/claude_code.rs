@@ -454,12 +454,30 @@ fn a_git_bash_declaration_pins_the_tool_that_would_contradict_it() {
     if runtime.capabilities().windows_agent_shell == WindowsAgentShell::GitBash {
         assert!(
             runtime
-                .static_env
+                .windows_shell_env
                 .contains(&("CLAUDE_CODE_USE_POWERSHELL_TOOL", "0")),
             "declared Git Bash but left the PowerShell tool to a rollout: {:?}",
-            runtime.static_env
+            runtime.windows_shell_env
         );
     }
+}
+
+/// The pin reads as Windows-shaped and is not: the same tool is opt-in on Linux
+/// and macOS, so shipping it unconditionally would strip it from Demeteo's
+/// agents for a user who deliberately enabled it there. `static_env` is applied
+/// on every spawn regardless of platform, which is exactly why this must not
+/// live in it.
+#[test]
+fn the_powershell_opt_out_never_rides_a_non_windows_spawn() {
+    let runtime = crate::adapters::agent::claude_code::runtime();
+    assert!(
+        !runtime
+            .static_env
+            .iter()
+            .any(|(k, _)| *k == "CLAUDE_CODE_USE_POWERSHELL_TOOL"),
+        "an unconditional pin reaches Linux and macOS: {:?}",
+        runtime.static_env
+    );
 }
 
 #[test]

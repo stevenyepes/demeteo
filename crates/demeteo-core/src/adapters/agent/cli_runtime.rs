@@ -108,6 +108,12 @@ pub struct UnifiedCliRuntime {
     /// Declared beside the argv builder because that is the code that knows
     /// how this harness invokes anything at all.
     pub windows_agent_shell: crate::domain::models::WindowsAgentShell,
+    /// Env that makes [`windows_agent_shell`](Self::windows_agent_shell) true
+    /// instead of probable, applied only where that declaration is load-bearing
+    /// — see [`pinned_shell_env`](crate::domain::agent_env::pinned_shell_env),
+    /// which owns the narrowing. `&[]` for a harness whose Windows shell is not
+    /// switchable, or whose declaration is `Unknown` and has nothing to pin.
+    pub windows_shell_env: &'static [(&'static str, &'static str)],
 }
 
 #[async_trait]
@@ -180,6 +186,7 @@ impl AgentRuntime for UnifiedCliRuntime {
         let perm_env = self.perm_env;
         let effort_env = self.effort_env;
         let static_env = self.static_env;
+        let windows_shell_env = self.windows_shell_env;
 
         Box::pin(async move {
             // Translate the abstract permission profile into this agent's
@@ -189,6 +196,10 @@ impl AgentRuntime for UnifiedCliRuntime {
             // reading the same `ctx.permissions`.
             let mut ctx = ctx;
             apply_static_env(&mut ctx.env, static_env);
+            apply_static_env(
+                &mut ctx.env,
+                crate::domain::agent_env::pinned_shell_env(ctx.platform, windows_shell_env),
+            );
             ctx.env.extend((perm_env)(&ctx.permissions));
             // Same shape for effort. claude-code needs this even though it
             // also takes `--effort`: `CLAUDE_CODE_EFFORT_LEVEL` outranks the

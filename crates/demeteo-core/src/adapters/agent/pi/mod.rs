@@ -427,6 +427,7 @@ pub fn runtime() -> UnifiedCliRuntime {
         // Files roots, then `bash.exe` on PATH — and raises rather than falling
         // back to a native shell when it finds none.
         windows_agent_shell: WindowsAgentShell::GitBash,
+        windows_shell_env: &[],
     }
 }
 

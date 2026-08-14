@@ -77,9 +77,23 @@ Four of the five are settled from upstream source or documentation:
 `claude-code` is the one Demeteo *makes* true rather than predicts. Upstream is
 rolling the PowerShell tool out progressively alongside Bash on installs that
 have Git for Windows, so the declaration would otherwise rest on guessing a
-rollout cohort. `CLAUDE_CODE_USE_POWERSHELL_TOOL=0` rides on every spawn
-through `static_env` — per-invocation, never written to the user's own
-`settings.json`, which §2 forbids.
+rollout cohort. `CLAUDE_CODE_USE_POWERSHELL_TOOL=0` is set per invocation, never
+written to the user's own `settings.json`, which §2 forbids.
+
+That pin looks Windows-shaped and is not, which is why it does not ride
+`static_env` with the hygiene switches: the same tool is **opt-in on Linux and
+macOS**, so an unconditional `0` would strip it from Demeteo's agents for a user
+who deliberately enabled it there — on a platform with no declaration to defend.
+`domain::agent_env::pinned_shell_env` owns that narrowing, so it is a
+synchronous decision with a test rather than a condition buried in a spawn path.
+The general rule: a harness switch is only Demeteo's to override where Demeteo
+makes a claim that depends on it.
+
+One thing this does **not** establish is precedence. Upstream documents the
+variable as settable "in your environment or in `settings.json`" without saying
+which wins when they disagree, so a user who set `1` in `settings.json` may or
+may not be overridden by the process env Demeteo sets. Worth an observation on a
+Windows box before anyone treats the pin as absolute.
 
 `opencode` remains a default its own `shell` key can move, and no equivalent
 per-invocation switch exists: `$SHELL` is the only lever, and Demeteo

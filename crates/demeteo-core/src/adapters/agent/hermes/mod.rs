@@ -198,6 +198,7 @@ pub fn runtime() -> UnifiedCliRuntime {
         // so there is no stable answer here to declare — under WSL the agent is
         // on Linux and this never renders anyway.
         windows_agent_shell: WindowsAgentShell::Unknown,
+        windows_shell_env: &[],
     }
 }
 

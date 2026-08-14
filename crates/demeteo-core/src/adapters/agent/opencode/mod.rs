@@ -484,6 +484,7 @@ impl OpencodeCliRuntime {
                 // the bash candidate is third and unreachable in practice.
                 // A user's own `opencode.json` `shell` still wins over both.
                 windows_agent_shell: WindowsAgentShell::PowerShell,
+                windows_shell_env: &[],
             },
         }
     }
