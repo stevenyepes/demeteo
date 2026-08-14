@@ -549,17 +549,26 @@ pub fn runtime() -> UnifiedCliRuntime {
         // mid-fleet version drift hazard) and no non-essential background
         // traffic. Both are documented Claude Code env switches; callers
         // can override via `ctx.env`.
+        //
+        // The third is not hygiene but the `windows_agent_shell` declaration
+        // below, made true rather than assumed. Upstream is rolling the
+        // PowerShell tool out progressively *alongside* Bash on installs that
+        // have Git for Windows, so which one a given machine gets is a decision
+        // Demeteo would otherwise be reading a rollout cohort to predict. `0`
+        // opts out per invocation, which is the only form §2 allows — the
+        // alternative is writing to the user's own `settings.json`.
         static_env: &[
             ("DISABLE_AUTOUPDATER", "1"),
             ("DISABLE_NONESSENTIAL_TRAFFIC", "1"),
+            ("CLAUDE_CODE_USE_POWERSHELL_TOOL", "0"),
         ],
         // Git for Windows is *optional* upstream: without it the shell tool is
         // PowerShell, with it the Bash tool is Git Bash. The condition holds
         // here because Demeteo requires that same bash for its own lane and
         // refuses to run without it (`PreflightVerdict::MissingPosixShell`), so
         // an install that would take the PowerShell branch never reaches a step.
-        // The exception is the opt-in `CLAUDE_CODE_USE_POWERSHELL_TOOL`, which
-        // Demeteo does not set either way.
+        // The remaining variable is pinned in `static_env` above, so this is the
+        // one declaration nothing outside Demeteo can move.
         windows_agent_shell: WindowsAgentShell::GitBash,
     }
 }

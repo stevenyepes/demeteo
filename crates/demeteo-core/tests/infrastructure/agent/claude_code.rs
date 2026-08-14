@@ -440,6 +440,28 @@ fn runtime_pins_headless_hygiene_env() {
     );
 }
 
+/// A declaration and the switch that makes it true are two facts that drift
+/// apart silently. Upstream ships the PowerShell tool *alongside* Bash on a
+/// progressive rollout, so an unpinned install decides this for itself and the
+/// Windows platform block would then describe a shell the agent does not have.
+/// Declaring `GitBash` without the opt-out is the mistake this catches.
+#[test]
+fn a_git_bash_declaration_pins_the_tool_that_would_contradict_it() {
+    use crate::domain::models::WindowsAgentShell;
+    use crate::ports::agent_runtime::AgentRuntime;
+
+    let runtime = crate::adapters::agent::claude_code::runtime();
+    if runtime.capabilities().windows_agent_shell == WindowsAgentShell::GitBash {
+        assert!(
+            runtime
+                .static_env
+                .contains(&("CLAUDE_CODE_USE_POWERSHELL_TOOL", "0")),
+            "declared Git Bash but left the PowerShell tool to a rollout: {:?}",
+            runtime.static_env
+        );
+    }
+}
+
 #[test]
 fn init_with_full_toolset_is_not_bare() {
     // Read tools are never denied by demeteo, so a non-bare init always

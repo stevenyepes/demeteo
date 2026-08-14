@@ -74,11 +74,20 @@ Four of the five are settled from upstream source or documentation:
 | `claude-code` | Git Bash | Git for Windows is optional upstream (without it the tool is PowerShell), but Demeteo refuses to run without that same bash, so the condition holds |
 | `hermes` | `Unknown` | upstream calls native Windows experimental and directs users to WSL2 |
 
-Two of these are defaults a user's own config can still move — opencode's
-`shell` key and claude-code's `CLAUDE_CODE_USE_POWERSHELL_TOOL`. Demeteo sets
-neither, so a user who changes one gets a block that is wrong about their
-syntax. It stays followable regardless: the wrapper and the prohibition do not
-depend on which shell the agent turned out to have.
+`claude-code` is the one Demeteo *makes* true rather than predicts. Upstream is
+rolling the PowerShell tool out progressively alongside Bash on installs that
+have Git for Windows, so the declaration would otherwise rest on guessing a
+rollout cohort. `CLAUDE_CODE_USE_POWERSHELL_TOOL=0` rides on every spawn
+through `static_env` — per-invocation, never written to the user's own
+`settings.json`, which §2 forbids.
+
+`opencode` remains a default its own `shell` key can move, and no equivalent
+per-invocation switch exists: `$SHELL` is the only lever, and Demeteo
+deliberately sends none to a Windows agent (`domain/agent_env.rs`) because that
+variable is the loudest false POSIX claim available. So a user who sets that key
+gets a block that is wrong about their syntax. It stays followable regardless —
+the wrapper and the prohibition do not depend on which shell the agent turned
+out to have.
 
 ### Why not two script bodies
 
