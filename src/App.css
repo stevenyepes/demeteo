@@ -397,67 +397,6 @@ body {
   background-color: transparent;
 }
 
-/* Workspace tab bar */
-.tabs-bar {
-  height: 42px;
-  background: rgba(13, 15, 20, 0.8);
-  border-bottom: 1px solid var(--border-glass);
-  display: flex;
-  align-items: flex-end;
-  padding-left: 10px;
-  overflow-x: auto;
-  gap: 4px;
-}
-
-.tab {
-  height: 34px;
-  padding: 0 16px;
-  background: rgba(18, 22, 30, 0.4);
-  border: 1px solid var(--border-glass);
-  border-bottom: none;
-  border-top-left-radius: 6px;
-  border-top-right-radius: 6px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  transition: all var(--transition-fast);
-  max-width: 180px;
-  white-space: nowrap;
-  position: relative;
-}
-
-.tab:hover {
-  background: rgba(28, 34, 46, 0.5);
-  color: var(--text-primary);
-}
-
-.tab.active {
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  border-color: var(--border-glass);
-  border-top: 2px solid var(--accent-cyan);
-}
-
-.tab-close {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  font-size: 10px;
-  color: var(--text-muted);
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-
-.tab-close:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary);
-}
-
 /* Workspace Panels Split Layout */
 .workspace-content {
   flex: 1;

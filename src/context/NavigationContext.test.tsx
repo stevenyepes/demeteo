@@ -67,6 +67,18 @@ describe('NAVIGATE (push)', () => {
     expect(b.current.kind).toBe('settings');
   });
 
+  // A no-field variant only collapses if `shallowEqualView` lists it. Omit the
+  // case and it falls to the `default: false` arm, which pushes a second copy
+  // of the screen the user is already on and buries the real previous view one
+  // Back press deeper.
+  it('collapses a repeat push of code-review', () => {
+    const a = navigationReducer(home, { type: 'NAVIGATE', view: { kind: 'code-review' } });
+    const b = navigationReducer(a, { type: 'NAVIGATE', view: { kind: 'code-review' } });
+
+    expect(b).toBe(a);
+    expect(b.backStack.map((v) => v.kind)).toEqual(['home']);
+  });
+
   it('collapses an identical detail view but not one with a different gate', () => {
     const detail = detailView('feat-1');
     const a = navigationReducer(home, { type: 'NAVIGATE', view: detail });

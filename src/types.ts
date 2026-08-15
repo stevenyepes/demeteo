@@ -104,6 +104,7 @@ export type AppView =
   | { kind: 'new-project' }
   | { kind: 'create-project' }
   | { kind: 'project-settings' }
+  | { kind: 'code-review' }
   | { kind: 'workflows' }
   | { kind: 'workflow-editor'; workflowId: string | null }
   | { kind: 'providers' }
