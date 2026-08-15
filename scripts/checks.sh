@@ -13,9 +13,23 @@
 #
 # Usage:
 #   scripts/checks.sh                 # run every gate, including commitlint
+#   scripts/checks.sh --skip-commitlint
 #   npm run checks:code               # every gate EXCEPT commitlint — see below
-#   CHECKS_SKIP_COMMITLINT=1 ...      # skip commitlint (CI runs it separately)
+#   CHECKS_SKIP_COMMITLINT=1 ...      # same, via env (what pr-checks.yml sets)
 #   CHECKS_BASE=origin/master ...     # commit range base for commitlint
+#
+# ## Absent is not green
+#
+# A gate that cannot run must fail, and two mechanisms here used to let it pass
+# instead. `npx` resolves a name it cannot find locally by *fetching it from the
+# registry* — `--no-install` has not stopped that since npm 7, and on npm 11 it
+# is silently ignored — so on a checkout with no node_modules the JS gates ran
+# an unpinned tool nobody chose, or a fetch failure whose exit code the caller's
+# pipeline then dropped. And `checks:code` used to reach this script through
+# `cross-env`, so a missing node_modules aborted before gate one with npm's own
+# 127 — which reads as a pass to anything piping the output through `tee`.
+# Hence: no `npx`, node_modules/.bin invoked by path, and the preflight below
+# runs before any gate so an incomplete toolchain is named rather than skipped.
 #
 # Why `checks:code` exists, and who should use it. Commitlint here judges the
 # *range* `origin/master..HEAD`, which is the right gate for a branch a human is
@@ -39,6 +53,40 @@ cd "$ROOT"
 
 step() { printf '\n\033[1;34m==>\033[0m %s\n' "$1"; }
 
+SKIP_COMMITLINT="${CHECKS_SKIP_COMMITLINT:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    --skip-commitlint) SKIP_COMMITLINT=1 ;;
+    *) printf 'unknown argument: %s\n' "$arg" >&2; exit 2 ;;
+  esac
+done
+
+BIN="$ROOT/node_modules/.bin"
+MISSING=""
+
+# `-e` rather than `-x`: on Windows npm writes the extensionless sh shim that
+# bash runs here alongside the .cmd, and Git Bash does not report it executable.
+need_node_bin() { [ -e "$BIN/$1" ] || MISSING="${MISSING}  - node_modules/.bin/$1 — run 'npm ci'"$'\n'; }
+need_host_bin() { command -v "$1" >/dev/null 2>&1 || MISSING="${MISSING}  - $1 — not on PATH ($2)"$'\n'; }
+
+step "Toolchain preflight"
+need_host_bin node "install Node.js"
+need_host_bin cargo "install Rust via rustup"
+need_host_bin rustc "install Rust via rustup"
+need_node_bin tsc
+need_node_bin biome
+need_node_bin vitest
+if [ "$SKIP_COMMITLINT" != "1" ]; then
+  need_host_bin git "install Git"
+  need_node_bin commitlint
+fi
+
+if [ -n "$MISSING" ]; then
+  printf '\n\033[1;31m✖ toolchain incomplete — no gate ran, so nothing was checked\033[0m\n' >&2
+  printf '%s' "$MISSING" >&2
+  exit 1
+fi
+
 HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
 RUNNER_SUPPORTED=1
 if [[ "$HOST_TRIPLE" == *-windows-* ]]; then
@@ -46,7 +94,7 @@ if [[ "$HOST_TRIPLE" == *-windows-* ]]; then
 fi
 
 step "TypeScript type-check (tsc --noEmit)"
-npx tsc --noEmit
+"$BIN/tsc" --noEmit
 
 # The frontend counterpart to `check-doc-refs.sh`: the AGENTS.md §3 rules a
 # compiler cannot see. Chief among them, `noRestrictedImports` denies
@@ -54,7 +102,7 @@ npx tsc --noEmit
 # invoke() raw in a component" is enforced rather than reviewed. biome.jsonc
 # keeps everything else advisory — only an error fails this gate.
 step "Frontend lint (biome check)"
-npx --no-install biome check .
+"$BIN/biome" check .
 
 # The one AGENTS.md §4 rule nothing above can see: a class name is just a string
 # to tsc, to Biome, and to jsdom, and Tailwind emits no rule and no warning for a
@@ -66,7 +114,7 @@ step "Frontend class names (used vs defined)"
 node scripts/check-classes.mjs
 
 step "Frontend tests (vitest run)"
-npx vitest run
+"$BIN/vitest" run
 
 step "Rust format check (cargo fmt --all -- --check)"
 ( cd src-tauri && cargo fmt --all -- --check )
@@ -105,13 +153,13 @@ else
   step "Runner tests — skipped (Linux-only binary; host: $HOST_TRIPLE)"
 fi
 
-if [ "${CHECKS_SKIP_COMMITLINT:-0}" = "1" ]; then
-  step "Commitlint — skipped (CHECKS_SKIP_COMMITLINT=1)"
+if [ "$SKIP_COMMITLINT" = "1" ]; then
+  step "Commitlint — skipped (requested)"
 else
   BASE="${CHECKS_BASE:-origin/master}"
   if git rev-parse --verify --quiet "$BASE" >/dev/null; then
     step "Commitlint ($BASE..HEAD)"
-    npx --no-install commitlint --from "$BASE" --to HEAD --config .commitlintrc.json
+    "$BIN/commitlint" --from "$BASE" --to HEAD --config .commitlintrc.json
   else
     step "Commitlint — skipped ($BASE not found; run 'git fetch origin master')"
   fi
