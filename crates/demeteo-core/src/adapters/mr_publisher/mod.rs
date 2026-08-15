@@ -1,8 +1,8 @@
 //! HTTP-backed [`MrPublisher`] implementation.
 //!
 //! Two providers, both authenticated with the project instance's
-//! PAT (resolved via `AppSettingsRepository::get_provider_instances`
-//! + `Keyring`):
+//! PAT (instance and token both resolved by the sibling `provider`
+//! module):
 //!
 //! - **GitHub**: `POST /repos/{owner}/{repo}/pulls` against `api.github.com`
 //!   (or `<host>/api/v3` for GitHub Enterprise).
@@ -17,19 +17,19 @@
 mod github;
 mod gitlab;
 mod http;
+mod provider;
 mod push;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-#[cfg(feature = "keyring")]
-use keyring::Entry;
 
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{MrInfo, PublishOptions};
 use crate::ports::db::{AppSettingsRepository, FeaturePatch, FeatureRepository, ProjectRepository};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::mr_publisher::MrPublisher;
+use provider::{resolve_pat, resolve_pat_best_effort, resolve_target, MrTarget};
 
 pub use http::{HttpClient, HttpResponse, ReqwestHttp};
 
@@ -154,39 +154,15 @@ impl HttpMrPublisher {
             .into_iter()
             .find(|p| p.id == pid)
             .ok_or_else(|| format!("Project not found: {}", project_id))?;
-        let repos = self.projects.get_repositories_for(&pid)?;
-        let repo = repos
-            .first()
-            .ok_or_else(|| "Project has no repositories configured".to_string())?;
-
-        let provider = self
-            .app_settings
-            .get_provider_instances()?
-            .into_iter()
-            .find(|p| p.host == repo.provider_id.0 || p.id.0 == repo.provider_id.0)
-            .or_else(|| {
-                // Fallback: take the first provider of the matching kind.
-                self.app_settings.get_provider_instances().ok().and_then(|v| {
-                    v.into_iter().find(|p| {
-                        let repo_kind = match repo.provider_id.0.as_str() {
-                            host if host.starts_with("github") => "github",
-                            host if host.starts_with("gitlab") => "gitlab",
-                            _ => "",
-                        };
-                        !repo_kind.is_empty() && p.kind == repo_kind
-                    })
-                })
-            })
-            .ok_or_else(|| {
-                "No provider instance configured for this project. Connect one in Preferences → Providers."
-                    .to_string()
-            })?;
+        let MrTarget {
+            provider,
+            repo_path,
+        } = resolve_target(self.app_settings.as_ref(), self.projects.as_ref(), &pid)?;
 
         let pat = match pat_override {
             Some(p) => p.to_string(),
             None => resolve_pat(&provider.id.0)?,
         };
-        let repo_path = repo.repo_path.clone();
         let feature = self
             .features
             .get(feature_id)?
@@ -297,34 +273,13 @@ impl HttpMrPublisher {
             return Ok("none".to_string());
         }
 
-        // Resolve the project's provider to know which URL shape /
-        // auth header to use. Falls back to URL-shape inference when
-        // no provider is configured (offline / cancelled-installation
-        // project) — `none` is returned so the UI doesn't have to
-        // special-case missing config.
+        // A project with no provider configured (offline / cancelled
+        // installation) is not an error here: the match below reports
+        // `open` so the UI doesn't have to special-case missing config.
         let pid = crate::domain::ids::ProjectId::from(project_id.to_string());
-        let repos = self.projects.get_repositories_for(&pid).ok();
-        let provider = repos
-            .as_ref()
-            .and_then(|rs| rs.first())
-            .and_then(|_r| self.app_settings.get_provider_instances().ok())
-            .and_then(|list| {
-                let repo_kind = match repos
-                    .as_ref()
-                    .and_then(|rs| rs.first())
-                    .map(|r| r.provider_id.0.as_str())
-                    .unwrap_or("")
-                {
-                    h if h.starts_with("github") => "github",
-                    h if h.starts_with("gitlab") => "gitlab",
-                    _ => "",
-                };
-                if repo_kind.is_empty() {
-                    None
-                } else {
-                    list.into_iter().find(|p| p.kind == repo_kind)
-                }
-            });
+        let provider = resolve_target(self.app_settings.as_ref(), self.projects.as_ref(), &pid)
+            .ok()
+            .map(|t| t.provider);
 
         // Pick the HTTP client (test override or production reqwest).
         let http: &dyn HttpClient = match self.http_override.as_ref() {
@@ -332,22 +287,10 @@ impl HttpMrPublisher {
             None => &ReqwestHttp,
         };
 
-        // Resolve the PAT for auth. Without it, private repos return
-        // 401/404 and the code below would silently coerce that to
-        // "open", so merged MRs on private repos are never detected.
-        // `resolve_pat` is best-effort: if the keyring entry is gone
-        // (provider removed / PAT rotated) we still proceed without
-        // auth so public-repo polling keeps working.
-        let pat = provider.as_ref().and_then(|p| match resolve_pat(&p.id.0) {
-            Ok(t) => Some(t),
-            Err(e) => {
-                eprintln!(
-                    "[MrPublisher] could not resolve PAT for provider {}: {}",
-                    p.id.0, e
-                );
-                None
-            }
-        });
+        // Without a PAT, private repos return 401/404 and the match
+        // below coerces that to "open", so merged MRs on private repos
+        // are never detected.
+        let pat = provider.as_ref().and_then(resolve_pat_best_effort);
 
         match (&provider, &pat) {
             (Some(p), Some(token)) if p.kind == "github" => {
@@ -376,23 +319,6 @@ fn extract_number_from_url(url: &str) -> Option<u64> {
     // GitHub: …/pull/123, GitLab: …/-/merge_requests/123
     let s = url.rsplit('/').next()?;
     s.parse::<u64>().ok()
-}
-
-fn resolve_pat(provider_id: &str) -> Result<String, String> {
-    crate::credential_cache::get_or_fetch(provider_id, || {
-        #[cfg(feature = "keyring")]
-        {
-            let entry =
-                Entry::new("demeteo", provider_id).map_err(|e| format!("Keyring error: {}", e))?;
-            entry
-                .get_password()
-                .map_err(|e| format!("Provider PAT not found in keyring: {}", e))
-        }
-        #[cfg(not(feature = "keyring"))]
-        {
-            Err("OS-keyring credential cache is disabled in this build".to_string())
-        }
-    })
 }
 
 fn urlencoded(s: &str) -> String {
