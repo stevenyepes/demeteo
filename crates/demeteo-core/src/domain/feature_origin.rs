@@ -1,12 +1,12 @@
 //! Where a run starts, as one value instead of three derivations. See
 //! [`crate::domain`].
 //!
-//! The starting point used to be `ProjectSettings.worktree_strategy.default_branch`
-//! read separately at each place that needed it: the branch cut in
-//! `adapters/worktree/git_ops/worktree.rs`, the squash base in
+//! Three call sites would otherwise each read
+//! `ProjectSettings.worktree_strategy.default_branch` for themselves: the
+//! branch cut in `adapters/worktree/git_ops/worktree.rs`, the squash base in
 //! `adapters/worktree/git_ops/squash.rs`, and the PR target in
 //! `adapters/mr_publisher/mod.rs`. Three readers of one field is fine while the
-//! answer is always the same field; it stops being fine the moment a run may
+//! answer is always that field; it stops being fine the moment a run may
 //! start somewhere else, because "somewhere else" is several separate answers
 //! — what to fetch, what to cut from, what to name the branch, what the squash
 //! parents onto, and what the run is measured against (its review diff, its PR

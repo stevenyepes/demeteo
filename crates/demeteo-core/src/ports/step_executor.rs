@@ -9,10 +9,9 @@ use serde::Serialize;
 /// Bundled because it travels as a unit from each of the four launch paths —
 /// the Tauri command, the runner, the scheduler, and the create-project
 /// wizard — straight onto the `Feature` row, and none of them make these
-/// choices separately. It was thirteen positional parameters behind
-/// `#[allow(clippy::too_many_arguments)]`, six of them `Option`s, which is a
-/// signature where a caller can transpose two arguments and get a compiling
-/// run that starts with the wrong model.
+/// choices separately. Spelled positionally these are a dozen arguments, six
+/// of them `Option`s: a signature where transposing two of them compiles and
+/// starts the run with the wrong model.
 ///
 /// `Default` is what keeps the non-launching callers honest: a scheduler that
 /// only chooses a project, workflow and title spells exactly that and

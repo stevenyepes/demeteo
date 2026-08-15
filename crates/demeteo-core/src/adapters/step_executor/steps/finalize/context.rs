@@ -53,8 +53,8 @@ pub(crate) struct BranchWork {
 /// run declared itself measured against
 /// ([`diff_base::resolve`](crate::domain::diff_base::resolve)), not the
 /// project's default branch: a run based on anything else would otherwise be
-/// summarised — and squashed — against a range holding every commit its base
-/// is missing.
+/// summarised against a range holding every commit its base is missing — the
+/// agent writing the PR title and body from a diff that is not the PR's.
 pub(crate) struct BranchRange<'a> {
     pub feature_branch: &'a str,
     pub base_branch: &'a str,

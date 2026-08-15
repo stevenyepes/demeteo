@@ -256,14 +256,12 @@ async fn test_squash_feature_branch_collapses_history_preserving_tree() {
 }
 
 /// A run launched on a pull request is cut from that PR's head, and the single
-/// commit it publishes has to sit directly on top of it.
+/// commit it publishes has to sit directly on top of it — the failure that
+/// makes this worth a git-backed test is spelled out on
+/// [`FeatureOrigin::squash_base`](crate::domain::feature_origin::FeatureOrigin::squash_base).
 ///
 /// The base the caller derives is half of what is under test, which is why this
-/// asks [`FeatureOrigin`] for it rather than spelling a ref: handed the branch
-/// the run is *diffed* against — the PR's target, and the project default for
-/// this arm — the merge base lands below the PR author's commits and the squash
-/// collapses their work into the run's one commit. Nothing downstream notices,
-/// because a stacked PR built on that commit still applies.
+/// asks `FeatureOrigin` for it rather than spelling a ref.
 #[tokio::test]
 async fn test_squash_parents_onto_the_ref_the_run_was_cut_from() {
     use crate::domain::feature_origin::FeatureOrigin;

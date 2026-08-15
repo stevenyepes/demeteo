@@ -352,10 +352,9 @@ impl GitOpsHelper {
 
     /// Collapse `<base_ref>..<feature_branch>` into one commit.
     ///
-    /// `base_ref` is the run's own base — [`FeatureOrigin::squash_base`], not
-    /// the project's default branch. Handed the default branch for a run cut
-    /// from somewhere else, the merge base lands below every commit that base
-    /// carries and this collapses them all into the run's one commit.
+    /// `base_ref` is [`FeatureOrigin::squash_base`], where the rationale for
+    /// that revision lives: whatever it names, everything between it and the
+    /// branch tip becomes the one commit this produces.
     ///
     /// [`FeatureOrigin::squash_base`]: crate::domain::feature_origin::FeatureOrigin::squash_base
     pub async fn squash_feature_branch(

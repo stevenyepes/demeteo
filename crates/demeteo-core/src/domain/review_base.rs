@@ -3,10 +3,11 @@
 //! A step that judges work does not need the work *shipped to it* — every step
 //! worktree is cut from the feature branch tip, so the code and its whole
 //! history are already on disk where the agent is standing. What the agent
-//! cannot recover on its own is the **left side of the range**: the commit the
-//! feature left the project's default branch at. `HEAD~1` is one ticket, the
-//! default branch may be called anything (`ProjectSettings.worktree_strategy`
-//! decides, and Demeteo is the only thing that reads it), and `origin/` may not
+//! cannot recover on its own is the **left side of the range**: the commit
+//! where the branch last shared history with the base this run declared itself
+//! measured against ([`diff_base::resolve`](crate::domain::diff_base::resolve)).
+//! `HEAD~1` is one ticket, that base is the project's default branch only for a
+//! run that started there and may be called anything, and `origin/` may not
 //! exist at all. So the orchestrator, which resolves that commit already for
 //! its own diff, says it here instead of leaving the agent to guess.
 //!
@@ -70,7 +71,7 @@ fn reviews_by_capability(capability: StepCapability) -> bool {
 
 /// Decide the placement.
 ///
-/// `fork_point` is `None` when the project configures no default branch or
+/// `fork_point` is `None` when nothing named a base for this run at all or
 /// `git merge-base` could not answer. That case is rendered, not suppressed:
 /// the agent is going to run *some* git command either way, and the difference
 /// between "here is the range" and "work it out from the log" is the difference
@@ -108,9 +109,10 @@ fn review_base_section(fork_point: Option<&str>, branch: &str) -> String {
         Some(sha) => format!(
             "## Reviewing this feature's change\n\
              \n\
-             This feature's work begins at `{sha}` — the commit where `{branch}` left the \
-             project's default branch. Everything after it on this branch is the change \
-             under review, including work committed by earlier steps of this run.\n\
+             This feature's work begins at `{sha}` — the commit where `{branch}` last \
+             shared history with the branch this run is measured against. Everything after \
+             it on this branch is the change under review, including work committed by \
+             earlier steps of this run.\n\
              \n\
              ```\n\
              git diff --name-status {sha}..HEAD    # what changed\n\
@@ -121,8 +123,9 @@ fn review_base_section(fork_point: Option<&str>, branch: &str) -> String {
              \n\
              A bare `git diff` is normally empty here, and that is not a sign that nothing \
              happened: the implementation is committed, not left in the working tree. Use \
-             the range above, and do not substitute a base branch you guessed by name — on \
-             this project it may be called neither `main` nor `master`.\n\
+             the range above, and do not substitute a base branch you guessed by name — \
+             the branch this run is measured against is not always the one this project \
+             defaults to, and it may be called neither `main` nor `master`.\n\
              \n\
              ---\n\
              \n"
@@ -130,9 +133,9 @@ fn review_base_section(fork_point: Option<&str>, branch: &str) -> String {
         None => format!(
             "## Reviewing this feature's change\n\
              \n\
-             The orchestrator could not determine where `{branch}` left the project's \
-             default branch, so it cannot hand you an exact range. Orient yourself from the \
-             log instead:\n\
+             The orchestrator could not determine where `{branch}` diverged from the branch \
+             this run is measured against, so it cannot hand you an exact range. Orient \
+             yourself from the log instead:\n\
              \n\
              ```\n\
              git log --oneline --decorate -n 30\n\

@@ -64,6 +64,21 @@ fn an_unresolved_base_gives_a_procedure_instead_of_a_range() {
     );
 }
 
+/// The block is authoritative text an agent acts on, so it may not describe a
+/// range only one origin produces: a run cut from a pull request head is
+/// measured against what that PR merges into, not against the project default.
+#[test]
+fn neither_rendering_calls_the_left_side_the_default_branch() {
+    for fork_point in [Some(SHA), None] {
+        let block = review_base_section(fork_point, BRANCH);
+        assert!(
+            !block.contains("default branch"),
+            "the left side is this run's base, which is the default branch only \
+             for a run that started there: {block}"
+        );
+    }
+}
+
 #[test]
 fn a_template_naming_the_token_places_the_block_itself() {
     let placed = place_review_base(

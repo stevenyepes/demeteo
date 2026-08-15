@@ -233,11 +233,8 @@ impl ExecutionDriver {
 
         let authored = authored.unwrap_or_else(|| Authored::fallback(&feature.title));
 
-        // ── Squash, onto where the run started rather than onto
-        // `base_branch`. The two are the same branch for a run cut from one,
-        // and for a run cut from a fetched ref they are the PR head and the
-        // branch that PR targets — squashing onto the latter collapses the PR
-        // author's commits into this run's one commit.
+        // Onto where the run started, not onto `base_branch` — where the two
+        // differ, and why it matters, is `FeatureOrigin::squash_base`.
         let squash = self
             .git_ops
             .squash_feature_branch(

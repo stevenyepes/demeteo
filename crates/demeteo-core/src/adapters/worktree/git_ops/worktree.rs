@@ -897,13 +897,21 @@ impl GitOpsHelper {
     /// `branch`'s current tip on each retry, already includes prior
     /// attempts' merged commits and so understates the diff).
     ///
-    /// `refs/remotes/origin/<base_branch>` is tried before the bare name, the
-    /// same order [`squash_feature_branch`](Self::squash_feature_branch)
-    /// uses: a run's base is often a branch this clone has never checked out,
-    /// so the bare name resolves to nothing and the whole review degrades to
-    /// "orient yourself from the log" while still reading as finished. The
-    /// bare name remains as the fallback for a repo with no origin (tests,
-    /// air-gapped clones).
+    /// `refs/remotes/origin/<base_branch>` is tried before the bare name: a
+    /// run's base is often a branch this clone has never checked out, so the
+    /// bare name resolves to nothing and the whole review degrades to "orient
+    /// yourself from the log" while still reading as finished. The bare name
+    /// remains as the fallback for a repo with no origin (tests, air-gapped
+    /// clones).
+    ///
+    /// `base_branch` here is a branch name — [`diff_base::resolve`] answers
+    /// with one or with nothing — so unlike
+    /// [`squash_feature_branch`](Self::squash_feature_branch), which is handed
+    /// [`FeatureOrigin::squash_base`] and so must also accept a fully-qualified
+    /// ref, there is no `refs/` case to skip the remote candidate for.
+    ///
+    /// [`diff_base::resolve`]: crate::domain::diff_base::resolve
+    /// [`FeatureOrigin::squash_base`]: crate::domain::feature_origin::FeatureOrigin::squash_base
     ///
     /// Returns `None` if neither candidate resolves or `git merge-base`
     /// fails (e.g. the two branches share no history) — callers fall

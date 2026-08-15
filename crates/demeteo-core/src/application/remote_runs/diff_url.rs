@@ -31,7 +31,7 @@ fn build_diff_url(
 /// makes the left side of the compare the branch the run declared itself
 /// measured against rather than the project's default. `None` (a mirror from
 /// before the id was recorded, or a feature this database never saw) falls back
-/// to the project default, which is what the link always used to be.
+/// to the project default.
 pub fn resolve_run_diff_url(
     ctx: &AppContext,
     project_id: String,
