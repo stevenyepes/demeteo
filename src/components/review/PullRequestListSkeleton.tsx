@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 
 import { Skeleton } from '../ui/Skeleton';
 
-const ROW_HEIGHT_PX = 96;
+const ROW_HEIGHT_PX = 156;
 const DEFAULT_ROWS = 4;
 
 export interface PullRequestListSkeletonProps {
@@ -15,8 +15,11 @@ export interface PullRequestListSkeletonProps {
  * layer per row is real GPU cost on WebKitGTK, and a surface nobody reads is
  * the wrong place to spend it.
  *
- * `ROW_HEIGHT_PX` stands in for `PullRequestRow`'s three tiers — a two-line
- * title, the mono context line, the timeline — rather than a round number.
+ * `ROW_HEIGHT_PX` stands in for `PullRequestRow`'s four tiers — a two-line
+ * title, the mono context line, the timeline, and the launch footer — rather
+ * than a round number. It is the one number here that has to be maintained by
+ * hand, and the failure is silent: a skeleton short of the real row jumps the
+ * whole list down when the fetch lands, and nothing but an eye reports it.
  */
 export function PullRequestListSkeleton({
   rows = DEFAULT_ROWS,
