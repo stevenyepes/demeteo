@@ -205,20 +205,51 @@ fn only_a_fetched_ref_makes_its_fetch_load_bearing() {
 
 #[test]
 fn a_run_from_the_default_branch_targets_it() {
-    assert_eq!(FeatureOrigin::DefaultBranch.publish_target("main"), "main");
+    assert_eq!(
+        FeatureOrigin::DefaultBranch.publish_target(None, "main"),
+        "main"
+    );
 }
 
 #[test]
 fn a_run_from_a_named_base_targets_that_base() {
-    assert_eq!(branch("release/2.0").publish_target("main"), "release/2.0");
+    assert_eq!(
+        branch("release/2.0").publish_target(None, "main"),
+        "release/2.0"
+    );
 }
 
 #[test]
 fn a_run_from_a_fetched_ref_falls_back_to_the_default_branch() {
     assert_eq!(
-        pull_request(12).publish_target("main"),
+        pull_request(12).publish_target(None, "main"),
         "main",
         "no host accepts a pull request head as a merge target"
+    );
+}
+
+#[test]
+fn a_caller_naming_a_target_outranks_the_origin() {
+    assert_eq!(
+        pull_request(12).publish_target(Some("feature/theirs"), "main"),
+        "feature/theirs",
+        "a run fixing a pull request merges into the branch that request targets"
+    );
+    assert_eq!(
+        branch("release/2.0").publish_target(Some("feature/theirs"), "main"),
+        "feature/theirs"
+    );
+}
+
+#[test]
+fn a_blank_target_is_no_answer() {
+    assert_eq!(
+        branch("release/2.0").publish_target(Some("   "), "main"),
+        "release/2.0"
+    );
+    assert_eq!(
+        FeatureOrigin::DefaultBranch.publish_target(Some(""), "main"),
+        "main"
     );
 }
 
@@ -243,7 +274,7 @@ fn a_run_from_a_fetched_ref_squashes_onto_the_ref_it_was_cut_from() {
     );
     assert_ne!(
         pull_request(12).squash_base("main"),
-        pull_request(12).publish_target("main"),
+        pull_request(12).publish_target(None, "main"),
         "the branch a stacked PR targets is not the commit it is stacked on"
     );
 }

@@ -282,6 +282,10 @@ impl HttpMrPublisher {
             });
 
         let source_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
+        let target_branch = feature.origin.publish_target(
+            options.target_branch.as_deref(),
+            &settings.worktree_strategy.default_branch,
+        );
 
         push::push_feature_branch(
             &self.exec,
@@ -308,7 +312,7 @@ impl HttpMrPublisher {
             host: &provider.host,
             repo_path: &repo_path,
             source_branch: &source_branch,
-            target_branch: settings.worktree_strategy.default_branch.as_str(),
+            target_branch: &target_branch,
             title: &title,
             body: &body,
             draft: options.draft,

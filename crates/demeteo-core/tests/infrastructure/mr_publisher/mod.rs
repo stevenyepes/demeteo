@@ -1,8 +1,10 @@
 use super::*;
 
 mod list;
+mod target_branch;
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// An [`HttpClient`] that answers only what it was told to answer.
 ///
@@ -12,13 +14,28 @@ use std::collections::HashMap;
 /// asserting a default. Here a wrong URL fails loudly and names itself.
 pub struct FakeHttpClient {
     replies: HashMap<String, (u16, String, Vec<(String, String)>)>,
+    posted: Mutex<Vec<(String, serde_json::Value)>>,
 }
 
 impl FakeHttpClient {
     pub fn new() -> Self {
         Self {
             replies: HashMap::new(),
+            posted: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The body of the last POST to `url`, which is the only place a caller's
+    /// choice of target branch becomes observable: both providers read it from
+    /// the payload, and a publisher that dropped it still POSTs to this URL.
+    pub fn posted_to(&self, url: &str) -> Option<serde_json::Value> {
+        self.posted
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(u, _)| u == url)
+            .map(|(_, body)| body.clone())
     }
 
     /// Answer `url` with this status and body, and no headers.
@@ -51,8 +68,12 @@ impl HttpClient for FakeHttpClient {
         &self,
         url: &str,
         _headers: &[(String, String)],
-        _body: &serde_json::Value,
+        body: &serde_json::Value,
     ) -> Result<HttpResponse, String> {
+        self.posted
+            .lock()
+            .unwrap()
+            .push((url.to_string(), body.clone()));
         self.get_json(url, &[]).await
     }
 

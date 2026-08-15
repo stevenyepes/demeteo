@@ -273,8 +273,23 @@ impl FeatureOrigin {
     }
 
     /// What a PR opened by this run targets.
-    pub fn publish_target(&self, default_branch: &str) -> String {
-        self.base_branch(None).unwrap_or(default_branch).to_string()
+    ///
+    /// `requested` is the publishing caller's own answer
+    /// ([`PublishOptions::target_branch`](crate::domain::models::PublishOptions)),
+    /// and it outranks the origin because the two answer different questions: a
+    /// run launched to fix a pull request is cut from that request's head and
+    /// must open against the branch that request merges into, which is neither
+    /// its own start point nor the project default.
+    ///
+    /// A blank request is not an answer — a PR targeting `""` is refused by
+    /// both providers with a message about a field the user never filled in.
+    pub fn publish_target(&self, requested: Option<&str>, default_branch: &str) -> String {
+        requested
+            .map(str::trim)
+            .filter(|b| !b.is_empty())
+            .or_else(|| self.base_branch(None))
+            .unwrap_or(default_branch)
+            .to_string()
     }
 
     /// The revision `finalize` collapses the run's commits onto — the point

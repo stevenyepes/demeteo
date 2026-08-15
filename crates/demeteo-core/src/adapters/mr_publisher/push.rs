@@ -162,7 +162,7 @@ fn credential_helper() -> String {
 ///
 /// `GCM_INTERACTIVE`/`GCM_GUI_PROMPT` are belt-and-braces for the same reason
 /// the reset exists — they matter only if a GCM survives it.
-fn push_request(
+pub(super) fn push_request(
     target_dir: &str,
     source_branch: &str,
     remote_user: &str,
