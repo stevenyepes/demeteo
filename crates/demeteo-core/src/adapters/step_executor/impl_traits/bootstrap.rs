@@ -5,7 +5,7 @@ use crate::domain::feature_origin::BranchCut;
 use crate::domain::ids::FeatureId;
 use crate::domain::step_seed::seed_step_executions;
 use crate::paths;
-use crate::ports::db::{FeaturePatch, StepExecutionPatch};
+use crate::ports::db::{FeaturePatch, FeatureRepository, StepExecutionPatch};
 use crate::ports::notification::DomainEvent;
 
 use super::super::DagStepExecutor;
@@ -158,9 +158,8 @@ impl DagStepExecutor {
     /// `git pull` manually"), so it reaches the UI verbatim rather than
     /// summarised into something less actionable.
     ///
-    /// The `resolved_branch` write is what lets every later reader take the
-    /// branch name from the row instead of rebuilding it from a
-    /// `branch_prefix` the user may since have edited.
+    /// Recording the branch is [`record_run_branch`]'s decision, and the one
+    /// write in this bootstrap that is not best-effort.
     async fn cut_run_branch(
         &self,
         feature_id: &FeatureId,
@@ -228,13 +227,10 @@ impl DagStepExecutor {
             self.emit_bootstrap(fid, branch, "failed", Some(e.clone()));
             return Err(e);
         }
-        let _ = self.features.update(
-            feature_id,
-            &FeaturePatch {
-                resolved_branch: Some(Some(ctx.branch_name.clone())),
-                ..Default::default()
-            },
-        );
+        if let Err(e) = record_run_branch(self.features.as_ref(), feature_id, &ctx.branch_name) {
+            self.emit_bootstrap(fid, branch, "failed", Some(e.clone()));
+            return Err(e);
+        }
         self.emit_bootstrap(fid, branch, "completed", None);
         Ok(())
     }
@@ -316,3 +312,37 @@ impl DagStepExecutor {
         Ok(())
     }
 }
+
+/// Write the branch the cut created onto the feature row.
+///
+/// The only write in the bootstrap whose failure stops the run, because it is
+/// the one every later reader of the branch depends on:
+/// [`Feature::run_branch`](crate::domain::models::Feature::run_branch) answers
+/// from this column and falls back to `{branch_prefix}{feature_id}` when it is
+/// NULL. That fallback is the pre-V41 derivation — correct only while nobody
+/// edits `branch_prefix` mid-run, and wrong outright for an origin whose
+/// branch was never derived from the feature id. Discarding the error leaves a
+/// run executing on a branch nothing recorded, and the publisher is free to
+/// push a different one.
+///
+/// A free function over the one port it writes, so the failure is reachable
+/// from a test (AGENTS.md §3).
+pub(crate) fn record_run_branch(
+    features: &dyn FeatureRepository,
+    feature_id: &FeatureId,
+    branch: &str,
+) -> Result<(), String> {
+    features
+        .update(
+            feature_id,
+            &FeaturePatch {
+                resolved_branch: Some(Some(branch.to_string())),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| format!("cut the run's branch {branch} but could not record it: {e}"))
+}
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/step_executor/impl_traits/bootstrap.rs"]
+mod tests;
