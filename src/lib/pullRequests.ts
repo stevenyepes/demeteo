@@ -1,5 +1,5 @@
 /**
- * Open pull requests for a project, and the four ways reading them can fail.
+ * Open pull requests for a project, and the five ways reading them can fail.
  *
  * The failure union is the point of this module. A listing that renders every
  * failure as an empty list tells the user "nothing is waiting for review" when
@@ -11,7 +11,7 @@
  * ## This union is the Rust enum
  *
  * `PullRequestListFailure` is the serde form of `MrListError`
- * (`crates/demeteo-core/src/domain/mr_list_error.rs`) transcribed — same four
+ * (`crates/demeteo-core/src/domain/mr_list_error.rs`) transcribed — same five
  * tags, same field names, same spelling. `list_open_pull_requests` is the one
  * command in the tree whose `Err` is JSON rather than an `AppError` sentence,
  * because a sentence cannot carry which host answered or how long a rate limit
@@ -67,6 +67,7 @@ export interface PullRequestSummary {
 
 export type PullRequestListFailure =
   | { kind: 'no-provider' }
+  | { kind: 'no-credential'; provider: string; host: string; detail: string }
   | { kind: 'unauthorized'; provider: string; host: string; status: number }
   | { kind: 'rate-limited'; host: string; retry_after: number | null }
   | { kind: 'http'; host: string; status: number | null; body: string };
@@ -116,6 +117,13 @@ export function asPullRequestListFailure(err: unknown): PullRequestListFailure {
   switch (payload?.kind) {
     case 'no-provider':
       return { kind: 'no-provider' };
+    case 'no-credential':
+      return {
+        kind: 'no-credential',
+        provider: readString(payload, 'provider') ?? 'provider',
+        host,
+        detail: readString(payload, 'detail') ?? '',
+      };
     case 'unauthorized':
       return {
         kind: 'unauthorized',
@@ -202,11 +210,29 @@ export function describeListFailure(failure: PullRequestListFailure): FailureCop
         body: "This project's repositories aren't mapped to a GitHub or GitLab connection, so Demeteo can't list pull requests. Connect one and it will read them with your token.",
         actions: [{ intent: 'connect', label: 'Connect a provider', primary: true }],
       };
+    case 'no-credential': {
+      const provider = providerName(failure.provider);
+      const detail = truncateDetail(failure.detail);
+      return {
+        title: `No ${provider} token is stored`,
+        // Naming the request that never happened is the point of this copy:
+        // told their token was rejected, a user checks its scopes, and the
+        // scopes are not what failed.
+        body: `Nothing was sent to ${failure.host} — Demeteo found no token for this connection in your keyring, so it never made the request. Reconnect the provider to store one again.${
+          detail ? " This is the keyring's own answer:" : ''
+        }`,
+        detail: detail || undefined,
+        actions: [
+          { intent: 'connect', label: `Reconnect ${provider}`, primary: true },
+          { intent: 'retry', label: 'Retry' },
+        ],
+      };
+    }
     case 'unauthorized': {
       const provider = providerName(failure.provider);
       return {
         title: `Your ${provider} token was rejected`,
-        body: `${failure.host} answered ${failure.status}. The token stored in your keyring is missing, expired, or lost the scope that reads pull requests — reconnect the provider to replace it.`,
+        body: `${failure.host} answered ${failure.status}. The token stored in your keyring is expired, revoked, or lost the scope that reads pull requests — reconnect the provider to replace it.`,
         actions: [
           { intent: 'connect', label: `Reconnect ${provider}`, primary: true },
           { intent: 'retry', label: 'Retry' },

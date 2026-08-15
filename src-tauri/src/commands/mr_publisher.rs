@@ -46,9 +46,9 @@ pub async fn fetch_mr_state(
 /// The `Err` is a JSON-serialized
 /// [`MrListError`](crate::domain::mr_list_error::MrListError), not the
 /// `AppError` sentence every command beside it produces. That module records
-/// why: the four failures differ in what the user should *do*, and the facts
-/// separating them — which host, which status, how long the limit has left —
-/// do not survive a `.to_string()`. `src/lib/pullRequests.ts` decodes it, and
+/// why: the five failures differ in what the user should *do*, and the facts
+/// separating them — which host, which status, whether a request was sent at
+/// all — do not survive a `.to_string()`. `src/lib/pullRequests.ts` decodes it, and
 /// tests on both sides quote the same literals so a rename cannot land on one
 /// side alone.
 #[tauri::command]

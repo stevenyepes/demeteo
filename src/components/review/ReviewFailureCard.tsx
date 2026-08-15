@@ -14,20 +14,22 @@ export interface ReviewFailureCardProps {
  * Which of `runStatus.ts`'s tones each failure speaks in.
  *
  * That vocabulary's own split decides this: amber is "needs a human", ruby is
- * "done badly". Three of these wait on the operator — connect something, replace
- * a token, wait out a quota — and one is the provider having failed at its end,
- * with nothing for the operator to supply. Painting all four amber would flatten
- * exactly the distinction the failure union was built to keep.
+ * "done badly". Four of these wait on the operator — connect something, store a
+ * token, replace a token, wait out a quota — and one is the provider having
+ * failed at its end, with nothing for the operator to supply. Painting all five
+ * amber would flatten exactly the distinction the failure union was built to
+ * keep.
  */
 const TONE: Record<PullRequestListFailure['kind'], RunStatusTone> = {
   'no-provider': 'amber',
+  'no-credential': 'amber',
   unauthorized: 'amber',
   'rate-limited': 'amber',
   http: 'ruby',
 };
 
 /**
- * The four ways the listing can fail, each wearing its own words
+ * The five ways the listing can fail, each wearing its own words
  * (`lib/pullRequests.ts` holds them). This is a card and not a toast because a
  * failure here *is* the page: dismissing it would leave an empty list behind,
  * which is the reading the whole failure union exists to prevent.
@@ -43,7 +45,11 @@ export function ReviewFailureCard({
   // class off it keeps this card and every chip on the same palette without a
   // second table to drift from.
   const border = TONE_CHIP[tone].split(' ').find((c) => c.startsWith('border-')) ?? '';
-  const Icon = failure.kind === 'no-provider' ? PlugZap : AlertTriangle;
+  // The plug is for the two failures where nothing was ever sent — something is
+  // unconnected at this end. The warning triangle is for an answer that came
+  // back and was bad.
+  const nothingSent = failure.kind === 'no-provider' || failure.kind === 'no-credential';
+  const Icon = nothingSent ? PlugZap : AlertTriangle;
 
   return (
     <div

@@ -435,12 +435,17 @@ impl HttpMrPublisher {
             host: &provider.host,
         };
 
-        // A keyring the token is missing from never reaches the provider, but it
-        // fails for the reason `Unauthorized` names and is fixed the same way —
-        // reconnect and a token replaces it. Reporting `NoProvider` here would
-        // send the user to connect one they already have.
-        let pat =
-            resolve_pat(&provider.id.0).map_err(|_| MrListError::unauthorized(target, 401))?;
+        // The keyring is keyed on the provider *id*, while `resolve_provider`
+        // above will match on host or fall back to any instance of the same
+        // kind — so a resolved provider is no evidence that a token for it was
+        // ever stored under that id. `NoProvider` would send the user to
+        // connect one they already have; `Unauthorized` would name a host and a
+        // status for a request that was never sent, which is how a working
+        // token ends up being audited for a failure that happened locally.
+        let pat = resolve_pat(&provider.id.0).map_err(|e| {
+            tracing::warn!(provider = %provider.id.0, error = %e, "no PAT resolved for provider");
+            MrListError::no_credential(target, e)
+        })?;
 
         let request = ListRequest {
             kind: &provider.kind,

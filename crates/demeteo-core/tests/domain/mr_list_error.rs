@@ -135,6 +135,19 @@ fn a_multibyte_body_is_cut_on_a_character_boundary() {
 }
 
 #[test]
+fn a_keyring_answer_is_capped_like_a_provider_body() {
+    // A keyring backend gets no more room to fill the card than a gateway
+    // serving an HTML error page does.
+    let MrListError::NoCredential { detail, .. } =
+        MrListError::no_credential(github(), "x".repeat(5_000))
+    else {
+        panic!("no_credential builds NoCredential");
+    };
+    assert_eq!(detail.chars().count(), BODY_LIMIT + 1);
+    assert!(detail.ends_with('…'));
+}
+
+#[test]
 fn redirects_do_not_coerce_to_success() {
     // 3xx is the status range the sibling `fetch_mr_state` path swallows as
     // `open`; the listing must not inherit that.
@@ -150,6 +163,10 @@ fn serialized_shape_is_the_wire_contract() {
     let json = |e: &MrListError| serde_json::to_string(e).expect("MrListError is serializable");
 
     assert_eq!(json(&MrListError::NoProvider), r#"{"kind":"no-provider"}"#);
+    assert_eq!(
+        json(&MrListError::no_credential(github(), "no entry found")),
+        r#"{"kind":"no-credential","provider":"github","host":"api.github.com","detail":"no entry found"}"#
+    );
     assert_eq!(
         json(&MrListError::Unauthorized {
             provider: "github".into(),

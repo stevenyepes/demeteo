@@ -133,6 +133,26 @@ describe('CodeReviewView', () => {
     expect(screen.queryByText('No open pull requests')).not.toBeInTheDocument();
   });
 
+  it('does not blame the provider for a token that never left the keyring', async () => {
+    backend(() =>
+      Promise.reject(
+        '{"kind":"no-credential","provider":"github","host":"api.github.com","detail":"No matching entry found in secure storage"}',
+      ),
+    );
+    mount();
+
+    const card = await screen.findByTestId('code-review-failure');
+    expect(card).toHaveAttribute('data-failure', 'no-credential');
+    expect(card).toHaveAttribute('data-tone', 'amber');
+    expect(screen.getByText('No GitHub token is stored')).toBeInTheDocument();
+    // The evidence the old `unauthorized` reporting threw away, and the claim it
+    // invented in its place.
+    expect(screen.getByTestId('code-review-failure-detail')).toHaveTextContent(
+      'No matching entry found in secure storage',
+    );
+    expect(screen.queryByText(/answered 401/)).not.toBeInTheDocument();
+  });
+
   it('quotes a provider error instead of paraphrasing it, in the failure tone', async () => {
     backend(() =>
       Promise.reject(
@@ -144,7 +164,7 @@ describe('CodeReviewView', () => {
     expect(await screen.findByTestId('code-review-failure-detail')).toHaveTextContent(
       'upstream unavailable',
     );
-    // A provider that failed at its end is `ruby`; the three the operator can
+    // A provider that failed at its end is `ruby`; the four the operator can
     // act on are amber. Flattening them is the distinction this view exists for.
     expect(screen.getByTestId('code-review-failure')).toHaveAttribute('data-tone', 'ruby');
   });

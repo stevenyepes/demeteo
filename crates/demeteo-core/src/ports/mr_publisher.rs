@@ -51,7 +51,7 @@ pub trait MrPublisher: Send + Sync {
     /// Here a wrong answer is an empty queue, which reads as "nothing needs
     /// review" — so a partial success is a failure, and one repository that
     /// cannot be read fails the whole listing rather than quietly returning the
-    /// rest. [`MrListError`] carries which of the four things went wrong;
+    /// rest. [`MrListError`] carries which of the five things went wrong;
     /// `domain/mr_list_error.rs` holds the reasoning and the wire contract.
     async fn list_open_mrs(
         &self,

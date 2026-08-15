@@ -1,4 +1,4 @@
-//! Why a pull-request listing came back with nothing, in the four shapes the
+//! Why a pull-request listing came back with nothing, in the five shapes the
 //! user can act on differently. See [`crate::domain`].
 //!
 //! A listing has one failure mode that is worse than all the others put
@@ -18,7 +18,7 @@
 //!
 //! This enum crosses IPC as its serde form — `{"kind": "unauthorized", …}`,
 //! kebab-case, fields flattened alongside the tag — and `src/lib/pullRequests.ts`
-//! declares the same four shapes to receive it. That is a deliberate departure
+//! declares the same five shapes to receive it. That is a deliberate departure
 //! from [`crate::error::AppError`], which every other command stringifies to a
 //! bare sentence: a sentence cannot carry which host answered, which status it
 //! answered with, or how long the rate limit has left, and those are precisely
@@ -62,10 +62,22 @@ pub enum MrListError {
     #[error("no provider instance is connected for this project")]
     NoProvider,
 
-    /// The token was refused. Includes a keyring miss, which the provider
-    /// never sees but which fails for the same reason and is fixed the same
-    /// way — the token that should be there is missing, expired, or short a
-    /// scope.
+    /// A provider is connected, but no token for it came out of the keyring,
+    /// so the request was never made. The user's next move is the same as for
+    /// [`MrListError::Unauthorized`] — reconnect — but the evidence is not, and
+    /// that is the whole reason this is its own variant: reported as a status
+    /// the provider never issued, a local failure sends the user to audit the
+    /// scopes of a token that is fine. `detail` is the keyring's own words,
+    /// because an absent entry and an OS refusing to release an existing one
+    /// are different problems and nothing else in the tree records which.
+    #[error("no {provider} token is stored for {host}: {detail}")]
+    NoCredential {
+        provider: String,
+        host: String,
+        detail: String,
+    },
+
+    /// The provider refused the token it was given.
     #[error("{host} rejected the {provider} token with HTTP {status}")]
     Unauthorized {
         provider: String,
@@ -100,13 +112,24 @@ pub enum MrListError {
 const BODY_LIMIT: usize = 600;
 
 impl MrListError {
-    /// A failure that never reached a provider — a keyring miss, a repository
-    /// row pointing at a provider that no longer exists.
+    /// A rejection the provider actually issued. `status` is the one it
+    /// refused with, so a 403 never arrives claiming to be a 401.
     pub fn unauthorized(target: ListTarget<'_>, status: u16) -> Self {
         Self::Unauthorized {
             provider: target.kind.to_string(),
             host: target.host.to_string(),
             status,
+        }
+    }
+
+    /// A failure that never reached the provider: the keyring answered `detail`
+    /// instead of a token. Capped like a provider body — a keyring backend is
+    /// as free to answer with a wall of text as a gateway is.
+    pub fn no_credential(target: ListTarget<'_>, detail: impl Into<String>) -> Self {
+        Self::NoCredential {
+            provider: target.kind.to_string(),
+            host: target.host.to_string(),
+            detail: cap(&detail.into()),
         }
     }
 

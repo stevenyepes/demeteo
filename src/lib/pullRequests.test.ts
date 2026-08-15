@@ -18,6 +18,8 @@ import {
 
 const WIRE = {
   noProvider: '{"kind":"no-provider"}',
+  noCredential:
+    '{"kind":"no-credential","provider":"github","host":"api.github.com","detail":"no entry found"}',
   unauthorized:
     '{"kind":"unauthorized","provider":"github","host":"api.github.com","status":401}',
   rateLimited: '{"kind":"rate-limited","host":"gitlab.com","retry_after":30}',
@@ -28,6 +30,12 @@ const WIRE = {
 describe('asPullRequestListFailure', () => {
   it('decodes every variant the Rust enum serializes', () => {
     expect(asPullRequestListFailure(WIRE.noProvider)).toEqual({ kind: 'no-provider' });
+    expect(asPullRequestListFailure(WIRE.noCredential)).toEqual({
+      kind: 'no-credential',
+      provider: 'github',
+      host: 'api.github.com',
+      detail: 'no entry found',
+    });
     expect(asPullRequestListFailure(WIRE.unauthorized)).toEqual({
       kind: 'unauthorized',
       provider: 'github',
@@ -80,6 +88,35 @@ describe('describeListFailure', () => {
     expect(copy.title).toBe('No provider connected');
     expect(copy.actions.map((a) => a.intent)).toEqual(['connect']);
     expect(copy.actions[0].label).toBe('Connect a provider');
+  });
+
+  it('says nothing was sent when the token never left the keyring', () => {
+    // The whole reason this failure is not `unauthorized`: told a host answered
+    // 401, the user goes and audits the scopes of a token that is fine.
+    const copy = describeListFailure({
+      kind: 'no-credential',
+      provider: 'github',
+      host: 'api.github.com',
+      detail: 'No matching entry found in secure storage',
+    });
+
+    expect(copy.title).toBe('No GitHub token is stored');
+    expect(copy.body).toContain('Nothing was sent to api.github.com');
+    expect(copy.body).not.toContain('answered');
+    expect(copy.detail).toBe('No matching entry found in secure storage');
+    expect(copy.actions.map((a) => a.label)).toEqual(['Reconnect GitHub', 'Retry']);
+  });
+
+  it('renders no empty evidence block when the keyring said nothing', () => {
+    const copy = describeListFailure({
+      kind: 'no-credential',
+      provider: 'gitlab',
+      host: 'gitlab.com',
+      detail: '',
+    });
+
+    expect(copy.detail).toBeUndefined();
+    expect(copy.body).not.toContain('answer:');
   });
 
   it('names the provider it wants reconnected', () => {
