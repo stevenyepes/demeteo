@@ -25,6 +25,7 @@ pub mod branch_listing;
 pub(crate) mod command_step;
 pub mod ecosystem;
 pub mod expr;
+pub mod feature_origin;
 pub(crate) mod finalize;
 pub(crate) mod gate;
 pub mod harness_attribution;
