@@ -1,5 +1,6 @@
 use super::*;
 
+mod comment;
 mod list;
 mod target_branch;
 
@@ -12,8 +13,10 @@ use std::sync::Mutex;
 /// permissive double AGENTS.md §7 warns about: a fake that returns `Ok("")` for
 /// everything turns "the adapter called the wrong endpoint" into a passing test
 /// asserting a default. Here a wrong URL fails loudly and names itself.
+type Reply = (u16, String, Vec<(String, String)>);
+
 pub struct FakeHttpClient {
-    replies: HashMap<String, (u16, String, Vec<(String, String)>)>,
+    replies: HashMap<String, Reply>,
     posted: Mutex<Vec<(String, serde_json::Value)>>,
 }
 

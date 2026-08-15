@@ -59,6 +59,28 @@ pub trait MrPublisher: Send + Sync {
         repository_id: Option<&str>,
     ) -> Result<Vec<MrSummary>, MrListError>;
 
+    /// Post `body` as a comment on the MR/PR at `mr_url`, and answer with the
+    /// created comment's URL.
+    ///
+    /// **Not idempotent, and not recoverable.** `publish_mr` above can retry
+    /// safely because a published MR leaves a URL on the feature row to check
+    /// for; a comment leaves nothing, so a second call posts a second comment
+    /// and neither this trait nor the provider offers a way to take one back.
+    /// That is why the only caller is a button a human pressed twice — once to
+    /// ask and once to confirm — and why nothing in the run loop may call it.
+    ///
+    /// The body reaches the provider through
+    /// [`attributed`](crate::domain::mr_comment::attributed): a reader of the
+    /// resulting comment sees the token owner's name on it, and that module
+    /// says why the line closing the gap is the adapter's job rather than the
+    /// caller's.
+    async fn post_mr_comment(
+        &self,
+        project_id: &str,
+        mr_url: &str,
+        body: &str,
+    ) -> Result<String, String>;
+
     /// Variant of [`publish_mr`](Self::publish_mr) that uses a
     /// caller-supplied PAT instead of resolving one from the keyring
     /// (docs/REMOTE_EXECUTION.md M4.3/M5.3, docs/REMOTE_EXECUTION.md

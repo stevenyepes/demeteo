@@ -82,6 +82,29 @@ export async function listOpenPullRequests(
   return invoke<PullRequestSummary[]>('list_open_pull_requests', { projectId, repositoryId });
 }
 
+/**
+ * Post a review report on `pullRequestUrl`, resolving to the created comment's
+ * URL.
+ *
+ * The rejection is an `AppError` sentence rather than the typed union above:
+ * there is no second attempt to shape here, because the only thing a caller can
+ * do with a failure is show it — the alternative outcome is a comment that is
+ * already on someone's pull request. The Rust side appends the attribution, so
+ * `body` is the report as written and nothing here re-states what will be added
+ * to it.
+ */
+export async function postPullRequestComment(input: {
+  projectId: string;
+  pullRequestUrl: string;
+  body: string;
+}): Promise<string> {
+  return invoke<string>('post_pull_request_comment', {
+    projectId: input.projectId,
+    pullRequestUrl: input.pullRequestUrl,
+    body: input.body,
+  });
+}
+
 const UNNAMED_HOST = 'The provider';
 
 /** Rejections arrive as the JSON string the command serialized, or as an

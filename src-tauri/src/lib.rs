@@ -523,6 +523,7 @@ pub fn run() {
             commands::mr_publisher::publish_mr,
             commands::mr_publisher::fetch_mr_state,
             commands::mr_publisher::list_open_pull_requests,
+            commands::mr_publisher::post_pull_request_comment,
             commands::feature_lifecycle::feature_cleanup,
             commands::notifications::notifications_list,
             commands::attachments::feature_add_attachment,

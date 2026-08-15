@@ -197,6 +197,15 @@ impl MrPublisher for HttpMrPublisher {
     ) -> Result<Vec<MrSummary>, MrListError> {
         self.list_open_mrs_impl(project_id, repository_id).await
     }
+
+    async fn post_mr_comment(
+        &self,
+        project_id: &str,
+        mr_url: &str,
+        body: &str,
+    ) -> Result<String, String> {
+        self.post_mr_comment_impl(project_id, mr_url, body).await
+    }
 }
 
 impl HttpMrPublisher {
@@ -342,6 +351,42 @@ impl HttpMrPublisher {
         );
 
         Ok(info)
+    }
+
+    async fn post_mr_comment_impl(
+        &self,
+        project_id: &str,
+        mr_url: &str,
+        body: &str,
+    ) -> Result<String, String> {
+        if body.trim().is_empty() {
+            return Err("There is nothing to post: the review report is empty.".to_string());
+        }
+
+        let pid = crate::domain::ids::ProjectId::from(project_id.to_string());
+        let MrTarget { provider, .. } =
+            resolve_target(self.app_settings.as_ref(), self.projects.as_ref(), &pid)?;
+
+        // `resolve_pat_best_effort` is the state poll's, and reading a public
+        // pull request unauthenticated is a real answer. Writing to one is not:
+        // the provider would reject it, and degrading to `None` here would
+        // report that rejection as the token's fault when the token was simply
+        // never sent.
+        let pat = resolve_pat(&provider.id.0)?;
+
+        let http: &dyn HttpClient = match self.http_override.as_ref() {
+            Some(arc) => arc.as_ref(),
+            None => &ReqwestHttp,
+        };
+        let body = crate::domain::mr_comment::attributed(body);
+
+        match provider.kind.as_str() {
+            "github" => {
+                github::post_github_comment(http, &provider.host, mr_url, &pat, &body).await
+            }
+            "gitlab" => gitlab::post_gitlab_note(http, &provider.host, mr_url, &pat, &body).await,
+            other => Err(format!("Unsupported provider kind: {}", other)),
+        }
     }
 
     async fn list_open_mrs_impl(
