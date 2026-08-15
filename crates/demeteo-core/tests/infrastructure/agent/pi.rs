@@ -405,8 +405,11 @@ fn args_open_with_json_mode_and_never_approve() {
     let args = build_pi_args(&ctx(), None, "implement the thing");
     assert_eq!(args[0], "--mode");
     assert_eq!(args[1], "json");
-    // Without `-na` a fleet run's behaviour depends on which projects the user
-    // happened to trust interactively in `~/.pi/agent/trust.json`.
+    // `-na` is what pins pi's project-trust decision to untrusted, and so what
+    // keeps the worktree's own `.pi/` extensions and skills — which pi executes
+    // on load — out of every turn, a keeping step's included. Without it the
+    // turn inherits whichever directories the user trusted interactively, and a
+    // trust entry covers every path beneath it.
     assert!(args.contains(&"-na".to_string()), "got {args:?}");
     assert_eq!(args.last().map(String::as_str), Some("implement the thing"));
     assert!(!args.contains(&"--session".to_string()));
@@ -615,6 +618,24 @@ openai-codex  gpt-5.6-luna         272K     128K     yes       yes
             "openai-codex/gpt-5.3-codex-spark".to_string(),
             "openai-codex/gpt-5.6-luna".to_string()
         ]
+    );
+}
+
+/// The probe is the one pi invocation `build_pi_args` does not build, so it is
+/// the one that can quietly lose the flag. pi executes a project extension on
+/// load, which would make reading a model table a code-execution path for any
+/// cwd holding a `.pi/`.
+#[test]
+fn model_listing_never_approves_the_project() {
+    use crate::ports::agent_runtime::AgentRuntime;
+    let listing = crate::adapters::agent::pi::runtime()
+        .capabilities()
+        .model_listing
+        .expect("pi lists models");
+    assert!(
+        listing.args.split_whitespace().any(|a| a == "-na"),
+        "got {:?}",
+        listing.args
     );
 }
 
