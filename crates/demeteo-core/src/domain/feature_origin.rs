@@ -278,8 +278,15 @@ impl FeatureOrigin {
     /// ([`PublishOptions::target_branch`](crate::domain::models::PublishOptions)),
     /// and it outranks the origin because the two answer different questions: a
     /// run launched to fix a pull request is cut from that request's head and
-    /// must open against the branch that request merges into, which is neither
-    /// its own start point nor the project default.
+    /// must open against a branch that is neither its own start point nor the
+    /// project default.
+    ///
+    /// *Which* branch is [`crate::domain::fix_destination`]'s to decide, and it
+    /// arrives here as `requested`: the reviewed request's target branch for a
+    /// fork, its head branch when the provider placed that head upstream. This
+    /// function ranks `requested` first so that decision is reachable; with
+    /// nothing requested the fallback is the request's target branch, which is
+    /// the conservative half of the same rule.
     ///
     /// A blank request is not an answer — a PR targeting `""` is refused by
     /// both providers with a message about a field the user never filled in.

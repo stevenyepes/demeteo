@@ -18,6 +18,24 @@
 //! arm written in advance is that choice made now, by nobody, at a call site
 //! that does not exist yet.
 //!
+//! ## Which of the two rules wins
+//!
+//! [`FeatureOrigin::publish_target`](crate::domain::feature_origin::FeatureOrigin::publish_target)
+//! answers the same question for every run, and states it categorically: a run
+//! launched to fix a pull request opens against the branch that request merges
+//! into. That is this module's *fallback*, not its answer — it is right for a
+//! fork, and needlessly conservative for a request whose head branch the
+//! provider already placed upstream.
+//!
+//! This module supersedes it for review-launched runs, and does so by feeding
+//! it: `resolve` produces the base, the launcher carries it as
+//! [`PublishOptions::target_branch`](crate::domain::models::PublishOptions),
+//! and `publish_target` ranks that caller answer above the origin exactly so
+//! this decision can reach it. Nothing here reimplements the publish path, and
+//! nothing in `publish_target` needs to know a fix run from any other — a call
+//! site that resolves neither still lands on the request's target branch,
+//! which is the safe half of both rules.
+//!
 //! ## The fork case
 //!
 //! [`FixDestination::StackedPr`] names a base branch, and the provider resolves
@@ -58,7 +76,10 @@
 //! merge request carries no push permission for GitLab to report, so **no**
 //! GitLab request stacks on its head branch, fork or not. That is the honest
 //! reading of what the provider says, and the fallback still produces a
-//! mergeable request.
+//! mergeable request — but it is a whole provider missing the behaviour, so it
+//! is written up in `docs/KNOWN_ISSUES.md` too, where a user hunting for it
+//! will look. Closing it means a real GitLab signal in `MrSummary::from_gitlab`
+//! and not a provider special case here, which has no provider to ask.
 
 use crate::domain::mr_summary::MrSummary;
 

@@ -40,8 +40,16 @@ pub struct MrSummary {
     pub number: u64,
     pub title: String,
     pub author: String,
-    /// What the provider calls the head branch. Display only — the module doc
-    /// says why nothing fetches it.
+    /// What the provider calls the head branch. Nothing fetches it — the
+    /// module doc says why — and everything else renders it as a label.
+    ///
+    /// One consumer does not: [`crate::domain::fix_destination`] returns it as
+    /// the base of a PR-create call, and only when `!from_fork &&
+    /// head_repo_push`, i.e. only when the provider itself placed this branch
+    /// in the upstream repository. So this is not free text to sanitize or
+    /// truncate for rendering: a shortened value is a base branch that does not
+    /// exist, and the module doc's warning about resolving this name against
+    /// origin is exactly why that guard is narrow.
     pub source_branch: String,
     pub target_branch: String,
     pub draft: bool,
