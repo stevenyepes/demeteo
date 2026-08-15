@@ -18,7 +18,13 @@ use tauri::State;
 
 /// The starter pack this build ships, read by the first-launch seed below and
 /// by `workflow_revert_to_default`.
-const STARTER_FILES: &[&str] = &[
+///
+/// `pub(crate)` so the starter suite asserts against *this* list rather than a
+/// parallel copy of it. A second hand-written list gates nothing: deleting a
+/// line here would leave the workflow unseeded and unreachable by
+/// `workflow_revert_to_default`, with every test still green because each one
+/// reached its JSON through its own `include_str!`.
+pub(crate) const STARTER_FILES: &[&str] = &[
     include_str!("../../workflows/standard-feature-pipeline.json"),
     include_str!("../../workflows/bugfix-pipeline.json"),
     include_str!("../../workflows/docs-update.json"),
