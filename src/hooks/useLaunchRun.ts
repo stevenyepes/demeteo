@@ -4,7 +4,7 @@ import { submitRemoteRun } from '../lib/remoteRuns';
 import { useNavigation } from '../context';
 import { useErrorBus } from '../lib/errorBus';
 import type { LaunchStageEntry } from '../components/AttachmentDropzone';
-import type { EffortLevel, Feature } from '../types';
+import type { EffortLevel, Feature, FeatureOrigin } from '../types';
 
 /** Launch parameters — the union of what `StartFeatureModal` and the
  * ProjectHome composer collect. Matches the modal's `onLaunch` shape. */
@@ -32,6 +32,11 @@ export interface LaunchRunParams {
   unattended?: boolean;
   maxCostUsd?: number;
   maxWallClockMins?: number;
+  /** Where the run's branch is cut from, and what its diff is measured
+   *  against (migration V41). Composed by `src/lib/runOrigin.ts`, which omits
+   *  both for a run that named neither. */
+  origin?: FeatureOrigin;
+  diffBaseBranch?: string;
 }
 
 /**
@@ -107,6 +112,8 @@ export function useLaunchRun(options: {
             maxCostUsd: params.maxCostUsd ?? null,
             maxWallClockSecs:
               params.maxWallClockMins != null ? params.maxWallClockMins * 60 : null,
+            origin: params.origin,
+            diffBaseBranch: params.diffBaseBranch,
           });
           const feature: Feature = {
             id: handle.feature_id,
@@ -139,6 +146,8 @@ export function useLaunchRun(options: {
           maxBudgetUsd: params.maxBudgetUsd ?? null,
           stepOverrides: params.stepOverrides ?? null,
           stagedAttachments,
+          origin: params.origin,
+          diffBaseBranch: params.diffBaseBranch,
         });
         const feature: Feature = {
           id: res.id,

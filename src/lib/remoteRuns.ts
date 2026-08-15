@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { RemoteRunMirror, RunEvent } from "../types";
+import type { FeatureOrigin, RemoteRunMirror, RunEvent } from "../types";
 
 export async function listMirroredRuns(): Promise<RemoteRunMirror[]> {
   return invoke<RemoteRunMirror[]>("remote_list_mirrored_runs");
@@ -48,6 +48,13 @@ export async function submitRemoteRun(input: {
   unattended: boolean;
   maxCostUsd: number | null;
   maxWallClockSecs: number | null;
+  /** Where the run's branch is cut from, and what its diff is measured
+   *  against (migration V41). Left `undefined` — not `null` — when unstated,
+   *  so the spread below omits the key entirely and a detached launch that
+   *  names neither carries the payload that shipped before the origin
+   *  picker. */
+  origin?: FeatureOrigin;
+  diffBaseBranch?: string;
 }): Promise<RemoteRunHandle> {
   return invoke<RemoteRunHandle>("remote_submit_run", { ...input });
 }
