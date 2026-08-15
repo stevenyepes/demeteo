@@ -5,9 +5,12 @@ use crate::domain::models::StepConfig;
 use crate::adapters::database::SqliteAdapter;
 use crate::domain::ids::{WorkflowId, WorkflowVersionId};
 use crate::domain::models::{Workflow, WorkflowVersion};
+use crate::domain::workflow_starters::{plan_seed, SeedAction, StarterDefinition};
 use crate::ports::db::WorkflowRepository;
 use rusqlite::Connection;
 use std::sync::Arc;
+
+const CODE_REVIEW: &str = include_str!("../../workflows/code-review.json");
 
 /// Every embedded starter workflow must deserialize into `StepConfig`
 /// (guards the V13 `model`/`verifier` JSON edits against typos).
@@ -26,6 +29,7 @@ fn all_starters_deserialize() {
         include_str!("../../workflows/experiment.json"),
         include_str!("../../workflows/ci-fix.json"),
         include_str!("../../workflows/simple-task.json"),
+        include_str!("../../workflows/code-review.json"),
     ] {
         let steps = parse(json);
         assert!(!steps.is_empty());
@@ -53,6 +57,74 @@ fn looping_starters_have_verifier_and_redirect() {
             "expected a validate step with on_failure + verifier"
         );
     }
+}
+
+/// The review starter ships no method of its own — no rubric, no severity
+/// scale, no criteria. A review's depth is meant to come from the agent's own
+/// review skill and from what the project wrote down about itself, and a
+/// prompt that grew a rubric would run exactly as well as one that did not, so
+/// nothing but this assertion holds the decision in place.
+#[test]
+fn the_review_starter_imposes_no_method_of_its_own() {
+    let prompts = parse(CODE_REVIEW)
+        .iter()
+        .filter_map(|s| s.prompt_template.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    assert!(!prompts.is_empty(), "read no prompt text at all");
+
+    for phrase in [
+        "critical",
+        "major",
+        "minor",
+        "blocker",
+        "check for",
+        "look for",
+        "ensure that",
+        "verify that",
+    ] {
+        assert!(
+            !prompts.contains(phrase),
+            "the review prompt says '{phrase}' — Demeteo is imposing a review method"
+        );
+    }
+}
+
+/// `finalize` squashes the branch and hands it to the publisher, so a review
+/// workflow that has one can ship the work it was asked to judge. Its absence
+/// is the enforcement: a flag would be something a later edit could set back.
+#[test]
+fn the_review_starter_has_no_step_that_publishes() {
+    let steps = parse(CODE_REVIEW);
+    assert!(
+        steps.iter().all(|s| s.kind != "finalize"),
+        "a review must never commit, push or open a PR"
+    );
+}
+
+/// Seeding appends a version whenever the bundle stops matching storage, so a
+/// starter whose JSON does not survive the round trip through `StepConfig`
+/// mints a new version on every launch, forever.
+#[test]
+fn the_review_starter_seeds_once_and_then_stands_still() {
+    let starter = StarterDefinition::parse(CODE_REVIEW).expect("the shipped starter is JSON");
+    assert_eq!(plan_seed(&starter, None, None), SeedAction::Create);
+
+    let workflows = repo();
+    super::seed_starter_workflows(&workflows);
+    let stored = workflows
+        .get(&starter.id)
+        .expect("read the seeded workflow")
+        .expect("the review starter is seeded");
+    let latest = workflows
+        .latest_version(&starter.id)
+        .expect("read the seeded version");
+
+    assert_eq!(
+        plan_seed(&starter, Some(&stored), latest.as_ref()),
+        SeedAction::Skip
+    );
 }
 
 // ── Version history: restore + per-version graph (P3.4) ──────────────────

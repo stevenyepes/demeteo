@@ -366,18 +366,24 @@ fn build_failure_short_circuits_but_reports_node_local_rules() {
     assert!(codes(&findings).contains(&"cycle"));
 }
 
-// ---------- the seven starters ----------
+// ---------- the bundled starters ----------
 
+/// `code-review` carries the one tolerated finding in the whole starter pack:
+/// it ends without a `finalize` node on purpose, so that a review cannot
+/// commit, push or publish anything. `no-finalize` is the lint saying exactly
+/// that, and the pair here is what stops the warning from being "fixed" by
+/// giving the review a publishing step.
 #[test]
 fn migrated_starters_lint_clean() {
-    for name in [
-        "bugfix-pipeline",
-        "ci-fix",
-        "docs-update",
-        "experiment",
-        "refactor",
-        "simple-task",
-        "standard-feature-pipeline",
+    for (name, tolerated) in [
+        ("bugfix-pipeline", &[][..]),
+        ("ci-fix", &[][..]),
+        ("code-review", &["no-finalize"][..]),
+        ("docs-update", &[][..]),
+        ("experiment", &[][..]),
+        ("refactor", &[][..]),
+        ("simple-task", &[][..]),
+        ("standard-feature-pipeline", &[][..]),
     ] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../src-tauri/workflows")
@@ -386,8 +392,12 @@ fn migrated_starters_lint_clean() {
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let migrated = migrate_definition(&doc).unwrap();
         let findings = lint_workflow_v2(&migrated, &CORE_NODE_TYPES);
+        let unexpected: Vec<&str> = codes(&findings)
+            .into_iter()
+            .filter(|c| !tolerated.contains(c))
+            .collect();
         assert!(
-            findings.is_empty(),
+            unexpected.is_empty(),
             "starter '{name}' should lint clean, got: {findings:#?}"
         );
     }

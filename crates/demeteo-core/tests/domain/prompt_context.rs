@@ -180,6 +180,7 @@ fn every_token_the_starters_reference_is_bound() {
     for name in [
         "bugfix-pipeline",
         "ci-fix",
+        "code-review",
         "docs-update",
         "experiment",
         "refactor",

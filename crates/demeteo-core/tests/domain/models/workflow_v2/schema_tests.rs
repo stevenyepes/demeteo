@@ -40,6 +40,7 @@ fn valid_v2_documents_pass_validation() {
     for name in [
         "bugfix-pipeline",
         "ci-fix",
+        "code-review",
         "docs-update",
         "experiment",
         "refactor",

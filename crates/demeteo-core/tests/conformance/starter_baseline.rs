@@ -458,6 +458,11 @@ async fn starter_baseline_refactor() {
 }
 
 #[tokio::test]
+async fn starter_baseline_code_review() {
+    assert_starter_baseline("code-review").await;
+}
+
+#[tokio::test]
 async fn starter_baseline_standard_feature_pipeline() {
     assert_starter_baseline("standard-feature-pipeline").await;
 }
