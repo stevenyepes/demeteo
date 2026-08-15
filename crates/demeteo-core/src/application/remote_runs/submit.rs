@@ -5,9 +5,10 @@ use crate::application::attachments::StagedAttachmentInput;
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
 use crate::domain::models::{
-    EffortLevel, Feature, ProviderInstance, Repository, StepOverride, WorkflowVersion,
+    EffortLevel, Feature, ProjectSettings, ProviderInstance, Repository, StepOverride,
+    WorkflowVersion,
 };
-use crate::domain::run_spec::{RunBudget, RunSpec, RunSpecProvider};
+use crate::domain::run_spec::{RunBudget, RunOrigin, RunSpec, RunSpecAttachment, RunSpecProvider};
 use crate::error::AppError;
 use crate::state::AppContext;
 
@@ -29,6 +30,15 @@ pub struct SubmitInput {
     pub unattended: bool,
     pub max_cost_usd: Option<f64>,
     pub max_wall_clock_secs: Option<u64>,
+    /// Where the run's branch is cut from. `None` — a launch that chose
+    /// nothing, or a frontend older than the picker — is
+    /// [`FeatureOrigin::DefaultBranch`], which is what every detached run did
+    /// before V41.
+    pub origin: Option<FeatureOrigin>,
+    /// What the run's review diff is measured against and what its PR targets,
+    /// when that is not where it started. See
+    /// [`FeatureOrigin::base_branch`].
+    pub diff_base_branch: Option<String>,
 }
 
 pub struct SubmitOutcome {
@@ -125,44 +135,95 @@ fn make_run_id() -> String {
     format!("laptop-{}", crate::paths::new_id())
 }
 
-fn insert_shadow_feature(
-    ctx: &AppContext,
-    input: &SubmitInput,
-    project_id: &ProjectId,
-    workflow: &ResolvedWorkflow,
-    feature_id: &str,
-    step_overrides: &[StepOverride],
+/// Everything a submit resolved from its own database before composing the
+/// run, bundled because the shadow row and the wire spec are built from the
+/// same pieces and have to agree on them.
+struct ResolvedSubmit {
+    project_id: ProjectId,
+    workflow: ResolvedWorkflow,
+    provider: RunSpecProvider,
+    repo_path: String,
+    project_settings: Option<ProjectSettings>,
+    attachments: Vec<RunSpecAttachment>,
+    budget: Option<RunBudget>,
+    feature_id: String,
+    step_overrides: Vec<StepOverride>,
     now: i64,
-) -> Result<(), String> {
-    ctx.features.add(Feature {
-        effort: input.effort,
-        id: FeatureId::from(feature_id.to_string()),
-        project_id: project_id.clone(),
-        workflow_id: Some(workflow.id.clone()),
-        workflow_version_id: Some(workflow.version.id.clone()),
-        title: input.title.clone(),
-        description: input.description.clone(),
-        status: "pending".to_string(),
-        total_cost: 0.0,
-        duration: "0s".to_string(),
-        tokens: 0,
-        created_at: now,
-        agent_kind: input.agent_kind.clone(),
-        model: input.model.clone(),
-        mr_url: None,
-        mr_state: Some("none".to_string()),
-        pr_title: None,
-        pr_body: None,
-        commit_artifacts: input.commit_artifacts,
-        loop_iterations: input.loop_iterations,
-        max_budget_usd: input.max_budget_usd,
-        step_overrides: step_overrides.to_vec(),
-        attachments: Vec::new(),
-        harness_baseline: None,
-        origin: FeatureOrigin::DefaultBranch,
-        diff_base_branch: None,
-        resolved_branch: None,
-    })
+}
+
+impl ResolvedSubmit {
+    /// The eager placeholder the laptop inserts before the RPC, so the run is
+    /// navigable from second zero and hydration updates it in place.
+    ///
+    /// It carries the run's origin because the laptop reads this row for its
+    /// own answers — the review diff's base, the "view diff" link, the branch
+    /// it offers to sync — for the whole window before the runner's real row
+    /// is hydrated over it. A placeholder saying `DefaultBranch` for a run
+    /// launched on a PR is wrong for that entire window, and wrong again
+    /// whenever hydration cannot reach the runner.
+    fn shadow_feature(&self, input: &SubmitInput) -> Feature {
+        Feature {
+            effort: input.effort,
+            id: FeatureId::from(self.feature_id.clone()),
+            project_id: self.project_id.clone(),
+            workflow_id: Some(self.workflow.id.clone()),
+            workflow_version_id: Some(self.workflow.version.id.clone()),
+            title: input.title.clone(),
+            description: input.description.clone(),
+            status: "pending".to_string(),
+            total_cost: 0.0,
+            duration: "0s".to_string(),
+            tokens: 0,
+            created_at: self.now,
+            agent_kind: input.agent_kind.clone(),
+            model: input.model.clone(),
+            mr_url: None,
+            mr_state: Some("none".to_string()),
+            pr_title: None,
+            pr_body: None,
+            commit_artifacts: input.commit_artifacts,
+            loop_iterations: input.loop_iterations,
+            max_budget_usd: input.max_budget_usd,
+            step_overrides: self.step_overrides.clone(),
+            attachments: Vec::new(),
+            harness_baseline: None,
+            origin: input.origin.clone().unwrap_or_default(),
+            diff_base_branch: input.diff_base_branch.clone(),
+            resolved_branch: None,
+        }
+    }
+
+    /// The spec the runner executes.
+    ///
+    /// `origin` rides as [`RunOrigin::Supported`] — the arm a runner of any
+    /// version either honours or refuses by name
+    /// ([`RunSpec::origin_to_honour`]). Sending `None` instead is not a
+    /// smaller version of the same thing: it tells the runner this launch
+    /// chose nothing, and a run launched on a PR head would start from the
+    /// default branch with nothing anywhere reporting a disagreement.
+    fn run_spec(&self, input: &SubmitInput) -> RunSpec {
+        RunSpec {
+            effort: input.effort,
+            feature_id: Some(self.feature_id.clone()),
+            title: input.title.clone(),
+            description: input.description.clone(),
+            provider: self.provider.clone(),
+            repo_path: self.repo_path.clone(),
+            workflow_json: self.workflow.json.clone(),
+            agent_kind: input.agent_kind.clone(),
+            model: input.model.clone(),
+            loop_iterations: input.loop_iterations,
+            max_budget_usd: input.max_budget_usd,
+            step_overrides: self.step_overrides.clone(),
+            commit_artifacts: input.commit_artifacts,
+            attachments: self.attachments.clone(),
+            unattended: input.unattended,
+            budget: self.budget.clone(),
+            project_settings: self.project_settings.clone(),
+            origin: input.origin.clone().map(RunOrigin::Supported),
+            diff_base_branch: input.diff_base_branch.clone(),
+        }
+    }
 }
 
 pub async fn submit_remote_run(
@@ -190,49 +251,31 @@ pub async fn submit_remote_run(
         }
     };
 
-    let now = crate::paths::now_ms();
-    let feature_id = format!("f-{}", crate::paths::new_id());
-    let step_overrides = input.step_overrides.take().unwrap_or_default();
-    if let Err(error) = insert_shadow_feature(
-        ctx,
-        &input,
-        &project_id,
-        &workflow,
-        &feature_id,
-        &step_overrides,
-        now,
-    ) {
+    let resolved = ResolvedSubmit {
+        project_id: project_id.clone(),
+        workflow,
+        provider: RunSpecProvider {
+            kind: provider.kind.clone(),
+            host: provider.host.clone(),
+        },
+        repo_path: repo.repo_path.clone(),
+        project_settings: ctx.projects.get_settings(&project_id).ok().flatten(),
+        attachments,
+        budget,
+        feature_id: format!("f-{}", crate::paths::new_id()),
+        step_overrides: input.step_overrides.take().unwrap_or_default(),
+        now: crate::paths::now_ms(),
+    };
+    let feature_id = resolved.feature_id.clone();
+    let now = resolved.now;
+    if let Err(error) = ctx.features.add(resolved.shadow_feature(&input)) {
         if had_attachments {
             cleanup_attachment_spool(ctx, &input.machine_id, &run_id).await;
         }
         return Err(AppError::from(error));
     }
 
-    let project_settings = ctx.projects.get_settings(&project_id).ok().flatten();
-    let spec = RunSpec {
-        effort: input.effort,
-        feature_id: Some(feature_id.clone()),
-        title: input.title.clone(),
-        description: input.description.clone(),
-        provider: RunSpecProvider {
-            kind: provider.kind.clone(),
-            host: provider.host.clone(),
-        },
-        repo_path: repo.repo_path.clone(),
-        workflow_json: workflow.json,
-        agent_kind: input.agent_kind.clone(),
-        model: input.model.clone(),
-        loop_iterations: input.loop_iterations,
-        max_budget_usd: input.max_budget_usd,
-        step_overrides,
-        commit_artifacts: input.commit_artifacts,
-        attachments,
-        unattended: input.unattended,
-        budget,
-        project_settings,
-        origin: None,
-        diff_base_branch: None,
-    };
+    let spec = resolved.run_spec(&input);
     let submitted = match remote_rpc(
         ctx,
         &input.machine_id,
@@ -300,3 +343,7 @@ pub async fn submit_remote_run(
         feature_id,
     })
 }
+
+#[cfg(test)]
+#[path = "../../../tests/application/remote_runs/submit.rs"]
+mod tests;

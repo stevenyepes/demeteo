@@ -29,6 +29,10 @@ pub async fn remote_submit_run(
     unattended: bool,
     max_cost_usd: Option<f64>,
     max_wall_clock_secs: Option<u64>,
+    // Omitted (a frontend older than the origin picker) = `None`, which
+    // `SubmitInput::origin` and `SubmitInput::diff_base_branch` define.
+    origin: Option<crate::domain::feature_origin::FeatureOrigin>,
+    diff_base_branch: Option<String>,
 ) -> Result<RemoteRunHandle, AppError> {
     submit_remote_run(
         &ctx,
@@ -50,6 +54,8 @@ pub async fn remote_submit_run(
             unattended,
             max_cost_usd,
             max_wall_clock_secs,
+            origin,
+            diff_base_branch,
         },
     )
     .await

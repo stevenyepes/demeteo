@@ -57,6 +57,10 @@ pub async fn start_feature(
     max_budget_usd: Option<f64>,
     step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
     staged_attachments: Option<Vec<crate::commands::attachments::StagedAttachmentInput>>,
+    // Omitted (a frontend older than the origin picker) = `None`, which
+    // `FeatureLaunch::origin` and `FeatureLaunch::diff_base_branch` define.
+    origin: Option<crate::domain::feature_origin::FeatureOrigin>,
+    diff_base_branch: Option<String>,
 ) -> Result<Feature, AppError> {
     ctx.executor
         .feature_start(FeatureLaunch {
@@ -72,6 +76,8 @@ pub async fn start_feature(
             max_budget_usd,
             step_overrides: step_overrides.unwrap_or_default(),
             staged_attachments: staged_attachments.unwrap_or_default(),
+            origin: origin.unwrap_or_default(),
+            diff_base_branch,
             ..FeatureLaunch::default()
         })
         .await
