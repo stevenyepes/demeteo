@@ -27,6 +27,7 @@ use crate::domain::ids::{FeatureId, ProviderId};
 use crate::domain::models::ProviderInstance;
 use crate::paths;
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
 const ARTIFACT_PATH: &str = "artifacts/parity-report.md";
@@ -192,21 +193,14 @@ async fn failed_run_logs_failure_class_and_policy_rule() {
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            "Parity Failing Feature",
-            "Fail deterministically for the exit-gate check.",
-            Some("stub"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: "Parity Failing Feature".to_string(),
+            description: "Fail deterministically for the exit-gate check.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
     let status = poll_terminal(&ctx, &feature.id).await;
@@ -289,21 +283,14 @@ async fn local_run_events_replay_the_live_story() {
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            "Parity Feature",
-            "Produce a deterministic parity report.",
-            Some("stub"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: "Parity Feature".to_string(),
+            description: "Produce a deterministic parity report.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
     let status = poll_terminal(&ctx, &feature.id).await;

@@ -87,6 +87,18 @@ pub(super) async fn build_test_executor_with_notif(
     label: &str,
     notif: Arc<dyn NotificationPort>,
 ) -> (DagStepExecutor, Arc<SqliteAdapter>, std::path::PathBuf) {
+    let temp_dir = scratch_dir(label);
+    let executor =
+        build_test_executor_in(temp_dir.clone(), notif, Arc::new(ScriptedExec::new(&[]))).await;
+    (executor.0, executor.1, temp_dir)
+}
+
+/// A fresh app-data directory for one test, named after `label`.
+///
+/// Separate from the builder so a test that has to script the transport can
+/// derive the repository path it will be asked about *before* the executor
+/// that asks exists.
+pub(super) fn scratch_dir(label: &str) -> std::path::PathBuf {
     let temp_dir = std::env::temp_dir().join(format!(
         "demeteo_test_guard_{}_{}",
         label,
@@ -96,11 +108,18 @@ pub(super) async fn build_test_executor_with_notif(
             .as_millis()
     ));
     std::fs::create_dir_all(&temp_dir).unwrap();
+    temp_dir
+}
+
+pub(super) async fn build_test_executor_in(
+    temp_dir: std::path::PathBuf,
+    notif: Arc<dyn NotificationPort>,
+    exec: Arc<dyn crate::ports::execution::ExecutionPort>,
+) -> (DagStepExecutor, Arc<SqliteAdapter>) {
     let conn = crate::db::init_db(temp_dir.clone()).expect("init_db failed");
     let db = Arc::new(SqliteAdapter::new(conn).unwrap());
     let registry = Arc::new(AgentRegistry::new(vec![]));
     let agent_exec = Arc::new(FakeAgentExec);
-    let exec = Arc::new(ScriptedExec::new(&[]));
     let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> = Arc::new(
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
     );
@@ -147,5 +166,5 @@ pub(super) async fn build_test_executor_with_notif(
         pricing,
         db.clone(), // remote-run mirror — SqliteAdapter implements the port
     );
-    (executor, db, temp_dir)
+    (executor, db)
 }

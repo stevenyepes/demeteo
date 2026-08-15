@@ -221,6 +221,27 @@ impl WorktreeOpsPort for GitOpsHelper {
             .await
     }
 
+    async fn fetch_origin_refspec(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        refspec: &str,
+    ) -> Result<(), String> {
+        self.fetch_origin_refspec(machine_id, repo_dir, refspec)
+            .await
+    }
+
+    async fn cut_branch_at(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        start_point: &str,
+        branch_name: &str,
+    ) -> Result<(), String> {
+        self.cut_branch_at(machine_id, repo_dir, start_point, branch_name)
+            .await
+    }
+
     async fn provision_subtask_worktree(
         &self,
         machine_id: Option<&str>,

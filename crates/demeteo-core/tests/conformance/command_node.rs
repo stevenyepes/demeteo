@@ -35,6 +35,7 @@ use crate::domain::models::{ProviderInstance, StepExecution};
 use crate::paths;
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
 const REPO_PATH: &str = "demeteo/command-node";
@@ -228,21 +229,14 @@ async fn start_feature(
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            "Command node run",
-            "Exercise the command node under the stub harness.",
-            Some("stub"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: "Command node run".to_string(),
+            description: "Exercise the command node under the stub harness.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
 

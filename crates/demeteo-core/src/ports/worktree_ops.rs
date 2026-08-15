@@ -370,6 +370,38 @@ pub trait WorktreeOpsPort: Send + Sync {
         branch_name: &str,
     ) -> Result<(), String>;
 
+    /// Bring exactly one refspec down from origin, failing when it does not
+    /// arrive.
+    ///
+    /// Deliberately **not** the best-effort fetch every other path here uses.
+    /// Those tolerate an unreachable origin because a local ref of the same
+    /// name is still a usable start point; a refspec fetched for a
+    /// [`FeatureOrigin::Ref`](crate::domain::feature_origin::FeatureOrigin::Ref)
+    /// has no local predecessor at all, so a swallowed failure would leave
+    /// [`cut_branch_at`](Self::cut_branch_at) cutting from something else
+    /// entirely and the run reviewing a tree nobody asked for.
+    async fn fetch_origin_refspec(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        refspec: &str,
+    ) -> Result<(), String>;
+
+    /// Point `branch_name` at `start_point`, which must already resolve.
+    ///
+    /// The counterpart to
+    /// [`create_feature_branch`](Self::create_feature_branch) for a run whose
+    /// origin named its own start point. There is no fallback ref to try:
+    /// falling back is how a run started somewhere the user chose silently
+    /// becomes a run started from the default branch.
+    async fn cut_branch_at(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        start_point: &str,
+        branch_name: &str,
+    ) -> Result<(), String>;
+
     /// Provision a subtask worktree.
     async fn provision_subtask_worktree(
         &self,

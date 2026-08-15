@@ -50,6 +50,28 @@ pub enum FeatureOrigin {
     },
 }
 
+/// How the bootstrap brings a run's start point down and points the run's
+/// branch at it.
+///
+/// A value the adapter executes rather than two calls it chooses between,
+/// because the arms differ in what a failed fetch *means* and that is a
+/// decision, not an argument. `FromDefaultBranch` keeps the pre-V41
+/// behaviour: an unreachable origin leaves the local `<default>` ref alone
+/// and the cut falls back to it, because a slightly stale default branch is
+/// still the branch the user asked for. `FromFetchedRef` has no such
+/// fallback in either half — the ref it names exists only because this fetch
+/// created it, so swallowing the failure would cut the run's branch from
+/// whatever else `start_point` happened to resolve to and hand a reviewer a
+/// diff against a tree nobody chose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BranchCut {
+    FromDefaultBranch,
+    FromFetchedRef {
+        refspec: String,
+        start_point: String,
+    },
+}
+
 /// Refs fetched for a [`FeatureOrigin::Ref`] land under this namespace.
 ///
 /// Not `refs/heads/`: a fetched PR head is a snapshot to cut from, and a local
@@ -92,6 +114,19 @@ impl FeatureOrigin {
             Self::DefaultBranch => format!("origin/{default_branch}"),
             Self::Branch { base } => format!("origin/{base}"),
             Self::Ref { fetch_spec, .. } => fetched_ref(fetch_spec),
+        }
+    }
+
+    /// The [`BranchCut`] the bootstrap performs for this origin, combining
+    /// [`FeatureOrigin::fetch_plan`] and [`FeatureOrigin::start_point`] with
+    /// the strictness each arm is owed.
+    pub fn branch_cut(&self, default_branch: &str) -> BranchCut {
+        match self {
+            Self::DefaultBranch => BranchCut::FromDefaultBranch,
+            Self::Branch { .. } | Self::Ref { .. } => BranchCut::FromFetchedRef {
+                refspec: self.fetch_plan(default_branch).refspec,
+                start_point: self.start_point(default_branch),
+            },
         }
     }
 

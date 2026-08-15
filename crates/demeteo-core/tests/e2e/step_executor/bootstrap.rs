@@ -7,7 +7,7 @@ use crate::domain::ids::{FeatureId, ProjectId};
 use crate::paths;
 use crate::ports::db::{FeatureRepository, ProjectRepository};
 use crate::ports::notification::DomainEvent;
-use crate::ports::step_executor::StepExecutor;
+use crate::ports::step_executor::{FeatureLaunch, StepExecutor};
 
 /// `feature_start` inserts the eager row as `bootstrapping` and returns
 /// immediately, then runs the bootstrap on a spawned tail that streams
@@ -40,22 +40,13 @@ async fn test_feature_start_bootstrap_failure_emits_events_and_fails() {
     // `resolve_execution_context` fails at the repo check.
 
     let feature = executor
-        .feature_start(
-            None,
-            "p-boot",
-            "wf-x",
-            "Boot Feature",
-            "a description",
-            None,
-            // model / effort / commit_artifacts / loop_iterations / max_budget_usd: all inherit.
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: "p-boot".to_string(),
+            workflow_id: "wf-x".to_string(),
+            title: "Boot Feature".to_string(),
+            description: "a description".to_string(),
+            ..Default::default()
+        })
         .await
         .expect("feature_start returns the eager row, not an error");
 

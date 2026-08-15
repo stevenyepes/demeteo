@@ -45,7 +45,7 @@ pub async fn resolve_feature_worktree(
         .get(feature_id)?
         .ok_or_else(|| "Feature not found".to_string())?;
 
-    let project_id = feature.project_id;
+    let project_id = feature.project_id.clone();
     let project = ctx
         .projects
         .get_projects()?
@@ -90,10 +90,7 @@ pub async fn resolve_feature_worktree(
         .await?
     };
 
-    let branch = format!(
-        "{}{}",
-        settings.worktree_strategy.branch_prefix, feature_id.0
-    );
+    let branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
     Ok(FeatureWorktreeInfo {
         machine_id,

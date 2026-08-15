@@ -39,6 +39,7 @@ use crate::domain::ids::{FeatureId, ProviderId};
 use crate::domain::models::ProviderInstance;
 use crate::paths;
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
 const REPO_PATH: &str = "demeteo/triage";
@@ -293,23 +294,15 @@ async fn run_triage_leg(
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            "Triage Feature",
-            "Exercise the C6 harness-failure triage path.",
-            Some("stub"),
-            // model / effort / commit_artifacts: inherit.
-            None,
-            None,
-            None,
-            Some(2),
-            // max_budget_usd: inherit.
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: "Triage Feature".to_string(),
+            description: "Exercise the C6 harness-failure triage path.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            loop_iterations: Some(2),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
 

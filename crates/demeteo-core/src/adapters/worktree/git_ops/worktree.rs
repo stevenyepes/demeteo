@@ -369,6 +369,47 @@ impl GitOpsHelper {
         Ok(stale.len())
     }
 
+    /// Fetch one refspec from origin. See
+    /// [`WorktreeOpsPort::fetch_origin_refspec`](crate::ports::worktree_ops::WorktreeOpsPort::fetch_origin_refspec)
+    /// for why this one is not best-effort like its neighbours.
+    pub async fn fetch_origin_refspec(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        refspec: &str,
+    ) -> Result<(), String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        self.exec
+            .run_program(
+                machine_str,
+                git_request(repo_dir, ["fetch", "origin", refspec]),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("Failed to fetch '{refspec}' from origin: {e}"))
+    }
+
+    /// Point a branch at an already-resolvable start point, with no fallback.
+    /// See
+    /// [`WorktreeOpsPort::cut_branch_at`](crate::ports::worktree_ops::WorktreeOpsPort::cut_branch_at).
+    pub async fn cut_branch_at(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        start_point: &str,
+        branch_name: &str,
+    ) -> Result<(), String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        self.exec
+            .run_program(
+                machine_str,
+                git_request(repo_dir, ["branch", "-f", branch_name, start_point]),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("Failed to create branch '{branch_name}' at '{start_point}': {e}"))
+    }
+
     /// Create a feature branch off the default branch in the main repo.
     ///
     /// The start point is the **remote-tracking** ref `origin/<default>`

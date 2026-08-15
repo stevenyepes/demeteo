@@ -303,24 +303,25 @@ pub async fn execute_run(
     let feature = svc
         .ctx
         .executor
-        .feature_start(
+        .feature_start(demeteo_core::ports::step_executor::FeatureLaunch {
             // Reuse the laptop-chosen id (if the submitting app is new
             // enough to send one) so the eager shadow Feature on the
             // laptop and this runner-owned row are the same feature.
-            spec.feature_id.clone(),
-            project.id.as_str(),
-            workflow_id.as_str(),
-            &spec.title,
-            &spec.description,
-            spec.agent_kind.as_deref(),
-            spec.model.as_deref(),
-            spec.effort,
-            spec.commit_artifacts,
-            spec.loop_iterations,
-            spec.max_budget_usd,
-            spec.step_overrides.clone(),
-            staged,
-        )
+            feature_id: spec.feature_id.clone(),
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: spec.title.clone(),
+            description: spec.description.clone(),
+            agent_kind: spec.agent_kind.clone(),
+            model: spec.model.clone(),
+            effort: spec.effort,
+            commit_artifacts: spec.commit_artifacts,
+            loop_iterations: spec.loop_iterations,
+            max_budget_usd: spec.max_budget_usd,
+            step_overrides: spec.step_overrides.clone(),
+            staged_attachments: staged,
+            ..Default::default()
+        })
         .await
         .map_err(|e| format!("feature_start failed: {}", e))?;
     eprintln!("[demeteo-runner] feature {} started", feature.id.as_str());

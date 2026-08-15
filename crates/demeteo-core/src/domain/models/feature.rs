@@ -130,6 +130,21 @@ pub struct Feature {
     pub resolved_branch: Option<String>,
 }
 
+impl Feature {
+    /// The branch this run works on.
+    ///
+    /// The single reader every site that used to spell
+    /// `format!("{branch_prefix}{feature_id}")` goes through, so a
+    /// `branch_prefix` edited while the run is live can no longer move the
+    /// publisher's branch off the worktree's. The derivation survives only as
+    /// the answer for rows written before V41 recorded one.
+    pub fn run_branch(&self, branch_prefix: &str) -> String {
+        self.resolved_branch
+            .clone()
+            .unwrap_or_else(|| self.origin.branch_to_cut(branch_prefix, self.id.as_str()))
+    }
+}
+
 /// A per-step agent/model/effort override selected when launching a feature.
 /// Any field may be `None`, meaning "inherit" for that dimension.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

@@ -41,6 +41,7 @@ use crate::domain::ids::{FeatureId, ProviderId};
 use crate::domain::models::ProviderInstance;
 use crate::paths;
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
 /// The declared artifact the single workflow step must produce. The
@@ -335,22 +336,14 @@ async fn run_leg(
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            "Topology Feature",
-            "Produce a deterministic topology conformance report.",
-            Some("stub"),
-            // model / effort / commit_artifacts / loop_iterations / max_budget_usd: inherit.
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: "Topology Feature".to_string(),
+            description: "Produce a deterministic topology conformance report.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
 

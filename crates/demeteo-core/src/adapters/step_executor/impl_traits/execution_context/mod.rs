@@ -17,6 +17,9 @@ pub struct ExecutionContext {
     pub settings: ProjectSettings,
     pub target_dir: String,
     pub branch_name: String,
+    /// Where this run's branch was cut from, read back from the row rather
+    /// than assumed, so a resume prepares the same start point the launch did.
+    pub origin: crate::domain::feature_origin::FeatureOrigin,
     pub steps: Vec<StepConfig>,
     /// The pinned version's **schema-v2 definition** — the run's scheduling
     /// topology (P1.12), taken from the stored document when the version has
@@ -280,7 +283,21 @@ impl DagStepExecutor {
         bake_step_overrides(&mut steps, &project_overrides);
 
         let slug = slug_from_description(description);
-        let branch_name = format!("{}{}", settings.worktree_strategy.branch_prefix, feature_id);
+        let existing_feature = self
+            .features
+            .get(&FeatureId::from(feature_id.to_string()))
+            .ok()
+            .flatten();
+        let origin = existing_feature
+            .as_ref()
+            .map(|f| f.origin.clone())
+            .unwrap_or_default();
+        let branch_name = existing_feature
+            .as_ref()
+            .map(|f| f.run_branch(&settings.worktree_strategy.branch_prefix))
+            .unwrap_or_else(|| {
+                origin.branch_to_cut(&settings.worktree_strategy.branch_prefix, feature_id)
+            });
 
         let machine_id_opt = machine_id.map(|s| s.to_string());
         let machine_id_for_check = machine_id_opt
@@ -358,10 +375,8 @@ impl DagStepExecutor {
         // if one is already in the DB (replay / re-entry path).
         let artifact_subdir = settings.artifact_subdir.clone();
         let mut commit_artifacts = settings.commit_artifacts;
-        if let Ok(Some(existing)) = self.features.get(&FeatureId::from(feature_id.to_string())) {
-            if let Some(override_flag) = existing.commit_artifacts {
-                commit_artifacts = override_flag;
-            }
+        if let Some(override_flag) = existing_feature.and_then(|f| f.commit_artifacts) {
+            commit_artifacts = override_flag;
         }
 
         Ok(ExecutionContext {
@@ -370,6 +385,7 @@ impl DagStepExecutor {
             settings,
             target_dir,
             branch_name,
+            origin,
             steps,
             definition,
             base_ctx,

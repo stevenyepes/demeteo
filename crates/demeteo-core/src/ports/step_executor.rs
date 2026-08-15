@@ -4,6 +4,60 @@ use crate::error::AppError;
 use async_trait::async_trait;
 use serde::Serialize;
 
+/// Everything a launch decides, in one value.
+///
+/// Bundled because it travels as a unit from each of the four launch paths —
+/// the Tauri command, the runner, the scheduler, and the create-project
+/// wizard — straight onto the `Feature` row, and none of them make these
+/// choices separately. It was thirteen positional parameters behind
+/// `#[allow(clippy::too_many_arguments)]`, six of them `Option`s, which is a
+/// signature where a caller can transpose two arguments and get a compiling
+/// run that starts with the wrong model.
+///
+/// `Default` is what keeps the non-launching callers honest: a scheduler that
+/// only chooses a project, workflow and title spells exactly that and
+/// inherits the rest, rather than counting `None`s.
+#[derive(Debug, Clone, Default)]
+pub struct FeatureLaunch {
+    /// Caller-supplied id for the new Feature row. `None` (every local
+    /// launch) generates one. The runner passes `RunSpec::feature_id` so a
+    /// detached run's Feature carries the same id as the eager shadow the
+    /// laptop inserted at submit time — one run, one id, on both databases.
+    pub feature_id: Option<String>,
+    pub project_id: String,
+    pub workflow_id: String,
+    /// Short human label — the `features.title` row, the worktree branch
+    /// slug, and the ProjectHome header.
+    pub title: String,
+    /// The rich prompt body rendered into `{{feature_description}}` for every
+    /// step. Required — the executor refuses to start with an empty one.
+    pub description: String,
+    /// Per-feature overrides for the project's defaults. `None` means "use
+    /// whatever the project says" (for effort, that bottoms out at
+    /// [`EffortLevel::DEFAULT`]).
+    pub agent_kind: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<EffortLevel>,
+    /// Per-feature override for the project's `commit_artifacts` setting.
+    /// `None` means inherit. See migration V12 and `commit_worktree_changes`.
+    pub commit_artifacts: Option<bool>,
+    /// Per-run override of the `on_failure` retry-loop budget. `None` means
+    /// inherit the project default (`ProjectSettings::default_loop_iterations`)
+    /// or the engine default.
+    pub loop_iterations: Option<u32>,
+    pub max_budget_usd: Option<f64>,
+    /// Per-step agent/model overrides chosen at launch. See migration V13.
+    pub step_overrides: Vec<crate::domain::models::StepOverride>,
+    /// Attachments the user dropped/picked before clicking "Launch feature".
+    /// Persisted to the freshly-created feature row BEFORE the driver is
+    /// spawned, so the agent's first turn sees them on its first
+    /// `features.get(&self.f_id)` read. Empty when nothing was attached.
+    pub staged_attachments: Vec<StagedAttachmentInput>,
+    /// Where the run's branch is cut from. Defaults to the project's default
+    /// branch, which is what every launch did before V41.
+    pub origin: crate::domain::feature_origin::FeatureOrigin,
+}
+
 /// Step executor — the DAG engine that drives a `Feature` through its
 /// workflow.
 ///
@@ -12,53 +66,9 @@ use serde::Serialize;
 /// anti-pattern used to call async impls from sync trait methods.
 #[async_trait]
 pub trait StepExecutor: Send + Sync {
-    /// Start a new feature run.
-    ///
-    /// - `title`: short human label for the feature (used as the
-    ///   `features.title` row, the worktree branch slug, and the
-    ///   ProjectHome header).
-    /// - `description`: the rich prompt body. This is what gets
-    ///   rendered into `{{feature_description}}` for every step.
-    ///   Required — the executor refuses to start with an empty
-    ///   description.
-    /// - `agent_kind`, `model`, `effort`: per-feature overrides for the
-    ///   project's defaults. `None` means "use whatever the project says"
-    ///   (for effort, that bottoms out at [`EffortLevel::DEFAULT`]).
-    /// - `commit_artifacts`: per-feature override for the project's
-    ///   `commit_artifacts` setting. `None` means inherit the project
-    ///   default. See migration V12 and `commit_worktree_changes`.
-    /// - `loop_iterations`: per-run override of the `on_failure` retry-loop
-    ///   budget. `None` means inherit the project default
-    ///   (`ProjectSettings::default_loop_iterations`) or the engine default.
-    /// - `step_overrides`: per-step agent/model overrides chosen at launch.
-    ///   See migration V13.
-    /// - `staged_attachments`: attachments the user dropped/picked before
-    ///   clicking "Launch feature". Persisted to the freshly-created
-    ///   feature row BEFORE the driver is spawned, so the agent's
-    ///   first turn sees them on its first `features.get(&self.f_id)`
-    ///   read. Empty when the user did not attach anything.
-    /// - `feature_id`: caller-supplied id for the new Feature row.
-    ///   `None` (every local launch) generates one. The runner passes
-    ///   `RunSpec::feature_id` so a detached run's Feature carries the
-    ///   same id as the eager shadow the laptop inserted at submit
-    ///   time — one run, one id, on both databases.
-    #[allow(clippy::too_many_arguments)]
-    async fn feature_start(
-        &self,
-        feature_id: Option<String>,
-        project_id: &str,
-        workflow_id: &str,
-        title: &str,
-        description: &str,
-        agent_kind: Option<&str>,
-        model: Option<&str>,
-        effort: Option<EffortLevel>,
-        commit_artifacts: Option<bool>,
-        loop_iterations: Option<u32>,
-        max_budget_usd: Option<f64>,
-        step_overrides: Vec<crate::domain::models::StepOverride>,
-        staged_attachments: Vec<StagedAttachmentInput>,
-    ) -> Result<Feature, String>;
+    /// Start a new feature run. Every choice the launch makes is a field of
+    /// [`FeatureLaunch`].
+    async fn feature_start(&self, launch: FeatureLaunch) -> Result<Feature, String>;
 
     async fn feature_pause(&self, feature_id: &str) -> Result<(), String>;
     async fn feature_resume(&self, feature_id: &str) -> Result<(), String>;

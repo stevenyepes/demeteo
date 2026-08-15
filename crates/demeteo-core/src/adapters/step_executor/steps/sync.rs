@@ -99,8 +99,7 @@ impl ExecutionDriver {
             }
         };
         let default_branch = settings.worktree_strategy.default_branch.clone();
-        let branch_prefix = settings.worktree_strategy.branch_prefix.clone();
-        let feature_branch = format!("{}{}", branch_prefix, self.f_id.as_str());
+        let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
         // Run the merge. A clean merge is the trivial path; conflicts
         // are routed to the resolution agent.

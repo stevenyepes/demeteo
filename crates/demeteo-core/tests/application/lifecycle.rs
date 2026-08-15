@@ -343,6 +343,18 @@ impl WorktreeOpsPort for RecordingWorktrees {
     ) -> Result<(), String> {
         panic!("unexpected WorktreeOpsPort call")
     }
+    async fn fetch_origin_refspec(&self, _: Option<&str>, _: &str, _: &str) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn cut_branch_at(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
     async fn create_feature_branch(
         &self,
         _: Option<&str>,

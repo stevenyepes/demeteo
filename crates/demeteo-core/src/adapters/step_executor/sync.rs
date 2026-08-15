@@ -374,8 +374,7 @@ impl DagStepExecutor {
             .get_settings(&feature.project_id)?
             .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
         let default_branch = settings.worktree_strategy.default_branch.clone();
-        let branch_prefix = settings.worktree_strategy.branch_prefix.clone();
-        let feature_branch = format!("{}{}", branch_prefix, fid.as_str());
+        let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
         match self
             .merge_executor
@@ -414,8 +413,7 @@ impl DagStepExecutor {
             .get_settings(&feature.project_id)?
             .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
         let default_branch = settings.worktree_strategy.default_branch.clone();
-        let branch_prefix = settings.worktree_strategy.branch_prefix.clone();
-        let feature_branch = format!("{}{}", branch_prefix, fid.as_str());
+        let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
         // Resolve the project / machine / repo dir for the agent's cwd.
         let (machine_id_opt, repo_dir) = self

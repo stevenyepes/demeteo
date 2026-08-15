@@ -1,35 +1,34 @@
 use async_trait::async_trait;
 
-use crate::application::attachments::StagedAttachmentInput;
-use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
 use crate::domain::models::{Feature, StepExecution};
 use crate::domain::run_control::{retry_refusal, shadow_refusal, RunAction};
 use crate::error::AppError;
 use crate::paths;
-use crate::ports::step_executor::{StepExecutor, SyncOutcomeView};
+use crate::ports::step_executor::{FeatureLaunch, StepExecutor, SyncOutcomeView};
 
 use super::super::DagStepExecutor;
 use super::lock_registry;
 
 #[async_trait]
 impl StepExecutor for DagStepExecutor {
-    async fn feature_start(
-        &self,
-        feature_id: Option<String>,
-        project_id: &str,
-        workflow_id: &str,
-        title: &str,
-        description: &str,
-        agent_kind: Option<&str>,
-        model: Option<&str>,
-        effort: Option<crate::domain::models::EffortLevel>,
-        commit_artifacts: Option<bool>,
-        loop_iterations: Option<u32>,
-        max_budget_usd: Option<f64>,
-        step_overrides: Vec<crate::domain::models::StepOverride>,
-        staged_attachments: Vec<StagedAttachmentInput>,
-    ) -> Result<Feature, String> {
+    async fn feature_start(&self, launch: FeatureLaunch) -> Result<Feature, String> {
+        let FeatureLaunch {
+            feature_id,
+            project_id,
+            workflow_id,
+            title,
+            description,
+            agent_kind,
+            model,
+            effort,
+            commit_artifacts,
+            loop_iterations,
+            max_budget_usd,
+            step_overrides,
+            staged_attachments,
+            origin,
+        } = launch;
         if title.trim().is_empty() {
             return Err("Feature title cannot be empty.".to_string());
         }
@@ -71,7 +70,7 @@ impl StepExecutor for DagStepExecutor {
         // version appears in between).
         let workflow_version_id = self
             .workflows
-            .latest_version(&WorkflowId::from(workflow_id.to_string()))
+            .latest_version(&WorkflowId::from(workflow_id.clone()))
             .ok()
             .flatten()
             .map(|v| v.id);
@@ -82,18 +81,18 @@ impl StepExecutor for DagStepExecutor {
             // Per-step efforts ride inside `step_overrides`.
             effort,
             id: feature_id.clone(),
-            project_id: ProjectId::from(project_id.to_string()),
-            workflow_id: Some(WorkflowId::from(workflow_id.to_string())),
+            project_id: ProjectId::from(project_id.clone()),
+            workflow_id: Some(WorkflowId::from(workflow_id.clone())),
             workflow_version_id,
-            title: title.to_string(),
-            description: description.to_string(),
+            title,
+            description: description.clone(),
             status: "bootstrapping".to_string(),
             total_cost: 0.0,
             duration: "0s".to_string(),
             tokens: 0,
             created_at: now,
-            agent_kind: agent_kind.map(|s| s.to_string()),
-            model: model.map(|s| s.to_string()),
+            agent_kind,
+            model,
             mr_url: None,
             mr_state: Some("none".to_string()),
             pr_title: None,
@@ -104,7 +103,7 @@ impl StepExecutor for DagStepExecutor {
             step_overrides,
             attachments: Vec::new(),
             harness_baseline: None,
-            origin: FeatureOrigin::DefaultBranch,
+            origin,
             diff_base_branch: None,
             resolved_branch: None,
         };
@@ -113,9 +112,6 @@ impl StepExecutor for DagStepExecutor {
         // Spawn the bootstrap tail on a cheap clone (every field is an `Arc`).
         let this = self.clone();
         let fid = feature_id.clone();
-        let project_id = project_id.to_string();
-        let workflow_id = workflow_id.to_string();
-        let description = description.to_string();
         tokio::spawn(async move {
             this.run_bootstrap_tail(
                 fid,

@@ -205,11 +205,7 @@ impl HttpMrPublisher {
                     })
             });
 
-        let source_branch = format!(
-            "{}{}",
-            settings.worktree_strategy.branch_prefix,
-            feature_id.as_str()
-        );
+        let source_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
         push::push_feature_branch(
             &self.exec,
