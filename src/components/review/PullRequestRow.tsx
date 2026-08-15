@@ -10,6 +10,10 @@ import type { ReviewLaunchParams } from '../../lib/reviewLaunch';
 export interface PullRequestRowProps {
   pullRequest: PullRequestSummary;
   onReview: (params: ReviewLaunchParams) => Promise<void>;
+  /** The project's stored default harness — the one a review launched here
+   *  actually runs on. Empty until the settings read lands, or when the project
+   *  has stored none. */
+  agentKind: string;
   /** Pinned by tests; a real row reads the clock at render. Left off the
    *  parent's call on purpose — a `Date.now()` passed down changes every
    *  render and would defeat the memo below. */
@@ -34,6 +38,7 @@ export interface PullRequestRowProps {
 function PullRequestRowImpl({
   pullRequest,
   onReview,
+  agentKind,
   now,
 }: PullRequestRowProps): React.ReactElement {
   const row = describePullRequestRow(pullRequest, now);
@@ -88,7 +93,7 @@ function PullRequestRowImpl({
         </div>
       </a>
 
-      <PullRequestLaunch pullRequest={pullRequest} onReview={onReview} />
+      <PullRequestLaunch pullRequest={pullRequest} onReview={onReview} agentKind={agentKind} />
     </div>
   );
 }

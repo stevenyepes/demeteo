@@ -62,10 +62,20 @@ export function personalizationFor(
   stepKeepsPersonalization: boolean,
 ): PersonalizationSupport | null {
   if (!kind) return null;
-  const declared = catalog.find((a) => a.kind === kind)?.personalization ?? null;
+  const declared = catalog.find((a) => a.kind === kind)?.personalization;
+  if (declared === undefined || !KNOWN_SUPPORT.includes(declared)) return null;
   if (declared === 'suppressed' && stepKeepsPersonalization) return 'loaded';
   return declared;
 }
+
+/**
+ * Rejecting a spelling this frontend does not know is what makes a rename on
+ * either side of the wire silent rather than fatal: the note stops rendering,
+ * which is also what "nobody has declared an answer" looks like on that
+ * surface. Without the check, an unrecognized value reaches the note's lookup
+ * tables as a missing key and takes the whole surface down mid-render.
+ */
+const KNOWN_SUPPORT: readonly PersonalizationSupport[] = ['loaded', 'suppressed', 'native'];
 
 /**
  * The effort levels `kind` accepts, per the backend catalog. Falls back to the

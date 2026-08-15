@@ -7,6 +7,7 @@ import { PullRequestRow } from './PullRequestRow';
 import { ReviewFailureCard } from './ReviewFailureCard';
 import { useNavigation, useProject } from '../../context';
 import { useLaunchRun } from '../../hooks/useLaunchRun';
+import { getProposedStrategy } from '../../lib/project';
 import {
   asPullRequestListFailure,
   listOpenPullRequests,
@@ -34,6 +35,7 @@ export function CodeReviewView(): React.ReactElement {
   const { state: { currentProjectId, projects } } = useProject();
   const { navigate } = useNavigation();
   const [state, setState] = useState<ListState>({ status: 'loading' });
+  const [defaultAgentKind, setDefaultAgentKind] = useState('');
   const latestRead = useRef(0);
 
   const projectName = projects.find((p) => p.id === currentProjectId)?.name ?? null;
@@ -60,6 +62,27 @@ export function CodeReviewView(): React.ReactElement {
   }, [currentProjectId]);
 
   useEffect(load, [load]);
+
+  // The harness every row's launch will inherit. Read here rather than per row
+  // so the answer is one fetch and one value: rows disagreeing about which
+  // harness the same project launches on is a lie no amount of correct copy
+  // fixes. A failed read leaves it blank, which renders no claim at all — the
+  // honest state, since the run would then fall to a built-in fallback this
+  // frontend cannot name without duplicating `resolve_step_agent`.
+  useEffect(() => {
+    if (!currentProjectId) return;
+    let alive = true;
+    getProposedStrategy(currentProjectId)
+      .then((settings) => {
+        if (alive) setDefaultAgentKind(settings?.default_agent_kind ?? '');
+      })
+      .catch(() => {
+        if (alive) setDefaultAgentKind('');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [currentProjectId]);
 
   const connectProvider = useCallback(() => navigate({ kind: 'providers' }), [navigate]);
 
@@ -114,6 +137,7 @@ export function CodeReviewView(): React.ReactElement {
                   key={pullRequest.web_url}
                   pullRequest={pullRequest}
                   onReview={startReview}
+                  agentKind={defaultAgentKind}
                 />
               ))}
             </div>

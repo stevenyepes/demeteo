@@ -54,6 +54,34 @@ function backend(answer: () => Promise<unknown>) {
   });
 }
 
+/** The three commands the launch surface reads before it can state what a
+ *  review will load, and nothing else — so a view that reached for a fourth
+ *  fails here rather than passing against a stub that answers everything. */
+function reviewBackend(input: {
+  defaultAgentKind: string | null;
+  personalization: string;
+}) {
+  vi.mocked(invoke).mockImplementation((cmd: string) => {
+    if (cmd === 'list_open_pull_requests') return Promise.resolve([PULL_REQUEST]);
+    if (cmd === 'get_proposed_strategy') {
+      return Promise.resolve({ default_agent_kind: input.defaultAgentKind });
+    }
+    if (cmd === 'list_agents') {
+      return Promise.resolve([
+        {
+          kind: 'pi',
+          display_label: 'Pi',
+          lists_models: false,
+          default_model: null,
+          install_command: '',
+          personalization: input.personalization,
+        },
+      ]);
+    }
+    return Promise.reject(new Error(`unexpected command: ${cmd}`));
+  });
+}
+
 function ProjectSeed({ children }: { children: ReactNode }): ReactElement | null {
   const { dispatch } = useProject();
   const [seeded, setSeeded] = useState(false);
@@ -213,44 +241,37 @@ describe('CodeReviewView', () => {
     expect(hint).not.toHaveAttribute('role', 'alert');
   });
 
-  it('reviews with the harness the row chose, and says what that run will load', async () => {
-    const launches: Record<string, unknown>[] = [];
-    vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
-      if (cmd === 'list_open_pull_requests') return Promise.resolve([PULL_REQUEST]);
-      if (cmd === 'list_agents') {
-        return Promise.resolve([
-          {
-            kind: 'pi',
-            display_label: 'Pi',
-            lists_models: false,
-            default_model: null,
-            install_command: '',
-            personalization: 'suppressed',
-          },
-        ]);
-      }
-      if (cmd === 'start_feature') {
-        launches.push(typeof args === 'object' && args !== null ? { ...args } : {});
-        return Promise.resolve({ id: 'feat-1', title: 'Review PR #412', status: 'running' });
-      }
-      return Promise.reject(new Error(`unexpected command: ${cmd}`));
-    });
+  // The note has to fire on the path the user actually takes. Nothing on this
+  // surface picks a harness, so the run inherits the project default — and a
+  // note that only appears once someone opens a control that does not exist
+  // would never be read by anyone.
+  it('says what the project default will load, without being asked', async () => {
+    reviewBackend({ defaultAgentKind: 'pi', personalization: 'suppressed' });
     mount();
 
-    await userEvent.selectOptions(await screen.findByLabelText('Harness'), 'pi');
     // Pi declares `suppressed`, but the review step keeps its personalization,
     // so no `--no-*` flag is emitted for this run: the declared value here
     // would warn about a downgrade the spawn does not perform.
-    expect(screen.getByTestId('harness-personalization')).toHaveAttribute(
-      'data-support',
-      'loaded',
+    await waitFor(() =>
+      expect(screen.getByTestId('harness-personalization')).toHaveAttribute(
+        'data-support',
+        'loaded',
+      ),
     );
-
-    await userEvent.click(screen.getByTestId('review-this-pr'));
-
-    await waitFor(() => expect(launches).toHaveLength(1));
-    expect(launches[0].agentKind).toBe('pi');
   });
+
+  it('claims nothing when the project has stored no default harness', async () => {
+    reviewBackend({ defaultAgentKind: null, personalization: 'suppressed' });
+    mount();
+
+    await screen.findByTestId('review-hint');
+    expect(screen.queryByTestId('harness-personalization')).not.toBeInTheDocument();
+  });
+
+  // An unrecognized wire spelling degrading to silence is asserted in
+  // `HarnessPersonalizationNote.test.tsx`, against the component directly:
+  // `loadAgentCatalog` memoizes for the app session, so a second catalog
+  // shape cannot be introduced from this file at all.
 
   it('refuses on the row when the head ref did not survive the wire', async () => {
     const launched: string[] = [];

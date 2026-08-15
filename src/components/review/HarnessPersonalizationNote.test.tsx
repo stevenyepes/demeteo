@@ -49,7 +49,9 @@ describe('HarnessPersonalizationNote', () => {
     const note = screen.getByTestId('harness-personalization');
     expect(note).toHaveAttribute('data-support', 'suppressed');
     expect(note).toHaveTextContent('own skills and prompt templates switched off');
-    expect(note).toHaveTextContent('Pick another harness');
+    // The action it names has to exist on the screen it appears on, and this
+    // one has no harness picker — the run takes the project's default.
+    expect(note).toHaveTextContent("Change the project's default harness in Settings");
     expect(note).toHaveClass('text-amber-200/90');
     // Nothing has failed and the run is fully launchable: ruby here would say
     // the opposite, and `role="alert"` would interrupt for a standing fact.
@@ -95,6 +97,18 @@ describe('HarnessPersonalizationNote', () => {
 
     // A backend that predates the field. Absent is not `native`.
     rerender(<HarnessPersonalizationNote agents={CATALOG} kind="hermes" stepKeepsPersonalization={false} />);
+    expect(screen.queryByTestId('harness-personalization')).not.toBeInTheDocument();
+  });
+
+  // The Rust `PersonalizationSupport` is a wire contract either side can
+  // rename, and its own test says a rename should cost this note its rendering
+  // and nothing more. Without the guard, an unknown spelling reaches the copy
+  // and tone tables as a missing key and takes the whole surface down mid-render.
+  it('renders nothing, rather than throwing, for a spelling it does not know', () => {
+    const alien = [
+      { ...entry('pi', 'Pi'), personalization: 'Suppressed' as unknown as PersonalizationSupport },
+    ];
+    render(<HarnessPersonalizationNote agents={alien} kind="pi" stepKeepsPersonalization={false} />);
     expect(screen.queryByTestId('harness-personalization')).not.toBeInTheDocument();
   });
 });
