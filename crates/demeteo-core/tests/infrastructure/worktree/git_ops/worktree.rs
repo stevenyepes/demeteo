@@ -2667,3 +2667,114 @@ fn baseline_suffix(repo: &str) -> String {
         .to_string_lossy()
         .into_owned()
 }
+
+/// Refuses every call and records the git command lines it refused.
+///
+/// A double that answered `Ok("")` would let the fork-point resolution look
+/// successful while asking git for nothing at all — the whole failure this
+/// suite is about is a review that reads as finished. Refusing also drives
+/// `merge_base` through its entire candidate list in one call.
+#[derive(Default)]
+struct RefusingExec {
+    seen: Mutex<Vec<String>>,
+}
+
+impl RefusingExec {
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ExecutionPort for RefusingExec {
+    async fn test_connection(&self, _m: &str) -> Result<(), String> {
+        Err("unscripted test_connection".into())
+    }
+    async fn run_program(&self, _m: &str, request: ProgramRequest) -> Result<String, String> {
+        self.seen.lock().unwrap().push(format!(
+            "{} {}",
+            request.executable,
+            request.args.join(" ")
+        ));
+        Err("refused".into())
+    }
+    async fn run_command(&self, _m: &str, cmd: &str) -> Result<String, String> {
+        self.seen.lock().unwrap().push(format!("sh: {cmd}"));
+        Err("refused".into())
+    }
+    async fn remove_dir_all(&self, _m: &str, _p: &str) -> Result<(), String> {
+        Err("unscripted remove_dir_all".into())
+    }
+    async fn get_metadata(&self, _m: &str, _p: &str) -> Result<SftpEntry, String> {
+        Err("unscripted get_metadata".into())
+    }
+    async fn read_file(&self, _m: &str, _p: &str) -> Result<String, String> {
+        Err("unscripted read_file".into())
+    }
+    async fn write_file(&self, _m: &str, _p: &str, _c: &str) -> Result<(), String> {
+        Err("unscripted write_file".into())
+    }
+    async fn write_file_bytes(&self, _m: &str, _p: &str, _c: &[u8]) -> Result<(), String> {
+        Err("unscripted write_file_bytes".into())
+    }
+    async fn list_dir(&self, _m: &str, _p: &str) -> Result<Vec<SftpEntry>, String> {
+        Err("unscripted list_dir".into())
+    }
+    async fn setup_worktree(&self, _m: &str, _r: &str, _b: &str, _s: &str) -> Result<(), String> {
+        Err("unscripted setup_worktree".into())
+    }
+    async fn resolve_home(&self, _m: &str) -> Result<String, String> {
+        Err("unscripted resolve_home".into())
+    }
+    async fn resolve_user(&self, _m: &str) -> Result<String, String> {
+        Err("unscripted resolve_user".into())
+    }
+    async fn resolve_platform(&self, _m: &str) -> Result<Platform, String> {
+        Err("unscripted resolve_platform".into())
+    }
+    async fn control_rpc(
+        &self,
+        _m: &str,
+        _method: &str,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err("unscripted control_rpc".into())
+    }
+    fn spawn_interactive(
+        &self,
+        _m: &str,
+        _b: &str,
+        _a: &[String],
+        _c: &str,
+        _e: &std::collections::HashMap<String, String>,
+    ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+        Err("unscripted spawn_interactive".into())
+    }
+}
+
+/// The bootstrap fetches one branch by name — the project's default — so a run
+/// measured against anything else has no `origin/<base>` to merge-base with
+/// until the review fetches it itself, and on a fresh clone no such ref at all.
+/// The candidate order after it is `squash_feature_branch`'s: the pushed ref
+/// first, the bare name only as the no-origin fallback.
+#[tokio::test]
+async fn the_fork_point_fetches_its_base_before_asking_for_a_merge_base() {
+    let conn = Connection::open_in_memory().unwrap();
+    let db = Arc::new(SqliteAdapter::new(conn).unwrap()) as Arc<dyn AppSettingsRepository>;
+    let exec = Arc::new(RefusingExec::default());
+    let helper = GitOpsHelper::new(db, exec.clone() as Arc<dyn ExecutionPort>);
+
+    let resolved = helper
+        .fork_point(None, "/repo", "release/2.1", "feature/f-1")
+        .await;
+
+    assert_eq!(resolved, None, "every candidate was refused");
+    assert_eq!(
+        exec.seen(),
+        vec![
+            "git -C /repo fetch origin -- release/2.1".to_string(),
+            "git -C /repo merge-base refs/remotes/origin/release/2.1 feature/f-1".to_string(),
+            "git -C /repo merge-base release/2.1 feature/f-1".to_string(),
+        ]
+    );
+}

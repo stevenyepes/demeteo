@@ -386,6 +386,7 @@ fn ctx() -> AgentContext {
         exec: Arc::new(StubExec),
         permissions: PermissionProfile::all_allow(),
         bare_mode: false,
+        keep_harness_personalization: false,
         tool_allowlist: None,
         max_turns: None,
         max_budget_usd: None,
@@ -404,8 +405,11 @@ fn args_open_with_json_mode_and_never_approve() {
     let args = build_pi_args(&ctx(), None, "implement the thing");
     assert_eq!(args[0], "--mode");
     assert_eq!(args[1], "json");
-    // Without `-na` a fleet run's behaviour depends on which projects the user
-    // happened to trust interactively in `~/.pi/agent/trust.json`.
+    // `-na` is what pins pi's project-trust decision to untrusted, and so what
+    // keeps the worktree's own `.pi/` extensions and skills — which pi executes
+    // on load — out of every turn, a keeping step's included. Without it the
+    // turn inherits whichever directories the user trusted interactively, and a
+    // trust entry covers every path beneath it.
     assert!(args.contains(&"-na".to_string()), "got {args:?}");
     assert_eq!(args.last().map(String::as_str), Some("implement the thing"));
     assert!(!args.contains(&"--session".to_string()));
@@ -537,27 +541,65 @@ fn args_drop_an_allowlist_naming_no_pi_tool() {
     assert!(!args.contains(&"-t".to_string()), "got {args:?}");
 }
 
+const PERSONALIZATION_FLAGS: [&str; 4] = [
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+];
+
+fn personalization_flags(args: &[String]) -> Vec<&str> {
+    PERSONALIZATION_FLAGS
+        .into_iter()
+        .filter(|flag| args.iter().any(|a| a == flag))
+        .collect()
+}
+
 #[test]
 fn args_bare_mode_pins_the_static_prefix() {
     let mut c = ctx();
     c.bare_mode = true;
-    let args = build_pi_args(&c, None, "go");
-    for flag in [
-        "--no-extensions",
-        "--no-skills",
-        "--no-prompt-templates",
-        "--no-themes",
-    ] {
-        assert!(
-            args.contains(&flag.to_string()),
-            "missing {flag} in {args:?}"
-        );
-    }
+    assert_eq!(
+        personalization_flags(&build_pi_args(&c, None, "go")),
+        PERSONALIZATION_FLAGS
+    );
+    assert!(personalization_flags(&build_pi_args(&ctx(), None, "go")).is_empty());
+}
 
-    let args = build_pi_args(&ctx(), None, "go");
+/// The step whose whole method is the harness's — a review — keeps what the
+/// user taught it. Demeteo encodes no rubric there, so a stripped harness has
+/// nothing left to review with.
+#[test]
+fn args_keep_the_personalization_a_step_asked_to_keep() {
+    let review_step = crate::domain::models::StepConfig {
+        uses_agent_skills: true,
+        ..Default::default()
+    };
+    let mut c = ctx();
+    c.bare_mode = true;
+    c.keep_harness_personalization =
+        crate::domain::turn_role::TurnRole::Step(&review_step).keeps_harness_personalization();
+    let args = build_pi_args(&c, None, "go");
     assert!(
-        !args.contains(&"--no-extensions".to_string()),
-        "got {args:?}"
+        personalization_flags(&args).is_empty(),
+        "got {:?}",
+        personalization_flags(&args)
+    );
+}
+
+/// Demeteo's own role turns — the adjudicator's among them — hold the switch
+/// closed however the step around them was configured. A skill the reviewed
+/// repository committed, firing inside the verdict turn, would reshape the
+/// decision the run reports as Demeteo's.
+#[test]
+fn args_suppress_personalization_for_an_orchestrator_turn() {
+    let mut c = ctx();
+    c.bare_mode = true;
+    c.keep_harness_personalization =
+        crate::domain::turn_role::TurnRole::Orchestrator.keeps_harness_personalization();
+    assert_eq!(
+        personalization_flags(&build_pi_args(&c, None, "go")),
+        PERSONALIZATION_FLAGS
     );
 }
 
@@ -576,6 +618,24 @@ openai-codex  gpt-5.6-luna         272K     128K     yes       yes
             "openai-codex/gpt-5.3-codex-spark".to_string(),
             "openai-codex/gpt-5.6-luna".to_string()
         ]
+    );
+}
+
+/// The probe is the one pi invocation `build_pi_args` does not build, so it is
+/// the one that can quietly lose the flag. pi executes a project extension on
+/// load, which would make reading a model table a code-execution path for any
+/// cwd holding a `.pi/`.
+#[test]
+fn model_listing_never_approves_the_project() {
+    use crate::ports::agent_runtime::AgentRuntime;
+    let listing = crate::adapters::agent::pi::runtime()
+        .capabilities()
+        .model_listing
+        .expect("pi lists models");
+    assert!(
+        listing.args.split_whitespace().any(|a| a == "-na"),
+        "got {:?}",
+        listing.args
     );
 }
 

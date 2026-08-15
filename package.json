@@ -21,7 +21,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "checks": "bash scripts/checks.sh",
-    "checks:code": "cross-env CHECKS_SKIP_COMMITLINT=1 bash scripts/checks.sh",
+    "checks:code": "bash scripts/checks.sh --skip-commitlint",
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {

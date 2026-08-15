@@ -289,6 +289,7 @@ fn ctx_for_test(bare_mode: bool) -> AgentContext {
         exec: Arc::new(StubExec),
         permissions: PermissionProfile::all_allow(),
         bare_mode,
+        keep_harness_personalization: false,
         tool_allowlist: None,
         max_turns: None,
         max_budget_usd: None,
@@ -336,6 +337,27 @@ fn isolation_flags_only_when_bare_mode_true() {
     assert!(!without_bare.contains(&"--exclude-dynamic-system-prompt-sections".to_string()));
     assert!(!without_bare.contains(&"--setting-sources".to_string()));
     assert!(!without_bare.contains(&"--strict-mcp-config".to_string()));
+}
+
+/// The guard against implementing "keep the harness's personalization" as
+/// `bare_mode: !uses_agent_skills`. This one block carries `--strict-mcp-config`
+/// too, so dropping it would re-enable every MCP server the *reviewed*
+/// repository commits — arbitrary processes with network access, inside a
+/// capability whose profile denies the network — and would pick up
+/// `settings.local.json` besides. Claude Code loads the user's and the
+/// project's own skills under this block already, so the step's answer has
+/// nothing to buy here and must change nothing.
+#[test]
+fn keeping_a_steps_personalization_never_loosens_claude_isolation() {
+    let mut keeping = ctx_for_test(true);
+    keeping.keep_harness_personalization = true;
+    let kept = build_claude_args(&keeping, None, "");
+
+    assert!(
+        kept.contains(&"--strict-mcp-config".to_string()),
+        "got {kept:?}"
+    );
+    assert_eq!(kept, build_claude_args(&ctx_for_test(true), None, ""));
 }
 
 #[test]

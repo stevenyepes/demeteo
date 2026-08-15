@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 use crate::domain::models::MrInfo;
+use crate::domain::mr_list_error::MrListError;
 
 use super::{truncate, HttpClient, MrRequest};
 
@@ -106,6 +107,78 @@ fn github_api_host(host: &str) -> &str {
     }
 }
 
+/// Read the open pull requests of one repository.
+///
+/// `state=open` is the server-side filter; asking for everything and filtering
+/// here would page through years of closed requests to find this week's four.
+pub(super) async fn list_github_pulls(
+    http: &dyn HttpClient,
+    req: &super::ListRequest<'_>,
+) -> Result<Vec<serde_json::Value>, MrListError> {
+    let url = format!(
+        "https://{}/repos/{}/pulls?state=open&sort=updated&direction=desc&per_page={}",
+        github_api_host(req.host),
+        req.repo_path,
+        super::LIST_PAGE_SIZE
+    );
+    let headers: Vec<(String, String)> = vec![
+        ("Authorization".to_string(), format!("Bearer {}", req.pat)),
+        (
+            "Accept".to_string(),
+            "application/vnd.github+json".to_string(),
+        ),
+        ("User-Agent".to_string(), "demeteo".to_string()),
+    ];
+    super::read_list(http, &url, &headers, req.target()).await
+}
+
+/// Comment on a pull request as a whole, and answer with the comment's URL.
+///
+/// **The endpoint is `issues`, not `pulls`.** GitHub models a pull request as
+/// an issue that also has a diff, and the conversation everyone reads belongs
+/// to the issue half. `POST /pulls/{n}/comments` is a different resource — a
+/// review comment anchored to a line, which requires `commit_id`, `path` and a
+/// position, and answers 404 without them. The two paths differ by one word and
+/// the wrong one fails as if the pull request did not exist, so
+/// `tests/infrastructure/mr_publisher/comment.rs` pins this URL exactly.
+pub(super) async fn post_github_comment(
+    http: &dyn HttpClient,
+    host: &str,
+    mr_url: &str,
+    pat: &str,
+    body: &str,
+) -> Result<String, String> {
+    let (owner, repo, number) = parse_github_pr_url(mr_url)?;
+    let url = format!(
+        "https://{}/repos/{}/{}/issues/{}/comments",
+        github_api_host(host),
+        owner,
+        repo,
+        number
+    );
+    let headers: Vec<(String, String)> = vec![
+        ("Authorization".to_string(), format!("Bearer {}", pat)),
+        (
+            "Accept".to_string(),
+            "application/vnd.github+json".to_string(),
+        ),
+        ("User-Agent".to_string(), "demeteo".to_string()),
+    ];
+    let resp = http
+        .post_json(&url, &headers, &serde_json::json!({ "body": body }))
+        .await?;
+    if resp.status >= 300 {
+        return Err(format!(
+            "GitHub returned HTTP {}: {}",
+            resp.status,
+            truncate(&resp.body, 512)
+        ));
+    }
+    let v: GithubComment = serde_json::from_str(&resp.body)
+        .map_err(|e| format!("Failed to parse GitHub comment response: {}", e))?;
+    Ok(v.html_url)
+}
+
 pub(super) async fn publish_github(
     http: &dyn HttpClient,
     req: &MrRequest<'_>,
@@ -153,6 +226,11 @@ pub(super) async fn publish_github(
         provider_kind: "github".into(),
         provider_host: req.host.into(),
     })
+}
+
+#[derive(Deserialize)]
+struct GithubComment {
+    html_url: String,
 }
 
 #[derive(Deserialize)]

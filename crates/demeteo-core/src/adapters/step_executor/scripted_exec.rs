@@ -16,16 +16,30 @@
 //! of `adapters/agent/test_stubs.rs`: three `#[path]` mounts of one file load it
 //! into the crate graph three times and trip `clippy::duplicate-mod`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::ports::execution::{ExecutionPort, ShellOptions};
+use crate::ports::execution::{ExecutionPort, ProgramRequest, ShellOptions};
 
 pub(crate) struct ScriptedExec {
     answers: HashMap<String, Result<String, String>>,
     files: HashMap<String, Result<String, String>>,
+    programs: HashMap<String, Result<String, String>>,
+    dirs: HashSet<String>,
     seen: Mutex<Vec<(String, ShellOptions)>>,
+    seen_programs: Mutex<Vec<String>>,
+}
+
+/// The argv of a [`ProgramRequest`] joined by single spaces — the form a test
+/// scripts and asserts against. Logged separately from
+/// [`ScriptedExec::commands`] so a test over shell commands is not perturbed
+/// by whatever git plumbing ran beside them.
+fn rendered(request: &ProgramRequest) -> String {
+    std::iter::once(request.executable.as_str())
+        .chain(request.args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn script(entries: &[(&str, Result<&str, &str>)]) -> HashMap<String, Result<String, String>> {
@@ -48,8 +62,31 @@ impl ScriptedExec {
         Self {
             answers: script(answers),
             files: HashMap::new(),
+            programs: HashMap::new(),
+            dirs: HashSet::new(),
             seen: Mutex::new(Vec::new()),
+            seen_programs: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Script [`ExecutionPort::run_program`] answers, keyed by [`rendered`]
+    /// argv. An unscripted program still errors.
+    pub(crate) fn with_programs(mut self, programs: &[(&str, Result<&str, &str>)]) -> Self {
+        self.programs = script(programs);
+        self
+    }
+
+    /// Declare which absolute paths `get_metadata` reports as directories.
+    /// Every other path stays an error, so "the code probed somewhere this
+    /// test never set up" fails rather than reading as an empty disk.
+    pub(crate) fn with_dirs(mut self, dirs: &[&str]) -> Self {
+        self.dirs = dirs.iter().map(|d| d.to_string()).collect();
+        self
+    }
+
+    /// Every `run_program` this double was handed, in call order.
+    pub(crate) fn programs(&self) -> Vec<String> {
+        self.seen_programs.lock().unwrap().clone()
     }
 
     /// Script `read_file` answers by absolute path. An unscripted path still
@@ -67,7 +104,10 @@ impl ScriptedExec {
         Self {
             answers: self.answers.into_iter().map(|(k, v)| (f(&k), v)).collect(),
             files: self.files,
+            programs: self.programs,
+            dirs: self.dirs,
             seen: self.seen,
+            seen_programs: self.seen_programs,
         }
     }
 
@@ -104,6 +144,14 @@ impl ExecutionPort for ScriptedExec {
     async fn test_connection(&self, _m: &str) -> Result<(), String> {
         Ok(())
     }
+    async fn run_program(&self, _m: &str, request: ProgramRequest) -> Result<String, String> {
+        let key = rendered(&request);
+        self.seen_programs.lock().unwrap().push(key.clone());
+        self.programs
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| Err(format!("ScriptedExec: unscripted program `{key}`")))
+    }
     async fn run_command_with(
         &self,
         _m: &str,
@@ -131,9 +179,18 @@ impl ExecutionPort for ScriptedExec {
     async fn get_metadata(
         &self,
         _m: &str,
-        _p: &str,
+        p: &str,
     ) -> Result<crate::ports::execution::SftpEntry, String> {
-        Err("unscripted get_metadata".into())
+        if self.dirs.contains(p) {
+            return Ok(crate::ports::execution::SftpEntry {
+                name: p.to_string(),
+                path: p.to_string(),
+                is_dir: true,
+                size: 0,
+                modified: 0,
+            });
+        }
+        Err(format!("ScriptedExec: unscripted get_metadata `{p}`"))
     }
     async fn list_dir(
         &self,

@@ -4,6 +4,7 @@
 //! provisioning worktrees, checking repository state, and syncing with upstream.
 
 use crate::domain::branch_listing::BranchOption;
+use crate::domain::feature_origin::Refspec;
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -370,6 +371,37 @@ pub trait WorktreeOpsPort: Send + Sync {
         branch_name: &str,
     ) -> Result<(), String>;
 
+    /// Bring exactly one refspec down from origin, reporting whether it
+    /// arrived.
+    ///
+    /// Whether that report stops the run is
+    /// [`BranchCut`](crate::domain::feature_origin::BranchCut)'s decision and
+    /// not this method's, which is why it reports rather than tolerates.
+    ///
+    /// The refspec is passed after `--`; see [`Refspec`] for what that is
+    /// holding shut.
+    async fn fetch_origin_refspec(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        refspec: &Refspec,
+    ) -> Result<(), String>;
+
+    /// Point `branch_name` at `start_point`, which must already resolve.
+    ///
+    /// The counterpart to
+    /// [`create_feature_branch`](Self::create_feature_branch) for a run whose
+    /// origin named its own start point. There is no fallback ref to try:
+    /// falling back is how a run started somewhere the user chose silently
+    /// becomes a run started from the default branch.
+    async fn cut_branch_at(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        start_point: &str,
+        branch_name: &str,
+    ) -> Result<(), String>;
+
     /// Provision a subtask worktree.
     async fn provision_subtask_worktree(
         &self,
@@ -411,7 +443,7 @@ pub trait WorktreeOpsPort: Send + Sync {
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_branch: &str,
     ) -> Result<SyncOutcome, SyncFailure>;
 
     /// Run the repo's own `commit-msg` hook against a proposed message,
@@ -428,14 +460,18 @@ pub trait WorktreeOpsPort: Send + Sync {
         message: &str,
     ) -> Result<(), CommitMessageRejected>;
 
-    /// Collapse every commit the feature branch adds on top of the default
-    /// branch into a single commit carrying `message`.
+    /// Collapse every commit the feature branch adds on top of `base_ref`
+    /// into a single commit carrying `message`.
+    ///
+    /// `base_ref` is where the run started, which is the project's default
+    /// branch only for a run that started there — see
+    /// [`FeatureOrigin::squash_base`](crate::domain::feature_origin::FeatureOrigin::squash_base).
     async fn squash_feature_branch(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_ref: &str,
         message: &str,
     ) -> Result<SquashOutcome, String>;
 

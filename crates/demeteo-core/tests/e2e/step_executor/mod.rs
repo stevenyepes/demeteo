@@ -6,5 +6,7 @@ mod bootstrap;
 mod gate_decide;
 mod harness;
 mod launch_resolution;
+mod origin_cut;
 mod remote_mirror;
 mod retry_guards;
+mod sync_base;

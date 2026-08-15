@@ -68,14 +68,14 @@ impl ExecutionDriver {
             }
         }
 
-        // 2. Compute git diff. Prefer the feature's fork point (where
-        // `branch_name` diverged from the default branch) over
-        // `baseline.base_ref` (this attempt's pre-run tip) so the review
-        // diff always covers the complete feature change, not just the
-        // latest retry's incremental fix — see `resolve_fork_point_ref`.
-        // `baseline.base_ref` remains the fallback (fork point
-        // unavailable, e.g. default branch not configured) and is still
-        // used unchanged by the no-op-commit guard in `handle_agent_step`.
+        // 2. Compute git diff. Prefer the fork point (where `branch_name`
+        // diverged from the branch this run is measured against) over
+        // `baseline.base_ref` (this attempt's pre-run tip) so the diff covers the
+        // complete feature change, not just the latest retry's incremental
+        // fix — see `resolve_fork_point_ref`. `baseline.base_ref` remains the
+        // fallback (no fork point resolved, e.g. nothing names a base) and is
+        // still used unchanged by the no-op-commit guard in
+        // `handle_agent_step`.
         let fork_point = self.resolve_fork_point_ref(machine_str).await;
         let diff_ref = fork_point
             .as_deref()

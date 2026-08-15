@@ -7,7 +7,9 @@ import { densityPref, inspectorWidthPref } from '../../lib/uiPrefs';
 import { usePersistedPref } from '../../hooks/usePersistedPref';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import { useNavigation, useProject, useUIState } from '../../context';
+import { useLaunchRun } from '../../hooks/useLaunchRun';
 import { ArtifactModal } from '../ArtifactModal';
+import { AddressFindingsLaunch } from '../review/AddressFindingsLaunch';
 import { RunViewToggle } from '../RunViewToggle';
 import {
   defaultInspectorWidth,
@@ -113,6 +115,16 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     setFeatureStatus: run.setFeatureStatus,
     overrides,
   });
+  // The one launch code path (F28), the same hook every composer uses: a fix
+  // run is a run like any other, and on success this navigates to its own
+  // feature detail the way every other launch does.
+  const launchRun = useLaunchRun({ projectId: currentProjectId });
+  const launchFixRun = useCallback(
+    async (params: Parameters<typeof launchRun>[0]) => {
+      await launchRun(params);
+    },
+    [launchRun],
+  );
   const selection = useStepSelection({ view, steps: run.steps, navigate });
   const graph = useRunGraph({
     featureId,
@@ -393,6 +405,17 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
           question, and it was previously findable only by scrolling to the card
           holding it (UI_REDESIGN_PLAN §3.2). */}
       <GateStrip steps={run.steps} onDecideGate={decideGate} className="mx-6 mt-4" />
+
+      {/* Renders itself away unless this run wrote a review report *and* the
+          pull request it reviewed is still open — see the component. Placed
+          beside the gate strip because it is the same kind of thing: the run
+          finished, and there is a decision waiting on a human. */}
+      <AddressFindingsLaunch
+        featureId={featureId}
+        projectId={currentProjectId}
+        steps={run.steps}
+        onLaunch={launchFixRun}
+      />
 
       <InitialPromptPanel featureDescription={run.featureDescription} />
 

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rusqlite::Connection;
 
 use crate::adapters::database::SqliteAdapter;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::ProjectId;
 use crate::domain::models::{Feature, Project};
 use crate::ports::db::{FeatureRepository, ProjectRepository};
@@ -76,6 +77,9 @@ fn make_open_mr_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> 
         step_overrides: Vec::new(),
         attachments: Vec::new(),
         harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
     };
     FeatureRepository::add(adapter, feature.clone()).unwrap();
     feature

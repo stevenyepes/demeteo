@@ -19,9 +19,17 @@ pub trait HttpClient: Send + Sync {
 
 /// HTTP response. Body is always captured as text so we can log it
 /// when the provider returns an error.
+///
+/// `headers` exists for the one thing the status code cannot say: a GitHub 403
+/// is a bad token or an exhausted quota depending only on `Retry-After` and
+/// `X-RateLimit-Remaining`, and
+/// [`classify_list_response`](crate::domain::mr_list_error::classify_list_response)
+/// is the reader. Kept as pairs rather than a map because that is what the
+/// classifier takes and a listing has a handful of them.
 pub struct HttpResponse {
     pub status: u16,
     pub body: String,
+    pub headers: Vec<(String, String)>,
 }
 
 pub struct ReqwestHttp;
@@ -46,9 +54,7 @@ impl HttpClient for ReqwestHttp {
             .send()
             .await
             .map_err(|e| format!("Git provider request failed: {}", e))?;
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        Ok(HttpResponse { status, body })
+        Ok(capture(resp).await)
     }
 
     async fn get_json(
@@ -68,8 +74,21 @@ impl HttpClient for ReqwestHttp {
             .send()
             .await
             .map_err(|e| format!("Git provider request failed: {}", e))?;
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        Ok(HttpResponse { status, body })
+        Ok(capture(resp).await)
+    }
+}
+
+async fn capture(resp: reqwest::Response) -> HttpResponse {
+    let status = resp.status().as_u16();
+    let headers = resp
+        .headers()
+        .iter()
+        .filter_map(|(k, v)| Some((k.as_str().to_string(), v.to_str().ok()?.to_string())))
+        .collect();
+    let body = resp.text().await.unwrap_or_default();
+    HttpResponse {
+        status,
+        body,
+        headers,
     }
 }

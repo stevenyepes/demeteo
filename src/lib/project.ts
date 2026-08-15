@@ -280,6 +280,7 @@ export interface ProjectSettingsInput {
   default_max_budget_usd?: number | null;
   artifact_subdir?: string;
   commit_artifacts?: boolean;
+  review_entrypoint?: string | null;
 }
 
 /**
@@ -383,6 +384,10 @@ export async function saveProjectSettings(
       input.artifact_subdir ?? existing?.artifact_subdir ?? "artifacts/",
     commit_artifacts:
       input.commit_artifacts ?? existing?.commit_artifacts ?? false,
+    review_entrypoint:
+      input.review_entrypoint !== undefined
+        ? input.review_entrypoint
+        : (existing?.review_entrypoint ?? null),
   };
 
   await invoke("save_project_settings", { projectId, settings: merged });

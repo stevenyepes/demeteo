@@ -2,6 +2,7 @@
 
 use super::merge_project_settings;
 use demeteo_core::adapters::step_executor::setup::fetch_default_settings;
+use demeteo_core::domain::feature_origin::FeatureOrigin;
 use demeteo_core::domain::ids::ProjectId;
 
 #[test]
@@ -11,7 +12,7 @@ fn none_client_reproduces_detected_strategy() {
     let mut detected = fetch_default_settings().worktree_strategy;
     detected.default_branch = "trunk".to_string();
     detected.test_command = Some("cargo test".to_string());
-    let out = merge_project_settings(detected, None, ProjectId::from("p1".to_string()));
+    let out = merge_project_settings(detected, None, ProjectId::from("p1".to_string()), None);
     assert_eq!(out.project_id.as_str(), "p1");
     assert_eq!(out.worktree_strategy.default_branch, "trunk");
     assert_eq!(
@@ -33,7 +34,12 @@ fn client_tunables_win_but_detected_default_branch_wins() {
     detected.default_branch = "master".to_string();
     detected.test_command = Some("SHOULD NOT WIN".to_string());
 
-    let out = merge_project_settings(detected, Some(client), ProjectId::from("p2".to_string()));
+    let out = merge_project_settings(
+        detected,
+        Some(client),
+        ProjectId::from("p2".to_string()),
+        None,
+    );
     // Detected default_branch (read from origin/HEAD) wins over the
     // client's stale copy…
     assert_eq!(out.worktree_strategy.default_branch, "master");
@@ -61,7 +67,12 @@ fn empty_detected_branch_falls_back_to_client_then_main() {
     client.worktree_strategy.default_branch = "develop".to_string();
     let mut detected = fetch_default_settings().worktree_strategy;
     detected.default_branch = "   ".to_string();
-    let out = merge_project_settings(detected, Some(client), ProjectId::from("p3".to_string()));
+    let out = merge_project_settings(
+        detected,
+        Some(client),
+        ProjectId::from("p3".to_string()),
+        None,
+    );
     assert_eq!(out.worktree_strategy.default_branch, "develop");
 
     // Detected blank AND client blank → "main" (never an empty branch).
@@ -69,8 +80,90 @@ fn empty_detected_branch_falls_back_to_client_then_main() {
     client2.worktree_strategy.default_branch = String::new();
     let mut detected2 = fetch_default_settings().worktree_strategy;
     detected2.default_branch = String::new();
-    let out2 = merge_project_settings(detected2, Some(client2), ProjectId::from("p4".to_string()));
+    let out2 = merge_project_settings(
+        detected2,
+        Some(client2),
+        ProjectId::from("p4".to_string()),
+        None,
+    );
     assert_eq!(out2.worktree_strategy.default_branch, "main");
+}
+
+/// Detection succeeding with empty output is the way a blank arrives with no
+/// client to fall through to: `git rev-parse --abbrev-ref origin/HEAD` returning
+/// `Ok("")` is not an error, so `detect_worktree_strategy` hands back a strategy
+/// naming no branch. The row it lands in is what `create_feature_branch`,
+/// `merge_base` and the squash all read.
+#[test]
+fn a_blank_detected_branch_with_no_client_still_names_one() {
+    let mut detected = fetch_default_settings().worktree_strategy;
+    detected.default_branch = String::new();
+    let out = merge_project_settings(detected, None, ProjectId::from("p8".to_string()), None);
+    assert_eq!(out.worktree_strategy.default_branch, "main");
+}
+
+// ── The base a run declared ──────────────────────────────────────────────────
+//
+// Why the run's base outranks every other claimant on a runner-side
+// `default_branch` is on `merge_project_settings`.
+
+#[test]
+fn a_declared_base_beats_the_detected_default_branch() {
+    let mut client = fetch_default_settings();
+    client.worktree_strategy.default_branch = "main".to_string();
+    let mut detected = fetch_default_settings().worktree_strategy;
+    detected.default_branch = "master".to_string();
+
+    let out = merge_project_settings(
+        detected,
+        Some(client),
+        ProjectId::from("p5".to_string()),
+        FeatureOrigin::Branch {
+            base: "release/2.0".to_string(),
+        }
+        .base_branch(None),
+    );
+
+    assert_eq!(
+        out.worktree_strategy.default_branch, "release/2.0",
+        "the detected default is a branch this run did not declare, and every \
+         answer that falls back to this field would be about that one instead"
+    );
+}
+
+#[test]
+fn a_pull_request_run_measures_itself_against_the_branch_it_merges_into() {
+    let mut detected = fetch_default_settings().worktree_strategy;
+    detected.default_branch = "master".to_string();
+    let origin = FeatureOrigin::Ref {
+        fetch_spec: "refs/pull/12/head".to_string(),
+        label: "PR #12".to_string(),
+    };
+
+    let out = merge_project_settings(
+        detected,
+        None,
+        ProjectId::from("p6".to_string()),
+        origin.base_branch(Some("develop")),
+    );
+
+    assert_eq!(out.worktree_strategy.default_branch, "develop");
+}
+
+#[test]
+fn a_blank_declared_base_leaves_the_detected_one_standing() {
+    let mut detected = fetch_default_settings().worktree_strategy;
+    detected.default_branch = "master".to_string();
+    let out = merge_project_settings(
+        detected,
+        None,
+        ProjectId::from("p7".to_string()),
+        Some("   "),
+    );
+    assert_eq!(
+        out.worktree_strategy.default_branch, "master",
+        "the row never carries an empty branch name"
+    );
 }
 
 // ── RunSpec wire format (effort) ────────────────────────────────────
@@ -120,4 +213,110 @@ fn a_spec_with_effort_round_trips_through_the_wire() {
     assert_eq!(back.effort, spec.effort);
     // The canonical spelling is the lowercase one, on the wire as in the DB.
     assert!(json.contains("\"effort\":\"max\""));
+}
+
+// ── the branch the terminal push sends ──────────────────────────────────────
+//
+// A run's branch is whatever its bootstrap cut and recorded. Rebuilding it
+// here from `branch_prefix` + feature id was right only for origins that
+// derive their branch that way, and the runner is the one side of the fleet
+// with no UI to notice it pushed the wrong name.
+
+use super::branch_to_push;
+use demeteo_core::adapters::database::SqliteAdapter;
+use demeteo_core::domain::ids::FeatureId;
+use demeteo_core::domain::models::{Feature, Project};
+use demeteo_core::ports::db::{FeatureRepository, ProjectRepository};
+
+const PREFIX: &str = "demeteo/features/";
+
+fn seeded_db(label: &str, resolved_branch: Option<&str>) -> SqliteAdapter {
+    let dir = std::env::temp_dir().join(format!(
+        "demeteo_runner_push_{}_{}",
+        label,
+        demeteo_core::paths::now_ms()
+    ));
+    let conn = demeteo_core::db::init_db(dir).expect("init_db");
+    let db = SqliteAdapter::new(conn).expect("migrations run");
+    ProjectRepository::add(
+        &db,
+        Project {
+            id: ProjectId::from("p-push"),
+            name: "push".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 1_700_000_000,
+        },
+    )
+    .expect("seed the project");
+    FeatureRepository::add(
+        &db,
+        Feature {
+            id: FeatureId::from("f-push"),
+            project_id: ProjectId::from("p-push"),
+            workflow_id: None,
+            workflow_version_id: None,
+            title: "push me".to_string(),
+            description: String::new(),
+            status: "completed".to_string(),
+            total_cost: 0.0,
+            duration: "0s".to_string(),
+            tokens: 0,
+            created_at: 1_700_000_000,
+            agent_kind: None,
+            model: None,
+            effort: None,
+            mr_url: None,
+            mr_state: Some("none".to_string()),
+            pr_title: None,
+            pr_body: None,
+            commit_artifacts: None,
+            loop_iterations: None,
+            max_budget_usd: None,
+            step_overrides: Vec::new(),
+            attachments: Vec::new(),
+            harness_baseline: None,
+            origin: FeatureOrigin::Ref {
+                fetch_spec: "refs/pull/42/head".to_string(),
+                label: "PR #42".to_string(),
+            },
+            diff_base_branch: None,
+            resolved_branch: resolved_branch.map(str::to_string),
+        },
+    )
+    .expect("seed the feature");
+    db
+}
+
+#[test]
+fn the_push_sends_the_branch_the_run_recorded() {
+    let db = seeded_db("recorded", Some("demeteo/pr-42-review"));
+
+    assert_eq!(
+        branch_to_push(&db, &FeatureId::from("f-push"), PREFIX),
+        Ok("demeteo/pr-42-review".to_string())
+    );
+}
+
+/// A row written before V41 recorded a branch, which is the one case the
+/// derivation is still the answer for.
+#[test]
+fn a_run_that_recorded_no_branch_falls_back_to_the_derivation() {
+    let db = seeded_db("underived", None);
+
+    assert_eq!(
+        branch_to_push(&db, &FeatureId::from("f-push"), PREFIX),
+        Ok("demeteo/features/f-push".to_string())
+    );
+}
+
+#[test]
+fn a_missing_feature_stops_the_push_instead_of_naming_a_branch() {
+    let db = seeded_db("missing", Some("demeteo/pr-42-review"));
+
+    assert!(branch_to_push(&db, &FeatureId::from("f-gone"), PREFIX).is_err());
 }

@@ -54,6 +54,7 @@ use crate::domain::ids::{FeatureId, ProjectId, ProviderId};
 use crate::domain::models::ProviderInstance;
 use crate::paths;
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
 const REPO_PATH: &str = "demeteo/harness-subtraction";
@@ -340,21 +341,15 @@ async fn run_leg(tag: &str, steps: Vec<serde_json::Value>, config: GateConfig) -
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            "Subtraction Feature",
-            "Exercise HB2c subtraction.",
-            Some("stub"),
-            None,
-            None,
-            None,
-            Some(1),
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: "Subtraction Feature".to_string(),
+            description: "Exercise HB2c subtraction.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            loop_iterations: Some(1),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
 

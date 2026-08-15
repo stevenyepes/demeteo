@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 use crate::domain::models::MrInfo;
+use crate::domain::mr_list_error::MrListError;
 
 use super::{truncate, urlencoded, HttpClient, MrRequest};
 
@@ -95,6 +96,67 @@ fn parse_gitlab_mr_url(url: &str) -> Result<(String, u64), String> {
     Ok((project_path.to_string(), iid))
 }
 
+/// Read the open merge requests of one project.
+///
+/// GitLab spells open `opened`, which `normalize_gitlab_state` already knows
+/// about on the read side; the query parameter takes the provider's spelling.
+pub(super) async fn list_gitlab_merge_requests(
+    http: &dyn HttpClient,
+    req: &super::ListRequest<'_>,
+) -> Result<Vec<serde_json::Value>, MrListError> {
+    let url = format!(
+        "https://{}/api/v4/projects/{}/merge_requests?state=opened&order_by=updated_at&sort=desc&per_page={}",
+        req.host,
+        urlencoded(req.repo_path),
+        super::LIST_PAGE_SIZE
+    );
+    let headers: Vec<(String, String)> = vec![
+        ("PRIVATE-TOKEN".to_string(), req.pat.to_string()),
+        ("Accept".to_string(), "application/json".to_string()),
+    ];
+    super::read_list(http, &url, &headers, req.target()).await
+}
+
+/// Comment on a merge request, and answer with the note's URL.
+///
+/// A created note answers with an `id` and no URL of its own — GitLab has no
+/// canonical address for a note outside the page it is on — so the address is
+/// the merge request plus the `#note_<id>` anchor its own UI links to. That is
+/// a construction, not a value the provider returned, and it is the reason this
+/// function reads `id` rather than looking for a `web_url` that never arrives.
+pub(super) async fn post_gitlab_note(
+    http: &dyn HttpClient,
+    host: &str,
+    mr_url: &str,
+    pat: &str,
+    body: &str,
+) -> Result<String, String> {
+    let (project_path, iid) = parse_gitlab_mr_url(mr_url)?;
+    let url = format!(
+        "https://{}/api/v4/projects/{}/merge_requests/{}/notes",
+        host,
+        urlencoded(&project_path),
+        iid
+    );
+    let headers: Vec<(String, String)> = vec![
+        ("PRIVATE-TOKEN".to_string(), pat.to_string()),
+        ("Content-Type".to_string(), "application/json".to_string()),
+    ];
+    let resp = http
+        .post_json(&url, &headers, &serde_json::json!({ "body": body }))
+        .await?;
+    if resp.status >= 300 {
+        return Err(format!(
+            "GitLab returned HTTP {}: {}",
+            resp.status,
+            truncate(&resp.body, 512)
+        ));
+    }
+    let v: GitlabNote = serde_json::from_str(&resp.body)
+        .map_err(|e| format!("Failed to parse GitLab note response: {}", e))?;
+    Ok(format!("{}#note_{}", mr_url.trim_end_matches('/'), v.id))
+}
+
 pub(super) async fn publish_gitlab(
     http: &dyn HttpClient,
     req: &MrRequest<'_>,
@@ -141,6 +203,11 @@ pub(super) async fn publish_gitlab(
         provider_kind: "gitlab".into(),
         provider_host: req.host.into(),
     })
+}
+
+#[derive(Deserialize)]
+struct GitlabNote {
+    id: i64,
 }
 
 #[derive(Deserialize)]

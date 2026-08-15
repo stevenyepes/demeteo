@@ -104,6 +104,7 @@ export type AppView =
   | { kind: 'new-project' }
   | { kind: 'create-project' }
   | { kind: 'project-settings' }
+  | { kind: 'code-review' }
   | { kind: 'workflows' }
   | { kind: 'workflow-editor'; workflowId: string | null }
   | { kind: 'providers' }
@@ -589,7 +590,31 @@ export interface Feature {
    * not "everything was green" — see {@link HarnessBaseline}.
    */
   harness_baseline?: HarnessBaseline | null;
+  /** Where this run's branch was cut from (`features.origin_json`, V41).
+   *  Absent on every row written before V41, which cut from the default
+   *  branch. */
+  origin?: FeatureOrigin | null;
+  /** The branch the run is measured against. `null` = the project's default
+   *  branch. Not interchangeable with {@link Feature.origin}: a run started
+   *  from a pull-request head reviews against the branch it merges into, not
+   *  against the snapshot it began at. */
+  diff_base_branch?: string | null;
+  /** The branch the run actually works on, written down at cut time.
+   *  `null` on pre-V41 rows, which re-derive `{branch_prefix}{id}`. */
+  resolved_branch?: string | null;
 }
+
+/** Mirrors the Rust `FeatureOrigin` (`domain/feature_origin.rs`), which serde
+ *  tags internally on `kind` with snake_case arm names. Declared twice with no
+ *  codegen between them, so the discriminants here are the wire contract.
+ *
+ *  `ref` carries a `fetch_spec` the Rust side re-validates into a `Refspec` on
+ *  the way in — TypeScript can state the shape but not the constraint, so
+ *  nothing here may treat an accepted string as a safe one. */
+export type FeatureOrigin =
+  | { kind: 'default_branch' }
+  | { kind: 'branch'; base: string }
+  | { kind: 'ref'; fetch_spec: string; label: string };
 
 /** Which producer measured one gate — mirrors the Rust `BaselineProducer`.
  *  Recorded per gate, not per record, because a partial re-measurement merges
@@ -903,6 +928,12 @@ export interface ProjectSettingsData {
   default_max_budget_usd?: number | null;
   artifact_subdir?: string;
   commit_artifacts?: boolean;
+  /** The command a reviewing step starts from, as the user wrote it. Carried
+   *  into the prompt verbatim — Demeteo neither validates it against a harness
+   *  nor wraps it in review vocabulary of its own. `null`/absent (and the empty
+   *  string, which a cleared input writes) = the project names none, and the
+   *  step is left to review in its own way. Migration V42. */
+  review_entrypoint?: string | null;
 }
 
 export interface SessionInfo {

@@ -157,6 +157,21 @@ pub struct StepConfig {
     /// remains the backstop for any write a shell escape attempts.
     #[serde(default)]
     pub allow_shell: bool,
+    /// Let this step's own agent turns run on the setup the user taught the
+    /// harness — its skills, extensions, prompt templates and themes — instead
+    /// of the pinned-prefix default every pipeline step gets
+    /// ([`AgentContext::keep_harness_personalization`](crate::ports::agent_runtime::AgentContext::keep_harness_personalization)).
+    ///
+    /// For a step whose whole method is the harness's, a review being the
+    /// case that motivated it: Demeteo encodes no rubric there, so a step that
+    /// strips the user's review skill has nothing left to review with. Off by
+    /// default, and read only for the step's own turns — the role turns
+    /// Demeteo runs around it are [`TurnRole::Orchestrator`] whatever this
+    /// says. Stored inside `steps_json`, so no DB migration is required.
+    ///
+    /// [`TurnRole::Orchestrator`]: crate::domain::turn_role::TurnRole::Orchestrator
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uses_agent_skills: bool,
     /// Blast-radius classification for `gate` steps (docs/REMOTE_EXECUTION.md
     /// M5.1, docs/REMOTE_EXECUTION.md §5). `"dangerous"` marks a gate as
     /// merge-to-default / push-to-protected / deploy / delete — an

@@ -28,10 +28,11 @@ impl ExecutionDriver {
             .unwrap_or(crate::domain::ids::LOCAL_MACHINE)
     }
 
-    /// Resolve the commit where `branch_name` most recently diverged from
-    /// the project's default branch — the feature's true fork point,
-    /// independent of how many `on_failure` retries have merged work back
-    /// into `branch_name` since.
+    /// Resolve the commit where `branch_name` most recently diverged from the
+    /// branch this run declared itself measured against
+    /// ([`diff_base::resolve`](crate::domain::diff_base::resolve)) — the
+    /// feature's true fork point, independent of how many `on_failure` retries
+    /// have merged work back into `branch_name` since.
     ///
     /// Steps that compute a *review* diff (the sequence step's `code-diff`
     /// artifact, `process_agent_artifacts`'s diff) use this instead of a
@@ -45,9 +46,9 @@ impl ExecutionDriver {
     /// partial merges (rolling back to the fork point would also discard
     /// every prior *successful* attempt).
     ///
-    /// Returns `None` on any failure (default branch not configured,
-    /// `merge-base` fails, project/feature lookup fails) — callers fall
-    /// back to their pre-existing per-attempt base.
+    /// Returns `None` on any failure (no branch named at all, `merge-base`
+    /// fails, project/feature lookup fails) — callers fall back to their
+    /// pre-existing per-attempt base.
     pub(crate) async fn resolve_fork_point_ref(&self, machine_str: &str) -> Option<String> {
         let feature = self.features.get(&self.f_id).ok().flatten()?;
         let settings = self
@@ -55,15 +56,16 @@ impl ExecutionDriver {
             .get_settings(&feature.project_id)
             .ok()
             .flatten()?;
-        let default_branch = settings.worktree_strategy.default_branch;
-        if default_branch.trim().is_empty() {
-            return None;
-        }
+        let base_branch = crate::domain::diff_base::resolve(
+            feature.diff_base_branch.as_deref(),
+            &feature.origin,
+            &settings.worktree_strategy.default_branch,
+        )?;
         self.git_ops
-            .merge_base(
+            .fork_point(
                 Some(machine_str),
                 &self.target_dir,
-                &default_branch,
+                base_branch,
                 &self.branch_name,
             )
             .await

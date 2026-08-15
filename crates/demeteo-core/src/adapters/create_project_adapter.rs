@@ -263,23 +263,15 @@ impl CreateProjectPort for CreateProjectAdapter {
         model: Option<&str>,
     ) -> Result<LaunchedFeature, AppError> {
         let feature = executor
-            .feature_start(
-                None,
-                project_id.as_str(),
-                "wf-starter-standard",
-                title,
-                description,
-                agent_kind,
-                model,
-                // Effort: inherit (project default, else the built-in high).
-                None,
-                // commit_artifacts / loop_iterations / max_budget_usd: inherit.
-                None,
-                None,
-                None,
-                Vec::new(),
-                Vec::new(),
-            )
+            .feature_start(crate::ports::step_executor::FeatureLaunch {
+                project_id: project_id.0.clone(),
+                workflow_id: "wf-starter-standard".to_string(),
+                title: title.to_string(),
+                description: description.to_string(),
+                agent_kind: agent_kind.map(str::to_string),
+                model: model.map(str::to_string),
+                ..Default::default()
+            })
             .await
             .map_err(AppError::from)?;
         Ok(LaunchedFeature {

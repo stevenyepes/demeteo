@@ -1,4 +1,5 @@
 use crate::domain::attachment::AttachedFile;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::harness_baseline::HarnessBaseline;
 use crate::domain::ids::{
     FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId, WorkflowVersionId,
@@ -106,6 +107,41 @@ pub struct Feature {
     /// `Feature` over the `get_feature` RPC.
     #[serde(default)]
     pub harness_baseline: Option<HarnessBaseline>,
+
+    /// Where this run's branch was cut from (`features.origin_json`, V41).
+    /// [`FeatureOrigin::DefaultBranch`] on every row written before V41,
+    /// which is what those runs did.
+    #[serde(default)]
+    pub origin: FeatureOrigin,
+
+    /// What the review diff is computed against. `None` = the project's
+    /// default branch. Distinct from [`Feature::origin`]: a run started from
+    /// a PR head reviews against the branch it will merge into, not against
+    /// the snapshot it began at. See migration V41.
+    #[serde(default)]
+    pub diff_base_branch: Option<String>,
+
+    /// The branch this run actually works on, written down at cut time so the
+    /// call sites that re-derive `{branch_prefix}{feature_id}` can read it
+    /// instead — mid-run edits to `branch_prefix` otherwise split a live run's
+    /// branch between the worktree and the publisher. `None` on pre-V41 rows,
+    /// which keep deriving. See migration V41.
+    #[serde(default)]
+    pub resolved_branch: Option<String>,
+}
+
+impl Feature {
+    /// The branch this run works on.
+    ///
+    /// The one place `{branch_prefix}{feature_id}` is spelled: a
+    /// `branch_prefix` edited mid-run otherwise moves the publisher's branch
+    /// off the worktree's. The derivation is the answer only for rows written
+    /// before V41 recorded one.
+    pub fn run_branch(&self, branch_prefix: &str) -> String {
+        self.resolved_branch
+            .clone()
+            .unwrap_or_else(|| self.origin.branch_to_cut(branch_prefix, self.id.as_str()))
+    }
 }
 
 /// A per-step agent/model/effort override selected when launching a feature.

@@ -198,4 +198,10 @@ pub struct AgentCatalogEntry {
     /// declared `AgentCapabilities`. Empty (hermes) means the agent has no
     /// per-invocation effort control at all, and the UI must not offer one.
     pub effort_levels: Vec<crate::domain::models::EffortLevel>,
+    /// What Demeteo's own spawn flags do to this harness's machine-local
+    /// personalization, straight from its declared `AgentCapabilities`. The UI
+    /// states the consequence before a run starts; the type's docs
+    /// ([`PersonalizationSupport`](crate::ports::agent_runtime::PersonalizationSupport))
+    /// carry why the answer is about Demeteo and not about the harness.
+    pub personalization: crate::ports::agent_runtime::PersonalizationSupport,
 }

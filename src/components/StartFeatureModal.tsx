@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu, EyeOff, Server, MoonStar } from 'lucide-react';
-import type { EffortLevel, Machine, Repository, WorkflowSummary } from '../types';
+import type { EffortLevel, FeatureOrigin, Machine, Repository, WorkflowSummary } from '../types';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import { extractClipboardImageFiles, recoverClipboardImageFile, stageBrowserFilesForLaunch } from '../lib/attachments';
 import { formatError } from '../lib/errors';
@@ -19,6 +19,8 @@ import { fetchActiveFeatures } from '../lib/features';
 import { getWorkflow, listWorkflows, workflowVersionGraph } from '../lib/workflows';
 import { resolveLaunchWorkflowId } from '../lib/workflowDefault';
 import { MiniGraph } from './canvas/MiniGraph';
+import { OriginPicker } from './StartFeatureModal/OriginPicker';
+import { runOriginArgs, type OriginSelection } from '../lib/runOrigin';
 import type { WorkflowDefinitionV2 } from './canvas/types';
 
 interface StartFeatureModalProps {
@@ -92,6 +94,11 @@ interface StartFeatureModalProps {
     /** M5.2 hard caps — `undefined` means no cap on that dimension. */
     maxCostUsd?: number;
     maxWallClockMins?: number;
+    /** Where the run's branch is cut from (migration V41). Both of these are
+     *  absent for a run that started where every run started before the
+     *  origin picker — see `src/lib/runOrigin.ts`. */
+    origin?: FeatureOrigin;
+    diffBaseBranch?: string;
   }) => void;
 }
 
@@ -174,6 +181,10 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   // in Customize. Kept as an override so untouched launches behave
   // exactly as before.
   const [repoOverride, setRepoOverride] = useState<string[] | null>(null);
+  const [originSelection, setOriginSelection] = useState<OriginSelection>({
+    base: null,
+    diffBase: null,
+  });
   // Steps of the selected workflow + per-step agent/model overrides.
   // A blank entry means "inherit" the workflow/project default for that step.
   const [steps, setSteps] = useState<StepRow[]>([]);
@@ -254,6 +265,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setStepOverrides({});
       setLoopIterations('');
       setRepoOverride(null);
+      setOriginSelection({ base: null, diffBase: null });
       setAttachments([]);
       setAttachmentError(null);
       setVisionWarningDismissed(false);
@@ -715,6 +727,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       unattended: detached ? true : undefined,
       maxCostUsd: Number.isFinite(costArg as number) ? costArg : undefined,
       maxWallClockMins: Number.isFinite(wallClockArg as number) ? wallClockArg : undefined,
+      ...runOriginArgs(originSelection),
     });
   };
 
@@ -999,6 +1012,13 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               )}
             </div>
           )}
+
+          <OriginPicker
+            projectId={projectId}
+            repositoryId={selectedRepoIds[0] ?? null}
+            value={originSelection}
+            onChange={setOriginSelection}
+          />
 
           {/* Customize (Q22: expand to full form) */}
           <div className="flex items-center gap-2">

@@ -29,9 +29,11 @@ pub(super) const NOTIFY_ON: &[&str] = &[
 /// log line, and nothing a fixture that never hits the update branch would
 /// catch. Being a free function over one value, it is assertable directly.
 ///
-/// `effort` and `commit_artifacts` are deliberately absent: both are launch
-/// inputs the desktop already holds, and mirroring them back would let the
-/// runner's copy overwrite the local pin.
+/// `effort`, `commit_artifacts`, `origin` and `diff_base_branch` are
+/// deliberately absent: all four are launch inputs the desktop already holds,
+/// and mirroring them back would let the runner's copy overwrite the local
+/// pin. `resolved_branch` is not one of them — the runner cuts the branch, so
+/// its name is an answer only the runner has.
 fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
     FeaturePatch {
         effort: None,
@@ -51,6 +53,9 @@ fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
         // the first poll's whole-`Feature` insert is not enough on its own.
         harness_baseline: Some(feature.harness_baseline.clone()),
         commit_artifacts: None,
+        origin: None,
+        diff_base_branch: None,
+        resolved_branch: Some(feature.resolved_branch.clone()),
     }
 }
 

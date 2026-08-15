@@ -125,6 +125,7 @@ fn agent_catalog(
                 // can never offer a level the agent would silently ignore.
                 // Empty for hermes, which has no per-invocation effort control.
                 effort_levels: caps.effort_levels.to_vec(),
+                personalization: caps.personalization,
             }
         })
         .collect()

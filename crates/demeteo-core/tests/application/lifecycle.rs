@@ -3,6 +3,7 @@
 use super::*;
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{RepositoryId, StepExecutionId, WorkflowId, WorkflowVersionId};
 use crate::domain::models::{
     Feature, Project, ProjectSettings, Repository, StepAttempt, StepExecution, SubtaskRunRow,
@@ -342,6 +343,23 @@ impl WorktreeOpsPort for RecordingWorktrees {
     ) -> Result<(), String> {
         panic!("unexpected WorktreeOpsPort call")
     }
+    async fn fetch_origin_refspec(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &crate::domain::feature_origin::Refspec,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn cut_branch_at(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
     async fn create_feature_branch(
         &self,
         _: Option<&str>,
@@ -440,6 +458,9 @@ fn cleanup_feature(mr_state: &str) -> Feature {
         step_overrides: vec![],
         attachments: vec![],
         harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
     }
 }
 

@@ -97,6 +97,10 @@ pub struct UnifiedCliRuntime {
     /// no effort control. Surfaced through `capabilities()` to drive the UI
     /// picker.
     pub effort_levels: &'static [EffortLevel],
+    /// What [`AgentContext::bare_mode`] does to this harness's own
+    /// personalization. Declared beside the argv builder because
+    /// [`build_args`](Self::build_args) is the only evidence for it.
+    pub personalization: crate::ports::agent_runtime::PersonalizationSupport,
     /// Fixed environment injected into every spawn of this agent, before the
     /// per-context env (so a caller-provided value wins). For headless CLI
     /// children this is hygiene, not configuration — e.g. claude-code's
@@ -129,6 +133,7 @@ impl AgentRuntime for UnifiedCliRuntime {
             model_listing: self.model_listing,
             default_model: self.default_model,
             effort_levels: self.effort_levels,
+            personalization: self.personalization,
             windows_agent_shell: self.windows_agent_shell,
         }
     }

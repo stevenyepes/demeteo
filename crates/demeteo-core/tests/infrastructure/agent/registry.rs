@@ -16,6 +16,7 @@ impl AgentRuntime for NoopRuntime {
             model_listing: None,
             default_model: None,
             effort_levels: &[],
+            personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }
@@ -76,6 +77,159 @@ fn runtime_for_returns_registered_kind() {
     let reg = AgentRegistry::new(vec![Arc::new(NoopRuntime)]);
     assert!(reg.runtime_for("noop").is_some());
     assert!(reg.runtime_for("opencode").is_none());
+}
+
+/// Whether Demeteo's own spawn flags strip a harness's personalization has no
+/// defensible default, so every supported kind answers it here — against its
+/// `build_args`, which the value's own rustdoc calls the whole evidence for it.
+///
+/// A second hand-written copy of the declared table would pass forever after
+/// someone taught an adapter to react to `bare_mode`: the declaration would
+/// stay `Native`, the comment beside it would stay "reads no `bare_mode`", and
+/// the launch surface would keep telling that user Demeteo passes their harness
+/// no personalization flags. So the assertion is the argv itself, and the
+/// exhaustive `match` survives only to stop a sixth harness compiling until
+/// someone has declared for it.
+#[test]
+fn every_supported_kind_declares_what_bare_mode_does_to_its_personalization() {
+    use crate::adapters::agent::cli_runtime::ArgsBuilder;
+    use crate::adapters::agent::test_stubs::{StubAgentExec, StubExec};
+    use crate::domain::models::AgentKind;
+    use crate::ports::agent_runtime::{AgentContext, PersonalizationSupport};
+
+    let ctx = |bare: bool| AgentContext {
+        thread_id: "t1".into(),
+        machine_id: "local".into(),
+        binary: "agent".into(),
+        args: vec![],
+        env: Default::default(),
+        cwd: ".".into(),
+        model: None,
+        effort: None,
+        title: None,
+        platform: None,
+        agent_exec: Arc::new(StubAgentExec),
+        exec: Arc::new(StubExec),
+        permissions: crate::domain::permission::PermissionProfile::all_allow(),
+        bare_mode: bare,
+        keep_harness_personalization: false,
+        tool_allowlist: None,
+        max_turns: None,
+        max_budget_usd: None,
+    };
+
+    for kind in AgentKind::ALL {
+        let (declared, build): (PersonalizationSupport, ArgsBuilder) = match kind {
+            AgentKind::ClaudeCode => {
+                let rt = crate::adapters::agent::claude_code::runtime();
+                (rt.personalization, rt.build_args)
+            }
+            AgentKind::Pi => {
+                let rt = crate::adapters::agent::pi::runtime();
+                (rt.personalization, rt.build_args)
+            }
+            AgentKind::Codex => {
+                let rt = crate::adapters::agent::codex::runtime();
+                (rt.personalization, rt.build_args)
+            }
+            AgentKind::Hermes => {
+                let rt = crate::adapters::agent::hermes::runtime();
+                (rt.personalization, rt.build_args)
+            }
+            // opencode wraps its `UnifiedCliRuntime` in a newtype and does not
+            // expose it, so the declaration is read through the trait and the
+            // builder by name. Same two values, one indirection more.
+            AgentKind::Opencode => (
+                crate::adapters::agent::opencode::runtime()
+                    .capabilities()
+                    .personalization,
+                crate::adapters::agent::opencode::build_opencode_args as ArgsBuilder,
+            ),
+        };
+
+        let plain = build(&ctx(false), None, "hi");
+        let bare = build(&ctx(true), None, "hi");
+
+        match declared {
+            // The claim is "Demeteo passes it no personalization flags either
+            // way", which is only true while `bare_mode` changes nothing at all
+            // about the argv.
+            PersonalizationSupport::Native => assert_eq!(
+                plain, bare,
+                "{kind} declares Native but its build_args reacts to bare_mode"
+            ),
+            // Both non-Native declarations are claims that `bare_mode` reaches
+            // argv; which of the two it is depends on *what* the flags do, and
+            // that is the `personalization` field's own job to say.
+            PersonalizationSupport::Loaded | PersonalizationSupport::Suppressed => assert_ne!(
+                plain, bare,
+                "{kind} declares {declared:?} but its build_args ignores bare_mode"
+            ),
+        }
+    }
+}
+
+/// The half the argv comparison above cannot see: that pi's `bare_mode` block
+/// is exactly the four personalization switches, and that a step keeping its
+/// personalization gets none of them. Pi is the only harness the flag reaches,
+/// so this is where the whole feature is true or false.
+#[test]
+fn a_step_that_keeps_its_personalization_gets_none_of_pis_suppression_flags() {
+    use crate::adapters::agent::test_stubs::{StubAgentExec, StubExec};
+    use crate::ports::agent_runtime::AgentContext;
+
+    const SUPPRESSION: [&str; 4] = [
+        "--no-skills",
+        "--no-extensions",
+        "--no-prompt-templates",
+        "--no-themes",
+    ];
+
+    let ctx = |keep: bool| AgentContext {
+        thread_id: "t1".into(),
+        machine_id: "local".into(),
+        binary: "pi".into(),
+        args: vec![],
+        env: Default::default(),
+        cwd: ".".into(),
+        model: None,
+        effort: None,
+        title: None,
+        platform: None,
+        agent_exec: Arc::new(StubAgentExec),
+        exec: Arc::new(StubExec),
+        permissions: crate::domain::permission::PermissionProfile::all_allow(),
+        bare_mode: true,
+        keep_harness_personalization: keep,
+        tool_allowlist: None,
+        max_turns: None,
+        max_budget_usd: None,
+    };
+
+    let build = crate::adapters::agent::pi::runtime().build_args;
+    let stripped = build(&ctx(false), None, "hi");
+    let kept = build(&ctx(true), None, "hi");
+
+    for flag in SUPPRESSION {
+        assert!(
+            stripped.contains(&flag.to_string()),
+            "a bare pi turn should emit {flag}"
+        );
+        assert!(
+            !kept.contains(&flag.to_string()),
+            "a step keeping its personalization should not emit {flag}"
+        );
+    }
+
+    // The four flags are the *whole* difference: keeping personalization must
+    // not also hand back the rest of what `bare_mode` does, which on another
+    // harness is the MCP and settings-source isolation this field must never
+    // reach.
+    let without_suppression: Vec<&String> = stripped
+        .iter()
+        .filter(|a| !SUPPRESSION.contains(&a.as_str()))
+        .collect();
+    assert_eq!(without_suppression, kept.iter().collect::<Vec<&String>>());
 }
 
 /// A kind nobody recognises is the case where nobody has checked what its
@@ -228,6 +382,7 @@ async fn get_or_spawn_returns_structured_error_for_unknown_kind() {
                 exec: stub,
                 permissions: crate::domain::permission::PermissionProfile::all_allow(),
                 bare_mode: false,
+                keep_harness_personalization: false,
                 tool_allowlist: None,
                 max_turns: None,
                 max_budget_usd: None,
@@ -287,6 +442,7 @@ impl AgentRuntime for FlippableRuntime {
             model_listing: None,
             default_model: None,
             effort_levels: &[],
+            personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }
@@ -349,6 +505,7 @@ impl AgentRuntime for FixedRuntime {
             model_listing: None,
             default_model: None,
             effort_levels: &[],
+            personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }

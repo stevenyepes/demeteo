@@ -545,6 +545,11 @@ pub fn runtime() -> UnifiedCliRuntime {
         model_listing: None,
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::ClaudeCode),
+        // `build_claude_args` answers `bare_mode` with `--setting-sources
+        // user,project`, which keeps the user's and the repo's own settings —
+        // skills, commands, agents — loaded; `settings.local.json` is the only
+        // source it drops.
+        personalization: crate::ports::agent_runtime::PersonalizationSupport::Loaded,
         // Headless hygiene: no self-update check on spawn (latency, and a
         // mid-fleet version drift hazard) and no non-essential background
         // traffic. Both are documented Claude Code env switches; callers

@@ -30,6 +30,11 @@ use crate::domain::models::{EffortLevel, StepConfig};
 /// on every turn. Two steps differing *only* in effort would otherwise
 /// share one session, and the second step's effort would be silently
 /// dropped — the run would claim `max` and execute at `low`.
+///
+/// [`StepConfig::uses_agent_skills`] is in the fingerprint for that same
+/// reason and no other: it is spelled into argv at spawn, so two steps
+/// differing only in it would share one session and the second would run on
+/// the first's answer.
 pub fn agent_session_key(
     f_id: &str,
     step_conf: &StepConfig,
@@ -42,9 +47,14 @@ pub fn agent_session_key(
         step_conf.allow_shell,
     );
     format!(
-        "{f_id}::{permissions:?}::{}::{}",
+        "{f_id}::{permissions:?}::{}::{}::{}",
         model.unwrap_or("default"),
-        effort.as_str()
+        effort.as_str(),
+        if step_conf.uses_agent_skills {
+            "harness-skills"
+        } else {
+            "pinned-prefix"
+        }
     )
 }
 

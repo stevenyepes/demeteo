@@ -54,6 +54,7 @@ function shallowEqualView(a: AppView, b: AppView): boolean {
     case 'new-project':
     case 'create-project':
     case 'project-settings':
+    case 'code-review':
     case 'workflows':
     case 'providers':
     case 'settings':

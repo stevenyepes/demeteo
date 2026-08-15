@@ -43,6 +43,13 @@ impl ExecutionDriver {
         };
 
         let conflict_thread_id = format!("{}-{}-merge", self.f_id_str, step.step_id());
+        // Resolving Demeteo's own merge, not the step's work: the step's
+        // answer does not reach this turn however the workflow set it.
+        let target = RunTarget {
+            keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator
+                .keeps_harness_personalization(),
+            ..target
+        };
         let session = self
             .spawn_sequence_session(
                 target,

@@ -22,7 +22,60 @@ export interface AgentCatalogEntry {
    * Older backends omit the field entirely, hence the optional marker.
    */
   effort_levels?: EffortLevel[];
+  /**
+   * What Demeteo's own spawn flags do to the setup this harness would
+   * otherwise load on the user's machine — the Rust `PersonalizationSupport`,
+   * kebab-serialized. Absent from a backend that predates the field.
+   */
+  personalization?: PersonalizationSupport;
 }
+
+/** Mirrors the Rust `PersonalizationSupport` wire form. */
+export type PersonalizationSupport = 'loaded' | 'suppressed' | 'native';
+
+/**
+ * What a run on `kind` does to the user's own setup — the *effective* answer,
+ * which the harness alone cannot give.
+ *
+ * The catalog declares what Demeteo's flags do to a step that does not keep the
+ * harness's personalization. A step that keeps it (`StepConfig.uses_agent_skills`
+ * in Rust) has none of those flags emitted on any harness, so `suppressed`
+ * becomes `loaded`. `native` is untouched: that adapter reads no such switch, so
+ * there is nothing for a step to keep and claiming otherwise would invent a
+ * guarantee.
+ *
+ * `null` is "nobody has said" — no kind chosen, the catalog still loading, or a
+ * backend that predates the field — and is deliberately not `'native'`. Every
+ * value here is a claim about what a run is about to do to work the user did
+ * themselves, and the honest answer to an unloaded catalog is silence; the
+ * static fallback `effortLevelsFor` leans on has no counterpart for that
+ * reason.
+ *
+ * Every surface asks through here, so the answer has one place to be resolved
+ * rather than one per call site — and a surface rendering the declared value
+ * beside a run that dropped those flags is the lie this resolution exists to
+ * stop.
+ */
+export function personalizationFor(
+  catalog: AgentCatalogEntry[],
+  kind: string | null | undefined,
+  stepKeepsPersonalization: boolean,
+): PersonalizationSupport | null {
+  if (!kind) return null;
+  const declared = catalog.find((a) => a.kind === kind)?.personalization;
+  if (declared === undefined || !KNOWN_SUPPORT.includes(declared)) return null;
+  if (declared === 'suppressed' && stepKeepsPersonalization) return 'loaded';
+  return declared;
+}
+
+/**
+ * Rejecting a spelling this frontend does not know is what makes a rename on
+ * either side of the wire silent rather than fatal: the note stops rendering,
+ * which is also what "nobody has declared an answer" looks like on that
+ * surface. Without the check, an unrecognized value reaches the note's lookup
+ * tables as a missing key and takes the whole surface down mid-render.
+ */
+const KNOWN_SUPPORT: readonly PersonalizationSupport[] = ['loaded', 'suppressed', 'native'];
 
 /**
  * The effort levels `kind` accepts, per the backend catalog. Falls back to the

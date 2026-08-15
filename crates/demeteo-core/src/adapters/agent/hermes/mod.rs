@@ -193,6 +193,9 @@ pub fn runtime() -> UnifiedCliRuntime {
         model_listing: Some(crate::ports::agent_runtime::ModelListing::MODELS_SUBCOMMAND),
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Hermes),
+        // `build_hermes_args` reads no `bare_mode`: Demeteo emits no flag that
+        // would either keep or drop this harness's own setup.
+        personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
         static_env: &[],
         // Upstream calls native Windows experimental and points users at WSL2,
         // so there is no stable answer here to declare — under WSL the agent is

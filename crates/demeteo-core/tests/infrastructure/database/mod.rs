@@ -264,6 +264,7 @@ fn project_settings_default_effort_round_trips() {
         default_max_budget_usd: Some(7.25),
         artifact_subdir: "artifacts/".to_string(),
         commit_artifacts: false,
+        review_entrypoint: None,
     };
 
     adapter
@@ -330,6 +331,7 @@ fn project_settings_default_workflow_id_round_trips() {
         default_max_budget_usd: Some(3.5),
         artifact_subdir: "artifacts/".to_string(),
         commit_artifacts: false,
+        review_entrypoint: None,
     };
 
     adapter
@@ -416,6 +418,7 @@ fn project_settings_harnesses_and_validation_gates_round_trip() {
         default_max_budget_usd: None,
         artifact_subdir: "artifacts/".to_string(),
         commit_artifacts: false,
+        review_entrypoint: None,
     };
 
     // No selection: the column keeps its pre-HB5 bare-map shape, and the map
@@ -435,5 +438,76 @@ fn project_settings_harnesses_and_validation_gates_round_trip() {
     assert_eq!(
         saved.worktree_strategy.validation_gates,
         Some(vec!["unit".to_string(), "lint".to_string()])
+    );
+}
+
+/// Both column lists are written out in full, so a new column reaches the row
+/// through two edits that must agree. When they don't, every value after the
+/// disagreement reads back as its neighbour — which is why the two adjacent
+/// TEXT columns are given values that would still be a legal answer for each
+/// other.
+#[test]
+fn project_settings_review_entrypoint_round_trips() {
+    let conn = Connection::open_in_memory().unwrap();
+    let adapter = SqliteAdapter::new(conn).unwrap();
+    let pid = ProjectId::from("p_settings_review".to_string());
+    adapter
+        .add(Project {
+            id: pid.clone(),
+            name: "review entrypoint settings".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 1000,
+        })
+        .unwrap();
+
+    let settings = |entrypoint: Option<String>| ProjectSettings {
+        project_id: pid.clone(),
+        worktree_strategy: WorktreeStrategy {
+            default_branch: "main".to_string(),
+            branch_prefix: "feat/".to_string(),
+            test_command: None,
+            build_command: None,
+            coverage_command: None,
+            conventions_file: None,
+            pr_template: None,
+            harnesses: None,
+            validation_gates: None,
+            prepare_command: None,
+            extra_writable_paths: Vec::new(),
+        },
+        conflict_policy: "manual".to_string(),
+        feature_lifecycle: "keep".to_string(),
+        default_agent_kind: None,
+        default_model: None,
+        default_effort: None,
+        default_workflow_id: Some("wf_starter_code_review".to_string()),
+        default_loop_iterations: None,
+        default_max_budget_usd: None,
+        artifact_subdir: "artifacts/".to_string(),
+        commit_artifacts: false,
+        review_entrypoint: entrypoint,
+    };
+
+    adapter
+        .save_settings(settings(Some("/code-review".to_string())))
+        .unwrap();
+    let saved = adapter.get_settings(&pid).unwrap().unwrap();
+    assert_eq!(saved.review_entrypoint, Some("/code-review".to_string()));
+    assert_eq!(
+        saved.default_workflow_id,
+        Some("wf_starter_code_review".to_string())
+    );
+
+    adapter.save_settings(settings(None)).unwrap();
+    let cleared = adapter.get_settings(&pid).unwrap().unwrap();
+    assert_eq!(cleared.review_entrypoint, None);
+    assert_eq!(
+        cleared.default_workflow_id,
+        Some("wf_starter_code_review".to_string())
     );
 }

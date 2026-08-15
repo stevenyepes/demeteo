@@ -33,6 +33,7 @@ use crate::paths;
 use crate::ports::db::FeaturePatch;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
 const REPO_PATH: &str = "demeteo/durable-checkpoints";
@@ -268,21 +269,15 @@ async fn start_run(
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            "Durable checkpoint resume",
-            "Run the stub plan + sequence pair to completion, then rewind.",
-            Some("stub"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: "Durable checkpoint resume".to_string(),
+            description: "Run the stub plan + sequence pair to completion, then rewind."
+                .to_string(),
+            agent_kind: Some("stub".to_string()),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
 

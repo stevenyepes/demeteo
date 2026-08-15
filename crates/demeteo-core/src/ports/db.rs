@@ -101,6 +101,17 @@ pub struct FeaturePatch {
     /// [`FeatureRepository::merge_harness_baseline`], because a whole-record
     /// write would clobber a partial measurement.
     pub harness_baseline: Option<Option<crate::domain::harness_baseline::HarnessBaseline>>,
+    /// Set where this run started (V41). Flat `Option`, unlike its
+    /// neighbours: `DefaultBranch` *is* the cleared state, so there is
+    /// nothing a `Some(None)` here could mean that `Some(DefaultBranch)`
+    /// does not already say.
+    pub origin: Option<crate::domain::feature_origin::FeatureOrigin>,
+    /// Set/clear what the review diff is computed against. `Some(None)`
+    /// restores the project's default branch.
+    pub diff_base_branch: Option<Option<String>>,
+    /// Record the run's actual branch name once it is cut, so the sites
+    /// that re-derive it from `branch_prefix` can read it instead.
+    pub resolved_branch: Option<Option<String>>,
 }
 
 /// Patch for [`FeatureRepository::step_update`].

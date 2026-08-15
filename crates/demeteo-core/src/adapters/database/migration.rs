@@ -148,6 +148,17 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // Nullable, and NULL means *absent*, never "everything was green".
     add_column_if_missing(conn, "features", "harness_baseline_json", "TEXT")?;
 
+    // Where the run started, what its diff is measured against, and what its
+    // branch is called (V41). All three nullable, and all three degrade to
+    // the pre-V41 behaviour — see the migration's header.
+    add_column_if_missing(conn, "features", "origin_json", "TEXT")?;
+    add_column_if_missing(conn, "features", "diff_base_branch", "TEXT")?;
+    add_column_if_missing(conn, "features", "resolved_branch", "TEXT")?;
+
+    // The project's review entrypoint (V42). Nullable, and NULL reads the same
+    // as the empty string — see the migration's header.
+    add_column_if_missing(conn, "project_settings", "review_entrypoint", "TEXT")?;
+
     Ok(())
 }
 
