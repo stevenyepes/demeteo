@@ -356,8 +356,8 @@ impl crate::adapters::step_executor::registry::NodeHandler for SyncNodeHandler {
     fn display(&self) -> crate::adapters::step_executor::registry::NodeDisplay {
         crate::adapters::step_executor::registry::NodeDisplay {
             label: "Sync",
-            summary: "Merge the default branch into the feature branch, \
-                      resolving any conflict with an agent turn.",
+            summary: "Merge the branch this run is based on into the feature \
+                      branch, resolving any conflict with an agent turn.",
         }
     }
 

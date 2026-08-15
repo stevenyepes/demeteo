@@ -252,7 +252,7 @@
   {
     "kind": "sync",
     "label": "Sync",
-    "summary": "Merge the default branch into the feature branch, resolving any conflict with an agent turn.",
+    "summary": "Merge the branch this run is based on into the feature branch, resolving any conflict with an agent turn.",
     "config_schema": {
       "additionalProperties": true,
       "description": "Configuration for a `sync` node: fetch + merge the branch this run is based on into the feature branch; on conflict, spawn a resolution agent and route the outcome through the node's retry policy (v1: on_failure).",
