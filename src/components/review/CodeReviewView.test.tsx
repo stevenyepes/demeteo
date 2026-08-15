@@ -213,7 +213,7 @@ describe('CodeReviewView', () => {
     expect(hint).not.toHaveAttribute('role', 'alert');
   });
 
-  it('reviews with the harness the row chose, and says what that costs first', async () => {
+  it('reviews with the harness the row chose, and says what that run will load', async () => {
     const launches: Record<string, unknown>[] = [];
     vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === 'list_open_pull_requests') return Promise.resolve([PULL_REQUEST]);
@@ -238,9 +238,12 @@ describe('CodeReviewView', () => {
     mount();
 
     await userEvent.selectOptions(await screen.findByLabelText('Harness'), 'pi');
+    // Pi declares `suppressed`, but the review step keeps its personalization,
+    // so no `--no-*` flag is emitted for this run: the declared value here
+    // would warn about a downgrade the spawn does not perform.
     expect(screen.getByTestId('harness-personalization')).toHaveAttribute(
       'data-support',
-      'suppressed',
+      'loaded',
     );
 
     await userEvent.click(screen.getByTestId('review-this-pr'));

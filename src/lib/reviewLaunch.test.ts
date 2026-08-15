@@ -6,7 +6,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { planReviewLaunch, REVIEW_STARTER_WORKFLOW_ID } from './reviewLaunch';
+import starter from '../../src-tauri/workflows/code-review.json';
+
+import {
+  planReviewLaunch,
+  REVIEW_STARTER_KEEPS_PERSONALIZATION,
+  REVIEW_STARTER_WORKFLOW_ID,
+} from './reviewLaunch';
 import type { PullRequestSummary } from './pullRequests';
 
 function summary(overrides: Partial<PullRequestSummary> = {}): PullRequestSummary {
@@ -161,5 +167,16 @@ describe('planReviewLaunch', () => {
     expect(operator).toBeLessThan(fence);
     expect(forged).toBeGreaterThan(fence);
     expect(launch.description).toContain('--- end of pull-request text ---');
+  });
+});
+
+describe('REVIEW_STARTER_KEEPS_PERSONALIZATION', () => {
+  it('says what the shipped starter actually asks for', () => {
+    // The launch surface promises the user, before the run exists, that the
+    // harness keeps their skills. Nothing else compares the promise to the
+    // workflow that will be executed, and an edit to either file alone is
+    // invisible to every other gate.
+    expect(starter.steps).toHaveLength(1);
+    expect(starter.steps[0].uses_agent_skills).toBe(REVIEW_STARTER_KEEPS_PERSONALIZATION);
   });
 });

@@ -18,6 +18,10 @@ impl ExecutionDriver {
     ///
     /// A spawn failure is always environmental; a cancellation is neither
     /// a failure nor environmental and says so in its own variant.
+    ///
+    /// Whose voice the turn speaks in is the caller's answer, carried on
+    /// [`RunTarget::keep_harness_personalization`] — the callers are of
+    /// opposite kind and that field's docs say why it cannot be resolved here.
     pub(crate) async fn spawn_sequence_session(
         &self,
         target: RunTarget<'_>,
@@ -48,6 +52,7 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
             bare_mode: true,
+            keep_harness_personalization: target.keep_harness_personalization,
             tool_allowlist: None,
             max_turns: None,
             // A sequence task is a primary coding turn: full base budget.

@@ -69,10 +69,22 @@ pub struct AgentContext {
     /// `--disallowedTools`). Defaults to `all_allow` for interactive /
     /// probe sessions that aren't capability-scoped pipeline steps.
     pub permissions: PermissionProfile,
-    /// Strip the machine-local personalization an agent would otherwise
-    /// load — hooks, skills, extensions, themes, dynamic system-prompt
-    /// sections — so the static prefix is byte-identical across worktrees
-    /// and machines, which is what makes the provider prompt cache hit.
+    /// Pin the static system-prompt prefix so it is byte-identical across
+    /// worktrees and machines, which is what makes the provider prompt cache
+    /// hit.
+    ///
+    /// What it costs is per-adapter, and each `build_args` is the whole
+    /// evidence for it: claude-code drops machine-local `settings.local.json`
+    /// and every MCP server the repository commits; pi additionally switches
+    /// off the setup the user taught it, unless
+    /// [`keep_harness_personalization`](Self::keep_harness_personalization)
+    /// says otherwise; codex, hermes and opencode read it not at all.
+    ///
+    /// It is therefore **not** the personalization switch. A step that wants
+    /// the user's own skills asks for them through that field and never by
+    /// dropping this one, which for claude-code would also re-enable the
+    /// reviewed repository's MCP servers — arbitrary processes with network
+    /// access, inside a capability whose profile denies the network.
     ///
     /// A property of the *step*, not of the agent: `true` for every
     /// capability-scoped pipeline step, `false` for the interactive
@@ -81,6 +93,17 @@ pub struct AgentContext {
     /// adapter that grows those flags later is then silently left out of
     /// them, with nothing failing to say so.
     pub bare_mode: bool,
+    /// Keep the setup the user taught this harness — its own skills,
+    /// extensions, prompt templates and themes — inside a step that is
+    /// otherwise [`bare_mode`](Self::bare_mode).
+    ///
+    /// Deliberately narrower than `bare_mode`: it governs those four switches
+    /// and nothing else, so a step that wants the harness's own review method
+    /// still runs under the MCP and settings-source isolation that flag block
+    /// carries. Every construction site answers it through
+    /// [`TurnRole`](crate::domain::turn_role::TurnRole), which holds it closed
+    /// for Demeteo's own role turns whatever the workflow asked for.
+    pub keep_harness_personalization: bool,
     /// Restrict which built-in tools are even *defined* for the session
     /// (claude-code: `--tools a,b`; `Some(vec![])` → `--tools ""`, no
     /// tools at all). Distinct from [`permissions`](Self::permissions),
@@ -333,6 +356,13 @@ pub fn models_one_per_line(output: &str) -> Vec<String> {
 /// here fails when it does, and the stale claim reads as authoritative
 /// forever. What [`AgentContext::bare_mode`] strips is ours to know, and each
 /// adapter's `build_args` is the whole evidence for its value.
+///
+/// A *declared* value: it answers for a step that does not set
+/// [`AgentContext::keep_harness_personalization`]. A step that sets it has no
+/// such flag emitted on any harness, so [`Suppressed`](Self::Suppressed) then
+/// reads [`Loaded`](Self::Loaded). What moves it is the step, not the harness,
+/// so that resolution happens once for every surface in
+/// `src/lib/agentCatalog.ts` rather than here.
 ///
 /// Declared beside [`AgentCapabilities::effort_levels`] for that field's own
 /// reason: the frontend states the consequence to the user without keeping a

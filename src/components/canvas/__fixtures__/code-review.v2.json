@@ -26,6 +26,7 @@
         "capability": "verify",
         "max_iterations": 1,
         "prompt_template": "You are reviewing a change you did not write.\n\nUnder review: {{feature_description}}\nBranch: {{feature_branch}}\nRepositories in scope: {{repo_list}}\nProject conventions: {{project_conventions}}\n\n## How to review\n\nThat is yours to decide, not Demeteo's. Use your own review capability — a built-in review command, a skill, a subagent, or simply reading — and judge the change against what this project has written down about itself: the conventions above, and whatever `AGENTS.md`, `CLAUDE.md` or contributing guide the repository carries.\n\n{{review_entrypoint}}\n\n## Where the report goes\n\n`artifacts/code-review.md`. That file is the whole deliverable, and it is also the only path you may write to — the source tree is read-only for this step.\n\nThis workflow has one step and nothing after it: no commit, no push, no squash, no pull request. A human reads the report and decides what happens to the change.\n\n## Stop condition\nYou are done when `artifacts/code-review.md` exists and speaks to the range above.",
+        "uses_agent_skills": true,
         "verifier": null
       },
       "position": {

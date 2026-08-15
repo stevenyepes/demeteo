@@ -386,6 +386,7 @@ fn ctx() -> AgentContext {
         exec: Arc::new(StubExec),
         permissions: PermissionProfile::all_allow(),
         bare_mode: false,
+        keep_harness_personalization: false,
         tool_allowlist: None,
         max_turns: None,
         max_budget_usd: None,
@@ -537,27 +538,65 @@ fn args_drop_an_allowlist_naming_no_pi_tool() {
     assert!(!args.contains(&"-t".to_string()), "got {args:?}");
 }
 
+const PERSONALIZATION_FLAGS: [&str; 4] = [
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+];
+
+fn personalization_flags(args: &[String]) -> Vec<&str> {
+    PERSONALIZATION_FLAGS
+        .into_iter()
+        .filter(|flag| args.iter().any(|a| a == flag))
+        .collect()
+}
+
 #[test]
 fn args_bare_mode_pins_the_static_prefix() {
     let mut c = ctx();
     c.bare_mode = true;
-    let args = build_pi_args(&c, None, "go");
-    for flag in [
-        "--no-extensions",
-        "--no-skills",
-        "--no-prompt-templates",
-        "--no-themes",
-    ] {
-        assert!(
-            args.contains(&flag.to_string()),
-            "missing {flag} in {args:?}"
-        );
-    }
+    assert_eq!(
+        personalization_flags(&build_pi_args(&c, None, "go")),
+        PERSONALIZATION_FLAGS
+    );
+    assert!(personalization_flags(&build_pi_args(&ctx(), None, "go")).is_empty());
+}
 
-    let args = build_pi_args(&ctx(), None, "go");
+/// The step whose whole method is the harness's — a review — keeps what the
+/// user taught it. Demeteo encodes no rubric there, so a stripped harness has
+/// nothing left to review with.
+#[test]
+fn args_keep_the_personalization_a_step_asked_to_keep() {
+    let review_step = crate::domain::models::StepConfig {
+        uses_agent_skills: true,
+        ..Default::default()
+    };
+    let mut c = ctx();
+    c.bare_mode = true;
+    c.keep_harness_personalization =
+        crate::domain::turn_role::TurnRole::Step(&review_step).keeps_harness_personalization();
+    let args = build_pi_args(&c, None, "go");
     assert!(
-        !args.contains(&"--no-extensions".to_string()),
-        "got {args:?}"
+        personalization_flags(&args).is_empty(),
+        "got {:?}",
+        personalization_flags(&args)
+    );
+}
+
+/// Demeteo's own role turns — the adjudicator's among them — hold the switch
+/// closed however the step around them was configured. A skill the reviewed
+/// repository committed, firing inside the verdict turn, would reshape the
+/// decision the run reports as Demeteo's.
+#[test]
+fn args_suppress_personalization_for_an_orchestrator_turn() {
+    let mut c = ctx();
+    c.bare_mode = true;
+    c.keep_harness_personalization =
+        crate::domain::turn_role::TurnRole::Orchestrator.keeps_harness_personalization();
+    assert_eq!(
+        personalization_flags(&build_pi_args(&c, None, "go")),
+        PERSONALIZATION_FLAGS
     );
 }
 

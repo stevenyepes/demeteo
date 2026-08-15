@@ -361,7 +361,7 @@ fn build_pi_args(
         args.push("-xt".to_string());
         args.push(excluded.join(","));
     }
-    if ctx.bare_mode {
+    if ctx.bare_mode && !ctx.keep_harness_personalization {
         args.push("--no-extensions".to_string());
         args.push("--no-skills".to_string());
         args.push("--no-prompt-templates".to_string());
@@ -417,7 +417,8 @@ pub fn runtime() -> UnifiedCliRuntime {
         effort_levels: EffortLevel::supported_for(AgentKind::Pi),
         // `build_pi_args` answers `bare_mode` with `--no-skills
         // --no-extensions --no-prompt-templates --no-themes`, so a
-        // capability-scoped step runs on nothing the user taught this harness.
+        // capability-scoped step runs on nothing the user taught this harness
+        // unless it asked to keep it (`keep_harness_personalization`).
         personalization: crate::ports::agent_runtime::PersonalizationSupport::Suppressed,
         // Headless hygiene, plus one behavioural pin: `long` retention buys the
         // extended provider prompt cache (1h Anthropic, 24h OpenAI), which is

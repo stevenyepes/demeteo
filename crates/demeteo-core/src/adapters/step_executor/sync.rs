@@ -166,6 +166,8 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         exec: exec.clone(),
         permissions: crate::domain::permission::PermissionProfile::all_allow(),
         bare_mode: true,
+        keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator
+            .keeps_harness_personalization(),
         tool_allowlist: None,
         max_turns: None,
         // Standalone resolver path (no driver budget in scope); uncapped like

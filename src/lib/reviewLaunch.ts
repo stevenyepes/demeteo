@@ -22,6 +22,13 @@ import type { PullRequestSummary } from './pullRequests';
  *  same row — which is what lets this name one workflow outright. */
 export const REVIEW_STARTER_WORKFLOW_ID = 'wf-starter-code-review';
 
+/** Whether that starter's review step runs on the harness's own skills and
+ *  prompt templates (`uses_agent_skills` in the shipped JSON). Mirrored here
+ *  because the launch surface states what the run will do before any workflow
+ *  has been fetched; `reviewLaunch.test.ts` reads the shipped file and fails
+ *  when the two disagree, which is the only thing keeping the promise true. */
+export const REVIEW_STARTER_KEEPS_PERSONALIZATION = true;
+
 /** A subset of `LaunchRunParams`, so a plan reaches `useLaunchRun` unchanged
  *  rather than being copied field by field into it. */
 export interface ReviewLaunchParams {

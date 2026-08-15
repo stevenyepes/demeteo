@@ -25,6 +25,9 @@ export interface HarnessPersonalizationNoteProps {
   agents: AgentCatalogEntry[];
   /** The harness the run will use, or the empty string when none is chosen. */
   kind: string;
+  /** Whether the step about to run keeps the harness's own personalization —
+   *  which moves the answer for a harness Demeteo would otherwise strip. */
+  stepKeepsPersonalization: boolean;
 }
 
 const NOTE: Record<PersonalizationSupport, (label: string) => string> = {
@@ -51,8 +54,9 @@ const TONE: Record<PersonalizationSupport, string> = {
 export function HarnessPersonalizationNote({
   agents,
   kind,
+  stepKeepsPersonalization,
 }: HarnessPersonalizationNoteProps): ReactElement | null {
-  const support = personalizationFor(agents, kind);
+  const support = personalizationFor(agents, kind, stepKeepsPersonalization);
   if (support === null) return null;
 
   return (

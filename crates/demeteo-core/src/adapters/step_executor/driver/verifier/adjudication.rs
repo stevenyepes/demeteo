@@ -448,6 +448,8 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
             bare_mode: true,
+            keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator
+                .keeps_harness_personalization(),
             // The classifier's entire input is inlined in the prompt (the
             // harness output tail) and its entire output is one JSON
             // object — no tool definitions in context, no agentic loop.

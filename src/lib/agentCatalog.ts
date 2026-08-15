@@ -34,7 +34,15 @@ export interface AgentCatalogEntry {
 export type PersonalizationSupport = 'loaded' | 'suppressed' | 'native';
 
 /**
- * What a run on `kind` does to the user's own setup, per the backend catalog.
+ * What a run on `kind` does to the user's own setup — the *effective* answer,
+ * which the harness alone cannot give.
+ *
+ * The catalog declares what Demeteo's flags do to a step that does not keep the
+ * harness's personalization. A step that keeps it (`StepConfig.uses_agent_skills`
+ * in Rust) has none of those flags emitted on any harness, so `suppressed`
+ * becomes `loaded`. `native` is untouched: that adapter reads no such switch, so
+ * there is nothing for a step to keep and claiming otherwise would invent a
+ * guarantee.
  *
  * `null` is "nobody has said" — no kind chosen, the catalog still loading, or a
  * backend that predates the field — and is deliberately not `'native'`. Every
@@ -44,14 +52,19 @@ export type PersonalizationSupport = 'loaded' | 'suppressed' | 'native';
  * reason.
  *
  * Every surface asks through here, so the answer has one place to be resolved
- * rather than one per call site.
+ * rather than one per call site — and a surface rendering the declared value
+ * beside a run that dropped those flags is the lie this resolution exists to
+ * stop.
  */
 export function personalizationFor(
   catalog: AgentCatalogEntry[],
   kind: string | null | undefined,
+  stepKeepsPersonalization: boolean,
 ): PersonalizationSupport | null {
   if (!kind) return null;
-  return catalog.find((a) => a.kind === kind)?.personalization ?? null;
+  const declared = catalog.find((a) => a.kind === kind)?.personalization ?? null;
+  if (declared === 'suppressed' && stepKeepsPersonalization) return 'loaded';
+  return declared;
 }
 
 /**

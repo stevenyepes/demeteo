@@ -60,6 +60,7 @@ pub mod step_boundary;
 pub mod step_seed;
 pub mod terminal_worktree;
 pub mod text;
+pub mod turn_role;
 pub mod usage;
 pub mod verifier;
 pub mod workflow_graph;

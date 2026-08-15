@@ -1,5 +1,6 @@
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::models::{AgentKind, EffortLevel, StepConfig, StepExecution};
+use crate::domain::turn_role::TurnRole;
 use crate::ports::agent_runtime::{AgentContext, AgentSession};
 use crate::ports::notification::DomainEvent;
 
@@ -96,6 +97,7 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions,
             bare_mode: true,
+            keep_harness_personalization: TurnRole::Step(step_conf).keeps_harness_personalization(),
             tool_allowlist: None,
             max_turns: None,
             // Primary coding turn: the full resolved base budget.
@@ -188,6 +190,8 @@ impl ExecutionDriver {
                 exec: self.exec.clone(),
                 permissions,
                 bare_mode: true,
+                keep_harness_personalization: TurnRole::Step(step_conf)
+                    .keeps_harness_personalization(),
                 tool_allowlist: None,
                 max_turns: None,
                 // Primary coding turn: the full resolved base budget.

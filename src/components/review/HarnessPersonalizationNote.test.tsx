@@ -33,7 +33,7 @@ const CATALOG: AgentCatalogEntry[] = [
 
 describe('HarnessPersonalizationNote', () => {
   it('says a loaded setup still applies, as furniture rather than a warning', () => {
-    render(<HarnessPersonalizationNote agents={CATALOG} kind="claude-code" />);
+    render(<HarnessPersonalizationNote agents={CATALOG} kind="claude-code" stepKeepsPersonalization={false} />);
 
     const note = screen.getByTestId('harness-personalization');
     expect(note).toHaveAttribute('data-support', 'loaded');
@@ -44,7 +44,7 @@ describe('HarnessPersonalizationNote', () => {
   });
 
   it('gives suppression the weight of a downgrade, in amber and not in ruby', () => {
-    render(<HarnessPersonalizationNote agents={CATALOG} kind="pi" />);
+    render(<HarnessPersonalizationNote agents={CATALOG} kind="pi" stepKeepsPersonalization={false} />);
 
     const note = screen.getByTestId('harness-personalization');
     expect(note).toHaveAttribute('data-support', 'suppressed');
@@ -58,7 +58,7 @@ describe('HarnessPersonalizationNote', () => {
   });
 
   it('claims nothing either way for a harness Demeteo passes no flags to', () => {
-    render(<HarnessPersonalizationNote agents={CATALOG} kind="codex" />);
+    render(<HarnessPersonalizationNote agents={CATALOG} kind="codex" stepKeepsPersonalization={false} />);
 
     const note = screen.getByTestId('harness-personalization');
     expect(note).toHaveAttribute('data-support', 'native');
@@ -66,16 +66,35 @@ describe('HarnessPersonalizationNote', () => {
     expect(note).toHaveTextContent('no personalization flags either way');
   });
 
+  it('reports what the step will really do, not what the catalog declares', () => {
+    // The review step keeps the harness's personalization, so the flags that
+    // earn Pi its `suppressed` declaration are never emitted for it. Rendering
+    // the declared value here would warn about a downgrade this run does not
+    // perform.
+    const { rerender } = render(
+      <HarnessPersonalizationNote agents={CATALOG} kind="pi" stepKeepsPersonalization={true} />,
+    );
+    const note = screen.getByTestId('harness-personalization');
+    expect(note).toHaveAttribute('data-support', 'loaded');
+    expect(note).toHaveTextContent('Demeteo starts Pi with your own setup loaded');
+
+    // A harness Demeteo passes no such flag to has nothing for a step to keep.
+    rerender(
+      <HarnessPersonalizationNote agents={CATALOG} kind="codex" stepKeepsPersonalization={true} />,
+    );
+    expect(screen.getByTestId('harness-personalization')).toHaveAttribute('data-support', 'native');
+  });
+
   it('renders nothing until something has actually declared an answer', () => {
-    const { rerender } = render(<HarnessPersonalizationNote agents={[]} kind="pi" />);
+    const { rerender } = render(<HarnessPersonalizationNote agents={[]} kind="pi" stepKeepsPersonalization={false} />);
     expect(screen.queryByTestId('harness-personalization')).not.toBeInTheDocument();
 
     // No harness chosen yet.
-    rerender(<HarnessPersonalizationNote agents={CATALOG} kind="" />);
+    rerender(<HarnessPersonalizationNote agents={CATALOG} kind="" stepKeepsPersonalization={false} />);
     expect(screen.queryByTestId('harness-personalization')).not.toBeInTheDocument();
 
     // A backend that predates the field. Absent is not `native`.
-    rerender(<HarnessPersonalizationNote agents={CATALOG} kind="hermes" />);
+    rerender(<HarnessPersonalizationNote agents={CATALOG} kind="hermes" stepKeepsPersonalization={false} />);
     expect(screen.queryByTestId('harness-personalization')).not.toBeInTheDocument();
   });
 });

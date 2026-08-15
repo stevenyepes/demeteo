@@ -3,7 +3,11 @@ import { useCallback, useId, useState, type ReactElement } from 'react';
 import { FieldLabel } from '../ui/FieldLabel';
 import { HarnessPersonalizationNote } from './HarnessPersonalizationNote';
 import { useAgentCatalog } from '../../lib/agentCatalog';
-import { planReviewLaunch, type ReviewLaunchParams } from '../../lib/reviewLaunch';
+import {
+  planReviewLaunch,
+  REVIEW_STARTER_KEEPS_PERSONALIZATION,
+  type ReviewLaunchParams,
+} from '../../lib/reviewLaunch';
 import type { PullRequestSummary } from '../../lib/pullRequests';
 
 /**
@@ -87,7 +91,11 @@ export function PullRequestLaunch({ pullRequest, onReview }: PullRequestLaunchPr
           >
             {plan.ok ? REVIEW_SOURCE_HINT : plan.message}
           </p>
-          <HarnessPersonalizationNote agents={agents} kind={agentKind} />
+          <HarnessPersonalizationNote
+            agents={agents}
+            kind={agentKind}
+            stepKeepsPersonalization={REVIEW_STARTER_KEEPS_PERSONALIZATION}
+          />
         </div>
 
         <div className="flex shrink-0 items-end gap-2">

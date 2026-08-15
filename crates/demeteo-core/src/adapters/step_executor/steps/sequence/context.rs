@@ -77,6 +77,18 @@ pub(crate) struct RunTarget<'a> {
     pub override_model: Option<&'a str>,
     /// The reasoning effort a task turn inherits.
     pub effort: EffortLevel,
+    /// Whether the turn about to be spawned keeps the harness's own
+    /// personalization
+    /// ([`TurnRole`](crate::domain::turn_role::TurnRole)).
+    ///
+    /// The one field of this bundle a stage overrides rather than inherits,
+    /// and the reason it is a field at all: `spawn_sequence_session` serves
+    /// two stages of opposite kind — a task turn, which is the step's own
+    /// work, and the merge-conflict turn, which is Demeteo resolving its own
+    /// merge. Resolving this at the shared spawn instead would answer for both
+    /// with one value, and the value that fits the task is exactly the wrong
+    /// one for the merge.
+    pub keep_harness_personalization: bool,
     /// What OS `machine` runs, as the execution port answered — `None` when it
     /// declined to say.
     ///
