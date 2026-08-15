@@ -214,3 +214,109 @@ fn a_spec_with_effort_round_trips_through_the_wire() {
     // The canonical spelling is the lowercase one, on the wire as in the DB.
     assert!(json.contains("\"effort\":\"max\""));
 }
+
+// ── the branch the terminal push sends ──────────────────────────────────────
+//
+// A run's branch is whatever its bootstrap cut and recorded. Rebuilding it
+// here from `branch_prefix` + feature id was right only for origins that
+// derive their branch that way, and the runner is the one side of the fleet
+// with no UI to notice it pushed the wrong name.
+
+use super::branch_to_push;
+use demeteo_core::adapters::database::SqliteAdapter;
+use demeteo_core::domain::ids::FeatureId;
+use demeteo_core::domain::models::{Feature, Project};
+use demeteo_core::ports::db::{FeatureRepository, ProjectRepository};
+
+const PREFIX: &str = "demeteo/features/";
+
+fn seeded_db(label: &str, resolved_branch: Option<&str>) -> SqliteAdapter {
+    let dir = std::env::temp_dir().join(format!(
+        "demeteo_runner_push_{}_{}",
+        label,
+        demeteo_core::paths::now_ms()
+    ));
+    let conn = demeteo_core::db::init_db(dir).expect("init_db");
+    let db = SqliteAdapter::new(conn).expect("migrations run");
+    ProjectRepository::add(
+        &db,
+        Project {
+            id: ProjectId::from("p-push"),
+            name: "push".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 1_700_000_000,
+        },
+    )
+    .expect("seed the project");
+    FeatureRepository::add(
+        &db,
+        Feature {
+            id: FeatureId::from("f-push"),
+            project_id: ProjectId::from("p-push"),
+            workflow_id: None,
+            workflow_version_id: None,
+            title: "push me".to_string(),
+            description: String::new(),
+            status: "completed".to_string(),
+            total_cost: 0.0,
+            duration: "0s".to_string(),
+            tokens: 0,
+            created_at: 1_700_000_000,
+            agent_kind: None,
+            model: None,
+            effort: None,
+            mr_url: None,
+            mr_state: Some("none".to_string()),
+            pr_title: None,
+            pr_body: None,
+            commit_artifacts: None,
+            loop_iterations: None,
+            max_budget_usd: None,
+            step_overrides: Vec::new(),
+            attachments: Vec::new(),
+            harness_baseline: None,
+            origin: FeatureOrigin::Ref {
+                fetch_spec: "refs/pull/42/head".to_string(),
+                label: "PR #42".to_string(),
+            },
+            diff_base_branch: None,
+            resolved_branch: resolved_branch.map(str::to_string),
+        },
+    )
+    .expect("seed the feature");
+    db
+}
+
+#[test]
+fn the_push_sends_the_branch_the_run_recorded() {
+    let db = seeded_db("recorded", Some("demeteo/pr-42-review"));
+
+    assert_eq!(
+        branch_to_push(&db, &FeatureId::from("f-push"), PREFIX),
+        Ok("demeteo/pr-42-review".to_string())
+    );
+}
+
+/// A row written before V41 recorded a branch, which is the one case the
+/// derivation is still the answer for.
+#[test]
+fn a_run_that_recorded_no_branch_falls_back_to_the_derivation() {
+    let db = seeded_db("underived", None);
+
+    assert_eq!(
+        branch_to_push(&db, &FeatureId::from("f-push"), PREFIX),
+        Ok("demeteo/features/f-push".to_string())
+    );
+}
+
+#[test]
+fn a_missing_feature_stops_the_push_instead_of_naming_a_branch() {
+    let db = seeded_db("missing", Some("demeteo/pr-42-review"));
+
+    assert!(branch_to_push(&db, &FeatureId::from("f-gone"), PREFIX).is_err());
+}

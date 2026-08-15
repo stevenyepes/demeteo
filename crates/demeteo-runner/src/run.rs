@@ -18,6 +18,7 @@ use demeteo_core::domain::models::{
 };
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
+use demeteo_core::ports::db::FeatureRepository;
 use demeteo_core::state::AppContext;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -829,6 +830,29 @@ async fn await_terminal_and_push_inner(
     })
 }
 
+/// The branch the terminal push sends to `origin`: the one the run's own row
+/// records ([`Feature::run_branch`]), not one rebuilt here from
+/// `branch_prefix` and the feature id.
+///
+/// The rebuild is only ever right by coincidence — it reproduces what the
+/// bootstrap cut for as long as nobody edits `branch_prefix` mid-run, and it
+/// is the branch nobody cut for any origin whose name does not come from the
+/// feature id at all. Pushing a branch that does not exist fails loudly; the
+/// worse shape is pushing one that does and belongs to a different run.
+fn branch_to_push(
+    features: &dyn FeatureRepository,
+    feature_id: &FeatureId,
+    branch_prefix: &str,
+) -> Result<String, String> {
+    let feature = features.get(feature_id)?.ok_or_else(|| {
+        format!(
+            "feature {} disappeared before the push",
+            feature_id.as_str()
+        )
+    })?;
+    Ok(feature.run_branch(branch_prefix))
+}
+
 /// Push the completed feature's branch to `origin` (R3: results ride
 /// git) via per-run askpass (M4.3) — no PAT embedded in the URL or
 /// command line.
@@ -853,11 +877,11 @@ async fn push_feature_branch(
     let target_dir =
         paths::repo_target_dir_local(&svc.ctx.workspace_dir, project_id.as_str(), &repo.repo_path);
     let target_dir_str = target_dir.to_string_lossy().to_string();
-    let branch = format!(
-        "{}{}",
-        settings.worktree_strategy.branch_prefix,
-        feature_id.as_str()
-    );
+    let branch = branch_to_push(
+        svc.ctx.features.as_ref(),
+        feature_id,
+        &settings.worktree_strategy.branch_prefix,
+    )?;
 
     git_askpass::run_git(
         &svc.askpass_path,
