@@ -1,11 +1,11 @@
 //! Tauri commands that wrap [`MrPublisher`].
-//! Tauri commands that wrap [`MrPublisher`].
 
 use crate::error::AppError;
 use tauri::State;
 
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{MrInfo, PublishOptions};
+use crate::domain::mr_summary::MrSummary;
 use crate::state::AppContext;
 
 #[tauri::command]
@@ -39,4 +39,26 @@ pub async fn fetch_mr_state(
         .fetch_mr_state(&project_id, &mr_url)
         .await
         .map_err(AppError::from)
+}
+
+/// The open pull requests the Code Review view lists.
+///
+/// The `Err` is a JSON-serialized
+/// [`MrListError`](crate::domain::mr_list_error::MrListError), not the
+/// `AppError` sentence every command beside it produces. That module records
+/// why: the four failures differ in what the user should *do*, and the facts
+/// separating them — which host, which status, how long the limit has left —
+/// do not survive a `.to_string()`. `src/lib/pullRequests.ts` decodes it, and
+/// tests on both sides quote the same literals so a rename cannot land on one
+/// side alone.
+#[tauri::command]
+pub async fn list_open_pull_requests(
+    ctx: State<'_, AppContext>,
+    project_id: String,
+    repository_id: Option<String>,
+) -> Result<Vec<MrSummary>, String> {
+    ctx.mr_publisher
+        .list_open_mrs(&project_id, repository_id.as_deref())
+        .await
+        .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))
 }

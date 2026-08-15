@@ -8,10 +8,22 @@
  * message needs (which host, which status), and the view is left with no way
  * to collapse them into a blank page.
  *
- * A rejection this module cannot recognise becomes `api-error` carrying the
- * provider's own words rather than a summary of them: a status Demeteo has
- * never seen is exactly the case where paraphrasing costs the user the only
- * evidence they have.
+ * ## This union is the Rust enum
+ *
+ * `PullRequestListFailure` is the serde form of `MrListError`
+ * (`crates/demeteo-core/src/domain/mr_list_error.rs`) transcribed — same four
+ * tags, same field names, same spelling. `list_open_pull_requests` is the one
+ * command in the tree whose `Err` is JSON rather than an `AppError` sentence,
+ * because a sentence cannot carry which host answered or how long a rate limit
+ * has left. That module documents the departure; this file's job is to not
+ * drift from it, which `pullRequests.test.ts` holds by quoting the literals the
+ * Rust test quotes.
+ *
+ * A rejection that is *not* that envelope — Tauri refusing the call, a panic
+ * mid-IPC — is still a real failure and becomes `http` carrying the text
+ * verbatim rather than a summary of it: an error Demeteo has never seen is
+ * exactly the case where paraphrasing costs the user the only evidence they
+ * have.
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -55,19 +67,25 @@ export interface PullRequestSummary {
 
 export type PullRequestListFailure =
   | { kind: 'no-provider' }
-  | { kind: 'token-rejected'; provider: string; host: string; status: number }
-  | { kind: 'rate-limited'; host: string }
-  | { kind: 'api-error'; host: string; status: number | null; body: string };
+  | { kind: 'unauthorized'; provider: string; host: string; status: number }
+  | { kind: 'rate-limited'; host: string; retry_after: number | null }
+  | { kind: 'http'; host: string; status: number | null; body: string };
 
-/** Every open pull request across the project's repositories. */
-export async function listOpenPullRequests(projectId: string): Promise<PullRequestSummary[]> {
-  return invoke<PullRequestSummary[]>('list_open_pull_requests', { projectId });
+/**
+ * Every open pull request across the project's repositories, newest activity
+ * first. `repositoryId` narrows it to one of them.
+ */
+export async function listOpenPullRequests(
+  projectId: string,
+  repositoryId?: string,
+): Promise<PullRequestSummary[]> {
+  return invoke<PullRequestSummary[]>('list_open_pull_requests', { projectId, repositoryId });
 }
 
 const UNNAMED_HOST = 'The provider';
 
-/** Rejections arrive as a JSON string (`Result<T, String>`) or as an already
- *  decoded object, and both spellings mean the same thing to the caller. */
+/** Rejections arrive as the JSON string the command serialized, or as an
+ *  already decoded object; both spellings mean the same thing to the caller. */
 export function asPullRequestListFailure(err: unknown): PullRequestListFailure {
   const payload = decodePayload(err);
   const host = readString(payload, 'host') ?? UNNAMED_HOST;
@@ -75,18 +93,18 @@ export function asPullRequestListFailure(err: unknown): PullRequestListFailure {
   switch (payload?.kind) {
     case 'no-provider':
       return { kind: 'no-provider' };
-    case 'token-rejected':
+    case 'unauthorized':
       return {
-        kind: 'token-rejected',
+        kind: 'unauthorized',
         provider: readString(payload, 'provider') ?? 'provider',
         host,
         status: readNumber(payload, 'status') ?? 401,
       };
     case 'rate-limited':
-      return { kind: 'rate-limited', host };
+      return { kind: 'rate-limited', host, retry_after: readNumber(payload, 'retry_after') };
     default:
       return {
-        kind: 'api-error',
+        kind: 'http',
         host,
         status: readNumber(payload, 'status'),
         body: readString(payload, 'body') ?? formatError(err),
@@ -161,7 +179,7 @@ export function describeListFailure(failure: PullRequestListFailure): FailureCop
         body: "This project's repositories aren't mapped to a GitHub or GitLab connection, so Demeteo can't list pull requests. Connect one and it will read them with your token.",
         actions: [{ intent: 'connect', label: 'Connect a provider', primary: true }],
       };
-    case 'token-rejected': {
+    case 'unauthorized': {
       const provider = providerName(failure.provider);
       return {
         title: `Your ${provider} token was rejected`,
@@ -175,10 +193,10 @@ export function describeListFailure(failure: PullRequestListFailure): FailureCop
     case 'rate-limited':
       return {
         title: `${failure.host} is rate-limiting this token`,
-        body: 'The pull-request list will be readable again shortly. Nothing was lost — reviews already running are unaffected.',
+        body: `The pull-request list will be readable again ${retryWhen(failure.retry_after)}. Nothing was lost — reviews already running are unaffected.`,
         actions: [{ intent: 'retry', label: 'Retry' }],
       };
-    case 'api-error':
+    case 'http':
       return {
         title: "Couldn't read pull requests",
         body: `${failure.host} answered ${failure.status ?? 'with an error'}. This is the provider's response, unchanged:`,
@@ -186,4 +204,12 @@ export function describeListFailure(failure: PullRequestListFailure): FailureCop
         actions: [{ intent: 'retry', label: 'Retry', primary: true }],
       };
   }
+}
+
+/** A provider that named a wait gets to keep the number; one that did not gets
+ *  the vague word rather than an invented figure. */
+function retryWhen(retryAfter: number | null): string {
+  if (retryAfter === null || retryAfter <= 0) return 'shortly';
+  if (retryAfter < 60) return `in about ${Math.ceil(retryAfter)}s`;
+  return `in about ${Math.ceil(retryAfter / 60)} min`;
 }

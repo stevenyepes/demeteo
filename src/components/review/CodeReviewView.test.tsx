@@ -87,35 +87,28 @@ describe('CodeReviewView', () => {
   });
 
   it('reads a rejected token as a token to reconnect, not as an empty queue', async () => {
+    // Serialized exactly as `MrListError::Unauthorized` is; `lib/pullRequests.test.ts`
+    // is where that spelling is pinned against the Rust side.
     backend(() =>
       Promise.reject(
-        JSON.stringify({
-          kind: 'token-rejected',
-          provider: 'github',
-          host: 'api.github.com',
-          status: 401,
-        }),
+        '{"kind":"unauthorized","provider":"github","host":"api.github.com","status":401}',
       ),
     );
     mount();
 
     const card = await screen.findByTestId('code-review-failure');
-    expect(card).toHaveAttribute('data-failure', 'token-rejected');
+    expect(card).toHaveAttribute('data-failure', 'unauthorized');
+    expect(card).toHaveAttribute('data-tone', 'amber');
     expect(screen.getByText('Your GitHub token was rejected')).toBeInTheDocument();
     expect(screen.getByText(/api\.github\.com answered 401/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reconnect GitHub' })).toBeInTheDocument();
     expect(screen.queryByText('No open pull requests')).not.toBeInTheDocument();
   });
 
-  it('quotes a provider error instead of paraphrasing it', async () => {
+  it('quotes a provider error instead of paraphrasing it, in the failure tone', async () => {
     backend(() =>
       Promise.reject(
-        JSON.stringify({
-          kind: 'api-error',
-          host: 'gitlab.example.com',
-          status: 503,
-          body: '{"message":"upstream unavailable"}',
-        }),
+        '{"kind":"http","host":"gitlab.example.com","status":503,"body":"{\\"message\\":\\"upstream unavailable\\"}"}',
       ),
     );
     mount();
@@ -123,6 +116,9 @@ describe('CodeReviewView', () => {
     expect(await screen.findByTestId('code-review-failure-detail')).toHaveTextContent(
       'upstream unavailable',
     );
+    // A provider that failed at its end is `ruby`; the three the operator can
+    // act on are amber. Flattening them is the distinction this view exists for.
+    expect(screen.getByTestId('code-review-failure')).toHaveAttribute('data-tone', 'ruby');
   });
 
   it('refetches when the failure card offers a retry', async () => {
@@ -130,7 +126,7 @@ describe('CodeReviewView', () => {
     backend(() => {
       attempts += 1;
       return attempts === 1
-        ? Promise.reject(JSON.stringify({ kind: 'rate-limited', host: 'api.github.com' }))
+        ? Promise.reject('{"kind":"rate-limited","host":"api.github.com","retry_after":null}')
         : Promise.resolve([]);
     });
     mount();
@@ -181,6 +177,61 @@ describe('CodeReviewView', () => {
     });
     expect(launches[0].diffBaseBranch).toBe('main');
     expect(launches[0].description).toContain('Concentrate on the fence.');
+  });
+
+  it('launches in one click, with no instructions section in the description', async () => {
+    // The headline promise: click once, a review runs. Every other launch test
+    // opens the panel first, which would let a regression that made the button
+    // depend on it pass unnoticed.
+    const launches: Record<string, unknown>[] = [];
+    vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'list_open_pull_requests') return Promise.resolve([PULL_REQUEST]);
+      if (cmd === 'start_feature') {
+        launches.push(typeof args === 'object' && args !== null ? { ...args } : {});
+        return Promise.resolve({ id: 'feat-1', title: 'Review PR #412', status: 'running' });
+      }
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
+    });
+    mount();
+
+    await userEvent.click(await screen.findByTestId('review-this-pr'));
+
+    await waitFor(() => expect(launches).toHaveLength(1));
+    expect(launches[0].description).not.toContain('What the reviewer was asked to focus on');
+  });
+
+  it('states what Demeteo does and does not decide, without dressing it as a warning', async () => {
+    backend(() => Promise.resolve([PULL_REQUEST]));
+    mount();
+
+    const hint = await screen.findByTestId('review-hint');
+    expect(hint).toHaveTextContent('encodes no review criteria of its own');
+    expect(hint).toHaveTextContent('AGENTS.md / CLAUDE.md');
+    // Standing fact, not a problem: a warning colour spent here is one the user
+    // learns to ignore before the first real warning arrives.
+    expect(hint).toHaveClass('text-slate-500');
+    expect(hint).not.toHaveAttribute('role', 'alert');
+  });
+
+  it('refuses on the row when the head ref did not survive the wire', async () => {
+    const launched: string[] = [];
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_open_pull_requests') {
+        return Promise.resolve([{ ...PULL_REQUEST, head_fetch_spec: 'patch-1' }]);
+      }
+      launched.push(cmd);
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
+    });
+    mount();
+
+    const refusal = await screen.findByTestId('review-refused');
+    expect(refusal).toHaveTextContent('no commit to review');
+    expect(refusal).toHaveClass('text-ruby-400');
+    expect(screen.queryByTestId('review-hint')).not.toBeInTheDocument();
+    expect(screen.getByTestId('review-this-pr')).toBeDisabled();
+
+    await userEvent.click(screen.getByTestId('review-this-pr'));
+    expect(launched).not.toContain('start_feature');
   });
 
   it('shows flat skeleton rows while the list is in flight', async () => {

@@ -105,8 +105,13 @@ export function CodeReviewView(): React.ReactElement {
           ) : (
             <div className="space-y-3">
               {state.pullRequests.map((pullRequest) => (
+                // Keyed on the URL, not the number: the listing spans every
+                // repository in the project, and `head_fetch_spec` is derived
+                // from the number alone — two repositories each with a #7 would
+                // key identically and React would hand one row's memoized
+                // instance the other's pull request.
                 <PullRequestRow
-                  key={`${pullRequest.head_fetch_spec}-${pullRequest.number}`}
+                  key={pullRequest.web_url}
                   pullRequest={pullRequest}
                   onReview={startReview}
                 />

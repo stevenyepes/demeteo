@@ -1,13 +1,30 @@
 import type { ReactElement } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, PlugZap } from 'lucide-react';
 
 import { describeListFailure, type PullRequestListFailure } from '../../lib/pullRequests';
+import { TONE_CHIP, TONE_TEXT, type RunStatusTone } from '../../lib/runStatus';
 
 export interface ReviewFailureCardProps {
   failure: PullRequestListFailure;
   onConnect: () => void;
   onRetry: () => void;
 }
+
+/**
+ * Which of `runStatus.ts`'s tones each failure speaks in.
+ *
+ * That vocabulary's own split decides this: amber is "needs a human", ruby is
+ * "done badly". Three of these wait on the operator — connect something, replace
+ * a token, wait out a quota — and one is the provider having failed at its end,
+ * with nothing for the operator to supply. Painting all four amber would flatten
+ * exactly the distinction the failure union was built to keep.
+ */
+const TONE: Record<PullRequestListFailure['kind'], RunStatusTone> = {
+  'no-provider': 'amber',
+  unauthorized: 'amber',
+  'rate-limited': 'amber',
+  http: 'ruby',
+};
 
 /**
  * The four ways the listing can fail, each wearing its own words
@@ -21,16 +38,23 @@ export function ReviewFailureCard({
   onRetry,
 }: ReviewFailureCardProps): ReactElement {
   const copy = describeListFailure(failure);
+  const tone = TONE[failure.kind];
+  // `TONE_CHIP` is the one place a tone's border is spelled; taking only that
+  // class off it keeps this card and every chip on the same palette without a
+  // second table to drift from.
+  const border = TONE_CHIP[tone].split(' ').find((c) => c.startsWith('border-')) ?? '';
+  const Icon = failure.kind === 'no-provider' ? PlugZap : AlertTriangle;
 
   return (
     <div
       role="alert"
       data-testid="code-review-failure"
       data-failure={failure.kind}
-      className="glass-panel rounded-2xl border border-amber-500/20 p-6 space-y-4"
+      data-tone={tone}
+      className={`glass-panel rounded-2xl border ${border} p-6 space-y-4`}
     >
       <div className="flex items-start gap-3">
-        <AlertTriangle aria-hidden="true" className="mt-0.5 w-5 h-5 shrink-0 text-amber-400" />
+        <Icon aria-hidden="true" className={`mt-0.5 w-5 h-5 shrink-0 ${TONE_TEXT[tone]}`} />
         <div className="min-w-0 space-y-2">
           <h2 className="font-heading text-base font-semibold text-white">{copy.title}</h2>
           <p className="text-sm text-slate-400 leading-relaxed">{copy.body}</p>

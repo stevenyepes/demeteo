@@ -25,11 +25,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::domain::ids::FeatureId;
-use crate::domain::models::{MrInfo, PublishOptions};
+use crate::domain::models::{MrInfo, ProviderInstance, PublishOptions};
+use crate::domain::mr_list_error::{classify_list_response, ListResponse, ListTarget, MrListError};
+use crate::domain::mr_summary::MrSummary;
 use crate::ports::db::{AppSettingsRepository, FeaturePatch, FeatureRepository, ProjectRepository};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::mr_publisher::MrPublisher;
-use provider::{resolve_pat, resolve_pat_best_effort, resolve_target, MrTarget};
+use provider::{resolve_pat, resolve_pat_best_effort, resolve_provider, resolve_target, MrTarget};
 
 pub use http::{HttpClient, HttpResponse, ReqwestHttp};
 
@@ -95,6 +97,72 @@ struct MrRequest<'a> {
     pat: &'a str,
 }
 
+/// One repository's worth of "list the open requests".
+struct ListRequest<'a> {
+    kind: &'a str,
+    host: &'a str,
+    repo_path: &'a str,
+    pat: &'a str,
+}
+
+impl<'a> ListRequest<'a> {
+    fn target(&self) -> ListTarget<'a> {
+        ListTarget {
+            kind: self.kind,
+            host: self.host,
+        }
+    }
+}
+
+/// Which provider's payload shape one element is read with. The two arms of
+/// the listing differ in exactly this and nothing else, so the choice is a
+/// value the caller picks once rather than a branch repeated per element.
+type MrMapper = fn(&serde_json::Value) -> Result<MrSummary, String>;
+
+/// One page, and only one. Both providers cap `per_page` at 100, and a review
+/// queue that needs a second page is not a queue anyone is working through — the
+/// listing is a place to start from, not an archive.
+const LIST_PAGE_SIZE: u32 = 100;
+
+/// GET a list endpoint and hand back its elements, with every non-2xx routed
+/// through [`classify_list_response`].
+///
+/// The `>= 300 => Ok(…)` shape two functions above this one is the thing that
+/// must never be copied here: it is right for a state poll and catastrophic for
+/// a listing, because the fallback value is an empty queue. That is what
+/// `tests/infrastructure/mr_publisher/list.rs` exists to hold.
+async fn read_list(
+    http: &dyn HttpClient,
+    url: &str,
+    headers: &[(String, String)],
+    target: ListTarget<'_>,
+) -> Result<Vec<serde_json::Value>, MrListError> {
+    let resp = http
+        .get_json(url, headers)
+        .await
+        .map_err(|e| MrListError::other(target.host, e))?;
+
+    classify_list_response(
+        target,
+        ListResponse {
+            status: resp.status,
+            body: &resp.body,
+            headers: &resp.headers,
+        },
+    )?;
+
+    let parsed: serde_json::Value = serde_json::from_str(&resp.body)
+        .map_err(|e| MrListError::other(target.host, format!("unreadable list response: {e}")))?;
+
+    match parsed {
+        serde_json::Value::Array(items) => Ok(items),
+        _ => Err(MrListError::other(
+            target.host,
+            "list endpoint answered with something other than an array",
+        )),
+    }
+}
+
 #[async_trait]
 impl MrPublisher for HttpMrPublisher {
     async fn publish_mr(
@@ -120,6 +188,14 @@ impl MrPublisher for HttpMrPublisher {
 
     async fn fetch_mr_state(&self, project_id: &str, mr_url: &str) -> Result<String, String> {
         self.fetch_mr_state_impl(project_id, mr_url).await
+    }
+
+    async fn list_open_mrs(
+        &self,
+        project_id: &str,
+        repository_id: Option<&str>,
+    ) -> Result<Vec<MrSummary>, MrListError> {
+        self.list_open_mrs_impl(project_id, repository_id).await
     }
 }
 
@@ -262,6 +338,99 @@ impl HttpMrPublisher {
         );
 
         Ok(info)
+    }
+
+    async fn list_open_mrs_impl(
+        &self,
+        project_id: &str,
+        repository_id: Option<&str>,
+    ) -> Result<Vec<MrSummary>, MrListError> {
+        let pid = crate::domain::ids::ProjectId::from(project_id.to_string());
+        let repos = self
+            .projects
+            .get_repositories_for(&pid)
+            .map_err(|e| MrListError::other("", e))?;
+
+        let selected: Vec<_> = match repository_id {
+            Some(id) => repos.into_iter().filter(|r| r.id.0 == id).collect(),
+            None => repos,
+        };
+
+        let http: &dyn HttpClient = match self.http_override.as_ref() {
+            Some(arc) => arc.as_ref(),
+            None => &ReqwestHttp,
+        };
+
+        let mut summaries = Vec::new();
+        for repo in &selected {
+            let provider = resolve_provider(self.app_settings.as_ref(), &repo.provider_id)
+                .map_err(|_| MrListError::NoProvider)?;
+            summaries.extend(self.list_one_repo(http, &provider, &repo.repo_path).await?);
+        }
+
+        // Newest activity first across every repository, because the queue is
+        // read top-down and a per-repository ordering would bury an hour-old
+        // request under a month-old one from the repository that sorted first.
+        summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(summaries)
+    }
+
+    async fn list_one_repo(
+        &self,
+        http: &dyn HttpClient,
+        provider: &ProviderInstance,
+        repo_path: &str,
+    ) -> Result<Vec<MrSummary>, MrListError> {
+        let target = ListTarget {
+            kind: &provider.kind,
+            host: &provider.host,
+        };
+
+        // A keyring the token is missing from never reaches the provider, but it
+        // fails for the reason `Unauthorized` names and is fixed the same way —
+        // reconnect and a token replaces it. Reporting `NoProvider` here would
+        // send the user to connect one they already have.
+        let pat =
+            resolve_pat(&provider.id.0).map_err(|_| MrListError::unauthorized(target, 401))?;
+
+        let request = ListRequest {
+            kind: &provider.kind,
+            host: &provider.host,
+            repo_path,
+            pat: &pat,
+        };
+
+        let (items, map): (Vec<serde_json::Value>, MrMapper) = match provider.kind.as_str() {
+            "github" => (
+                github::list_github_pulls(http, &request).await?,
+                MrSummary::from_github,
+            ),
+            "gitlab" => (
+                gitlab::list_gitlab_merge_requests(http, &request).await?,
+                MrSummary::from_gitlab,
+            ),
+            other => {
+                return Err(MrListError::other(
+                    &provider.host,
+                    format!("Demeteo cannot list pull requests on a {other} provider"),
+                ))
+            }
+        };
+
+        // An element that fails to map describes no reviewable request — it is
+        // missing a number, a branch pair or a URL. Dropping it loses one row;
+        // failing the listing loses every row to one malformed neighbour, and
+        // the user cannot fix either from here.
+        Ok(items
+            .iter()
+            .filter_map(|item| match map(item) {
+                Ok(summary) => Some(summary),
+                Err(e) => {
+                    tracing::warn!(provider = %provider.kind, error = %e, "skipping unreadable merge request");
+                    None
+                }
+            })
+            .collect())
     }
 
     async fn fetch_mr_state_impl(&self, project_id: &str, mr_url: &str) -> Result<String, String> {

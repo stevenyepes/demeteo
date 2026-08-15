@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 use crate::domain::models::MrInfo;
+use crate::domain::mr_list_error::MrListError;
 
 use super::{truncate, HttpClient, MrRequest};
 
@@ -104,6 +105,31 @@ fn github_api_host(host: &str) -> &str {
         "" | "github.com" | "api.github.com" => "api.github.com",
         other => other,
     }
+}
+
+/// Read the open pull requests of one repository.
+///
+/// `state=open` is the server-side filter; asking for everything and filtering
+/// here would page through years of closed requests to find this week's four.
+pub(super) async fn list_github_pulls(
+    http: &dyn HttpClient,
+    req: &super::ListRequest<'_>,
+) -> Result<Vec<serde_json::Value>, MrListError> {
+    let url = format!(
+        "https://{}/repos/{}/pulls?state=open&sort=updated&direction=desc&per_page={}",
+        github_api_host(req.host),
+        req.repo_path,
+        super::LIST_PAGE_SIZE
+    );
+    let headers: Vec<(String, String)> = vec![
+        ("Authorization".to_string(), format!("Bearer {}", req.pat)),
+        (
+            "Accept".to_string(),
+            "application/vnd.github+json".to_string(),
+        ),
+        ("User-Agent".to_string(), "demeteo".to_string()),
+    ];
+    super::read_list(http, &url, &headers, req.target()).await
 }
 
 pub(super) async fn publish_github(

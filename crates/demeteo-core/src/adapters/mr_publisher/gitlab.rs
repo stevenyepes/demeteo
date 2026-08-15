@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 use crate::domain::models::MrInfo;
+use crate::domain::mr_list_error::MrListError;
 
 use super::{truncate, urlencoded, HttpClient, MrRequest};
 
@@ -93,6 +94,27 @@ fn parse_gitlab_mr_url(url: &str) -> Result<(String, u64), String> {
         .parse()
         .map_err(|_| format!("Invalid MR iid in URL: {}", url))?;
     Ok((project_path.to_string(), iid))
+}
+
+/// Read the open merge requests of one project.
+///
+/// GitLab spells open `opened`, which `normalize_gitlab_state` already knows
+/// about on the read side; the query parameter takes the provider's spelling.
+pub(super) async fn list_gitlab_merge_requests(
+    http: &dyn HttpClient,
+    req: &super::ListRequest<'_>,
+) -> Result<Vec<serde_json::Value>, MrListError> {
+    let url = format!(
+        "https://{}/api/v4/projects/{}/merge_requests?state=opened&order_by=updated_at&sort=desc&per_page={}",
+        req.host,
+        urlencoded(req.repo_path),
+        super::LIST_PAGE_SIZE
+    );
+    let headers: Vec<(String, String)> = vec![
+        ("PRIVATE-TOKEN".to_string(), req.pat.to_string()),
+        ("Accept".to_string(), "application/json".to_string()),
+    ];
+    super::read_list(http, &url, &headers, req.target()).await
 }
 
 pub(super) async fn publish_gitlab(

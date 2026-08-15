@@ -14,6 +14,8 @@
 
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{MrInfo, PublishOptions};
+use crate::domain::mr_list_error::MrListError;
+use crate::domain::mr_summary::MrSummary;
 use async_trait::async_trait;
 
 #[async_trait]
@@ -36,6 +38,26 @@ pub trait MrPublisher: Send + Sync {
     /// merged / closed). Used to refresh `features.mr_state` on
     /// launch so the UI can show "MR merged" without re-publishing.
     async fn fetch_mr_state(&self, project_id: &str, mr_url: &str) -> Result<String, String>;
+
+    /// Every open MR/PR the project can review, newest activity first.
+    ///
+    /// `repository_id` narrows the read to one of the project's repositories;
+    /// `None` reads all of them and concatenates. A project with no
+    /// repositories is an empty list, not an error — it genuinely has nothing
+    /// open.
+    ///
+    /// **Not best-effort, unlike its two neighbours.** Every other read on this
+    /// trait degrades on failure because a wrong answer costs a stale badge.
+    /// Here a wrong answer is an empty queue, which reads as "nothing needs
+    /// review" — so a partial success is a failure, and one repository that
+    /// cannot be read fails the whole listing rather than quietly returning the
+    /// rest. [`MrListError`] carries which of the four things went wrong;
+    /// `domain/mr_list_error.rs` holds the reasoning and the wire contract.
+    async fn list_open_mrs(
+        &self,
+        project_id: &str,
+        repository_id: Option<&str>,
+    ) -> Result<Vec<MrSummary>, MrListError>;
 
     /// Variant of [`publish_mr`](Self::publish_mr) that uses a
     /// caller-supplied PAT instead of resolving one from the keyring

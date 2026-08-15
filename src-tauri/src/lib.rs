@@ -522,6 +522,7 @@ pub fn run() {
             commands::pricing::pricing_for,
             commands::mr_publisher::publish_mr,
             commands::mr_publisher::fetch_mr_state,
+            commands::mr_publisher::list_open_pull_requests,
             commands::feature_lifecycle::feature_cleanup,
             commands::notifications::notifications_list,
             commands::attachments::feature_add_attachment,
