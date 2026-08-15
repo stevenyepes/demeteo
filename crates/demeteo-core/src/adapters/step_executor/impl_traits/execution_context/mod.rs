@@ -283,11 +283,18 @@ impl DagStepExecutor {
         bake_step_overrides(&mut steps, &project_overrides);
 
         let slug = slug_from_description(description);
-        let existing_feature = self
-            .features
-            .get(&FeatureId::from(feature_id.to_string()))
-            .ok()
-            .flatten();
+        // A read that failed is not a row that is absent: the absent row means
+        // this launch is the first write and the origin is whatever the
+        // launcher passed, while a failed read leaves the run's declared start
+        // point unknown, and defaulting it cuts the branch somewhere the user
+        // did not ask for.
+        let existing_feature = match self.features.get(&FeatureId::from(feature_id.to_string())) {
+            Ok(found) => found,
+            Err(e) => {
+                emit(bp::PREPARING, "failed", Some(e.clone()));
+                return Err(e);
+            }
+        };
         let origin = existing_feature
             .as_ref()
             .map(|f| f.origin.clone())

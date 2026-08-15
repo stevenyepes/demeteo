@@ -1,5 +1,6 @@
 use super::{git_request, git_request_vec, GitOpsHelper};
 use crate::domain::branch_listing::BranchOption;
+use crate::domain::feature_origin::Refspec;
 use crate::domain::models::WorktreeInfo;
 use crate::paths;
 use crate::ports::worktree_ops::{TerminalWorktreeCreated, TerminalWorktreeRequest};
@@ -376,17 +377,20 @@ impl GitOpsHelper {
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
-        refspec: &str,
+        refspec: &Refspec,
     ) -> Result<(), String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let spec = refspec.as_str();
         self.exec
             .run_program(
                 machine_str,
-                git_request(repo_dir, ["fetch", "origin", refspec]),
+                // Never drop the `--`: without it git reads a refspec
+                // beginning with `-` as an option. See `Refspec`.
+                git_request(repo_dir, ["fetch", "origin", "--", spec]),
             )
             .await
             .map(|_| ())
-            .map_err(|e| format!("Failed to fetch '{refspec}' from origin: {e}"))
+            .map_err(|e| format!("Failed to fetch '{spec}' from origin: {e}"))
     }
 
     /// Point a branch at an already-resolvable start point, with no fallback.

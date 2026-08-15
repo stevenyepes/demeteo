@@ -4,6 +4,7 @@
 //! provisioning worktrees, checking repository state, and syncing with upstream.
 
 use crate::domain::branch_listing::BranchOption;
+use crate::domain::feature_origin::Refspec;
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -370,21 +371,20 @@ pub trait WorktreeOpsPort: Send + Sync {
         branch_name: &str,
     ) -> Result<(), String>;
 
-    /// Bring exactly one refspec down from origin, failing when it does not
-    /// arrive.
+    /// Bring exactly one refspec down from origin, reporting whether it
+    /// arrived.
     ///
-    /// Deliberately **not** the best-effort fetch every other path here uses.
-    /// Those tolerate an unreachable origin because a local ref of the same
-    /// name is still a usable start point; a refspec fetched for a
-    /// [`FeatureOrigin::Ref`](crate::domain::feature_origin::FeatureOrigin::Ref)
-    /// has no local predecessor at all, so a swallowed failure would leave
-    /// [`cut_branch_at`](Self::cut_branch_at) cutting from something else
-    /// entirely and the run reviewing a tree nobody asked for.
+    /// Whether that report stops the run is
+    /// [`BranchCut`](crate::domain::feature_origin::BranchCut)'s decision and
+    /// not this method's, which is why it reports rather than tolerates.
+    ///
+    /// The refspec is passed after `--`; see [`Refspec`] for what that is
+    /// holding shut.
     async fn fetch_origin_refspec(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
-        refspec: &str,
+        refspec: &Refspec,
     ) -> Result<(), String>;
 
     /// Point `branch_name` at `start_point`, which must already resolve.
@@ -443,7 +443,7 @@ pub trait WorktreeOpsPort: Send + Sync {
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_branch: &str,
     ) -> Result<SyncOutcome, SyncFailure>;
 
     /// Run the repo's own `commit-msg` hook against a proposed message,

@@ -724,6 +724,27 @@ fn a_null_origin_column_reads_back_as_the_default_branch() {
 }
 
 #[test]
+fn a_corrupt_origin_column_refuses_to_read_the_row() {
+    // Unlike the baseline column above, whose corruption honestly reads as
+    // "no baseline measured": there is no honest reading of an unnameable
+    // origin, and the default branch is a *different* run.
+    let adapter = setup();
+    let fid = make_feature(&adapter, "f_bad_origin", "p_bad_origin");
+    {
+        let conn = adapter.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE features SET origin_json = ?2 WHERE id = ?1",
+            rusqlite::params![fid.0, r#"{"kind":"from_the_moon"}"#],
+        )
+        .unwrap();
+    }
+    assert!(adapter.get(&fid).is_err());
+    assert!(adapter
+        .get_active(&ProjectId::from("p_bad_origin".to_string()))
+        .is_err());
+}
+
+#[test]
 fn the_default_origin_is_written_as_null() {
     // One spelling of the default in the column, so a query that asks which
     // runs started somewhere else can trust `origin_json IS NOT NULL`.

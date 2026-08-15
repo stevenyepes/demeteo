@@ -21,11 +21,61 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The refs `git fetch origin <refspec>` must bring down before the cut.
+/// A refspec `git fetch` cannot mistake for an option.
+///
+/// git parses argv before it parses refspecs, so an argument beginning with
+/// `-` is an option whatever it was meant to be, and `--upload-pack=<cmd>`
+/// makes git run `<cmd>`: `git fetch origin --upload-pack='touch X' main`
+/// creates X. [`FeatureOrigin::Ref`] is the arm a later ticket fills from a
+/// provider's API — a PR number becoming `refs/pull/<n>/head` — so the value
+/// reaching that argv stops being one this repository wrote.
+///
+/// Two defences, because either alone is one edit away from gone: this type,
+/// which no hostile string can be built into or deserialised into, and the
+/// `--` separator that
+/// [`WorktreeOpsPort::fetch_origin_refspec`](crate::ports::worktree_ops::WorktreeOpsPort::fetch_origin_refspec)
+/// passes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Refspec(String);
+
+impl Refspec {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Refspec {
+    type Error = String;
+
+    fn try_from(spec: String) -> Result<Self, String> {
+        let named = spec.trim_start_matches('+');
+        if named.is_empty() {
+            return Err("a refspec names no ref".to_string());
+        }
+        if named.starts_with('-') {
+            return Err(format!("git would read the refspec '{spec}' as an option"));
+        }
+        if spec.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err(format!(
+                "the refspec '{spec}' carries whitespace, so it names no single ref"
+            ));
+        }
+        Ok(Self(spec))
+    }
+}
+
+impl From<Refspec> for String {
+    fn from(spec: Refspec) -> Self {
+        spec.0
+    }
+}
+
+/// The refs `git fetch origin -- <refspec>` must bring down before the cut.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FetchPlan {
     /// The single argument after the remote name.
-    pub refspec: String,
+    pub refspec: Refspec,
     /// The ref that argument lands in, and the one
     /// [`FeatureOrigin::start_point`] then names.
     pub local_ref: String,
@@ -54,21 +104,33 @@ pub enum FeatureOrigin {
 /// How the bootstrap brings a run's start point down and points the run's
 /// branch at it.
 ///
-/// A value the adapter executes rather than two calls it chooses between,
+/// A value the adapter executes rather than three calls it chooses between,
 /// because the arms differ in what a failed fetch *means* and that is a
-/// decision, not an argument. `FromDefaultBranch` keeps the pre-V41
-/// behaviour: an unreachable origin leaves the local `<default>` ref alone
-/// and the cut falls back to it, because a slightly stale default branch is
-/// still the branch the user asked for. `FromFetchedRef` has no such
-/// fallback in either half — the ref it names exists only because this fetch
-/// created it, so swallowing the failure would cut the run's branch from
-/// whatever else `start_point` happened to resolve to and hand a reviewer a
-/// diff against a tree nobody chose.
+/// decision, not an argument.
+///
+/// `FromDefaultBranch` and `FromRemoteBranch` both cut from a
+/// remote-tracking ref a normal clone already carries, so an unreachable
+/// origin leaves that ref alone and the cut proceeds from a possibly stale
+/// copy of the branch the user named — the best-effort fetch every pre-V41
+/// path here used, and the reason it exists. `FromFetchedRef` has no such
+/// predecessor: the ref it names exists only because this fetch created it,
+/// so swallowing the failure would cut the run's branch from whatever else
+/// `start_point` happened to resolve to and hand a reviewer a diff against a
+/// tree nobody chose.
+///
+/// The cut is strict in the two arms that name a ref outright. Only
+/// `FromDefaultBranch` falls back, and to the local `<default>`, which is
+/// [`create_feature_branch`](crate::ports::worktree_ops::WorktreeOpsPort::create_feature_branch)'s
+/// own offline path rather than anything decided here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BranchCut {
     FromDefaultBranch,
+    FromRemoteBranch {
+        refspec: Refspec,
+        start_point: String,
+    },
     FromFetchedRef {
-        refspec: String,
+        refspec: Refspec,
         start_point: String,
     },
 }
@@ -89,22 +151,43 @@ impl FeatureOrigin {
     }
 
     /// What `git fetch origin …` must bring down before the cut. Every arm has
-    /// something to fetch, so this is total: [`FeatureOrigin::start_point`]
+    /// something to fetch, so every arm answers: [`FeatureOrigin::start_point`]
     /// names a ref that only exists once this has run.
-    pub fn fetch_plan(&self, default_branch: &str) -> FetchPlan {
-        let branch_fetch = |branch: &str| FetchPlan {
-            refspec: branch.to_string(),
-            local_ref: format!("origin/{branch}"),
+    ///
+    /// `Err` is a refspec git would not read as this origin meant it — see
+    /// [`Refspec`], and the `refs/` requirement below. It is the gate every
+    /// other `Ref` derivation stands behind: [`FeatureOrigin::start_point`]
+    /// and [`FeatureOrigin::squash_base`] name the ref *this* fetch created,
+    /// so they cannot be reached for an origin whose plan was refused.
+    pub fn fetch_plan(&self, default_branch: &str) -> Result<FetchPlan, String> {
+        let branch_fetch = |branch: &str| {
+            Ok(FetchPlan {
+                refspec: Refspec::try_from(branch.to_string())?,
+                local_ref: format!("origin/{branch}"),
+            })
         };
         match self {
             Self::DefaultBranch => branch_fetch(default_branch),
             Self::Branch { base } => branch_fetch(base),
             Self::Ref { fetch_spec, .. } => {
-                let local_ref = fetched_ref(fetch_spec);
-                FetchPlan {
-                    refspec: format!("{fetch_spec}:{local_ref}"),
-                    local_ref,
+                // A `Ref` that is not a full ref path lands under
+                // `FETCHED_REF_PREFIX` anyway, where it reads as a PR head
+                // this repository never fetched.
+                if !fetch_spec.starts_with("refs/") {
+                    return Err(format!(
+                        "a fetched origin must name a ref under refs/, not '{fetch_spec}'"
+                    ));
                 }
+                let local_ref = fetched_ref(fetch_spec);
+                Ok(FetchPlan {
+                    // `+` because the destination is a disposable snapshot in
+                    // a namespace nothing else reads: re-running a review
+                    // against a force-pushed PR head has to retarget it, and
+                    // without the `+` git rejects that fetch as a
+                    // non-fast-forward and the whole run fails.
+                    refspec: Refspec::try_from(format!("+{fetch_spec}:{local_ref}"))?,
+                    local_ref,
+                })
             }
         }
     }
@@ -121,25 +204,35 @@ impl FeatureOrigin {
     /// The [`BranchCut`] the bootstrap performs for this origin, combining
     /// [`FeatureOrigin::fetch_plan`] and [`FeatureOrigin::start_point`] with
     /// the strictness each arm is owed.
-    pub fn branch_cut(&self, default_branch: &str) -> BranchCut {
-        match self {
+    pub fn branch_cut(&self, default_branch: &str) -> Result<BranchCut, String> {
+        Ok(match self {
             Self::DefaultBranch => BranchCut::FromDefaultBranch,
-            Self::Branch { .. } | Self::Ref { .. } => BranchCut::FromFetchedRef {
-                refspec: self.fetch_plan(default_branch).refspec,
+            Self::Branch { .. } => BranchCut::FromRemoteBranch {
+                refspec: self.fetch_plan(default_branch)?.refspec,
                 start_point: self.start_point(default_branch),
             },
-        }
+            Self::Ref { .. } => BranchCut::FromFetchedRef {
+                refspec: self.fetch_plan(default_branch)?.refspec,
+                start_point: self.start_point(default_branch),
+            },
+        })
     }
 
-    /// Decode `features.origin_json` (V41). NULL, empty, or a document this
-    /// build cannot parse all answer [`FeatureOrigin::DefaultBranch`]: a run
-    /// that started from nowhere is not a state, so there is no third answer
-    /// to give and no caller has to handle one.
-    pub fn from_column(raw: Option<&str>) -> Self {
+    /// Decode `features.origin_json` (V41). NULL and empty answer
+    /// [`FeatureOrigin::DefaultBranch`]: a run that started from nowhere is
+    /// not a state, and every row written before the column existed cut from
+    /// the default branch.
+    ///
+    /// A document that is present and unreadable is a different fact and gets
+    /// a different answer. It says a run started somewhere this build cannot
+    /// name, and calling that the default branch would resume it on the wrong
+    /// branch, diff it against the wrong tree and squash it onto the wrong
+    /// parent — three silent wrongs from one unreadable column.
+    pub fn from_column(raw: Option<&str>) -> Result<Self, serde_json::Error> {
         let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
-            return Self::DefaultBranch;
+            return Ok(Self::DefaultBranch);
         };
-        serde_json::from_str(raw).unwrap_or_default()
+        serde_json::from_str(raw)
     }
 
     /// Encode for `features.origin_json`. The inverse of

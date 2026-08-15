@@ -56,6 +56,16 @@ fn a_run_cut_from_a_named_branch_is_measured_against_it() {
 }
 
 #[test]
+fn an_origin_whose_base_is_blank_falls_through_like_any_other_unnamed_base() {
+    assert_eq!(
+        resolve(None, &from_branch("   "), "main"),
+        Some("main"),
+        "the empty-name guard is the whole tier's, not the first tier's"
+    );
+    assert_eq!(resolve(None, &from_branch(""), ""), None);
+}
+
+#[test]
 fn the_declared_base_also_outranks_the_branch_the_run_was_cut_from() {
     assert_eq!(
         resolve(Some("release/2.1"), &from_branch("release/2.0"), "main"),

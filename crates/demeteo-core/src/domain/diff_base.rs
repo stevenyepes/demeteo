@@ -34,7 +34,7 @@ pub fn resolve<'a>(
     default_branch: &'a str,
 ) -> Option<&'a str> {
     named(diff_base_branch)
-        .or_else(|| origin.base_branch(None))
+        .or_else(|| named(origin.base_branch(None)))
         .or_else(|| named(Some(default_branch)))
 }
 

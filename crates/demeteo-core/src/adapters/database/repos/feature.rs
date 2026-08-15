@@ -70,7 +70,9 @@ fn feature_from_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> {
             .unwrap_or_default(),
         attachments,
         harness_baseline: baseline_from_row(row, 23)?,
-        origin: FeatureOrigin::from_column(origin_json.as_deref()),
+        origin: FeatureOrigin::from_column(origin_json.as_deref()).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(24, rusqlite::types::Type::Text, Box::new(e))
+        })?,
         diff_base_branch: row.get(25)?,
         resolved_branch: row.get(26)?,
     })

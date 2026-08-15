@@ -150,8 +150,8 @@ impl DagStepExecutor {
     /// Which of the two sequences runs, and whether a failed fetch is fatal,
     /// is [`BranchCut`]'s decision rather than this function's.
     ///
-    /// A `FromDefaultBranch` phase-5 failure is a detail, not a stop: the cut
-    /// after it falls back to the local default. The message
+    /// A best-effort arm's phase-5 failure is a detail, not a stop: the cut
+    /// after it still has a remote-tracking ref to use. The message
     /// [`ensure_default_branch_updated`](GitOpsHelper::ensure_default_branch_updated)
     /// returns is self-describing ("local master is 71 commits behind
     /// origin/master but the working tree has uncommitted changes; please
@@ -174,12 +174,22 @@ impl DagStepExecutor {
         );
         let machine = ctx.machine_id_opt.as_deref();
         let default_branch = ctx.settings.worktree_strategy.default_branch.as_str();
-        let cut = ctx.origin.branch_cut(default_branch);
 
         self.emit_bootstrap(fid, sync, "running", None);
+        let cut = match ctx.origin.branch_cut(default_branch) {
+            Ok(cut) => cut,
+            Err(e) => {
+                self.emit_bootstrap(fid, sync, "failed", Some(e.clone()));
+                return Err(e);
+            }
+        };
         let sync_detail = match &cut {
             BranchCut::FromDefaultBranch => git_ops
                 .ensure_default_branch_updated(machine, &ctx.target_dir, default_branch)
+                .await
+                .err(),
+            BranchCut::FromRemoteBranch { refspec, .. } => git_ops
+                .fetch_origin_refspec(machine, &ctx.target_dir, refspec)
                 .await
                 .err(),
             BranchCut::FromFetchedRef { refspec, .. } => {
@@ -207,7 +217,8 @@ impl DagStepExecutor {
                     )
                     .await
             }
-            BranchCut::FromFetchedRef { start_point, .. } => {
+            BranchCut::FromRemoteBranch { start_point, .. }
+            | BranchCut::FromFetchedRef { start_point, .. } => {
                 git_ops
                     .cut_branch_at(machine, &ctx.target_dir, start_point, &ctx.branch_name)
                     .await

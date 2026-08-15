@@ -39,14 +39,14 @@ fn a_named_base_cuts_from_that_branch_and_not_the_default() {
 fn a_fetched_ref_cuts_from_where_the_fetch_put_it() {
     assert_eq!(
         pull_request(12).start_point("main"),
-        pull_request(12).fetch_plan("main").local_ref,
+        plan(&pull_request(12)).local_ref,
         "the start point is unresolvable unless it names the ref the plan lands in"
     );
 }
 
 #[test]
 fn a_fetched_ref_lands_outside_refs_heads() {
-    let landed = pull_request(12).fetch_plan("main").local_ref;
+    let landed = plan(&pull_request(12)).local_ref;
     assert!(
         !landed.starts_with("refs/heads/"),
         "a local branch would be offered as a base and pushed by a matching-branch push: {landed}"
@@ -55,19 +55,31 @@ fn a_fetched_ref_lands_outside_refs_heads() {
 
 // ── What git has to fetch first ──────────────────────────────────────────────
 
+fn plan(origin: &FeatureOrigin) -> FetchPlan {
+    origin
+        .fetch_plan("main")
+        .expect("a plan for a well-formed origin")
+}
+
+fn spec(refspec: &str) -> Refspec {
+    Refspec::try_from(refspec.to_string()).expect("a well-formed refspec")
+}
+
 #[test]
 fn the_branch_arms_fetch_the_branch_they_name() {
     assert_eq!(
-        FeatureOrigin::DefaultBranch.fetch_plan("trunk"),
+        FeatureOrigin::DefaultBranch
+            .fetch_plan("trunk")
+            .expect("plan"),
         FetchPlan {
-            refspec: "trunk".to_string(),
+            refspec: spec("trunk"),
             local_ref: "origin/trunk".to_string(),
         },
     );
     assert_eq!(
-        branch("release/2.0").fetch_plan("main"),
+        plan(&branch("release/2.0")),
         FetchPlan {
-            refspec: "release/2.0".to_string(),
+            refspec: spec("release/2.0"),
             local_ref: "origin/release/2.0".to_string(),
         },
     );
@@ -76,11 +88,20 @@ fn the_branch_arms_fetch_the_branch_they_name() {
 #[test]
 fn a_fetched_ref_carries_its_destination_in_the_refspec() {
     assert_eq!(
-        pull_request(12).fetch_plan("main"),
+        plan(&pull_request(12)),
         FetchPlan {
-            refspec: "refs/pull/12/head:refs/demeteo/origins/pull/12/head".to_string(),
+            refspec: spec("+refs/pull/12/head:refs/demeteo/origins/pull/12/head"),
             local_ref: "refs/demeteo/origins/pull/12/head".to_string(),
         },
+    );
+}
+
+#[test]
+fn a_fetched_ref_forces_its_destination() {
+    assert!(
+        plan(&pull_request(12)).refspec.as_str().starts_with('+'),
+        "a review re-run against a force-pushed head fetches a non-fast-forward, \
+         which git rejects without the +, failing the whole run"
     );
 }
 
@@ -91,11 +112,91 @@ fn a_gitlab_merge_request_head_is_the_same_shape() {
         label: "!7".to_string(),
     };
     assert_eq!(
-        origin.fetch_plan("main"),
+        plan(&origin),
         FetchPlan {
-            refspec: "refs/merge-requests/7/head:refs/demeteo/origins/merge-requests/7/head"
-                .to_string(),
+            refspec: spec("+refs/merge-requests/7/head:refs/demeteo/origins/merge-requests/7/head"),
             local_ref: "refs/demeteo/origins/merge-requests/7/head".to_string(),
+        },
+    );
+}
+
+// ── What git must never be handed ────────────────────────────────────────────
+
+#[test]
+fn a_refspec_git_would_read_as_an_option_is_refused() {
+    for hostile in [
+        "--upload-pack=touch /tmp/pwned",
+        "-c",
+        "+--upload-pack=touch /tmp/pwned",
+    ] {
+        assert!(
+            Refspec::try_from(hostile.to_string()).is_err(),
+            "git runs --upload-pack's argument: {hostile}"
+        );
+    }
+    assert!(
+        Refspec::try_from("refs/pull/1/head refs/heads/main".to_string()).is_err(),
+        "one argv element naming two refs is not one refspec"
+    );
+    assert!(Refspec::try_from(String::new()).is_err());
+    assert!(Refspec::try_from("+".to_string()).is_err());
+}
+
+#[test]
+fn a_hostile_refspec_cannot_be_deserialised_either() {
+    assert!(
+        serde_json::from_str::<Refspec>(r#""--upload-pack=id""#).is_err(),
+        "a refspec arriving as JSON is exactly the one this repository did not write"
+    );
+}
+
+#[test]
+fn a_branch_named_like_an_option_has_no_fetch_plan() {
+    assert!(
+        branch("--upload-pack=touch /tmp/pwned")
+            .fetch_plan("main")
+            .is_err(),
+        "the base is a string a person typed, and it lands in argv"
+    );
+    assert!(FeatureOrigin::DefaultBranch.fetch_plan("-x").is_err());
+}
+
+#[test]
+fn a_fetched_origin_must_name_a_full_ref() {
+    let shorthand = FeatureOrigin::Ref {
+        fetch_spec: "main".to_string(),
+        label: "main".to_string(),
+    };
+    assert!(
+        shorthand.fetch_plan("main").is_err(),
+        "anything else lands under the private namespace looking like a PR head this \
+         repository never fetched"
+    );
+}
+
+// ── The strictness each arm is owed ──────────────────────────────────────────
+
+#[test]
+fn only_a_fetched_ref_makes_its_fetch_load_bearing() {
+    assert_eq!(
+        FeatureOrigin::DefaultBranch
+            .branch_cut("main")
+            .expect("cut"),
+        BranchCut::FromDefaultBranch
+    );
+    assert_eq!(
+        branch("release/2.0").branch_cut("main").expect("cut"),
+        BranchCut::FromRemoteBranch {
+            refspec: spec("release/2.0"),
+            start_point: "origin/release/2.0".to_string(),
+        },
+        "origin/release/2.0 is already in the clone, so an unreachable origin is stale, not fatal"
+    );
+    assert_eq!(
+        pull_request(12).branch_cut("main").expect("cut"),
+        BranchCut::FromFetchedRef {
+            refspec: spec("+refs/pull/12/head:refs/demeteo/origins/pull/12/head"),
+            start_point: "refs/demeteo/origins/pull/12/head".to_string(),
         },
     );
 }
@@ -211,6 +312,28 @@ fn the_arms_are_told_apart_by_a_tag_and_not_by_their_fields() {
         r#"{"kind":"default_branch"}"#,
         "a fieldless arm still needs a discriminator to come back as itself"
     );
+}
+
+#[test]
+fn a_stored_but_unreadable_origin_is_not_the_default_branch() {
+    let corrupt = FeatureOrigin::from_column(Some(r#"{"kind":"from_the_moon"}"#));
+    assert!(
+        corrupt.is_err(),
+        "reading it as the default branch resumes the run on the wrong branch, diffs it \
+         against the wrong tree and squashes it onto the wrong parent"
+    );
+    assert!(FeatureOrigin::from_column(Some("{ not json")).is_err());
+}
+
+#[test]
+fn an_absent_column_still_reads_as_the_default_branch() {
+    for absent in [None, Some(""), Some("   ")] {
+        assert_eq!(
+            FeatureOrigin::from_column(absent).expect("absent is not corrupt"),
+            FeatureOrigin::DefaultBranch,
+            "every run predating the column started from the default branch"
+        );
+    }
 }
 
 #[test]

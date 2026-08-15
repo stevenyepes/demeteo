@@ -34,12 +34,18 @@ fn gate_workflow() -> serde_json::Value {
 }
 
 /// The git the bootstrap issued, in call order, for a run launched with
-/// `origin` — where every argv in `expected` is scripted to succeed and
-/// anything else the bootstrap tries is an error it cannot swallow.
+/// `origin`, and the branch it recorded — `None` when the run failed before
+/// cutting one.
 ///
-/// `expected` carries the argv *after* `git -C <repo_dir>`, since the
-/// repository path is a temp dir this function is the first to know.
-async fn bootstrap_git(label: &str, origin: FeatureOrigin, expected: &[String]) -> Vec<String> {
+/// `script` pairs each argv *after* `git -C <repo_dir>` with what git answers;
+/// the repository path is a temp dir this function is the first to know.
+/// Anything the bootstrap tries that is not in it is an error it cannot
+/// swallow.
+async fn bootstrap_git(
+    label: &str,
+    origin: FeatureOrigin,
+    script: &[(String, Result<&'static str, &'static str>)],
+) -> (Vec<String>, Option<String>) {
     let temp_dir = scratch_dir(label);
     let project_id = format!("p-{label}");
     let feature_id = format!("f-{label}");
@@ -47,16 +53,19 @@ async fn bootstrap_git(label: &str, origin: FeatureOrigin, expected: &[String]) 
         .to_string_lossy()
         .to_string();
 
-    let keys: Vec<String> = expected
+    let keys: Vec<String> = script
         .iter()
-        .map(|argv| format!("git -C {repo_dir} {argv}"))
+        .map(|(argv, _)| format!("git -C {repo_dir} {argv}"))
         .collect();
-    let script: Vec<(&str, Result<&str, &str>)> =
-        keys.iter().map(|k| (k.as_str(), Ok(""))).collect();
+    let programs: Vec<(&str, Result<&str, &str>)> = keys
+        .iter()
+        .zip(script.iter())
+        .map(|(key, (_, answer))| (key.as_str(), *answer))
+        .collect();
     let exec = Arc::new(
         ScriptedExec::new(&[])
             .with_dirs(&[&repo_dir])
-            .with_programs(&script),
+            .with_programs(&programs),
     );
     let (executor, db) =
         build_test_executor_in(temp_dir.clone(), Arc::new(FakeNotif), exec.clone()).await;
@@ -110,22 +119,28 @@ async fn bootstrap_git(label: &str, origin: FeatureOrigin, expected: &[String]) 
                 recorded = f.resolved_branch;
                 break;
             }
-            Ok(Some(f)) if f.status == "failed" => panic!(
-                "bootstrap failed before cutting a branch; the git it ran: {:?}",
-                exec.programs()
-            ),
+            Ok(Some(f)) if f.status == "failed" => break,
             _ => {}
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    assert_eq!(
-        recorded.as_deref(),
-        Some(format!("demeteo/features/{feature_id}").as_str()),
-        "the cut records the branch it created, so later readers stop re-deriving it"
-    );
 
     let ran = exec.programs();
     let _ = std::fs::remove_dir_all(temp_dir);
+    (ran, recorded)
+}
+
+/// Every argv in `expected` succeeds, and the run is expected to cut.
+async fn bootstrap_cutting(label: &str, origin: FeatureOrigin, expected: &[String]) -> Vec<String> {
+    let script: Vec<(String, Result<&'static str, &'static str>)> =
+        expected.iter().map(|argv| (argv.clone(), Ok(""))).collect();
+    let (ran, recorded) = bootstrap_git(label, origin, &script).await;
+    assert_eq!(
+        recorded.as_deref(),
+        Some(format!("demeteo/features/f-{label}").as_str()),
+        "the cut records the branch it created, so later readers stop re-deriving it; \
+         the git it ran: {ran:?}"
+    );
     ran
 }
 
@@ -140,13 +155,87 @@ async fn default_branch_origin_cuts_exactly_as_it_did_before_v41() {
         "fetch origin +main:main".to_string(),
         "branch -f demeteo/features/f-origin_default origin/main".to_string(),
     ];
-    let ran = bootstrap_git(
+    let ran = bootstrap_cutting(
         "origin_default",
         FeatureOrigin::DefaultBranch,
         &expected[..],
     )
     .await;
     assert_git_prefix(&ran, &expected);
+}
+
+/// A `Branch` origin fetches its base and cuts from `origin/<base>`. The
+/// refspec goes after `--`, like every other refspec this bootstrap builds.
+#[tokio::test]
+async fn branch_origin_cuts_from_the_tracking_ref_for_its_base() {
+    let expected = [
+        "fetch origin -- release/2.0".to_string(),
+        "branch -f demeteo/features/f-origin_branch origin/release/2.0".to_string(),
+    ];
+    let ran = bootstrap_cutting(
+        "origin_branch",
+        FeatureOrigin::Branch {
+            base: "release/2.0".to_string(),
+        },
+        &expected[..],
+    )
+    .await;
+    assert_git_prefix(&ran, &expected);
+}
+
+/// The half of the strictness split that is easy to lose: `origin/release/2.0`
+/// is already in the clone, so an unreachable origin makes the cut stale — not
+/// impossible — and the run goes on, exactly as a default-branch run does.
+#[tokio::test]
+async fn a_branch_origin_survives_an_unreachable_origin() {
+    let script = [
+        (
+            "fetch origin -- release/2.0".to_string(),
+            Err("fatal: could not read from remote repository"),
+        ),
+        (
+            "branch -f demeteo/features/f-origin_branch_offline origin/release/2.0".to_string(),
+            Ok(""),
+        ),
+    ];
+    let (ran, recorded) = bootstrap_git(
+        "origin_branch_offline",
+        FeatureOrigin::Branch {
+            base: "release/2.0".to_string(),
+        },
+        &script[..],
+    )
+    .await;
+    assert_eq!(
+        recorded.as_deref(),
+        Some("demeteo/features/f-origin_branch_offline"),
+        "the git it ran: {ran:?}"
+    );
+}
+
+/// And the other half: a fetched ref has no predecessor in the clone, so the
+/// same failure has to stop the run rather than cut from whatever else
+/// resolves.
+#[tokio::test]
+async fn a_ref_origin_stops_when_its_fetch_fails() {
+    let script = [(
+        "fetch origin -- +refs/pull/42/head:refs/demeteo/origins/pull/42/head".to_string(),
+        Err("fatal: couldn't find remote ref refs/pull/42/head"),
+    )];
+    let (ran, recorded) = bootstrap_git(
+        "origin_ref_missing",
+        FeatureOrigin::Ref {
+            fetch_spec: "refs/pull/42/head".to_string(),
+            label: "PR #42".to_string(),
+        },
+        &script[..],
+    )
+    .await;
+    assert_eq!(recorded, None, "the git it ran: {ran:?}");
+    assert!(
+        !ran.iter().any(|c| c.contains("branch -f")),
+        "a cut after a failed fetch is a cut from whatever else resolved: {ran:?}"
+    );
 }
 
 /// A `Ref` origin fetches its refspec into the private namespace and cuts from
@@ -157,10 +246,10 @@ async fn default_branch_origin_cuts_exactly_as_it_did_before_v41() {
 async fn ref_origin_fetches_the_refspec_then_cuts_from_it() {
     const FETCHED: &str = "refs/demeteo/origins/pull/42/head";
     let expected = [
-        format!("fetch origin refs/pull/42/head:{FETCHED}"),
+        format!("fetch origin -- +refs/pull/42/head:{FETCHED}"),
         format!("branch -f demeteo/features/f-origin_ref {FETCHED}"),
     ];
-    let ran = bootstrap_git(
+    let ran = bootstrap_cutting(
         "origin_ref",
         FeatureOrigin::Ref {
             fetch_spec: "refs/pull/42/head".to_string(),

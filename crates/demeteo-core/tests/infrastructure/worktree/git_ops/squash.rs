@@ -277,7 +277,7 @@ async fn test_squash_parents_onto_the_ref_the_run_was_cut_from() {
         fetch_spec: "refs/pull/7/head".to_string(),
         label: "PR #7".to_string(),
     };
-    let fetched = origin.fetch_plan("main").local_ref;
+    let fetched = origin.fetch_plan("main").expect("plan").local_ref;
 
     // The PR author's work, then the ref the bootstrap's fetch lands it in.
     // The branch itself goes away: a real clone of the upstream repo has only

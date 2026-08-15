@@ -1,4 +1,5 @@
 use crate::domain::branch_listing::BranchOption;
+use crate::domain::feature_origin::Refspec;
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
@@ -225,7 +226,7 @@ impl WorktreeOpsPort for GitOpsHelper {
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
-        refspec: &str,
+        refspec: &Refspec,
     ) -> Result<(), String> {
         self.fetch_origin_refspec(machine_id, repo_dir, refspec)
             .await
@@ -289,9 +290,9 @@ impl WorktreeOpsPort for GitOpsHelper {
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_branch: &str,
     ) -> Result<SyncOutcome, SyncFailure> {
-        self.sync_feature_with_upstream(machine_id, repo_dir, feature_branch, default_branch)
+        self.sync_feature_with_upstream(machine_id, repo_dir, feature_branch, base_branch)
             .await
     }
 
