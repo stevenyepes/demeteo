@@ -6,12 +6,14 @@ import { PullRequestListSkeleton } from './PullRequestListSkeleton';
 import { PullRequestRow } from './PullRequestRow';
 import { ReviewFailureCard } from './ReviewFailureCard';
 import { useNavigation, useProject } from '../../context';
+import { useLaunchRun } from '../../hooks/useLaunchRun';
 import {
   asPullRequestListFailure,
   listOpenPullRequests,
   type PullRequestListFailure,
   type PullRequestSummary,
 } from '../../lib/pullRequests';
+import type { ReviewLaunchParams } from '../../lib/reviewLaunch';
 
 type ListState =
   | { status: 'loading' }
@@ -61,6 +63,17 @@ export function CodeReviewView(): React.ReactElement {
 
   const connectProvider = useCallback(() => navigate({ kind: 'providers' }), [navigate]);
 
+  // The one launch code path (F28), reached from a second composer rather than
+  // routed around: a review is a run like any other, and on success this
+  // navigates to its feature detail the way every other launch does.
+  const launchRun = useLaunchRun({ projectId: currentProjectId });
+  const startReview = useCallback(
+    async (params: ReviewLaunchParams) => {
+      await launchRun(params);
+    },
+    [launchRun],
+  );
+
   return (
     <div className="flex-1 min-w-0 overflow-y-auto p-8">
       <div className="max-w-5xl mx-auto w-full space-y-6">
@@ -95,6 +108,7 @@ export function CodeReviewView(): React.ReactElement {
                 <PullRequestRow
                   key={`${pullRequest.head_fetch_spec}-${pullRequest.number}`}
                   pullRequest={pullRequest}
+                  onReview={startReview}
                 />
               ))}
             </div>

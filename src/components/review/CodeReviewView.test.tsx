@@ -24,6 +24,26 @@ const PROJECT: Project = {
   tokens: 0,
 };
 
+const PULL_REQUEST = {
+  number: 412,
+  title: 'Tighten the refspec guard',
+  author: 'octocat',
+  source_branch: 'patch-1',
+  target_branch: 'main',
+  draft: true,
+  web_url: 'https://github.com/acme/app/pull/412',
+  created_at: '2026-08-12T09:00:00Z',
+  updated_at: '2026-08-15T07:00:00Z',
+  head_repo_path: 'octocat/app',
+  head_fetch_spec: 'refs/pull/412/head',
+  from_fork: true,
+  maintainer_can_modify: false,
+  head_repo_push: false,
+  additions: 120,
+  deletions: 8,
+  changed_files: 3,
+};
+
 /** Answers `list_open_pull_requests` and rejects everything else: a stub that
  *  resolves every command would let this suite pass against a view that called
  *  the wrong one. */
@@ -121,29 +141,7 @@ describe('CodeReviewView', () => {
   });
 
   it('renders a pull request across its three tiers', async () => {
-    backend(() =>
-      Promise.resolve([
-        {
-          number: 412,
-          title: 'Tighten the refspec guard',
-          author: 'octocat',
-          source_branch: 'patch-1',
-          target_branch: 'main',
-          draft: true,
-          web_url: 'https://github.com/acme/app/pull/412',
-          created_at: '2026-08-12T09:00:00Z',
-          updated_at: '2026-08-15T07:00:00Z',
-          head_repo_path: 'octocat/app',
-          head_fetch_spec: 'refs/pull/412/head',
-          from_fork: true,
-          maintainer_can_modify: false,
-          head_repo_push: false,
-          additions: 120,
-          deletions: 8,
-          changed_files: 3,
-        },
-      ]),
-    );
+    backend(() => Promise.resolve([PULL_REQUEST]));
     mount();
 
     const row = await screen.findByTestId('pull-request-row');
@@ -153,6 +151,36 @@ describe('CodeReviewView', () => {
     expect(row).toHaveTextContent('patch-1 → main');
     expect(row).toHaveTextContent('+120');
     expect(row).toHaveTextContent('3 files');
+  });
+
+  it('launches a review on the head ref, measured against the target branch', async () => {
+    const launches: Record<string, unknown>[] = [];
+    vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'list_open_pull_requests') return Promise.resolve([PULL_REQUEST]);
+      if (cmd === 'start_feature') {
+        launches.push(typeof args === 'object' && args !== null ? { ...args } : {});
+        return Promise.resolve({ id: 'feat-1', title: 'Review PR #412', status: 'running' });
+      }
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
+    });
+    mount();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Add instructions' }));
+    await userEvent.type(
+      screen.getByLabelText('Extra instructions (optional)'),
+      'Concentrate on the fence.',
+    );
+    await userEvent.click(screen.getByTestId('review-this-pr'));
+
+    await waitFor(() => expect(launches).toHaveLength(1));
+    expect(launches[0].workflowId).toBe('wf-starter-code-review');
+    expect(launches[0].origin).toEqual({
+      kind: 'ref',
+      fetch_spec: 'refs/pull/412/head',
+      label: 'patch-1',
+    });
+    expect(launches[0].diffBaseBranch).toBe('main');
+    expect(launches[0].description).toContain('Concentrate on the fence.');
   });
 
   it('shows flat skeleton rows while the list is in flight', async () => {
