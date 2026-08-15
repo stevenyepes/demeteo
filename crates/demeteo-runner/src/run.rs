@@ -156,11 +156,16 @@ async fn pre_clone_with_askpass(
 /// for a run that already has a `feature_id`, or it would create a second
 /// project from scratch instead of resuming the first. Use
 /// [`resume_or_run`] to pick the right path.
+///
+/// The origin is resolved before any of that, because
+/// [`RunSpec::origin_to_honour`] can refuse and a refused run must leave no
+/// project, no clone and no feature behind.
 pub async fn execute_run(
     svc: &RunnerServices,
     run_id: &str,
     spec: &RunSpec,
 ) -> Result<RunOutcome, String> {
+    let origin = spec.origin_to_honour()?;
     emit(&svc.ctx, run_id, "submitted", &spec.title);
 
     // M4.2/§6.2: nothing that touches `origin` happens without an
@@ -256,21 +261,17 @@ pub async fn execute_run(
         None,
     );
 
-    // Persist the settings the run will execute under. Two inputs merge
-    // here (MC-D4 / P0.5): the bootstrap-*detected* worktree strategy (it
-    // read the true `default_branch` from `origin/HEAD` on this clone —
-    // ground truth) and, when the launching client sent them, that
-    // client's own project settings (harnesses, prepare/test commands,
-    // extra writable paths, lifecycle, …). The client wins on every
-    // tunable; the detected `default_branch` wins over the client's stale
-    // copy. Without persisting *something*, `get_settings` returns None at
-    // feature_start and `fetch_default_settings` would supply
-    // `default_branch = "main"`, so `create_feature_branch` would run
-    // `git branch -f <feature> main` and fail on a `master`-default repo.
-    // `None` client settings reproduce the pre-multi-client behavior
-    // exactly (detected strategy + engine defaults).
-    let settings =
-        merge_project_settings(strategy, spec.project_settings.clone(), project.id.clone());
+    // Persist the settings the run will execute under. Without persisting
+    // *something*, `get_settings` returns None at feature_start and
+    // `fetch_default_settings` would supply `default_branch = "main"`, so
+    // `create_feature_branch` would run `git branch -f <feature> main` and
+    // fail on a `master`-default repo.
+    let settings = merge_project_settings(
+        strategy,
+        spec.project_settings.clone(),
+        project.id.clone(),
+        origin.base_branch(spec.diff_base_branch.as_deref()),
+    );
     svc.ctx
         .projects
         .save_settings(settings)
@@ -320,7 +321,8 @@ pub async fn execute_run(
             max_budget_usd: spec.max_budget_usd,
             step_overrides: spec.step_overrides.clone(),
             staged_attachments: staged,
-            ..Default::default()
+            origin,
+            diff_base_branch: spec.diff_base_branch.clone(),
         })
         .await
         .map_err(|e| format!("feature_start failed: {}", e))?;
@@ -353,24 +355,43 @@ pub async fn execute_run(
 }
 
 /// MC-D4 merge (P0.5): compose the `ProjectSettings` row the runner
-/// persists for a run's own project from the two sources of truth. The
+/// persists for a run's own project from the three sources of truth. The
 /// launching client's settings win on **every tunable** (`branch_prefix`,
 /// `test_command`, `build_command`, `coverage_command`, `conventions_file`,
 /// `pr_template`, `harnesses`, `prepare_command`, `extra_writable_paths`,
 /// `conflict_policy`, `feature_lifecycle`, `default_*`, `artifact_subdir`,
-/// `commit_artifacts`). The bootstrap-*detected* `default_branch` wins over
-/// the client's, because it was read from `origin/HEAD` on the *actual*
-/// clone — ground truth for this checkout — falling back to the client's
-/// value, then `"main"`. `project_id` is always the run's own project (the
-/// client's is meaningless on the runner). `None` client settings
-/// reproduce the pre-multi-client behavior exactly: detected strategy +
-/// engine defaults. Pure over its inputs so the merge is unit-testable.
+/// `commit_artifacts`). `project_id` is always the run's own project (the
+/// client's is meaningless on the runner). `None` client settings reproduce
+/// the pre-multi-client behavior exactly: detected strategy + engine
+/// defaults. Pure over its inputs so the merge is unit-testable.
+///
+/// `default_branch` is the field with three claimants, and the order is
+/// `run_base`, then `detected`, then the client's, then `"main"`:
+///
+/// - `run_base` — this run's declared base
+///   ([`demeteo_core::domain::feature_origin::FeatureOrigin::base_branch`]) —
+///   wins outright. On the runner `default_branch` is not a project-wide
+///   fact: the project row exists for this one run, and every reader of the
+///   field is asking a question about *it* — what `finalize` squashes onto,
+///   what `merge_base` measures the review diff from, what the PR targets. A
+///   run cut from `release/2.0` whose settings say `master` squashes away
+///   every commit `release/2.0` has that `master` does not, and hands its
+///   reviewer that as the diff.
+/// - `detected` wins next, because it was read from `origin/HEAD` on the
+///   *actual* clone. That is ground truth about the checkout, and it is the
+///   right answer exactly while nobody has chosen otherwise: it beats a
+///   client's stale copy of a project default, and it must not beat a base
+///   the launching client picked deliberately.
+///
+/// A blank at any tier falls through to the next, so the row never carries
+/// an empty branch name.
 fn merge_project_settings(
     detected: WorktreeStrategy,
     client: Option<ProjectSettings>,
     project_id: ProjectId,
+    run_base: Option<&str>,
 ) -> ProjectSettings {
-    match client {
+    let mut settings = match client {
         None => {
             let mut settings = fetch_default_settings();
             settings.project_id = project_id;
@@ -379,8 +400,6 @@ fn merge_project_settings(
         }
         Some(mut settings) => {
             settings.project_id = project_id;
-            // Detected `default_branch` is ground truth for this clone;
-            // every other strategy tunable stays the client's.
             if !detected.default_branch.trim().is_empty() {
                 settings.worktree_strategy.default_branch = detected.default_branch;
             } else if settings.worktree_strategy.default_branch.trim().is_empty() {
@@ -388,7 +407,11 @@ fn merge_project_settings(
             }
             settings
         }
+    };
+    if let Some(base) = run_base.map(str::trim).filter(|base| !base.is_empty()) {
+        settings.worktree_strategy.default_branch = base.to_string();
     }
+    settings
 }
 
 /// Dispatch to [`execute_run`] (nothing created yet) or

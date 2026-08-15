@@ -230,6 +230,8 @@ pub async fn submit_remote_run(
         unattended: input.unattended,
         budget,
         project_settings,
+        origin: None,
+        diff_base_branch: None,
     };
     let submitted = match remote_rpc(
         ctx,

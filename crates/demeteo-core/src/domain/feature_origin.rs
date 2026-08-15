@@ -8,10 +8,11 @@
 //! `adapters/mr_publisher/mod.rs`. Three readers of one field is fine while the
 //! answer is always the same field; it stops being fine the moment a run may
 //! start somewhere else, because "somewhere else" is four separate answers —
-//! what to fetch, what to cut from, what to name the branch, what a PR targets
-//! — and nothing forces three call sites to agree on them. Those four answers
-//! are the four methods here, and they are the reason the type exists rather
-//! than an extra `Option<String>` beside `default_branch`.
+//! what to fetch, what to cut from, what to name the branch, and what the run
+//! is measured against (its squash base, its review diff, its PR target) — and
+//! nothing forces three call sites to agree on them. Those four answers are
+//! the methods here, and they are the reason the type exists rather than an
+//! extra `Option<String>` beside `default_branch`.
 //!
 //! An earlier draft carried a fourth arm that adopted an existing worktree. It
 //! was cut after review: an adopted worktree's uncommitted changes are
@@ -151,17 +152,33 @@ impl FeatureOrigin {
         }
     }
 
-    /// What a PR opened by this run targets.
+    /// The branch a run started here treats as its base: what a PR targets,
+    /// what the review diff is measured from, and what `finalize` squashes
+    /// onto. `None` means the run named no base of its own and the project's
+    /// default branch stands.
     ///
-    /// [`FeatureOrigin::Ref`] answers `default_branch` rather than the ref it
-    /// started from: a PR head is not a target any host accepts — often it is
-    /// not even a ref in this repository — so a run started from one lands its
-    /// own PR where every other run lands it.
-    pub fn publish_target(&self, default_branch: &str) -> String {
+    /// `review_base` is the launcher's explicit answer
+    /// ([`crate::domain::run_spec::RunSpec::diff_base_branch`]) and wins where
+    /// it is given, because [`FeatureOrigin::Ref`] has no base to offer: a PR
+    /// head is not a target any host accepts — often not even a ref in this
+    /// repository — so what such a run merges into is a choice only its
+    /// launcher can make.
+    ///
+    /// [`FeatureOrigin::DefaultBranch`] answers `None` whatever `review_base`
+    /// says. That arm's fetch and cut are *defined* in terms of the default
+    /// branch, so letting a review base through here would move the start
+    /// point of a run that asked to start from the default branch.
+    pub fn base_branch<'a>(&'a self, review_base: Option<&'a str>) -> Option<&'a str> {
         match self {
-            Self::DefaultBranch | Self::Ref { .. } => default_branch.to_string(),
-            Self::Branch { base } => base.clone(),
+            Self::DefaultBranch => None,
+            Self::Branch { base } => review_base.or(Some(base.as_str())),
+            Self::Ref { .. } => review_base,
         }
+    }
+
+    /// What a PR opened by this run targets.
+    pub fn publish_target(&self, default_branch: &str) -> String {
+        self.base_branch(None).unwrap_or(default_branch).to_string()
     }
 }
 

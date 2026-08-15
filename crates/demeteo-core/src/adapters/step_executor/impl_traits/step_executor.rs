@@ -28,6 +28,7 @@ impl StepExecutor for DagStepExecutor {
             step_overrides,
             staged_attachments,
             origin,
+            diff_base_branch,
         } = launch;
         if title.trim().is_empty() {
             return Err("Feature title cannot be empty.".to_string());
@@ -104,7 +105,7 @@ impl StepExecutor for DagStepExecutor {
             attachments: Vec::new(),
             harness_baseline: None,
             origin,
-            diff_base_branch: None,
+            diff_base_branch,
             resolved_branch: None,
         };
         self.features.add(feature.clone())?;

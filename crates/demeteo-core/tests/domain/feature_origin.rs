@@ -121,6 +121,35 @@ fn a_run_from_a_fetched_ref_falls_back_to_the_default_branch() {
     );
 }
 
+// ── What the run measures itself against ─────────────────────────────────────
+
+#[test]
+fn a_named_base_is_the_run_s_base() {
+    assert_eq!(branch("release/2.0").base_branch(None), Some("release/2.0"));
+}
+
+#[test]
+fn a_fetched_ref_has_no_base_until_the_launcher_names_one() {
+    assert_eq!(
+        pull_request(12).base_branch(None),
+        None,
+        "a pull request head is not a branch anything merges into"
+    );
+    assert_eq!(
+        pull_request(12).base_branch(Some("develop")),
+        Some("develop")
+    );
+}
+
+#[test]
+fn a_default_branch_run_ignores_a_review_base() {
+    assert_eq!(
+        FeatureOrigin::DefaultBranch.base_branch(Some("develop")),
+        None,
+        "this arm's fetch and cut are the default branch; a review base here would move the cut"
+    );
+}
+
 // ── The branch name is the origin's one invariant ────────────────────────────
 
 #[test]

@@ -56,6 +56,10 @@ pub struct FeatureLaunch {
     /// Where the run's branch is cut from. Defaults to the project's default
     /// branch, which is what every launch did before V41.
     pub origin: crate::domain::feature_origin::FeatureOrigin,
+    /// What the run's review diff is measured against when that is not where
+    /// it started. `None` = the project's default branch. See migration V41
+    /// and [`FeatureOrigin::base_branch`](crate::domain::feature_origin::FeatureOrigin::base_branch).
+    pub diff_base_branch: Option<String>,
 }
 
 /// Step executor — the DAG engine that drives a `Feature` through its

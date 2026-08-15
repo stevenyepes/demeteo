@@ -2,6 +2,7 @@
 
 use super::merge_project_settings;
 use demeteo_core::adapters::step_executor::setup::fetch_default_settings;
+use demeteo_core::domain::feature_origin::FeatureOrigin;
 use demeteo_core::domain::ids::ProjectId;
 
 #[test]
@@ -11,7 +12,7 @@ fn none_client_reproduces_detected_strategy() {
     let mut detected = fetch_default_settings().worktree_strategy;
     detected.default_branch = "trunk".to_string();
     detected.test_command = Some("cargo test".to_string());
-    let out = merge_project_settings(detected, None, ProjectId::from("p1".to_string()));
+    let out = merge_project_settings(detected, None, ProjectId::from("p1".to_string()), None);
     assert_eq!(out.project_id.as_str(), "p1");
     assert_eq!(out.worktree_strategy.default_branch, "trunk");
     assert_eq!(
@@ -33,7 +34,12 @@ fn client_tunables_win_but_detected_default_branch_wins() {
     detected.default_branch = "master".to_string();
     detected.test_command = Some("SHOULD NOT WIN".to_string());
 
-    let out = merge_project_settings(detected, Some(client), ProjectId::from("p2".to_string()));
+    let out = merge_project_settings(
+        detected,
+        Some(client),
+        ProjectId::from("p2".to_string()),
+        None,
+    );
     // Detected default_branch (read from origin/HEAD) wins over the
     // client's stale copy…
     assert_eq!(out.worktree_strategy.default_branch, "master");
@@ -61,7 +67,12 @@ fn empty_detected_branch_falls_back_to_client_then_main() {
     client.worktree_strategy.default_branch = "develop".to_string();
     let mut detected = fetch_default_settings().worktree_strategy;
     detected.default_branch = "   ".to_string();
-    let out = merge_project_settings(detected, Some(client), ProjectId::from("p3".to_string()));
+    let out = merge_project_settings(
+        detected,
+        Some(client),
+        ProjectId::from("p3".to_string()),
+        None,
+    );
     assert_eq!(out.worktree_strategy.default_branch, "develop");
 
     // Detected blank AND client blank → "main" (never an empty branch).
@@ -69,8 +80,78 @@ fn empty_detected_branch_falls_back_to_client_then_main() {
     client2.worktree_strategy.default_branch = String::new();
     let mut detected2 = fetch_default_settings().worktree_strategy;
     detected2.default_branch = String::new();
-    let out2 = merge_project_settings(detected2, Some(client2), ProjectId::from("p4".to_string()));
+    let out2 = merge_project_settings(
+        detected2,
+        Some(client2),
+        ProjectId::from("p4".to_string()),
+        None,
+    );
     assert_eq!(out2.worktree_strategy.default_branch, "main");
+}
+
+// ── The base a run declared ──────────────────────────────────────────────────
+//
+// `default_branch` on a runner-side project is not a project-wide fact: the
+// project row is created for one run, and the field is what `finalize`
+// squashes onto and what the review diff's `merge_base` measures from.
+
+#[test]
+fn a_declared_base_beats_the_detected_default_branch() {
+    let mut client = fetch_default_settings();
+    client.worktree_strategy.default_branch = "main".to_string();
+    let mut detected = fetch_default_settings().worktree_strategy;
+    detected.default_branch = "master".to_string();
+
+    let out = merge_project_settings(
+        detected,
+        Some(client),
+        ProjectId::from("p5".to_string()),
+        FeatureOrigin::Branch {
+            base: "release/2.0".to_string(),
+        }
+        .base_branch(None),
+    );
+
+    assert_eq!(
+        out.worktree_strategy.default_branch, "release/2.0",
+        "squashing this run onto the detected default would collapse every commit \
+         release/2.0 has that it does not, and call the result the run's diff"
+    );
+}
+
+#[test]
+fn a_pull_request_run_measures_itself_against_the_branch_it_merges_into() {
+    let mut detected = fetch_default_settings().worktree_strategy;
+    detected.default_branch = "master".to_string();
+    let origin = FeatureOrigin::Ref {
+        fetch_spec: "refs/pull/12/head".to_string(),
+        label: "PR #12".to_string(),
+    };
+
+    let out = merge_project_settings(
+        detected,
+        None,
+        ProjectId::from("p6".to_string()),
+        origin.base_branch(Some("develop")),
+    );
+
+    assert_eq!(out.worktree_strategy.default_branch, "develop");
+}
+
+#[test]
+fn a_blank_declared_base_leaves_the_detected_one_standing() {
+    let mut detected = fetch_default_settings().worktree_strategy;
+    detected.default_branch = "master".to_string();
+    let out = merge_project_settings(
+        detected,
+        None,
+        ProjectId::from("p7".to_string()),
+        Some("   "),
+    );
+    assert_eq!(
+        out.worktree_strategy.default_branch, "master",
+        "the row never carries an empty branch name"
+    );
 }
 
 // ── RunSpec wire format (effort) ────────────────────────────────────
