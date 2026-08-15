@@ -95,6 +95,27 @@ impl FeatureOrigin {
         }
     }
 
+    /// Decode `features.origin_json` (V41). NULL, empty, or a document this
+    /// build cannot parse all answer [`FeatureOrigin::DefaultBranch`]: a run
+    /// that started from nowhere is not a state, so there is no third answer
+    /// to give and no caller has to handle one.
+    pub fn from_column(raw: Option<&str>) -> Self {
+        let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Self::DefaultBranch;
+        };
+        serde_json::from_str(raw).unwrap_or_default()
+    }
+
+    /// Encode for `features.origin_json`. The inverse of
+    /// [`FeatureOrigin::from_column`], so the default stores as SQL NULL and
+    /// the column carries one spelling of it rather than two.
+    pub fn to_column(&self) -> Option<String> {
+        match self {
+            Self::DefaultBranch => None,
+            other => serde_json::to_string(other).ok(),
+        }
+    }
+
     /// What a PR opened by this run targets.
     ///
     /// [`FeatureOrigin::Ref`] answers `default_branch` rather than the ref it

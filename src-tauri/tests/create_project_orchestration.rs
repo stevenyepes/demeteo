@@ -49,6 +49,7 @@ use demeteo_lib::adapters::create_project_adapter::CreateProjectAdapter;
 use demeteo_lib::commands::attachments::StagedAttachmentInput;
 use demeteo_lib::commands::create_project::{BootstrapOutcome, CreateProjectStepPayload};
 use demeteo_lib::domain::bootstrap::{BootstrapState, BootstrapStep, STEP_ORDER};
+use demeteo_lib::domain::feature_origin::FeatureOrigin;
 use demeteo_lib::domain::ids::{ProjectId, ProviderId, RepositoryId, WorkflowId};
 use demeteo_lib::domain::models::GateDecision;
 use demeteo_lib::domain::models::{
@@ -295,6 +296,9 @@ impl StepExecutor for StubExecutor {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         })
     }
     async fn feature_pause(&self, _feature_id: &str) -> Result<(), String> {

@@ -1,6 +1,7 @@
 use rusqlite::params;
 
 use crate::domain::attachment::AttachedFile;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::harness_baseline::HarnessBaseline;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
 use crate::domain::models::{EffortLevel, Feature, StepExecution};
@@ -24,6 +25,55 @@ fn effort_from_row(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<E
 fn baseline_from_row(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<HarnessBaseline>> {
     let raw: Option<String> = row.get(idx)?;
     Ok(HarnessBaseline::from_column(raw.as_deref()))
+}
+
+/// The projection [`feature_from_row`] indexes into. The two must move
+/// together: every read of a `features` row is positional, so a column added
+/// to one list and not the other silently reads as its neighbour rather than
+/// failing. Keeping one list is what makes that impossible instead of
+/// careful.
+const FEATURE_COLUMNS: &str = "id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id, harness_baseline_json, origin_json, diff_base_branch, resolved_branch";
+
+fn feature_from_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> {
+    let commit_artifacts: Option<i64> = row.get(13)?;
+    let loop_iterations: Option<i64> = row.get(14)?;
+    let step_overrides_json: Option<String> = row.get(15)?;
+    let attachments_json: Option<String> = row.get(16)?;
+    let origin_json: Option<String> = row.get(24)?;
+    let attachments: Vec<AttachedFile> = attachments_json
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    Ok(Feature {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        workflow_id: row.get(2)?,
+        workflow_version_id: row.get(22)?,
+        title: row.get(3)?,
+        description: row.get(17)?,
+        status: row.get(4)?,
+        total_cost: row.get(5)?,
+        duration: row.get(6)?,
+        tokens: row.get(7)?,
+        created_at: row.get(8)?,
+        agent_kind: row.get(9)?,
+        model: row.get(10)?,
+        effort: effort_from_row(row, 20)?,
+        mr_url: row.get(11)?,
+        mr_state: row.get(12)?,
+        pr_title: row.get(18)?,
+        pr_body: row.get(19)?,
+        commit_artifacts: commit_artifacts.map(|v| v != 0),
+        loop_iterations: loop_iterations.map(|v| v as u32),
+        max_budget_usd: row.get(21)?,
+        step_overrides: step_overrides_json
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
+        attachments,
+        harness_baseline: baseline_from_row(row, 23)?,
+        origin: FeatureOrigin::from_column(origin_json.as_deref()),
+        diff_base_branch: row.get(25)?,
+        resolved_branch: row.get(26)?,
+    })
 }
 
 impl AttachmentJsonPort for SqliteAdapter {
@@ -70,49 +120,13 @@ impl FeatureRepository for SqliteAdapter {
     fn get_active(&self, project_id: &ProjectId) -> Result<Vec<Feature>, String> {
         let conn = self.conn.lock()?;
         let mut stmt = conn
-            .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id, harness_baseline_json
+            .prepare(&format!(
+                "SELECT {FEATURE_COLUMNS}
                  FROM features WHERE project_id = ?1 AND status NOT IN ('archived', 'deleted') ORDER BY created_at DESC",
-            )
+            ))
             .map_err(|e| e.to_string())?;
         let iter = stmt
-            .query_map(params![project_id.0], |row| {
-                let commit_artifacts: Option<i64> = row.get(13)?;
-                let loop_iterations: Option<i64> = row.get(14)?;
-                let step_overrides_json: Option<String> = row.get(15)?;
-                let attachments_json: Option<String> = row.get(16)?;
-                let attachments: Vec<AttachedFile> = attachments_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-                Ok(Feature {
-                    id: row.get(0)?,
-                    project_id: row.get(1)?,
-                    workflow_id: row.get(2)?,
-                    workflow_version_id: row.get(22)?,
-                    title: row.get(3)?,
-                    description: row.get(17)?,
-                    status: row.get(4)?,
-                    total_cost: row.get(5)?,
-                    duration: row.get(6)?,
-                    tokens: row.get(7)?,
-                    created_at: row.get(8)?,
-                    agent_kind: row.get(9)?,
-                    model: row.get(10)?,
-                    effort: effort_from_row(row, 20)?,
-                    mr_url: row.get(11)?,
-                    mr_state: row.get(12)?,
-                    pr_title: row.get(18)?,
-                    pr_body: row.get(19)?,
-                    commit_artifacts: commit_artifacts.map(|v| v != 0),
-                    loop_iterations: loop_iterations.map(|v| v as u32),
-                    max_budget_usd: row.get(21)?,
-                    step_overrides: step_overrides_json
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_default(),
-                    attachments,
-                    harness_baseline: baseline_from_row(row, 23)?,
-                })
-            })
+            .query_map(params![project_id.0], feature_from_row)
             .map_err(|e| e.to_string())?;
         let mut list = Vec::new();
         for r in iter {
@@ -124,49 +138,12 @@ impl FeatureRepository for SqliteAdapter {
     fn get(&self, id: &FeatureId) -> Result<Option<Feature>, String> {
         let conn = self.conn.lock()?;
         let mut stmt = conn
-            .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id, harness_baseline_json
-                 FROM features WHERE id = ?1",
-            )
+            .prepare(&format!(
+                "SELECT {FEATURE_COLUMNS} FROM features WHERE id = ?1",
+            ))
             .map_err(|e| e.to_string())?;
         let mut iter = stmt
-            .query_map(params![id.0], |row| {
-                let commit_artifacts: Option<i64> = row.get(13)?;
-                let loop_iterations: Option<i64> = row.get(14)?;
-                let step_overrides_json: Option<String> = row.get(15)?;
-                let attachments_json: Option<String> = row.get(16)?;
-                let attachments: Vec<AttachedFile> = attachments_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-                Ok(Feature {
-                    id: row.get(0)?,
-                    project_id: row.get(1)?,
-                    workflow_id: row.get(2)?,
-                    workflow_version_id: row.get(22)?,
-                    title: row.get(3)?,
-                    description: row.get(17)?,
-                    status: row.get(4)?,
-                    total_cost: row.get(5)?,
-                    duration: row.get(6)?,
-                    tokens: row.get(7)?,
-                    created_at: row.get(8)?,
-                    agent_kind: row.get(9)?,
-                    model: row.get(10)?,
-                    effort: effort_from_row(row, 20)?,
-                    mr_url: row.get(11)?,
-                    mr_state: row.get(12)?,
-                    pr_title: row.get(18)?,
-                    pr_body: row.get(19)?,
-                    commit_artifacts: commit_artifacts.map(|v| v != 0),
-                    loop_iterations: loop_iterations.map(|v| v as u32),
-                    max_budget_usd: row.get(21)?,
-                    step_overrides: step_overrides_json
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_default(),
-                    attachments,
-                    harness_baseline: baseline_from_row(row, 23)?,
-                })
-            })
+            .query_map(params![id.0], feature_from_row)
             .map_err(|e| e.to_string())?;
         match iter.next() {
             Some(Ok(f)) => Ok(Some(f)),
@@ -192,14 +169,15 @@ impl FeatureRepository for SqliteAdapter {
         let harness_baseline_json: Option<String> =
             HarnessBaseline::to_column(f.harness_baseline.as_ref());
         conn.execute(
-            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, effort, max_budget_usd, workflow_version_id, harness_baseline_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+            "INSERT INTO features (id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, effort, max_budget_usd, workflow_version_id, harness_baseline_json, origin_json, diff_base_branch, resolved_branch)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
             params![
                 f.id, f.project_id, f.workflow_id, f.title, f.status,
                 f.total_cost, f.duration, f.tokens, f.created_at, f.agent_kind, f.model,
                 f.mr_url, f.mr_state, commit_artifacts, loop_iterations, step_overrides_json,
                 attachments_json, f.description, f.effort.map(|e| e.as_str()), f.max_budget_usd,
-                f.workflow_version_id, harness_baseline_json
+                f.workflow_version_id, harness_baseline_json, f.origin.to_column(),
+                f.diff_base_branch, f.resolved_branch
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -283,6 +261,18 @@ impl FeatureRepository for SqliteAdapter {
             sets.push("harness_baseline_json=?");
             binds.push(Box::new(HarnessBaseline::to_column(baseline.as_ref())));
         }
+        if let Some(origin) = patch.origin.clone() {
+            sets.push("origin_json=?");
+            binds.push(Box::new(origin.to_column()));
+        }
+        if let Some(base) = patch.diff_base_branch.clone() {
+            sets.push("diff_base_branch=?");
+            binds.push(Box::new(base));
+        }
+        if let Some(branch) = patch.resolved_branch.clone() {
+            sets.push("resolved_branch=?");
+            binds.push(Box::new(branch));
+        }
         if sets.is_empty() {
             return Ok(());
         }
@@ -354,49 +344,13 @@ impl FeatureRepository for SqliteAdapter {
     fn list_with_open_mr(&self) -> Result<Vec<Feature>, String> {
         let conn = self.conn.lock()?;
         let mut stmt = conn
-            .prepare(
-                "SELECT id, project_id, workflow_id, title, status, total_cost, duration, tokens, created_at, agent_kind, model, mr_url, mr_state, commit_artifacts, loop_iterations, step_overrides_json, attachments_json, description, pr_title, pr_body, effort, max_budget_usd, workflow_version_id, harness_baseline_json
+            .prepare(&format!(
+                "SELECT {FEATURE_COLUMNS}
                  FROM features WHERE mr_state = 'open' AND mr_url IS NOT NULL ORDER BY created_at DESC",
-            )
+            ))
             .map_err(|e| e.to_string())?;
         let iter = stmt
-            .query_map([], |row| {
-                let commit_artifacts: Option<i64> = row.get(13)?;
-                let loop_iterations: Option<i64> = row.get(14)?;
-                let step_overrides_json: Option<String> = row.get(15)?;
-                let attachments_json: Option<String> = row.get(16)?;
-                let attachments: Vec<AttachedFile> = attachments_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-                Ok(Feature {
-                    id: row.get(0)?,
-                    project_id: row.get(1)?,
-                    workflow_id: row.get(2)?,
-                    workflow_version_id: row.get(22)?,
-                    title: row.get(3)?,
-                    description: row.get(17)?,
-                    status: row.get(4)?,
-                    total_cost: row.get(5)?,
-                    duration: row.get(6)?,
-                    tokens: row.get(7)?,
-                    created_at: row.get(8)?,
-                    agent_kind: row.get(9)?,
-                    model: row.get(10)?,
-                    effort: effort_from_row(row, 20)?,
-                    mr_url: row.get(11)?,
-                    mr_state: row.get(12)?,
-                    pr_title: row.get(18)?,
-                    pr_body: row.get(19)?,
-                    commit_artifacts: commit_artifacts.map(|v| v != 0),
-                    loop_iterations: loop_iterations.map(|v| v as u32),
-                    max_budget_usd: row.get(21)?,
-                    step_overrides: step_overrides_json
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_default(),
-                    attachments,
-                    harness_baseline: baseline_from_row(row, 23)?,
-                })
-            })
+            .query_map([], feature_from_row)
             .map_err(|e| e.to_string())?;
         let mut list = Vec::new();
         for r in iter {

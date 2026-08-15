@@ -11,6 +11,7 @@ use crate::adapters::agent::registry::AgentRegistry;
 use crate::adapters::database::SqliteAdapter;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::adapters::step_executor::DagStepExecutor;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, StepId, WorkflowId};
 use crate::domain::models::{Feature, StepExecution};
 use crate::error::AppError;
@@ -274,6 +275,9 @@ async fn cleanup_dismissal_blocks_a_stale_reconciliation_snapshot() {
         step_overrides: Vec::new(),
         attachments: Vec::new(),
         harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
     };
     features.add(feature("f-dismissed", "running")).unwrap();
 
@@ -476,6 +480,9 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
         step_overrides: Vec::new(),
         attachments: Vec::new(),
         harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
     };
     let mk_step = |se: &str, f: &str| StepExecution {
         last_failure_fingerprint: None,

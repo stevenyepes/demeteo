@@ -2,6 +2,7 @@ use super::attachments::{cleanup_attachment_spool, mark_placeholder_failed, spoo
 use super::rpc::{json_str, remote_rpc};
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::application::attachments::StagedAttachmentInput;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
 use crate::domain::models::{
     EffortLevel, Feature, ProviderInstance, Repository, StepOverride, WorkflowVersion,
@@ -158,6 +159,9 @@ fn insert_shadow_feature(
         step_overrides: step_overrides.to_vec(),
         attachments: Vec::new(),
         harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
     })
 }
 

@@ -3,6 +3,7 @@
 use super::*;
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{RepositoryId, StepExecutionId, WorkflowId, WorkflowVersionId};
 use crate::domain::models::{
     Feature, Project, ProjectSettings, Repository, StepAttempt, StepExecution, SubtaskRunRow,
@@ -440,6 +441,9 @@ fn cleanup_feature(mr_state: &str) -> Feature {
         step_overrides: vec![],
         attachments: vec![],
         harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
     }
 }
 

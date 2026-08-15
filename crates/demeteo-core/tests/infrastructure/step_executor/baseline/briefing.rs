@@ -7,6 +7,7 @@
 //! successfully asserts against a default rather than an answer).
 
 use super::*;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, StepId, WorkflowId};
 use crate::domain::models::{Feature, ProjectSettings, StepConfig, WorktreeStrategy};
 use crate::domain::verifier::VerifierConfig;
@@ -126,6 +127,9 @@ fn feature() -> Feature {
         step_overrides: Vec::new(),
         attachments: Vec::new(),
         harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
     }
 }
 

@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use super::harness::{build_test_executor, FakeNotif};
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::Feature;
 use crate::paths;
@@ -356,6 +357,9 @@ async fn test_feature_start_pins_workflow_version() {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         })
         .unwrap();
     let resolved = executor

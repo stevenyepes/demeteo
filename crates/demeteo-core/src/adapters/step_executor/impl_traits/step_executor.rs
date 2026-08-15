@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::application::attachments::StagedAttachmentInput;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
 use crate::domain::models::{Feature, StepExecution};
 use crate::domain::run_control::{retry_refusal, shadow_refusal, RunAction};
@@ -103,6 +104,9 @@ impl StepExecutor for DagStepExecutor {
             step_overrides,
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         };
         self.features.add(feature.clone())?;
 
