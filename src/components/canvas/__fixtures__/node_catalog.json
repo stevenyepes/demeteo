@@ -255,7 +255,7 @@
     "summary": "Merge the default branch into the feature branch, resolving any conflict with an agent turn.",
     "config_schema": {
       "additionalProperties": true,
-      "description": "Configuration for a `sync` node: fetch + merge origin/<default_branch> into the feature branch; on conflict, spawn a resolution agent and route the outcome through the node's retry policy (v1: on_failure).",
+      "description": "Configuration for a `sync` node: fetch + merge the branch this run is based on into the feature branch; on conflict, spawn a resolution agent and route the outcome through the node's retry policy (v1: on_failure).",
       "properties": {
         "agent_kind": {
           "description": "Agent runtime override for the conflict-resolution turn. Unset inherits the run/project chain.",

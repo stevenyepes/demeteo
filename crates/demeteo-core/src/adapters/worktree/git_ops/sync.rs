@@ -224,7 +224,7 @@ impl GitOpsHelper {
             })
     }
 
-    /// Merge `origin/<default_branch>` into `feature_branch`. This is
+    /// Merge `origin/<base_branch>` into `feature_branch`. This is
     /// the "rebase from the user's perspective" call: it does NOT
     /// rebase (which would rewrite history) — it creates a merge
     /// commit so any in-flight reviewers see a clear fork/join in the
@@ -235,28 +235,32 @@ impl GitOpsHelper {
     /// The `Ok` variant returns the new HEAD commit SHA (so the
     /// caller can record the merge commit in the audit trail). The
     /// `Err` variant carries the unmerged file list and raw git error.
+    ///
+    /// `base_branch` is the run's declared base
+    /// ([`diff_base::resolve`](crate::domain::diff_base::resolve)), which is
+    /// the project's default branch only for a run that started there.
     pub async fn sync_feature_with_upstream(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_branch: &str,
     ) -> Result<SyncOutcome, SyncFailure> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let tracking = format!("origin/{}", default_branch);
+        let tracking = format!("origin/{}", base_branch);
         let feat_ref = format!("refs/heads/{}", feature_branch);
 
         // 1. Refresh remote refs. We use `git fetch <remote> <branch>`
-        //    so the local `refs/remotes/origin/<default>` ref is
+        //    so the local `refs/remotes/origin/<base>` ref is
         //    updated to the latest upstream state. The fetch is
         //    *reported* on failure — silently swallowing it is what
         //    caused the "no conflicts detected" bug where a stale
-        //    `origin/<default>` was used as the merge source.
+        //    `origin/<base>` was used as the merge source.
         let fetch_outcome = self
             .exec
             .run_program(
                 machine_str,
-                git_request(repo_dir, ["fetch", "origin", default_branch]),
+                git_request(repo_dir, ["fetch", "origin", base_branch]),
             )
             .await;
         if let Err(fetch_err) = fetch_outcome {
@@ -265,17 +269,17 @@ impl GitOpsHelper {
                 raw_error: format!(
                     "Could not fetch origin/{} from remote: {}. \
                      Check the project's remote URL and credentials.",
-                    default_branch, fetch_err
+                    base_branch, fetch_err
                 ),
                 worktree_path: None,
             });
         }
 
-        // 2. Verify `origin/<default>` exists locally. After a
+        // 2. Verify `origin/<base>` exists locally. After a
         //    successful fetch this is guaranteed for any branch the
-        //    remote actually has; if the project's default_branch
-        //    setting doesn't match a real upstream branch we surface
-        //    that as a config error rather than a silent no-op.
+        //    remote actually has; if the run's base doesn't match a
+        //    real upstream branch we surface that as a config error
+        //    rather than a silent no-op.
         if self
             .exec
             .run_program(
@@ -289,8 +293,8 @@ impl GitOpsHelper {
                 files: Vec::new(),
                 raw_error: format!(
                     "Fetched origin but {} does not exist on the remote. \
-                     The project's default_branch setting ('{}') may be wrong.",
-                    tracking, default_branch
+                     The branch this run is based on ('{}') may be wrong.",
+                    tracking, base_branch
                 ),
                 worktree_path: None,
             });
@@ -332,7 +336,7 @@ impl GitOpsHelper {
             .map(|s| s.trim().parse::<u64>().unwrap_or(0))
             .unwrap_or(0);
 
-        // If origin/<default> is not ahead of the feature branch,
+        // If origin/<base> is not ahead of the feature branch,
         // the feature is already up to date with upstream. No merge
         // is needed and the call is a true no-op.
         if ahead_count == 0 {
@@ -362,7 +366,7 @@ impl GitOpsHelper {
                         "merge",
                         &tracking,
                         "-m",
-                        &format!("chore(sync): sync feature with origin/{default_branch}"),
+                        &format!("chore(sync): sync feature with origin/{base_branch}"),
                     ],
                 ),
             )

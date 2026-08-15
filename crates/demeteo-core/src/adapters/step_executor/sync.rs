@@ -1,8 +1,8 @@
-//! Feature-branch sync with the upstream `default_branch`.
+//! Feature-branch sync with the upstream `base_branch`.
 //!
 //! Two Tauri commands surface this code path:
 //!
-//! - `feature_sync`: merges `origin/<default>` into the feature
+//! - `feature_sync`: merges `origin/<base>` into the feature
 //!   branch. If the merge is clean, returns a `SyncOutcomeView::Ok`.
 //!   If there are conflicts, returns a `SyncOutcomeView::Conflict`
 //!   with the parsed conflict list — the UI then offers a "Resolve
@@ -40,6 +40,26 @@ use crate::ports::step_executor::{StepExecutor, SyncOutcomeView};
 use super::sync_worktree::discard_sync_worktree;
 use super::DagStepExecutor;
 
+/// The branch a sync merges into the feature branch.
+///
+/// [`diff_base::resolve`](crate::domain::diff_base::resolve) and nothing
+/// else: a run cut from `origin/release/2.0` that merged the project default
+/// instead would pull the whole of trunk into a release branch's feature.
+pub(crate) fn sync_base(
+    feature: &crate::domain::models::Feature,
+    settings: &crate::domain::models::ProjectSettings,
+) -> Result<String, String> {
+    crate::domain::diff_base::resolve(
+        feature.diff_base_branch.as_deref(),
+        &feature.origin,
+        &settings.worktree_strategy.default_branch,
+    )
+    .map(str::to_string)
+    .ok_or_else(|| {
+        "This run names no base branch to sync from; set the project's default branch.".to_string()
+    })
+}
+
 /// The thread-id suffix for the conflict-resolution agent. We use a
 /// fresh id (not `feature_id`) so the resolution session is fully
 /// independent from the step-execution agent session that drove the
@@ -62,7 +82,7 @@ pub(crate) struct ResolveSyncContext<'a> {
     pub resolved_cwd: &'a str,
     pub machine_str: &'a str,
     pub feature_branch: &'a str,
-    pub default_branch: &'a str,
+    pub base_branch: &'a str,
     pub conflict_files: &'a [String],
     pub step_execution_id: &'a StepExecutionId,
     pub thread_id_prefix: &'a str,
@@ -90,7 +110,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         resolved_cwd,
         machine_str,
         feature_branch,
-        default_branch,
+        base_branch,
         conflict_files,
         step_execution_id,
         thread_id_prefix,
@@ -158,7 +178,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         .await
         .map_err(|e| format!("Failed to spawn resolver agent: {}", e))?;
 
-    let prompt = build_resolver_prompt(feature_branch, default_branch, conflict_files);
+    let prompt = build_resolver_prompt(feature_branch, base_branch, conflict_files);
 
     let timeouts = crate::application::timeouts::resolve_effective(app_settings.as_ref());
 
@@ -234,10 +254,7 @@ pub(crate) async fn resolve_sync_conflicts_shared(
         return Err("Resolver did not resolve every conflicted file.".to_string());
     }
 
-    let message = format!(
-        "chore: resolve sync conflicts with origin/{}",
-        default_branch
-    );
+    let message = format!("chore: resolve sync conflicts with origin/{}", base_branch);
     if let Err(rejection) = git_ops
         .validate_commit_message(
             if machine_str == crate::domain::ids::LOCAL_MACHINE {
@@ -373,12 +390,12 @@ impl DagStepExecutor {
             .projects
             .get_settings(&feature.project_id)?
             .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
-        let default_branch = settings.worktree_strategy.default_branch.clone();
+        let base_branch = sync_base(&feature, &settings)?;
         let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
         match self
             .merge_executor
-            .sync_feature_with_upstream(&fid, &feature_branch, &default_branch)
+            .sync_feature_with_upstream(&fid, &feature_branch, &base_branch)
             .await
         {
             Ok(outcome) => Ok(SyncOutcomeView::Ok {
@@ -412,7 +429,7 @@ impl DagStepExecutor {
             .projects
             .get_settings(&feature.project_id)?
             .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
-        let default_branch = settings.worktree_strategy.default_branch.clone();
+        let base_branch = sync_base(&feature, &settings)?;
         let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
         // Resolve the project / machine / repo dir for the agent's cwd.
@@ -494,7 +511,7 @@ impl DagStepExecutor {
             resolved_cwd: &resolved_cwd,
             machine_str: &machine_str,
             feature_branch: &feature_branch,
-            default_branch: &default_branch,
+            base_branch: &base_branch,
             conflict_files,
             step_execution_id: &step_exec_id,
             thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
@@ -598,7 +615,7 @@ impl DagStepExecutor {
 /// the resolution deterministic.
 fn build_resolver_prompt(
     feature_branch: &str,
-    default_branch: &str,
+    base_branch: &str,
     conflict_files: &[String],
 ) -> String {
     let files_list = conflict_files
@@ -607,7 +624,7 @@ fn build_resolver_prompt(
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "We just merged origin/{default} into {feature}. A merge conflict was detected.\n\
+        "We just merged origin/{base} into {feature}. A merge conflict was detected.\n\
          Please resolve the conflicts in the following files:\n\
          {files}\n\n\
          For each file:\n\
@@ -618,7 +635,7 @@ fn build_resolver_prompt(
          - When done, run the project's build / test suite to confirm nothing is broken.\n\
          - Do NOT stage or commit — Demeteo validates, stages, and commits the resolution.\n\
          - Report back with a one-line summary when you're done.",
-        default = default_branch,
+        base = base_branch,
         feature = feature_branch,
         files = files_list,
     )

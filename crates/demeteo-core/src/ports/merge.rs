@@ -1,6 +1,6 @@
 //! Merge executor port — the **feature ↔ upstream sync** flow.
 //!
-//! Wraps `git merge` of `origin/<default>` into a feature branch with
+//! Wraps `git merge` of `origin/<base>` into a feature branch with
 //! structured conflict detection and a `feature_syncs` audit trail. Serves
 //! the "Sync with main" button, the `sync` workflow step, and the
 //! "Resolve with agent" recovery flow.
@@ -21,7 +21,10 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait MergeExecutor: Send + Sync {
-    /// Sync a feature branch with the latest `origin/<default_branch>`.
+    /// Sync a feature branch with the latest `origin/<base_branch>`, where
+    /// the base is the one
+    /// [`diff_base::resolve`](crate::domain::diff_base::resolve) gives — the
+    /// project's default branch only for a run that started there.
     ///
     /// - `Ok(UpstreamSyncOutcome)` when the feature branch was
     ///   fast-forwarded or a merge commit was created cleanly. The
@@ -35,7 +38,7 @@ pub trait MergeExecutor: Send + Sync {
         &self,
         feature_id: &FeatureId,
         feature_branch: &str,
-        default_branch: &str,
+        base_branch: &str,
     ) -> Result<UpstreamSyncOutcome, UpstreamSyncFailure>;
 
     /// Retrieve the worktree path from the last sync conflict report.

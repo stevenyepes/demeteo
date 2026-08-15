@@ -1,6 +1,8 @@
 //! The `sync` step kind. A workflow node that:
 //!
-//! 1. Fetches the latest `origin/<default_branch>`.
+//! 1. Fetches the latest `origin/<base>` — the run's declared base
+//!    ([`sync_base`](crate::adapters::step_executor::sync::sync_base)),
+//!    which is the project default only for a run that started there.
 //! 2. Merges it into the feature branch.
 //! 3. On a clean merge, completes (invisible cost when nothing changed).
 //! 4. On a conflict, spawns a fresh agent to resolve, then redirects
@@ -25,14 +27,14 @@ use super::StepOutcome;
 /// What the failed merge left behind, and the two branches it was between.
 ///
 /// `files` and `worktree_path` both come out of the same `ConflictFailure`;
-/// `feature_branch` and `default_branch` are computed together and never used
+/// `feature_branch` and `base_branch` are computed together and never used
 /// apart. The resolution turn two frames down already takes a bundle of the
 /// same shape (`sync::ResolveSyncContext`).
 struct SyncConflict<'a> {
     files: &'a [crate::domain::models::ConflictFile],
     worktree_path: Option<&'a str>,
     feature_branch: &'a str,
-    default_branch: &'a str,
+    base_branch: &'a str,
 }
 
 impl ExecutionDriver {
@@ -83,8 +85,8 @@ impl ExecutionDriver {
             cache_creation_input_tokens: None,
         });
 
-        // Resolve the project settings so we know which branch is the
-        // default. We can't reach `ProjectSettings` from the driver
+        // Resolve the project settings so we know which branch this run is
+        // based on. We can't reach `ProjectSettings` from the driver
         // directly, so we look it up via the executor's project
         // repository. The driver is created by the executor which
         // already has the project settings cached, so this is cheap.
@@ -98,14 +100,18 @@ impl ExecutionDriver {
                 return StepOutcome::Failed("Project settings not found for sync step".to_string())
             }
         };
-        let default_branch = settings.worktree_strategy.default_branch.clone();
+        let base_branch = match crate::adapters::step_executor::sync::sync_base(&feature, &settings)
+        {
+            Ok(base) => base,
+            Err(e) => return StepOutcome::Failed(e),
+        };
         let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
         // Run the merge. A clean merge is the trivial path; conflicts
         // are routed to the resolution agent.
         match self
             .merge_executor
-            .sync_feature_with_upstream(&self.f_id, &feature_branch, &default_branch)
+            .sync_feature_with_upstream(&self.f_id, &feature_branch, &base_branch)
             .await
         {
             Ok(outcome) => {
@@ -151,7 +157,7 @@ impl ExecutionDriver {
                         files: &failure.report.files,
                         worktree_path: failure.worktree_path.as_deref(),
                         feature_branch: &feature_branch,
-                        default_branch: &default_branch,
+                        base_branch: &base_branch,
                     },
                     step_start,
                 )
@@ -171,7 +177,7 @@ impl ExecutionDriver {
             files: conflict_files,
             worktree_path,
             feature_branch,
-            default_branch,
+            base_branch,
         } = conflict;
         let machine_str = self.machine_id();
         let repo_dir = &self.target_dir;
@@ -204,7 +210,7 @@ impl ExecutionDriver {
                 resolved_cwd,
                 machine_str,
                 feature_branch,
-                default_branch,
+                base_branch,
                 conflict_files: &conflict_paths,
                 step_execution_id: &step_exec.id,
                 thread_id_prefix: "sync-step-resolver",
@@ -312,7 +318,7 @@ static SYNC_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
         serde_json::json!({
             "type": "object",
             "description": "Configuration for a `sync` node: fetch + merge \
-                origin/<default_branch> into the feature branch; on \
+                the branch this run is based on into the feature branch; on \
                 conflict, spawn a resolution agent and route the outcome \
                 through the node's retry policy (v1: on_failure).",
             "properties": {
