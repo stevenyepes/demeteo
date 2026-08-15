@@ -134,8 +134,9 @@ pub fn remote_run_diff_url(
     ctx: State<'_, AppContext>,
     project_id: String,
     branch: String,
+    feature_id: Option<String>,
 ) -> Result<Option<String>, AppError> {
-    resolve_run_diff_url(&ctx, project_id, branch).map_err(AppError::from)
+    resolve_run_diff_url(&ctx, project_id, branch, feature_id).map_err(AppError::from)
 }
 
 #[tauri::command]

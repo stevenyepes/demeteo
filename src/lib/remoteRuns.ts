@@ -58,12 +58,19 @@ export async function remoteRunForFeature(featureId: string): Promise<RemoteRunM
 }
 
 /** Provider compare/tree URL for a branch a run pushed, or `null` when no
- *  repo/provider resolves for it — a missing deep link, not an error. */
+ *  repo/provider resolves for it — a missing deep link, not an error.
+ *  `featureId` decides the left side of the compare: the base that run
+ *  declared, falling back to the project default when it is null. */
 export async function remoteRunDiffUrl(
   projectId: string,
   branch: string,
+  featureId: string | null,
 ): Promise<string | null> {
-  return invoke<string | null>("remote_run_diff_url", { projectId, branch });
+  return invoke<string | null>("remote_run_diff_url", {
+    projectId,
+    branch,
+    featureId,
+  });
 }
 
 /**

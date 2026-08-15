@@ -26,7 +26,7 @@ pub(crate) fn build_authoring_prompt(
     feature_title: &str,
     feature_description: &str,
     feature_branch: &str,
-    default_branch: &str,
+    base_branch: &str,
     work: &BranchWork,
 ) -> String {
     let truncation_note = if work.diff_truncated {
@@ -52,7 +52,7 @@ pub(crate) fn build_authoring_prompt(
 
     format!(
         "You are writing the permanent record of a piece of work: the single commit \
-         that will land on `{default_branch}`, and the pull request a reviewer will read \
+         that will land on `{base_branch}`, and the pull request a reviewer will read \
          before approving it.
 
 Every commit on `{feature_branch}` is about to be collapsed into ONE commit. The \
@@ -89,7 +89,7 @@ approach, and call out anything a reviewer should look at closely. Do not pad th
 with a file-by-file walkthrough — the diff is right there.
 
 {CONTRACT}",
-        default_branch = default_branch,
+        base_branch = base_branch,
         feature_branch = feature_branch,
         feature_title = feature_title,
         feature_description = feature_description,

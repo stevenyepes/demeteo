@@ -83,11 +83,11 @@ const DiffLinkButton: React.FC<{ run: RemoteRunMirror }> = ({ run }) => {
       return;
     }
     let cancelled = false;
-    remoteRunDiffUrl(run.project_id, run.pushed_branch)
+    remoteRunDiffUrl(run.project_id, run.pushed_branch, run.feature_id)
       .then((u) => { if (!cancelled) setUrl(u); })
       .catch(() => { if (!cancelled) setUrl(null); });
     return () => { cancelled = true; };
-  }, [run.project_id, run.pushed_branch]);
+  }, [run.project_id, run.pushed_branch, run.feature_id]);
 
   if (!url) return null;
   return (

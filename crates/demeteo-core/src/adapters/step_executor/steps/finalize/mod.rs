@@ -99,7 +99,13 @@ impl ExecutionDriver {
                 step_start,
             );
         };
-        let default_branch = settings.worktree_strategy.default_branch.clone();
+        let base_branch = crate::domain::diff_base::resolve(
+            feature.diff_base_branch.as_deref(),
+            &feature.origin,
+            &settings.worktree_strategy.default_branch,
+        )
+        .unwrap_or_default()
+        .to_string();
         let feature_branch = self.branch_name.clone();
 
         // ── Gather. The agent has no shell, so we run the git reads for it,
@@ -117,7 +123,7 @@ impl ExecutionDriver {
             },
             context::BranchRange {
                 feature_branch: &feature_branch,
-                default_branch: &default_branch,
+                base_branch: &base_branch,
             },
             context::PriorWork {
                 artifacts: self.artifacts.as_ref(),
@@ -144,7 +150,7 @@ impl ExecutionDriver {
                     &feature.title,
                     &feature.description,
                     &feature_branch,
-                    &default_branch,
+                    &base_branch,
                     &work,
                 ),
             };
@@ -234,7 +240,7 @@ impl ExecutionDriver {
                 self.machine_id_opt.as_deref(),
                 &repo_dir,
                 &feature_branch,
-                &default_branch,
+                &base_branch,
                 &authored.commit_message(),
             )
             .await;
