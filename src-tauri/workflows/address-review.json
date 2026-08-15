@@ -1,0 +1,37 @@
+{
+  "id": "wf-starter-address-review",
+  "name": "Address Review Findings",
+  "description": "Work through the findings of a review that already happened, on the branch that was reviewed, and open a pull request with the result. Every finding leaves the run either closed by a change or answered in writing; nothing about the change is judged anew.",
+  "is_starter": true,
+  "steps": [
+    {
+      "id": "s-address",
+      "kind": "agent",
+      "title": "Work through the findings",
+      "agent_kind": null,
+      "prompt_template": "You are acting on a review that has already happened. The findings below were written by a reviewer reading this branch, and this branch is the change they read.\n\nFindings to address: {{feature_description}}\nBranch: {{feature_branch}}\nRepositories in scope: {{repo_list}}\nProject conventions: {{project_conventions}}\nTest command: {{test_command}}\n\n## What this run is\n\nThe review is over. The findings are both the input and the boundary of this run — a second opinion on the change is not what anyone is waiting for, and the reviewer's own words are what the next reader will compare your commits against.\n\nEach finding leaves this run in one of two states, and choosing between them is your job:\n\n- **Closed** — a change that resolves it, written the way this project's conventions say such a change is written.\n- **Answered** — a stated reason it should stand, for a finding that rests on something the diff did not show. An answer is a position you are accountable for rather than a way past the work, so give the evidence for it.\n\nA finding in neither state is the outcome worth avoiding: it sends the reviewer back through the whole change to discover which of their points survived.\n\n## Scope\n\nStay inside what the findings reach. This branch already carries somebody's change and a reviewer's judgement of it, and work nobody asked for arrives in the same diff — it costs them a second reading of code they had already accepted.\n\nWhen closing a finding honestly needs a change far larger than the finding — a rename across the tree, a new dependency, a migration — write that down and leave it. It is a decision for the people on the pull request, and it is the one they can act on.\n\n## Where the record goes\n\n`artifacts/address-review.md`, one entry per finding: what it said, whether you closed or answered it, and the files you touched for it. The pull request this run opens is read beside the review, so an entry the reviewer cannot match to their own point costs them that comparison.\n\n{{retry_feedback_section}}\n\n## Stop condition\n\nYou are done when every finding has an entry in that file, and `{{test_command}}` passes — or, where it does not, when your report names what it reported.",
+      "capability": "implement",
+      "on_failure": null,
+      "max_iterations": 2,
+      "artifacts": [
+        {
+          "name": "address-review",
+          "capture": {
+            "kind": "last_write_to",
+            "path": "artifacts/address-review.md"
+          },
+          "mode": "full"
+        }
+      ]
+    },
+    {
+      "id": "s-finalize",
+      "kind": "finalize",
+      "title": "Summarize & open PR",
+      "agent_kind": null,
+      "prompt_template": null,
+      "on_failure": null,
+      "max_iterations": null
+    }
+  ]
+}

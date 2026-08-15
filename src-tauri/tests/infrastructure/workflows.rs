@@ -11,12 +11,26 @@ use rusqlite::Connection;
 use std::sync::Arc;
 
 const CODE_REVIEW: &str = include_str!("../../workflows/code-review.json");
+const ADDRESS_REVIEW: &str = include_str!("../../workflows/address-review.json");
 
 /// Every embedded starter workflow must deserialize into `StepConfig`
 /// (guards the V13 `model`/`verifier` JSON edits against typos).
 fn parse(json: &str) -> Vec<StepConfig> {
     let v: serde_json::Value = serde_json::from_str(json).expect("starter JSON parses");
     serde_json::from_value(v["steps"].clone()).expect("steps deserialize into StepConfig")
+}
+
+/// Every prompt a starter ships, lowercased, for the vocabulary assertions
+/// below to read as one body of text.
+fn prompt_text(json: &str) -> String {
+    let prompts = parse(json)
+        .iter()
+        .filter_map(|s| s.prompt_template.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    assert!(!prompts.is_empty(), "read no prompt text at all");
+    prompts
 }
 
 #[test]
@@ -30,6 +44,7 @@ fn all_starters_deserialize() {
         include_str!("../../workflows/ci-fix.json"),
         include_str!("../../workflows/simple-task.json"),
         include_str!("../../workflows/code-review.json"),
+        include_str!("../../workflows/address-review.json"),
     ] {
         let steps = parse(json);
         assert!(!steps.is_empty());
@@ -66,13 +81,7 @@ fn looping_starters_have_verifier_and_redirect() {
 /// nothing but this assertion holds the decision in place.
 #[test]
 fn the_review_starter_imposes_no_method_of_its_own() {
-    let prompts = parse(CODE_REVIEW)
-        .iter()
-        .filter_map(|s| s.prompt_template.clone())
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_lowercase();
-    assert!(!prompts.is_empty(), "read no prompt text at all");
+    let prompts = prompt_text(CODE_REVIEW);
 
     for phrase in [
         "critical",
@@ -100,6 +109,46 @@ fn the_review_starter_has_no_step_that_publishes() {
     assert!(
         steps.iter().all(|s| s.kind != "finalize"),
         "a review must never commit, push or open a PR"
+    );
+}
+
+/// The fix starter is the one place Demeteo *may* direct the work — it is
+/// implementing, not judging — so the review starter's guard narrows here to
+/// the vocabulary of judgement rather than the vocabulary of instruction. A
+/// prompt that grades the findings it was handed is running the review a
+/// second time, against a rubric this project never agreed to, and the
+/// reviewer's own words are what the pull request will be read beside.
+#[test]
+fn the_fix_starter_directs_the_work_without_re_reviewing_it() {
+    let prompts = prompt_text(ADDRESS_REVIEW);
+
+    for phrase in [
+        "critical",
+        "major",
+        "minor",
+        "blocker",
+        "severity",
+        "code smell",
+        "check for",
+        "look for",
+    ] {
+        assert!(
+            !prompts.contains(phrase),
+            "the fix prompt says '{phrase}' — it is reviewing, not addressing a review"
+        );
+    }
+}
+
+/// The counterpart of [`the_review_starter_has_no_step_that_publishes`]: a run
+/// that ends in commits has to put them somewhere a human can merge, and
+/// `finalize` is what squashes the branch and hands it to the publisher.
+/// Without it the work ends in a worktree nobody is told about.
+#[test]
+fn the_fix_starter_ends_in_a_pull_request() {
+    let steps = parse(ADDRESS_REVIEW);
+    assert!(
+        steps.iter().any(|s| s.kind == "finalize"),
+        "a fix run must end somewhere its commits can be merged from"
     );
 }
 
