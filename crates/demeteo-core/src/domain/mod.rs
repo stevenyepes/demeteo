@@ -28,6 +28,7 @@ pub mod ecosystem;
 pub mod expr;
 pub mod feature_origin;
 pub(crate) mod finalize;
+pub mod fix_destination;
 pub(crate) mod gate;
 pub mod harness_attribution;
 pub mod harness_baseline;
