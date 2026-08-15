@@ -928,6 +928,12 @@ export interface ProjectSettingsData {
   default_max_budget_usd?: number | null;
   artifact_subdir?: string;
   commit_artifacts?: boolean;
+  /** The command a reviewing step starts from, as the user wrote it. Carried
+   *  into the prompt verbatim — Demeteo neither validates it against a harness
+   *  nor wraps it in review vocabulary of its own. `null`/absent (and the empty
+   *  string, which a cleared input writes) = the project names none, and the
+   *  step is left to review in its own way. Migration V42. */
+  review_entrypoint?: string | null;
 }
 
 export interface SessionInfo {

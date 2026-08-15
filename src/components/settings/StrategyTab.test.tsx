@@ -33,6 +33,8 @@ const WORKFLOWS = [
 interface Scenario {
   /** What `project_settings.default_workflow_id` holds on disk. */
   storedWorkflowId?: string | null;
+  /** What `project_settings.review_entrypoint` holds on disk. */
+  storedReviewEntrypoint?: string | null;
 }
 
 function scriptIpc(scenario: Scenario) {
@@ -46,6 +48,7 @@ function scriptIpc(scenario: Scenario) {
       default_model: null,
       default_effort: null,
       default_workflow_id: scenario.storedWorkflowId ?? null,
+      review_entrypoint: scenario.storedReviewEntrypoint ?? null,
     }),
     get_repositories_for_project: () => [],
     get_machines: () => [],
@@ -165,5 +168,33 @@ describe('default workflow picker', () => {
 
     await save();
     expect(savedSettings()).toHaveProperty('default_workflow_id', null);
+  });
+});
+
+// The field the user owns, on the save path that carries it. Both save call
+// sites spell the whole settings object out, so a field the form holds and the
+// literal omits is dropped without a type error anywhere.
+describe('code review entrypoint', () => {
+  const field = () => screen.getByLabelText('Code review entrypoint') as HTMLInputElement;
+
+  it('shows the stored entrypoint and persists an edit', async () => {
+    await mount({ storedReviewEntrypoint: '/code-review' });
+    await waitFor(() => expect(field()).toHaveValue('/code-review'));
+
+    await userEvent.clear(field());
+    await userEvent.type(field(), '/review --deep');
+
+    await save();
+    expect(savedSettings().review_entrypoint).toBe('/review --deep');
+  });
+
+  it('persists a cleared field as null, not an empty string', async () => {
+    await mount({ storedReviewEntrypoint: '/code-review' });
+    await waitFor(() => expect(field()).toHaveValue('/code-review'));
+
+    await userEvent.clear(field());
+
+    await save();
+    expect(savedSettings()).toHaveProperty('review_entrypoint', null);
   });
 });

@@ -1,11 +1,13 @@
 use super::super::DagStepExecutor;
 use crate::adapters::step_executor::setup::{
-    build_base_ctx, fetch_default_settings, slug_from_description, FeatureIdentity, ProjectCommands,
+    build_base_ctx, fetch_default_settings, slug_from_description, FeatureIdentity,
+    ProjectCommands, ProjectProse,
 };
 use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
 use crate::domain::models::workflow_v2::definition_matches_steps;
 use crate::domain::models::{ProjectSettings, StepConfig};
 use crate::domain::prompt_context::PromptContext;
+use crate::domain::review_entrypoint::review_entrypoint_binding;
 use crate::domain::workflow_overrides::{bake_step_overrides, overlay_workflow_defaults};
 use crate::paths;
 
@@ -366,8 +368,11 @@ impl DagStepExecutor {
                 build: &build_cmd,
                 coverage: &coverage_cmd,
             },
-            &conventions_content,
-            &memory_md,
+            ProjectProse {
+                conventions: &conventions_content,
+                memory: &memory_md,
+                review_entrypoint: review_entrypoint_binding(settings.review_entrypoint.as_deref()),
+            },
             &settings.artifact_subdir,
             // First turn of the feature → no recap needed. The
             // watchdog populates this on subsequent turns when

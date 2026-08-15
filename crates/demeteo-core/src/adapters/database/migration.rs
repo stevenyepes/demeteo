@@ -155,6 +155,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     add_column_if_missing(conn, "features", "diff_base_branch", "TEXT")?;
     add_column_if_missing(conn, "features", "resolved_branch", "TEXT")?;
 
+    // The project's review entrypoint (V42). Nullable, and NULL reads the same
+    // as the empty string — see the migration's header.
+    add_column_if_missing(conn, "project_settings", "review_entrypoint", "TEXT")?;
+
     Ok(())
 }
 

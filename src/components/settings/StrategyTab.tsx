@@ -55,6 +55,11 @@ export function StrategyTab() {
             <option value="auto_delete">Auto delete branch after MR merge</option>
           </select>
         </div>
+        <div>
+          <label htmlFor="review-entrypoint" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Code review entrypoint</label>
+          <input id="review-entrypoint" type="text" value={s.reviewEntrypoint} onChange={e => s.setReviewEntrypoint(e.target.value)} placeholder="e.g. /code-review" className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+          <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Run this instead of asking the agent to review in its own way. Leave blank to let the agent choose — Demeteo does not supply review criteria either way.</p>
+        </div>
       </div>
 
       {/* Default AI Executor */}

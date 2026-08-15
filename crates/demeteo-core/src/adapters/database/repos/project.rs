@@ -249,7 +249,7 @@ impl ProjectRepository for SqliteAdapter {
                         conventions_file, default_agent_kind, default_model, harnesses,
                         artifact_subdir, commit_artifacts, default_loop_iterations,
                         extra_writable_paths, prepare_command, default_effort,
-                        default_max_budget_usd, default_workflow_id
+                        default_max_budget_usd, default_workflow_id, review_entrypoint
                  FROM project_settings WHERE project_id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -287,6 +287,7 @@ impl ProjectRepository for SqliteAdapter {
                     commit_artifacts: commit_artifacts != 0,
                     default_loop_iterations: default_loop_iterations.map(|v| v as u32),
                     default_max_budget_usd: row.get(19)?,
+                    review_entrypoint: row.get(21)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -314,8 +315,8 @@ impl ProjectRepository for SqliteAdapter {
               coverage_command, conventions_file, pr_template, conflict_policy, feature_lifecycle,
               default_agent_kind, default_model, harnesses, artifact_subdir, commit_artifacts,
               default_loop_iterations, extra_writable_paths, prepare_command, default_effort,
-              default_max_budget_usd, default_workflow_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+              default_max_budget_usd, default_workflow_id, review_entrypoint)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 s.project_id,
                 s.worktree_strategy.default_branch,
@@ -338,6 +339,7 @@ impl ProjectRepository for SqliteAdapter {
                 s.default_effort.map(|e| e.as_str()),
                 s.default_max_budget_usd,
                 s.default_workflow_id,
+                s.review_entrypoint,
             ],
         )
         .map_err(|e| e.to_string())?;

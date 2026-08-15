@@ -171,6 +171,13 @@ pub struct ProjectSettings {
     /// "also commit them to the PR" opt-in, not the only way to see them.
     #[serde(default)]
     pub commit_artifacts: bool,
+    /// The command a reviewing step should start from, as the user wrote it.
+    /// Bound to `{{review_entrypoint}}` and carried into the prompt untouched —
+    /// [`review_entrypoint`](crate::domain::review_entrypoint) holds why it is
+    /// never wrapped, and why `None` and `""` are the same answer. See
+    /// migration V42.
+    #[serde(default)]
+    pub review_entrypoint: Option<String>,
 }
 
 fn default_artifact_subdir() -> String {

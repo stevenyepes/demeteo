@@ -72,13 +72,22 @@ pub(crate) struct FeatureIdentity<'a> {
     pub branch_name: &'a str,
 }
 
+/// What the project has written down about itself, as prose the prompt carries
+/// rather than commands it runs.
+pub(crate) struct ProjectProse<'a> {
+    pub conventions: &'a str,
+    pub memory: &'a str,
+    /// Already resolved through
+    /// [`review_entrypoint_binding`](crate::domain::review_entrypoint::review_entrypoint_binding).
+    pub review_entrypoint: &'a str,
+}
+
 /// Build the feature-level base PromptContext, shared by every step.
 pub(crate) fn build_base_ctx(
     feature: FeatureIdentity<'_>,
     repo_list_str: &str,
     commands: ProjectCommands<'_>,
-    conventions_content: &str,
-    project_memory: &str,
+    prose: ProjectProse<'_>,
     artifact_dir: &str,
     session_resume_summary: &str,
 ) -> PromptContext {
@@ -90,8 +99,9 @@ pub(crate) fn build_base_ctx(
         .set("test_command", commands.test)
         .set("build_command", commands.build)
         .set("coverage_command", commands.coverage)
-        .set("project_conventions", conventions_content)
-        .set("project_memory", project_memory)
+        .set("project_conventions", prose.conventions)
+        .set("project_memory", prose.memory)
+        .set("review_entrypoint", prose.review_entrypoint)
         .set("artifact_dir", artifact_dir)
         // `report_dir` is the clearer-name alias for `artifact_dir`. The
         // `{{report_dir}}` token is what new workflows should use — it
@@ -210,5 +220,6 @@ pub fn fetch_default_settings() -> ProjectSettings {
         commit_artifacts: false,
         default_loop_iterations: None,
         default_max_budget_usd: None,
+        review_entrypoint: None,
     }
 }
