@@ -43,8 +43,15 @@ pub fn resolve<'a>(
         .or_else(|| named(Some(default_branch)))
 }
 
+/// A leading `-` is rejected here rather than at the three `git fetch origin
+/// <base>` call sites, because this is the one point all of them pass through.
+/// Those sites also carry a `--`, and both are wanted: the separator is what
+/// makes the argv safe, this is what keeps a value git would refuse from being
+/// resolved as a base in the first place.
 fn named(branch: Option<&str>) -> Option<&str> {
-    branch.map(str::trim).filter(|b| !b.is_empty())
+    branch
+        .map(str::trim)
+        .filter(|b| !b.is_empty() && !b.starts_with('-'))
 }
 
 #[cfg(test)]

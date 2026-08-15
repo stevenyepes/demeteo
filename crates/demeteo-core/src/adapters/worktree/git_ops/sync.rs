@@ -34,7 +34,7 @@ impl GitOpsHelper {
             .exec
             .run_program(
                 machine_str,
-                git_request(repo_dir, ["fetch", "origin", default_branch]),
+                git_request(repo_dir, ["fetch", "origin", "--", default_branch]),
             )
             .await;
 
@@ -260,7 +260,7 @@ impl GitOpsHelper {
             .exec
             .run_program(
                 machine_str,
-                git_request(repo_dir, ["fetch", "origin", base_branch]),
+                git_request(repo_dir, ["fetch", "origin", "--", base_branch]),
             )
             .await;
         if let Err(fetch_err) = fetch_outcome {

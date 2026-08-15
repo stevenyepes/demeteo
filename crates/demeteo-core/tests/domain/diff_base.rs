@@ -85,3 +85,23 @@ fn a_pull_request_head_supplies_no_base_of_its_own() {
         Some("release/2.1")
     );
 }
+
+#[test]
+fn a_base_git_would_read_as_an_option_names_no_branch() {
+    assert_eq!(
+        resolve(
+            Some("--upload-pack=touch /tmp/x"),
+            &FeatureOrigin::DefaultBranch,
+            "main"
+        ),
+        Some("main"),
+        "the declared base reaches `git fetch origin <base>`; a value git parses as an \
+         option is not a branch and must not win the tier"
+    );
+    assert_eq!(
+        resolve(None, &from_branch("-x"), "main"),
+        Some("main"),
+        "the origin's own base goes to the same argv"
+    );
+    assert_eq!(resolve(Some("-x"), &from_branch("-y"), "-z"), None);
+}

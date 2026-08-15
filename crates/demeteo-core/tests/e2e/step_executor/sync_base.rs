@@ -99,7 +99,7 @@ async fn sync_git(
 
 fn fetched_branch(ran: &[String]) -> Option<String> {
     ran.iter()
-        .find_map(|argv| argv.split(" fetch origin ").nth(1))
+        .find_map(|argv| argv.split(" fetch origin -- ").nth(1))
         .map(str::to_string)
 }
 

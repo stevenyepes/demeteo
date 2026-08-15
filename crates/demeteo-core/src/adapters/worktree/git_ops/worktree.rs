@@ -965,7 +965,7 @@ impl GitOpsHelper {
             .exec
             .run_program(
                 machine_str,
-                git_request(repo_dir, ["fetch", "origin", base_branch]),
+                git_request(repo_dir, ["fetch", "origin", "--", base_branch]),
             )
             .await;
         self.merge_base(machine_id, repo_dir, base_branch, branch)

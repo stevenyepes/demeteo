@@ -2772,7 +2772,7 @@ async fn the_fork_point_fetches_its_base_before_asking_for_a_merge_base() {
     assert_eq!(
         exec.seen(),
         vec![
-            "git -C /repo fetch origin release/2.1".to_string(),
+            "git -C /repo fetch origin -- release/2.1".to_string(),
             "git -C /repo merge-base refs/remotes/origin/release/2.1 feature/f-1".to_string(),
             "git -C /repo merge-base release/2.1 feature/f-1".to_string(),
         ]

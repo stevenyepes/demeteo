@@ -150,7 +150,7 @@ async fn bootstrap_cutting(label: &str, origin: FeatureOrigin, expected: &[Strin
 #[tokio::test]
 async fn default_branch_origin_cuts_exactly_as_it_did_before_v41() {
     let expected = [
-        "fetch origin main".to_string(),
+        "fetch origin -- main".to_string(),
         "rev-parse --verify origin/main".to_string(),
         "fetch origin +main:main".to_string(),
         "branch -f demeteo/features/f-origin_default origin/main".to_string(),
