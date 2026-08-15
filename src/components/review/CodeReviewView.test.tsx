@@ -213,6 +213,42 @@ describe('CodeReviewView', () => {
     expect(hint).not.toHaveAttribute('role', 'alert');
   });
 
+  it('reviews with the harness the row chose, and says what that costs first', async () => {
+    const launches: Record<string, unknown>[] = [];
+    vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'list_open_pull_requests') return Promise.resolve([PULL_REQUEST]);
+      if (cmd === 'list_agents') {
+        return Promise.resolve([
+          {
+            kind: 'pi',
+            display_label: 'Pi',
+            lists_models: false,
+            default_model: null,
+            install_command: '',
+            personalization: 'suppressed',
+          },
+        ]);
+      }
+      if (cmd === 'start_feature') {
+        launches.push(typeof args === 'object' && args !== null ? { ...args } : {});
+        return Promise.resolve({ id: 'feat-1', title: 'Review PR #412', status: 'running' });
+      }
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
+    });
+    mount();
+
+    await userEvent.selectOptions(await screen.findByLabelText('Harness'), 'pi');
+    expect(screen.getByTestId('harness-personalization')).toHaveAttribute(
+      'data-support',
+      'suppressed',
+    );
+
+    await userEvent.click(screen.getByTestId('review-this-pr'));
+
+    await waitFor(() => expect(launches).toHaveLength(1));
+    expect(launches[0].agentKind).toBe('pi');
+  });
+
   it('refuses on the row when the head ref did not survive the wire', async () => {
     const launched: string[] = [];
     vi.mocked(invoke).mockImplementation((cmd: string) => {

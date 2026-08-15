@@ -27,6 +27,7 @@ impl AgentRuntime for NoopRuntime {
             model_listing: None,
             default_model: None,
             effort_levels: &[],
+            personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }

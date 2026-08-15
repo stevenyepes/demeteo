@@ -54,6 +54,19 @@ fn codex_reports_a_ladder_without_max() {
     assert!(levels.contains(&EffortLevel::XHigh));
 }
 
+/// The UI's own union is spelled in these strings, and a rename on either side
+/// fails nothing: the note it drives just stops rendering, which is also what
+/// "nobody has declared an answer" looks like there.
+#[test]
+fn the_catalog_carries_personalization_in_the_spelling_the_ui_reads() {
+    let entry = agent_catalog(&production_registry())
+        .into_iter()
+        .find(|e| e.kind == "claude-code")
+        .expect("claude-code is missing from the agent catalog");
+    let json = serde_json::to_value(&entry).unwrap();
+    assert_eq!(json["personalization"], "loaded");
+}
+
 #[test]
 fn the_catalog_excludes_internal_runtimes() {
     let kinds: Vec<String> = agent_catalog(&production_registry())

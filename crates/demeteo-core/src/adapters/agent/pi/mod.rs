@@ -415,6 +415,10 @@ pub fn runtime() -> UnifiedCliRuntime {
         // there is no statically-knowable model to seed the cost fallback.
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Pi),
+        // `build_pi_args` answers `bare_mode` with `--no-skills
+        // --no-extensions --no-prompt-templates --no-themes`, so a
+        // capability-scoped step runs on nothing the user taught this harness.
+        personalization: crate::ports::agent_runtime::PersonalizationSupport::Suppressed,
         // Headless hygiene, plus one behavioural pin: `long` retention buys the
         // extended provider prompt cache (1h Anthropic, 24h OpenAI), which is
         // what makes cross-step `--session` continuation actually pay off.

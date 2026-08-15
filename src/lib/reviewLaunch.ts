@@ -30,6 +30,10 @@ export interface ReviewLaunchParams {
   description: string;
   origin: FeatureOrigin;
   diffBaseBranch: string;
+  /** The harness to review with. Unset inherits the project default, which is
+   *  what `planReviewLaunch` produces — the choice is the launch surface's, not
+   *  the plan's, and a pull request implies nothing about it. */
+  agentKind?: string;
 }
 
 export type ReviewLaunchPlan =

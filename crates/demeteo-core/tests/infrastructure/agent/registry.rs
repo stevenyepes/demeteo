@@ -16,6 +16,7 @@ impl AgentRuntime for NoopRuntime {
             model_listing: None,
             default_model: None,
             effort_levels: &[],
+            personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }
@@ -76,6 +77,42 @@ fn runtime_for_returns_registered_kind() {
     let reg = AgentRegistry::new(vec![Arc::new(NoopRuntime)]);
     assert!(reg.runtime_for("noop").is_some());
     assert!(reg.runtime_for("opencode").is_none());
+}
+
+/// Whether Demeteo's own spawn flags strip a harness's personalization has no
+/// defensible default, so every supported kind answers it here. The `match` is
+/// the enforcement: a sixth harness stops this compiling until someone has read
+/// that adapter's `build_args` and said which of the three it is.
+#[test]
+fn every_supported_kind_declares_what_bare_mode_does_to_its_personalization() {
+    use crate::domain::models::AgentKind;
+    use crate::ports::agent_runtime::PersonalizationSupport;
+
+    let reg = AgentRegistry::new(vec![
+        Arc::new(crate::adapters::agent::opencode::runtime()) as Arc<dyn AgentRuntime>,
+        Arc::new(crate::adapters::agent::hermes::runtime()) as Arc<dyn AgentRuntime>,
+        Arc::new(crate::adapters::agent::claude_code::runtime()) as Arc<dyn AgentRuntime>,
+        Arc::new(crate::adapters::agent::codex::runtime()) as Arc<dyn AgentRuntime>,
+        Arc::new(crate::adapters::agent::pi::runtime()) as Arc<dyn AgentRuntime>,
+    ]);
+
+    for kind in AgentKind::ALL {
+        let expected = match kind {
+            AgentKind::ClaudeCode => PersonalizationSupport::Loaded,
+            AgentKind::Pi => PersonalizationSupport::Suppressed,
+            AgentKind::Opencode | AgentKind::Hermes | AgentKind::Codex => {
+                PersonalizationSupport::Native
+            }
+        };
+        let runtime = reg
+            .runtime_for(kind.as_str())
+            .unwrap_or_else(|| panic!("{kind} is supported but no runtime is registered for it"));
+        assert_eq!(
+            runtime.capabilities().personalization,
+            expected,
+            "{kind} declares a personalization its own build_args does not support"
+        );
+    }
 }
 
 /// A kind nobody recognises is the case where nobody has checked what its
@@ -287,6 +324,7 @@ impl AgentRuntime for FlippableRuntime {
             model_listing: None,
             default_model: None,
             effort_levels: &[],
+            personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }
@@ -349,6 +387,7 @@ impl AgentRuntime for FixedRuntime {
             model_listing: None,
             default_model: None,
             effort_levels: &[],
+            personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }

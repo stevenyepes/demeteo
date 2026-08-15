@@ -1,6 +1,8 @@
 import { useCallback, useId, useState, type ReactElement } from 'react';
 
 import { FieldLabel } from '../ui/FieldLabel';
+import { HarnessPersonalizationNote } from './HarnessPersonalizationNote';
+import { useAgentCatalog } from '../../lib/agentCatalog';
 import { planReviewLaunch, type ReviewLaunchParams } from '../../lib/reviewLaunch';
 import type { PullRequestSummary } from '../../lib/pullRequests';
 
@@ -10,10 +12,9 @@ import type { PullRequestSummary } from '../../lib/pullRequests';
  *
  * Not an alert, not amber, no `role="alert"`: it reports no problem, and a
  * warning colour spent on a standing fact is a colour the user learns to
- * ignore. The second half stays vague about the harness on purpose — a later
- * ticket makes it per-harness, and until then it must not promise a mechanism
- * (a loaded skill, a built-in review command) that one of the three harnesses
- * does not have.
+ * ignore. It holds only what is true of every harness; what the chosen one
+ * brings, and what Demeteo's flags do to it, is `HarnessPersonalizationNote`
+ * beneath it.
  */
 export const REVIEW_SOURCE_HINT =
   'Demeteo hands the agent the diff range and a path for the report, and encodes no ' +
@@ -38,20 +39,29 @@ export interface PullRequestLaunchProps {
  * The instructions field is closed by default and the primary button launches
  * from either state, so the common case — review this, as it stands — is one
  * click and the field is never in the way of it.
+ *
+ * The harness field appears only once the catalog has answered: with nothing
+ * fetched its only option is the project default, which is not a choice, and a
+ * dead control beside a live one reads as a broken one.
  */
 export function PullRequestLaunch({ pullRequest, onReview }: PullRequestLaunchProps): ReactElement {
   const [open, setOpen] = useState(false);
   const [instructions, setInstructions] = useState('');
+  const [agentKind, setAgentKind] = useState('');
   const [launching, setLaunching] = useState(false);
   const fieldId = useId();
+  const harnessId = useId();
+  const { agents } = useAgentCatalog();
 
   const plan = planReviewLaunch(pullRequest, instructions);
 
   const review = useCallback(() => {
     if (!plan.ok || launching) return;
     setLaunching(true);
-    void onReview(plan.launch).finally(() => setLaunching(false));
-  }, [plan, launching, onReview]);
+    void onReview({ ...plan.launch, agentKind: agentKind || undefined }).finally(() =>
+      setLaunching(false),
+    );
+  }, [plan, launching, agentKind, onReview]);
 
   return (
     <div className="space-y-3 border-t border-white/5 px-4 py-3">
@@ -70,14 +80,35 @@ export function PullRequestLaunch({ pullRequest, onReview }: PullRequestLaunchPr
       )}
 
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <p
-          data-testid={plan.ok ? 'review-hint' : 'review-refused'}
-          className={`min-w-0 flex-1 text-[11px] leading-relaxed ${plan.ok ? 'text-slate-500' : 'text-ruby-400'}`}
-        >
-          {plan.ok ? REVIEW_SOURCE_HINT : plan.message}
-        </p>
+        <div className="min-w-0 flex-1 space-y-2">
+          <p
+            data-testid={plan.ok ? 'review-hint' : 'review-refused'}
+            className={`text-[11px] leading-relaxed ${plan.ok ? 'text-slate-500' : 'text-ruby-400'}`}
+          >
+            {plan.ok ? REVIEW_SOURCE_HINT : plan.message}
+          </p>
+          <HarnessPersonalizationNote agents={agents} kind={agentKind} />
+        </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-end gap-2">
+          {agents.length > 0 && (
+            <div>
+              <FieldLabel htmlFor={harnessId}>Harness</FieldLabel>
+              <select
+                id={harnessId}
+                value={agentKind}
+                onChange={(e) => setAgentKind(e.target.value)}
+                className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-slate-200 focus:border-cyan-500/50 focus:outline-none"
+              >
+                <option value="">Project default</option>
+                {agents.map((a) => (
+                  <option key={a.kind} value={a.kind}>
+                    {a.display_label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <button
             type="button"
             aria-expanded={open}

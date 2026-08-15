@@ -22,6 +22,36 @@ export interface AgentCatalogEntry {
    * Older backends omit the field entirely, hence the optional marker.
    */
   effort_levels?: EffortLevel[];
+  /**
+   * What Demeteo's own spawn flags do to the setup this harness would
+   * otherwise load on the user's machine — the Rust `PersonalizationSupport`,
+   * kebab-serialized. Absent from a backend that predates the field.
+   */
+  personalization?: PersonalizationSupport;
+}
+
+/** Mirrors the Rust `PersonalizationSupport` wire form. */
+export type PersonalizationSupport = 'loaded' | 'suppressed' | 'native';
+
+/**
+ * What a run on `kind` does to the user's own setup, per the backend catalog.
+ *
+ * `null` is "nobody has said" — no kind chosen, the catalog still loading, or a
+ * backend that predates the field — and is deliberately not `'native'`. Every
+ * value here is a claim about what a run is about to do to work the user did
+ * themselves, and the honest answer to an unloaded catalog is silence; the
+ * static fallback `effortLevelsFor` leans on has no counterpart for that
+ * reason.
+ *
+ * Every surface asks through here, so the answer has one place to be resolved
+ * rather than one per call site.
+ */
+export function personalizationFor(
+  catalog: AgentCatalogEntry[],
+  kind: string | null | undefined,
+): PersonalizationSupport | null {
+  if (!kind) return null;
+  return catalog.find((a) => a.kind === kind)?.personalization ?? null;
 }
 
 /**

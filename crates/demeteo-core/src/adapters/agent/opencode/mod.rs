@@ -476,6 +476,9 @@ impl OpencodeCliRuntime {
                 model_listing: Some(crate::ports::agent_runtime::ModelListing::MODELS_SUBCOMMAND),
                 default_model: None,
                 effort_levels: EffortLevel::supported_for(AgentKind::Opencode),
+                // `build_opencode_args` reads no `bare_mode`: Demeteo emits no
+                // flag that would either keep or drop this harness's own setup.
+                personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
                 static_env: &[],
                 // `Shell.preferred` takes `$SHELL` first and otherwise the head
                 // of `[pwsh, powershell, gitbash, COMSPEC]` (upstream

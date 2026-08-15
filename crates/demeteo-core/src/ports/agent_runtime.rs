@@ -323,6 +323,36 @@ pub fn models_one_per_line(output: &str) -> Vec<String> {
         .collect()
 }
 
+/// What Demeteo's own spawn flags do to the machine-local personalization a
+/// harness would otherwise load — the user's skills, commands, prompt
+/// templates, themes and settings files.
+///
+/// The subject is Demeteo's argv, never the harness's feature set. Which
+/// review capability a given harness ships, and what it is called there, is
+/// another product's vocabulary: it changes on their release schedule, nothing
+/// here fails when it does, and the stale claim reads as authoritative
+/// forever. What [`AgentContext::bare_mode`] strips is ours to know, and each
+/// adapter's `build_args` is the whole evidence for its value.
+///
+/// Declared beside [`AgentCapabilities::effort_levels`] for that field's own
+/// reason: the frontend states the consequence to the user without keeping a
+/// per-agent list of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PersonalizationSupport {
+    /// Under `bare_mode` the user's own setup is still loaded.
+    Loaded,
+    /// Under `bare_mode` the harness is told to switch it off, so a
+    /// capability-scoped step runs without it. The one value that costs the
+    /// user something they would otherwise have had.
+    Suppressed,
+    /// The adapter reads no `bare_mode` at all: whatever the harness loads
+    /// unprompted on that machine is what the step gets. Distinct from
+    /// [`Loaded`](Self::Loaded), which is a switch Demeteo holds and chose not
+    /// to throw.
+    Native,
+}
+
 /// The capabilities Demeteo asks of a coding agent, declared once per runtime
 /// instead of being inferred from `match kind { ... }` string lists scattered
 /// across the executor, the model probe, and the UI.
@@ -363,6 +393,11 @@ pub struct AgentCapabilities {
     /// declared in Rust, never read back off the wire.
     #[serde(skip_deserializing)]
     pub effort_levels: &'static [EffortLevel],
+    /// What this harness's personalization does under
+    /// [`AgentContext::bare_mode`], which every capability-scoped step sets.
+    /// Read the adapter's `build_args` before changing a value here; the type's
+    /// own docs carry why it is a claim about Demeteo and not about the harness.
+    pub personalization: PersonalizationSupport,
     /// The interpreter this harness runs agent-authored commands under on
     /// Windows, which decides what the platform block may promise about
     /// command syntax. Read through

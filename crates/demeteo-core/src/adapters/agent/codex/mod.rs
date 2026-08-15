@@ -385,6 +385,9 @@ pub fn runtime() -> UnifiedCliRuntime {
         // don't seed a cost fallback that could misprice an overridden model.
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Codex),
+        // `build_codex_args` reads no `bare_mode`: Demeteo emits no flag that
+        // would either keep or drop this harness's own setup.
+        personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
         static_env: &[],
         // `default_user_shell_from_path` returns PowerShell under `cfg!(windows)`
         // before consulting the user's shell at all, so this is the one
