@@ -113,6 +113,18 @@ describe('AddressFindingsLaunch', () => {
     expect(String(launched[0].description)).toContain(REPORT);
   });
 
+  it('offers posting the report back on the request it reviewed', async () => {
+    backend({ fetchSpec: 'refs/pull/412/head' });
+    mount(async () => {});
+
+    // The button existing in its own file is not the same as it being reachable:
+    // it shipped tested and unmounted, so this asserts the mount, not the button.
+    const post = await screen.findByTestId('post-review-comment');
+    expect(post).toBeEnabled();
+    await userEvent.click(post);
+    expect(await screen.findByTestId('confirm-post-review-comment')).toBeInTheDocument();
+  });
+
   it('does nothing at all until the user confirms', async () => {
     backend({ fetchSpec: 'refs/pull/412/head' });
     const launched: unknown[] = [];

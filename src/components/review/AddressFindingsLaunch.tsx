@@ -7,6 +7,7 @@ import { getFeature } from '../../lib/featureSync';
 import { listOpenPullRequests, type PullRequestSummary } from '../../lib/pullRequests';
 import { getProposedStrategy } from '../../lib/project';
 import { formatError } from '../../lib/errors';
+import { PostReviewComment } from './PostReviewComment';
 import type { StepExecution } from '../../types';
 
 /**
@@ -48,7 +49,7 @@ export interface AddressFindingsLaunchProps {
   }) => Promise<void>;
 }
 
-type Ready = { pullRequest: PullRequestSummary; plan: FixLaunchPlan };
+type Ready = { pullRequest: PullRequestSummary; plan: FixLaunchPlan; report: string };
 
 const CONFIRM_TITLE = 'Start a run that addresses these findings?';
 
@@ -90,6 +91,7 @@ export function AddressFindingsLaunch({
 
         setReady({
           pullRequest,
+          report: findings,
           plan: planFixLaunch({
             pullRequest,
             findings,
@@ -122,7 +124,7 @@ export function AddressFindingsLaunch({
   }, [ready, launching, onLaunch]);
 
   if (ready === null) return null;
-  const { pullRequest, plan } = ready;
+  const { pullRequest, plan, report } = ready;
 
   return (
     <div className="mx-6 mt-4 rounded-xl border border-white/5 bg-black/20 px-4 py-3">
@@ -162,6 +164,18 @@ export function AddressFindingsLaunch({
           {failure}
         </p>
       )}
+
+      {/* The other thing a human does with a finished review, and it rides this
+          surface because the pull request it needs was resolved by the fetch-spec
+          join above — the one place in the app that recovers it. */}
+      <div className="mt-3 border-t border-white/5 pt-3">
+        <PostReviewComment
+          projectId={projectId ?? ''}
+          pullRequestUrl={pullRequest.web_url}
+          pullRequestLabel={`PR #${pullRequest.number}`}
+          report={report}
+        />
+      </div>
 
       {confirming && plan.ok && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
