@@ -310,17 +310,11 @@ impl WorktreeOpsPort for GitOpsHelper {
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_ref: &str,
         message: &str,
     ) -> Result<SquashOutcome, String> {
-        self.squash_feature_branch(
-            machine_id,
-            repo_dir,
-            feature_branch,
-            default_branch,
-            message,
-        )
-        .await
+        self.squash_feature_branch(machine_id, repo_dir, feature_branch, base_ref, message)
+            .await
     }
 
     async fn restore_pre_squash(

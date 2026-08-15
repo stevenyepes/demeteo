@@ -233,14 +233,20 @@ impl ExecutionDriver {
 
         let authored = authored.unwrap_or_else(|| Authored::fallback(&feature.title));
 
-        // ── Squash.
+        // ── Squash, onto where the run started rather than onto
+        // `base_branch`. The two are the same branch for a run cut from one,
+        // and for a run cut from a fetched ref they are the PR head and the
+        // branch that PR targets — squashing onto the latter collapses the PR
+        // author's commits into this run's one commit.
         let squash = self
             .git_ops
             .squash_feature_branch(
                 self.machine_id_opt.as_deref(),
                 &repo_dir,
                 &feature_branch,
-                &base_branch,
+                &feature
+                    .origin
+                    .squash_base(&settings.worktree_strategy.default_branch),
                 &authored.commit_message(),
             )
             .await;

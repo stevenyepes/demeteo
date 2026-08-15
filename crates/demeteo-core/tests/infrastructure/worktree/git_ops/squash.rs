@@ -255,6 +255,110 @@ async fn test_squash_feature_branch_collapses_history_preserving_tree() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A run launched on a pull request is cut from that PR's head, and the single
+/// commit it publishes has to sit directly on top of it.
+///
+/// The base the caller derives is half of what is under test, which is why this
+/// asks [`FeatureOrigin`] for it rather than spelling a ref: handed the branch
+/// the run is *diffed* against — the PR's target, and the project default for
+/// this arm — the merge base lands below the PR author's commits and the squash
+/// collapses their work into the run's one commit. Nothing downstream notices,
+/// because a stacked PR built on that commit still applies.
+#[tokio::test]
+async fn test_squash_parents_onto_the_ref_the_run_was_cut_from() {
+    use crate::domain::feature_origin::FeatureOrigin;
+
+    let (dir, helper) = make_repo("squash_pr_head_base").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+    let git = |args: &str| format!("git -C \"{repo}\" {args}");
+
+    let origin = FeatureOrigin::Ref {
+        fetch_spec: "refs/pull/7/head".to_string(),
+        label: "PR #7".to_string(),
+    };
+    let fetched = origin.fetch_plan("main").local_ref;
+
+    // The PR author's work, then the ref the bootstrap's fetch lands it in.
+    // The branch itself goes away: a real clone of the upstream repo has only
+    // the fetched ref, never a local branch for someone else's PR.
+    exec.run_command("local", &git("checkout -q -b pr-head"))
+        .await
+        .unwrap();
+    for i in 0..2 {
+        exec.write_file("local", &format!("{repo}/theirs{i}.txt"), "theirs")
+            .await
+            .unwrap();
+        exec.run_command("local", &git("add .")).await.unwrap();
+        exec.run_command(
+            "local",
+            &git(&format!("commit --no-verify -m \"their work {i}\"")),
+        )
+        .await
+        .unwrap();
+    }
+    exec.run_command("local", &git(&format!("update-ref {fetched} pr-head")))
+        .await
+        .unwrap();
+    let pr_head = rev_parse(&exec, &repo, &fetched).await;
+    let main_tip = rev_parse(&exec, &repo, "main").await;
+
+    exec.run_command(
+        "local",
+        &git(&format!("checkout -q -b feature/f-sq {fetched}")),
+    )
+    .await
+    .unwrap();
+    exec.run_command("local", &git("branch -q -D pr-head"))
+        .await
+        .unwrap();
+    for i in 0..2 {
+        exec.write_file("local", &format!("{repo}/ours{i}.txt"), "ours")
+            .await
+            .unwrap();
+        exec.run_command("local", &git("add .")).await.unwrap();
+        exec.run_command(
+            "local",
+            &git(&format!("commit --no-verify -m \"run work {i}\"")),
+        )
+        .await
+        .unwrap();
+    }
+
+    let outcome = helper
+        .squash_feature_branch(
+            None,
+            &repo,
+            "feature/f-sq",
+            &origin.squash_base("main"),
+            "feat(x): stack one commit on the pull request",
+        )
+        .await
+        .expect("squash should succeed");
+
+    assert_eq!(
+        outcome,
+        SquashOutcome::Squashed {
+            sha: rev_parse(&exec, &repo, "feature/f-sq").await,
+            collapsed: 2,
+            backup_ref: "refs/demeteo/pre-squash/feature/f-sq".to_string(),
+        },
+        "only the run's own commits are the run's to collapse"
+    );
+    assert_eq!(
+        rev_parse(&exec, &repo, "feature/f-sq^").await,
+        pr_head,
+        "the published commit's parent is the pull request head the run was cut from"
+    );
+    assert_ne!(
+        rev_parse(&exec, &repo, "feature/f-sq^").await,
+        main_tip,
+        "parenting onto the default branch swallows the pull request's own commits"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The undo path: restore the branch (and the checkout holding it) to the
 /// full pre-squash history.
 #[tokio::test]

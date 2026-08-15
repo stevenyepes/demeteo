@@ -460,14 +460,18 @@ pub trait WorktreeOpsPort: Send + Sync {
         message: &str,
     ) -> Result<(), CommitMessageRejected>;
 
-    /// Collapse every commit the feature branch adds on top of the default
-    /// branch into a single commit carrying `message`.
+    /// Collapse every commit the feature branch adds on top of `base_ref`
+    /// into a single commit carrying `message`.
+    ///
+    /// `base_ref` is where the run started, which is the project's default
+    /// branch only for a run that started there — see
+    /// [`FeatureOrigin::squash_base`](crate::domain::feature_origin::FeatureOrigin::squash_base).
     async fn squash_feature_branch(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_ref: &str,
         message: &str,
     ) -> Result<SquashOutcome, String>;
 

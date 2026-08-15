@@ -121,6 +121,32 @@ fn a_run_from_a_fetched_ref_falls_back_to_the_default_branch() {
     );
 }
 
+// ── What the published commit parents onto ───────────────────────────────────
+
+#[test]
+fn a_run_from_the_default_branch_squashes_onto_it() {
+    assert_eq!(FeatureOrigin::DefaultBranch.squash_base("main"), "main");
+}
+
+#[test]
+fn a_run_from_a_named_base_squashes_onto_that_base() {
+    assert_eq!(branch("release/2.0").squash_base("main"), "release/2.0");
+}
+
+#[test]
+fn a_run_from_a_fetched_ref_squashes_onto_the_ref_it_was_cut_from() {
+    assert_eq!(
+        pull_request(12).squash_base("main"),
+        pull_request(12).start_point("main"),
+        "any other parent collapses the pull request's own commits into the run's"
+    );
+    assert_ne!(
+        pull_request(12).squash_base("main"),
+        pull_request(12).publish_target("main"),
+        "the branch a stacked PR targets is not the commit it is stacked on"
+    );
+}
+
 // ── What the run measures itself against ─────────────────────────────────────
 
 #[test]

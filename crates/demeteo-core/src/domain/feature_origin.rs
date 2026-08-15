@@ -7,12 +7,12 @@
 //! `adapters/worktree/git_ops/squash.rs`, and the PR target in
 //! `adapters/mr_publisher/mod.rs`. Three readers of one field is fine while the
 //! answer is always the same field; it stops being fine the moment a run may
-//! start somewhere else, because "somewhere else" is four separate answers —
-//! what to fetch, what to cut from, what to name the branch, and what the run
-//! is measured against (its squash base, its review diff, its PR target) — and
-//! nothing forces three call sites to agree on them. Those four answers are
-//! the methods here, and they are the reason the type exists rather than an
-//! extra `Option<String>` beside `default_branch`.
+//! start somewhere else, because "somewhere else" is several separate answers
+//! — what to fetch, what to cut from, what to name the branch, what the squash
+//! parents onto, and what the run is measured against (its review diff, its PR
+//! target) — and nothing forces three call sites to agree on them. Those
+//! answers are the methods here, and they are the reason the type exists rather
+//! than an extra `Option<String>` beside `default_branch`.
 //!
 //! An earlier draft carried a fourth arm that adopted an existing worktree. It
 //! was cut after review: an adopted worktree's uncommitted changes are
@@ -152,10 +152,13 @@ impl FeatureOrigin {
         }
     }
 
-    /// The branch a run started here treats as its base: what a PR targets,
-    /// what the review diff is measured from, and what `finalize` squashes
-    /// onto. `None` means the run named no base of its own and the project's
-    /// default branch stands.
+    /// The branch a run started here treats as its base: what a PR targets and
+    /// what the review diff is measured from. `None` means the run named no
+    /// base of its own and the project's default branch stands.
+    ///
+    /// Not what `finalize` squashes onto — that is
+    /// [`FeatureOrigin::squash_base`], and the two answers separate exactly
+    /// where it matters.
     ///
     /// `review_base` is the launcher's explicit answer
     /// ([`crate::domain::run_spec::RunSpec::diff_base_branch`]) and wins where
@@ -179,6 +182,31 @@ impl FeatureOrigin {
     /// What a PR opened by this run targets.
     pub fn publish_target(&self, default_branch: &str) -> String {
         self.base_branch(None).unwrap_or(default_branch).to_string()
+    }
+
+    /// The revision `finalize` collapses the run's commits onto — the point
+    /// the branch was cut from, and so the parent of the one commit that is
+    /// published.
+    ///
+    /// Deliberately not [`FeatureOrigin::base_branch`], which answers where
+    /// the run's *diff* starts. For [`FeatureOrigin::Ref`] the two differ by
+    /// the whole of the pull request the run was launched on: squashing onto
+    /// the branch that PR targets would give the published commit a parent
+    /// below the PR author's commits, so the squash swallows their work into
+    /// the run's single commit — and nothing shows it, because a stacked PR
+    /// built on that commit still applies and simply replays the original diff.
+    ///
+    /// Spelled as the bare name rather than [`FeatureOrigin::start_point`]'s
+    /// `origin/<branch>` because the squash tries `refs/remotes/origin/<base>`
+    /// first and the local ref second, which keeps a clone with no reachable
+    /// origin resolving. A fetched ref has no such pair — it exists only
+    /// locally — and is named outright.
+    pub fn squash_base(&self, default_branch: &str) -> String {
+        match self {
+            Self::DefaultBranch => default_branch.to_string(),
+            Self::Branch { base } => base.clone(),
+            Self::Ref { fetch_spec, .. } => fetched_ref(fetch_spec),
+        }
     }
 }
 
