@@ -121,6 +121,36 @@ toolchains (MSBuild, signtool, the .NET SDK) are not reachable from
 there, so a project that needs them wants the native path despite
 the caveats above.
 
+## A GitLab fix run never stacks on the branch it reviewed
+
+**Symptom:** A fix run launched from a GitHub pull request whose head
+branch lives in the upstream repository opens its pull request against
+that head branch, so the fix is reviewed against the work it fixes. The
+same run launched from a GitLab merge request always opens against the
+branch the merge request targets — `main` — even for a same-project
+merge request whose source branch demonstrably exists upstream.
+
+**Cause:** `crates/demeteo-core/src/domain/fix_destination.rs` will only
+stack on the head branch when the provider has said we may add commits
+to it. Merging that stack lands its commits on the contributor's branch
+and changes what the reviewed request contains, so an unstated
+permission is refused rather than assumed — the rule
+`crates/demeteo-core/src/domain/mr_summary.rs` applies to every
+permission field. GitHub answers it with `head.repo.permissions.push`.
+A GitLab merge request payload carries no equivalent field at all, so
+`MrSummary::head_repo_push` is hardcoded `false` for every merge
+request, and the fork test in the destination's suite is deliberately
+split so the fork case cannot pass for this reason.
+
+**Consequence:** none to correctness. The fallback is the merge
+request's own target branch, which is always upstream, so the fix run
+still produces a mergeable merge request; it just carries the reviewed
+commits along with the fix rather than stacking on top of them.
+
+**What would close it:** a real GitLab signal for push permission on the
+source branch, parsed in the provider mapping (`MrSummary::from_gitlab`)
+— not a special case in `fix_destination`, which has no provider to ask.
+
 ## References
 
 - [tauri-apps/tauri#10702](https://github.com/tauri-apps/tauri/issues/10702) — Error 71 dispatching to Wayland display
