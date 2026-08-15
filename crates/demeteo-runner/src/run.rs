@@ -372,11 +372,11 @@ pub async fn execute_run(
 ///   ([`demeteo_core::domain::feature_origin::FeatureOrigin::base_branch`]) —
 ///   wins outright. On the runner `default_branch` is not a project-wide
 ///   fact: the project row exists for this one run, and every reader of the
-///   field is asking a question about *it* — what `finalize` squashes onto,
-///   what `merge_base` measures the review diff from, what the PR targets. A
-///   run cut from `release/2.0` whose settings say `master` squashes away
-///   every commit `release/2.0` has that `master` does not, and hands its
-///   reviewer that as the diff.
+///   field is asking a question about *it*. The origin answers most of them
+///   from the `Feature` row, but this is what they fall back to and what the
+///   MR publisher reads outright for its target branch — so a run based on
+///   `release/2.0` under a row saying `master` opens its PR against `master`
+///   and hands its reviewer a diff holding every commit `master` is missing.
 /// - `detected` wins next, because it was read from `origin/HEAD` on the
 ///   *actual* clone. That is ground truth about the checkout, and it is the
 ///   right answer exactly while nobody has chosen otherwise: it beats a
@@ -391,26 +391,30 @@ fn merge_project_settings(
     project_id: ProjectId,
     run_base: Option<&str>,
 ) -> ProjectSettings {
+    let detected_branch = detected.default_branch.clone();
+    let client_branch = client
+        .as_ref()
+        .map(|client| client.worktree_strategy.default_branch.clone())
+        .unwrap_or_default();
     let mut settings = match client {
         None => {
             let mut settings = fetch_default_settings();
-            settings.project_id = project_id;
             settings.worktree_strategy = detected;
             settings
         }
-        Some(mut settings) => {
-            settings.project_id = project_id;
-            if !detected.default_branch.trim().is_empty() {
-                settings.worktree_strategy.default_branch = detected.default_branch;
-            } else if settings.worktree_strategy.default_branch.trim().is_empty() {
-                settings.worktree_strategy.default_branch = "main".to_string();
-            }
-            settings
-        }
+        Some(settings) => settings,
     };
-    if let Some(base) = run_base.map(str::trim).filter(|base| !base.is_empty()) {
-        settings.worktree_strategy.default_branch = base.to_string();
-    }
+    settings.project_id = project_id;
+    settings.worktree_strategy.default_branch = [
+        run_base.unwrap_or_default(),
+        detected_branch.as_str(),
+        client_branch.as_str(),
+    ]
+    .into_iter()
+    .map(str::trim)
+    .find(|branch| !branch.is_empty())
+    .unwrap_or("main")
+    .to_string();
     settings
 }
 

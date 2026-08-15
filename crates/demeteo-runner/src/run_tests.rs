@@ -89,11 +89,23 @@ fn empty_detected_branch_falls_back_to_client_then_main() {
     assert_eq!(out2.worktree_strategy.default_branch, "main");
 }
 
+/// Detection succeeding with empty output is the way a blank arrives with no
+/// client to fall through to: `git rev-parse --abbrev-ref origin/HEAD` returning
+/// `Ok("")` is not an error, so `detect_worktree_strategy` hands back a strategy
+/// naming no branch. The row it lands in is what `create_feature_branch`,
+/// `merge_base` and the squash all read.
+#[test]
+fn a_blank_detected_branch_with_no_client_still_names_one() {
+    let mut detected = fetch_default_settings().worktree_strategy;
+    detected.default_branch = String::new();
+    let out = merge_project_settings(detected, None, ProjectId::from("p8".to_string()), None);
+    assert_eq!(out.worktree_strategy.default_branch, "main");
+}
+
 // ── The base a run declared ──────────────────────────────────────────────────
 //
-// `default_branch` on a runner-side project is not a project-wide fact: the
-// project row is created for one run, and the field is what `finalize`
-// squashes onto and what the review diff's `merge_base` measures from.
+// Why the run's base outranks every other claimant on a runner-side
+// `default_branch` is on `merge_project_settings`.
 
 #[test]
 fn a_declared_base_beats_the_detected_default_branch() {
@@ -114,8 +126,8 @@ fn a_declared_base_beats_the_detected_default_branch() {
 
     assert_eq!(
         out.worktree_strategy.default_branch, "release/2.0",
-        "squashing this run onto the detected default would collapse every commit \
-         release/2.0 has that it does not, and call the result the run's diff"
+        "the detected default is a branch this run did not declare, and every \
+         answer that falls back to this field would be about that one instead"
     );
 }
 
