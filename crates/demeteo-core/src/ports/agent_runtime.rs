@@ -97,12 +97,30 @@ pub struct AgentContext {
     /// extensions, prompt templates and themes — inside a step that is
     /// otherwise [`bare_mode`](Self::bare_mode).
     ///
-    /// Deliberately narrower than `bare_mode`: it governs those four switches
-    /// and nothing else, so a step that wants the harness's own review method
-    /// still runs under the MCP and settings-source isolation that flag block
-    /// carries. Every construction site answers it through
+    /// Narrower than `bare_mode` *as a rule*, but say what it costs per
+    /// harness rather than as a general guarantee — the two differ sharply:
+    ///
+    /// - **pi** is the only harness this field reaches, and pi's entire
+    ///   `bare_mode` block is those four switches. Setting this therefore
+    ///   switches off 100% of what `bare_mode` does to a pi turn. It leaves no
+    ///   MCP or settings-source isolation standing because pi never had any —
+    ///   what it costs is the byte-identical static prefix, and so the prompt
+    ///   cache. Whether pi resolves skills and extensions from the *worktree*
+    ///   as well as `~/.pi` is not established in this tree; until it is, a
+    ///   step setting this on pi must be assumed to load whatever the reviewed
+    ///   repository ships. See `build_pi_args`.
+    /// - **claude-code** ignores it: its skills already load under
+    ///   `--setting-sources user,project`, and `--strict-mcp-config` and
+    ///   `--exclude-dynamic-system-prompt-sections` are emitted either way.
+    ///   That isolation is `bare_mode`'s, not this field's, and is the reason
+    ///   a step must never ask for personalization by dropping `bare_mode`.
+    /// - **codex, hermes, opencode** read neither flag.
+    ///
+    /// Every construction site *should* answer it through
     /// [`TurnRole`](crate::domain::turn_role::TurnRole), which holds it closed
-    /// for Demeteo's own role turns whatever the workflow asked for.
+    /// for Demeteo's own role turns whatever the workflow asked for — but it is
+    /// a bare `bool` and nothing stops a new site passing `true` directly, so
+    /// read that as the convention it is rather than an enforced invariant.
     pub keep_harness_personalization: bool,
     /// Restrict which built-in tools are even *defined* for the session
     /// (claude-code: `--tools a,b`; `Some(vec![])` → `--tools ""`, no

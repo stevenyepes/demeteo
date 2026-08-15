@@ -1,10 +1,11 @@
 //! In whose voice an agent turn speaks. See [`crate::domain`].
 //!
 //! A run opens turns of more than one kind against the same harness, and only
-//! one kind is the workflow author's to configure. A `sequence` step is where
-//! that is easiest to get wrong: its task turns are the step's own work, while
-//! the merge-conflict turn beside them is Demeteo resolving its own merge, and
-//! both are spawned through a single function.
+//! one kind is the workflow author's to configure. Where two kinds share a
+//! spawn, the answer cannot be resolved at the spawn — the seam this enum
+//! exists for, and `RunTarget::keep_harness_personalization` in
+//! `adapters/step_executor/steps/sequence/context.rs` carries that case in
+//! full.
 
 use crate::domain::models::StepConfig;
 

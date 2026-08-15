@@ -20,8 +20,7 @@ impl ExecutionDriver {
     /// a failure nor environmental and says so in its own variant.
     ///
     /// Whose voice the turn speaks in is the caller's answer, carried on
-    /// [`RunTarget::keep_harness_personalization`] — the callers are of
-    /// opposite kind and that field's docs say why it cannot be resolved here.
+    /// [`RunTarget::keep_harness_personalization`], which says why.
     pub(crate) async fn spawn_sequence_session(
         &self,
         target: RunTarget<'_>,

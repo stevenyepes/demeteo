@@ -245,6 +245,13 @@ fn pi_breadcrumb(v: &serde_json::Value) -> String {
 /// `network: Deny` is unenforceable beyond removing `bash`. Nothing here
 /// pretends otherwise. The artifacts-vs-source path shape is enforced for
 /// every agent by the chmod fence in `adapters/worktree/git_ops/scope.rs`.
+///
+/// That gap is load-bearing for pipeline steps now, in a way it was not: an
+/// extension tool that reaches the network is not a built-in and cannot be
+/// named here, and `--no-extensions` is no longer emitted for a step with
+/// `uses_agent_skills`. The hazard is written up beside that gate in
+/// `build_pi_args`; do not close it by extending this list, which cannot see
+/// an extension's tools.
 pub(crate) fn excluded_tools_for(p: &PermissionProfile) -> Vec<&'static str> {
     let mut out = Vec::new();
     if !p.read_fs.is_allow() {
@@ -303,8 +310,14 @@ fn pi_tool_name(name: &str) -> Option<&'static str> {
 ///                       step's permission profile.
 /// -xt <denied>          compiled from the profile by `excluded_tools_for`.
 /// --no-extensions --no-skills --no-prompt-templates --no-themes
-///                       bare mode only: a byte-identical static prefix across
-///                       worktrees, for prompt-cache reuse.
+///                       bare mode, unless the step asked to keep the
+///                       harness's own setup (`keep_harness_personalization`).
+///                       Emitting them buys a byte-identical static prefix
+///                       across worktrees, and so prompt-cache reuse; a step
+///                       that keeps its personalization spends that to run on
+///                       the skills and prompt templates the user wrote.
+///                       These four are the whole of what `bare_mode` does
+///                       here, so a keeping step's pi turn carries none of it.
 /// <prompt>              trailing positional — stdin races pi's own init.
 /// ```
 ///
@@ -361,6 +374,22 @@ fn build_pi_args(
         args.push("-xt".to_string());
         args.push(excluded.join(","));
     }
+    // What a keeping step gives up here is not only cache reuse. Every
+    // `StepCapability` denies `network` (`domain/permission.rs`), and
+    // `excluded_tools_for` can only deny pi's *built-ins* by name — it says so
+    // itself, and it deliberately lets a user's extension tools through. Until
+    // this commit `--no-extensions` was emitted for every capability-scoped
+    // step, so there were no extension tools to let through and the flag was
+    // the de-facto enforcement of `network: Deny` on pi.
+    //
+    // Unestablished, and it decides whether that matters: whether pi resolves
+    // skills and extensions from the *worktree* as well as `~/.pi`. `-na`
+    // (ignore `~/.pi/agent/trust.json`) implies pi has project-scoped trust,
+    // hence project-scoped things to trust. If it does, a step with
+    // `uses_agent_skills` runs extension code the reviewed repository shipped,
+    // and the reviewed repository is attacker-influenced on a fork PR. Answer
+    // that before widening `uses_agent_skills` past the starter workflows
+    // Demeteo ships.
     if ctx.bare_mode && !ctx.keep_harness_personalization {
         args.push("--no-extensions".to_string());
         args.push("--no-skills".to_string());
