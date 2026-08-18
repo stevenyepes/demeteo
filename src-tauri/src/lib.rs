@@ -493,6 +493,8 @@ pub fn run() {
             commands::features::replay_from_step,
             commands::features::feature_sync,
             commands::features::feature_resolve_sync_conflicts,
+            commands::features::sync_session_get,
+            commands::features::sync_abort,
             commands::features::feature_get_worktree,
             commands::git::git_changed_files,
             commands::git::git_file_at_ref,

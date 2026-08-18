@@ -442,13 +442,13 @@ mod stage_at_each_call {
     const REPO: &str = "/repo";
     const BRANCH: &str = "feat/x";
     const BASE: &str = "main";
-    const WT: &str = "/repo_wt_sync_feat_x";
+    const WT: &str = "/repo_wt_sync_feat-x";
 
     const REV_PARSE_BASE: &str = "git -C /repo rev-parse --verify origin/main";
-    const WORKTREE_ADD: &str = "git -C /repo worktree add /repo_wt_sync_feat_x feat/x";
-    const MERGE: &str = "git -C /repo_wt_sync_feat_x merge origin/main \
+    const WORKTREE_ADD: &str = "git -C /repo worktree add /repo_wt_sync_feat-x feat/x";
+    const MERGE: &str = "git -C /repo_wt_sync_feat-x merge origin/main \
                          -m chore(sync): sync feature with origin/main";
-    const PUSH: &str = "git -C /repo_wt_sync_feat_x push origin feat/x";
+    const PUSH: &str = "git -C /repo_wt_sync_feat-x push origin feat/x";
 
     /// A sync that reaches the push, answered call by call. Every test below
     /// breaks exactly one entry, so the stage it gets back names that call and
@@ -470,10 +470,10 @@ mod stage_at_each_call {
             ("git -C /repo worktree list --porcelain", Ok("")),
             (WORKTREE_ADD, Ok("")),
             (MERGE, Ok("")),
-            ("git -C /repo_wt_sync_feat_x rev-parse HEAD", Ok("d00d")),
+            ("git -C /repo_wt_sync_feat-x rev-parse HEAD", Ok("d00d")),
             (PUSH, Ok("")),
             (
-                "git -C /repo_wt_sync_feat_x status --porcelain --untracked-files=no",
+                "git -C /repo_wt_sync_feat-x status --porcelain --untracked-files=no",
                 Ok("UU README.md"),
             ),
         ]

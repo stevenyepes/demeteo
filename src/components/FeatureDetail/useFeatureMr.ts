@@ -3,7 +3,14 @@ import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/
 import type { AppView, MrState, SyncOutcomeView } from '../../types';
 import { formatError } from '../../lib/errors';
 import { useErrorBus } from '../../lib/errorBus';
-import { getFeature, syncFeature, resolveSyncConflicts, fetchMrState } from '../../lib/featureSync';
+import {
+  abortSync,
+  getFeature,
+  getSyncSession,
+  syncFeature,
+  resolveSyncConflicts,
+  fetchMrState,
+} from '../../lib/featureSync';
 import { cleanupFeature, publishMr } from '../../lib/featureDetail';
 
 /**
@@ -48,6 +55,38 @@ export function useFeatureMr(input: {
   };
 
   /**
+   * A conflict outlives this component. It lives in a worktree with
+   * `MERGE_HEAD` set and in the feature's sync session, so navigating away —
+   * or restarting the app — must not be how the user loses it: before this
+   * ran, the banner was the only place the conflict existed at all, and the
+   * only thing that ever cleaned the worktree up was the next sync
+   * force-removing it.
+   *
+   * Only `conflicted` hydrates. The other states are either terminal or have
+   * nothing on disk to come back to, and a banner replayed on every mount for
+   * a sync that finished last week is noise the user cannot dismiss.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const session = await getSyncSession(featureId);
+        if (cancelled || session?.status !== 'conflicted') return;
+        setSyncBanner({
+          status: 'conflict',
+          conflict_files: session.conflict_files,
+          raw_error: session.raw_error ?? '',
+        });
+      } catch (err) {
+        reportError(err, { kind: 'internal' });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [featureId]);
+
+  /**
    * Spawn a fresh agent to resolve the conflicts surfaced by
    * `handleSync`. The agent edits the conflict files in a temporary
    * worktree, commits the resolution, and the worktree is merged
@@ -63,6 +102,24 @@ export function useFeatureMr(input: {
       await messageDialog(formatError(err), { title: 'Resolution failed', kind: 'error' });
     } finally {
       setResolving(false);
+    }
+  };
+
+  /**
+   * Give up on the sync: undo the merge, discard the worktree and close the
+   * session. The banner goes with it — there is no longer anything for it to
+   * describe.
+   */
+  const handleAbortSync = async () => {
+    setSyncing(true);
+    try {
+      await abortSync(featureId);
+      setSyncBanner(null);
+      reload();
+    } catch (err) {
+      await messageDialog(formatError(err), { title: 'Abort failed', kind: 'error' });
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -175,6 +232,7 @@ export function useFeatureMr(input: {
     mrUrl,
     handleSync,
     handleResolveConflicts,
+    handleAbortSync,
     refreshMrState,
     handlePublishClick,
     handleCleanup,

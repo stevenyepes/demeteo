@@ -93,6 +93,7 @@ pub fn build_core_context(
     let run_events_repo: Arc<dyn ports::run_events::RunEventsPort> = db_adapter.clone();
     let remote_run_mirror_repo: Arc<dyn ports::remote_run_mirror::RemoteRunMirrorPort> =
         db_adapter.clone();
+    let sync_sessions_repo: Arc<dyn ports::sync_session::SyncSessionPort> = db_adapter.clone();
 
     // Resolve the workspace directory: user-configurable base for repo
     // storage, defaults to `app_data_dir`. Takes effect on next launch
@@ -185,6 +186,7 @@ pub fn build_core_context(
         );
         Arc::new(adapters::merge::SqliteMergeExecutor::new(
             merge_audit_repo.clone(),
+            sync_sessions_repo.clone(),
             git_ops_for_merge,
             exec_inner.clone(),
             workspace_dir.clone(),
@@ -318,6 +320,7 @@ pub fn build_core_context(
         runner_runs: runner_runs_repo,
         run_events: run_events_repo,
         remote_run_mirror: remote_run_mirror_repo,
+        sync_sessions: sync_sessions_repo,
         remote_run_mirror_guard: Arc::new(tokio::sync::Mutex::new(())),
         run_view,
     }

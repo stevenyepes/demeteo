@@ -192,6 +192,10 @@ pub struct SyncOutcome {
     /// `false` when `origin/<default>` didn't exist or had no new
     /// commits since the last sync.
     pub changed: bool,
+    /// The feature branch's tip before the merge. Reported rather than
+    /// re-derived, because `merge_commit^` stops being it the moment anything
+    /// commits on top — and by then nothing can recover it.
+    pub head_before: String,
 }
 
 /// Why a feature-branch sync did not land. Which variant it is cannot be
@@ -205,6 +209,10 @@ pub enum SyncFailure {
         files: Vec<crate::domain::models::ConflictFile>,
         raw_error: String,
         worktree_path: Option<String>,
+        /// The feature branch's tip before the merge, on the same terms as
+        /// [`SyncOutcome::head_before`] — a resolution commits on top of the
+        /// merge, so this is the only base a review diff can use.
+        head_before: String,
     },
     /// No merge was attempted, or one was and never reached a verdict, or its
     /// result could not be published. Nothing is known to be conflicted, so

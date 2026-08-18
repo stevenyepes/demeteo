@@ -398,6 +398,7 @@ async fn watchdog_and_resume_skip_runner_owned_shadows() {
             crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
         Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
             db.clone(),
+            db.clone(),
             git_ops,
             exec.clone(),
             temp_dir.clone(),

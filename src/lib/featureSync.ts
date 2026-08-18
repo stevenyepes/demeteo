@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Feature, SyncOutcomeView } from "../types";
+import type { Feature, SyncOutcomeView, SyncSessionView } from "../types";
 
 /**
  * Sync the feature branch with `origin/<default_branch>`. Returns
@@ -36,6 +36,29 @@ export async function resolveSyncConflicts(
     featureId,
     conflictFiles,
   });
+}
+
+/**
+ * The feature's live sync, or `null` when it has never synced.
+ *
+ * Reconciled against the working tree by the backend before it answers, so a
+ * `conflicted` session is one git still agrees with rather than a row nothing
+ * has revisited since a process died.
+ */
+export async function getSyncSession(
+  featureId: string,
+): Promise<SyncSessionView | null> {
+  return invoke<SyncSessionView | null>("sync_session_get", { featureId });
+}
+
+/**
+ * Give up on the feature's sync: undo the merge, discard the sync worktree and
+ * close the session. Safe when the worktree is already gone.
+ */
+export async function abortSync(
+  featureId: string,
+): Promise<SyncSessionView | null> {
+  return invoke<SyncSessionView | null>("sync_abort", { featureId });
 }
 
 /**

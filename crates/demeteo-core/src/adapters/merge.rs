@@ -16,6 +16,13 @@
 //! once, in a banner the user then dismisses, so a row saying only "an attempt
 //! failed at T" leaves nothing behind to answer "why do this feature's syncs
 //! keep failing".
+//!
+//! The audit is not state, though, which is why every outcome also writes the
+//! feature's single [`SyncSessionPort`] row. This is the only place that has
+//! the repo dir, the machine, both branches and the verdict at once, so it is
+//! where the live row is opened and closed; everything downstream — the
+//! banner, the abort command, a later resolver — reads that row rather than
+//! re-deriving any of it.
 
 use std::sync::Arc;
 
@@ -27,14 +34,17 @@ use crate::domain::models::{
     ConflictReport, RepoContext, UpstreamSyncFailure, UpstreamSyncOutcome,
 };
 use crate::domain::sync_failure::SyncBlockedStage;
+use crate::domain::sync_session::SyncSessionStatus;
 use crate::paths;
 use crate::ports::db::MergeAuditRepository;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::merge::MergeExecutor;
+use crate::ports::sync_session::{SyncSession, SyncSessionPatch, SyncSessionPort};
 use crate::ports::worktree_ops::SyncFailure;
 
 pub struct SqliteMergeExecutor {
     merge_audit: Arc<dyn MergeAuditRepository>,
+    sync_sessions: Arc<dyn SyncSessionPort>,
     git_ops: GitOpsHelper,
     exec: Arc<dyn ExecutionPort>,
     workspace_dir: std::path::PathBuf,
@@ -43,12 +53,14 @@ pub struct SqliteMergeExecutor {
 impl SqliteMergeExecutor {
     pub fn new(
         merge_audit: Arc<dyn MergeAuditRepository>,
+        sync_sessions: Arc<dyn SyncSessionPort>,
         git_ops: GitOpsHelper,
         exec: Arc<dyn ExecutionPort>,
         workspace_dir: std::path::PathBuf,
     ) -> Self {
         Self {
             merge_audit,
+            sync_sessions,
             git_ops,
             exec,
             workspace_dir,
@@ -111,6 +123,31 @@ impl MergeExecutor for SqliteMergeExecutor {
             }
         };
 
+        let machine_str = machine_id_opt
+            .as_deref()
+            .unwrap_or(crate::domain::ids::LOCAL_MACHINE)
+            .to_string();
+        let now = paths::now_ms();
+        // Opened before the merge, not after it: a sync that is cut short
+        // between here and its verdict is the case the row exists for, and one
+        // written only on the way out would leave exactly that case invisible.
+        let _ = self.sync_sessions.open(&SyncSession {
+            feature_id: feature_id.0.clone(),
+            machine_id: machine_str.clone(),
+            repo_dir: repo_dir.clone(),
+            feature_branch: feature_branch.to_string(),
+            base_branch: default_branch.to_string(),
+            status: SyncSessionStatus::Syncing,
+            worktree_path: None,
+            head_before: None,
+            merge_commit_sha: None,
+            conflict_files: Vec::new(),
+            raw_error: None,
+            attempts: 0,
+            created_at: now,
+            updated_at: now,
+        });
+
         // Delegate the git work to GitOpsHelper and translate the
         // SyncOutcome / SyncFailure into the upstream-sync domain
         // types. The repo context is already resolved; the helper
@@ -126,13 +163,10 @@ impl MergeExecutor for SqliteMergeExecutor {
             .await
         {
             Ok(outcome) => {
-                let machine_str = machine_id_opt
-                    .as_deref()
-                    .unwrap_or(crate::domain::ids::LOCAL_MACHINE);
                 let _ = self
                     .exec
                     .run_command(
-                        machine_str,
+                        &machine_str,
                         &format!(
                             "git -C {} rev-parse HEAD",
                             paths::shell_escape_posix(&repo_dir)
@@ -148,6 +182,20 @@ impl MergeExecutor for SqliteMergeExecutor {
                     None,
                     paths::now_ms(),
                 );
+                let _ = self.sync_sessions.update(
+                    feature_id,
+                    &SyncSessionPatch {
+                        status: Some(if outcome.changed {
+                            SyncSessionStatus::Merged
+                        } else {
+                            SyncSessionStatus::UpToDate
+                        }),
+                        head_before: Some(Some(outcome.head_before.clone())),
+                        merge_commit_sha: Some(Some(outcome.merge_commit_sha.clone())),
+                        ..Default::default()
+                    },
+                    paths::now_ms(),
+                );
                 Ok(UpstreamSyncOutcome {
                     merge_commit_sha: outcome.merge_commit_sha,
                     changed: outcome.changed,
@@ -158,8 +206,21 @@ impl MergeExecutor for SqliteMergeExecutor {
                 files,
                 raw_error,
                 worktree_path,
+                head_before,
             }) => {
                 let now = paths::now_ms();
+                let _ = self.sync_sessions.update(
+                    feature_id,
+                    &SyncSessionPatch {
+                        status: Some(SyncSessionStatus::Conflicted),
+                        worktree_path: Some(worktree_path.clone()),
+                        head_before: Some(Some(head_before)),
+                        conflict_files: Some(files.clone()),
+                        raw_error: Some(Some(raw_error.clone())),
+                        ..Default::default()
+                    },
+                    now,
+                );
                 let report = ConflictReport {
                     source_branch: format!("origin/{}", default_branch),
                     target_branch: feature_branch.to_string(),
@@ -184,6 +245,15 @@ impl MergeExecutor for SqliteMergeExecutor {
                 })
             }
             Err(SyncFailure::Blocked { stage, raw_error }) => {
+                let _ = self.sync_sessions.update(
+                    feature_id,
+                    &SyncSessionPatch {
+                        status: Some(SyncSessionStatus::Blocked),
+                        raw_error: Some(Some(raw_error.clone())),
+                        ..Default::default()
+                    },
+                    paths::now_ms(),
+                );
                 let failure = UpstreamSyncFailure::Blocked { stage, raw_error };
                 let json_blob =
                     serde_json::to_string(&failure).unwrap_or_else(|_| "{}".to_string());

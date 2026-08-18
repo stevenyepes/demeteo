@@ -781,6 +781,47 @@ export interface ConflictFile {
   kind: string;
 }
 
+/**
+ * The state a feature's sync is in. Mirrors
+ * `crate::domain::sync_session::SyncSessionStatus`; every spelling here is the
+ * wire form.
+ */
+export type SyncSessionState =
+  | 'syncing'
+  | 'up_to_date'
+  | 'merged'
+  | 'blocked'
+  | 'conflicted'
+  | 'resolving'
+  | 'resolved'
+  | 'resolution_failed'
+  | 'aborted';
+
+/**
+ * One feature's live sync, as `sync_session_get` answers it — reconciled
+ * against the working tree on the way out, so a `conflicted` session here is
+ * one git still agrees with.
+ */
+export interface SyncSessionView {
+  feature_id: string;
+  machine_id: string;
+  repo_dir: string;
+  feature_branch: string;
+  base_branch: string;
+  status: SyncSessionState;
+  worktree_path: string | null;
+  /** The feature branch's tip before the merge — the base a review diff of the
+   *  resolution has to be computed from. */
+  head_before: string | null;
+  merge_commit_sha: string | null;
+  conflict_files: ConflictFile[];
+  /** git's own stderr, verbatim. */
+  raw_error: string | null;
+  attempts: number;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface Repository {
   id: string;
   repo_path: string;

@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, CheckCircle, Cpu, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Cpu, RefreshCw, XCircle } from 'lucide-react';
 import type { SyncBlockedStage, SyncOutcomeView } from '../../types';
 import { TONE_TEXT } from '../../lib/runStatus';
 
@@ -17,6 +17,11 @@ import { TONE_TEXT } from '../../lib/runStatus';
  * evidence the user has: the banner's own sentence is written here, git's is
  * the one that says which host refused and why.
  *
+ * "Abort sync" is the other half of the conflict being durable: the merge and
+ * its worktree now outlive this component, so there has to be somewhere to say
+ * "not this one" — otherwise the only thing that ever cleans the tree up is
+ * the next sync force-removing it.
+ *
  * "Resolve with agent" does not test the file list. An empty list proves
  * nothing (`crate::domain::sync_failure`) — the porcelain read that fills it
  * answers empty on any transport error — and hiding the button on one leaves
@@ -27,6 +32,7 @@ import { TONE_TEXT } from '../../lib/runStatus';
 interface SyncBannerContentProps {
   outcome: SyncOutcomeView;
   onResolve: (files: string[]) => void;
+  onAbort: () => void;
   resolving: boolean;
   onDismiss: () => void;
 }
@@ -43,6 +49,7 @@ const BLOCKED_NEXT_MOVE: Record<SyncBlockedStage, string> = {
 export const SyncBannerContent: React.FC<SyncBannerContentProps> = ({
   outcome,
   onResolve,
+  onAbort,
   resolving,
   onDismiss,
 }) => {
@@ -139,7 +146,16 @@ export const SyncBannerContent: React.FC<SyncBannerContentProps> = ({
         <pre className="font-mono text-[11px] text-slate-300 whitespace-pre-wrap max-h-32 overflow-y-auto bg-black/30 p-2 rounded">
           {outcome.raw_error}
         </pre>
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onAbort}
+            disabled={resolving}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-rose-500/30 hover:bg-rose-500/10 rounded text-xs font-bold text-rose-300 transition disabled:opacity-40"
+            title="Undo the merge and discard the sync worktree"
+          >
+            <XCircle className="w-3 h-3" />
+            Abort sync
+          </button>
           <button
             onClick={() => onResolve(outcome.conflict_files.map((f) => f.path))}
             disabled={resolving}

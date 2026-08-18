@@ -4,6 +4,7 @@ use crate::domain::models::{
 };
 use crate::error::AppError;
 use crate::ports::step_executor::{FeatureLaunch, SyncOutcomeView};
+use crate::ports::sync_session::SyncSession;
 use crate::state::AppContext;
 use tauri::State;
 
@@ -284,6 +285,42 @@ pub async fn feature_sync(
         .feature_sync(&feature_id)
         .await
         .map_err(AppError::from)
+}
+
+/// The feature's live sync, or `null` if it has never synced.
+///
+/// Reconciled against the working tree before it answers, so a session left
+/// `resolving` by a process that died — or a conflict whose worktree a later
+/// sync force-removed — is never handed to the UI as if it were still true.
+#[tauri::command]
+pub async fn sync_session_get(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<SyncSession>, AppError> {
+    crate::application::sync_session::get_reconciled(
+        &ctx.sync_sessions,
+        &ctx.exec,
+        &FeatureId::from(feature_id),
+    )
+    .await
+    .map_err(AppError::from)
+}
+
+/// Give up on the feature's sync: undo the merge, discard the worktree, and
+/// close the session. Safe on a worktree that is already gone, which is the
+/// common case.
+#[tauri::command]
+pub async fn sync_abort(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<SyncSession>, AppError> {
+    crate::application::sync_session::abort(
+        &ctx.sync_sessions,
+        &ctx.exec,
+        &FeatureId::from(feature_id),
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 /// Spawn a fresh agent to resolve the conflicts left by

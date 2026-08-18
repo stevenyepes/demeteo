@@ -131,6 +131,7 @@ pub(super) async fn build_test_executor_in(
             crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
         Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
             db.clone(),
+            db.clone(),
             git_ops,
             exec.clone(),
             temp_dir.clone(),

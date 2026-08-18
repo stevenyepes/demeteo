@@ -62,6 +62,7 @@ pub mod staged_deliverable;
 pub mod step_boundary;
 pub mod step_seed;
 pub mod sync_failure;
+pub mod sync_session;
 pub mod terminal_worktree;
 pub mod text;
 pub mod turn_role;

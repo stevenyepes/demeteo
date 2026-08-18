@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { SyncBannerContent } from './SyncBannerContent';
 import type { SyncOutcomeView } from '../../types';
@@ -7,15 +7,17 @@ const GIT_SAYS = 'fatal: could not read Username for https://github.com: No such
 
 function renderBanner(outcome: SyncOutcomeView) {
   const onResolve = vi.fn();
+  const onAbort = vi.fn();
   render(
     <SyncBannerContent
       outcome={outcome}
       onResolve={onResolve}
+      onAbort={onAbort}
       resolving={false}
       onDismiss={vi.fn()}
     />,
   );
-  return onResolve;
+  return { onResolve, onAbort };
 }
 
 describe('SyncBannerContent', () => {
@@ -68,5 +70,25 @@ describe('SyncBannerContent', () => {
     renderBanner({ status: 'conflict', conflict_files: [], raw_error: GIT_SAYS });
 
     expect(screen.getByRole('button', { name: /Resolve with agent/ })).toBeInTheDocument();
+  });
+
+  /**
+   * The conflict outlives this component now — a worktree with `MERGE_HEAD`
+   * set and a session row — so "not this one" has to be sayable. Without it
+   * the only thing that ever cleans that tree up is the next sync
+   * force-removing it.
+   */
+  it('lets the user abandon a conflict, and only a conflict', () => {
+    const { onAbort } = renderBanner({
+      status: 'conflict',
+      conflict_files: [],
+      raw_error: GIT_SAYS,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Abort sync/ }));
+    expect(onAbort).toHaveBeenCalledOnce();
+
+    cleanup();
+    renderBanner({ status: 'blocked', stage: 'fetch', raw_error: GIT_SAYS });
+    expect(screen.queryByRole('button', { name: /Abort sync/ })).not.toBeInTheDocument();
   });
 });

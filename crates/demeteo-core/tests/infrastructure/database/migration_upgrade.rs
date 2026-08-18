@@ -77,6 +77,17 @@ fn the_schema_survives_a_run_over_a_divergent_history() {
         )
         .unwrap();
     assert_eq!(count, 1, "step_executions missing after the divergent run");
+
+    // And the current tail of the chain, which is the half a divergent run can
+    // actually stop short of.
+    let count: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_sessions'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1, "sync_sessions missing after the divergent run");
 }
 
 #[test]

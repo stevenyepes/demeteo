@@ -395,6 +395,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         syncBanner={mr.syncBanner}
         resolving={mr.resolving}
         onResolveConflicts={mr.handleResolveConflicts}
+        onAbortSync={mr.handleAbortSync}
         onDismissSyncBanner={() => mr.setSyncBanner(null)}
         mrUrl={mr.mrUrl}
         mrState={mr.mrState}

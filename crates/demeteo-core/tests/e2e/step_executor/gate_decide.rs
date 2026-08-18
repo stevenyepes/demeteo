@@ -47,6 +47,7 @@ async fn test_executor_instantiation_and_cancel() {
             crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
         Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
             db.clone(),
+            db.clone(),
             git_ops,
             exec.clone(),
             temp_dir.clone(),
@@ -119,6 +120,7 @@ async fn test_executor_gate_decide() {
         let git_ops =
             crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
         Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
+            db.clone(),
             db.clone(),
             git_ops,
             exec.clone(),
@@ -312,6 +314,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
         let git_ops =
             crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
         Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
+            db.clone(),
             db.clone(),
             git_ops,
             exec.clone(),

@@ -34,6 +34,7 @@ use crate::ports::remote_run_mirror::RemoteRunMirrorPort;
 use crate::ports::run_events::RunEventsPort;
 use crate::ports::runner_run::RunnerRunPort;
 use crate::ports::step_executor::{GatePresenter, StepExecutor};
+use crate::ports::sync_session::SyncSessionPort;
 use crate::ports::worktree_ops::WorktreeOpsPort;
 use serde::Serialize;
 use std::sync::Arc;
@@ -147,6 +148,11 @@ pub struct AppContext {
     /// `(machine_id, run_id)`. Unused by `demeteo-runner` — only the
     /// Tauri app populates it.
     pub remote_run_mirror: Arc<dyn RemoteRunMirrorPort>,
+
+    /// The feature's live sync, if it has one (V43). Read through
+    /// [`crate::application::sync_session::get_reconciled`] rather than
+    /// directly: the row is a claim and the working tree is the authority.
+    pub sync_sessions: Arc<dyn SyncSessionPort>,
 
     /// Serializes local mirror dismissal with reconciliation's guarded
     /// status/hydration work. A reconciler may list a row before cleanup,

@@ -7,6 +7,7 @@ interface FeatureStatusBannersProps {
   syncBanner: SyncOutcomeView | null;
   resolving: boolean;
   onResolveConflicts: (files: string[]) => void;
+  onAbortSync: () => void;
   onDismissSyncBanner: () => void;
   mrUrl: string | null;
   mrState: MrState | null;
@@ -19,6 +20,7 @@ export function FeatureStatusBanners({
   syncBanner,
   resolving,
   onResolveConflicts,
+  onAbortSync,
   onDismissSyncBanner,
   mrUrl,
   mrState,
@@ -51,6 +53,7 @@ export function FeatureStatusBanners({
             <SyncBannerContent
               outcome={syncBanner}
               onResolve={(files) => onResolveConflicts(files)}
+              onAbort={onAbortSync}
               resolving={resolving}
               onDismiss={onDismissSyncBanner}
             />

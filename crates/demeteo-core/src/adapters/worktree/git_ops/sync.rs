@@ -344,8 +344,9 @@ impl GitOpsHelper {
         // is needed and the call is a true no-op.
         if ahead_count == 0 {
             return Ok(SyncOutcome {
-                merge_commit_sha: head_before,
+                merge_commit_sha: head_before.clone(),
                 changed: false,
+                head_before,
             });
         }
 
@@ -408,6 +409,7 @@ impl GitOpsHelper {
                 Ok(SyncOutcome {
                     merge_commit_sha: head_after.clone(),
                     changed,
+                    head_before: head_before.clone(),
                 })
             }
             Err(raw) => match crate::domain::sync_failure::merge_failure_stage(&raw) {
@@ -423,6 +425,7 @@ impl GitOpsHelper {
                         files,
                         raw_error: raw,
                         worktree_path: Some(wt_path.clone()),
+                        head_before: head_before.clone(),
                     })
                 }
             },
@@ -494,8 +497,11 @@ impl GitOpsHelper {
                 .await;
         }
 
-        // Use a deterministic path for this feature branch's sync worktree
-        let wt_path = format!("{}_wt_sync_{}", repo_dir, feature_branch.replace('/', "_"));
+        let wt_path = crate::paths::sync_worktree_dir(
+            repo_dir,
+            feature_branch,
+            crate::paths::targets_windows_host(machine_str),
+        );
 
         // Force remove any pre-existing worktree at that path to avoid collisions
         let _ = self
