@@ -1,12 +1,22 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { SyncBannerContent } from './SyncBannerContent';
-import type { SyncOutcomeView } from '../../types';
+import type { SyncOutcomeView, SyncResolverView } from '../../types';
 import type { HarnessOverrides } from './useHarnessOverrides';
+import type { SyncResolverSelection } from './useSyncResolverOverrides';
 
 const GIT_SAYS = 'fatal: could not read Username for https://github.com: No such device';
 
-function resolverOverrides(over: Partial<HarnessOverrides> = {}): HarnessOverrides {
+const INHERITS_CODEX: SyncResolverView = { agent_kind: 'codex', model: 'gpt-5-codex', effort: 'low' };
+
+function resolverSelection(
+  over: Partial<HarnessOverrides> = {},
+  inherited: SyncResolverView | null = INHERITS_CODEX,
+): SyncResolverSelection {
+  return { overrides: harnessOverrides(over), inherited };
+}
+
+function harnessOverrides(over: Partial<HarnessOverrides> = {}): HarnessOverrides {
   return {
     availableModels: [{ value: 'gpt-5-codex', name: 'GPT-5 Codex' }],
     selectedModel: '',
@@ -25,14 +35,14 @@ function resolverOverrides(over: Partial<HarnessOverrides> = {}): HarnessOverrid
   };
 }
 
-function renderBanner(outcome: SyncOutcomeView, overrides = resolverOverrides()) {
+function renderBanner(outcome: SyncOutcomeView, selection = resolverSelection()) {
   const onResolve = vi.fn();
   const onAbort = vi.fn();
   render(
     <SyncBannerContent
       outcome={outcome}
       onResolve={onResolve}
-      resolverOverrides={overrides}
+      resolverSelection={selection}
       onAbort={onAbort}
       resolving={false}
       aborting={false}
@@ -123,7 +133,7 @@ describe('SyncBannerContent', () => {
   it('sends the picked harness, model and effort with the resolve', () => {
     const { onResolve } = renderBanner(
       { status: 'conflict', conflict_files: [{ path: 'README.md', kind: 'both-modified' }], raw_error: GIT_SAYS },
-      resolverOverrides({ selectedAgent: 'codex', selectedModel: 'gpt-5-codex', selectedEffort: 'low' }),
+      resolverSelection({ selectedAgent: 'codex', selectedModel: 'gpt-5-codex', selectedEffort: 'low' }),
     );
     expect(screen.getByLabelText('Harness')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Resolve with agent/ }));
@@ -148,6 +158,38 @@ describe('SyncBannerContent', () => {
       model: null,
       effort: null,
     });
+  });
+
+  /**
+   * The name on the "Inherit" option is the backend's answer, not the feature's
+   * harness: with a project-level conflict resolver set they differ, and the
+   * one the banner used to show was the one that would not run.
+   */
+  it('names the harness the untouched picker would actually inherit', () => {
+    renderBanner({
+      status: 'conflict',
+      conflict_files: [{ path: 'README.md', kind: 'both-modified' }],
+      raw_error: GIT_SAYS,
+    });
+
+    const harness = within(screen.getByLabelText('Harness'));
+    expect(harness.getByRole('option', { name: /Inherit \(codex\)/ })).toBeInTheDocument();
+    expect(harness.queryByRole('option', { name: /Inherit \(opencode\)/ })).not.toBeInTheDocument();
+  });
+
+  it('falls back to a bare "Inherit" while the read is still in flight', () => {
+    renderBanner(
+      {
+        status: 'conflict',
+        conflict_files: [{ path: 'README.md', kind: 'both-modified' }],
+        raw_error: GIT_SAYS,
+      },
+      resolverSelection({}, null),
+    );
+
+    expect(
+      within(screen.getByLabelText('Harness')).getByRole('option', { name: 'Inherit' }),
+    ).toBeInTheDocument();
   });
 
   /** The picker belongs to the one outcome that has anything to resolve. */

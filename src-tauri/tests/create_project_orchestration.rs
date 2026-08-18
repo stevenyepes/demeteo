@@ -345,6 +345,16 @@ impl StepExecutor for StubExecutor {
             changed: false,
         })
     }
+    async fn feature_sync_resolver(
+        &self,
+        _feature_id: &str,
+    ) -> Result<demeteo_core::ports::step_executor::SyncResolverView, String> {
+        Ok(demeteo_core::ports::step_executor::SyncResolverView {
+            agent_kind: "opencode".into(),
+            model: None,
+            effort: demeteo_core::domain::models::EffortLevel::DEFAULT,
+        })
+    }
 }
 
 #[async_trait]

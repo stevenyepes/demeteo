@@ -775,6 +775,19 @@ export type SyncOutcomeView =
       conflict_files: ConflictFile[];
     };
 
+/**
+ * Who would resolve a conflict on this feature if the banner's picker is left
+ * alone, as `feature_sync_resolver` answers it. Read rather than derived: the
+ * chain behind it puts the project's conflict-resolver setting above the
+ * harness the run was launched with, so the feature's own row is the wrong
+ * answer for any project that has set one.
+ */
+export interface SyncResolverView {
+  agent_kind: string;
+  model: string | null;
+  effort: EffortLevel;
+}
+
 export interface ConflictFile {
   path: string;
   /** "both-modified" | "added-by-them" | "added-by-us" | "deleted-by-them" | "deleted-by-us". */

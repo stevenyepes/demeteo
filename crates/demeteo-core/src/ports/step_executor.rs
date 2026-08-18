@@ -132,6 +132,37 @@ pub trait StepExecutor: Send + Sync {
         conflict_files: &[String],
         asked: &crate::domain::sync_resolver::SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String>;
+
+    /// What `feature_resolve_sync_conflicts` would run under if this attempt
+    /// asked for nothing — the same chain, with an empty choice.
+    ///
+    /// A read for the conflict banner, whose picker has to name the harness it
+    /// is offering models and effort levels *for*. It cannot derive that: the
+    /// resolver's tier order puts the project's setting above the feature's own
+    /// row, so the run's harness is the wrong answer whenever a project has
+    /// configured one, and the ladder shown for it can offer a level the
+    /// harness that really runs would drop.
+    async fn feature_sync_resolver(&self, feature_id: &str) -> Result<SyncResolverView, String>;
+}
+
+/// A resolved resolver identity, for a UI that has to name it before the turn
+/// exists. [`crate::domain::sync_resolver::SyncResolver`] with a serde
+/// derive — the domain type stays free of one.
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncResolverView {
+    pub agent_kind: String,
+    pub model: Option<String>,
+    pub effort: EffortLevel,
+}
+
+impl From<crate::domain::sync_resolver::SyncResolver> for SyncResolverView {
+    fn from(r: crate::domain::sync_resolver::SyncResolver) -> Self {
+        SyncResolverView {
+            agent_kind: r.agent_kind,
+            model: r.model,
+            effort: r.effort,
+        }
+    }
 }
 
 /// What `feature_sync` and `feature_resolve_sync_conflicts` return to

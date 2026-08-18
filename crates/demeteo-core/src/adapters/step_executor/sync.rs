@@ -34,7 +34,7 @@ use crate::domain::agent_session::budget;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
 use crate::domain::step_seed::manual_sync_step_execution;
-use crate::domain::sync_resolver::{SyncResolverChain, SyncResolverChoice};
+use crate::domain::sync_resolver::SyncResolverChoice;
 use crate::domain::sync_session::{intervention_refusal, SyncIntervention};
 use crate::paths;
 use crate::ports::db::FeatureRepository;
@@ -120,6 +120,30 @@ impl DagStepExecutor {
         ))
     }
 
+    /// Who the "Resolve with agent" button would spawn if nobody asked for
+    /// anything — the same two rows and the same chain, read without running a
+    /// turn.
+    pub(crate) fn feature_sync_resolver_impl(
+        &self,
+        feature_id: &str,
+    ) -> Result<crate::ports::step_executor::SyncResolverView, String> {
+        let fid = FeatureId::from(feature_id.to_string());
+        let feature = self
+            .features
+            .get(&fid)?
+            .ok_or_else(|| format!("Feature not found: {}", feature_id))?;
+        let settings = self
+            .projects
+            .get_settings(&feature.project_id)?
+            .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
+        Ok(crate::domain::sync_resolver::resolve_stored(
+            &SyncResolverChoice::default(),
+            &feature,
+            &settings,
+        )
+        .into())
+    }
+
     /// Tauri entry point for the "Resolve with agent" button.
     ///
     /// Every fact about *which* conflict this is comes off the feature's sync
@@ -167,18 +191,7 @@ impl DagStepExecutor {
             .projects
             .get_settings(&feature.project_id)?
             .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
-        // No driver is running here (this is the "Resolve with agent" button),
-        // so the tiers are read straight off the two rows that hold them.
-        let project_sync = SyncResolverChoice::from_project_sync(&settings);
-        let run = SyncResolverChoice::from_run(&feature);
-        let project_default = SyncResolverChoice::from_project_default(&settings);
-        let chosen = SyncResolverChain {
-            asked,
-            project_sync: &project_sync,
-            run: &run,
-            project_default: &project_default,
-        }
-        .resolve();
+        let chosen = crate::domain::sync_resolver::resolve_stored(asked, &feature, &settings);
 
         // Stop, for a turn no driver owns. Its own map rather than
         // `cancel_senders`: that one is keyed by feature id and owned by

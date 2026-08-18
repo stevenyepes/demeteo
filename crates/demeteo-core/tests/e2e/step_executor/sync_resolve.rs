@@ -459,9 +459,15 @@ fn merge_open_for_the_resolver() -> ScriptedExec {
 /// Records the identity one spawn was asked for, then refuses. Refusing is the
 /// point: nothing past the spawn is scripted, so the turn stops at the one
 /// question these tests are about.
+///
+/// One of these is registered per supported harness, all writing to the same
+/// log, because a registry holding only the expected one cannot tell a wrong
+/// answer from no answer: `runtime_for` misses, `get_or_spawn` returns
+/// `NotFound`, and the assertion's `left` is the empty vector a script error or
+/// an early return produces just as readily.
 struct RecordingRuntime {
     kind: &'static str,
-    seen: std::sync::Mutex<Vec<Spawned>>,
+    seen: Arc<std::sync::Mutex<Vec<Spawned>>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -514,25 +520,31 @@ impl crate::ports::agent_runtime::AgentRuntime for RecordingRuntime {
     }
 }
 
-/// Press the button on a conflicted feature whose registry can answer, and
-/// report what the spawn was asked for.
+/// Press the button on a conflicted feature whose registry can answer for every
+/// harness, and report what the spawn was asked for.
 async fn spawned_by(
     label: &str,
-    kind: &'static str,
     prepare: impl FnOnce(&Arc<SqliteAdapter>, &crate::domain::models::Feature),
     asked: crate::domain::sync_resolver::SyncResolverChoice,
 ) -> Vec<Spawned> {
     let temp_dir = scratch_dir(label);
     let exec = Arc::new(merge_open_for_the_resolver());
-    let runtime = Arc::new(RecordingRuntime {
-        kind,
-        seen: std::sync::Mutex::new(Vec::new()),
-    });
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let runtimes: Vec<Arc<dyn crate::ports::agent_runtime::AgentRuntime>> =
+        crate::domain::models::AgentKind::ALL
+            .iter()
+            .map(|kind| {
+                Arc::new(RecordingRuntime {
+                    kind: kind.as_str(),
+                    seen: seen.clone(),
+                }) as Arc<dyn crate::ports::agent_runtime::AgentRuntime>
+            })
+            .collect();
     let (executor, db) = super::harness::build_test_executor_with_agents(
         temp_dir.clone(),
         Arc::new(FakeNotif),
         exec.clone(),
-        vec![runtime.clone()],
+        runtimes,
     )
     .await;
     let feature_id = seed(&db, label, "completed");
@@ -547,9 +559,9 @@ async fn spawned_by(
         .feature_resolve_sync_conflicts_impl(&feature_id, &["README.md".to_string()], &asked)
         .await;
 
-    let seen = runtime.seen.lock().unwrap().clone();
+    let recorded = seen.lock().unwrap().clone();
     let _ = std::fs::remove_dir_all(temp_dir);
-    seen
+    recorded
 }
 
 fn resolver_settings(
@@ -581,7 +593,6 @@ async fn the_projects_conflict_resolver_outranks_the_runs_launch_pin() {
 
     let seen = spawned_by(
         "resolve_pick",
-        "codex",
         |db, feature| {
             let features: &dyn FeatureRepository = &**db;
             features
@@ -629,7 +640,6 @@ async fn the_attempts_own_choice_outranks_the_projects_resolver_default() {
 
     let seen = spawned_by(
         "resolve_asked",
-        "pi",
         |db, feature| {
             resolver_settings(
                 db,
@@ -657,4 +667,62 @@ async fn the_attempts_own_choice_outranks_the_projects_resolver_default() {
         }],
         "the picker's choice never reached the spawn"
     );
+}
+
+/// The name the conflict banner puts on "Inherit" is a read of the chain the
+/// button walks, not of the feature row: a project with a conflict resolver set
+/// runs *that* harness, and a banner that named the run's would offer the wrong
+/// harness's models and an effort ladder its harness may not have.
+///
+/// The scripted exec answers nothing, so this also pins that naming the
+/// resolver costs no process and no git.
+#[tokio::test]
+async fn the_inherited_resolver_is_read_from_the_same_chain_the_button_walks() {
+    use crate::domain::models::EffortLevel;
+    use crate::domain::sync_resolver::SyncResolverChoice;
+
+    let temp_dir = scratch_dir("resolve_inherited");
+    let exec = Arc::new(ScriptedExec::new(&[]));
+    let (executor, db) =
+        build_test_executor_in(temp_dir.clone(), Arc::new(FakeNotif), exec.clone()).await;
+    let feature_id = seed(&db, "resolve_inherited", "completed");
+    let features: &dyn FeatureRepository = &*db;
+    let feature = features
+        .get(&FeatureId::from(feature_id.clone()))
+        .unwrap()
+        .unwrap();
+    features
+        .update(
+            &feature.id,
+            &crate::ports::db::FeaturePatch {
+                agent_kind: Some(Some("opencode".to_string())),
+                model: Some(Some("sonnet".to_string())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    resolver_settings(
+        &db,
+        &feature,
+        SyncResolverChoice {
+            agent_kind: Some("codex".to_string()),
+            model: None,
+            effort: Some(EffortLevel::Low),
+        },
+    );
+
+    let inherited = executor.feature_sync_resolver_impl(&feature_id).unwrap();
+
+    assert_eq!(inherited.agent_kind, "codex");
+    assert_eq!(
+        inherited.model, None,
+        "the run's model is opencode's, and must not be offered for codex"
+    );
+    assert_eq!(inherited.effort, EffortLevel::Low);
+    assert!(
+        exec.commands().is_empty(),
+        "naming the resolver ran something: {:?}",
+        exec.commands()
+    );
+    let _ = std::fs::remove_dir_all(temp_dir);
 }

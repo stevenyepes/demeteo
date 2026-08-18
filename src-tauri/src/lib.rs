@@ -493,6 +493,7 @@ pub fn run() {
             commands::features::replay_from_step,
             commands::features::feature_sync,
             commands::features::feature_resolve_sync_conflicts,
+            commands::features::feature_sync_resolver,
             commands::features::sync_session_get,
             commands::features::sync_abort,
             commands::features::feature_get_worktree,

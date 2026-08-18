@@ -4,7 +4,7 @@ use crate::domain::models::{
 };
 use crate::domain::sync_resolver::SyncResolverChoice;
 use crate::error::AppError;
-use crate::ports::step_executor::{FeatureLaunch, SyncOutcomeView};
+use crate::ports::step_executor::{FeatureLaunch, SyncOutcomeView, SyncResolverView};
 use crate::ports::sync_session::{SyncSession, SyncSessionView};
 use crate::state::AppContext;
 use tauri::State;
@@ -323,6 +323,22 @@ pub async fn sync_abort(
     )
     .await
     .map_err(AppError::from)
+}
+
+/// Who a resolution would run under if the banner's picker is left alone.
+///
+/// A read, so the picker can label what it is inheriting and offer that
+/// harness's models and effort levels rather than the run's — the two differ
+/// exactly when a project has set a conflict resolver of its own.
+#[tauri::command]
+pub async fn feature_sync_resolver(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<SyncResolverView, AppError> {
+    ctx.executor
+        .feature_sync_resolver(&feature_id)
+        .await
+        .map_err(AppError::from)
 }
 
 /// Spawn a fresh agent to resolve the conflicts left by

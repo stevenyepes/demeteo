@@ -4,7 +4,7 @@ import type { SyncBlockedStage, SyncOutcomeView } from '../../types';
 import type { SyncResolverChoice } from '../../lib/featureSync';
 import { TONE_TEXT } from '../../lib/runStatus';
 import { SyncResolverOptions } from './SyncResolverOptions';
-import type { HarnessOverrides } from './useHarnessOverrides';
+import type { SyncResolverSelection } from './useSyncResolverOverrides';
 
 /**
  * Render the most recent `feature_sync` / `feature_resolve_sync_conflicts`
@@ -25,10 +25,9 @@ import type { HarnessOverrides } from './useHarnessOverrides';
  * "not this one" — otherwise the only thing that ever cleans the tree up is
  * the next sync force-removing it.
  *
- * The picker beside "Resolve with agent" is a *second* selection, on its own
- * `useHarnessOverrides`: the one `FeatureDetailView` hands the step cards is
- * what a retry re-pins, so sharing it would make a harness chosen for one merge
- * conflict the harness the next retry runs the whole step under.
+ * The picker beside "Resolve with agent" carries its own selection
+ * (`useSyncResolverOverrides`), which is also where the inherited identity it
+ * labels comes from.
  *
  * "Resolve with agent" does not test the file list. An empty list proves
  * nothing (`crate::domain::sync_failure`) — the porcelain read that fills it
@@ -40,7 +39,7 @@ import type { HarnessOverrides } from './useHarnessOverrides';
 interface SyncBannerContentProps {
   outcome: SyncOutcomeView;
   onResolve: (files: string[], resolver: SyncResolverChoice) => void;
-  resolverOverrides: HarnessOverrides;
+  resolverSelection: SyncResolverSelection;
   onAbort: () => void;
   resolving: boolean;
   aborting: boolean;
@@ -59,7 +58,7 @@ const BLOCKED_NEXT_MOVE: Record<SyncBlockedStage, string> = {
 export const SyncBannerContent: React.FC<SyncBannerContentProps> = ({
   outcome,
   onResolve,
-  resolverOverrides,
+  resolverSelection,
   onAbort,
   resolving,
   aborting,
@@ -158,7 +157,7 @@ export const SyncBannerContent: React.FC<SyncBannerContentProps> = ({
         <pre className="font-mono text-[11px] text-slate-300 whitespace-pre-wrap max-h-32 overflow-y-auto bg-black/30 p-2 rounded">
           {outcome.raw_error}
         </pre>
-        <SyncResolverOptions overrides={resolverOverrides} />
+        <SyncResolverOptions selection={resolverSelection} />
         <div className="flex justify-end gap-2">
           <button
             onClick={onAbort}
@@ -174,9 +173,9 @@ export const SyncBannerContent: React.FC<SyncBannerContentProps> = ({
               onResolve(
                 outcome.conflict_files.map((f) => f.path),
                 {
-                  agentKind: resolverOverrides.selectedAgent || null,
-                  model: resolverOverrides.selectedModel || null,
-                  effort: resolverOverrides.selectedEffort || null,
+                  agentKind: resolverSelection.overrides.selectedAgent || null,
+                  model: resolverSelection.overrides.selectedModel || null,
+                  effort: resolverSelection.overrides.selectedEffort || null,
                 },
               )
             }

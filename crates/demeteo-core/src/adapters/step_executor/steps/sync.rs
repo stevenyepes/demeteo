@@ -24,7 +24,7 @@ use crate::adapters::step_executor::step_status::{
 use crate::adapters::step_executor::sync_resolve::ResolveSyncError;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sync_failure::SyncStepNext;
-use crate::domain::sync_resolver::{SyncResolver, SyncResolverChain, SyncResolverChoice};
+use crate::domain::sync_resolver::{SyncNodeTiers, SyncResolver, SyncResolverChoice};
 
 use super::StepOutcome;
 
@@ -135,36 +135,13 @@ impl ExecutionDriver {
         }
     }
 
-    /// Who resolves this node's conflict.
-    ///
-    /// The node's own config sits in the `asked` tier under any per-step run
-    /// override, so the two arrive as one opinion; below them the chain is the
-    /// same one the "Resolve with agent" button walks, which is the point of
-    /// there being a chain at all.
+    /// Who resolves this node's conflict — the driver's fields, handed to the
+    /// chain that decides it ([`SyncNodeTiers`]).
     fn resolve_sync_resolver(
         &self,
         step_conf: &StepConfig,
         settings: &crate::domain::models::ProjectSettings,
     ) -> SyncResolver {
-        let node = SyncResolverChoice {
-            agent_kind: step_conf.agent_kind.clone(),
-            model: step_conf.model.clone(),
-            effort: step_conf.effort,
-        };
-        let asked = match self
-            .step_overrides
-            .iter()
-            .find(|o| o.step_id == step_conf.id.0)
-        {
-            Some(ov) => SyncResolverChoice {
-                agent_kind: ov.agent_kind.clone(),
-                model: ov.model.clone(),
-                effort: ov.effort,
-            }
-            .or(&node),
-            None => node,
-        };
-        let project_sync = SyncResolverChoice::from_project_sync(settings);
         let run = SyncResolverChoice {
             agent_kind: self.feature_agent_kind.clone(),
             model: self.feature_model.clone(),
@@ -175,9 +152,13 @@ impl ExecutionDriver {
             model: self.default_model.clone(),
             effort: self.default_effort,
         };
-        SyncResolverChain {
-            asked: &asked,
-            project_sync: &project_sync,
+        SyncNodeTiers {
+            step_conf,
+            step_override: self
+                .step_overrides
+                .iter()
+                .find(|o| o.step_id == step_conf.id.0),
+            settings,
             run: &run,
             project_default: &project_default,
         }

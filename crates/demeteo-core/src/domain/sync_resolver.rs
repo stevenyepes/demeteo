@@ -17,7 +17,9 @@
 //! fence is worth* is not, and that asymmetry is recorded where the spawn
 //! happens rather than here.
 
-use crate::domain::models::{AgentKind, EffortLevel, Feature, ProjectSettings};
+use crate::domain::models::{
+    AgentKind, EffortLevel, Feature, ProjectSettings, StepConfig, StepOverride,
+};
 
 /// One tier's opinion. Every field `None` means "no opinion, ask the tier
 /// below", so an empty choice costs a caller nothing to send.
@@ -29,14 +31,32 @@ pub struct SyncResolverChoice {
 }
 
 impl SyncResolverChoice {
-    /// This choice, with each dimension it has no opinion on taken from
-    /// `lower`. Per-dimension rather than whole-choice: pinning the harness at
-    /// one tier and the model at another is legal, matching how
-    /// `resolve_agent_model` reads its own tiers.
+    /// This choice over `lower` — everything it has no opinion on taken from
+    /// there, except that **the model travels with the harness**.
+    ///
+    /// A model name is one harness's namespace, so a choice naming a harness
+    /// `lower` does not name cannot borrow `lower`'s model: `sonnet` inherited
+    /// past a `codex` pin spawns `codex --model sonnet`. Dropped instead, the
+    /// model stays unset and the chosen harness resolves its own default —
+    /// what `impl_traits/replay.rs` does when an operator re-pins the
+    /// feature-wide harness without naming a model. Effort has no such
+    /// namespace — the ladder is canonical and each adapter clamps it — so it
+    /// crosses freely.
+    ///
+    /// The harness and the model may still be pinned at different tiers; what
+    /// they may not do is disagree about which harness the model is for. That
+    /// comparison is only sound against an already-folded `lower` — see
+    /// [`SyncResolverChain::resolve`].
     pub fn or(self, lower: &SyncResolverChoice) -> Self {
+        let model_travels = self.agent_kind.is_none() || self.agent_kind == lower.agent_kind;
+        let inherited_model = if model_travels {
+            lower.model.clone()
+        } else {
+            None
+        };
         SyncResolverChoice {
             agent_kind: self.agent_kind.or_else(|| lower.agent_kind.clone()),
-            model: self.model.or_else(|| lower.model.clone()),
+            model: self.model.or(inherited_model),
             effort: self.effort.or(lower.effort),
         }
     }
@@ -113,13 +133,16 @@ pub struct SyncResolver {
 const FALLBACK_AGENT_KIND: &str = "opencode";
 
 impl SyncResolverChain<'_> {
+    /// Folded from the bottom up, which for the harness and the effort is the
+    /// same answer either way and for the model is not: a tier that names no
+    /// harness of its own runs under the one the tiers *below* it resolve to,
+    /// and only a stack already folded that far can say what that is. Folding
+    /// downwards would compare a pinned harness against a bare `None` and drop
+    /// a model the two tiers actually agreed on.
     pub fn resolve(&self) -> SyncResolver {
-        let folded = self
-            .asked
-            .clone()
-            .or(self.project_sync)
-            .or(self.run)
-            .or(self.project_default);
+        let below_run = self.run.clone().or(self.project_default);
+        let below_sync = self.project_sync.clone().or(&below_run);
+        let folded = self.asked.clone().or(&below_sync);
         SyncResolver {
             agent_kind: folded
                 .agent_kind
@@ -127,6 +150,78 @@ impl SyncResolverChain<'_> {
             model: folded.model,
             effort: folded.effort.unwrap_or(EffortLevel::DEFAULT),
         }
+    }
+}
+
+/// The chain behind the "Resolve with agent" button, and behind the harness
+/// name the conflict banner shows for an untouched picker: no driver is running
+/// on that path, so every tier under `asked` is read straight off the two rows
+/// that hold it.
+///
+/// One function so the button and the banner's label cannot disagree about who
+/// would run — a label naming a harness other than the one that spawns is the
+/// whole failure this replaces.
+pub fn resolve_stored(
+    asked: &SyncResolverChoice,
+    feature: &Feature,
+    settings: &ProjectSettings,
+) -> SyncResolver {
+    let project_sync = SyncResolverChoice::from_project_sync(settings);
+    let run = SyncResolverChoice::from_run(feature);
+    let project_default = SyncResolverChoice::from_project_default(settings);
+    SyncResolverChain {
+        asked,
+        project_sync: &project_sync,
+        run: &run,
+        project_default: &project_default,
+    }
+    .resolve()
+}
+
+/// What a `sync` node inside a running workflow resolves through.
+///
+/// The tiers below `project_sync` reach this as choices rather than rows: a
+/// driver has already folded the project's workflow overrides into them, and
+/// re-reading the feature here would undo that.
+pub struct SyncNodeTiers<'a> {
+    /// The node's own `agent_kind` / `model` / `effort`.
+    pub step_conf: &'a StepConfig,
+    /// This run's override for *this* node, if the launch pinned one.
+    pub step_override: Option<&'a StepOverride>,
+    pub settings: &'a ProjectSettings,
+    /// [`SyncResolverChoice::from_run`], as the driver holds it.
+    pub run: &'a SyncResolverChoice,
+    /// [`SyncResolverChoice::from_project_default`], as the driver holds it.
+    pub project_default: &'a SyncResolverChoice,
+}
+
+impl SyncNodeTiers<'_> {
+    /// The node's config and this run's override for it are one tier, not two:
+    /// both name the resolution turn specifically, so they fold together into
+    /// `asked` before the chain the button walks resumes underneath.
+    pub fn resolve(&self) -> SyncResolver {
+        let node = SyncResolverChoice {
+            agent_kind: self.step_conf.agent_kind.clone(),
+            model: self.step_conf.model.clone(),
+            effort: self.step_conf.effort,
+        };
+        let asked = match self.step_override {
+            Some(ov) => SyncResolverChoice {
+                agent_kind: ov.agent_kind.clone(),
+                model: ov.model.clone(),
+                effort: ov.effort,
+            }
+            .or(&node),
+            None => node,
+        };
+        let project_sync = SyncResolverChoice::from_project_sync(self.settings);
+        SyncResolverChain {
+            asked: &asked,
+            project_sync: &project_sync,
+            run: self.run,
+            project_default: self.project_default,
+        }
+        .resolve()
     }
 }
 

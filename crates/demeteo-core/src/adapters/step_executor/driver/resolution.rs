@@ -131,6 +131,12 @@ impl ExecutionDriver {
 /// Pure agent/model resolution. Precedence (first non-empty wins):
 /// per-step run override → feature-wide run override → workflow step →
 /// project default → built-in (`"opencode"` agent; no model).
+///
+/// Every step kind but one. A `sync` node's conflict-resolution turn is a role
+/// rather than a step and resolves through
+/// [`crate::domain::sync_resolver`] instead, on a different order: the
+/// project's conflict-resolver setting outranks what the run was launched
+/// with, and the node's own config outranks both.
 pub(crate) fn resolve_agent_model(
     step_override: Option<&crate::domain::models::StepOverride>,
     feature_agent: Option<&str>,

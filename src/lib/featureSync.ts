@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EffortLevel, Feature, SyncOutcomeView, SyncSessionView } from "../types";
+import type {
+  EffortLevel,
+  Feature,
+  SyncOutcomeView,
+  SyncResolverView,
+  SyncSessionView,
+} from "../types";
 
 /**
  * Sync the feature branch with `origin/<default_branch>`. Returns
@@ -32,6 +38,15 @@ export interface SyncResolverChoice {
   agentKind: string | null;
   model: string | null;
   effort: EffortLevel | null;
+}
+
+/**
+ * Who a resolution would run under with every field of the choice left
+ * `null` — the label the picker shows for "Inherit", read from the same chain
+ * the resolve call walks rather than guessed from the feature.
+ */
+export async function getSyncResolver(featureId: string): Promise<SyncResolverView> {
+  return invoke<SyncResolverView>("feature_sync_resolver", { featureId });
 }
 
 /**

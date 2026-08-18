@@ -245,4 +245,11 @@ impl StepExecutor for DagStepExecutor {
         self.feature_resolve_sync_conflicts_impl(feature_id, conflict_files, asked)
             .await
     }
+
+    async fn feature_sync_resolver(
+        &self,
+        feature_id: &str,
+    ) -> Result<crate::ports::step_executor::SyncResolverView, String> {
+        self.feature_sync_resolver_impl(feature_id)
+    }
 }
