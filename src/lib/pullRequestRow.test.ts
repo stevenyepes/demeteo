@@ -53,10 +53,22 @@ describe('describePullRequestRow', () => {
   });
 
   it('omits the tiers a list endpoint did not carry', () => {
-    const row = describePullRequestRow(summary({ has_conflicts: null }), NOW);
+    const row = describePullRequestRow(summary({}), NOW);
 
     expect(row.diffstat).toBeNull();
     expect(row.fileLabel).toBeNull();
+    expect(row.chips).toEqual([]);
+  });
+
+  it('says so when the provider has not finished deciding mergeability', () => {
+    const row = describePullRequestRow(summary({ has_conflicts: null }), NOW);
+
+    expect(row.chips).toEqual([{ label: 'Merge unknown', tone: 'slate' }]);
+  });
+
+  it('says nothing about a request the provider called clean', () => {
+    const row = describePullRequestRow(summary({ has_conflicts: false }), NOW);
+
     expect(row.chips).toEqual([]);
   });
 

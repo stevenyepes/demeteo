@@ -315,37 +315,20 @@ impl GitOpsHelper {
             .await
             .ok()
             .map(|s| s.trim().to_string());
-        let _behind_count = self
-            .exec
-            .run_program(
-                machine_str,
-                git_request(
-                    repo_dir,
-                    ["rev-list", "--count", &format!("{tracking}..{feat_ref}")],
-                ),
-            )
-            .await
-            .ok()
-            .map(|s| s.trim().parse::<u64>().unwrap_or(0))
-            .unwrap_or(0);
-        let ahead_count = self
-            .exec
-            .run_program(
-                machine_str,
-                git_request(
-                    repo_dir,
-                    ["rev-list", "--count", &format!("{feat_ref}..{tracking}")],
-                ),
-            )
-            .await
-            .ok()
-            .map(|s| s.trim().parse::<u64>().unwrap_or(0))
-            .unwrap_or(0);
+        let divergence = super::divergence::count_divergence(
+            &*self.exec,
+            machine_str,
+            repo_dir,
+            &feat_ref,
+            &tracking,
+        )
+        .await;
 
-        // If origin/<base> is not ahead of the feature branch,
-        // the feature is already up to date with upstream. No merge
-        // is needed and the call is a true no-op.
-        if ahead_count == 0 {
+        // Only a measured zero is a no-op. A count that did not resolve says
+        // nothing about whether upstream moved, and skipping the merge on it
+        // costs the user the sync they asked for — where attempting one that
+        // turns out to have nothing to do costs a worktree.
+        if divergence.behind == Some(0) {
             return Ok(SyncOutcome {
                 merge_commit_sha: head_before.clone().unwrap_or_default(),
                 changed: false,

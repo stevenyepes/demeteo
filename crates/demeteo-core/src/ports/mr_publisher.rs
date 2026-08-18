@@ -59,6 +59,26 @@ pub trait MrPublisher: Send + Sync {
         repository_id: Option<&str>,
     ) -> Result<Vec<MrSummary>, MrListError>;
 
+    /// One request read in full, for the fields only a single-request GET
+    /// carries: mergeability and the diffstat.
+    ///
+    /// **One request per call, and never once per row of a listing.** GitHub's
+    /// secondary rate limit punishes bursts of concurrent reads of the same
+    /// resource, and `list_open_mrs` walks its repositories in sequence — so a
+    /// hundred-row queue enriched eagerly is a hundred serialized requests in
+    /// which one slow response holds up every row. The caller decides which
+    /// single request is worth asking about.
+    ///
+    /// Fails on a non-2xx rather than degrading, unlike
+    /// [`fetch_mr_state`](Self::fetch_mr_state): the answer here is one a
+    /// reviewer reads as a verdict, and a rejected request answering "no
+    /// conflicts" is worse than one answering nothing.
+    async fn fetch_mr_detail(
+        &self,
+        project_id: &str,
+        mr_url: &str,
+    ) -> Result<MrSummary, MrListError>;
+
     /// Post `body` as a comment on the MR/PR at `mr_url`, and answer with the
     /// created comment's URL.
     ///

@@ -29,6 +29,7 @@ function renderHeader(overrides: Partial<Parameters<typeof FeatureHeader>[0]> = 
       stepCount={7}
       syncing={false}
       reviewHeld={false}
+      drift={null}
       resolving={false}
       publishing={false}
       mrUrl={null}
@@ -174,5 +175,46 @@ describe('FeatureHeader motion budget', () => {
 
     renderHeader({ remoteRun: mirror('completed'), remoteMachineName: 'gpu-box' });
     expect(chip('Remote · Detached').querySelector('[data-testid="chip-dot"]')).toBeNull();
+  });
+});
+
+describe('FeatureHeader staleness', () => {
+  function drift(behind: number | null) {
+    return {
+      divergence: { behind, ahead: 1 },
+      base_ref: 'origin/main',
+      fetched: true,
+      checked_at: 0,
+    };
+  }
+
+  function tones(): Record<string, string> {
+    return Object.fromEntries(
+      screen
+        .getAllByTestId('chip')
+        .map((c) => [c.textContent ?? '', c.getAttribute('data-tone') ?? '']),
+    );
+  }
+
+  it('says nothing at all before a reading lands', () => {
+    renderHeader({ status: 'completed', drift: null });
+    expect(screen.queryByText(/behind/i)).toBeNull();
+    expect(screen.queryByText(/up to date/i)).toBeNull();
+  });
+
+  it('names the commits a sync would pull in', () => {
+    renderHeader({ status: 'completed', drift: drift(4) });
+    expect(tones()['4 behind']).toBe('cyan');
+  });
+
+  it('keeps a branch nobody could measure out of the up-to-date state', () => {
+    renderHeader({ status: 'completed', drift: drift(null) });
+    expect(tones()['Drift unknown']).toBe('slate');
+    expect(screen.queryByText(/up to date/i)).toBeNull();
+  });
+
+  it('calls a measured zero up to date', () => {
+    renderHeader({ status: 'completed', drift: drift(0) });
+    expect(tones()['Up to date']).toBe('emerald');
   });
 });

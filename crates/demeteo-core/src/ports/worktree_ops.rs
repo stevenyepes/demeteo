@@ -184,6 +184,32 @@ pub struct TerminalWorktreeCreated {
     pub base_ref: String,
 }
 
+/// How far a feature branch has drifted from the base it will merge into.
+///
+/// Both counts are `Option` because the three ways a `rev-list` can answer
+/// nothing — zero commits, an unresolvable ref, a dead transport — are three
+/// different facts and only the first one means "up to date". Collapsing them
+/// is how a branch nobody could measure renders as current, which is the one
+/// answer a staleness signal must never invent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchDivergence {
+    /// Commits `origin/<base>` has that the feature branch does not.
+    pub behind: Option<u64>,
+    /// Commits the feature branch has that `origin/<base>` does not.
+    pub ahead: Option<u64>,
+}
+
+impl BranchDivergence {
+    /// Neither side was measured. Spelled out so a construction site reads as
+    /// the assertion it is rather than as two fields somebody forgot to fill.
+    pub const fn unknown() -> Self {
+        Self {
+            behind: None,
+            ahead: None,
+        }
+    }
+}
+
 /// Result of a successful feature branch sync.
 #[derive(Debug, Clone)]
 pub struct SyncOutcome {

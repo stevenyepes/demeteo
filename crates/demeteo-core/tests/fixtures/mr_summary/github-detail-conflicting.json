@@ -1,0 +1,27 @@
+{
+  "number": 118,
+  "state": "open",
+  "title": "declare each harness's Windows shell instead of its kind",
+  "user": { "login": "stevenyepes" },
+  "draft": false,
+  "html_url": "https://github.com/stvcloud/demeteo/pull/118",
+  "created_at": "2026-08-01T09:12:44Z",
+  "updated_at": "2026-08-02T17:03:10Z",
+  "maintainer_can_modify": true,
+  "mergeable": false,
+  "mergeable_state": "dirty",
+  "additions": 120,
+  "deletions": 8,
+  "changed_files": 3,
+  "head": {
+    "ref": "feature/windows-shell",
+    "repo": {
+      "full_name": "stvcloud/demeteo",
+      "permissions": { "admin": true, "push": true, "pull": true }
+    }
+  },
+  "base": {
+    "ref": "master",
+    "repo": { "full_name": "stvcloud/demeteo" }
+  }
+}

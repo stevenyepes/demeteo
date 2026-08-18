@@ -1,6 +1,7 @@
 use super::*;
 
 mod comment;
+mod detail;
 mod list;
 mod target_branch;
 

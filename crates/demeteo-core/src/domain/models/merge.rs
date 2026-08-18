@@ -68,6 +68,23 @@ pub struct UpstreamSyncOutcome {
     pub default_branch: String,
 }
 
+/// How stale a feature branch is against the base it will merge into, answered
+/// without merging anything.
+///
+/// `fetched` is part of the answer rather than an implementation detail: the
+/// counts are taken from `refs/remotes/origin/<base>`, so a query that skipped
+/// or failed its fetch is reporting how things stood at some unnamed earlier
+/// moment. A number presented as current when it is not is worse than no
+/// number, because the user acts on it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FeatureDrift {
+    pub divergence: crate::ports::worktree_ops::BranchDivergence,
+    /// The ref the counts were taken against.
+    pub base_ref: String,
+    pub fetched: bool,
+    pub checked_at: i64,
+}
+
 /// Result of a failed upstream sync, mirroring
 /// [`SyncFailure`](crate::ports::worktree_ops::SyncFailure) across the merge
 /// executor. In-memory only — [`ConflictReport`] is the persisted half.

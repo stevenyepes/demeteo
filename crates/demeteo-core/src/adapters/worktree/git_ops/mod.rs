@@ -76,6 +76,7 @@ pub fn subtask_branch_name(feature_branch: &str, subtask_id: &str) -> String {
 }
 
 pub(crate) mod clone;
+pub(crate) mod divergence;
 pub(crate) mod health;
 pub(crate) mod merge;
 pub(crate) mod scope;

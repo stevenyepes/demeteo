@@ -114,6 +114,18 @@ pub trait StepExecutor: Send + Sync {
     /// changes, a conflict list, or the stage the sync never got past.
     async fn feature_sync(&self, feature_id: &str) -> Result<SyncOutcomeView, String>;
 
+    /// How far the feature branch has fallen behind the base it will merge
+    /// into, without merging anything.
+    ///
+    /// `refresh` fetches `origin/<base>` first; the answer says whether that
+    /// happened, so a count taken against a ref nothing has moved in a week is
+    /// not shown as this week's.
+    async fn feature_drift(
+        &self,
+        feature_id: &str,
+        refresh: bool,
+    ) -> Result<crate::domain::models::FeatureDrift, String>;
+
     /// Spawn a fresh agent session to resolve the merge conflicts left
     /// over from `feature_sync`. The agent runs in a temporary
     /// worktree on the conflicted feature branch, edits the conflict

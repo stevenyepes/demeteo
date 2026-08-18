@@ -3,6 +3,7 @@ import { RefreshCw, ShieldAlert } from 'lucide-react';
 import type { AppView } from '../../types';
 import type { NavigationMode } from '../../context/NavigationContext';
 import { DEFAULT_DENSITY } from '../../lib/density';
+import { TERMINAL_STATUSES } from '../../lib/runStatus';
 import { densityPref, inspectorWidthPref } from '../../lib/uiPrefs';
 import { usePersistedPref } from '../../hooks/usePersistedPref';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
@@ -35,6 +36,7 @@ import { useAgentStream } from './useAgentStream';
 import { useArtifactSelection } from './useArtifactSelection';
 import { useAttachmentPreview } from './useAttachmentPreview';
 import { useBootstrapPhases } from './useBootstrapPhases';
+import { useFeatureDrift } from './useFeatureDrift';
 import { useFeatureMr } from './useFeatureMr';
 import { useFeatureRun } from './useFeatureRun';
 import { useGateCardScroll } from './useGateCardScroll';
@@ -142,6 +144,13 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     status: run.status,
     reload: run.reload,
     navigate,
+  });
+  // Only once the run has stopped committing, and never during a sync: the two
+  // are the states the "Sync with main" button itself is offered in, and a
+  // count taken between the merge and its push describes neither side.
+  const { drift } = useFeatureDrift({
+    featureId,
+    enabled: TERMINAL_STATUSES.includes(run.status) && !mr.syncing,
   });
   const syncResolver = useSyncResolverOverrides({
     featureId,
@@ -388,6 +397,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         resolving={mr.resolving}
         publishing={mr.publishing}
         reviewHeld={mr.reviewHeld}
+        drift={drift}
         mrUrl={mr.mrUrl}
         onBack={() => navigate({ kind: 'home' })}
         onOpenTerminalTab={routing.handleOpenTerminalTab}

@@ -163,6 +163,32 @@ async fn read_list(
     }
 }
 
+/// GET one resource and hand back its object, on the same terms as
+/// [`read_list`] — including that a non-2xx never becomes a value.
+async fn read_object(
+    http: &dyn HttpClient,
+    url: &str,
+    headers: &[(String, String)],
+    target: ListTarget<'_>,
+) -> Result<serde_json::Value, MrListError> {
+    let resp = http
+        .get_json(url, headers)
+        .await
+        .map_err(|e| MrListError::other(target.host, e))?;
+
+    classify_list_response(
+        target,
+        ListResponse {
+            status: resp.status,
+            body: &resp.body,
+            headers: &resp.headers,
+        },
+    )?;
+
+    serde_json::from_str(&resp.body)
+        .map_err(|e| MrListError::other(target.host, format!("unreadable response: {e}")))
+}
+
 #[async_trait]
 impl MrPublisher for HttpMrPublisher {
     async fn publish_mr(
@@ -196,6 +222,14 @@ impl MrPublisher for HttpMrPublisher {
         repository_id: Option<&str>,
     ) -> Result<Vec<MrSummary>, MrListError> {
         self.list_open_mrs_impl(project_id, repository_id).await
+    }
+
+    async fn fetch_mr_detail(
+        &self,
+        project_id: &str,
+        mr_url: &str,
+    ) -> Result<MrSummary, MrListError> {
+        self.fetch_mr_detail_impl(project_id, mr_url).await
     }
 
     async fn post_mr_comment(
@@ -485,6 +519,49 @@ impl HttpMrPublisher {
                 }
             })
             .collect())
+    }
+
+    async fn fetch_mr_detail_impl(
+        &self,
+        project_id: &str,
+        mr_url: &str,
+    ) -> Result<MrSummary, MrListError> {
+        let pid = crate::domain::ids::ProjectId::from(project_id.to_string());
+        let provider = resolve_target(self.app_settings.as_ref(), self.projects.as_ref(), &pid)
+            .map_err(|_| MrListError::NoProvider)?
+            .provider;
+        let target = ListTarget {
+            kind: &provider.kind,
+            host: &provider.host,
+        };
+        let pat = resolve_pat(&provider.id.0).map_err(|e| {
+            tracing::warn!(provider = %provider.id.0, error = %e, "no PAT resolved for provider");
+            MrListError::no_credential(target, e)
+        })?;
+
+        let http: &dyn HttpClient = match self.http_override.as_ref() {
+            Some(arc) => arc.as_ref(),
+            None => &ReqwestHttp,
+        };
+
+        let (payload, map): (serde_json::Value, MrMapper) = match provider.kind.as_str() {
+            "github" => (
+                github::fetch_github_pr_detail(http, &provider.host, mr_url, &pat).await?,
+                MrSummary::from_github,
+            ),
+            "gitlab" => (
+                gitlab::fetch_gitlab_mr_detail(http, &provider.host, mr_url, &pat).await?,
+                MrSummary::from_gitlab,
+            ),
+            other => {
+                return Err(MrListError::other(
+                    &provider.host,
+                    format!("Demeteo cannot read pull requests on a {other} provider"),
+                ))
+            }
+        };
+
+        map(&payload).map_err(|e| MrListError::other(&provider.host, e))
     }
 
     async fn fetch_mr_state_impl(&self, project_id: &str, mr_url: &str) -> Result<String, String> {

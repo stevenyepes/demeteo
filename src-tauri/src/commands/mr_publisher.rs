@@ -63,6 +63,28 @@ pub async fn list_open_pull_requests(
         .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))
 }
 
+/// One pull request read in full, for the mergeability verdict and the
+/// diffstat its listing did not carry.
+///
+/// One request, asked for one row. The listing deliberately does not do this
+/// per row — [`MrPublisher::fetch_mr_detail`](crate::ports::mr_publisher::MrPublisher::fetch_mr_detail)
+/// records the rate-limit reason — so this is invoked when the user points at
+/// something, and a failure leaves the row exactly as the listing left it.
+///
+/// The `Err` is the same JSON envelope `list_open_pull_requests` answers with,
+/// for the same reason and decoded by the same function.
+#[tauri::command]
+pub async fn pull_request_detail(
+    ctx: State<'_, AppContext>,
+    project_id: String,
+    pull_request_url: String,
+) -> Result<MrSummary, String> {
+    ctx.mr_publisher
+        .fetch_mr_detail(&project_id, &pull_request_url)
+        .await
+        .map_err(|e| serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()))
+}
+
 /// Post `body` on the pull request at `pull_request_url`, answering with the
 /// created comment's URL.
 ///

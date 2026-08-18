@@ -68,6 +68,32 @@ pub struct MrSummary {
     /// GitHub `head.repo.permissions.push`. A merge request carries no
     /// equivalent, so a GitLab summary always answers `false`.
     pub head_repo_push: bool,
+    /// Whether the request conflicts with its target branch, and `None` while
+    /// nobody knows yet.
+    ///
+    /// Both providers compute mergeability asynchronously — GitHub answers
+    /// `mergeable: null` and GitLab `merge_status: checking` until they are
+    /// done — and neither GitHub list endpoint carries the field at all. Every
+    /// one of those is *not yet decided*, which the "Absent is not permitted"
+    /// rule above forbids spending as `false`: a green row on a request that
+    /// will not merge is the answer a reviewer acts on and then loses an hour
+    /// to.
+    ///
+    /// Serialized even when `None`, deliberately — the frontend renders the
+    /// undecided state as its own chip, and a skipped field would arrive
+    /// indistinguishable from a clean one.
+    #[serde(default)]
+    pub has_conflicts: Option<bool>,
+    /// Lines added, lines removed and files touched, when the payload that
+    /// produced this summary carried them. Absent and unknown are the same
+    /// fact to a reader of a diffstat, so unlike `has_conflicts` these are
+    /// skipped rather than sent as null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_files: Option<u64>,
 }
 
 impl MrSummary {
@@ -101,6 +127,10 @@ impl MrSummary {
                 .and_then(|r| r.permissions)
                 .map_or_else(not_permitted, |p| p.push),
             head_repo_path,
+            has_conflicts: pull.mergeable.map(|m| !m),
+            additions: pull.additions,
+            deletions: pull.deletions,
+            changed_files: pull.changed_files,
         })
     }
 
@@ -123,12 +153,42 @@ impl MrSummary {
             from_fork: mr.source_project_id != mr.target_project_id,
             maintainer_can_modify: mr.allow_collaboration,
             head_repo_push: not_permitted(),
+            has_conflicts: mr
+                .has_conflicts
+                .or_else(|| mr.merge_status.as_deref().and_then(conflict_verdict)),
+            additions: None,
+            deletions: None,
+            changed_files: mr.changes_count.as_deref().and_then(changed_file_count),
         })
     }
 }
 
 const fn not_permitted() -> bool {
     false
+}
+
+/// Read GitLab's `merge_status`, and only once it has settled.
+///
+/// `unchecked` and `checking` are the provider still working. Answering `false`
+/// for either is the same lie as reading GitHub's `mergeable: null` as clean,
+/// so they leave the verdict undecided and the row shows no reassurance it was
+/// not given.
+fn conflict_verdict(merge_status: &str) -> Option<bool> {
+    match merge_status {
+        "cannot_be_merged" => Some(true),
+        "can_be_merged" => Some(false),
+        _ => None,
+    }
+}
+
+/// Read GitLab's `changes_count`, which is a string and caps itself.
+///
+/// Very large merge requests answer `"1000+"`. Trimming the marker keeps the
+/// floor, which is what a "N files" label means anyway; a parse of the raw
+/// string would drop the count entirely and the row would claim the request
+/// touches nothing.
+fn changed_file_count(changes_count: &str) -> Option<u64> {
+    changes_count.trim().trim_end_matches('+').parse().ok()
 }
 
 #[derive(Deserialize)]
@@ -149,6 +209,16 @@ struct GithubPull {
     updated_at: String,
     #[serde(default = "not_permitted")]
     maintainer_can_modify: bool,
+    /// Present only on the single-request GET, and `null` there until GitHub
+    /// has finished deciding.
+    #[serde(default)]
+    mergeable: Option<bool>,
+    #[serde(default)]
+    additions: Option<u64>,
+    #[serde(default)]
+    deletions: Option<u64>,
+    #[serde(default)]
+    changed_files: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -198,6 +268,12 @@ struct GitlabMergeRequest {
     target_project_id: u64,
     #[serde(default = "not_permitted")]
     allow_collaboration: bool,
+    #[serde(default)]
+    has_conflicts: Option<bool>,
+    #[serde(default)]
+    merge_status: Option<String>,
+    #[serde(default)]
+    changes_count: Option<String>,
 }
 
 #[derive(Deserialize)]

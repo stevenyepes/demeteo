@@ -16,7 +16,7 @@
 //! **All methods are async.** Tauri v2 supports async commands natively.
 
 use crate::domain::ids::FeatureId;
-use crate::domain::models::{UpstreamSyncFailure, UpstreamSyncOutcome};
+use crate::domain::models::{FeatureDrift, UpstreamSyncFailure, UpstreamSyncOutcome};
 use async_trait::async_trait;
 
 #[async_trait]
@@ -48,6 +48,30 @@ pub trait MergeExecutor: Send + Sync {
         feature_branch: &str,
         base_branch: &str,
     ) -> Result<UpstreamSyncOutcome, UpstreamSyncFailure>;
+
+    /// How far this feature's branch has drifted from the base it will merge
+    /// into, having merged nothing.
+    ///
+    /// `refresh` decides whether `origin/<base>` is fetched first: without it
+    /// the answer is as of whenever that ref last moved, with it the answer is
+    /// current and costs a network round trip. Either way the fetch's outcome
+    /// is reported rather than enforced — this is the one caller that must
+    /// **not** copy [`sync_feature_with_upstream`](Self::sync_feature_with_upstream)'s
+    /// hard failure on a bad fetch, because a poll that errors costs the user
+    /// the whole signal where a poll that says "as of your last sync" still
+    /// tells them something true.
+    ///
+    /// Here rather than on
+    /// [`WorktreeOpsPort`](crate::ports::worktree_ops::WorktreeOpsPort) because
+    /// the question is feature-scoped and that port is repo-scoped: only this
+    /// port already turns a feature id into a machine and a repo directory.
+    async fn feature_drift(
+        &self,
+        feature_id: &FeatureId,
+        feature_branch: &str,
+        base_branch: &str,
+        refresh: bool,
+    ) -> Result<FeatureDrift, String>;
 
     /// The feature's live sync as the working tree says it stands, or `None`
     /// when it has never synced.

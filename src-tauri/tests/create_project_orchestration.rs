@@ -334,6 +334,13 @@ impl StepExecutor for StubExecutor {
             changed: false,
         })
     }
+    async fn feature_drift(
+        &self,
+        _feature_id: &str,
+        _refresh: bool,
+    ) -> Result<demeteo_core::domain::models::FeatureDrift, String> {
+        Err("this stub counts nothing".into())
+    }
     async fn feature_resolve_sync_conflicts(
         &self,
         _feature_id: &str,

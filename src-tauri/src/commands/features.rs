@@ -1,6 +1,6 @@
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::models::{
-    EffortLevel, Feature, GateDecision, SequenceState, StepAttempt, StepExecution,
+    EffortLevel, Feature, FeatureDrift, GateDecision, SequenceState, StepAttempt, StepExecution,
 };
 use crate::domain::sync_resolver::SyncResolverChoice;
 use crate::error::AppError;
@@ -284,6 +284,23 @@ pub async fn feature_sync(
 ) -> Result<SyncOutcomeView, AppError> {
     ctx.executor
         .feature_sync(&feature_id)
+        .await
+        .map_err(AppError::from)
+}
+
+/// How far the feature branch has fallen behind the base a sync would merge —
+/// the reason to press "Sync with main", answered without merging anything.
+///
+/// `refresh` fetches `origin/<base>` first. Left off, the counts are as of
+/// whenever that ref last moved, and the answer says so.
+#[tauri::command]
+pub async fn feature_drift(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+    refresh: Option<bool>,
+) -> Result<FeatureDrift, AppError> {
+    ctx.executor
+        .feature_drift(&feature_id, refresh.unwrap_or(false))
         .await
         .map_err(AppError::from)
 }

@@ -114,6 +114,39 @@ async fn test_sync_feature_with_upstream_noop_when_already_in_sync() {
     let _ = std::fs::remove_dir_all(&remote_dir);
 }
 
+/// A branch whose divergence could not be counted is not a branch that is
+/// already in sync. The short-circuit above the merge reads a *measured* zero
+/// and nothing else, so a `rev-list` that never answered has to fall through to
+/// the merge and fail there, where the reason is nameable.
+#[tokio::test]
+async fn test_sync_feature_with_upstream_does_not_call_an_unmeasurable_branch_synced() {
+    let (local_dir, remote_dir, helper) = make_two_repos("sync_unmeasurable").await;
+    let local = local_dir.to_string_lossy().to_string();
+
+    let outcome = helper
+        .sync_feature_with_upstream(None, &local, "feature/never-cut", "main")
+        .await;
+
+    match outcome {
+        Ok(o) => panic!(
+            "A branch that does not exist cannot be reported as up to date with \
+             upstream; got changed={} merge_commit_sha={:?}",
+            o.changed, o.merge_commit_sha
+        ),
+        Err(SyncFailure::Conflict { .. }) => {
+            panic!("Nothing was merged, so nothing can be conflicted")
+        }
+        Err(SyncFailure::Blocked { stage, .. }) => assert_eq!(
+            stage,
+            SyncBlockedStage::WorktreeProvision,
+            "the branch is what could not be checked out"
+        ),
+    }
+
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
 /// When origin is unreachable the sync must surface a real
 /// error so the user knows the merge wasn't actually attempted.
 /// (The old code silently swallowed fetch failures.)

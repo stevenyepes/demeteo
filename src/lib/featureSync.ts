@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   EffortLevel,
   Feature,
+  FeatureDrift,
   SyncOutcomeView,
   SyncResolverView,
   SyncSessionView,
@@ -26,6 +27,21 @@ import type {
  */
 export async function syncFeature(featureId: string): Promise<SyncOutcomeView> {
   return invoke<SyncOutcomeView>("feature_sync", { featureId });
+}
+
+/**
+ * How far the feature branch has fallen behind the base a sync would merge —
+ * the reason to press "Sync with main", answered without merging anything.
+ *
+ * `refresh` fetches `origin/<base>` first. Left off, the counts are as of
+ * whenever that ref last moved; the answer's `fetched` says which it was, so a
+ * caller never presents a week-old number as this minute's.
+ */
+export async function getFeatureDrift(
+  featureId: string,
+  refresh = false,
+): Promise<FeatureDrift> {
+  return invoke<FeatureDrift>("feature_drift", { featureId, refresh });
 }
 
 /**

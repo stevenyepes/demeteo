@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { Zap, ChevronRight, Settings, AlertTriangle, RotateCw, Check, GitPullRequest, Sliders, Terminal } from 'lucide-react';
-import { Feature, Repository } from '../types';
+import { Feature, FeatureDrift, Repository } from '../types';
 import { formatError } from '../lib/errors';
 import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } from '../lib/project';
 import { bootstrapProject } from '../lib/createProjectWizard';
 import { fetchActiveFeatures } from '../lib/features';
+import { getFeatureDrift } from '../lib/featureSync';
+import { holdsOpenRequest } from '../lib/staleness';
 import { listMirroredRuns } from '../lib/remoteRuns';
 import { listWorkflows } from '../lib/workflows';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
@@ -48,6 +50,7 @@ const ProjectHome = () => {
     const activeProject = projects.find(p => p.id === currentProjectId)!;
     const [featureInput, setFeatureInput] = useState('');
     const [features, setFeatures] = useState<Feature[]>([]);
+    const [driftByFeature, setDriftByFeature] = useState<Record<string, FeatureDrift>>({});
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
     const [activeTab, setActiveTab] = useState<ProjectSection>('pipelines');
     const [pipelineFilter, setPipelineFilter] = usePersistedPipelineFilter();
@@ -132,6 +135,40 @@ const ProjectHome = () => {
     const openFeature = useCallback((featureId: string, featureTitle: string) => {
         navigate({ kind: 'detail', featureId, featureTitle });
     }, [navigate]);
+
+    // Which rows are worth counting, as a string so an unrelated re-render of
+    // the feature list — a status event, a keystroke in the composer — does not
+    // re-issue every `git` call behind it.
+    const driftTargets = useMemo(
+        () => features.filter(holdsOpenRequest).map((f) => f.id).join(','),
+        [features],
+    );
+
+    // One reading per open request, and none with a fetch: the counts come off
+    // local refs and say so, and paying a network round trip per row on every
+    // visit to the project view is a cost the signal is not worth. The run
+    // header is where a user can ask for a current one.
+    useEffect(() => {
+        const ids = driftTargets ? driftTargets.split(',') : [];
+        if (ids.length === 0) {
+            setDriftByFeature({});
+            return;
+        }
+        let alive = true;
+        Promise.allSettled(
+            ids.map(async (id) => [id, await getFeatureDrift(id)] as const),
+        ).then((results) => {
+            if (!alive) return;
+            setDriftByFeature(
+                Object.fromEntries(
+                    results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : [])),
+                ),
+            );
+        });
+        return () => {
+            alive = false;
+        };
+    }, [driftTargets]);
 
     /** `filterPipelines` returns `features` itself when nothing was dropped and
      *  nothing moved, so this memo genuinely holds across a keystroke in the
@@ -719,6 +756,7 @@ const ProjectHome = () => {
                                     detached={detachedIds.has(feature.id)}
                                     computeType={activeProject.compute_type}
                                     remoteHost={activeProject.remote_host}
+                                    drift={driftByFeature[feature.id] ?? null}
                                     density={densityClasses}
                                     onOpen={openFeature}
                                 />

@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{
-    ConflictReport, RepoContext, UpstreamSyncFailure, UpstreamSyncOutcome,
+    ConflictReport, FeatureDrift, RepoContext, UpstreamSyncFailure, UpstreamSyncOutcome,
 };
 use crate::domain::sync_failure::SyncBlockedStage;
 use crate::domain::sync_session::SyncSessionStatus;
@@ -61,6 +61,46 @@ impl SqliteMergeExecutor {
             exec,
             workspace_dir,
         }
+    }
+
+    /// The machine and repository directory this feature's git work happens in.
+    ///
+    /// `None` for the machine means the local subprocess transport; every other
+    /// value is a host the same `ExecutionPort` reaches over SSH, so no caller
+    /// of this ever branches on which it got.
+    async fn repo_target(
+        &self,
+        feature_id: &FeatureId,
+    ) -> Result<(Option<String>, String), String> {
+        let RepoContext {
+            compute_type,
+            remote_host,
+            project_id,
+            repo_path,
+        } = self
+            .merge_audit
+            .lookup_repo_context(feature_id)
+            .map_err(|e| format!("Failed to resolve repo context: {}", e))?;
+
+        let local = compute_type.eq_ignore_ascii_case("local");
+        let machine_id_opt = if local { None } else { remote_host.clone() };
+        let repo_dir = if local {
+            paths::repo_target_dir_local(&self.workspace_dir, &project_id, &repo_path)
+                .to_string_lossy()
+                .to_string()
+        } else {
+            paths::repo_target_dir_str(
+                &self.exec,
+                &compute_type,
+                remote_host.as_deref(),
+                &project_id,
+                &repo_path,
+                None,
+            )
+            .await
+            .map_err(|e| format!("Failed to resolve repo directory: {}", e))?
+        };
+        Ok((machine_id_opt, repo_dir))
     }
 }
 
@@ -108,50 +148,13 @@ impl MergeExecutor for SqliteMergeExecutor {
             }
         }
 
-        // Resolve the project / machine / repo dir from the feature row.
-        let RepoContext {
-            compute_type,
-            remote_host,
-            project_id,
-            repo_path,
-        } = match self.merge_audit.lookup_repo_context(feature_id) {
+        let (machine_id_opt, repo_dir) = match self.repo_target(feature_id).await {
             Ok(v) => v,
             Err(e) => {
                 return Err(UpstreamSyncFailure::Blocked {
                     stage: SyncBlockedStage::RepoContext,
-                    raw_error: format!("Failed to resolve repo context: {}", e),
+                    raw_error: e,
                 });
-            }
-        };
-
-        let machine_id_opt = if compute_type.eq_ignore_ascii_case("local") {
-            None
-        } else {
-            remote_host.clone()
-        };
-
-        let repo_dir = if compute_type.eq_ignore_ascii_case("local") {
-            paths::repo_target_dir_local(&self.workspace_dir, &project_id, &repo_path)
-                .to_string_lossy()
-                .to_string()
-        } else {
-            match paths::repo_target_dir_str(
-                &self.exec,
-                &compute_type,
-                remote_host.as_deref(),
-                &project_id,
-                &repo_path,
-                None,
-            )
-            .await
-            {
-                Ok(dir) => dir,
-                Err(e) => {
-                    return Err(UpstreamSyncFailure::Blocked {
-                        stage: SyncBlockedStage::RepoContext,
-                        raw_error: format!("Failed to resolve repo directory: {}", e),
-                    });
-                }
             }
         };
 
@@ -313,6 +316,43 @@ impl MergeExecutor for SqliteMergeExecutor {
                 Err(failure)
             }
         }
+    }
+
+    async fn feature_drift(
+        &self,
+        feature_id: &FeatureId,
+        feature_branch: &str,
+        base_branch: &str,
+        refresh: bool,
+    ) -> Result<FeatureDrift, String> {
+        let (machine_id_opt, repo_dir) = self.repo_target(feature_id).await?;
+        let machine_str = machine_id_opt
+            .as_deref()
+            .unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let base_ref = format!("origin/{}", base_branch);
+
+        let fetched = refresh
+            && crate::adapters::worktree::git_ops::divergence::refresh_base_ref(
+                &*self.exec,
+                machine_str,
+                &repo_dir,
+                base_branch,
+            )
+            .await;
+
+        Ok(FeatureDrift {
+            divergence: crate::adapters::worktree::git_ops::divergence::count_divergence(
+                &*self.exec,
+                machine_str,
+                &repo_dir,
+                &format!("refs/heads/{}", feature_branch),
+                &base_ref,
+            )
+            .await,
+            base_ref,
+            fetched,
+            checked_at: paths::now_ms(),
+        })
     }
 
     async fn record_sync_resolution(

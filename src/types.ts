@@ -759,6 +759,30 @@ export type SyncBlockedStage =
   | 'repo_context'
   | 'held_resolution';
 
+/**
+ * How far a feature branch has drifted from the base a sync would merge.
+ *
+ * Both counts are nullable because "we could not measure it" and "there is
+ * nothing to merge" are different facts, and only the second one means the
+ * branch is current. Rendering a null as `0` is how a branch nobody could look
+ * at ends up labelled up to date.
+ */
+export interface BranchDivergence {
+  behind: number | null;
+  ahead: number | null;
+}
+
+/** Return shape for `feature_drift`. */
+export interface FeatureDrift {
+  divergence: BranchDivergence;
+  /** The ref the counts were taken against, e.g. `origin/main`. */
+  base_ref: string;
+  /** `false` when the fetch was skipped or failed, so the counts are as of
+   *  whenever that ref last moved rather than as of now. */
+  fetched: boolean;
+  checked_at: number;
+}
+
 /** Return shape for `feature_sync` and `feature_resolve_sync_conflicts`. */
 export type SyncOutcomeView =
   | {

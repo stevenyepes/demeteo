@@ -1,6 +1,7 @@
 import { Cpu, GitBranch, GitPullRequest, RefreshCw, Terminal } from 'lucide-react';
-import type { Project, RemoteRunMirror } from '../../types';
+import type { FeatureDrift, Project, RemoteRunMirror } from '../../types';
 import { runStatusMeta, TERMINAL_STATUSES } from '../../lib/runStatus';
+import { describeStaleness } from '../../lib/staleness';
 import { formatCost, formatTokens } from '../../lib/utils';
 import { Chip } from '../ui/Chip';
 import { Metric, MetricStrip } from '../ui/MetricStrip';
@@ -27,6 +28,10 @@ interface FeatureHeaderProps {
    *  `held_resolution` — so the button says so here rather than sending a
    *  request that can only come back as a banner. */
   reviewHeld: boolean;
+  /** How far behind the base a sync would merge, or `null` before a reading
+   *  lands. The chip it produces is the answer to "why would I press Sync", and
+   *  an unmeasurable branch renders as unknown rather than as current. */
+  drift: FeatureDrift | null;
   mrUrl: string | null;
   /** Quieter chrome for a scrolled run column; `lib/headerCollapse.ts` decides it. */
   collapsed?: boolean;
@@ -74,6 +79,7 @@ export function FeatureHeader({
   resolving,
   publishing,
   reviewHeld,
+  drift,
   mrUrl,
   collapsed = false,
   onBack,
@@ -84,6 +90,8 @@ export function FeatureHeader({
   onPublish,
   onCleanup,
 }: FeatureHeaderProps) {
+  const staleness = describeStaleness(drift);
+
   return (
     <div
       data-testid="feature-header"
@@ -136,6 +144,11 @@ export function FeatureHeader({
               ? 'Remote · SSH'
               : 'Local'}
           </Chip>
+          {staleness && (
+            <Chip tone={staleness.tone} dot={false} title={staleness.title}>
+              {staleness.label}
+            </Chip>
+          )}
         </div>
         {!collapsed && <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>}
       </div>

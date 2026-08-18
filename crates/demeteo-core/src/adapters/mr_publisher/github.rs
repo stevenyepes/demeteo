@@ -16,14 +16,7 @@ pub(super) async fn fetch_github_pr_state(
     mr_url: &str,
     pat: &str,
 ) -> Result<String, String> {
-    let (owner, repo, number) = parse_github_pr_url(mr_url)?;
-    let url = format!(
-        "https://{}/repos/{}/{}/pulls/{}",
-        github_api_host(host),
-        owner,
-        repo,
-        number
-    );
+    let url = github_pr_api_url(host, mr_url)?;
     let headers: Vec<(String, String)> = vec![
         ("Authorization".to_string(), format!("Bearer {}", pat)),
         (
@@ -43,14 +36,7 @@ pub(super) async fn fetch_github_pr_state_unauth(
     host: &str,
     mr_url: &str,
 ) -> Result<String, String> {
-    let (owner, repo, number) = parse_github_pr_url(mr_url)?;
-    let url = format!(
-        "https://{}/repos/{}/{}/pulls/{}",
-        github_api_host(host),
-        owner,
-        repo,
-        number
-    );
+    let url = github_pr_api_url(host, mr_url)?;
     let headers: Vec<(String, String)> = vec![
         (
             "Accept".to_string(),
@@ -79,6 +65,55 @@ async fn fetch_github_pr_state_with_headers(
         .and_then(|s| s.as_str())
         .unwrap_or("open")
         .to_string())
+}
+
+/// The API URL of one pull request, for every read that wants that resource.
+///
+/// One function rather than one per caller: the state poll and the detail read
+/// answer different questions about the same request, and two spellings of this
+/// URL is how they end up asking them of different endpoints.
+fn github_pr_api_url(host: &str, mr_url: &str) -> Result<String, String> {
+    let (owner, repo, number) = parse_github_pr_url(mr_url)?;
+    Ok(format!(
+        "https://{}/repos/{}/{}/pulls/{}",
+        github_api_host(host),
+        owner,
+        repo,
+        number
+    ))
+}
+
+/// Read one pull request in full — the only payload carrying `mergeable` and
+/// the diffstat.
+///
+/// Unlike the state poll above, a non-2xx here is a failure and not an "open".
+/// [`MrListError`] records why the coercion is right for a badge and wrong for
+/// anything a reviewer reads as a verdict.
+pub(super) async fn fetch_github_pr_detail(
+    http: &dyn HttpClient,
+    host: &str,
+    mr_url: &str,
+    pat: &str,
+) -> Result<serde_json::Value, MrListError> {
+    let url = github_pr_api_url(host, mr_url).map_err(|e| MrListError::other(host, e))?;
+    let headers: Vec<(String, String)> = vec![
+        ("Authorization".to_string(), format!("Bearer {}", pat)),
+        (
+            "Accept".to_string(),
+            "application/vnd.github+json".to_string(),
+        ),
+        ("User-Agent".to_string(), "demeteo".to_string()),
+    ];
+    super::read_object(
+        http,
+        &url,
+        &headers,
+        super::ListTarget {
+            kind: "github",
+            host,
+        },
+    )
+    .await
 }
 
 /// Parse a `https://github.com/<owner>/<repo>/pull/<n>` URL.

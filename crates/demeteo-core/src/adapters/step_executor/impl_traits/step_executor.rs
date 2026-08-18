@@ -236,6 +236,14 @@ impl StepExecutor for DagStepExecutor {
         self.feature_sync_impl(feature_id).await
     }
 
+    async fn feature_drift(
+        &self,
+        feature_id: &str,
+        refresh: bool,
+    ) -> Result<crate::domain::models::FeatureDrift, String> {
+        self.feature_drift_impl(feature_id, refresh).await
+    }
+
     async fn feature_resolve_sync_conflicts(
         &self,
         feature_id: &str,

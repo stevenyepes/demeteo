@@ -39,6 +39,12 @@ import { formatError } from './errors';
  * additions/deletions/changed_files only from the single-PR GET, GitLab
  * computes mergeability asynchronously and answers `null` while it does. A row
  * renders the tier it was handed, never a zero it inferred from an absence.
+ *
+ * `has_conflicts` therefore has three readings and not two. `true` and `false`
+ * are verdicts a provider gave; `null` is one it has not finished computing,
+ * which the Rust side sends explicitly rather than skipping so it cannot arrive
+ * looking like a clean merge. `undefined` is a payload that predates the field
+ * — no claim at all, and the only one that renders nothing.
  */
 export interface PullRequestSummary {
   number: number;
@@ -81,6 +87,26 @@ export async function listOpenPullRequests(
   repositoryId?: string,
 ): Promise<PullRequestSummary[]> {
   return invoke<PullRequestSummary[]>('list_open_pull_requests', { projectId, repositoryId });
+}
+
+/**
+ * One pull request read in full — the mergeability verdict and the diffstat the
+ * listing could not carry.
+ *
+ * **One request, and never one per row.** The listing is a hundred rows on one
+ * page; enriching them all would be a hundred serialized provider requests per
+ * refresh, against a rate limit this app can detect and cannot back off from.
+ * So this is called for the row the user is pointing at, and a rejection leaves
+ * that row exactly as the listing left it — the identity tier is still true.
+ *
+ * Rejects with the same envelope `listOpenPullRequests` does; decode it with
+ * `asPullRequestListFailure`.
+ */
+export async function loadPullRequestDetail(
+  projectId: string,
+  pullRequestUrl: string,
+): Promise<PullRequestSummary> {
+  return invoke<PullRequestSummary>('pull_request_detail', { projectId, pullRequestUrl });
 }
 
 /**

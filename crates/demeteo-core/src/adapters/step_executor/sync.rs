@@ -120,6 +120,33 @@ impl DagStepExecutor {
         ))
     }
 
+    /// Tauri entry point for the staleness signal on the run header.
+    ///
+    /// The same two lines `feature_sync_impl` resolves its branches with, and
+    /// deliberately so: a drift chip counted against a base the sync would not
+    /// have merged is a number about a branch nobody is going to touch.
+    pub(crate) async fn feature_drift_impl(
+        &self,
+        feature_id: &str,
+        refresh: bool,
+    ) -> Result<crate::domain::models::FeatureDrift, String> {
+        let fid = FeatureId::from(feature_id.to_string());
+        let feature = self
+            .features
+            .get(&fid)?
+            .ok_or_else(|| format!("Feature not found: {}", feature_id))?;
+        let settings = self
+            .projects
+            .get_settings(&feature.project_id)?
+            .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
+        let base_branch = sync_base(&feature, &settings)?;
+        let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
+
+        self.merge_executor
+            .feature_drift(&fid, &feature_branch, &base_branch, refresh)
+            .await
+    }
+
     /// Who the "Resolve with agent" button would spawn if nobody asked for
     /// anything — the same two rows and the same chain, read without running a
     /// turn.

@@ -11,6 +11,7 @@ import { getProposedStrategy } from '../../lib/project';
 import {
   asPullRequestListFailure,
   listOpenPullRequests,
+  loadPullRequestDetail,
   type PullRequestListFailure,
   type PullRequestSummary,
 } from '../../lib/pullRequests';
@@ -37,6 +38,9 @@ export function CodeReviewView(): React.ReactElement {
   const [state, setState] = useState<ListState>({ status: 'loading' });
   const [defaultAgentKind, setDefaultAgentKind] = useState('');
   const latestRead = useRef(0);
+  /** Rows whose detail has been requested, so pointing at one twice is one
+   *  request and a re-render is none. */
+  const asked = useRef(new Set<string>());
 
   const projectName = projects.find((p) => p.id === currentProjectId)?.name ?? null;
 
@@ -48,6 +52,7 @@ export function CodeReviewView(): React.ReactElement {
     if (!currentProjectId) return;
     latestRead.current += 1;
     const read = latestRead.current;
+    asked.current.clear();
     setState({ status: 'loading' });
 
     listOpenPullRequests(currentProjectId)
@@ -83,6 +88,38 @@ export function CodeReviewView(): React.ReactElement {
       alive = false;
     };
   }, [currentProjectId]);
+
+  // Enrichment is per row and on demand, never per refresh. GitHub carries
+  // mergeability and the diffstat only on the single-request GET, so a queue of
+  // a hundred rows enriched eagerly is a hundred serialized provider requests —
+  // against a rate limit this app can detect and has no way to back off from.
+  // A row asks once, when the user points at it; a failure leaves the row as
+  // the listing left it, because the identity tier is still true.
+  const requestDetail = useCallback(
+    (url: string) => {
+      if (!currentProjectId || asked.current.has(url)) return;
+      asked.current.add(url);
+      const read = latestRead.current;
+      loadPullRequestDetail(currentProjectId, url)
+        .then((detail) => {
+          if (read !== latestRead.current) return;
+          setState((prev) =>
+            prev.status === 'ready'
+              ? {
+                  status: 'ready',
+                  pullRequests: prev.pullRequests.map((pr) =>
+                    pr.web_url === url ? detail : pr,
+                  ),
+                }
+              : prev,
+          );
+        })
+        .catch(() => {
+          asked.current.delete(url);
+        });
+    },
+    [currentProjectId],
+  );
 
   const connectProvider = useCallback(() => navigate({ kind: 'providers' }), [navigate]);
 
@@ -138,6 +175,7 @@ export function CodeReviewView(): React.ReactElement {
                   pullRequest={pullRequest}
                   onReview={startReview}
                   agentKind={defaultAgentKind}
+                  onRequestDetail={requestDetail}
                 />
               ))}
             </div>

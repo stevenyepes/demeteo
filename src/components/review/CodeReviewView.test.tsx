@@ -325,4 +325,26 @@ describe('CodeReviewView', () => {
     release([]);
     await waitFor(() => expect(screen.getByText('No open pull requests')).toBeInTheDocument());
   });
+  it('does not spend a provider request on a row nobody has pointed at', async () => {
+    // The failure mode is invisible on a queue of one: eager enrichment turns
+    // one refresh of a hundred-row queue into a hundred and one serialized
+    // requests, and the only thing that ever says so is a rate limit.
+    const detail = vi.fn(() => Promise.resolve({ ...PULL_REQUEST, has_conflicts: true }));
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_open_pull_requests') return Promise.resolve([PULL_REQUEST]);
+      if (cmd === 'pull_request_detail') return detail();
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
+    });
+    mount();
+
+    const row = await screen.findByTestId('pull-request-row');
+    expect(detail).not.toHaveBeenCalled();
+
+    await userEvent.hover(row);
+    await waitFor(() => expect(detail).toHaveBeenCalledTimes(1));
+
+    await userEvent.unhover(row);
+    await userEvent.hover(row);
+    expect(detail).toHaveBeenCalledTimes(1);
+  });
 });
