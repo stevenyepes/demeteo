@@ -1,6 +1,7 @@
 import React from 'react';
 import { AlertCircle, RefreshCw, RotateCcw, ShieldCheck, XCircle } from 'lucide-react';
 
+import { isOutOfBandStep } from '../../../lib/featureSync';
 import { TONE_TEXT } from '../../../lib/runStatus';
 import type { StepAttempt } from '../../../types';
 import { RerunOptions } from '../../FeatureDetail/RerunOptions';
@@ -43,7 +44,12 @@ export function ActionsTab({
   onDecideGate?: () => void;
 }) {
   const status = run?.status ?? 'pending';
-  const isFailed = status === 'failed' || status === 'interrupted';
+  // Retry and Replay walk the graph from this node, and an out-of-band sync is
+  // in no graph — the backend refuses both
+  // (`domain::run_control::out_of_band_refusal`), so offering them is a button
+  // whose only outcome is an error toast.
+  const graphless = isOutOfBandStep(node.id);
+  const isFailed = (status === 'failed' || status === 'interrupted') && !graphless;
   const isRunning = status === 'running' || status === 'verifying';
   const isGateWaiting = node.type === 'gate' && status === 'awaiting_gate';
   const guarded = blockedBy !== null;
@@ -55,7 +61,13 @@ export function ActionsTab({
   // "which rule will apply" hint (P2.4), read straight from the attempt row.
   const lastFailed = [...attempts].reverse().find((a) => a.error_class);
 
-  if (!hasActions) {
+  const anyAction =
+    (onDecideGate && isGateWaiting) ||
+    (onRetry && isFailed) ||
+    (onReplay && !graphless) ||
+    (onStop && isRunning);
+
+  if (!hasActions || !anyAction) {
     return (
       <div className="flex h-full items-center justify-center px-8 text-center text-xs font-bold uppercase tracking-wider text-slate-600">
         No actions available for this node yet.
@@ -103,7 +115,7 @@ export function ActionsTab({
         </>
       )}
 
-      {onReplay && (
+      {onReplay && !graphless && (
         <ActionRow
           icon={<RotateCcw className="h-4 w-4" />}
           tone="cyan"

@@ -37,7 +37,7 @@ pub(crate) struct StatusWriters<'a> {
 /// every call site reads them together off `ExecutionDriver`'s
 /// `last_cache_read` / `last_cache_creation`. `None` on both means the
 /// transition carries no cache news — not "zero tokens".
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(crate) struct CacheTokens {
     pub read: Option<u64>,
     pub creation: Option<u64>,
@@ -52,13 +52,20 @@ pub(crate) struct CacheTokens {
 ///
 /// `artifact_path: None` means **leave the column as it is**, not "clear
 /// it" — see the patch construction in [`try_update_step_status`].
+///
+/// `error_message` is the one column where "leave it" is the wrong default and
+/// the constructors never choose it: a row that ran again and succeeded still
+/// rendering the previous attempt's failure is a `completed` step the Output
+/// tab paints red. Every other node kind clears it by hand in its own
+/// completion path, so the clearing belongs to the status rather than to
+/// whoever remembered.
 pub(crate) struct StepTransition {
     pub status: &'static str,
     pub cost_usd: f64,
     pub tokens: Option<i64>,
     pub wall_clock_secs: u64,
     pub artifact_path: Option<String>,
-    pub error_message: Option<String>,
+    pub error_message: Option<Option<String>>,
     pub cache: CacheTokens,
 }
 
@@ -72,7 +79,7 @@ impl StepTransition {
             tokens,
             wall_clock_secs,
             artifact_path: None,
-            error_message: None,
+            error_message: Some(None),
             cache: CacheTokens::default(),
         }
     }
@@ -93,7 +100,7 @@ impl StepTransition {
             tokens: Some(tokens),
             wall_clock_secs,
             artifact_path,
-            error_message: None,
+            error_message: Some(None),
             cache,
         }
     }
@@ -113,7 +120,7 @@ impl StepTransition {
             tokens,
             wall_clock_secs,
             artifact_path: None,
-            error_message: Some(error_message),
+            error_message: Some(Some(error_message)),
             cache,
         }
     }
@@ -133,7 +140,7 @@ impl StepTransition {
             tokens: Some(tokens),
             wall_clock_secs,
             artifact_path: None,
-            error_message: Some(error_message),
+            error_message: Some(Some(error_message)),
             cache,
         }
     }
@@ -153,7 +160,7 @@ impl StepTransition {
             tokens: Some(tokens),
             wall_clock_secs,
             artifact_path: None,
-            error_message: Some(error_message),
+            error_message: Some(Some(error_message)),
             cache,
         }
     }
@@ -179,7 +186,7 @@ impl StepTransition {
             tokens,
             wall_clock_secs,
             artifact_path: None,
-            error_message: Some(error_message),
+            error_message: Some(Some(error_message)),
             cache: CacheTokens::default(),
         }
     }
@@ -252,7 +259,7 @@ pub(crate) fn try_update_step_status(
             wall_clock_secs: Some(Some(wall_clock_secs)),
             artifact_path: artifact_path.map(Some),
             artifact_paths: None,
-            error_message: error_message.map(Some),
+            error_message,
             cache_read_input_tokens: Some(cache.read),
             cache_creation_input_tokens: Some(cache.creation),
         },

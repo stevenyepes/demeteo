@@ -182,6 +182,12 @@ impl StepExecutor for DagStepExecutor {
             return Err(AppError::validation(refusal));
         }
 
+        if let Some(refusal) =
+            crate::domain::run_control::out_of_band_refusal(RunAction::Retry, &step_exec.step_id.0)
+        {
+            return Err(AppError::validation(refusal));
+        }
+
         self.assert_no_active_predecessors(&step_exec, "retrying this step")?;
 
         // A shadow is not ours to replay. `replay_steps_from` rewinds the

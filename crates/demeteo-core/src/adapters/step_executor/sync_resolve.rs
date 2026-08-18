@@ -22,8 +22,9 @@ use tokio::sync::watch;
 
 use crate::adapters::agent::registry::AgentRegistry;
 use crate::adapters::step_executor::spend::RunningSpend;
-use crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files;
-use crate::adapters::step_executor::steps::pending_commit::worktree_has_pending_commit;
+use crate::adapters::step_executor::step_status::CacheTokens;
+use crate::adapters::step_executor::steps::list_unmerged::try_list_unmerged_files;
+use crate::adapters::step_executor::steps::pending_commit::{self, PendingCommit};
 use crate::adapters::step_executor::sync_worktree::discard_sync_worktree;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::agent_event::AgentEvent;
@@ -34,7 +35,7 @@ use crate::paths;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::db::AppSettingsRepository;
-use crate::ports::execution::ExecutionPort;
+use crate::ports::execution::{ask, Answer, ExecutionPort};
 use crate::ports::merge::MergeExecutor;
 use crate::ports::notification::{DomainEvent, NotificationPort};
 use crate::ports::pricing::PricingTable;
@@ -130,6 +131,26 @@ impl ResolveSyncError {
             Self::Cancelled(reason) | Self::Failed(reason) => reason,
         }
     }
+
+    fn message(&self) -> &str {
+        match self {
+            Self::Cancelled(reason) | Self::Failed(reason) => reason,
+        }
+    }
+}
+
+/// A resolution that landed: the commit that proves it, and what the turn read
+/// from and wrote into the prompt cache.
+///
+/// The cache pair rides back rather than being folded into
+/// [`RunningSpend`] because the row reports it beside the dollars in one
+/// transition, and a caller holding one without the other is how the live
+/// cache chip goes blank — the shape `steps::conflict_pass` already returns
+/// for the same reason.
+#[derive(Debug)]
+pub(crate) struct ResolvedSync {
+    pub merge_commit_sha: String,
+    pub cache: CacheTokens,
 }
 
 /// Resolve the conflicts in `resolved_cwd` with an agent: the merge commit's
@@ -141,7 +162,7 @@ impl ResolveSyncError {
 /// ([`user_may_intervene`](crate::domain::sync_session::user_may_intervene)).
 pub(crate) async fn resolve_sync_conflicts(
     ctx: ResolveSyncContext<'_>,
-) -> Result<String, ResolveSyncError> {
+) -> Result<ResolvedSync, ResolveSyncError> {
     let merge_executor = ctx.merge_executor;
     let feature_id = ctx.feature_id;
     let exec = ctx.exec;
@@ -149,30 +170,110 @@ pub(crate) async fn resolve_sync_conflicts(
     let repo_dir = ctx.repo_dir;
     let resolved_cwd = ctx.resolved_cwd;
 
+    let pre_unmerged = match preflight(&**exec, machine_str, resolved_cwd).await {
+        Ok(files) => files,
+        // A verdict closes the session; an unreadable tree leaves it exactly as
+        // it was, still naming the worktree, for whoever can reach the machine.
+        Err(PreflightRefusal::Unreadable(why)) => return Err(ResolveSyncError::Failed(why)),
+        Err(PreflightRefusal::NothingToResolve(why)) => {
+            let _ = merge_executor
+                .record_sync_resolution(
+                    feature_id,
+                    &SyncResolution::Failed {
+                        reason: why.clone(),
+                    },
+                )
+                .await;
+            return Err(ResolveSyncError::Failed(why));
+        }
+    };
+
     let _ = merge_executor
         .record_sync_resolution(feature_id, &SyncResolution::Started)
         .await;
 
-    let outcome = run_resolver_turn(ctx).await;
+    let outcome = run_resolver_turn(ctx, &pre_unmerged).await;
 
     let verdict = match &outcome {
-        Ok(merge_commit_sha) => SyncResolution::Succeeded {
-            merge_commit_sha: merge_commit_sha.clone(),
-        },
-        Err(ResolveSyncError::Cancelled(reason) | ResolveSyncError::Failed(reason)) => {
-            SyncResolution::Failed {
-                reason: reason.clone(),
+        Ok(resolved) => {
+            discard_sync_worktree(&**exec, machine_str, repo_dir, resolved_cwd).await;
+            SyncResolution::Succeeded {
+                merge_commit_sha: resolved.merge_commit_sha.clone(),
+                worktree_discarded: resolved_cwd == repo_dir
+                    || crate::application::sync_session::worktree_confirmed_gone(
+                        &**exec,
+                        machine_str,
+                        resolved_cwd,
+                    )
+                    .await,
             }
         }
+        Err(failure) => SyncResolution::Failed {
+            reason: failure.message().to_string(),
+        },
     };
-    if outcome.is_ok() {
-        discard_sync_worktree(&**exec, machine_str, repo_dir, resolved_cwd).await;
-    }
     let _ = merge_executor
         .record_sync_resolution(feature_id, &verdict)
         .await;
 
     outcome
+}
+
+/// Why a turn stopped before it started — and, decisively, whether the machine
+/// answered.
+///
+/// The two arms differ only in what the caller is then allowed to write. A
+/// preflight that answered from an *unreachable* host used to rewrite a
+/// `conflicted` row to `resolution_failed` and replace `raw_error` with "no
+/// merge in progress": a diagnosis of a tree nobody looked at, telling the user
+/// to re-run Sync, whose force-remove then takes the still-live conflicted
+/// worktree with it.
+enum PreflightRefusal {
+    /// git answered, and there is no merge here for an agent to resolve.
+    NothingToResolve(String),
+    /// The worktree could not be read. Nothing may be concluded from that in
+    /// either direction, so nothing may be recorded from it either.
+    Unreadable(String),
+}
+
+/// Is there a merge in `worktree` for an agent to resolve, and which files did
+/// it leave unmerged?
+async fn preflight(
+    exec: &dyn ExecutionPort,
+    machine_str: &str,
+    worktree: &str,
+) -> Result<Vec<crate::domain::models::ConflictFile>, PreflightRefusal> {
+    let unmerged = try_list_unmerged_files(exec, machine_str, worktree)
+        .await
+        .map_err(|why| {
+            PreflightRefusal::Unreadable(format!(
+                "Could not read the sync worktree at {} to see what the merge left, \
+                 so the sync was left as it was: {}",
+                worktree, why
+            ))
+        })?;
+    if !unmerged.is_empty() {
+        return Ok(unmerged);
+    }
+    match ask(
+        exec,
+        machine_str,
+        &format!(
+            "git -C {} rev-parse --verify --quiet MERGE_HEAD",
+            paths::shell_escape_posix(worktree)
+        ),
+    )
+    .await
+    {
+        Answer::Said(out) if !out.trim().is_empty() => Ok(unmerged),
+        Answer::Said(_) | Answer::Refused => Err(PreflightRefusal::NothingToResolve(
+            "No active merge in progress. Please run 'Sync with main' first.".to_string(),
+        )),
+        Answer::Unreadable(e) => Err(PreflightRefusal::Unreadable(format!(
+            "Could not check {} for an open merge, so the sync was left as it was: {}",
+            worktree, e
+        ))),
+    }
 }
 
 /// Has a stop arrived? Read before the spawn and again after the turn, because
@@ -182,7 +283,10 @@ fn cancelled(cancel: &Option<watch::Receiver<bool>>) -> bool {
     cancel.as_ref().is_some_and(|rx| *rx.borrow())
 }
 
-async fn run_resolver_turn(sync_ctx: ResolveSyncContext<'_>) -> Result<String, ResolveSyncError> {
+async fn run_resolver_turn(
+    sync_ctx: ResolveSyncContext<'_>,
+    pre_unmerged: &[crate::domain::models::ConflictFile],
+) -> Result<ResolvedSync, ResolveSyncError> {
     let ResolveSyncContext {
         exec,
         registry,
@@ -215,24 +319,6 @@ async fn run_resolver_turn(sync_ctx: ResolveSyncContext<'_>) -> Result<String, R
     } = spend;
     let fid = feature_id;
 
-    // Safety check: is a merge actually active?
-    let pre_unmerged = list_unmerged_files(&**exec, machine_str, resolved_cwd).await;
-    let merge_in_progress = exec
-        .run_command(
-            machine_str,
-            &format!(
-                "git -C {} rev-parse --verify MERGE_HEAD",
-                paths::shell_escape_posix(resolved_cwd)
-            ),
-        )
-        .await
-        .is_ok();
-
-    if pre_unmerged.is_empty() && !merge_in_progress {
-        return Err(ResolveSyncError::Failed(
-            "No active merge in progress. Please run 'Sync with main' first.".to_string(),
-        ));
-    }
     if cancelled(&cancel) {
         return Err(ResolveSyncError::Cancelled(CANCELLED_REASON.to_string()));
     }
@@ -313,7 +399,7 @@ async fn run_resolver_turn(sync_ctx: ResolveSyncContext<'_>) -> Result<String, R
     )
     .await;
 
-    match turn_res {
+    let cache = match turn_res {
         crate::adapters::agent::event_stream::TurnResult::Interrupted => {
             let _ = registry.kill(&resolver_thread_id).await;
             return Err(ResolveSyncError::Cancelled(CANCELLED_REASON.to_string()));
@@ -326,8 +412,12 @@ async fn run_resolver_turn(sync_ctx: ResolveSyncContext<'_>) -> Result<String, R
         crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
             *accumulated_cost += outcome.cost_usd;
             *accumulated_tokens += outcome.tokens;
+            CacheTokens {
+                read: Some(outcome.cache_read_input_tokens),
+                creation: Some(outcome.cache_creation_input_tokens),
+            }
         }
-    }
+    };
 
     if cancelled(&cancel) {
         let _ = registry.kill(&resolver_thread_id).await;
@@ -338,7 +428,7 @@ async fn run_resolver_turn(sync_ctx: ResolveSyncContext<'_>) -> Result<String, R
     // index. Demeteo owns staging and committing after the agent resolves
     // the conflicted content.
     if let Err(reason) =
-        ensure_conflict_markers_removed(&**exec, machine_str, resolved_cwd, &pre_unmerged).await
+        ensure_conflict_markers_removed(&**exec, machine_str, resolved_cwd, pre_unmerged).await
     {
         let _ = registry.kill(&resolver_thread_id).await;
         return Err(ResolveSyncError::Failed(reason));
@@ -368,7 +458,16 @@ async fn run_resolver_turn(sync_ctx: ResolveSyncContext<'_>) -> Result<String, R
 
     // Staging turns Git's unmerged index entries into the resolved files;
     // this is the authoritative completion check, independent of agent kind.
-    let still_unmerged = list_unmerged_files(&**exec, machine_str, resolved_cwd).await;
+    let still_unmerged = match try_list_unmerged_files(&**exec, machine_str, resolved_cwd).await {
+        Ok(files) => files,
+        Err(why) => {
+            let _ = registry.kill(&resolver_thread_id).await;
+            return Err(ResolveSyncError::Failed(format!(
+                "Could not read {} back to confirm the resolution: {}",
+                resolved_cwd, why
+            )));
+        }
+    };
     if !still_unmerged.is_empty() {
         let _ = registry.kill(&resolver_thread_id).await;
         return Err(ResolveSyncError::Failed(
@@ -402,60 +501,89 @@ async fn run_resolver_turn(sync_ctx: ResolveSyncContext<'_>) -> Result<String, R
     //
     // Guarded because an agent that committed on its own leaves nothing to
     // record — see `steps::pending_commit`.
-    if worktree_has_pending_commit(&**exec, machine_str, resolved_cwd).await {
-        let commit_resolved = exec
-            .run_command(
-                machine_str,
-                &format!(
-                    "{} -c user.email=demeteo@local -c user.name=demeteo commit -m {}",
-                    paths::git_no_hooks(resolved_cwd),
-                    paths::shell_escape_posix(&message),
-                ),
-            )
-            .await;
-        if let Err(e) = commit_resolved {
+    match pending_commit::probe(&**exec, machine_str, resolved_cwd).await {
+        PendingCommit::Nothing => {}
+        // The one arm with data loss behind it. A skipped commit still pushes
+        // (a no-op), still reads a sha back (the pre-merge one), still files
+        // the session `Resolved` — and the teardown then force-removes the
+        // worktree the agent's work is sitting in, unpublished.
+        PendingCommit::Unreadable(why) => {
             let _ = registry.kill(&resolver_thread_id).await;
             return Err(ResolveSyncError::Failed(format!(
-                "Failed to commit resolution: {}",
-                e
+                "Could not tell whether the resolution still needs committing, so it was left in {}: {}",
+                resolved_cwd, why
             )));
+        }
+        PendingCommit::Pending => {
+            let commit_resolved = exec
+                .run_command(
+                    machine_str,
+                    &format!(
+                        "{} -c user.email=demeteo@local -c user.name=demeteo commit -m {}",
+                        paths::git_no_hooks(resolved_cwd),
+                        paths::shell_escape_posix(&message),
+                    ),
+                )
+                .await;
+            if let Err(e) = commit_resolved {
+                let _ = registry.kill(&resolver_thread_id).await;
+                return Err(ResolveSyncError::Failed(format!(
+                    "Failed to commit resolution: {}",
+                    e
+                )));
+            }
         }
     }
 
-    // Push the resolution to origin remote.
-    exec.run_command(
+    // Read before the push rather than after it. `push` does not move `HEAD`,
+    // so the two orders name the same commit — but this one is still on the
+    // failing side of the publish, so an unreadable answer can be refused
+    // outright instead of becoming the empty sha a `Succeeded` verdict then
+    // carries as its evidence.
+    let head_sha = match ask(
+        &**exec,
         machine_str,
         &format!(
-            "git -C {} push origin {}",
-            paths::shell_escape_posix(resolved_cwd),
-            paths::shell_escape_posix(feature_branch),
+            "git -C {} rev-parse HEAD",
+            paths::shell_escape_posix(resolved_cwd)
         ),
     )
     .await
-    .map_err(|e| {
-        ResolveSyncError::Failed(format!(
-            "Resolution committed locally but push to origin/{} failed: {}. Push the feature branch manually.",
-            feature_branch, e
-        ))
-    })?;
+    {
+        Answer::Said(out) => out.trim().to_string(),
+        Answer::Refused | Answer::Unreadable(_) => {
+            let _ = registry.kill(&resolver_thread_id).await;
+            return Err(ResolveSyncError::Failed(format!(
+                "The resolution was committed in {} but its commit could not be read back, so it was not published.",
+                resolved_cwd
+            )));
+        }
+    };
 
-    let _ = registry.kill(&resolver_thread_id).await;
-
-    // Capture the new HEAD sha.
-    let head_sha = exec
+    if let Err(e) = exec
         .run_command(
             machine_str,
             &format!(
-                "git -C {} rev-parse HEAD",
-                paths::shell_escape_posix(resolved_cwd)
+                "git -C {} push origin {}",
+                paths::shell_escape_posix(resolved_cwd),
+                paths::shell_escape_posix(feature_branch),
             ),
         )
         .await
-        .ok()
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+    {
+        let _ = registry.kill(&resolver_thread_id).await;
+        return Err(ResolveSyncError::Failed(format!(
+            "Resolution committed locally but push to origin/{} failed: {}. Push the feature branch manually.",
+            feature_branch, e
+        )));
+    }
 
-    Ok(head_sha)
+    let _ = registry.kill(&resolver_thread_id).await;
+
+    Ok(ResolvedSync {
+        merge_commit_sha: head_sha,
+        cache,
+    })
 }
 
 async fn ensure_conflict_markers_removed(

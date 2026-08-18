@@ -391,8 +391,12 @@ fn every_constructor_writes_the_status_it_is_named_for() {
 }
 
 /// A transition that reports success has no failure to report, and one that
-/// reports a failure has no artifact to point at. Encoding that in the
-/// constructors is what keeps a `completed` row from carrying a stale error.
+/// reports a failure has no artifact to point at.
+///
+/// Success *clears* the column rather than leaving it: `None` here means "leave
+/// the column alone", which is how a step that failed and then succeeded went
+/// on rendering the previous attempt's message under a green status. Every
+/// other node kind spells the clear by hand in its own completion path.
 #[test]
 fn a_success_carries_no_error_and_a_failure_carries_no_artifact() {
     let h = Harness::new(FeaturesDouble::accepting());
@@ -401,7 +405,7 @@ fn a_success_carries_no_error_and_a_failure_carries_no_artifact() {
         &step_exec(),
         StepTransition::completed(0.0, 0, 0, None, CacheTokens::default()),
     );
-    assert_eq!(h.features.patches()[0].error_message, None);
+    assert_eq!(h.features.patches()[0].error_message, Some(None));
 
     let h = Harness::new(FeaturesDouble::accepting());
     update_step_status(

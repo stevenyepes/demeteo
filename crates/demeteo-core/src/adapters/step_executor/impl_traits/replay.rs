@@ -1,7 +1,7 @@
 use super::super::DagStepExecutor;
 use crate::domain::ids::StepExecutionId;
 use crate::domain::models::{StepAttempt, StepConfig, StepExecution};
-use crate::domain::run_control::{shadow_refusal, RunAction};
+use crate::domain::run_control::{out_of_band_refusal, shadow_refusal, RunAction};
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::notification::DomainEvent;
 use crate::ports::step_executor::StepExecutor;
@@ -109,6 +109,13 @@ impl DagStepExecutor {
 
         let feature_id = &step_exec.feature_id;
 
+        // `step_retry` repeats this check ahead of here to answer a typed
+        // validation error in its own words; this one is the backstop for
+        // every other caller, on the pattern of the shadow guard below.
+        if let Some(refusal) = out_of_band_refusal(RunAction::Replay, &step_exec.step_id.0) {
+            return Err(refusal);
+        }
+
         // Never replay a runner-owned shadow. This is the shared primitive
         // behind both `step_retry` and `replay_from_step`, and it calls
         // `start_execution_loop` directly rather than going through
@@ -183,7 +190,7 @@ impl DagStepExecutor {
                     {
                         let w_step_ids: Vec<String> =
                             steps.iter().map(|s| s.id.0.clone()).collect();
-                        if w_step_ids == step_ids {
+                        if crate::domain::step_seed::workflow_matches_rows(&w_step_ids, &step_ids) {
                             self.features.update_workflow_id(feature_id, &w.id)?;
                             workflow_id = Some(w.id);
                             break;

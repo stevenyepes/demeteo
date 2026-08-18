@@ -77,3 +77,22 @@ export async function fetchMrState(
 export async function getFeature(featureId: string): Promise<Feature | null> {
   return invoke<Feature | null>("feature_get", { featureId });
 }
+
+/**
+ * The `step_id` an out-of-band sync records itself under
+ * (`domain::step_seed::MANUAL_SYNC_STEP_ID`).
+ *
+ * The row exists so the resolution can stream to an id the inspector
+ * subscribes to, and it lands in `step_executions` beside the run's own rows —
+ * which is also the frontend's rollup input. Nothing in the row marks it as
+ * out-of-band, so every reader that summarises a *run* has to exclude it: a
+ * manual sync the user tried once and gave up on would otherwise report a
+ * finished run as failed forever, and the actions the inspector offers a node
+ * are refused for it by the backend.
+ */
+export const MANUAL_SYNC_STEP_ID = "s-sync-manual";
+
+/** Whether `stepId` names a row no workflow node produced. */
+export function isOutOfBandStep(stepId: string): boolean {
+  return stepId === MANUAL_SYNC_STEP_ID;
+}

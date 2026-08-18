@@ -30,10 +30,9 @@ const REPO: &str = "/repos/demeteo";
 const WT: &str = "/repos/demeteo_wt_sync_feature-f-1";
 const PORCELAIN: &str =
     "git -C /repos/demeteo_wt_sync_feature-f-1 status --porcelain --untracked-files=no";
-const MERGE_HEAD: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse --verify MERGE_HEAD";
-const ADD_ALL: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 add -A";
-const PENDING_MERGE_HEAD: &str =
+const MERGE_HEAD: &str =
     "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse --verify --quiet MERGE_HEAD";
+const ADD_ALL: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 add -A";
 const PENDING_STATUS: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 status --porcelain";
 const COMMIT: &str = "git -c core.hooksPath=/dev/null -C /repos/demeteo_wt_sync_feature-f-1 \
                       -c user.email=demeteo@local -c user.name=demeteo commit -m \
@@ -42,6 +41,17 @@ const PUSH: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 push origin featur
 const HEAD: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse HEAD";
 const DISCARD: &str =
     "git -C /repos/demeteo worktree remove --force /repos/demeteo_wt_sync_feature-f-1";
+const PRUNE: &str = "git -C /repos/demeteo worktree prune";
+/// The teardown's confirmation read: only an observed-gone tree lets the row
+/// stop naming the worktree.
+const GIT_DIR: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse --git-dir";
+
+fn transport_dead() -> String {
+    format!(
+        "{}Connection appears dead",
+        crate::ports::execution::TRANSPORT_ERROR_PREFIX
+    )
+}
 
 /// Records what the turn told the UI, so a test can assert which row the
 /// stream was keyed to rather than that a stream happened.
@@ -56,18 +66,77 @@ impl NotificationPort for CapturingNotif {
     }
 }
 
+/// When a stop lands, relative to the turn it interrupts.
+///
+/// The two guards in the resolver are separate and only one of them is about
+/// the agent: the watch handed to `stream_agent_turn` ends a turn in flight,
+/// and the recheck afterwards catches a stop that arrived while git was
+/// running. A fixture that delivers its whole script synchronously satisfies
+/// both from the *recheck*, which is how "the resolver passes a cancel watch"
+/// went untested while reading as covered.
+#[derive(Clone, Copy, PartialEq)]
+enum StopAt {
+    /// As the agent is prompted. Only the watch inside the turn can see it, and
+    /// the turn is then billed nothing.
+    Prompt,
+    /// As the stream closes, after the turn has run and been billed. The watch
+    /// has nothing left to interrupt; only the recheck sees it.
+    StreamEnd,
+}
+
 /// An [`AgentSession`] that replays a fixed script — the wire, minus the
 /// process. Copied in shape from `tests/infrastructure/agent/event_stream.rs`;
 /// what this file needs beyond it is a *runtime* the registry can spawn from.
-struct ScriptedSession(Vec<AgentEvent>);
+///
+/// `linger` is the pause between the first token and the rest, and it is what
+/// makes a mid-turn stop deterministic rather than a race with the rest of the
+/// script.
+struct ScriptedSession {
+    events: Vec<AgentEvent>,
+    linger: Option<std::time::Duration>,
+    stop: Option<(StopAt, watch::Sender<bool>)>,
+    /// Trips when the registry reaps this session. The resolver's thread id is
+    /// minted per turn from the clock, so nothing else in a test can tell a
+    /// reaped session from a leaked one.
+    killed: Arc<std::sync::atomic::AtomicBool>,
+}
+
 impl AgentSession for ScriptedSession {
     fn session_id(&self) -> &str {
         "scripted"
     }
     fn prompt(&self, _: &str) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {
-        Box::pin(tokio_stream::iter(self.0.clone()))
+        if let Some((StopAt::Prompt, tx)) = &self.stop {
+            let _ = tx.send(true);
+        }
+        let at_end = match &self.stop {
+            Some((StopAt::StreamEnd, tx)) => Some(tx.clone()),
+            _ => None,
+        };
+        Box::pin(futures::stream::unfold(
+            (0usize, self.events.clone(), self.linger, at_end),
+            |(i, events, linger, at_end)| async move {
+                if i == 1 {
+                    if let Some(d) = linger {
+                        tokio::time::sleep(d).await;
+                    }
+                }
+                if i < events.len() {
+                    let event = events[i].clone();
+                    return Some((event, (i + 1, events, linger, at_end)));
+                }
+                if let Some(tx) = &at_end {
+                    let _ = tx.send(true);
+                }
+                None
+            },
+        ))
     }
     fn cancel(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn kill(&self) -> Result<(), String> {
+        self.killed.store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
     fn set_mode(&self, _: &str) -> Result<(), String> {
@@ -81,7 +150,64 @@ impl AgentSession for ScriptedSession {
     }
 }
 
-struct ScriptedRuntime;
+/// The ceilings the turn asked the harness for, which are invisible to every
+/// other assertion here: the registry hands the runtime an `AgentContext` and
+/// nothing downstream reports what was in it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SpawnedWith {
+    max_turns: Option<u32>,
+    max_budget_usd: Option<f64>,
+}
+
+#[derive(Default)]
+struct ScriptedRuntime {
+    seen: std::sync::Mutex<Vec<SpawnedWith>>,
+    linger: Option<std::time::Duration>,
+    stop: Option<(StopAt, watch::Sender<bool>)>,
+    killed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ScriptedRuntime {
+    /// A turn that pauses after its first token and trips `stop` at `at`.
+    fn stopping(at: StopAt, stop: watch::Sender<bool>) -> Self {
+        Self {
+            linger: Some(std::time::Duration::from_millis(300)),
+            stop: Some((at, stop)),
+            ..Default::default()
+        }
+    }
+    fn spawns(&self) -> Vec<SpawnedWith> {
+        self.seen.lock().unwrap().clone()
+    }
+    fn session_reaped(&self) -> bool {
+        self.killed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// `TurnComplete` is what ends the turn, so the stop-at-close fixture omits
+    /// it: the stream's own end is then the last thing that happens before the
+    /// recheck, and there is no race with it.
+    fn events(&self) -> Vec<AgentEvent> {
+        let mut events = vec![
+            AgentEvent::Text {
+                delta: "resolved".to_string(),
+            },
+            AgentEvent::Usage(Usage {
+                input_tokens: 400,
+                output_tokens: 600,
+                cache_read_input_tokens: 70,
+                cache_creation_input_tokens: 30,
+                cost_usd: Some(1.25),
+            }),
+        ];
+        if !matches!(self.stop, Some((StopAt::StreamEnd, _))) {
+            events.push(AgentEvent::TurnComplete {
+                stop_reason: StopReason::EndOfTurn,
+                usage: None,
+            });
+        }
+        events
+    }
+}
+
 #[async_trait::async_trait]
 impl AgentRuntime for ScriptedRuntime {
     fn kind(&self) -> &'static str {
@@ -106,7 +232,7 @@ impl AgentRuntime for ScriptedRuntime {
     }
     fn start(
         &self,
-        _ctx: crate::ports::agent_runtime::AgentContext,
+        ctx: crate::ports::agent_runtime::AgentContext,
     ) -> Pin<
         Box<
             dyn std::future::Future<Output = Result<Arc<dyn AgentSession>, AgentStartError>>
@@ -114,23 +240,21 @@ impl AgentRuntime for ScriptedRuntime {
                 + '_,
         >,
     > {
-        Box::pin(async {
-            let session: Arc<dyn AgentSession> = Arc::new(ScriptedSession(vec![
-                AgentEvent::Text {
-                    delta: "resolved".to_string(),
-                },
-                AgentEvent::Usage(Usage {
-                    input_tokens: 400,
-                    output_tokens: 600,
-                    cache_read_input_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                    cost_usd: Some(1.25),
-                }),
-                AgentEvent::TurnComplete {
-                    stop_reason: StopReason::EndOfTurn,
-                    usage: None,
-                },
-            ]));
+        self.seen.lock().unwrap().push(SpawnedWith {
+            max_turns: ctx.max_turns,
+            max_budget_usd: ctx.max_budget_usd,
+        });
+        let events = self.events();
+        let linger = self.linger;
+        let stop = self.stop.clone();
+        let killed = self.killed.clone();
+        Box::pin(async move {
+            let session: Arc<dyn AgentSession> = Arc::new(ScriptedSession {
+                events,
+                linger,
+                stop,
+                killed,
+            });
             Ok(session)
         })
     }
@@ -261,7 +385,7 @@ async fn run(
     cancel: Option<watch::Receiver<bool>>,
     cost: &mut f64,
     tokens: &mut i64,
-) -> Result<String, ResolveSyncError> {
+) -> Result<ResolvedSync, ResolveSyncError> {
     resolve_sync_conflicts(ResolveSyncContext {
         exec: &p.exec,
         registry: &p.registry,
@@ -304,14 +428,16 @@ fn happy_path() -> ScriptedExec {
         (PORCELAIN, Ok("")),
         (MERGE_HEAD, Ok("b1b2b3b\n")),
         (ADD_ALL, Ok("")),
-        (PENDING_MERGE_HEAD, Ok("b1b2b3b\n")),
         (
             COMMIT,
             Ok("[feature/f-1 c0ffee] chore: resolve sync conflicts"),
         ),
-        (PUSH, Ok("")),
         (HEAD, Ok("c0ffeec\n")),
+        (PUSH, Ok("")),
         (DISCARD, Ok("")),
+        (PRUNE, Ok("")),
+        // The teardown's confirmation: the tree really is gone.
+        (GIT_DIR, Err("fatal: not a git repository")),
     ])
 }
 
@@ -324,7 +450,13 @@ fn happy_path() -> ScriptedExec {
 /// step row.
 #[tokio::test]
 async fn a_turn_that_found_no_merge_leaves_the_verdict_on_the_session() {
-    let p = ports(ScriptedExec::new(&[]), vec![]);
+    let p = ports(
+        ScriptedExec::new(&[
+            (PORCELAIN, Ok("")),
+            (MERGE_HEAD, Err("fatal: Needed a single revision")),
+        ]),
+        vec![],
+    );
     open_conflicted(&p.db);
     let (mut cost, mut tokens) = (0.0, 0);
 
@@ -354,14 +486,14 @@ async fn a_turn_that_found_no_merge_leaves_the_verdict_on_the_session() {
 /// showed the user a spinner and billed them nothing.
 #[tokio::test]
 async fn the_turn_bills_the_totals_it_was_handed_and_streams_to_its_own_row() {
-    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime)]);
+    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime::default())]);
     open_conflicted(&p.db);
     let step_exec = row();
     let (mut cost, mut tokens) = (0.0, 0);
 
     let outcome = run(&p, &step_exec, None, &mut cost, &mut tokens).await;
 
-    assert_eq!(outcome.unwrap(), "c0ffeec");
+    assert_eq!(outcome.unwrap().merge_commit_sha, "c0ffeec");
     assert_eq!(cost, 1.25, "the turn's dollars have to reach the caller");
     assert_eq!(tokens, 1000, "and so do its tokens");
 
@@ -397,7 +529,7 @@ async fn a_file_outside_the_reported_conflicts_is_staged_with_the_rest() {
             "/repos/demeteo_wt_sync_feature-f-1/src/lib.rs",
             Ok("clean\n"),
         )]);
-    let p = ports(scripted, vec![Arc::new(ScriptedRuntime)]);
+    let p = ports(scripted, vec![Arc::new(ScriptedRuntime::default())]);
     open_conflicted(&p.db);
     let (mut cost, mut tokens) = (0.0, 0);
 
@@ -425,21 +557,24 @@ async fn a_file_outside_the_reported_conflicts_is_staged_with_the_rest() {
 async fn an_agent_that_committed_on_its_own_does_not_fail_the_sync() {
     let scripted = ScriptedExec::new(&[
         (PORCELAIN, Ok("")),
-        (MERGE_HEAD, Ok("b1b2b3b\n")),
         (ADD_ALL, Ok("")),
-        (PENDING_MERGE_HEAD, Ok("")),
         (PENDING_STATUS, Ok("")),
-        (PUSH, Ok("")),
         (HEAD, Ok("c0ffeec\n")),
+        (PUSH, Ok("")),
         (DISCARD, Ok("")),
-    ]);
-    let p = ports(scripted, vec![Arc::new(ScriptedRuntime)]);
+        (PRUNE, Ok("")),
+        (GIT_DIR, Err("fatal: not a git repository")),
+    ])
+    // Open when the turn starts, consumed by the agent's own commit by the
+    // time Demeteo asks whether one is still owed.
+    .with_queue(MERGE_HEAD, &[Ok("b1b2b3b\n"), Ok("")]);
+    let p = ports(scripted, vec![Arc::new(ScriptedRuntime::default())]);
     open_conflicted(&p.db);
     let (mut cost, mut tokens) = (0.0, 0);
 
     let outcome = run(&p, &row(), None, &mut cost, &mut tokens).await;
 
-    assert_eq!(outcome.unwrap(), "c0ffeec");
+    assert_eq!(outcome.unwrap().merge_commit_sha, "c0ffeec");
     assert_eq!(
         stored_status(&p.db),
         SyncSessionStatus::Resolved,
@@ -455,7 +590,7 @@ async fn an_agent_that_committed_on_its_own_does_not_fail_the_sync() {
 /// reading `failed` rather than `interrupted`.
 #[tokio::test]
 async fn a_stop_that_arrived_first_spawns_no_agent() {
-    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime)]);
+    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime::default())]);
     open_conflicted(&p.db);
     let (_tx, rx) = watch::channel(true);
     let (mut cost, mut tokens) = (0.0, 0);
@@ -471,6 +606,255 @@ async fn a_stop_that_arrived_first_spawns_no_agent() {
         p.scripted.commands(),
         vec![PORCELAIN.to_string(), MERGE_HEAD.to_string()],
         "the stop has to land before the spawn, not after it"
+    );
+}
+
+/// The resolution has to be *recorded*, and nothing said so.
+///
+/// Forcing the commit guard to `false` — so the merge is never committed at all
+/// — left the whole suite green: the sha this file asserts comes from a
+/// scripted `rev-parse HEAD` that answers the same whether or not a commit ran,
+/// so the one write the turn exists to make could disappear while the session
+/// was still filed `Resolved`. Only the skip direction was covered.
+#[tokio::test]
+async fn the_resolution_is_committed_before_it_is_published() {
+    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime::default())]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let outcome = run(&p, &row(), None, &mut cost, &mut tokens).await;
+    assert!(outcome.is_ok(), "{outcome:?}");
+
+    let commands = p.scripted.commands();
+    let commit = commands.iter().position(|c| c == COMMIT);
+    let push = commands.iter().position(|c| c == PUSH);
+    assert!(
+        commit.is_some(),
+        "the merge the agent resolved has to be committed: {commands:?}"
+    );
+    assert!(
+        commit < push,
+        "and committed before it is published: {commands:?}"
+    );
+}
+
+/// The prompt cache the turn used has to reach the row.
+///
+/// `cost_usd` and `tokens` were folded out of the `TurnOutcome` and the two
+/// cache counters were dropped, so both callers wrote `CacheTokens::default()`
+/// and the header's cache chips undercounted every conflict resolution.
+#[tokio::test]
+async fn the_turns_cache_telemetry_reaches_its_caller() {
+    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime::default())]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let resolved = run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("the happy path resolves");
+
+    assert_eq!(
+        resolved.cache,
+        CacheTokens {
+            read: Some(70),
+            creation: Some(30)
+        }
+    );
+}
+
+/// A resolver turn the user started by hand is an unbounded spend unless the
+/// ceilings reach the harness, and nothing downstream reports what the registry
+/// was handed — so reverting both to `None` was invisible to every other test.
+#[tokio::test]
+async fn the_resolver_is_spawned_with_a_turn_cap_and_a_budget() {
+    let runtime = Arc::new(ScriptedRuntime::default());
+    let p = ports(happy_path(), vec![runtime.clone()]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("the happy path resolves");
+
+    assert_eq!(
+        runtime.spawns(),
+        vec![SpawnedWith {
+            max_turns: Some(RESOLVER_MAX_TURNS),
+            max_budget_usd: Some(10.0),
+        }]
+    );
+}
+
+/// Stop, honoured *during* the turn — the only case the cancel watch exists
+/// for, and the one a stop-before-the-spawn test cannot reach.
+///
+/// The turn is billed nothing, which is what separates this from the recheck
+/// below: a resolver handed no watch at all runs its turn to completion, bills
+/// it, and is only then refused.
+#[tokio::test]
+async fn a_stop_that_arrives_mid_turn_ends_it_before_the_turn_is_billed() {
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let runtime = Arc::new(ScriptedRuntime::stopping(StopAt::Prompt, cancel_tx));
+    let p = ports(happy_path(), vec![runtime.clone()]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let outcome = run(&p, &row(), Some(cancel_rx), &mut cost, &mut tokens).await;
+
+    assert!(
+        matches!(outcome, Err(ResolveSyncError::Cancelled(_))),
+        "{outcome:?}"
+    );
+    assert_eq!(runtime.spawns().len(), 1, "the agent did start");
+    assert_eq!(cost, 0.0, "an interrupted turn is billed nothing");
+    let commands = p.scripted.commands();
+    assert!(
+        !commands
+            .iter()
+            .any(|c| c == ADD_ALL || c == COMMIT || c == PUSH),
+        "a stopped turn stages, commits and publishes nothing: {commands:?}"
+    );
+    assert_eq!(
+        stored_status(&p.db),
+        SyncSessionStatus::ResolutionFailed,
+        "and the session records the turn that did not land"
+    );
+}
+
+/// A stop that lands once the turn is over is the other guard, and it is the
+/// one that decides whether the row reads `interrupted` or `failed`: without
+/// it the resolution walks on into staging and committing in a worktree the
+/// user has asked to be left alone.
+#[tokio::test]
+async fn a_stop_that_arrives_after_the_turn_still_stops_the_resolution() {
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let runtime = Arc::new(ScriptedRuntime::stopping(StopAt::StreamEnd, cancel_tx));
+    let p = ports(happy_path(), vec![runtime.clone()]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let outcome = run(&p, &row(), Some(cancel_rx), &mut cost, &mut tokens).await;
+
+    assert!(
+        matches!(outcome, Err(ResolveSyncError::Cancelled(_))),
+        "{outcome:?}"
+    );
+    assert_eq!(cost, 1.25, "this turn ran and has to be paid for");
+    let commands = p.scripted.commands();
+    assert!(
+        !commands.iter().any(|c| c == ADD_ALL || c == PUSH),
+        "nothing is staged or published after a stop: {commands:?}"
+    );
+}
+
+/// Every other exit from the turn reaps the resolver; the push's `?` returned
+/// straight out. The thread id is minted per turn from the clock, so nothing
+/// later reclaims it: the agent process outlives the run and its registry entry
+/// accumulates for the life of the app.
+#[tokio::test]
+async fn a_push_that_failed_still_reaps_the_resolver() {
+    let scripted = happy_path().with_queue(PUSH, &[Err("fatal: remote rejected")]);
+    let runtime = Arc::new(ScriptedRuntime::default());
+    let p = ports(scripted, vec![runtime.clone()]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let outcome = run(&p, &row(), None, &mut cost, &mut tokens).await;
+
+    assert!(
+        matches!(&outcome, Err(ResolveSyncError::Failed(reason)) if reason.contains("push to origin")),
+        "{outcome:?}"
+    );
+    assert!(
+        runtime.session_reaped(),
+        "the resolver agent is still running"
+    );
+}
+
+/// A channel that dies over the commit guard used to read as "the agent
+/// committed it itself": the commit was skipped, the push succeeded as a no-op,
+/// `rev-parse HEAD` answered the pre-merge sha, and the teardown then deleted
+/// the worktree the resolution was sitting in — with the session filed
+/// `Resolved`.
+#[tokio::test]
+async fn an_unreadable_commit_guard_keeps_the_worktree_and_the_verdict_honest() {
+    let scripted = happy_path().with_queue(MERGE_HEAD, &[Ok("b1b2b3b\n"), Err(&transport_dead())]);
+    let p = ports(scripted, vec![Arc::new(ScriptedRuntime::default())]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let outcome = run(&p, &row(), None, &mut cost, &mut tokens).await;
+
+    assert!(
+        matches!(outcome, Err(ResolveSyncError::Failed(_))),
+        "{outcome:?}"
+    );
+    let commands = p.scripted.commands();
+    assert!(
+        !commands.iter().any(|c| c == PUSH || c == DISCARD),
+        "nothing may be published or deleted on an answer nobody got: {commands:?}"
+    );
+    assert_eq!(stored_status(&p.db), SyncSessionStatus::ResolutionFailed);
+    let session: &dyn SyncSessionPort = &*p.db;
+    assert_eq!(
+        session
+            .get(&fid())
+            .unwrap()
+            .unwrap()
+            .worktree_path
+            .as_deref(),
+        Some(WT),
+        "the row has to keep naming the tree the resolution is still in"
+    );
+}
+
+/// An unreachable host is not a verdict about a merge, and a session it could
+/// not read may not be rewritten from it. The row previously moved to
+/// `resolution_failed` with `raw_error` replaced by advice — re-run Sync —
+/// whose force-remove would then take the live conflicted worktree.
+#[tokio::test]
+async fn an_unreachable_worktree_leaves_the_conflicted_session_untouched() {
+    let p = ports(
+        ScriptedExec::new(&[(PORCELAIN, Err(&transport_dead()))]),
+        vec![],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let outcome = run(&p, &row(), None, &mut cost, &mut tokens).await;
+
+    assert!(
+        matches!(outcome, Err(ResolveSyncError::Failed(_))),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        stored_status(&p.db),
+        SyncSessionStatus::Conflicted,
+        "nothing was observed, so nothing may be recorded"
+    );
+}
+
+/// The teardown reports nothing, so the row may only stop naming the worktree
+/// once something has *seen* it go — the rule
+/// `application::sync_session::abort` takes at the same boundary.
+#[tokio::test]
+async fn a_worktree_the_teardown_could_not_confirm_stays_on_the_row() {
+    let scripted = happy_path().with_queue(GIT_DIR, &[Err(&transport_dead())]);
+    let p = ports(scripted, vec![Arc::new(ScriptedRuntime::default())]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("the resolution itself landed");
+
+    let session: &dyn SyncSessionPort = &*p.db;
+    let stored = session.get(&fid()).unwrap().unwrap();
+    assert_eq!(stored.status, SyncSessionStatus::Resolved);
+    assert_eq!(
+        stored.worktree_path.as_deref(),
+        Some(WT),
+        "a path nobody confirmed gone is a directory nothing would ever reclaim"
     );
 }
 

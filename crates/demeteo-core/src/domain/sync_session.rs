@@ -89,7 +89,19 @@ pub enum SyncResolution {
     /// claiming `conflicted` while an agent holds the worktree.
     Started,
     /// The conflicts are gone and committed.
-    Succeeded { merge_commit_sha: String },
+    Succeeded {
+        merge_commit_sha: String,
+        /// Whether the throwaway worktree was *observed* to be gone after the
+        /// teardown, which is what decides whether the row may stop naming it.
+        ///
+        /// The teardown is best-effort and reports nothing, so a row blanked on
+        /// its say-so can leave a directory on disk that no row names and no
+        /// reader revisits — the leak
+        /// [`abort`](crate::application::sync_session::abort) refuses to create
+        /// by returning an error instead. Two paths clearing one column on
+        /// opposite rules is what the flag removes.
+        worktree_discarded: bool,
+    },
     /// The turn ran and did not produce a resolved tree.
     Failed { reason: String },
 }
@@ -122,7 +134,23 @@ impl SyncResolution {
 /// resolution turn recording itself, the row legitimately reads `conflicted`
 /// while the step is still the one holding the worktree.
 pub fn user_may_intervene(status: SyncSessionStatus, feature_status: &str) -> bool {
-    intervention_refusal(status, feature_status).is_none()
+    intervention_refusal(SyncIntervention::Abort, status, feature_status).is_none()
+}
+
+/// What the user is asking to do to a sync that is not running.
+///
+/// The two affordances do not accept the same sessions, and collapsing them
+/// into one predicate is what let the resolve IPC reach a `Blocked` row: a
+/// sync that stopped before it reached a merge has no conflicts, so resolving
+/// it can only fail — and failing it rewrites the stored `UpstreamSyncFailure`
+/// text, which is the one thing a blocked row exists to keep. Aborting the same
+/// row is legitimate; it holds a real unpublished merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncIntervention {
+    /// Undo the merge, discard the worktree, close the session.
+    Abort,
+    /// Put an agent in the conflicted worktree.
+    Resolve,
 }
 
 /// Why this sync is not the user's to act on, or `None` when it is.
@@ -130,9 +158,10 @@ pub fn user_may_intervene(status: SyncSessionStatus, feature_status: &str) -> bo
 /// The same decision as [`user_may_intervene`], in the shape a caller that has
 /// to *answer* needs: the UI hides the affordance, but the IPC behind it stays
 /// reachable, and a request that arrives anyway is owed the reason rather than a
-/// silent no-op. Two reasons, and they are not interchangeable — one resolves
-/// itself when the run finishes, the other never will.
+/// silent no-op. The reasons are not interchangeable — one resolves itself when
+/// the run finishes, the others never will.
 pub fn intervention_refusal(
+    action: SyncIntervention,
     status: SyncSessionStatus,
     feature_status: &str,
 ) -> Option<&'static str> {
@@ -143,9 +172,14 @@ pub fn intervention_refusal(
         );
     }
     match status {
-        SyncSessionStatus::Conflicted
-        | SyncSessionStatus::ResolutionFailed
-        | SyncSessionStatus::Blocked => None,
+        SyncSessionStatus::Conflicted | SyncSessionStatus::ResolutionFailed => None,
+        SyncSessionStatus::Blocked => match action {
+            SyncIntervention::Abort => None,
+            SyncIntervention::Resolve => Some(
+                "This sync stopped before it reached a merge, so there are no conflicts to \
+                 resolve. Fix what blocked it and sync again, or abandon the sync.",
+            ),
+        },
         SyncSessionStatus::Resolving => {
             Some("An agent is already resolving this sync; give it time or stop the run.")
         }

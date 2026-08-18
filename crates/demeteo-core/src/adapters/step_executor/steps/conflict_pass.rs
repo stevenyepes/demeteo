@@ -42,7 +42,7 @@
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::spend::RunningSpend;
 use crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files;
-use crate::adapters::step_executor::steps::pending_commit::worktree_has_pending_commit;
+use crate::adapters::step_executor::steps::pending_commit::{self, PendingCommit};
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::models::StepExecution;
 use crate::paths;
@@ -195,26 +195,35 @@ impl ExecutionDriver {
         // staged above, and this worktree outlives the pass — the step goes on
         // working in it — so an untracked file lying in it is not part of the
         // resolution. See `steps::pending_commit` for why the guard is here.
-        if worktree_has_pending_commit(&*self.exec, machine_str, wt_path).await {
-            self.exec
-                .run_command(
-                    machine_str,
-                    &format!(
-                        "{} commit -am {}",
-                        paths::git_no_hooks(wt_path),
-                        paths::shell_escape_posix(&format!(
-                            "chore: resolve merge conflicts with {}",
-                            self.branch_name
-                        )),
-                    ),
-                )
-                .await
-                .map_err(|e| {
-                    ConflictPassError::Failed(format!(
-                        "failed to commit the merge-conflict resolution: {}",
-                        e
-                    ))
-                })?;
+        match pending_commit::probe(&*self.exec, machine_str, wt_path).await {
+            PendingCommit::Nothing => {}
+            PendingCommit::Unreadable(why) => {
+                return Err(ConflictPassError::Failed(format!(
+                "could not tell whether the merge-conflict resolution still needs committing: {}",
+                why
+            )))
+            }
+            PendingCommit::Pending => {
+                self.exec
+                    .run_command(
+                        machine_str,
+                        &format!(
+                            "{} commit -am {}",
+                            paths::git_no_hooks(wt_path),
+                            paths::shell_escape_posix(&format!(
+                                "chore: resolve merge conflicts with {}",
+                                self.branch_name
+                            )),
+                        ),
+                    )
+                    .await
+                    .map_err(|e| {
+                        ConflictPassError::Failed(format!(
+                            "failed to commit the merge-conflict resolution: {}",
+                            e
+                        ))
+                    })?;
+            }
         }
 
         Ok(ConflictPass::Resolved(billing))

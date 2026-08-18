@@ -12,13 +12,12 @@
 use std::sync::Arc;
 
 use crate::adapters::step_executor::sync_worktree::discard_sync_worktree;
-use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
 use crate::domain::ids::FeatureId;
 use crate::domain::sync_session::{
     reconcile, user_may_intervene, SyncSessionStatus, SyncWorkspaceProbe,
 };
 use crate::paths;
-use crate::ports::execution::ExecutionPort;
+use crate::ports::execution::{ask, Answer, ExecutionPort};
 use crate::ports::sync_session::{SyncSession, SyncSessionPatch, SyncSessionPort, SyncSessionView};
 
 /// The feature's session as the working tree says it stands.
@@ -134,10 +133,7 @@ pub async fn abort(
         // survives: the guard inside `discard_sync_worktree` refuses to delete
         // the clone, and undoing the merge there is the whole of the abort.
         if worktree != session.repo_dir
-            && !matches!(
-                probe_worktree(&**exec, &session.machine_id, worktree, None).await,
-                Some(probe) if !probe.worktree_exists
-            )
+            && !worktree_confirmed_gone(&**exec, &session.machine_id, worktree).await
         {
             return Err(format!(
                 "Could not confirm the sync worktree at {} is gone, so the sync is still open. \
@@ -160,6 +156,26 @@ pub async fn abort(
     session.worktree_path = None;
     session.updated_at = now;
     Ok(Some(session))
+}
+
+/// Has `worktree` been observed to be gone — as opposed to merely failing to
+/// answer?
+///
+/// The one question every path that *clears* `worktree_path` has to answer
+/// first, and the reason [`abort`] refuses rather than closing an unreadable
+/// session. A resolution's teardown owes the same care for the same reason:
+/// [`discard_sync_worktree`] reports nothing, so a row blanked on the strength
+/// of a delete nobody confirmed names a directory that may still be on disk,
+/// and no reader is left to revisit it.
+pub(crate) async fn worktree_confirmed_gone(
+    exec: &dyn ExecutionPort,
+    machine: &str,
+    worktree: &str,
+) -> bool {
+    matches!(
+        probe_worktree(exec, machine, worktree, None).await,
+        Some(probe) if !probe.worktree_exists
+    )
 }
 
 /// What the tree at `worktree` says about the merge the session claims, or
@@ -200,7 +216,7 @@ async fn probe_worktree(
                 head_advanced: None,
             })
         }
-        Answer::Unreadable => return None,
+        Answer::Unreadable(_) => return None,
         Answer::Said(_) => {}
     }
     let merge_in_progress = match ask(
@@ -214,7 +230,7 @@ async fn probe_worktree(
         // rather than printing a diagnostic.
         Answer::Said(out) => !out.trim().is_empty(),
         Answer::Refused => false,
-        Answer::Unreadable => return None,
+        Answer::Unreadable(_) => return None,
     };
     let dirty = match ask(
         exec,
@@ -226,7 +242,7 @@ async fn probe_worktree(
         Answer::Said(out) => !out.trim().is_empty(),
         // A repository that answered `--git-dir` and then refused a status read
         // is not reporting a clean tree, it is not reporting.
-        Answer::Refused | Answer::Unreadable => return None,
+        Answer::Refused | Answer::Unreadable(_) => return None,
     };
     // Only a closed merge over a clean tree is ambiguous, so that is the only
     // shape worth a fourth round trip — and asking unconditionally would put a
@@ -235,7 +251,7 @@ async fn probe_worktree(
         (false, false, Some(before)) => {
             match ask(exec, machine, &format!("git -C {} rev-parse HEAD", safe)).await {
                 Answer::Said(head) => Some(head.trim() != before),
-                Answer::Refused | Answer::Unreadable => None,
+                Answer::Refused | Answer::Unreadable(_) => None,
             }
         }
         _ => None,
@@ -246,27 +262,6 @@ async fn probe_worktree(
         dirty,
         head_advanced,
     })
-}
-
-/// What one probe command came back with.
-enum Answer {
-    /// git ran and answered; the payload is its stdout.
-    Said(String),
-    /// git ran and refused. A negative result, and usable as one.
-    Refused,
-    /// The command never reached a verdict — the transport failed or the
-    /// deadline expired. Nothing may be concluded from it in either direction.
-    Unreadable,
-}
-
-async fn ask(exec: &dyn ExecutionPort, machine: &str, command: &str) -> Answer {
-    match exec.run_command(machine, command).await {
-        Ok(out) => Answer::Said(out),
-        Err(e) => match classify_exec_failure(&e) {
-            HarnessExecFailure::NonZeroExit => Answer::Refused,
-            HarnessExecFailure::Transport | HarnessExecFailure::Timeout => Answer::Unreadable,
-        },
-    }
 }
 
 #[cfg(test)]

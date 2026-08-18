@@ -289,9 +289,9 @@ impl MergeExecutor for SqliteMergeExecutor {
             &SyncSessionPatch {
                 status: Some(resolution.status()),
                 merge_commit_sha: match resolution {
-                    SyncResolution::Succeeded { merge_commit_sha } => {
-                        Some(Some(merge_commit_sha.clone()))
-                    }
+                    SyncResolution::Succeeded {
+                        merge_commit_sha, ..
+                    } => Some(Some(merge_commit_sha.clone())),
                     _ => None,
                 },
                 // A resolved sync has had its worktree discarded, and a row
@@ -299,9 +299,13 @@ impl MergeExecutor for SqliteMergeExecutor {
                 // finds the directory gone, which is the one observation
                 // `reconcile` treats as terminal. Clearing it is also what stops
                 // `sync_abort` aiming a delete at a path something else may have
-                // re-provisioned since.
+                // re-provisioned since. Only on the caller's *observation* that
+                // the tree went, though — see `SyncResolution::Succeeded`.
                 worktree_path: match resolution {
-                    SyncResolution::Succeeded { .. } => Some(None),
+                    SyncResolution::Succeeded {
+                        worktree_discarded: true,
+                        ..
+                    } => Some(None),
                     _ => None,
                 },
                 raw_error: match resolution {

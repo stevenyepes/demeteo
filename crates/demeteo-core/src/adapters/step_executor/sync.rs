@@ -34,7 +34,7 @@ use crate::domain::agent_session::budget;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
 use crate::domain::step_seed::manual_sync_step_execution;
-use crate::domain::sync_session::intervention_refusal;
+use crate::domain::sync_session::{intervention_refusal, SyncIntervention};
 use crate::paths;
 use crate::ports::db::FeatureRepository;
 use crate::ports::step_executor::SyncOutcomeView;
@@ -84,6 +84,13 @@ pub(crate) fn sync_base(
 }
 
 impl DagStepExecutor {
+    /// Hold the in-flight entry a resolution would claim, so the refusal that
+    /// serialises two of them is assertable without racing two real turns.
+    #[cfg(test)]
+    pub(crate) fn claim_sync_cancel_for_test(&self, feature_id: &str, tx: watch::Sender<bool>) {
+        lock_registry(&self.sync_cancels).insert(feature_id.to_string(), tx);
+    }
+
     /// Tauri entry point for the "Sync with main" command. Resolves
     /// the feature branch + project state, asks the merge executor to
     /// do the actual git work, and translates the result into a
@@ -144,7 +151,9 @@ impl DagStepExecutor {
             .ok_or_else(|| {
                 "This feature has no sync to resolve. Run 'Sync with main' first.".to_string()
             })?;
-        if let Some(refusal) = intervention_refusal(session.status, &feature.status) {
+        if let Some(refusal) =
+            intervention_refusal(SyncIntervention::Resolve, session.status, &feature.status)
+        {
             return Err(refusal.to_string());
         }
         let worktree = session.worktree_path.as_deref().ok_or_else(|| {
@@ -169,6 +178,33 @@ impl DagStepExecutor {
             .or(settings.default_effort)
             .unwrap_or(crate::domain::models::EffortLevel::DEFAULT);
 
+        // Stop, for a turn no driver owns. Its own map rather than
+        // `cancel_senders`: that one is keyed by feature id and owned by
+        // `start_execution_with_ctx`, so a sync writing there would displace a
+        // run's sender, and its entries are never removed — a stale `true`
+        // would abort the next resolution before it started. This entry is
+        // dropped when the turn ends.
+        //
+        // Claimed before anything else, and under one guard, because the entry
+        // is also the only thing serialising two resolutions of one feature.
+        // `reconcile` rewrites a `resolving` row back to `conflicted` whenever
+        // the merge is still open — sound for a row whose writer is gone, and
+        // false in-process while this very turn holds it — so a second window's
+        // click passes `intervention_refusal` and does the thing
+        // `user_may_intervene` exists to prevent. It would also displace this
+        // turn's sender and swallow its Stop.
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        {
+            let mut cancels = lock_registry(&self.sync_cancels);
+            if cancels.contains_key(feature_id) {
+                return Err(
+                    "A resolution is already running for this feature; wait for it or stop it."
+                        .to_string(),
+                );
+            }
+            cancels.insert(feature_id.to_string(), cancel_tx);
+        }
+
         // A persisted row, because the id the turn streams against has to be one
         // the inspector can subscribe to — see `ResolveSyncContext::step_exec`.
         let step_exec = manual_sync_row(self.features.as_ref(), &fid, paths::now_ms())?;
@@ -178,22 +214,19 @@ impl DagStepExecutor {
             f_id: &fid,
         };
         let start = Instant::now();
-        let mut cost = 0.0_f64;
-        let mut tokens = 0_i64;
+        // Seeded from the row rather than from zero: the row is reused by every
+        // out-of-band sync this feature runs, and the header's spend is a sum
+        // over rows, so restarting the count makes the previous attempt's
+        // dollars vanish from the feature's total. The run loop carries a
+        // re-dispatched node's spend forward for the same reason
+        // (`StepTransition::running`).
+        let mut cost = step_exec.cost_usd.unwrap_or(0.0);
+        let mut tokens = step_exec.tokens.unwrap_or(0);
         update_step_status(
             writers,
             &step_exec,
-            StepTransition::running(0.0, Some(0), 0),
+            StepTransition::running(cost, Some(tokens), 0),
         );
-
-        // Stop, for a turn no driver owns. Its own map rather than
-        // `cancel_senders`: that one is keyed by feature id and owned by
-        // `start_execution_with_ctx`, so a sync writing there would displace a
-        // run's sender, and its entries are never removed — a stale `true`
-        // would abort the next resolution before it started. This entry is
-        // dropped when the turn ends.
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        lock_registry(&self.sync_cancels).insert(feature_id.to_string(), cancel_tx);
 
         let outcome = resolve_sync_conflicts(ResolveSyncContext {
             exec: &self.exec,
@@ -236,13 +269,15 @@ impl DagStepExecutor {
 
         let wall = start.elapsed().as_secs();
         match outcome {
-            Ok(merge_commit_sha) => {
+            Ok(resolved) => {
                 update_step_status(
                     writers,
                     &step_exec,
-                    StepTransition::completed(cost, tokens, wall, None, CacheTokens::default()),
+                    StepTransition::completed(cost, tokens, wall, None, resolved.cache),
                 );
-                Ok(SyncOutcomeView::Resolved { merge_commit_sha })
+                Ok(SyncOutcomeView::Resolved {
+                    merge_commit_sha: resolved.merge_commit_sha,
+                })
             }
             Err(failure) => {
                 let stopped = matches!(failure, ResolveSyncError::Cancelled(_));

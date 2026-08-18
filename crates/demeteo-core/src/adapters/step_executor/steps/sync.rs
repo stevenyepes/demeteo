@@ -204,11 +204,11 @@ impl ExecutionDriver {
 
         let wall = start.elapsed().as_secs();
         match outcome {
-            Ok(_) => {
+            Ok(resolved) => {
                 update_step_status(
                     self.status_writers(),
                     step_exec,
-                    StepTransition::completed(*cost, *tokens, wall, None, CacheTokens::default()),
+                    StepTransition::completed(*cost, *tokens, wall, None, resolved.cache),
                 );
 
                 let target = step_conf

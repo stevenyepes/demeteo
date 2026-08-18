@@ -135,3 +135,44 @@ fn the_manual_sync_row_sorts_after_every_graph_node() {
         assert!(graph_row.step_index < row.step_index);
     }
 }
+
+/// A feature from before `workflow_id` existed recovers its definition by
+/// matching its rows against every workflow's steps, exactly. One manual sync
+/// row is an extra id no definition has, so an unfiltered comparison leaves
+/// that feature matching nothing for good — and retry and replay then die on
+/// every *real* step it has, with "does not match any current workflow steps".
+#[test]
+fn an_out_of_band_row_does_not_cost_a_legacy_feature_its_workflow() {
+    use crate::domain::step_seed::workflow_matches_rows;
+
+    let definition: Vec<String> = ["s-plan", "s-implement"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    assert!(workflow_matches_rows(&definition, &definition));
+    assert!(workflow_matches_rows(
+        &definition,
+        &["s-plan", "s-implement", MANUAL_SYNC_STEP_ID]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+    ));
+    assert!(
+        !workflow_matches_rows(
+            &definition,
+            &["s-plan"].iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        ),
+        "a definition the run only partly executed is not the one it ran"
+    );
+    assert!(
+        !workflow_matches_rows(
+            &definition,
+            &["s-implement", "s-plan"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        ),
+        "order is part of the identity"
+    );
+}

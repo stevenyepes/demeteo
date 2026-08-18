@@ -38,14 +38,18 @@ fn live_conflict_probes() -> ScriptedExec {
             Ok(".git\n"),
         ),
         (
-            "git -C /repos/demeteo_wt_sync_conflicted rev-parse --verify --quiet MERGE_HEAD",
-            Ok("b1b2b3b\n"),
-        ),
-        (
             "git -C /repos/demeteo_wt_sync_conflicted status --porcelain",
             Ok("UU README.md\n"),
         ),
     ])
+    // The reconcile probe and the resolver's preflight ask the *same* question
+    // of the same directory, so the queue is what lets one answer and the other
+    // refuse: the session is read as a live conflict, and then the turn stops at
+    // its own preflight rather than spawning an agent nothing here scripts.
+    .with_queue(
+        "git -C /repos/demeteo_wt_sync_conflicted rev-parse --verify --quiet MERGE_HEAD",
+        &[Ok("b1b2b3b\n"), Err("fatal: Needed a single revision")],
+    )
 }
 
 /// One project and one feature — deliberately no `repositories` row: every path
@@ -165,8 +169,9 @@ async fn the_resolver_works_in_the_worktree_the_session_names() {
         "the unscripted preflight is a resolution that did not land: {view:?}"
     );
     assert!(
-        exec.commands()
-            .contains(&format!("git -C {WT} rev-parse --verify MERGE_HEAD")),
+        exec.commands().contains(&format!(
+            "git -C {WT} rev-parse --verify --quiet MERGE_HEAD"
+        )),
         "the resolver has to look for the merge where the session put it: {:?}",
         exec.commands()
     );
@@ -278,6 +283,40 @@ async fn a_second_manual_sync_reuses_the_first_ones_row() {
     let _ = std::fs::remove_dir_all(temp_dir);
 }
 
+/// The row is reused by every out-of-band sync a feature runs, and the header's
+/// spend is a sum over rows — so opening it at zero makes the previous
+/// attempt's dollars vanish from the feature's total. The run loop carries a
+/// re-dispatched node's spend forward for the same reason.
+#[tokio::test]
+async fn a_repeat_resolution_does_not_erase_what_the_first_one_spent() {
+    let temp_dir = scratch_dir("resolve_spend");
+    let exec = Arc::new(live_conflict_probes());
+    let (executor, db) =
+        build_test_executor_in(temp_dir.clone(), Arc::new(FakeNotif), exec.clone()).await;
+    let feature_id = seed(&db, "resolve_spend", "completed");
+    let features: &dyn FeatureRepository = &*db;
+    let mut spent = manual_sync_step_execution(&FeatureId::from(feature_id.clone()), 0);
+    spent.status = "failed".to_string();
+    spent.cost_usd = Some(4.5);
+    spent.tokens = Some(3000);
+    features
+        .step_create(spent)
+        .expect("the first attempt's row");
+
+    executor
+        .feature_resolve_sync_conflicts_impl(&feature_id, &["README.md".to_string()])
+        .await
+        .expect("the button answers a view");
+
+    let row = steps_of(&db, &feature_id)
+        .into_iter()
+        .find(|r| r.step_id.0 == MANUAL_SYNC_STEP_ID)
+        .expect("the row is still there");
+    assert_eq!(row.cost_usd, Some(4.5));
+    assert_eq!(row.tokens, Some(3000));
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
 /// A manual sync runs on a feature that already finished, and the restart
 /// reconciliation reads only features in `running`/`gated` and the `pending`
 /// rows of ones that were cancelled or failed. Its row would otherwise read
@@ -301,5 +340,77 @@ async fn a_crashed_manual_sync_is_reconciled_on_the_next_start() {
         .find(|r| r.step_id.0 == MANUAL_SYNC_STEP_ID)
         .expect("the row is still there");
     assert_eq!(row.status, "interrupted");
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+/// The inspector mounts on this row like any other and offers Retry and Replay,
+/// and neither has anything to walk: the id is in no graph, so both fall back to
+/// `step_index` — `u32::MAX` — which rewinds only this row and promotes every
+/// real node to an ancestor to be restored, then sets the feature `running` and
+/// arms a driver. On a finished run that is the whole outcome rewritten.
+#[tokio::test]
+async fn the_manual_sync_row_is_not_a_node_to_retry() {
+    use crate::ports::step_executor::StepExecutor;
+
+    let temp_dir = scratch_dir("resolve_retry");
+    let exec = Arc::new(live_conflict_probes());
+    let (executor, db) =
+        build_test_executor_in(temp_dir.clone(), Arc::new(FakeNotif), exec.clone()).await;
+    let feature_id = seed(&db, "resolve_retry", "completed");
+    let features: &dyn FeatureRepository = &*db;
+    let mut failed = manual_sync_step_execution(&FeatureId::from(feature_id.clone()), 0);
+    failed.status = "failed".to_string();
+    let row_id = failed.id.0.clone();
+    features
+        .step_create(failed)
+        .expect("the row the button left");
+
+    let refusal = executor
+        .step_retry(&row_id, None, None, None)
+        .await
+        .expect_err("a row no workflow contains was retried");
+    assert!(
+        format!("{refusal}").contains("out-of-band sync"),
+        "{refusal:?}"
+    );
+    assert_eq!(
+        features
+            .get(&FeatureId::from(feature_id))
+            .unwrap()
+            .unwrap()
+            .status,
+        "completed",
+        "the refusal may not re-arm a run that already finished"
+    );
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+/// Two resolutions of one feature at once are the thing `user_may_intervene`
+/// exists to prevent, and the session cannot refuse the second on its own:
+/// `reconcile` rewrites a `resolving` row back to `conflicted` whenever the
+/// merge is still open, which is sound for a row whose writer is gone and false
+/// while this very process holds it. The in-flight entry is what serialises
+/// them — and displacing it would also have swallowed the first turn's Stop.
+#[tokio::test]
+async fn a_second_resolution_is_refused_while_the_first_is_in_flight() {
+    let temp_dir = scratch_dir("resolve_race");
+    let exec = Arc::new(live_conflict_probes());
+    let (executor, db) =
+        build_test_executor_in(temp_dir.clone(), Arc::new(FakeNotif), exec.clone()).await;
+    let feature_id = seed(&db, "resolve_race", "completed");
+
+    let (tx, _rx) = tokio::sync::watch::channel(false);
+    executor.claim_sync_cancel_for_test(&feature_id, tx);
+
+    let refusal = executor
+        .feature_resolve_sync_conflicts_impl(&feature_id, &["README.md".to_string()])
+        .await
+        .expect_err("a second agent was let into the same worktree");
+    assert!(refusal.contains("already running"), "{refusal}");
+    assert_eq!(
+        stored_status(&db, &feature_id),
+        SyncSessionStatus::Conflicted,
+        "a refusal may not move the session"
+    );
     let _ = std::fs::remove_dir_all(temp_dir);
 }

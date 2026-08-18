@@ -241,3 +241,46 @@ fn a_live_run_owns_its_sync_whatever_the_session_says() {
         );
     }
 }
+
+/// Abort and resolve do not accept the same sessions, and one predicate for
+/// both is what let the resolve IPC reach a `Blocked` row: the turn then fails
+/// its own preflight and files `resolution_failed`, replacing the
+/// `UpstreamSyncFailure` text that row exists to keep with a verdict about a
+/// merge that never happened.
+#[test]
+fn a_blocked_sync_may_be_abandoned_but_not_resolved() {
+    use crate::domain::sync_session::{intervention_refusal, SyncIntervention};
+
+    assert_eq!(
+        intervention_refusal(
+            SyncIntervention::Abort,
+            SyncSessionStatus::Blocked,
+            "completed"
+        ),
+        None,
+        "a blocked sync still holds an unpublished merge to undo"
+    );
+    let refusal = intervention_refusal(
+        SyncIntervention::Resolve,
+        SyncSessionStatus::Blocked,
+        "completed",
+    )
+    .expect("there are no conflicts in a sync that never merged");
+    assert!(refusal.contains("before it reached a merge"), "{refusal}");
+
+    for action in [SyncIntervention::Abort, SyncIntervention::Resolve] {
+        assert_eq!(
+            intervention_refusal(action, SyncSessionStatus::Conflicted, "completed"),
+            None,
+            "{action:?}"
+        );
+        assert!(
+            intervention_refusal(action, SyncSessionStatus::Resolving, "completed").is_some(),
+            "{action:?}"
+        );
+        assert!(
+            intervention_refusal(action, SyncSessionStatus::Conflicted, "running").is_some(),
+            "{action:?}"
+        );
+    }
+}

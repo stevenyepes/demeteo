@@ -403,4 +403,31 @@ describe('useFeatureRun reload contract', () => {
     expect(backend.stepListCalls).toBe(3);
     expect(result.current.steps[0].status).toBe('completed');
   });
+
+  // The manual sync writes a real `step_executions` row so the resolution can
+  // stream to an id the inspector subscribes to — and `step_executions` is also
+  // this hook's rollup input, with nothing on the row marking it out-of-band.
+  // A resolution the user tried once and abandoned therefore reported a run
+  // that had already finished as failed, permanently.
+  it('does not let an out-of-band sync restate a finished run', async () => {
+    vi.useFakeTimers();
+    backend.status = 'completed';
+    backend.steps = [
+      stepRow({ id: 'se-1', step_id: 'implement', status: 'completed' }),
+      stepRow({
+        id: 'se-1-s-sync-manual',
+        step_id: 's-sync-manual',
+        step_kind: 'sync',
+        status: 'failed',
+        cost_usd: 2.5,
+      }),
+    ];
+
+    const { result } = mountRun();
+    await settle();
+
+    expect(result.current.status).toBe('completed');
+    // The dollars are the feature's either way, so the spend still counts it.
+    expect(result.current.totalCost).toBe(2.5);
+  });
 });
