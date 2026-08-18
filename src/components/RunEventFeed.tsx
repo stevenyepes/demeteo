@@ -11,7 +11,7 @@
 import React from 'react';
 import {
   assignmentEffortLabel,
-  parseRunEventAssignment,
+  parseAssignmentEvidence,
 } from '../lib/runEventAssignments';
 import type { RunEvent } from '../types';
 
@@ -116,7 +116,6 @@ interface RunEventPayload {
 export function describeEvent(
   kind: string,
   payloadJson: string | null,
-  offset = 0,
 ): { label: string; detail: string; tone: EventTone } {
   const fallbackLabel = EVENT_KIND_LABEL[kind] ?? kind;
   let p: RunEventPayload | null = null;
@@ -130,11 +129,11 @@ export function describeEvent(
 
   switch (kind) {
     case 'agent_spawned': {
-      const assignment = parseRunEventAssignment({ kind, payload_json: payloadJson, offset });
-      if (!assignment) break;
+      const evidence = parseAssignmentEvidence(kind, payloadJson);
+      if (!evidence) break;
       return {
         label: fallbackLabel,
-        detail: `Agent ${assignment.agentKind} · Effective effort ${assignmentEffortLabel(assignment.effort)}`,
+        detail: `Agent ${evidence.agentKind} · Effective effort ${assignmentEffortLabel(evidence.effort)}`,
         tone: 'default',
       };
     }
@@ -210,7 +209,7 @@ export const RunEventFeed: React.FC<{
   return (
     <>
       {events.map((e) => {
-        const { label, detail, tone } = describeEvent(e.kind, e.payload_json, e.offset);
+        const { label, detail, tone } = describeEvent(e.kind, e.payload_json);
         return (
           <div key={e.offset} className="flex items-start gap-2">
             <span className="shrink-0 text-slate-600">

@@ -41,14 +41,6 @@ use crate::ports::db::{FeatureRepository, SequenceResumeRepository, ThreadReposi
 use crate::ports::execution::ExecutionPort;
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 
-fn list_run_events_since(
-    run_events: &dyn RunEventsPort,
-    feature_id: &str,
-    from_offset: i64,
-) -> Result<Vec<RunEvent>, String> {
-    run_events.list_since(feature_id, from_offset)
-}
-
 /// Minimal projection of a persisted `TaskPlan` (`sequence_plan_cache`): the
 /// ordered id + title the drill-down needs, per cycle. Parsing it here rather
 /// than pulling in the domain's full `TaskPlan` keeps the application layer
@@ -234,7 +226,7 @@ impl RunView {
         feature_id: &FeatureId,
         from_offset: i64,
     ) -> Result<Vec<RunEvent>, String> {
-        list_run_events_since(self.run_events.as_ref(), feature_id.as_ref(), from_offset)
+        self.run_events.list_since(feature_id.as_ref(), from_offset)
     }
 
     /// The UTF-8 body of a declared artifact at `path` on `machine_id`. For
@@ -247,64 +239,5 @@ impl RunView {
     /// path and this reads it like any native artifact.
     pub async fn artifact_body(&self, machine_id: &str, path: &str) -> Result<String, String> {
         self.exec.read_file(machine_id, path).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Mutex;
-
-    use crate::ports::run_events::{RunEvent, RunEventsPort};
-
-    struct RecordingRunEvents {
-        list_call: Mutex<Option<(String, i64)>>,
-        result: Vec<RunEvent>,
-    }
-
-    impl RunEventsPort for RecordingRunEvents {
-        fn append(
-            &self,
-            _run_id: &str,
-            _kind: &str,
-            _payload_json: Option<&str>,
-            _now: i64,
-        ) -> Result<i64, String> {
-            Err("unexpected append".to_owned())
-        }
-
-        fn list_since(&self, run_id: &str, from_offset: i64) -> Result<Vec<RunEvent>, String> {
-            *self.list_call.lock().map_err(|error| error.to_string())? =
-                Some((run_id.to_owned(), from_offset));
-            Ok(self.result.clone())
-        }
-    }
-
-    #[test]
-    fn run_events_read_preserves_feature_id_cursor_and_port_result() {
-        let expected = [13, 21]
-            .into_iter()
-            .map(|offset| RunEvent {
-                offset,
-                run_id: "feature-1".to_owned(),
-                kind: "agent_spawned".to_owned(),
-                payload_json: None,
-                created_at: 1,
-            })
-            .collect::<Vec<_>>();
-        let port = RecordingRunEvents {
-            list_call: Mutex::new(None),
-            result: expected.clone(),
-        };
-
-        let actual = super::list_run_events_since(&port, "feature-1", 8).expect("list run events");
-
-        assert_eq!(
-            actual.iter().map(|event| event.offset).collect::<Vec<_>>(),
-            vec![13, 21]
-        );
-        assert_eq!(
-            *port.list_call.lock().expect("recorded list call"),
-            Some(("feature-1".to_owned(), 8))
-        );
     }
 }

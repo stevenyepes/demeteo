@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import type { RemoteRunMirror, RunEvent } from '../../types';
 import { TERMINAL_STATUSES } from '../../lib/runStatus';
 import { listMachines, remoteRefreshRun, remoteRunForFeature } from '../../lib/featureDetail';
+import type { RunEventAssignments } from '../../lib/runEventAssignments';
 import {
-  reconcileRunEventAssignments,
-  type RunEventAssignments,
-} from '../../lib/runEventAssignments';
+  EMPTY_RUN_EVENT_FEED,
+  mergeRunEventFeed,
+  type RunEventFeed,
+} from '../../lib/runEventFeed';
 
 type BootstrapPhasePayload = { phase: string; label?: string; status?: string; detail?: string | null };
 
@@ -19,16 +21,14 @@ function isBootstrapPhasePayload(value: unknown): value is BootstrapPhasePayload
 
 const POLL_BASE_MS = 3_000;
 const POLL_CEILING_MS = 48_000;
-const EMPTY_ASSIGNMENTS: RunEventAssignments = {};
 
 interface RemoteEventState {
   runKey: string;
-  events: RunEvent[];
-  assignments: RunEventAssignments;
+  feed: RunEventFeed;
 }
 
 function emptyEventState(runKey: string): RemoteEventState {
-  return { runKey, events: [], assignments: EMPTY_ASSIGNMENTS };
+  return { runKey, feed: EMPTY_RUN_EVENT_FEED };
 }
 
 /**
@@ -80,12 +80,10 @@ export function useRemoteRun(input: {
   const [remoteEventState, setRemoteEventState] = useState<RemoteEventState>(() =>
     emptyEventState(remoteRunKey),
   );
-  const remoteRunEvents =
-    remoteEventState.runKey === remoteRunKey ? remoteEventState.events : [];
-  const remoteRunAssignments =
-    remoteEventState.runKey === remoteRunKey
-      ? remoteEventState.assignments
-      : EMPTY_ASSIGNMENTS;
+  const scopedFeed =
+    remoteEventState.runKey === remoteRunKey ? remoteEventState.feed : EMPTY_RUN_EVENT_FEED;
+  const remoteRunEvents: RunEvent[] = scopedFeed.events;
+  const remoteRunAssignments: RunEventAssignments = scopedFeed.assignments;
 
   useEffect(() => {
     let cancelled = false;
@@ -212,19 +210,14 @@ export function useRemoteRun(input: {
           /* malformed payload — skip */
         }
       }
+      // De-duped by offset — the poll re-delivers a batch across a reconnect,
+      // and `mergeRunEventFeed` is the fold the local path also runs, so the
+      // two transports cannot drift in what the strip shows.
       setRemoteEventState((current) => {
         const scoped =
           current.runKey === remoteRunKey ? current : emptyEventState(remoteRunKey);
-        const assignments = reconcileRunEventAssignments(scoped.assignments, evts);
-        const seen = new Set(scoped.events.map((e) => e.offset));
-        const fresh = evts.filter((e) => !seen.has(e.offset));
-        if (fresh.length === 0 && assignments === scoped.assignments) return scoped;
-        const next = [...scoped.events, ...fresh];
-        return {
-          runKey: remoteRunKey,
-          events: next.length > 500 ? next.slice(next.length - 500) : next,
-          assignments,
-        };
+        const feed = mergeRunEventFeed(scoped.feed, evts);
+        return feed === scoped.feed ? scoped : { runKey: remoteRunKey, feed };
       });
     },
     [remoteRunKey, upsertBootstrapPhase],
