@@ -1,7 +1,7 @@
 use rusqlite::params;
 
 use crate::domain::ids::FeatureId;
-use crate::domain::models::{ConflictReport, RepoContext};
+use crate::domain::models::RepoContext;
 use crate::ports::db::MergeAuditRepository;
 
 use super::super::SqliteAdapter;
@@ -71,29 +71,6 @@ impl MergeAuditRepository for SqliteAdapter {
             }),
             Some(Err(e)) => Err(e.to_string()),
             None => Err("Feature has no project repository configured".to_string()),
-        }
-    }
-
-    fn get_last_sync_worktree_path(
-        &self,
-        feature_id: &FeatureId,
-    ) -> Result<Option<String>, String> {
-        let conn = self.conn.lock()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT conflict_report FROM feature_syncs
-                 WHERE feature_id = ?1 AND status = 'conflict'
-                 ORDER BY created_at DESC LIMIT 1",
-            )
-            .map_err(|e| e.to_string())?;
-        let res = stmt.query_row(params![feature_id.0], |r| r.get::<_, Option<String>>(0));
-        match res {
-            Ok(Some(json_str)) => {
-                let report: ConflictReport = serde_json::from_str(&json_str)
-                    .map_err(|e| format!("Failed to parse conflict report JSON: {}", e))?;
-                Ok(report.worktree_path)
-            }
-            _ => Ok(None),
         }
     }
 }

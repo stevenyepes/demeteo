@@ -7,15 +7,11 @@
 //! agent and the UI can render it.
 //!
 //! A blocked sync ([`crate::domain::sync_failure`]) is audited as
-//! `status = 'blocked'`, and that spelling is load-bearing:
-//! `get_last_sync_worktree_path` answers from the newest `'conflict'` row, so
-//! a blocked attempt filed as a conflict carries a `worktree_path` of `None`
-//! that hides the real conflict's worktree from the resolver. Its own row
-//! stores the serialized [`UpstreamSyncFailure`] in the same column the
-//! conflict report uses: the manual "Sync with main" path shows the reason
-//! once, in a banner the user then dismisses, so a row saying only "an attempt
-//! failed at T" leaves nothing behind to answer "why do this feature's syncs
-//! keep failing".
+//! `status = 'blocked'` rather than as a conflict, and stores the serialized
+//! [`UpstreamSyncFailure`] in the same column the conflict report uses: the
+//! manual "Sync with main" path shows the reason once, in a banner the user then
+//! dismisses, so a row saying only "an attempt failed at T" leaves nothing
+//! behind to answer "why do this feature's syncs keep failing".
 //!
 //! The audit is not state, though, which is why every outcome also writes the
 //! feature's single [`SyncSessionPort`] row. This is the only place that has
@@ -298,6 +294,16 @@ impl MergeExecutor for SqliteMergeExecutor {
                     }
                     _ => None,
                 },
+                // A resolved sync has had its worktree discarded, and a row
+                // still naming it reads back as an abandoned sync: the probe
+                // finds the directory gone, which is the one observation
+                // `reconcile` treats as terminal. Clearing it is also what stops
+                // `sync_abort` aiming a delete at a path something else may have
+                // re-provisioned since.
+                worktree_path: match resolution {
+                    SyncResolution::Succeeded { .. } => Some(None),
+                    _ => None,
+                },
                 raw_error: match resolution {
                     SyncResolution::Failed { reason } => Some(Some(reason.clone())),
                     _ => None,
@@ -308,10 +314,15 @@ impl MergeExecutor for SqliteMergeExecutor {
         )
     }
 
-    async fn get_last_sync_worktree_path(
+    async fn sync_session(
         &self,
         feature_id: &FeatureId,
-    ) -> Result<Option<String>, String> {
-        self.merge_audit.get_last_sync_worktree_path(feature_id)
+    ) -> Result<Option<crate::ports::sync_session::SyncSession>, String> {
+        crate::application::sync_session::get_reconciled(
+            &self.sync_sessions,
+            &self.exec,
+            feature_id,
+        )
+        .await
     }
 }

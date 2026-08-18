@@ -49,11 +49,21 @@ pub trait MergeExecutor: Send + Sync {
         base_branch: &str,
     ) -> Result<UpstreamSyncOutcome, UpstreamSyncFailure>;
 
-    /// Retrieve the worktree path from the last sync conflict report.
-    async fn get_last_sync_worktree_path(
+    /// The feature's live sync as the working tree says it stands, or `None`
+    /// when it has never synced.
+    ///
+    /// Reconciled before it answers, on the terms
+    /// [`SyncSessionPort`](crate::ports::sync_session::SyncSessionPort) sets: a
+    /// caller acting on the stored status alone would resolve a conflict whose
+    /// worktree a later attempt has already removed.
+    ///
+    /// Here for the reason `record_sync_resolution` is: this implementation owns
+    /// every write to that row, and the two callers that need to read it hold a
+    /// `MergeExecutor` already.
+    async fn sync_session(
         &self,
         feature_id: &FeatureId,
-    ) -> Result<Option<String>, String>;
+    ) -> Result<Option<crate::ports::sync_session::SyncSession>, String>;
 
     /// Move the sync session on to what a resolution turn is doing, or has done.
     ///

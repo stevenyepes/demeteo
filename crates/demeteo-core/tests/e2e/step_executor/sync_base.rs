@@ -19,11 +19,10 @@ use crate::adapters::database::SqliteAdapter;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, ProviderId, RepositoryId};
-use crate::domain::models::{ConflictFile, ConflictReport};
 use crate::domain::sync_failure::SyncBlockedStage;
 use crate::domain::sync_session::SyncSessionStatus;
 use crate::paths;
-use crate::ports::db::{FeatureRepository, MergeAuditRepository, ProjectRepository};
+use crate::ports::db::{FeatureRepository, ProjectRepository};
 use crate::ports::step_executor::SyncOutcomeView;
 use crate::ports::sync_session::SyncSessionPort;
 
@@ -206,58 +205,6 @@ async fn an_unreachable_origin_comes_back_blocked_rather_than_conflicted() {
         }
         other => panic!("a fetch that never ran rendered as {other:?}"),
     }
-}
-
-/// The audit-row spelling `adapters::merge` documents as load-bearing,
-/// asserted through the real repository: an earlier conflict's worktree stays
-/// the answer after a later attempt fails without ever merging.
-#[tokio::test]
-async fn a_blocked_attempt_does_not_hide_an_earlier_conflicts_worktree() {
-    let label = "sync_blocked_shadow";
-    let temp_dir = scratch_dir(label);
-    let (executor, db) = build_test_executor_in(
-        temp_dir.clone(),
-        Arc::new(FakeNotif),
-        Arc::new(ScriptedExec::new(&[])),
-    )
-    .await;
-    let feature_id = seed_feature(&db, label, FeatureOrigin::DefaultBranch, None);
-    let fid = FeatureId::from(feature_id.clone());
-
-    let audit: &dyn MergeAuditRepository = &*db;
-    let report = ConflictReport {
-        source_branch: "origin/main".to_string(),
-        target_branch: format!("demeteo/features/{feature_id}"),
-        files: vec![ConflictFile {
-            path: "README.md".to_string(),
-            kind: "both-modified".to_string(),
-        }],
-        raw_error: "CONFLICT (content): Merge conflict in README.md".to_string(),
-        detected_at: paths::now_ms() - 60_000,
-        worktree_path: Some("/w/sync-earlier".to_string()),
-    };
-    audit
-        .record_sync_outcome(
-            &fid,
-            &report.target_branch,
-            "main",
-            "conflict",
-            None,
-            Some(&serde_json::to_string(&report).expect("report serializes")),
-            paths::now_ms() - 60_000,
-        )
-        .expect("record the earlier conflict");
-
-    let _ = executor.feature_sync_impl(&feature_id).await;
-
-    assert_eq!(
-        audit
-            .get_last_sync_worktree_path(&fid)
-            .expect("read the last conflict"),
-        Some("/w/sync-earlier".to_string()),
-        "a sync that never merged must not be filed as the newest conflict"
-    );
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 /// The one failure that issues no git at all: with no `repositories` row there

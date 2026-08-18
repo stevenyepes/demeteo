@@ -600,9 +600,6 @@ pub trait MergeAuditRepository: Send + Sync {
     ) -> Result<(), String>;
 
     fn lookup_repo_context(&self, feature_id: &FeatureId) -> Result<RepoContext, String>;
-
-    fn get_last_sync_worktree_path(&self, feature_id: &FeatureId)
-        -> Result<Option<String>, String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

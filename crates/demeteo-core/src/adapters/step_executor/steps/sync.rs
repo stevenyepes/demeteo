@@ -19,10 +19,8 @@
 use std::time::Instant;
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
-use crate::adapters::step_executor::sync_worktree::discard_sync_worktree;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sync_failure::SyncStepNext;
-use crate::domain::sync_session::SyncResolution;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
 
@@ -33,7 +31,7 @@ use super::StepOutcome;
 /// `files` and `worktree_path` both come out of one [`SyncStepNext::Resolve`];
 /// `feature_branch` and `base_branch` are computed together and never used
 /// apart. The resolution turn two frames down already takes a bundle of the
-/// same shape (`sync::ResolveSyncContext`).
+/// same shape (`sync_resolve::ResolveSyncContext`).
 struct SyncConflict<'a> {
     files: &'a [crate::domain::models::ConflictFile],
     worktree_path: Option<&'a str>,
@@ -207,25 +205,17 @@ impl ExecutionDriver {
 
         let conflict_paths: Vec<String> = conflict_files.iter().map(|f| f.path.clone()).collect();
 
-        // The row said `conflicted` and this turn is about to hold the worktree.
-        // Leaving it that way is what let the run's own resolution look, to
-        // anyone opening the feature, like a conflict waiting for them — with an
-        // abort that deletes the tree the agent is writing in.
-        let _ = self
-            .merge_executor
-            .record_sync_resolution(&self.f_id, &SyncResolution::Started)
-            .await;
-
-        match crate::adapters::step_executor::sync::resolve_sync_conflicts_shared(
-            crate::adapters::step_executor::sync::ResolveSyncContext {
+        match crate::adapters::step_executor::sync_resolve::resolve_sync_conflicts(
+            crate::adapters::step_executor::sync_resolve::ResolveSyncContext {
                 exec: &self.exec,
                 registry: &self.registry,
                 notif: &self.notif,
-                _features: &self.features,
                 agent_exec: &self.agent_exec,
                 app_settings: &self.app_settings,
                 git_ops: &self.git_ops,
+                merge_executor: &self.merge_executor,
                 feature_id: &self.f_id,
+                repo_dir,
                 resolved_cwd,
                 machine_str,
                 feature_branch,
@@ -241,18 +231,7 @@ impl ExecutionDriver {
         )
         .await
         {
-            Ok(head_sha) => {
-                let _ = self
-                    .merge_executor
-                    .record_sync_resolution(
-                        &self.f_id,
-                        &SyncResolution::Succeeded {
-                            merge_commit_sha: head_sha.clone(),
-                        },
-                    )
-                    .await;
-                discard_sync_worktree(&*self.exec, machine_str, repo_dir, resolved_cwd).await;
-
+            Ok(_) => {
                 let wall = step_start.elapsed().as_secs();
                 let _ = self.features.step_update(
                     &step_exec.id,
@@ -293,15 +272,6 @@ impl ExecutionDriver {
                 }
             }
             Err(reason) => {
-                let _ = self
-                    .merge_executor
-                    .record_sync_resolution(
-                        &self.f_id,
-                        &SyncResolution::Failed {
-                            reason: reason.clone(),
-                        },
-                    )
-                    .await;
                 let wall = step_start.elapsed().as_secs();
                 let _ = self.features.step_update(
                     &step_exec.id,

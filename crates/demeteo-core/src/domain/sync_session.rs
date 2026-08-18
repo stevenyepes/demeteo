@@ -122,15 +122,35 @@ impl SyncResolution {
 /// resolution turn recording itself, the row legitimately reads `conflicted`
 /// while the step is still the one holding the worktree.
 pub fn user_may_intervene(status: SyncSessionStatus, feature_status: &str) -> bool {
+    intervention_refusal(status, feature_status).is_none()
+}
+
+/// Why this sync is not the user's to act on, or `None` when it is.
+///
+/// The same decision as [`user_may_intervene`], in the shape a caller that has
+/// to *answer* needs: the UI hides the affordance, but the IPC behind it stays
+/// reachable, and a request that arrives anyway is owed the reason rather than a
+/// silent no-op. Two reasons, and they are not interchangeable — one resolves
+/// itself when the run finishes, the other never will.
+pub fn intervention_refusal(
+    status: SyncSessionStatus,
+    feature_status: &str,
+) -> Option<&'static str> {
     if run_is_live(feature_status) {
-        return false;
+        return Some(
+            "This run is still going and owns its own sync. \
+             Wait for it to finish, or stop it first.",
+        );
     }
-    matches!(
-        status,
+    match status {
         SyncSessionStatus::Conflicted
-            | SyncSessionStatus::ResolutionFailed
-            | SyncSessionStatus::Blocked
-    )
+        | SyncSessionStatus::ResolutionFailed
+        | SyncSessionStatus::Blocked => None,
+        SyncSessionStatus::Resolving => {
+            Some("An agent is already resolving this sync; give it time or stop the run.")
+        }
+        _ => Some("This sync has nothing left to act on."),
+    }
 }
 
 /// Feature statuses during which a driver still owns the branch.

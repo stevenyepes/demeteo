@@ -10,3 +10,4 @@ mod origin_cut;
 mod remote_mirror;
 mod retry_guards;
 mod sync_base;
+mod sync_resolve;
