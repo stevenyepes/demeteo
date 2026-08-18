@@ -99,8 +99,4 @@ describe('StepCard observed assignment', () => {
     expect(badge).toHaveAccessibleName(`Agent: ${longAgent}`);
     expect(badge).toHaveTextContent(longAgent);
   });
-
-  it('remains memoized while assignment props stay primitive', () => {
-    expect(StepCard).toHaveProperty('$$typeof', Symbol.for('react.memo'));
-  });
 });

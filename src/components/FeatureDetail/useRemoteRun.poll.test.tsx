@@ -270,9 +270,12 @@ describe('useRemoteRun detached event folding', () => {
           }),
         }),
       ]);
+      // Offset 4 is the reconnect re-delivering a row already folded; offset
+      // 10 is genuinely new. A re-delivered offset is refused by identity, so
+      // the log's own immutability — not the payload — settles the duplicate.
       result.current.handleRunEvents([
         spawnedEvent(4, 'se-1', 'duplicate', 'low'),
-        spawnedEvent(9, 'se-2', 'hermes', 'medium'),
+        spawnedEvent(10, 'se-2', 'hermes', 'medium'),
       ]);
     });
 
@@ -287,13 +290,15 @@ describe('useRemoteRun detached event folding', () => {
         stepExecutionId: 'se-2',
         agentKind: 'hermes',
         effort: 'medium',
-        offset: 9,
+        offset: 10,
       },
     });
-    expect(result.current.remoteRunEvents.map((event) => event.offset)).toEqual([8, 4, 9]);
+    // Ordered by durable offset, not by the order the polls delivered them —
+    // the same fold the local feed runs, so the strip reads alike either way.
+    expect(result.current.remoteRunEvents.map((event) => event.offset)).toEqual([4, 8, 9, 10]);
 
     const stableAssignments = result.current.remoteRunAssignments;
-    act(() => result.current.handleRunEvents([spawnedEvent(9, 'se-2', 'retry', 'low')]));
+    act(() => result.current.handleRunEvents([spawnedEvent(10, 'se-2', 'retry', 'low')]));
     expect(result.current.remoteRunAssignments).toBe(stableAssignments);
   });
 

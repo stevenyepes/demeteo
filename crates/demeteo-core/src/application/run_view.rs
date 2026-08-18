@@ -41,14 +41,6 @@ use crate::ports::db::{FeatureRepository, SequenceResumeRepository, ThreadReposi
 use crate::ports::execution::ExecutionPort;
 use crate::ports::run_events::{RunEvent, RunEventsPort};
 
-fn list_run_events_since(
-    run_events: &dyn RunEventsPort,
-    feature_id: &str,
-    from_offset: i64,
-) -> Result<Vec<RunEvent>, String> {
-    run_events.list_since(feature_id, from_offset)
-}
-
 /// Minimal projection of a persisted `TaskPlan` (`sequence_plan_cache`): the
 /// ordered id + title the drill-down needs, per cycle. Parsing it here rather
 /// than pulling in the domain's full `TaskPlan` keeps the application layer
@@ -239,7 +231,7 @@ impl RunView {
         feature_id: &FeatureId,
         from_offset: i64,
     ) -> Result<Vec<RunEvent>, String> {
-        list_run_events_since(self.run_events.as_ref(), feature_id.as_ref(), from_offset)
+        self.run_events.list_since(feature_id.as_ref(), from_offset)
     }
 
     /// The UTF-8 body of a declared artifact at `path` on `machine_id`. For

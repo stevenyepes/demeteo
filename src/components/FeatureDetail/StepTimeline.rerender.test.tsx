@@ -246,13 +246,13 @@ describe('StepTimeline assignments', () => {
     const assignmentLabel = (id: string) =>
       container
         .querySelector(`[data-step-id="${id}"]`)
-        ?.querySelector('[aria-label^="Actual assignment:"]')
+        ?.querySelector('[aria-label^="Actual assignment for "]')
         ?.getAttribute('aria-label');
     expect(assignmentLabel('se-1')).toBe(
-      'Actual assignment: Agent: opencode; Effective effort: Medium',
+      'Actual assignment for Research: Agent: opencode; Effective effort: Medium',
     );
     expect(assignmentLabel(STREAMING_ID)).toBe(
-      'Actual assignment: Agent: claude-code; Effective effort: High',
+      'Actual assignment for Implement: Agent: claude-code; Effective effort: High',
     );
     expect(assignmentLabel('se-2')).toBeUndefined();
 
@@ -260,7 +260,7 @@ describe('StepTimeline assignments', () => {
     await userEvent.click(getByRole('button', { name: 'Update assignment' }));
 
     expect(assignmentLabel(STREAMING_ID)).toBe(
-      'Actual assignment: Agent: claude-code; Effective effort: Extra high',
+      'Actual assignment for Implement: Agent: claude-code; Effective effort: Extra high',
     );
     for (const [id, renders] of Object.entries(cardRenders)) {
       expect(renders - (before[id] ?? 0)).toBe(id === STREAMING_ID ? 1 : 0);

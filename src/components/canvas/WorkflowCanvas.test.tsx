@@ -294,18 +294,20 @@ describe('WorkflowCanvas render', () => {
       </div>,
     );
 
-    const assignment = screen.getByLabelText('Actual assignment for Implement');
-    expect(within(assignment).getByLabelText(`Agent: ${longAgentKind}`)).toHaveAttribute(
-      'title',
-      `Agent: ${longAgentKind}`,
+    // Truncation is CSS, so the full value has to survive somewhere a pointer
+    // and a screen reader can each reach it: the badge title and the one
+    // composed label the pair is announced under.
+    const assignment = screen.getByLabelText(
+      `Actual assignment for Implement: Agent: ${longAgentKind}; Effective effort: Extra high`,
     );
-    expect(within(assignment).getByText(longAgentKind)).toBeInTheDocument();
-    expect(within(assignment).getByLabelText('Effective effort: Extra high')).toHaveAttribute(
-      'title',
-      'Effective effort: Extra high',
+    expect(within(assignment).getByTitle(`Agent: ${longAgentKind}`)).toHaveTextContent(
+      longAgentKind,
     );
-    expect(screen.queryByLabelText('Actual assignment for Approval')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Actual assignment for Pending work')).not.toBeInTheDocument();
+    expect(within(assignment).getByTitle('Effective effort: Extra high')).toHaveTextContent(
+      'Extra high',
+    );
+    expect(screen.queryByLabelText(/Actual assignment for Approval/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Actual assignment for Pending work/)).not.toBeInTheDocument();
     expect(screen.queryByText('Max')).not.toBeInTheDocument();
   });
 
@@ -334,11 +336,10 @@ describe('WorkflowCanvas render', () => {
       </div>,
     );
 
-    const assignment = screen.getByLabelText('Actual assignment for Implement');
-    expect(within(assignment).getByLabelText('Agent: hermes')).toBeInTheDocument();
-    expect(
-      within(assignment).getByLabelText('Effective effort: No injected effort'),
-    ).toBeInTheDocument();
+    const assignment = screen.getByLabelText(
+      'Actual assignment for Implement: Agent: hermes; Effective effort: No injected effort',
+    );
+    expect(within(assignment).getByTitle('Agent: hermes')).toBeInTheDocument();
     expect(within(assignment).queryByText('High')).not.toBeInTheDocument();
   });
 
@@ -366,7 +367,7 @@ describe('WorkflowCanvas render', () => {
 
     expect(screen.getByTestId('node-essence')).toHaveTextContent('configured-agent');
     expect(screen.getByTestId('node-essence')).toHaveTextContent('max');
-    expect(screen.queryByLabelText('Actual assignment for Implement')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Actual assignment for Implement/)).not.toBeInTheDocument();
   });
 });
 

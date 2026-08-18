@@ -326,7 +326,7 @@ describe('FeatureDetail — a run with no workflow graph', () => {
 });
 
 describe('FeatureDetail — observed assignments across run views', () => {
-  it('projects only newest-execution evidence identically into graph and timeline', async () => {
+  it('gives the canvas the newest execution and the timeline every attempt', async () => {
     const steps: StepExecution[] = [
       { ...step(), id: 'se-old', step_id: 'clamped', step_index: 0, updated_at: 1 },
       { ...step(), id: 'se-clamped', step_id: 'clamped', step_index: 0, updated_at: 2 },
@@ -413,16 +413,17 @@ describe('FeatureDetail — observed assignments across run views', () => {
     );
     expect(await screen.findByText(/Agent codex/)).toBeVisible();
 
-    const graphAssignment = await screen.findByLabelText('Actual assignment for Clamped work');
-    expect(within(graphAssignment).getByLabelText('Agent: codex')).toBeInTheDocument();
+    // One card per node: the canvas shows the execution `statusByNode` picked,
+    // so the superseded attempt's agent is absent here.
+    const graphAssignment = await screen.findByLabelText(
+      'Actual assignment for Clamped work: Agent: codex; Effective effort: Extra high',
+    );
+    expect(within(graphAssignment).getByTitle('Agent: codex')).toBeInTheDocument();
     expect(
-      within(graphAssignment).getByLabelText('Effective effort: Extra high'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByLabelText('Actual assignment for Defaulted work'),
+      screen.getByLabelText(/Actual assignment for Defaulted work/),
     ).toHaveTextContent('No injected effort');
     expect(
-      screen.queryByLabelText('Actual assignment for Unspawned work'),
+      screen.queryByLabelText(/Actual assignment for Unspawned work/),
     ).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/stale-agent|wrong-run-agent|wrong-execution-agent/)).not.toBeInTheDocument();
 
@@ -436,20 +437,22 @@ describe('FeatureDetail — observed assignments across run views', () => {
     expect(nullRow).not.toBeNull();
     expect(oldRow).not.toBeNull();
     expect(unspawnedRow).not.toBeNull();
-    expect(within(clampedRow as HTMLElement).getByLabelText('Agent: codex')).toBeVisible();
+    expect(within(clampedRow as HTMLElement).getByTitle('Agent: codex')).toBeVisible();
     expect(
-      within(clampedRow as HTMLElement).getByLabelText('Effective effort: Extra high'),
+      within(clampedRow as HTMLElement).getByTitle('Effective effort: Extra high'),
     ).toBeVisible();
-    expect(within(nullRow as HTMLElement).getByLabelText('Agent: claude-code')).toBeVisible();
+    expect(within(nullRow as HTMLElement).getByTitle('Agent: claude-code')).toBeVisible();
     expect(
-      within(nullRow as HTMLElement).getByLabelText('Effective effort: No injected effort'),
+      within(nullRow as HTMLElement).getByTitle('Effective effort: No injected effort'),
     ).toBeVisible();
-    expect(within(oldRow as HTMLElement).queryByLabelText(/Agent:/)).not.toBeInTheDocument();
-    expect(within(unspawnedRow as HTMLElement).queryByLabelText(/Agent:/)).not.toBeInTheDocument();
+    // One card per attempt: the superseded execution keeps the evidence of what
+    // *it* ran, which is the comparison a retry exists to be read against.
+    expect(within(oldRow as HTMLElement).getByTitle('Agent: stale-agent')).toBeVisible();
+    expect(within(unspawnedRow as HTMLElement).queryByTitle(/Agent:/)).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('radio', { name: 'Graph' }));
     expect(
-      await screen.findByLabelText('Actual assignment for Clamped work'),
+      await screen.findByLabelText(/Actual assignment for Clamped work/),
     ).toHaveTextContent('Extra high');
   });
 
@@ -530,18 +533,18 @@ describe('FeatureDetail — observed assignments across run views', () => {
     mount();
 
     const graphAssignment = await screen.findByLabelText(
-      'Actual assignment for Detached work',
+      /Actual assignment for Detached work/,
     );
-    expect(within(graphAssignment).getByLabelText('Agent: remote-codex')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Agent: local-should-not-leak')).not.toBeInTheDocument();
+    expect(within(graphAssignment).getByTitle('Agent: remote-codex')).toBeInTheDocument();
+    expect(screen.queryByTitle('Agent: local-should-not-leak')).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('radio', { name: 'Timeline' }));
     const row = document.querySelector('[data-step-row="se-detached"]');
     expect(row).not.toBeNull();
-    expect(within(row as HTMLElement).getByLabelText('Agent: remote-codex')).toBeVisible();
+    expect(within(row as HTMLElement).getByTitle('Agent: remote-codex')).toBeVisible();
     expect(
-      within(row as HTMLElement).getByLabelText('Effective effort: Extra high'),
+      within(row as HTMLElement).getByTitle('Effective effort: Extra high'),
     ).toBeVisible();
-    expect(screen.queryByLabelText('Agent: local-should-not-leak')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Agent: local-should-not-leak')).not.toBeInTheDocument();
   });
 });
