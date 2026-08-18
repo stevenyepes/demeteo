@@ -17,6 +17,7 @@ const GIT_DIR: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse --git
 const MERGE_HEAD: &str =
     "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse --verify --quiet MERGE_HEAD";
 const PORCELAIN: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 status --porcelain";
+const HEAD_SHA: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse HEAD";
 
 fn fid() -> FeatureId {
     FeatureId::from("f-1".to_string())
@@ -169,5 +170,86 @@ async fn aborting_twice_is_the_same_as_aborting_once() {
         git.commands(),
         issued,
         "a session with no worktree left must issue no git at all"
+    );
+}
+
+/// The bug this file exists to keep out, and the one the first version shipped.
+///
+/// `aborted` is terminal, so writing it is irreversible — and every probe here
+/// reaches the caller as a `Result`, which makes "the SSH channel died" and
+/// "git says this is not a repository" the same shape unless the prefix is
+/// read. Conflating them retires a live conflict on the first mount after a
+/// network blip, leaving the worktree on disk named by nothing.
+#[tokio::test]
+async fn a_transport_failure_is_not_evidence_the_worktree_is_gone() {
+    let (sessions, exec, _git) = ports(ScriptedExec::new(&[(
+        GIT_DIR,
+        Err("transport: Connection appears dead: no data and no keepalive ack"),
+    )]));
+    sessions.open(&conflicted(Some(WT))).unwrap();
+
+    let read = get_reconciled(&sessions, &exec, &fid())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        read.status,
+        SyncSessionStatus::Conflicted,
+        "an unreadable tree may not move the stored status"
+    );
+    assert_eq!(
+        sessions.get(&fid()).unwrap().unwrap().status,
+        SyncSessionStatus::Conflicted,
+        "and it must not persist a correction it did not earn"
+    );
+}
+
+/// The same conflation one probe further in: a `MERGE_HEAD` read that never
+/// answered, taken as "no merge open", walks a conflicted session into the
+/// resolved arm and offers a review of a resolution nobody performed.
+#[tokio::test]
+async fn an_unreadable_merge_head_does_not_mean_the_merge_is_finished() {
+    // Everything *around* the unreadable probe answers, and answers with the
+    // shape that resolves: clean tree, HEAD moved off the starting sha. So the
+    // only thing standing between this session and `resolved` is refusing to
+    // read a dead channel as "no merge open".
+    let (sessions, exec, _git) = ports(ScriptedExec::new(&[
+        (GIT_DIR, Ok(".git\n")),
+        (MERGE_HEAD, Err("transport: Connection appears dead")),
+        (PORCELAIN, Ok("")),
+        (HEAD_SHA, Ok("bbbbbbb\n")),
+    ]));
+    sessions.open(&conflicted(Some(WT))).unwrap();
+
+    let read = get_reconciled(&sessions, &exec, &fid())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.status, SyncSessionStatus::Conflicted);
+}
+
+/// Teardown is best-effort because the tree is usually already gone, but the
+/// verdict may not be. An unreachable host that swallows every delete would
+/// otherwise be recorded as an abandoned sync — terminal, and with
+/// `worktree_path` cleared, so the merge left open on disk is named by nothing
+/// and revisited by no reader.
+#[tokio::test]
+async fn aborting_against_an_unreachable_host_leaves_the_session_open() {
+    let (sessions, exec, _git) = ports(ScriptedExec::new(&[
+        (
+            "git -C /repos/demeteo_wt_sync_feature-f-1 merge --abort",
+            Err("transport: Connection appears dead"),
+        ),
+        (GIT_DIR, Err("transport: Connection appears dead")),
+    ]));
+    sessions.open(&conflicted(Some(WT))).unwrap();
+
+    assert!(abort(&sessions, &exec, &fid()).await.is_err());
+    let read = sessions.get(&fid()).unwrap().unwrap();
+    assert_eq!(read.status, SyncSessionStatus::Conflicted);
+    assert_eq!(
+        read.worktree_path.as_deref(),
+        Some(WT),
+        "the row must keep naming the tree it did not remove"
     );
 }

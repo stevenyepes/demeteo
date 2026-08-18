@@ -4,7 +4,7 @@ use crate::domain::models::{
 };
 use crate::error::AppError;
 use crate::ports::step_executor::{FeatureLaunch, SyncOutcomeView};
-use crate::ports::sync_session::SyncSession;
+use crate::ports::sync_session::{SyncSession, SyncSessionView};
 use crate::state::AppContext;
 use tauri::State;
 
@@ -296,10 +296,11 @@ pub async fn feature_sync(
 pub async fn sync_session_get(
     ctx: State<'_, AppContext>,
     feature_id: String,
-) -> Result<Option<SyncSession>, AppError> {
-    crate::application::sync_session::get_reconciled(
+) -> Result<Option<SyncSessionView>, AppError> {
+    crate::application::sync_session::get_reconciled_view(
         &ctx.sync_sessions,
         &ctx.exec,
+        &ctx.features,
         &FeatureId::from(feature_id),
     )
     .await

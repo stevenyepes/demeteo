@@ -54,4 +54,21 @@ pub trait MergeExecutor: Send + Sync {
         &self,
         feature_id: &FeatureId,
     ) -> Result<Option<String>, String>;
+
+    /// Move the sync session on to what a resolution turn is doing, or has done.
+    ///
+    /// Here rather than on a session port of its own because this
+    /// implementation already owns every write to that row, and the callers that
+    /// need it — the `sync` workflow step and the "Resolve with agent" button —
+    /// already hold a `MergeExecutor`. Handing the step executor a second port
+    /// to reach the same table would mean widening a constructor AGENTS.md §3
+    /// already names as a review trigger.
+    ///
+    /// A session that never opened is not an error: the resolver can be reached
+    /// from a conflict this process did not record.
+    async fn record_sync_resolution(
+        &self,
+        feature_id: &FeatureId,
+        resolution: &crate::domain::sync_session::SyncResolution,
+    ) -> Result<(), String>;
 }

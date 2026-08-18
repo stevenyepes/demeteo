@@ -276,6 +276,8 @@ impl GitOpsHelper {
                      Check the project's remote URL and credentials.",
                     base_branch, fetch_err
                 ),
+                worktree_path: None,
+                head_before: None,
             });
         }
 
@@ -300,6 +302,8 @@ impl GitOpsHelper {
                      The branch this run is based on ('{}') may be wrong.",
                     tracking, base_branch
                 ),
+                worktree_path: None,
+                head_before: None,
             });
         }
 
@@ -310,8 +314,7 @@ impl GitOpsHelper {
             .run_program(machine_str, git_request(repo_dir, ["rev-parse", &feat_ref]))
             .await
             .ok()
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
+            .map(|s| s.trim().to_string());
         let _behind_count = self
             .exec
             .run_program(
@@ -344,7 +347,7 @@ impl GitOpsHelper {
         // is needed and the call is a true no-op.
         if ahead_count == 0 {
             return Ok(SyncOutcome {
-                merge_commit_sha: head_before.clone(),
+                merge_commit_sha: head_before.clone().unwrap_or_default(),
                 changed: false,
                 head_before,
             });
@@ -358,6 +361,8 @@ impl GitOpsHelper {
             .map_err(|e| SyncFailure::Blocked {
                 stage: SyncBlockedStage::WorktreeProvision,
                 raw_error: e,
+                worktree_path: None,
+                head_before: head_before.clone(),
             })?;
         let merge_out = self
             .exec
@@ -384,7 +389,10 @@ impl GitOpsHelper {
                     .ok()
                     .map(|s| s.trim().to_string())
                     .unwrap_or_default();
-                let changed = head_after != head_before;
+                // An unread `head_before` cannot say the tip stayed put, and the
+                // merge only got here because `origin/<base>` was ahead — so the
+                // honest reading of "we don't know" is that something moved.
+                let changed = head_before.as_deref() != Some(head_after.as_str());
 
                 if changed {
                     // Push the successful clean merge to origin so remote MR is updated
@@ -402,6 +410,8 @@ impl GitOpsHelper {
                                 "Sync merge succeeded locally but pushing to origin failed: {}",
                                 push_err
                             ),
+                            worktree_path: Some(wt_path.clone()),
+                            head_before: head_before.clone(),
                         });
                     }
                 }
@@ -416,6 +426,8 @@ impl GitOpsHelper {
                 Some(stage) => Err(SyncFailure::Blocked {
                     stage,
                     raw_error: raw,
+                    worktree_path: Some(wt_path.clone()),
+                    head_before: head_before.clone(),
                 }),
                 None => {
                     // The merge left the worktree in a conflicted state.

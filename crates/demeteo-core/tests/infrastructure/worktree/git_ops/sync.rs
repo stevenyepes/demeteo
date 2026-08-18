@@ -55,7 +55,9 @@ async fn test_sync_feature_with_upstream_detects_conflicts() {
              the merge should have failed because README.md was edited on \
              both sides."
         ),
-        Err(SyncFailure::Blocked { stage, raw_error }) => panic!(
+        Err(SyncFailure::Blocked {
+            stage, raw_error, ..
+        }) => panic!(
             "A merge that left unmerged paths must not be classified as \
              blocked ({stage:?}) — the banner would then offer no way to \
              resolve it. raw_error: {raw_error}"
@@ -151,7 +153,9 @@ async fn test_sync_feature_with_upstream_reports_fetch_failure() {
              is what put a 'Resolve with agent' button under a DNS failure. \
              raw_error: {raw_error}"
         ),
-        Err(SyncFailure::Blocked { stage, raw_error }) => {
+        Err(SyncFailure::Blocked {
+            stage, raw_error, ..
+        }) => {
             assert_eq!(stage, SyncBlockedStage::Fetch);
             assert!(
                 raw_error.to_lowercase().contains("fetch")
@@ -572,7 +576,9 @@ mod stage_at_each_call {
                 assert_eq!(files[0].path, "README.md");
                 assert_eq!(worktree_path.as_deref(), Some(WT));
             }
-            SyncFailure::Blocked { stage, raw_error } => {
+            SyncFailure::Blocked {
+                stage, raw_error, ..
+            } => {
                 panic!("a merge that answered was filed as {stage:?}: {raw_error}")
             }
         }

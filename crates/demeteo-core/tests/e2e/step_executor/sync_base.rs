@@ -21,9 +21,11 @@ use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, ProviderId, RepositoryId};
 use crate::domain::models::{ConflictFile, ConflictReport};
 use crate::domain::sync_failure::SyncBlockedStage;
+use crate::domain::sync_session::SyncSessionStatus;
 use crate::paths;
 use crate::ports::db::{FeatureRepository, MergeAuditRepository, ProjectRepository};
 use crate::ports::step_executor::SyncOutcomeView;
+use crate::ports::sync_session::SyncSessionPort;
 
 const REPO_PATH: &str = "demeteo/sync-base";
 
@@ -319,5 +321,59 @@ async fn a_remote_whose_repo_dir_will_not_resolve_is_blocked_too() {
         SyncOutcomeView::Blocked { stage, .. } => assert_eq!(stage, SyncBlockedStage::RepoContext),
         other => panic!("an unresolvable remote repo dir rendered as {other:?}"),
     }
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+/// The seam every other sync-session test takes on faith.
+///
+/// The domain, repository and application suites all call `open()` themselves
+/// before asserting, so they prove `reconcile` and `abort` work on a row the
+/// product may never actually write. This is the only place the *production*
+/// write is exercised: replace the `open()` in `adapters::merge` with a no-op
+/// and nothing else in the tree notices, while in the app the banner would
+/// never hydrate, `sync_abort` would have nothing to close, and every one of
+/// those tests would still pass.
+#[tokio::test]
+async fn a_sync_leaves_a_session_row_behind_for_the_ui_to_find() {
+    let label = "sync_session_written";
+    let temp_dir = scratch_dir(label);
+    let (executor, db) = build_test_executor_in(
+        temp_dir.clone(),
+        Arc::new(FakeNotif),
+        Arc::new(ScriptedExec::new(&[])),
+    )
+    .await;
+    let feature_id = seed_feature(&db, label, FeatureOrigin::DefaultBranch, None);
+    let fid = FeatureId::from(feature_id.clone());
+
+    let _ = executor.feature_sync_impl(&feature_id).await;
+
+    let sessions: &dyn SyncSessionPort = &*db;
+    let session = sessions
+        .get(&fid)
+        .expect("read the session")
+        .expect("a sync must open a session row");
+    assert_eq!(
+        session.status,
+        SyncSessionStatus::Blocked,
+        "the unscripted fetch fails, so the verdict patch must land too"
+    );
+    assert_eq!(
+        session.feature_branch,
+        format!("demeteo/features/{feature_id}")
+    );
+    assert_eq!(session.base_branch, "main");
+    assert!(
+        session
+            .raw_error
+            .as_deref()
+            .is_some_and(|e| e.contains("fetch") || e.contains("origin")),
+        "the row has to keep git's own words: {:?}",
+        session.raw_error
+    );
+    assert_eq!(
+        session.worktree_path, None,
+        "a fetch that never ran provisioned nothing to name"
+    );
     let _ = std::fs::remove_dir_all(temp_dir);
 }

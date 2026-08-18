@@ -58,6 +58,20 @@ pub struct SyncSessionPatch {
     pub bump_attempts: bool,
 }
 
+/// A session as the UI reads it: the row, plus the one decision the UI is not
+/// allowed to make for itself.
+///
+/// `user_may_intervene` is computed here rather than in the frontend because it
+/// is a policy question — who owns this worktree right now — and AGENTS.md §3
+/// keeps those in `domain/`. Spelled as a condition in TSX it would drift from
+/// the workflow step that writes the states it reads.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SyncSessionView {
+    #[serde(flatten)]
+    pub session: SyncSession,
+    pub user_may_intervene: bool,
+}
+
 pub trait SyncSessionPort: Send + Sync {
     /// Open the feature's session, replacing whatever the previous one
     /// claimed. Idempotent on `feature_id`: a feature has at most one sync in
@@ -73,7 +87,13 @@ pub trait SyncSessionPort: Send + Sync {
         patch: &SyncSessionPatch,
         now: i64,
     ) -> Result<(), String>;
-    /// Forget the session entirely. Nothing else deletes a row — a feature
-    /// deleted upstream takes its session with it through the FK cascade.
+    /// Forget the session entirely.
+    ///
+    /// Not how a sync ends: abandoning one records
+    /// [`SyncSessionStatus::Aborted`] and keeps the row, because the states the
+    /// user can still be shown — and the audit of how a feature's syncs have
+    /// been going — both live in it. This exists for a caller that wants the
+    /// feature to have no sync history at all, and the FK cascade already covers
+    /// the only one there is: deleting the feature.
     fn close(&self, feature_id: &FeatureId) -> Result<(), String>;
 }

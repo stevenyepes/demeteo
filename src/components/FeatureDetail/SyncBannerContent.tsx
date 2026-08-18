@@ -34,6 +34,7 @@ interface SyncBannerContentProps {
   onResolve: (files: string[]) => void;
   onAbort: () => void;
   resolving: boolean;
+  aborting: boolean;
   onDismiss: () => void;
 }
 
@@ -51,6 +52,7 @@ export const SyncBannerContent: React.FC<SyncBannerContentProps> = ({
   onResolve,
   onAbort,
   resolving,
+  aborting,
   onDismiss,
 }) => {
   if (outcome.status === 'ok') {
@@ -149,7 +151,7 @@ export const SyncBannerContent: React.FC<SyncBannerContentProps> = ({
         <div className="flex justify-end gap-2">
           <button
             onClick={onAbort}
-            disabled={resolving}
+            disabled={resolving || aborting}
             className="flex items-center gap-1.5 px-3 py-1.5 border border-rose-500/30 hover:bg-rose-500/10 rounded text-xs font-bold text-rose-300 transition disabled:opacity-40"
             title="Undo the merge and discard the sync worktree"
           >
@@ -158,7 +160,7 @@ export const SyncBannerContent: React.FC<SyncBannerContentProps> = ({
           </button>
           <button
             onClick={() => onResolve(outcome.conflict_files.map((f) => f.path))}
-            disabled={resolving}
+            disabled={resolving || aborting}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 hover:shadow-[0_0_20px_rgba(139,92,246,0.5)] rounded text-xs font-bold text-white transition disabled:opacity-40"
           >
             {resolving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Cpu className="w-3 h-3" />}

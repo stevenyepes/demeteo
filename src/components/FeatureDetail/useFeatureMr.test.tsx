@@ -56,6 +56,7 @@ const session = (over: Partial<SyncSessionView> = {}): SyncSessionView => ({
   merge_commit_sha: null,
   conflict_files: [{ path: 'src/lib.rs', kind: 'both modified' }],
   raw_error: 'CONFLICT (content): Merge conflict in src/lib.rs',
+  user_may_intervene: true,
   attempts: 0,
   created_at: 0,
   updated_at: 0,
@@ -123,4 +124,29 @@ describe('useFeatureMr', () => {
     expect(abortSync).toHaveBeenCalledWith('f-1');
     await waitFor(() => expect(result.current.syncBanner).toBeNull());
   });
+});
+
+/**
+ * Persisting the session created a footgun that could not exist before it: the
+ * workflow's own `sync` step conflicts and resolves with no user involved, so a
+ * hydrated banner can point its Abort and Resolve buttons at a worktree an
+ * agent is mid-write in — abort deletes that directory, resolve puts a second
+ * agent in it. The backend decides who owns a session; this pins that the hook
+ * obeys rather than re-deriving it from `status`.
+ */
+it('leaves a conflict the run is still driving alone', async () => {
+  getSyncSession.mockResolvedValue(session({ user_may_intervene: false }));
+
+  const { result } = renderHook(() =>
+    useFeatureMr({
+      featureId: 'f-1',
+      projectId: 'p-1',
+      status: 'running',
+      reload: () => {},
+      navigate: () => {},
+    }),
+  );
+
+  await waitFor(() => expect(getSyncSession).toHaveBeenCalledWith('f-1'));
+  expect(result.current.syncBanner).toBeNull();
 });

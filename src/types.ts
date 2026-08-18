@@ -820,6 +820,15 @@ export interface SyncSessionView {
   attempts: number;
   created_at: number;
   updated_at: number;
+  /** Whether this sync is the user's to abort or re-resolve, rather than one a
+   *  live run is already driving. Computed by
+   *  `domain::sync_session::user_may_intervene` — a `resolving` session, or any
+   *  session on a feature whose run is still going, belongs to that turn: abort
+   *  would delete the worktree an agent is writing in and resolve would put a
+   *  second agent in the same tree. Never re-derive this from `status` here; the
+   *  window where the row still reads `conflicted` while the step owns it is
+   *  exactly what the backend flag closes. */
+  user_may_intervene: boolean;
 }
 
 export interface Repository {

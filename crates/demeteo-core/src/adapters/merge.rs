@@ -190,7 +190,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                         } else {
                             SyncSessionStatus::UpToDate
                         }),
-                        head_before: Some(Some(outcome.head_before.clone())),
+                        head_before: Some(outcome.head_before.clone()),
                         merge_commit_sha: Some(Some(outcome.merge_commit_sha.clone())),
                         ..Default::default()
                     },
@@ -214,7 +214,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                     &SyncSessionPatch {
                         status: Some(SyncSessionStatus::Conflicted),
                         worktree_path: Some(worktree_path.clone()),
-                        head_before: Some(Some(head_before)),
+                        head_before: Some(head_before),
                         conflict_files: Some(files.clone()),
                         raw_error: Some(Some(raw_error.clone())),
                         ..Default::default()
@@ -244,12 +244,23 @@ impl MergeExecutor for SqliteMergeExecutor {
                     worktree_path,
                 })
             }
-            Err(SyncFailure::Blocked { stage, raw_error }) => {
+            Err(SyncFailure::Blocked {
+                stage,
+                raw_error,
+                worktree_path,
+                head_before,
+            }) => {
+                // A blocked attempt can still have provisioned a tree — `Push`
+                // always has, and it holds a real unpublished merge. Naming it on
+                // the row is what lets `sync_abort` reclaim it; otherwise the only
+                // thing that ever removes it is the next sync's force-remove.
                 let _ = self.sync_sessions.update(
                     feature_id,
                     &SyncSessionPatch {
                         status: Some(SyncSessionStatus::Blocked),
                         raw_error: Some(Some(raw_error.clone())),
+                        worktree_path: Some(worktree_path),
+                        head_before: Some(head_before),
                         ..Default::default()
                     },
                     paths::now_ms(),
@@ -269,6 +280,32 @@ impl MergeExecutor for SqliteMergeExecutor {
                 Err(failure)
             }
         }
+    }
+
+    async fn record_sync_resolution(
+        &self,
+        feature_id: &FeatureId,
+        resolution: &crate::domain::sync_session::SyncResolution,
+    ) -> Result<(), String> {
+        use crate::domain::sync_session::SyncResolution;
+        self.sync_sessions.update(
+            feature_id,
+            &SyncSessionPatch {
+                status: Some(resolution.status()),
+                merge_commit_sha: match resolution {
+                    SyncResolution::Succeeded { merge_commit_sha } => {
+                        Some(Some(merge_commit_sha.clone()))
+                    }
+                    _ => None,
+                },
+                raw_error: match resolution {
+                    SyncResolution::Failed { reason } => Some(Some(reason.clone())),
+                    _ => None,
+                },
+                ..Default::default()
+            },
+            paths::now_ms(),
+        )
     }
 
     async fn get_last_sync_worktree_path(

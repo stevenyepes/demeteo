@@ -7,6 +7,19 @@ fn probe(worktree_exists: bool, merge_in_progress: bool, dirty: bool) -> SyncWor
         worktree_exists,
         merge_in_progress,
         dirty,
+        head_advanced: None,
+    }
+}
+
+fn probe_head(
+    worktree_exists: bool,
+    merge_in_progress: bool,
+    dirty: bool,
+    head_advanced: bool,
+) -> SyncWorkspaceProbe {
+    SyncWorkspaceProbe {
+        head_advanced: Some(head_advanced),
+        ..probe(worktree_exists, merge_in_progress, dirty)
     }
 }
 
@@ -44,11 +57,12 @@ fn a_resolve_nobody_is_driving_falls_back_to_the_conflict() {
 }
 
 /// The agent, or the user in their own editor, committed the resolution. Git
-/// says so — `MERGE_HEAD` is consumed and the tree is clean — and the row,
-/// written before any of that happened, does not.
+/// says so — `MERGE_HEAD` is consumed, the tree is clean, and `HEAD` has moved
+/// off the sha the sync started from — and the row, written before any of that
+/// happened, does not.
 #[test]
 fn a_closed_merge_over_a_clean_tree_is_resolved_whatever_the_row_says() {
-    let done = probe(true, false, false);
+    let done = probe_head(true, false, false, true);
     for stored in [
         SyncSessionStatus::Conflicted,
         SyncSessionStatus::Resolving,
@@ -59,6 +73,43 @@ fn a_closed_merge_over_a_clean_tree_is_resolved_whatever_the_row_says() {
             SyncSessionStatus::Resolved,
             "{stored:?}"
         );
+    }
+}
+
+/// `git merge --abort` in the user's own terminal leaves a tree that is
+/// byte-identical to a committed resolution — merge closed, nothing modified —
+/// and the two want opposite answers. `HEAD` back on the sha the sync started
+/// from is the whole of the difference; calling this `resolved` would offer a
+/// review of a merge that no longer exists, and P4 would push a branch carrying
+/// none of it.
+#[test]
+fn a_merge_undone_by_hand_is_abandoned_not_resolved() {
+    let undone = probe_head(true, false, false, false);
+    for stored in [
+        SyncSessionStatus::Conflicted,
+        SyncSessionStatus::Resolving,
+        SyncSessionStatus::ResolutionFailed,
+    ] {
+        assert_eq!(
+            reconcile(stored, Some(&undone)),
+            SyncSessionStatus::Aborted,
+            "{stored:?}"
+        );
+    }
+}
+
+/// With no starting sha on the row there is nothing to compare `HEAD` against,
+/// so neither verdict above is earned and the claim already on the row stands.
+/// Guessing either way is how a resolution gets reviewed that never happened.
+#[test]
+fn a_closed_merge_with_no_starting_sha_leaves_the_row_alone() {
+    let unknowable = probe(true, false, false);
+    for stored in [
+        SyncSessionStatus::Conflicted,
+        SyncSessionStatus::Resolving,
+        SyncSessionStatus::ResolutionFailed,
+    ] {
+        assert_eq!(reconcile(stored, Some(&unknowable)), stored, "{stored:?}");
     }
 }
 
@@ -134,4 +185,59 @@ fn every_status_round_trips_through_its_stored_spelling() {
         assert_eq!(SyncSessionStatus::parse(stored.as_str()), Some(stored));
     }
     assert_eq!(SyncSessionStatus::parse("rebasing"), None);
+}
+
+/// A conflict the user may act on, and one they may not. The destructive half
+/// of the banner — abort deletes the worktree, resolve spawns a second agent in
+/// it — must be unreachable while something else holds the tree, and a session
+/// that says `resolving` says exactly that.
+#[test]
+fn a_sync_somebody_else_is_driving_is_not_the_users_to_touch() {
+    for status in [
+        SyncSessionStatus::Conflicted,
+        SyncSessionStatus::ResolutionFailed,
+        SyncSessionStatus::Blocked,
+    ] {
+        assert!(user_may_intervene(status, "completed"), "{status:?}");
+    }
+    assert!(
+        !user_may_intervene(SyncSessionStatus::Resolving, "completed"),
+        "a turn is holding this worktree"
+    );
+    for status in [
+        SyncSessionStatus::Syncing,
+        SyncSessionStatus::UpToDate,
+        SyncSessionStatus::Merged,
+        SyncSessionStatus::Resolved,
+        SyncSessionStatus::Aborted,
+    ] {
+        assert!(!user_may_intervene(status, "completed"), "{status:?}");
+    }
+}
+
+/// The window the session status cannot cover on its own: between the merge
+/// failing and the resolution turn recording itself the row honestly reads
+/// `conflicted`, and the step is still the one holding it. A live run is
+/// therefore disqualifying regardless of what the session says.
+#[test]
+fn a_live_run_owns_its_sync_whatever_the_session_says() {
+    for feature_status in [
+        "pending",
+        "running",
+        "verifying",
+        "awaiting_gate",
+        "gated",
+        "syncing_origin",
+    ] {
+        assert!(
+            !user_may_intervene(SyncSessionStatus::Conflicted, feature_status),
+            "{feature_status}"
+        );
+    }
+    for feature_status in ["completed", "failed", "cancelled", "awaiting_mr"] {
+        assert!(
+            user_may_intervene(SyncSessionStatus::Conflicted, feature_status),
+            "{feature_status}"
+        );
+    }
 }

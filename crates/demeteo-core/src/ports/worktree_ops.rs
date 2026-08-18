@@ -194,8 +194,10 @@ pub struct SyncOutcome {
     pub changed: bool,
     /// The feature branch's tip before the merge. Reported rather than
     /// re-derived, because `merge_commit^` stops being it the moment anything
-    /// commits on top — and by then nothing can recover it.
-    pub head_before: String,
+    /// commits on top — and by then nothing can recover it. `None` when the
+    /// read failed: a base that was never measured is not the same as one that
+    /// resolved to nothing, and only the first may be stored as unknown.
+    pub head_before: Option<String>,
 }
 
 /// Why a feature-branch sync did not land. Which variant it is cannot be
@@ -211,8 +213,10 @@ pub enum SyncFailure {
         worktree_path: Option<String>,
         /// The feature branch's tip before the merge, on the same terms as
         /// [`SyncOutcome::head_before`] — a resolution commits on top of the
-        /// merge, so this is the only base a review diff can use.
-        head_before: String,
+        /// merge, so this is the only base a review diff can use. `None` when
+        /// the read for it failed, which is not the same as a branch with no
+        /// tip and may not be flattened into one.
+        head_before: Option<String>,
     },
     /// No merge was attempted, or one was and never reached a verdict, or its
     /// result could not be published. Nothing is known to be conflicted, so
@@ -220,6 +224,17 @@ pub enum SyncFailure {
     Blocked {
         stage: crate::domain::sync_failure::SyncBlockedStage,
         raw_error: String,
+        /// A worktree this attempt provisioned and did not clean up, when there
+        /// is one. `Push` and `Merge` both leave one: the cleanup in
+        /// `sync_feature_with_upstream` runs only on success, and the push
+        /// failure returns before reaching it. Carrying it is what lets the
+        /// session name the tree, and `sync_abort` reclaim it — otherwise the
+        /// only thing that ever removes it is the next sync's force-remove.
+        worktree_path: Option<String>,
+        /// As [`SyncFailure::Conflict::head_before`]. Known at every stage after
+        /// the refs are read, and a `Push` failure leaves a real merge commit
+        /// sitting on top of it.
+        head_before: Option<String>,
     },
 }
 

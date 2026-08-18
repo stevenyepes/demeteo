@@ -14,6 +14,7 @@ function renderBanner(outcome: SyncOutcomeView) {
       onResolve={onResolve}
       onAbort={onAbort}
       resolving={false}
+      aborting={false}
       onDismiss={vi.fn()}
     />,
   );

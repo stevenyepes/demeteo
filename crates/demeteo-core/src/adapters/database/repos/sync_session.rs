@@ -41,7 +41,15 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SyncSession> {
 
 impl SyncSessionPort for SqliteAdapter {
     fn open(&self, session: &SyncSession) -> Result<(), String> {
-        let files = serde_json::to_string(&session.conflict_files).map_err(|e| e.to_string())?;
+        // The column's NULL means "no conflict has been measured yet", which is
+        // what a session opened before the merge is in — distinct from the `[]`
+        // a porcelain read writes when it answered nothing. Serializing an empty
+        // Vec into `[]` here would erase that distinction on every open.
+        let files = if session.conflict_files.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&session.conflict_files).map_err(|e| e.to_string())?)
+        };
         let conn = self.conn.lock()?;
         conn.execute(
             &format!(

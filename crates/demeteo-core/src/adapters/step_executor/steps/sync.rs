@@ -22,6 +22,7 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::sync_worktree::discard_sync_worktree;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sync_failure::SyncStepNext;
+use crate::domain::sync_session::SyncResolution;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
 
@@ -206,6 +207,15 @@ impl ExecutionDriver {
 
         let conflict_paths: Vec<String> = conflict_files.iter().map(|f| f.path.clone()).collect();
 
+        // The row said `conflicted` and this turn is about to hold the worktree.
+        // Leaving it that way is what let the run's own resolution look, to
+        // anyone opening the feature, like a conflict waiting for them — with an
+        // abort that deletes the tree the agent is writing in.
+        let _ = self
+            .merge_executor
+            .record_sync_resolution(&self.f_id, &SyncResolution::Started)
+            .await;
+
         match crate::adapters::step_executor::sync::resolve_sync_conflicts_shared(
             crate::adapters::step_executor::sync::ResolveSyncContext {
                 exec: &self.exec,
@@ -231,7 +241,16 @@ impl ExecutionDriver {
         )
         .await
         {
-            Ok(_head_sha) => {
+            Ok(head_sha) => {
+                let _ = self
+                    .merge_executor
+                    .record_sync_resolution(
+                        &self.f_id,
+                        &SyncResolution::Succeeded {
+                            merge_commit_sha: head_sha.clone(),
+                        },
+                    )
+                    .await;
                 discard_sync_worktree(&*self.exec, machine_str, repo_dir, resolved_cwd).await;
 
                 let wall = step_start.elapsed().as_secs();
@@ -274,6 +293,15 @@ impl ExecutionDriver {
                 }
             }
             Err(reason) => {
+                let _ = self
+                    .merge_executor
+                    .record_sync_resolution(
+                        &self.f_id,
+                        &SyncResolution::Failed {
+                            reason: reason.clone(),
+                        },
+                    )
+                    .await;
                 let wall = step_start.elapsed().as_secs();
                 let _ = self.features.step_update(
                     &step_exec.id,

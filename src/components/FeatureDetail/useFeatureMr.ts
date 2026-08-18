@@ -29,6 +29,7 @@ export function useFeatureMr(input: {
   const { reportError } = useErrorBus();
   const [publishing, setPublishing] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [aborting, setAborting] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [syncBanner, setSyncBanner] = useState<SyncOutcomeView | null>(null);
   const [mrState, setMrState] = useState<MrState | null>(null);
@@ -72,6 +73,9 @@ export function useFeatureMr(input: {
       try {
         const session = await getSyncSession(featureId);
         if (cancelled || session?.status !== 'conflicted') return;
+        // A conflict the run is still driving is not the user's to see a
+        // banner about: its buttons act on a worktree an agent holds.
+        if (!session.user_may_intervene) return;
         setSyncBanner({
           status: 'conflict',
           conflict_files: session.conflict_files,
@@ -111,7 +115,7 @@ export function useFeatureMr(input: {
    * describe.
    */
   const handleAbortSync = async () => {
-    setSyncing(true);
+    setAborting(true);
     try {
       await abortSync(featureId);
       setSyncBanner(null);
@@ -119,7 +123,7 @@ export function useFeatureMr(input: {
     } catch (err) {
       await messageDialog(formatError(err), { title: 'Abort failed', kind: 'error' });
     } finally {
-      setSyncing(false);
+      setAborting(false);
     }
   };
 
@@ -227,6 +231,7 @@ export function useFeatureMr(input: {
     syncing,
     resolving,
     syncBanner,
+    aborting,
     setSyncBanner,
     mrState,
     mrUrl,
