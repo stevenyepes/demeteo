@@ -387,6 +387,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         syncing={mr.syncing}
         resolving={mr.resolving}
         publishing={mr.publishing}
+        reviewHeld={mr.reviewHeld}
         mrUrl={mr.mrUrl}
         onBack={() => navigate({ kind: 'home' })}
         onOpenTerminalTab={routing.handleOpenTerminalTab}

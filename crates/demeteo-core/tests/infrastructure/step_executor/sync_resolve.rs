@@ -15,7 +15,7 @@ use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
 use crate::domain::ids::{StepExecutionId, StepId};
 use crate::domain::models::{Availability, EffortLevel, SessionInfo, StepExecution};
-use crate::domain::sync_session::{ResolutionPublish, SyncSessionStatus};
+use crate::domain::sync_session::SyncSessionStatus;
 use crate::ports::agent_runtime::{
     AgentCapabilities, AgentRuntime, AgentSession, AgentStartError, PersonalizationSupport,
 };
@@ -38,6 +38,10 @@ const COMMIT: &str = "git -c core.hooksPath=/dev/null -C /repos/demeteo_wt_sync_
                       -c user.email=demeteo@local -c user.name=demeteo commit -m \
                       'chore: resolve sync conflicts with origin/master'";
 const PUSH: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 push origin feature/f-1";
+/// The push's own confirmation: `git push` exiting zero is a verdict about the
+/// command, and this is the one about origin.
+const CONTAINS: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 merge-base --is-ancestor \
+                        c0ffeec refs/remotes/origin/feature/f-1";
 const HEAD: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse HEAD";
 const DISCARD: &str =
     "git -C /repos/demeteo worktree remove --force /repos/demeteo_wt_sync_feature-f-1";
@@ -380,6 +384,13 @@ fn stored_status(db: &Arc<SqliteAdapter>) -> SyncSessionStatus {
 }
 
 /// Run one turn against `p`, with the spend and cancel a caller would own.
+///
+/// `running` because that is the caller a plain `run` stands in for — a
+/// workflow's `sync` node, whose driver still holds the feature — and it is
+/// what makes the turn publish. The two publication facts are arguments rather
+/// than a verdict for the reason
+/// [`ResolveSyncContext::review_before_push`](super::ResolveSyncContext) gives:
+/// with the verdict handed in, no test here could see the policy at all.
 async fn run(
     p: &Ports,
     step_exec: &StepExecution,
@@ -387,16 +398,18 @@ async fn run(
     cost: &mut f64,
     tokens: &mut i64,
 ) -> Result<ResolvedSync, ResolveSyncError> {
-    run_with(p, step_exec, cancel, cost, tokens, ResolutionPublish::Push).await
+    run_with(p, step_exec, cancel, cost, tokens, None, "running").await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_with(
     p: &Ports,
     step_exec: &StepExecution,
     cancel: Option<watch::Receiver<bool>>,
     cost: &mut f64,
     tokens: &mut i64,
-    publish: ResolutionPublish,
+    review_before_push: Option<bool>,
+    feature_status: &str,
 ) -> Result<ResolvedSync, ResolveSyncError> {
     resolve_sync_conflicts(ResolveSyncContext {
         exec: &p.exec,
@@ -419,7 +432,8 @@ async fn run_with(
         override_model: None,
         effort: EffortLevel::DEFAULT,
         max_budget_usd: Some(10.0),
-        publish,
+        review_before_push,
+        feature_status,
         cancel,
         spend: RunningSpend {
             cost,
@@ -447,6 +461,7 @@ fn happy_path() -> ScriptedExec {
         ),
         (HEAD, Ok("c0ffeec\n")),
         (PUSH, Ok("")),
+        (CONTAINS, Ok("")),
         (DISCARD, Ok("")),
         (PRUNE, Ok("")),
         // The teardown's confirmation: the tree really is gone.
@@ -935,16 +950,9 @@ async fn a_resolution_somebody_can_look_at_stops_at_the_commit() {
     open_conflicted(&p.db);
     let (mut cost, mut tokens) = (0.0, 0);
 
-    let resolved = run_with(
-        &p,
-        &row(),
-        None,
-        &mut cost,
-        &mut tokens,
-        ResolutionPublish::HoldForReview,
-    )
-    .await
-    .expect("holding the push is not a failure");
+    let resolved = run_with(&p, &row(), None, &mut cost, &mut tokens, None, "completed")
+        .await
+        .expect("holding the push is not a failure");
 
     assert!(!resolved.published);
     assert_eq!(resolved.merge_commit_sha, "c0ffeec");
@@ -955,6 +963,121 @@ async fn a_resolution_somebody_can_look_at_stops_at_the_commit() {
         session.worktree_path.as_deref(),
         Some(WT),
         "the tree the branch is checked out in is what Discard resets"
+    );
+    // The row would keep naming the directory whether or not it went:
+    // `discard_sync_worktree` swallows every error and the held arm hard-codes
+    // `worktree_discarded: false`. What the deletion is visible in is the
+    // command log, so that is what this asserts on.
+    assert!(
+        !p.scripted
+            .commands()
+            .iter()
+            .any(|c| c.contains("worktree remove") || c.contains("worktree prune")),
+        "{:?}",
+        p.scripted.commands()
+    );
+}
+
+/// The project may take review away, and taking it away has to actually reach
+/// the turn. Somebody is in a position to look here — the run is over — and the
+/// resolution still publishes, which is the whole of what the setting does.
+#[tokio::test]
+async fn a_project_that_opted_out_of_review_publishes_with_somebody_watching() {
+    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime::default())]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let resolved = run_with(
+        &p,
+        &row(),
+        None,
+        &mut cost,
+        &mut tokens,
+        Some(false),
+        "completed",
+    )
+    .await
+    .expect("opting out is not a failure");
+
+    assert!(resolved.published);
+    assert!(stored_session(&p.db).pushed_at.is_some());
+}
+
+/// V45's own invariant, and the one a mutation at either call site could
+/// silently break: a resolution produced while a driver still holds the feature
+/// must never wait. Nothing offers Publish there, so holding would leave the
+/// merge on the branch with nobody able to publish it — and the project asking
+/// for review, which is the strongest form of the request, may not buy it.
+///
+/// The script has no `push` removed and no teardown removed: it is the happy
+/// path, which means a turn that held here would die on the strict double
+/// rather than pass.
+#[tokio::test]
+async fn a_run_that_still_owns_its_branch_publishes_however_the_project_asked() {
+    for feature_status in ["running", "awaiting_gate", "syncing_origin"] {
+        let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime::default())]);
+        open_conflicted(&p.db);
+        let (mut cost, mut tokens) = (0.0, 0);
+
+        let resolved = run_with(
+            &p,
+            &row(),
+            None,
+            &mut cost,
+            &mut tokens,
+            Some(true),
+            feature_status,
+        )
+        .await
+        .expect("a run's own sync node resolves and publishes");
+
+        assert!(resolved.published, "{feature_status}");
+        assert!(
+            stored_session(&p.db).pushed_at.is_some(),
+            "{feature_status}"
+        );
+    }
+}
+
+/// `git push` exiting zero is a verdict about the command, not about origin.
+/// The button's `publish` already refuses to record one it cannot confirm; this
+/// path used to write `pushed_at` from the exit code alone, so a push that
+/// never landed suppressed the review card forever for a merge the pull request
+/// had never seen. Two paths writing one column on opposite evidence rules is
+/// what the shared confirmation removes.
+#[tokio::test]
+async fn a_push_origin_did_not_confirm_leaves_the_resolution_waiting() {
+    let script = [
+        (PORCELAIN, Ok("")),
+        (MERGE_HEAD, Ok("b1b2b3b\n")),
+        (ADD_ALL, Ok("")),
+        (
+            COMMIT,
+            Ok("[feature/f-1 c0ffee] chore: resolve sync conflicts"),
+        ),
+        (HEAD, Ok("c0ffeec\n")),
+        (PUSH, Ok("")),
+        (CONTAINS, Err("fatal: not an ancestor")),
+    ];
+    let p = ports(
+        ScriptedExec::new(&script),
+        vec![Arc::new(ScriptedRuntime::default())],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let resolved = run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("the resolution is committed either way");
+
+    assert!(!resolved.published);
+    let session = stored_session(&p.db);
+    assert_eq!(session.status, SyncSessionStatus::Resolved);
+    assert_eq!(session.pushed_at, None);
+    assert_eq!(
+        session.worktree_path.as_deref(),
+        Some(WT),
+        "an unconfirmed push leaves the tree the review still needs"
     );
 }
 
@@ -982,16 +1105,9 @@ async fn a_follow_up_commit_does_not_move_the_diffs_base() {
     open_conflicted(&p.db);
     let (mut cost, mut tokens) = (0.0, 0);
 
-    let resolved = run_with(
-        &p,
-        &row(),
-        None,
-        &mut cost,
-        &mut tokens,
-        ResolutionPublish::HoldForReview,
-    )
-    .await
-    .expect("an agent that committed for itself still resolved the merge");
+    let resolved = run_with(&p, &row(), None, &mut cost, &mut tokens, None, "completed")
+        .await
+        .expect("an agent that committed for itself still resolved the merge");
 
     let session = stored_session(&p.db);
     assert_eq!(resolved.merge_commit_sha, "f0110up");

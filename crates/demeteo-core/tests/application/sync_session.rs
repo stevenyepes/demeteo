@@ -137,18 +137,37 @@ async fn a_feature_that_never_synced_has_no_session() {
 /// delete here is the checkout.
 #[tokio::test]
 async fn aborting_in_the_clone_itself_undoes_the_merge_and_deletes_nothing() {
-    let (sessions, exec, git, _features) = ports(ScriptedExec::new(&[(
-        "git -C /repos/demeteo merge --abort",
-        Ok(""),
-    )]));
+    let (sessions, exec, git, features) = ports(ScriptedExec::new(&[
+        ("git -C /repos/demeteo rev-parse --git-dir", Ok(".git\n")),
+        (
+            "git -C /repos/demeteo rev-parse --verify --quiet MERGE_HEAD",
+            Ok("b1b2b3b\n"),
+        ),
+        (
+            "git -C /repos/demeteo status --porcelain",
+            Ok("UU src/lib.rs\n"),
+        ),
+        ("git -C /repos/demeteo merge --abort", Ok("")),
+    ]));
     sessions.open(&conflicted(Some(REPO))).unwrap();
 
-    let read = abort(&sessions, &exec, &fid()).await.unwrap().unwrap();
-    assert_eq!(read.status, SyncSessionStatus::Aborted);
-    assert_eq!(
-        git.commands(),
-        vec!["git -C /repos/demeteo merge --abort".to_string()],
-        "nothing may remove or prune the clone itself"
+    let read = abort(&sessions, &exec, &features, &fid())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.session.status, SyncSessionStatus::Aborted);
+    assert!(
+        !git.commands()
+            .iter()
+            .any(|c| c.contains("worktree remove") || c.contains("worktree prune")),
+        "nothing may remove or prune the clone itself: {:?}",
+        git.commands()
+    );
+    assert!(
+        git.commands()
+            .contains(&"git -C /repos/demeteo merge --abort".to_string()),
+        "{:?}",
+        git.commands()
     );
 }
 
@@ -157,15 +176,15 @@ async fn aborting_in_the_clone_itself_undoes_the_merge_and_deletes_nothing() {
 /// the same case. Neither may fail, and the second must issue nothing.
 #[tokio::test]
 async fn aborting_twice_is_the_same_as_aborting_once() {
-    let (sessions, exec, git, _features) = ports(ScriptedExec::new(&[(
+    let (sessions, exec, git, features) = ports(ScriptedExec::new(&[(
         "git -C /repos/demeteo_wt_sync_feature-f-1 merge --abort",
         Err("fatal: There is no merge to abort"),
     )]));
     sessions.open(&conflicted(Some(WT))).unwrap();
 
-    abort(&sessions, &exec, &fid()).await.unwrap();
+    abort(&sessions, &exec, &features, &fid()).await.unwrap();
     let issued = git.commands();
-    abort(&sessions, &exec, &fid()).await.unwrap();
+    abort(&sessions, &exec, &features, &fid()).await.unwrap();
 
     let read = sessions.get(&fid()).unwrap().unwrap();
     assert_eq!(read.status, SyncSessionStatus::Aborted);
@@ -239,7 +258,7 @@ async fn an_unreadable_merge_head_does_not_mean_the_merge_is_finished() {
 /// and revisited by no reader.
 #[tokio::test]
 async fn aborting_against_an_unreachable_host_leaves_the_session_open() {
-    let (sessions, exec, _git, _features) = ports(ScriptedExec::new(&[
+    let (sessions, exec, _git, features) = ports(ScriptedExec::new(&[
         (
             "git -C /repos/demeteo_wt_sync_feature-f-1 merge --abort",
             Err("transport: Connection appears dead"),
@@ -248,7 +267,7 @@ async fn aborting_against_an_unreachable_host_leaves_the_session_open() {
     ]));
     sessions.open(&conflicted(Some(WT))).unwrap();
 
-    assert!(abort(&sessions, &exec, &fid()).await.is_err());
+    assert!(abort(&sessions, &exec, &features, &fid()).await.is_err());
     let read = sessions.get(&fid()).unwrap().unwrap();
     assert_eq!(read.status, SyncSessionStatus::Conflicted);
     assert_eq!(
@@ -423,6 +442,120 @@ async fn discarding_moves_the_branch_back_and_abandons_the_sync() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(after.status, SyncSessionStatus::Aborted);
-    assert_eq!(after.worktree_path, None);
+    assert_eq!(after.session.status, SyncSessionStatus::Aborted);
+    assert_eq!(after.session.worktree_path, None);
+}
+
+/// `intervention_refusal` says abort is refused for a committed resolution, and
+/// until this test nothing made that true: the IPC behind the hidden button
+/// accepted it, removed the worktree, wrote a terminal `aborted` and left the
+/// merge on the branch — with `Publish` and `Discard` both refused afterwards,
+/// so the resolution was reachable by nothing.
+#[tokio::test]
+async fn abandoning_a_sync_is_refused_while_a_resolution_is_waiting_on_it() {
+    let (sessions, exec, git, features) = ports(script(&[]));
+    sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    let err = abort(&sessions, &exec, &features, &fid())
+        .await
+        .expect_err("abort is not how a committed resolution is undone");
+    assert!(
+        err.contains("Publish the resolution or discard it"),
+        "{err}"
+    );
+    let read = sessions.get(&fid()).unwrap().unwrap();
+    assert_eq!(read.status, SyncSessionStatus::Resolved);
+    assert_eq!(read.worktree_path.as_deref(), Some(WT));
+    assert!(
+        !git.commands().iter().any(|c| c.contains("worktree remove")),
+        "{:?}",
+        git.commands()
+    );
+}
+
+/// `reset --hard` throws away everything between the tip and the target, and
+/// the checkout it runs in can be the user's own clone — `provision_sync_worktree`
+/// returns `repo_dir` when the feature branch is already checked out there, and
+/// the held path deliberately leaves that value on the row. So a commit added on
+/// top of the resolution refuses the discard rather than being deleted by it.
+#[tokio::test]
+async fn a_branch_that_moved_past_the_resolution_is_not_reset_out_from_under_it() {
+    let (sessions, exec, git, features) = ports(ScriptedExec::new(&[
+        (GIT_DIR, Ok(".git\n")),
+        (MERGE_HEAD, Ok("")),
+        (PORCELAIN, Ok("")),
+        (HEAD_SHA, Ok("1ate5tc\n")),
+    ]));
+    sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    let err = discard_resolution(&sessions, &exec, &features, &fid())
+        .await
+        .expect_err("something has been committed since");
+    assert!(err.contains("1ate5tc"), "{err}");
+    assert!(
+        !git.commands().iter().any(|c| c.contains("reset")),
+        "{:?}",
+        git.commands()
+    );
+    assert_eq!(
+        sessions.get(&fid()).unwrap().unwrap().status,
+        SyncSessionStatus::Resolved
+    );
+}
+
+/// The same rule for work that was never committed at all. Uncommitted changes
+/// in the checkout holding the branch are the one thing no history can bring
+/// back, and neither the button's title nor the confirm dialog mentions them.
+#[tokio::test]
+async fn a_dirty_checkout_is_not_reset_either() {
+    let (sessions, exec, git, features) = ports(ScriptedExec::new(&[
+        (GIT_DIR, Ok(".git\n")),
+        (MERGE_HEAD, Ok("")),
+        (PORCELAIN, Ok(" M src/lib.rs\n")),
+    ]));
+    sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    let err = discard_resolution(&sessions, &exec, &features, &fid())
+        .await
+        .expect_err("uncommitted work is not the discard's to throw away");
+    assert!(err.contains("uncommitted changes"), "{err}");
+    assert!(
+        !git.commands().iter().any(|c| c.contains("reset")),
+        "{:?}",
+        git.commands()
+    );
+}
+
+/// The case this module opens on: the user finished the merge in their own
+/// editor, so `reconcile` promotes the session out of a moved `HEAD` and
+/// nothing ever recorded the commit. Without writing it back, the review card's
+/// three conditions all hold and its Publish can only answer "this sync
+/// recorded no resolution commit" — while View diff is disabled blaming a base
+/// that is right there.
+#[tokio::test]
+async fn a_resolution_nobody_recorded_still_gets_the_commit_that_proves_it() {
+    let (sessions, exec, _git, _features) = ports(ScriptedExec::new(&[
+        (GIT_DIR, Ok(".git\n")),
+        (MERGE_HEAD, Ok("")),
+        (PORCELAIN, Ok("")),
+        (HEAD_SHA, Ok("byhandd\n")),
+    ]));
+    sessions.open(&conflicted(Some(WT))).unwrap();
+
+    let read = get_reconciled(&sessions, &exec, &fid())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.status, SyncSessionStatus::Resolved);
+    assert_eq!(read.merge_commit_sha.as_deref(), Some("byhandd"));
+    assert_eq!(
+        sessions
+            .get(&fid())
+            .unwrap()
+            .unwrap()
+            .merge_commit_sha
+            .as_deref(),
+        Some("byhandd"),
+        "and the next reader must not have to re-derive it"
+    );
 }

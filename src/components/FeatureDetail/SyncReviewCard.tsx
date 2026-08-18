@@ -32,6 +32,8 @@ interface SyncReviewCardProps {
 
 const NO_BASE =
   'This sync never recorded where the branch was before the merge, so there is no honest base to diff or reset against.';
+const NO_HEAD =
+  'This sync recorded no resolution commit, so there is nothing here to identify what would be shown or undone.';
 
 export const SyncReviewCard: React.FC<SyncReviewCardProps> = ({
   session,
@@ -63,7 +65,13 @@ export const SyncReviewCard: React.FC<SyncReviewCardProps> = ({
             type="button"
             onClick={() => (base && head ? onViewDiff({ baseRef: base, headRef: head }) : undefined)}
             disabled={!base || !head}
-            title={base && head ? `Diff ${base.slice(0, 7)}..${head.slice(0, 7)}` : NO_BASE}
+            title={
+              base && head
+                ? `Diff ${base.slice(0, 7)}..${head.slice(0, 7)}`
+                : base
+                  ? NO_HEAD
+                  : NO_BASE
+            }
             className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 hover:shadow-[0_0_20px_rgba(139,92,246,0.5)] rounded text-xs font-bold text-white transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:shadow-none"
           >
             <GitCompare className="w-3 h-3" />
@@ -72,8 +80,12 @@ export const SyncReviewCard: React.FC<SyncReviewCardProps> = ({
           <button
             type="button"
             onClick={onPush}
-            disabled={busy}
-            title="Push the resolution to origin. Safe to press twice."
+            disabled={busy || !head}
+            title={
+              head
+                ? 'Push the resolution to origin. Safe to press twice — a resolution already there answers with itself.'
+                : NO_HEAD
+            }
             className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 text-emerald-400 hover:text-white rounded text-xs font-bold transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Upload className="w-3 h-3" />
@@ -82,11 +94,13 @@ export const SyncReviewCard: React.FC<SyncReviewCardProps> = ({
           <button
             type="button"
             onClick={onDiscard}
-            disabled={busy || !base}
+            disabled={busy || !base || !head}
             title={
-              base
-                ? `Move ${session.feature_branch} back to ${base.slice(0, 7)} and abandon this sync. The conflict is not restored — sync again for a fresh one.`
-                : NO_BASE
+              base && head
+                ? `Move ${session.feature_branch} back to ${base.slice(0, 7)} and abandon this sync. Refused if anything has been committed on top or the checkout is dirty. The conflict is not restored — sync again for a fresh one.`
+                : base
+                  ? NO_HEAD
+                  : NO_BASE
             }
             className="flex items-center gap-1.5 px-3 py-1.5 border border-rose-500/30 hover:bg-rose-500/10 rounded text-xs font-bold text-rose-300 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >

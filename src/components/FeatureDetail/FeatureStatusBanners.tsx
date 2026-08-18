@@ -1,6 +1,6 @@
 import { AlertTriangle, ExternalLink, GitPullRequest } from 'lucide-react';
 import type { MrState, SyncOutcomeView, SyncSessionView } from '../../types';
-import type { SyncResolverChoice } from '../../lib/featureSync';
+import { isAwaitingSyncReview, type SyncResolverChoice } from '../../lib/featureSync';
 import { SyncBannerContent } from './SyncBannerContent';
 import { SyncReviewCard } from './SyncReviewCard';
 import type { SyncResolverSelection } from './useSyncResolverOverrides';
@@ -84,17 +84,15 @@ export function FeatureStatusBanners({
         </div>
       )}
 
-      {syncSession?.status === 'resolved' &&
-        syncSession.pushed_at === null &&
-        syncSession.user_may_intervene && (
-          <SyncReviewCard
-            session={syncSession}
-            pending={reviewPending}
-            onViewDiff={onViewSyncDiff}
-            onPush={onPublishSync}
-            onDiscard={onDiscardSync}
-          />
-        )}
+      {syncSession && isAwaitingSyncReview(syncSession) && (
+        <SyncReviewCard
+          session={syncSession}
+          pending={reviewPending}
+          onViewDiff={onViewSyncDiff}
+          onPush={onPublishSync}
+          onDiscard={onDiscardSync}
+        />
+      )}
 
       {mrUrl && (
         <div className="px-6 py-2 bg-[#0d0f14]/40 border-b border-white/5 flex items-center justify-between gap-3 text-xs">

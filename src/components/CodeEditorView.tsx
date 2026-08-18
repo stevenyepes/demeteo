@@ -51,6 +51,18 @@ const LANG_MAP: Record<string, string> = {
   sql: 'sql', xml: 'xml', tf: 'hcl', rb: 'ruby', kt: 'kotlin', swift: 'swift',
 };
 
+/** A ref as a label: a sha is shortened, a branch name is not.
+ *
+ *  The Changes tab is not always `defaultBranch..branch` — the sync review
+ *  opens it on `head_before..merge_commit_sha`, whose content is mostly
+ *  upstream work flowing *in*. A header naming the branch pair there tells the
+ *  reader an incoming hunk is something the feature added, and the empty state
+ *  reads "No changes vs master" about a branch that certainly does differ from
+ *  it. */
+function refLabel(ref: string): string {
+  return /^[0-9a-f]{7,40}$/i.test(ref) ? ref.slice(0, 7) : ref;
+}
+
 function langFromPath(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
   return LANG_MAP[ext] ?? 'plaintext';
@@ -368,7 +380,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
                 <div className="p-3 text-xs text-rose-400 font-mono">{changesError}</div>
               ) : changedFiles.length === 0 ? (
                 <div className="py-8 px-3 text-[10px] text-slate-600 uppercase tracking-widest text-center">
-                  No changes vs {defaultBranch}
+                  No changes vs {refLabel(diffBase)}
                 </div>
               ) : changedFiles.map(f => (
                 <button
@@ -411,7 +423,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
                 </span>
               )}
               <span className="text-[10px] text-slate-600 ml-auto uppercase tracking-wider font-bold shrink-0">
-                {diffPath ? `${defaultBranch} → ${branch}` : 'read-only'}
+                {diffPath ? `${refLabel(diffBase)} → ${refLabel(diffHead)}` : 'read-only'}
               </span>
             </div>
           )}

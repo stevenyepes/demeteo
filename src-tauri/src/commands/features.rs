@@ -5,7 +5,7 @@ use crate::domain::models::{
 use crate::domain::sync_resolver::SyncResolverChoice;
 use crate::error::AppError;
 use crate::ports::step_executor::{FeatureLaunch, SyncOutcomeView, SyncResolverView};
-use crate::ports::sync_session::{SyncSession, SyncSessionView};
+use crate::ports::sync_session::SyncSessionView;
 use crate::state::AppContext;
 use tauri::State;
 
@@ -310,15 +310,20 @@ pub async fn sync_session_get(
 
 /// Give up on the feature's sync: undo the merge, discard the worktree, and
 /// close the session. Safe on a worktree that is already gone, which is the
-/// common case.
+/// common case, and on a session already abandoned.
+///
+/// Refused for a committed resolution — that is `sync_discard`'s, because
+/// undoing an open merge would leave the commit on the branch beside a row
+/// calling the sync abandoned.
 #[tauri::command]
 pub async fn sync_abort(
     ctx: State<'_, AppContext>,
     feature_id: String,
-) -> Result<Option<SyncSession>, AppError> {
+) -> Result<Option<SyncSessionView>, AppError> {
     crate::application::sync_session::abort(
         &ctx.sync_sessions,
         &ctx.exec,
+        &ctx.features,
         &FeatureId::from(feature_id),
     )
     .await
@@ -353,7 +358,7 @@ pub async fn sync_publish(
 pub async fn sync_discard(
     ctx: State<'_, AppContext>,
     feature_id: String,
-) -> Result<Option<SyncSession>, AppError> {
+) -> Result<Option<SyncSessionView>, AppError> {
     crate::application::sync_session::discard_resolution(
         &ctx.sync_sessions,
         &ctx.exec,

@@ -22,6 +22,11 @@ interface FeatureHeaderProps {
   syncing: boolean;
   resolving: boolean;
   publishing: boolean;
+  /** A resolution is committed on the branch and waiting to be published or
+   *  discarded. Syncing again is refused while one is — the backend answers
+   *  `held_resolution` — so the button says so here rather than sending a
+   *  request that can only come back as a banner. */
+  reviewHeld: boolean;
   mrUrl: string | null;
   /** Quieter chrome for a scrolled run column; `lib/headerCollapse.ts` decides it. */
   collapsed?: boolean;
@@ -68,6 +73,7 @@ export function FeatureHeader({
   syncing,
   resolving,
   publishing,
+  reviewHeld,
   mrUrl,
   collapsed = false,
   onBack,
@@ -182,9 +188,13 @@ export function FeatureHeader({
             <>
               <button
                 onClick={onSync}
-                disabled={syncing || resolving}
-                className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 flex items-center gap-1.5"
-                title="Merge origin/main into this feature branch (resolves conflicts with a fresh agent when needed)"
+                disabled={syncing || resolving || reviewHeld}
+                className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+                title={
+                  reviewHeld
+                    ? 'A resolution from the last sync is still waiting to be published or discarded. Deal with it below, then sync again.'
+                    : 'Merge origin/main into this feature branch (resolves conflicts with a fresh agent when needed)'
+                }
               >
                 {syncing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
                 Sync with main

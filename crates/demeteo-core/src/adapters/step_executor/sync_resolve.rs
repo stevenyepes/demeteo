@@ -30,7 +30,9 @@ use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
-use crate::domain::sync_session::{ResolutionPublish, SyncResolution};
+use crate::domain::sync_session::{
+    publish_policy, resolution_is_reviewable, ResolutionPublish, SyncResolution,
+};
 use crate::paths;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::agent_runtime::AgentContext;
@@ -94,16 +96,19 @@ pub(crate) struct ResolveSyncContext<'a> {
     /// One arithmetic, two callers — a second precedence chain here is how the
     /// button and the node would come to spend different money.
     pub max_budget_usd: Option<f64>,
-    /// Whether the resolution this turn commits also goes to origin, decided
-    /// by [`publish_policy`](crate::domain::sync_session::publish_policy) from
-    /// the project's setting and whether anyone is in a position to look at it.
+    /// The project's `sync_review_before_push`, and the feature's own status.
     ///
-    /// Carried rather than derived here because deriving it would mean asking
-    /// *who called* — and the whole of this module is the answer to the two
-    /// callers having diverged once already. Both compute it the same way from
-    /// the same two facts; that a workflow node always arrives at `Push` is a
-    /// consequence of the run holding the feature, not a branch on the caller.
-    pub publish: ResolutionPublish,
+    /// The two facts [`publish_policy`](crate::domain::sync_session::publish_policy)
+    /// decides publication from, carried raw so the decision itself is made
+    /// here — once, for both callers. Handing this module the *verdict* is how
+    /// the two callers came to hold two copies of one policy, each reachable
+    /// only through a driver and so pinned by nothing: a call site rewritten to
+    /// a constant turned the feature off with the suite green. A status is data
+    /// the caller reports, not an answer to "who called"; that a workflow node
+    /// always arrives at `Push` is a consequence of the run still holding the
+    /// feature, which is exactly what the status says.
+    pub review_before_push: Option<bool>,
+    pub feature_status: &'a str,
     /// Stop, as whoever owns this turn hears it: the driver's own watch on the
     /// workflow path, the executor's out-of-band sender on the button's.
     pub cancel: Option<watch::Receiver<bool>>,
@@ -160,9 +165,10 @@ impl ResolveSyncError {
 #[derive(Debug)]
 pub(crate) struct ResolvedSync {
     pub merge_commit_sha: String,
-    /// Whether the commit reached origin. `false` is not a failure — it is a
-    /// resolution waiting for a look, which the session records as `resolved`
-    /// with no `pushed_at`.
+    /// Whether the commit was *confirmed* to have reached origin. `false` is
+    /// not a failure — it is a resolution waiting for a look, whether it was
+    /// held deliberately or pushed without the remote-tracking ref agreeing —
+    /// and the session records it as `resolved` with no `pushed_at`.
     pub published: bool,
     pub cache: CacheTokens,
 }
@@ -332,12 +338,15 @@ async fn run_resolver_turn(
         override_model,
         effort,
         max_budget_usd,
-        publish,
+        review_before_push,
+        feature_status,
         cancel,
         spend,
         pricing,
         ..
     } = sync_ctx;
+
+    let publish = publish_policy(review_before_push, resolution_is_reviewable(feature_status));
 
     let RunningSpend {
         cost: accumulated_cost,
@@ -602,7 +611,15 @@ async fn run_resolver_turn(
         }
     };
 
-    if publish == ResolutionPublish::Push {
+    // The row's `pushed_at` is written from this bool, and the button's
+    // `publish` refuses to write it on the strength of an exit code
+    // ([`push_landed`](crate::application::sync_session::push_landed)). Two
+    // paths writing one column on opposite evidence rules is how a merge origin
+    // never received suppresses its own review card forever, so this one asks
+    // origin too. An unconfirmed push is not a failed resolution — the commit
+    // is on the branch either way — so it lands as a resolution still waiting,
+    // which is the state that keeps a surface pointing at it.
+    let published = if publish == ResolutionPublish::Push {
         if let Err(e) = exec
             .run_command(
                 machine_str,
@@ -620,13 +637,26 @@ async fn run_resolver_turn(
                 feature_branch, e
             )));
         }
-    }
+        matches!(
+            crate::application::sync_session::push_landed(
+                &**exec,
+                machine_str,
+                resolved_cwd,
+                feature_branch,
+                &head_sha,
+            )
+            .await,
+            Answer::Said(_)
+        )
+    } else {
+        false
+    };
 
     let _ = registry.kill(&resolver_thread_id).await;
 
     Ok(ResolvedSync {
         merge_commit_sha: head_sha,
-        published: publish == ResolutionPublish::Push,
+        published,
         cache,
     })
 }

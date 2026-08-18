@@ -122,6 +122,27 @@ export async function discardSyncResolution(
 }
 
 /**
+ * Whether this session holds a resolution that is committed on the branch,
+ * has not reached origin, and is the user's to act on — the one state the
+ * review card exists for, and the one the "resolved" success banner must be
+ * suppressed under so nobody reads it as shipped.
+ *
+ * One predicate because it is asserted in three places that must not drift:
+ * the card's render gate, the banner's suppression, and whether "Sync with
+ * main" is still offered. `user_may_intervene` is the backend's answer and not
+ * re-derived here; it is what keeps a resolution a live run still owns out of
+ * all three.
+ */
+export function isAwaitingSyncReview(session: SyncSessionView | null): boolean {
+  return (
+    session !== null &&
+    session.status === 'resolved' &&
+    session.pushed_at === null &&
+    session.user_may_intervene
+  );
+}
+
+/**
  * Refresh the MR state on a feature. Hits the provider's HTTP API
  * (GitHub or GitLab) and returns the latest `mr_state`. The caller
  * is expected to persist the result back to the feature row.

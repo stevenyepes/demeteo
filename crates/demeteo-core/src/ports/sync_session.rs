@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::ids::FeatureId;
 use crate::domain::models::ConflictFile;
-use crate::domain::sync_session::SyncSessionStatus;
+use crate::domain::sync_session::{SyncResolution, SyncSessionStatus};
 
 /// One feature's live sync, as the row holds it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +63,60 @@ pub struct SyncSessionPatch {
     pub bump_attempts: bool,
 }
 
+impl SyncSessionPatch {
+    /// The transition a resolution turn's outcome makes to the row.
+    ///
+    /// Its own function because it decides *what the row should say* — three of
+    /// its four columns are written as clears, and a clear is the half no
+    /// happy-path assertion reaches — while the only caller is an `async fn`
+    /// mid-way through a sync (AGENTS.md §3).
+    pub fn from_resolution(resolution: &SyncResolution, now: i64) -> Self {
+        Self {
+            status: Some(resolution.status()),
+            merge_commit_sha: match resolution {
+                SyncResolution::Succeeded {
+                    merge_commit_sha, ..
+                } => Some(Some(merge_commit_sha.clone())),
+                _ => None,
+            },
+            // A resolved sync that discarded its worktree leaves a row still
+            // naming it reading back as an abandoned sync: the probe finds the
+            // directory gone, which is the one observation `reconcile` treats
+            // as terminal. Clearing it is also what stops a later abort aiming
+            // a delete at a path something else may have re-provisioned since.
+            // Only on the caller's *observation* that the tree went, though —
+            // see [`SyncResolution::Succeeded`].
+            worktree_path: match resolution {
+                SyncResolution::Succeeded {
+                    worktree_discarded: true,
+                    ..
+                } => Some(None),
+                _ => None,
+            },
+            raw_error: match resolution {
+                SyncResolution::Failed { reason } => Some(Some(reason.clone())),
+                _ => None,
+            },
+            // Written in both directions from the outcome alone, because the
+            // turn is the only thing that can know: the commit is on the branch
+            // either way, and nothing about the tree afterwards distinguishes a
+            // resolution origin has from one it has not. A `Succeeded` that did
+            // not publish therefore says so rather than leaving whatever the
+            // column held to answer in its place.
+            pushed_at: match resolution {
+                SyncResolution::Succeeded {
+                    published: true, ..
+                } => Some(Some(now)),
+                SyncResolution::Succeeded {
+                    published: false, ..
+                } => Some(None),
+                _ => None,
+            },
+            ..Self::default()
+        }
+    }
+}
+
 /// A session as the UI reads it: the row, plus the one decision the UI is not
 /// allowed to make for itself.
 ///
@@ -102,3 +156,7 @@ pub trait SyncSessionPort: Send + Sync {
     /// the only one there is: deleting the feature.
     fn close(&self, feature_id: &FeatureId) -> Result<(), String>;
 }
+
+#[cfg(test)]
+#[path = "../../tests/ports/sync_session.rs"]
+mod tests;

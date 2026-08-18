@@ -72,6 +72,42 @@ impl MergeExecutor for SqliteMergeExecutor {
         feature_branch: &str,
         default_branch: &str,
     ) -> Result<UpstreamSyncOutcome, UpstreamSyncFailure> {
+        // Before anything is resolved or fetched, because the row this would
+        // overwrite is the only copy of a resolution nobody has read yet
+        // ([`resync_refusal`](crate::domain::sync_session::resync_refusal)). A
+        // row that could not be read is not evidence there is none, so it
+        // refuses on the same terms rather than syncing over a maybe.
+        match crate::application::sync_session::get_reconciled(
+            &self.sync_sessions,
+            &self.exec,
+            feature_id,
+        )
+        .await
+        {
+            Ok(Some(existing)) => {
+                if let Some(refusal) = crate::domain::sync_session::resync_refusal(
+                    existing.status,
+                    existing.pushed_at.is_some(),
+                ) {
+                    return Err(UpstreamSyncFailure::Blocked {
+                        stage: SyncBlockedStage::HeldResolution,
+                        raw_error: refusal.to_string(),
+                    });
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Err(UpstreamSyncFailure::Blocked {
+                    stage: SyncBlockedStage::HeldResolution,
+                    raw_error: format!(
+                        "This feature's sync session could not be read, so whether the last \
+                         resolution is still unpublished is unknown and nothing was synced: {}",
+                        e
+                    ),
+                });
+            }
+        }
+
         // Resolve the project / machine / repo dir from the feature row.
         let RepoContext {
             compute_type,
@@ -284,52 +320,11 @@ impl MergeExecutor for SqliteMergeExecutor {
         feature_id: &FeatureId,
         resolution: &crate::domain::sync_session::SyncResolution,
     ) -> Result<(), String> {
-        use crate::domain::sync_session::SyncResolution;
+        let now = paths::now_ms();
         self.sync_sessions.update(
             feature_id,
-            &SyncSessionPatch {
-                status: Some(resolution.status()),
-                merge_commit_sha: match resolution {
-                    SyncResolution::Succeeded {
-                        merge_commit_sha, ..
-                    } => Some(Some(merge_commit_sha.clone())),
-                    _ => None,
-                },
-                // A resolved sync has had its worktree discarded, and a row
-                // still naming it reads back as an abandoned sync: the probe
-                // finds the directory gone, which is the one observation
-                // `reconcile` treats as terminal. Clearing it is also what stops
-                // `sync_abort` aiming a delete at a path something else may have
-                // re-provisioned since. Only on the caller's *observation* that
-                // the tree went, though — see `SyncResolution::Succeeded`.
-                worktree_path: match resolution {
-                    SyncResolution::Succeeded {
-                        worktree_discarded: true,
-                        ..
-                    } => Some(None),
-                    _ => None,
-                },
-                raw_error: match resolution {
-                    SyncResolution::Failed { reason } => Some(Some(reason.clone())),
-                    _ => None,
-                },
-                // Written on every `Succeeded`, including the unpublished one,
-                // and written as a *clear* there rather than left alone: this
-                // row is reused by every sync a feature runs, so a resolution
-                // held for review would otherwise inherit the timestamp of the
-                // last one that published and read as already on origin.
-                pushed_at: match resolution {
-                    SyncResolution::Succeeded {
-                        published: true, ..
-                    } => Some(Some(paths::now_ms())),
-                    SyncResolution::Succeeded {
-                        published: false, ..
-                    } => Some(None),
-                    _ => None,
-                },
-                ..Default::default()
-            },
-            paths::now_ms(),
+            &SyncSessionPatch::from_resolution(resolution, now),
+            now,
         )
     }
 
@@ -345,3 +340,7 @@ impl MergeExecutor for SqliteMergeExecutor {
         .await
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/infrastructure/merge.rs"]
+mod tests;

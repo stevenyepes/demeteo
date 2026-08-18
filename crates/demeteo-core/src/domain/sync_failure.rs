@@ -48,6 +48,11 @@ pub enum SyncBlockedStage {
     /// The feature's project repository row could not be resolved, so no git
     /// command was ever issued.
     RepoContext,
+    /// The previous sync's resolution is still committed on the branch and
+    /// unpublished — or the row that would rule that out could not be read — so
+    /// no new sync was started
+    /// ([`resync_refusal`](crate::domain::sync_session::resync_refusal)).
+    HeldResolution,
 }
 
 /// Whether a failed `git merge` is a blocked sync, and at which stage.

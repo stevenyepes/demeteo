@@ -162,14 +162,13 @@ export function StrategyTab() {
               <select
                 aria-label="After a resolution"
                 value={s.syncReviewBeforePush}
-                onChange={e => s.setSyncReviewBeforePush(e.target.value as '' | 'review' | 'push')}
+                onChange={e => s.setSyncReviewBeforePush(e.target.value as '' | 'push')}
                 className="w-64 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50"
               >
                 <option value="">Review it when someone is there</option>
-                <option value="review">Always wait for a review</option>
                 <option value="push">Always push to origin</option>
               </select>
-              <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Whether a resolved merge stops for a look before it reaches the open pull request. The default holds it only when the run is over and somebody can act on it; a resolution a run produces mid-flight is always pushed, because nothing offers a review button while the run still owns the branch — waiting there would leave the merge on the branch and nobody able to publish it.</p>
+              <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Whether a resolved merge stops for a look before it reaches the open pull request. The default holds it only when the run is over and somebody can act on it; a resolution a run produces mid-flight is always pushed, because nothing offers a review button while the run still owns the branch — waiting there would leave the merge on the branch and nobody able to publish it. There is no "always wait" for the same reason: the setting can only take the review away.</p>
             </div>
             <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Who cleans up a merge conflict when a sync hits one — the workflow's <span className="font-mono">sync</span> node and the "Resolve with agent" button alike. Set this when merge conflicts want a different harness from the coding work; it outranks the harness a run was launched with, for that turn only. Leave blank to inherit the run, then the defaults above. Note the harnesses differ in how tightly the resolver is confined to the sync worktree.</p>
           </div>

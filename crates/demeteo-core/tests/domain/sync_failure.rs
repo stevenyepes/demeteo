@@ -4,13 +4,14 @@ use super::*;
 use crate::domain::models::ConflictReport;
 use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
 
-const EVERY_STAGE: [SyncBlockedStage; 6] = [
+const EVERY_STAGE: [SyncBlockedStage; 7] = [
     SyncBlockedStage::Fetch,
     SyncBlockedStage::BaseRefMissing,
     SyncBlockedStage::WorktreeProvision,
     SyncBlockedStage::Merge,
     SyncBlockedStage::Push,
     SyncBlockedStage::RepoContext,
+    SyncBlockedStage::HeldResolution,
 ];
 
 fn blocked(stage: SyncBlockedStage) -> UpstreamSyncFailure {
@@ -139,6 +140,7 @@ fn the_serialized_shape_is_the_wire_contract() {
             SyncBlockedStage::Merge => "merge",
             SyncBlockedStage::Push => "push",
             SyncBlockedStage::RepoContext => "repo_context",
+            SyncBlockedStage::HeldResolution => "held_resolution",
         };
         assert_eq!(
             json(&SyncOutcomeView::Blocked {

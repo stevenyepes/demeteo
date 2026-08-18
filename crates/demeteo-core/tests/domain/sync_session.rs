@@ -398,3 +398,38 @@ fn a_run_that_still_owns_its_branch_has_nobody_to_review_for() {
         assert!(resolution_is_reviewable(feature_status), "{feature_status}");
     }
 }
+
+/// The row is one per feature and `open` is an upsert, so the next sync writes
+/// over whatever the last one left. That is right for every session but the one
+/// nobody has read: `head_before` is unrecoverable, the merge becomes part of
+/// the new baseline on its way to origin, and — because the second merge finds
+/// `origin/<base>` already in the branch and so changes nothing — the row lands
+/// on a terminal `up_to_date` that every intervention then refuses. The
+/// affordance that publishes the merge disappears with it.
+#[test]
+fn a_resolution_nobody_has_read_is_not_something_the_next_sync_may_write_over() {
+    use crate::domain::sync_session::resync_refusal;
+
+    assert!(resync_refusal(SyncSessionStatus::Resolved, false).is_some());
+    assert_eq!(
+        resync_refusal(SyncSessionStatus::Resolved, true),
+        None,
+        "a resolution origin already has is nothing to protect"
+    );
+    for status in [
+        SyncSessionStatus::Syncing,
+        SyncSessionStatus::UpToDate,
+        SyncSessionStatus::Merged,
+        SyncSessionStatus::Blocked,
+        SyncSessionStatus::Conflicted,
+        SyncSessionStatus::Resolving,
+        SyncSessionStatus::ResolutionFailed,
+        SyncSessionStatus::Aborted,
+    ] {
+        assert_eq!(
+            resync_refusal(status, false),
+            None,
+            "{status:?} holds no committed resolution and must not block a sync"
+        );
+    }
+}

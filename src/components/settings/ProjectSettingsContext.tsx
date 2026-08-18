@@ -155,7 +155,10 @@ interface SettingsCtx {
   /** '' = no opinion, which holds a resolution only when somebody can look at
    *  it. 'review' / 'push' pin it. Three states because `null` and `false` are
    *  different answers on the wire (migration V45). */
-  syncReviewBeforePush: '' | 'review' | 'push'; setSyncReviewBeforePush: (v: '' | 'review' | 'push') => void;
+  /** Two states, not three: `publish_policy` reads the column as
+   *  `unwrap_or(true)`, so a stored `true` and a stored NULL are the same
+   *  behaviour for every input. The setting's one real power is opting out. */
+  syncReviewBeforePush: '' | 'push'; setSyncReviewBeforePush: (v: '' | 'push') => void;
   availableModelsForSyncResolver: ConfigOptionValue[]; isLoadingModelsForSyncResolver: boolean;
   // warning modals
   dirtyWarningRepos: RepoDirtyStatus[];
@@ -303,7 +306,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [syncResolverAgentKind, setSyncResolverAgentKind] = useState('');
   const [syncResolverModel, setSyncResolverModel] = useState('');
   const [syncResolverEffort, setSyncResolverEffort] = useState<EffortLevel | ''>('');
-  const [syncReviewBeforePush, setSyncReviewBeforePush] = useState<'' | 'review' | 'push'>('');
+  const [syncReviewBeforePush, setSyncReviewBeforePush] = useState<'' | 'push'>('');
   const [availableModelsForSyncResolver, setAvailableModelsForSyncResolver] = useState<ConfigOptionValue[]>([]);
   const [isLoadingModelsForSyncResolver, setIsLoadingModelsForSyncResolver] = useState(false);
   const [extraWritablePaths, setExtraWritablePaths] = useState<string[]>([]);
@@ -623,7 +626,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setSyncResolverModel(res.sync_resolver_model || '');
           setSyncResolverEffort(res.sync_resolver_effort || '');
           setSyncReviewBeforePush(
-            res.sync_review_before_push == null ? '' : res.sync_review_before_push ? 'review' : 'push',
+            res.sync_review_before_push === false ? 'push' : '',
           );
           setExtraWritablePaths(res.worktree_strategy.extra_writable_paths || []);
         }
@@ -720,7 +723,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
    *  every project that goes through the site that omitted it. Spelled twice,
    *  that omission is invisible to the compiler and to any test that exercises
    *  only the other site. */
-  const settingsToPersist = (): ProjectSettingsInput => ({ default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts, review_entrypoint: reviewEntrypoint.trim() || null, sync_resolver_agent_kind: syncResolverAgentKind || null, sync_resolver_model: syncResolverModel || null, sync_resolver_effort: syncResolverEffort || null, sync_review_before_push: syncReviewBeforePush === '' ? null : syncReviewBeforePush === 'review' });
+  const settingsToPersist = (): ProjectSettingsInput => ({ default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts, review_entrypoint: reviewEntrypoint.trim() || null, sync_resolver_agent_kind: syncResolverAgentKind || null, sync_resolver_model: syncResolverModel || null, sync_resolver_effort: syncResolverEffort || null, sync_review_before_push: syncReviewBeforePush === 'push' ? false : null });
 
   const saveAllSettings = async () => {
     const machineId = computeType === 'remote' ? remoteHost : 'local';

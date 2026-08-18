@@ -5,7 +5,7 @@
 //! makes the narrower dependency the testable one — everything here is
 //! reachable with a strict [`ExecutionPort`] double and an in-memory database.
 //!
-//! Both functions treat the working tree as the authority
+//! Everything here treats the working tree as the authority
 //! ([`crate::ports::sync_session`]). The probe is here because it does I/O;
 //! the decision it feeds is in [`crate::domain::sync_session::reconcile`].
 
@@ -32,13 +32,37 @@ pub async fn get_reconciled(
     exec: &Arc<dyn ExecutionPort>,
     feature_id: &FeatureId,
 ) -> Result<Option<SyncSession>, String> {
+    Ok(reconciled(sessions, exec, feature_id)
+        .await?
+        .map(|(session, _)| session))
+}
+
+/// What one look at a sync worktree came back with.
+///
+/// The sha itself rides beside the probe because two readers need it and not
+/// only whether it moved: a session promoted to
+/// [`SyncSessionStatus::Resolved`] out of the tree alone has no other source
+/// for the commit that proves it, and `discard_resolution` has to see the
+/// branch still standing on that commit before it resets. Asking again would
+/// be a second round trip for a sha this read already holds.
+struct WorktreeReading {
+    probe: SyncWorkspaceProbe,
+    head: Option<String>,
+}
+
+/// [`get_reconciled`], keeping the observation the correction was made from.
+async fn reconciled(
+    sessions: &Arc<dyn SyncSessionPort>,
+    exec: &Arc<dyn ExecutionPort>,
+    feature_id: &FeatureId,
+) -> Result<Option<(SyncSession, Option<WorktreeReading>)>, String> {
     let Some(mut session) = sessions.get(feature_id)? else {
         return Ok(None);
     };
     // A session naming no worktree and a worktree that would not answer arrive
     // at `reconcile` as the same `None`, and that is deliberate: neither is an
     // observation, so neither may move the stored status.
-    let probe = match session.worktree_path.as_deref() {
+    let reading = match session.worktree_path.as_deref() {
         Some(path) => {
             probe_worktree(
                 &**exec,
@@ -50,21 +74,38 @@ pub async fn get_reconciled(
         }
         None => None,
     };
-    let corrected = reconcile(session.status, probe.as_ref());
-    if corrected != session.status {
+    let corrected = reconcile(session.status, reading.as_ref().map(|r| &r.probe));
+    // The user who finished the merge in their own editor is the case this
+    // module opens on, and it is the one resolution nothing recorded a commit
+    // for: `reconcile` promotes it out of a moved `HEAD` alone. Left unwritten,
+    // the review card offers a Publish that can only answer "this sync recorded
+    // no resolution commit".
+    let observed_commit = match reading.as_ref() {
+        Some(r) if r.probe.head_advanced == Some(true) => r.head.clone(),
+        _ => None,
+    };
+    let commit = match (corrected, &session.merge_commit_sha) {
+        (SyncSessionStatus::Resolved, None) => observed_commit,
+        _ => None,
+    };
+    if corrected != session.status || commit.is_some() {
         let now = paths::now_ms();
         sessions.update(
             feature_id,
             &SyncSessionPatch {
                 status: Some(corrected),
+                merge_commit_sha: commit.clone().map(Some),
                 ..Default::default()
             },
             now,
         )?;
         session.status = corrected;
+        if commit.is_some() {
+            session.merge_commit_sha = commit;
+        }
         session.updated_at = now;
     }
-    Ok(Some(session))
+    Ok(Some((session, reading)))
 }
 
 /// The session plus the one question the UI may not answer for itself: whether
@@ -163,15 +204,12 @@ pub async fn publish(
             ),
         });
     }
-    match ask(
+    match push_landed(
         &**exec,
         &session.machine_id,
-        &format!(
-            "git -C {} merge-base --is-ancestor {} refs/remotes/origin/{}",
-            repo,
-            paths::shell_escape_posix(&sha),
-            branch
-        ),
+        &session.repo_dir,
+        &session.feature_branch,
+        &sha,
     )
     .await
     {
@@ -251,13 +289,23 @@ pub async fn publish(
 /// follow-up commit, and there is nothing on the row to tell the two apart, so
 /// the guess would silently reset the branch to the wrong place exactly when
 /// the resolution was most involved.
+///
+/// **The branch has to still be standing on the resolution, and the tree has to
+/// be clean.** `reset --hard` destroys whatever is between here and
+/// `head_before` without asking, and the checkout it runs in can be the user's
+/// own clone: `provision_sync_worktree` returns `repo_dir` when the feature
+/// branch is already checked out there, and a held resolution deliberately
+/// leaves that value on the row. So a commit somebody added on top, and any
+/// uncommitted work in that checkout, each refuse the discard rather than being
+/// thrown away by it — the same evidence-before-record rule [`publish`] applies
+/// to origin, pointed the other way.
 pub async fn discard_resolution(
     sessions: &Arc<dyn SyncSessionPort>,
     exec: &Arc<dyn ExecutionPort>,
     features: &Arc<dyn crate::ports::db::FeatureRepository>,
     feature_id: &FeatureId,
-) -> Result<Option<SyncSession>, String> {
-    let Some(session) = get_reconciled(sessions, exec, feature_id).await? else {
+) -> Result<Option<SyncSessionView>, String> {
+    let Some((session, reading)) = reconciled(sessions, exec, feature_id).await? else {
         return Ok(None);
     };
     let feature_status = feature_status_of(features, feature_id)?;
@@ -274,6 +322,13 @@ pub async fn discard_resolution(
                 .to_string(),
         );
     };
+    let Some(resolution) = session.merge_commit_sha.clone() else {
+        return Err(
+            "This sync recorded no resolution commit, so there is nothing here to identify what \
+             would be undone. Move the branch back yourself if that is what you want."
+                .to_string(),
+        );
+    };
     // The reset has to run in a checkout that has the feature branch on HEAD,
     // and the sync worktree is the only place guaranteed to. Without one, the
     // clone is on whatever it was left on, and a `reset --hard` there would
@@ -285,6 +340,37 @@ pub async fn discard_resolution(
                 .to_string(),
         );
     };
+    let Some(reading) = reading else {
+        return Err(format!(
+            "Could not read {} to confirm what is there, so nothing was discarded. Try again \
+             once the machine answers.",
+            worktree
+        ));
+    };
+    if reading.probe.dirty {
+        return Err(format!(
+            "There are uncommitted changes in {}, and moving the branch back would throw them \
+             away. Nothing was discarded — commit or clean them up first.",
+            worktree
+        ));
+    }
+    match reading.head.as_deref() {
+        Some(head) if head == resolution => {}
+        Some(head) => {
+            return Err(format!(
+                "{} is at {}, not the resolution {}, so something has moved it since. Discarding \
+                 would throw that away, and nothing was done.",
+                session.feature_branch, head, resolution
+            ))
+        }
+        None => {
+            return Err(format!(
+                "Could not read {} back to confirm it is still on the resolution, so nothing was \
+                 discarded. Try again once the machine answers.",
+                session.feature_branch
+            ))
+        }
+    }
     let safe = paths::shell_escape_posix(&worktree);
     if let Err(e) = exec
         .run_command(
@@ -327,10 +413,12 @@ pub async fn discard_resolution(
         }
     }
     // The branch is back; what remains is the teardown and the verdict, which
-    // `abort` already owns on exactly the terms this needs. Its refusal to
-    // record a sync as abandoned while its tree may still be on disk applies
-    // here too, and pressing Discard again re-runs a reset that is now a no-op.
-    abort(sessions, exec, feature_id).await
+    // `close_session` already owns on exactly the terms this needs. Its refusal
+    // to record a sync as abandoned while its tree may still be on disk applies
+    // here too. `abort` itself is not what runs: this session is `resolved`,
+    // which is the one standing that entry point must turn away.
+    let closed = close_session(sessions, exec, session).await?;
+    Ok(Some(view(closed, &feature_status)))
 }
 
 fn feature_status_of(
@@ -353,6 +441,45 @@ fn view(session: SyncSession, feature_status: &str) -> SyncSessionView {
 /// Abandon the feature's sync: undo the merge, discard the worktree, and mark
 /// the session aborted.
 ///
+/// **What this may be asked of is [`intervention_refusal`]'s answer, not the
+/// caller's.** The UI hides the button, but `sync_abort` stays reachable, and
+/// the standing it must turn away is a committed resolution: this path undoes
+/// an *open* merge, so aimed at one it deletes the tree, records the sync as
+/// abandoned and leaves the merge on the branch with `Publish` and `Discard`
+/// both refused afterwards. [`discard_resolution`] is the one that moves the
+/// branch, and it reaches the teardown below without coming through here.
+///
+/// The refusal is read against the *reconciled* status and not the stored one,
+/// because the session abort exists for is precisely the one whose writer died:
+/// a row left `resolving` by a killed resolver would otherwise be turned away
+/// with "an agent is already resolving this sync". An already-`aborted` session
+/// skips the refusal rather than being turned away by it — the common case is a
+/// second press, or a first one after a restart, and an error dialog is the
+/// wrong answer to "did that work".
+pub async fn abort(
+    sessions: &Arc<dyn SyncSessionPort>,
+    exec: &Arc<dyn ExecutionPort>,
+    features: &Arc<dyn crate::ports::db::FeatureRepository>,
+    feature_id: &FeatureId,
+) -> Result<Option<SyncSessionView>, String> {
+    let Some(session) = get_reconciled(sessions, exec, feature_id).await? else {
+        return Ok(None);
+    };
+    let feature_status = feature_status_of(features, feature_id)?;
+    if session.status != SyncSessionStatus::Aborted {
+        if let Some(refusal) =
+            intervention_refusal(SyncIntervention::Abort, standing(&session, &feature_status))
+        {
+            return Err(refusal.to_string());
+        }
+    }
+    let closed = close_session(sessions, exec, session).await?;
+    Ok(Some(view(closed, &feature_status)))
+}
+
+/// Undo whatever merge is open, remove the throwaway tree, and record the sync
+/// as abandoned.
+///
 /// The teardown steps stay best-effort — the common case is a tree that is
 /// already gone, because the user aborts after a restart or after cleaning up by
 /// hand — but the *verdict* is not taken from them. It is taken from a probe
@@ -371,14 +498,12 @@ fn view(session: SyncSession, feature_status: &str) -> SyncSessionView {
 /// re-spelled, because `worktree_path` may legitimately be the clone itself
 /// (`provision_sync_worktree` returns it when the feature branch is already
 /// checked out there) and that function is where the guard lives.
-pub async fn abort(
+async fn close_session(
     sessions: &Arc<dyn SyncSessionPort>,
     exec: &Arc<dyn ExecutionPort>,
-    feature_id: &FeatureId,
-) -> Result<Option<SyncSession>, String> {
-    let Some(mut session) = sessions.get(feature_id)? else {
-        return Ok(None);
-    };
+    mut session: SyncSession,
+) -> Result<SyncSession, String> {
+    let feature_id = &FeatureId::from(session.feature_id.clone());
     if let Some(worktree) = session.worktree_path.as_deref() {
         let _ = exec
             .run_command(
@@ -418,15 +543,15 @@ pub async fn abort(
     session.status = SyncSessionStatus::Aborted;
     session.worktree_path = None;
     session.updated_at = now;
-    Ok(Some(session))
+    Ok(session)
 }
 
 /// Has `worktree` been observed to be gone — as opposed to merely failing to
 /// answer?
 ///
 /// The one question every path that *clears* `worktree_path` has to answer
-/// first, and the reason [`abort`] refuses rather than closing an unreadable
-/// session. A resolution's teardown owes the same care for the same reason:
+/// first, and the reason [`close_session`] refuses rather than closing an
+/// unreadable session. A resolution's teardown owes the same care for the same reason:
 /// [`discard_sync_worktree`] reports nothing, so a row blanked on the strength
 /// of a delete nobody confirmed names a directory that may still be on disk,
 /// and no reader is left to revisit it.
@@ -437,8 +562,40 @@ pub(crate) async fn worktree_confirmed_gone(
 ) -> bool {
     matches!(
         probe_worktree(exec, machine, worktree, None).await,
-        Some(probe) if !probe.worktree_exists
+        Some(reading) if !reading.probe.worktree_exists
     )
+}
+
+/// Whether `sha` is reachable from `origin/<branch>` — the only evidence
+/// either publisher is allowed to record a push on.
+///
+/// `git push` exiting zero is a verdict about the command and not about origin,
+/// and the two come apart in both directions: a push rejected because the
+/// branch moved under it, and a push that landed on a connection that died
+/// before saying so. Containment rather than equality, because the branch may
+/// legitimately have grown since — [`publish`] has the rest of that reasoning.
+///
+/// The answer is handed back whole rather than as a bool: `Refused` is origin
+/// saying it does not have the commit, `Unreadable` is nobody saying anything,
+/// and a caller that collapses them records a publication from a dead channel.
+pub(crate) async fn push_landed(
+    exec: &dyn ExecutionPort,
+    machine: &str,
+    repo_dir: &str,
+    branch: &str,
+    sha: &str,
+) -> Answer {
+    ask(
+        exec,
+        machine,
+        &format!(
+            "git -C {} merge-base --is-ancestor {} refs/remotes/origin/{}",
+            paths::shell_escape_posix(repo_dir),
+            paths::shell_escape_posix(sha),
+            paths::shell_escape_posix(branch)
+        ),
+    )
+    .await
 }
 
 /// What the tree at `worktree` says about the merge the session claims, or
@@ -462,7 +619,7 @@ async fn probe_worktree(
     machine: &str,
     worktree: &str,
     head_before: Option<&str>,
-) -> Option<SyncWorkspaceProbe> {
+) -> Option<WorktreeReading> {
     let safe = paths::shell_escape_posix(worktree);
     match ask(
         exec,
@@ -472,11 +629,14 @@ async fn probe_worktree(
     .await
     {
         Answer::Refused => {
-            return Some(SyncWorkspaceProbe {
-                worktree_exists: false,
-                merge_in_progress: false,
-                dirty: false,
-                head_advanced: None,
+            return Some(WorktreeReading {
+                probe: SyncWorkspaceProbe {
+                    worktree_exists: false,
+                    merge_in_progress: false,
+                    dirty: false,
+                    head_advanced: None,
+                },
+                head: None,
             })
         }
         Answer::Unreadable(_) => return None,
@@ -510,20 +670,27 @@ async fn probe_worktree(
     // Only a closed merge over a clean tree is ambiguous, so that is the only
     // shape worth a fourth round trip — and asking unconditionally would put a
     // command in front of the strict test double that no assertion is about.
-    let head_advanced = match (merge_in_progress, dirty, head_before) {
-        (false, false, Some(before)) => {
+    let head = match (merge_in_progress, dirty, head_before) {
+        (false, false, Some(_)) => {
             match ask(exec, machine, &format!("git -C {} rev-parse HEAD", safe)).await {
-                Answer::Said(head) => Some(head.trim() != before),
+                Answer::Said(head) => Some(head.trim().to_string()),
                 Answer::Refused | Answer::Unreadable(_) => None,
             }
         }
         _ => None,
     };
-    Some(SyncWorkspaceProbe {
-        worktree_exists: true,
-        merge_in_progress,
-        dirty,
-        head_advanced,
+    let head_advanced = match (&head, head_before) {
+        (Some(head), Some(before)) => Some(head != before),
+        _ => None,
+    };
+    Some(WorktreeReading {
+        probe: SyncWorkspaceProbe {
+            worktree_exists: true,
+            merge_in_progress,
+            dirty,
+            head_advanced,
+        },
+        head,
     })
 }
 

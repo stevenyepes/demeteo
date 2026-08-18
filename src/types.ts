@@ -756,7 +756,8 @@ export type SyncBlockedStage =
   | 'worktree_provision'
   | 'merge'
   | 'push'
-  | 'repo_context';
+  | 'repo_context'
+  | 'held_resolution';
 
 /** Return shape for `feature_sync` and `feature_resolve_sync_conflicts`. */
 export type SyncOutcomeView =

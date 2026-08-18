@@ -28,6 +28,7 @@ function renderHeader(overrides: Partial<Parameters<typeof FeatureHeader>[0]> = 
       cacheCreationTokens={4_500}
       stepCount={7}
       syncing={false}
+      reviewHeld={false}
       resolving={false}
       publishing={false}
       mrUrl={null}

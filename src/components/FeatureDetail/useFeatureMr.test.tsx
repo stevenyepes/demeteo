@@ -17,21 +17,32 @@ import type { SyncSessionView } from '../../types';
 
 const getSyncSession = vi.fn<(featureId: string) => Promise<SyncSessionView | null>>();
 const abortSync = vi.fn<(featureId: string) => Promise<SyncSessionView | null>>();
+const resolveSyncConflicts = vi.fn();
+const publishSyncResolution = vi.fn<(featureId: string) => Promise<SyncSessionView | null>>();
+const discardSyncResolution = vi.fn<(featureId: string) => Promise<SyncSessionView | null>>();
 
-vi.mock('../../lib/featureSync', () => ({
-  getSyncSession: (featureId: string) => getSyncSession(featureId),
-  abortSync: (featureId: string) => abortSync(featureId),
-  getFeature: async () => null,
-  syncFeature: () => {
-    throw new Error('syncFeature was not expected here');
-  },
-  resolveSyncConflicts: () => {
-    throw new Error('resolveSyncConflicts was not expected here');
-  },
-  fetchMrState: () => {
-    throw new Error('fetchMrState was not expected here');
-  },
-}));
+// `isAwaitingSyncReview` comes through real: it is the predicate under test in
+// half of these, and a stubbed one would assert the stub.
+vi.mock('../../lib/featureSync', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../lib/featureSync')>();
+  return {
+    isAwaitingSyncReview: actual.isAwaitingSyncReview,
+    getSyncSession: (featureId: string) => getSyncSession(featureId),
+    abortSync: (featureId: string) => abortSync(featureId),
+    publishSyncResolution: (featureId: string) => publishSyncResolution(featureId),
+    discardSyncResolution: (featureId: string) => discardSyncResolution(featureId),
+    getFeature: async () => null,
+    syncFeature: () => {
+      throw new Error('syncFeature was not expected here');
+    },
+    resolveSyncConflicts: (featureId: string, files: string[]) =>
+      resolveSyncConflicts(featureId, files),
+    fetchMrState: () => {
+      throw new Error('fetchMrState was not expected here');
+    },
+  };
+});
+
 
 vi.mock('../../lib/featureDetail', () => ({
   cleanupFeature: () => {
@@ -150,4 +161,93 @@ it('leaves a conflict the run is still driving alone', async () => {
 
   await waitFor(() => expect(getSyncSession).toHaveBeenCalledWith('f-1'));
   expect(result.current.syncBanner).toBeNull();
+});
+
+/**
+ * A resolution held for review has its own card, which says the thing the
+ * banner cannot: that origin has not seen this yet. Two success notices for one
+ * merge, one of which stops at "resolved", is how a user concludes it shipped —
+ * so the banner is suppressed, and `reviewHeld` is what stops "Sync with main"
+ * from writing over the row while it waits.
+ */
+it('suppresses the resolved banner while the resolution is still waiting', async () => {
+  const held = session({ status: 'resolved', merge_commit_sha: 'c0ffeec', pushed_at: null });
+  getSyncSession.mockResolvedValue(held);
+  resolveSyncConflicts.mockResolvedValue({ status: 'resolved', merge_commit_sha: 'c0ffeec' });
+  const { result } = mount();
+
+  await waitFor(() => expect(getSyncSession).toHaveBeenCalledWith('f-1'));
+  await result.current.handleResolveConflicts(['src/lib.rs']);
+
+  await waitFor(() => expect(result.current.syncSession).toEqual(held));
+  expect(result.current.syncBanner).toBeNull();
+  expect(result.current.reviewHeld).toBe(true);
+});
+
+/** Once origin has it there is nothing left to review, so the ordinary success
+ *  banner is the right and only notice. */
+it('shows the resolved banner once the resolution is on origin', async () => {
+  getSyncSession.mockResolvedValue(
+    session({ status: 'resolved', merge_commit_sha: 'c0ffeec', pushed_at: 1700 }),
+  );
+  resolveSyncConflicts.mockResolvedValue({ status: 'resolved', merge_commit_sha: 'c0ffeec' });
+  const { result } = mount();
+
+  await waitFor(() => expect(getSyncSession).toHaveBeenCalledWith('f-1'));
+  await result.current.handleResolveConflicts(['src/lib.rs']);
+
+  await waitFor(() => expect(result.current.syncBanner).not.toBeNull());
+  expect(result.current.reviewHeld).toBe(false);
+});
+
+/** A resolution a run still owns is nobody's to publish, and must not suppress
+ *  the banner either: `user_may_intervene` is the backend's answer and the hook
+ *  obeys it rather than re-deriving one from `status`. */
+it('does not call a resolution held by a live run a review', async () => {
+  getSyncSession.mockResolvedValue(
+    session({
+      status: 'resolved',
+      merge_commit_sha: 'c0ffeec',
+      pushed_at: null,
+      user_may_intervene: false,
+    }),
+  );
+  const { result } = mount();
+
+  await waitFor(() => expect(getSyncSession).toHaveBeenCalledWith('f-1'));
+  expect(result.current.reviewHeld).toBe(false);
+});
+
+/** Publishing answers with the row the backend reconciled on its way out, and
+ *  the hook takes that rather than assuming the press worked. */
+it('takes the published row from the publish call', async () => {
+  const held = session({ status: 'resolved', merge_commit_sha: 'c0ffeec', pushed_at: null });
+  getSyncSession.mockResolvedValue(held);
+  publishSyncResolution.mockResolvedValue({ ...held, pushed_at: 1800 });
+  const { result } = mount();
+
+  await waitFor(() => expect(result.current.reviewHeld).toBe(true));
+  await result.current.handlePublishSync();
+
+  expect(publishSyncResolution).toHaveBeenCalledWith('f-1');
+  await waitFor(() => expect(result.current.reviewHeld).toBe(false));
+  expect(result.current.syncSession?.pushed_at).toBe(1800);
+});
+
+/** Discarding re-reads rather than trusting its own answer, because the row it
+ *  returns has already been reconciled and the banner has to go with it. */
+it('clears the banner and re-reads the row after a discard', async () => {
+  const held = session({ status: 'resolved', merge_commit_sha: 'c0ffeec', pushed_at: null });
+  const abandoned = session({ status: 'aborted', worktree_path: null, pushed_at: null });
+  getSyncSession.mockResolvedValueOnce(held).mockResolvedValue(abandoned);
+  discardSyncResolution.mockResolvedValue(abandoned);
+  const { result } = mount();
+
+  await waitFor(() => expect(result.current.reviewHeld).toBe(true));
+  await result.current.handleDiscardSync();
+
+  expect(discardSyncResolution).toHaveBeenCalledWith('f-1');
+  await waitFor(() => expect(result.current.syncSession?.status).toBe('aborted'));
+  expect(result.current.syncBanner).toBeNull();
+  expect(result.current.reviewHeld).toBe(false);
 });

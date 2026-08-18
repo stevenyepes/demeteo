@@ -8,6 +8,7 @@ import {
   discardSyncResolution,
   getFeature,
   getSyncSession,
+  isAwaitingSyncReview,
   publishSyncResolution,
   syncFeature,
   resolveSyncConflicts,
@@ -133,8 +134,7 @@ export function useFeatureMr(input: {
       // the banner cannot: that origin has not seen this yet. Two success
       // notices for one merge, one of which stops at "resolved", is how a
       // user concludes it shipped.
-      const awaitingReview = fresh?.status === 'resolved' && fresh.pushed_at === null;
-      setSyncBanner(awaitingReview ? null : outcome);
+      setSyncBanner(isAwaitingSyncReview(fresh) ? null : outcome);
       reload();
     } catch (err) {
       await messageDialog(formatError(err), { title: 'Resolution failed', kind: 'error' });
@@ -312,6 +312,7 @@ export function useFeatureMr(input: {
     resolving,
     syncBanner,
     syncSession,
+    reviewHeld: isAwaitingSyncReview(syncSession),
     reviewPending,
     aborting,
     setSyncBanner,

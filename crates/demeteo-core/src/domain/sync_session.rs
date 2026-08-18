@@ -245,6 +245,29 @@ pub fn intervention_refusal(
     }
 }
 
+/// Why the session already on the row may not be replaced by a fresh sync, or
+/// `None` when it may.
+///
+/// [`SyncSessionPort::open`](crate::ports::sync_session::SyncSessionPort::open)
+/// is an upsert on one row per feature, so starting a sync takes the previous
+/// one's `head_before`, `merge_commit_sha` and `pushed_at` with it. For every
+/// other session that is the point — the row describes the sync in flight.
+///
+/// A committed, unpublished resolution is the exception, and not a small one.
+/// `head_before` is the only record of where the branch was and nothing can
+/// recover it afterwards; the merge nobody has read becomes part of the next
+/// sync's baseline on its way to origin; and because the second merge finds
+/// `origin/<base>` already in the branch it changes nothing, so the row lands
+/// on [`SyncSessionStatus::UpToDate`] — terminal, which `reconcile` then passes
+/// through forever and every intervention refuses. Refusing the sync is what
+/// keeps the resolution reachable.
+pub fn resync_refusal(status: SyncSessionStatus, published: bool) -> Option<&'static str> {
+    (matches!(status, SyncSessionStatus::Resolved) && !published).then_some(
+        "The last sync left a resolution on this branch that nobody has published or \
+         discarded. Publish it or discard it first, then sync again.",
+    )
+}
+
 /// What happens to a resolution the moment it is committed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionPublish {

@@ -35,9 +35,7 @@ use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
 use crate::domain::step_seed::manual_sync_step_execution;
 use crate::domain::sync_resolver::SyncResolverChoice;
-use crate::domain::sync_session::{
-    intervention_refusal, publish_policy, resolution_is_reviewable, SyncIntervention, SyncStanding,
-};
+use crate::domain::sync_session::{intervention_refusal, SyncIntervention, SyncStanding};
 use crate::paths;
 use crate::ports::db::FeatureRepository;
 use crate::ports::step_executor::SyncOutcomeView;
@@ -277,10 +275,8 @@ impl DagStepExecutor {
                 ),
                 budget::BUDGET_FRACTION_RESOLVER,
             ),
-            publish: publish_policy(
-                settings.sync_review_before_push,
-                resolution_is_reviewable(&feature.status),
-            ),
+            review_before_push: settings.sync_review_before_push,
+            feature_status: &feature.status,
             cancel: Some(cancel_rx),
             spend: RunningSpend {
                 cost: &mut cost,

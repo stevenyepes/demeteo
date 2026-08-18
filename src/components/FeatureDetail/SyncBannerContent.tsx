@@ -53,6 +53,8 @@ const BLOCKED_NEXT_MOVE: Record<SyncBlockedStage, string> = {
   merge: 'The merge was cut short by the connection or a timeout, and never finished.',
   push: 'Merged locally, but the push to origin failed. The merge is not published.',
   repo_context: 'This feature has no project repository configured.',
+  held_resolution:
+    'The last sync left a resolution on this branch that nobody has published or discarded. Deal with it in the review below, then sync again.',
 };
 
 export const SyncBannerContent: React.FC<SyncBannerContentProps> = ({

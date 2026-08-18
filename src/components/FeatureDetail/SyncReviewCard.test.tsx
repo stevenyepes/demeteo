@@ -75,6 +75,31 @@ describe('SyncReviewCard', () => {
     expect(screen.getByRole('button', { name: /push to origin/i })).toBeEnabled();
   });
 
+  /**
+   * A session `reconcile` promoted out of a moved `HEAD` alone — the user who
+   * finished the merge in their own editor — used to reach here with no
+   * recorded commit, and every button lied about it: Push was enabled and
+   * `publish` could only answer "this sync recorded no resolution commit",
+   * while View diff was disabled blaming a base that is right there.
+   */
+  it('blames the missing commit, not the base, when it is the head that is unknown', () => {
+    render(
+      <SyncReviewCard
+        session={session({ merge_commit_sha: null })}
+        pending={null}
+        onViewDiff={() => {}}
+        onPush={() => {}}
+        onDiscard={() => {}}
+      />,
+    );
+
+    for (const name of [/view diff/i, /push to origin/i, /discard merge/i]) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      expect(button.getAttribute('title')).toContain('no resolution commit');
+    }
+  });
+
   it('says the merge is gone, never that the conflict comes back', () => {
     render(
       <SyncReviewCard
