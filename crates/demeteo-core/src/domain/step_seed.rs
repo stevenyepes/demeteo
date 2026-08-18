@@ -6,7 +6,7 @@
 //! reaching it there means a `DagStepExecutor` with every port those
 //! neighbouring phases touch, which is why none of this was asserted anywhere.
 
-use crate::domain::ids::{FeatureId, StepExecutionId};
+use crate::domain::ids::{FeatureId, StepExecutionId, StepId};
 use crate::domain::models::{StepConfig, StepExecution};
 
 /// Whether `step_execution_id` names one of `feature_id`'s rows.
@@ -62,6 +62,56 @@ pub fn seed_step_executions(
             updated_at: now,
         })
         .collect()
+}
+
+/// The `step_id` an out-of-band sync records itself under.
+///
+/// Reserved rather than borrowed from the run's own graph: a manual sync is
+/// work on a run that already ended, and writing it onto the workflow's `sync`
+/// node would overwrite what that node did during the run — a verdict a replay
+/// then rewinds and re-reads. It is also the handle
+/// [`abandoned_out_of_band`](crate::domain::restart_reconcile::abandoned_out_of_band)
+/// recognises a stranded row by, which a real graph node could not offer
+/// without colliding with the reconciliation the run loop's own rows get.
+pub const MANUAL_SYNC_STEP_ID: &str = "s-sync-manual";
+
+/// The row one out-of-band sync attempt reports through.
+///
+/// Derived like [`seed_step_executions`]'s ids, so the second attempt on a
+/// feature names the first attempt's row instead of colliding with it —
+/// `step_create` is a bare `INSERT`.
+///
+/// `step_index` is `u32::MAX` because this row is not in the graph, and both
+/// guards that fall back to index order when the graph cannot be resolved —
+/// [`active_predecessor_refusal`](crate::domain::run_control::active_predecessor_refusal)
+/// and the replay rewind — read a lower index as "upstream of everything".
+/// Last in `steps_for_feature`'s `ORDER BY step_index ASC` is also where the
+/// timeline should show it.
+pub fn manual_sync_step_execution(feature_id: &FeatureId, now: i64) -> StepExecution {
+    StepExecution {
+        id: StepExecutionId::from(format!(
+            "se-{}-{}",
+            feature_id.as_str(),
+            MANUAL_SYNC_STEP_ID
+        )),
+        feature_id: feature_id.clone(),
+        step_id: StepId(MANUAL_SYNC_STEP_ID.to_string()),
+        step_index: u32::MAX,
+        step_kind: "sync".to_string(),
+        status: "pending".to_string(),
+        cost_usd: Some(0.0),
+        tokens: Some(0),
+        wall_clock_secs: Some(0),
+        artifact_path: None,
+        artifact_paths: Vec::new(),
+        error_message: None,
+        iteration_count: 0,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+        last_failure_fingerprint: None,
+        created_at: now,
+        updated_at: now,
+    }
 }
 
 #[cfg(test)]

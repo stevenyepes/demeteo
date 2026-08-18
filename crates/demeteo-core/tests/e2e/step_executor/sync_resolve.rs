@@ -17,6 +17,8 @@ use crate::adapters::database::SqliteAdapter;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, LOCAL_MACHINE};
+use crate::domain::models::StepExecution;
+use crate::domain::step_seed::{manual_sync_step_execution, MANUAL_SYNC_STEP_ID};
 use crate::domain::sync_session::SyncSessionStatus;
 use crate::paths;
 use crate::ports::db::{FeatureRepository, ProjectRepository};
@@ -218,5 +220,86 @@ async fn a_sync_the_run_owns_is_not_the_buttons_to_resolve() {
         "the refusal has to come before the resolver's own preflight: {:?}",
         exec.commands()
     );
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+fn steps_of(db: &Arc<SqliteAdapter>, feature_id: &str) -> Vec<StepExecution> {
+    let features: &dyn FeatureRepository = &**db;
+    features
+        .steps_for_feature(&FeatureId::from(feature_id.to_string()))
+        .expect("read the rows")
+}
+
+/// The turn used to stream against `se-sync-<millis>`, a step-execution id no
+/// row carried. The inspector only ever subscribes to ids `step_list_for_run`
+/// handed it, so every token the resolver emitted went to a buffer nothing
+/// renders and the button was a spinner with no output, no cost and no cancel.
+#[tokio::test]
+async fn the_manual_turn_reports_through_a_row_the_run_can_see() {
+    let (_, _exec, db, temp_dir) = resolve("resolve_row", "completed").await;
+
+    let rows = steps_of(&db, "f-resolve_row");
+    let row = rows
+        .iter()
+        .find(|r| r.step_id.0 == MANUAL_SYNC_STEP_ID)
+        .unwrap_or_else(|| panic!("no row for the manual sync: {rows:?}"));
+    assert_eq!(row.id.0, "se-f-resolve_row-s-sync-manual");
+    assert_eq!(row.step_kind, "sync");
+    assert_eq!(
+        row.status, "failed",
+        "the preflight is unscripted, so it fails"
+    );
+    assert_eq!(row.step_index, u32::MAX);
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+/// `step_create` is a bare `INSERT`, so the second attempt has to find the row
+/// the first one left rather than mint a colliding one.
+#[tokio::test]
+async fn a_second_manual_sync_reuses_the_first_ones_row() {
+    let temp_dir = scratch_dir("resolve_twice");
+    let exec = Arc::new(live_conflict_probes());
+    let (executor, db) =
+        build_test_executor_in(temp_dir.clone(), Arc::new(FakeNotif), exec.clone()).await;
+    let feature_id = seed(&db, "resolve_twice", "completed");
+
+    for _ in 0..2 {
+        executor
+            .feature_resolve_sync_conflicts_impl(&feature_id, &["README.md".to_string()])
+            .await
+            .expect("the button answers a view, never an insert error");
+    }
+
+    let manual = steps_of(&db, &feature_id)
+        .into_iter()
+        .filter(|r| r.step_id.0 == MANUAL_SYNC_STEP_ID)
+        .count();
+    assert_eq!(manual, 1);
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+/// A manual sync runs on a feature that already finished, and the restart
+/// reconciliation reads only features in `running`/`gated` and the `pending`
+/// rows of ones that were cancelled or failed. Its row would otherwise read
+/// `running` forever, with nothing left in the process that could move it.
+#[tokio::test]
+async fn a_crashed_manual_sync_is_reconciled_on_the_next_start() {
+    let temp_dir = scratch_dir("resolve_crash");
+    let exec = Arc::new(live_conflict_probes());
+    let (executor, db) =
+        build_test_executor_in(temp_dir.clone(), Arc::new(FakeNotif), exec.clone()).await;
+    let feature_id = seed(&db, "resolve_crash", "completed");
+    let features: &dyn FeatureRepository = &*db;
+    let mut abandoned = manual_sync_step_execution(&FeatureId::from(feature_id.clone()), 0);
+    abandoned.status = "running".to_string();
+    features.step_create(abandoned).expect("leave a row behind");
+
+    executor.startup_watchdog();
+
+    let row = steps_of(&db, &feature_id)
+        .into_iter()
+        .find(|r| r.step_id.0 == MANUAL_SYNC_STEP_ID)
+        .expect("the row is still there");
+    assert_eq!(row.status, "interrupted");
     let _ = std::fs::remove_dir_all(temp_dir);
 }

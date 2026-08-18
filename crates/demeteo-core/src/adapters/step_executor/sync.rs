@@ -18,16 +18,50 @@
 //! `GitOpsHelper` for git, `MergeExecutor` for the conflict
 //! detection, and the `AgentRegistry` for spawning — no new ports.
 
+use std::time::Instant;
+
+use tokio::sync::watch;
+
+use crate::adapters::step_executor::spend::RunningSpend;
+use crate::adapters::step_executor::step_status::{
+    update_step_status, CacheTokens, StatusWriters, StepTransition,
+};
 use crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files;
 use crate::adapters::step_executor::sync_resolve::{
-    resolve_sync_conflicts, ResolveSyncContext, SYNC_RESOLVER_THREAD_PREFIX,
+    resolve_sync_conflicts, ResolveSyncContext, ResolveSyncError, SYNC_RESOLVER_THREAD_PREFIX,
 };
-use crate::domain::ids::{FeatureId, StepExecutionId};
+use crate::domain::agent_session::budget;
+use crate::domain::ids::FeatureId;
+use crate::domain::models::StepExecution;
+use crate::domain::step_seed::manual_sync_step_execution;
 use crate::domain::sync_session::intervention_refusal;
 use crate::paths;
+use crate::ports::db::FeatureRepository;
 use crate::ports::step_executor::SyncOutcomeView;
 
+use super::impl_traits::lock_registry;
 use super::DagStepExecutor;
+
+/// The row this feature's out-of-band syncs report through, created on the
+/// first one and found on every one after.
+///
+/// A free function over the one port it needs, so what it does to the table is
+/// assertable without an executor. `step_create` is a bare `INSERT`, so the
+/// `step_get` is not an optimisation: without it the second attempt dies on the
+/// primary key, and the id is derived rather than minted precisely so there is
+/// a second attempt to find.
+pub(crate) fn manual_sync_row(
+    features: &dyn FeatureRepository,
+    feature_id: &FeatureId,
+    now: i64,
+) -> Result<StepExecution, String> {
+    let seeded = manual_sync_step_execution(feature_id, now);
+    if let Some(existing) = features.step_get(&seeded.id)? {
+        return Ok(existing);
+    }
+    features.step_create(seeded.clone())?;
+    Ok(seeded)
+}
 
 /// The branch a sync merges into the feature branch.
 ///
@@ -135,8 +169,33 @@ impl DagStepExecutor {
             .or(settings.default_effort)
             .unwrap_or(crate::domain::models::EffortLevel::DEFAULT);
 
-        let step_exec_id = StepExecutionId::from(format!("se-sync-{}", paths::now_ms()));
-        match resolve_sync_conflicts(ResolveSyncContext {
+        // A persisted row, because the id the turn streams against has to be one
+        // the inspector can subscribe to — see `ResolveSyncContext::step_exec`.
+        let step_exec = manual_sync_row(self.features.as_ref(), &fid, paths::now_ms())?;
+        let writers = StatusWriters {
+            features: self.features.as_ref(),
+            notif: self.notif.as_ref(),
+            f_id: &fid,
+        };
+        let start = Instant::now();
+        let mut cost = 0.0_f64;
+        let mut tokens = 0_i64;
+        update_step_status(
+            writers,
+            &step_exec,
+            StepTransition::running(0.0, Some(0), 0),
+        );
+
+        // Stop, for a turn no driver owns. Its own map rather than
+        // `cancel_senders`: that one is keyed by feature id and owned by
+        // `start_execution_with_ctx`, so a sync writing there would displace a
+        // run's sender, and its entries are never removed — a stale `true`
+        // would abort the next resolution before it started. This entry is
+        // dropped when the turn ends.
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        lock_registry(&self.sync_cancels).insert(feature_id.to_string(), cancel_tx);
+
+        let outcome = resolve_sync_conflicts(ResolveSyncContext {
             exec: &self.exec,
             registry: &self.registry,
             notif: &self.notif,
@@ -151,21 +210,67 @@ impl DagStepExecutor {
             feature_branch: &session.feature_branch,
             base_branch: &session.base_branch,
             conflict_files,
-            step_execution_id: &step_exec_id,
+            step_exec: &step_exec,
             thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
             agent_kind: &agent_kind,
             override_model: override_model.as_deref(),
             effort,
+            max_budget_usd: budget::role_max_budget_usd(
+                budget::base_max_budget_usd(
+                    feature.max_budget_usd,
+                    settings.default_max_budget_usd,
+                ),
+                budget::BUDGET_FRACTION_RESOLVER,
+            ),
+            cancel: Some(cancel_rx),
+            spend: RunningSpend {
+                cost: &mut cost,
+                tokens: &mut tokens,
+                start,
+            },
             pricing: &self.pricing,
         })
-        .await
-        {
-            Ok(merge_commit_sha) => Ok(SyncOutcomeView::Resolved { merge_commit_sha }),
-            Err(reason) => Ok(SyncOutcomeView::ResolutionFailed {
-                reason,
-                conflict_files: list_unmerged_files(&*self.exec, &session.machine_id, worktree)
-                    .await,
-            }),
+        .await;
+
+        lock_registry(&self.sync_cancels).remove(feature_id);
+
+        let wall = start.elapsed().as_secs();
+        match outcome {
+            Ok(merge_commit_sha) => {
+                update_step_status(
+                    writers,
+                    &step_exec,
+                    StepTransition::completed(cost, tokens, wall, None, CacheTokens::default()),
+                );
+                Ok(SyncOutcomeView::Resolved { merge_commit_sha })
+            }
+            Err(failure) => {
+                let stopped = matches!(failure, ResolveSyncError::Cancelled(_));
+                let reason = failure.reason();
+                let transition = if stopped {
+                    StepTransition::interrupted(
+                        cost,
+                        tokens,
+                        wall,
+                        reason.clone(),
+                        CacheTokens::default(),
+                    )
+                } else {
+                    StepTransition::failed(
+                        cost,
+                        Some(tokens),
+                        wall,
+                        reason.clone(),
+                        CacheTokens::default(),
+                    )
+                };
+                update_step_status(writers, &step_exec, transition);
+                Ok(SyncOutcomeView::ResolutionFailed {
+                    reason,
+                    conflict_files: list_unmerged_files(&*self.exec, &session.machine_id, worktree)
+                        .await,
+                })
+            }
         }
     }
 }

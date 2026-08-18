@@ -1,4 +1,4 @@
-// `super` = `steps::conflict_pass`.
+// `super` = `steps::pending_commit`.
 //
 // The rule this pins has never been asserted: an agent told to fix conflict
 // markers very often stages and commits on its own, which consumes

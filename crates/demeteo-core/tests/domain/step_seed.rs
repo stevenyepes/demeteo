@@ -104,3 +104,34 @@ fn a_feature_id_that_prefixes_another_does_not_claim_its_rows() {
         assert!(!belongs_to_feature(&short, row.id.0.as_str()));
     }
 }
+
+// ── The row a sync outside the run reports through ───────────────────────────
+
+/// It has to be findable, because `step_create` is a bare `INSERT`: the second
+/// manual sync on a feature looks the first one's row up rather than colliding
+/// with it, and that only works while the id is derived from the pair.
+#[test]
+fn the_manual_sync_row_is_named_from_the_feature_not_minted() {
+    let f = FeatureId::from("f-42".to_string());
+
+    let first = manual_sync_step_execution(&f, 100);
+    let second = manual_sync_step_execution(&f, 200);
+
+    assert_eq!(first.id, second.id);
+    assert!(belongs_to_feature(&f, first.id.0.as_str()));
+    assert_eq!(first.step_id.0, MANUAL_SYNC_STEP_ID);
+}
+
+/// Both guards that fall back to index order when the graph will not resolve —
+/// `active_predecessor_refusal` and the replay rewind — read a lower index as
+/// upstream. A manual sync sitting at index 0 would be a "predecessor" that
+/// blocks every retry and every gate decision on the feature.
+#[test]
+fn the_manual_sync_row_sorts_after_every_graph_node() {
+    let row = manual_sync_step_execution(&FeatureId::from("f-42".to_string()), 0);
+
+    assert_eq!(row.step_index, u32::MAX);
+    for graph_row in seed_step_executions(&FeatureId::from("f-42".to_string()), &steps(), 0) {
+        assert!(graph_row.step_index < row.step_index);
+    }
+}

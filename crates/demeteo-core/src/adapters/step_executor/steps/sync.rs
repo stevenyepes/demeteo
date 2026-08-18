@@ -16,13 +16,14 @@
 //! the re-validate loop work — it points at the step that should be
 //! replayed after a successful resolution.
 
-use std::time::Instant;
-
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::spend::RunningSpend;
+use crate::adapters::step_executor::step_status::{
+    update_step_status, CacheTokens, StepTransition,
+};
+use crate::adapters::step_executor::sync_resolve::ResolveSyncError;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sync_failure::SyncStepNext;
-use crate::ports::db::StepExecutionPatch;
-use crate::ports::notification::DomainEvent;
 
 use super::StepOutcome;
 
@@ -57,36 +58,13 @@ impl ExecutionDriver {
         &self,
         step_exec: &StepExecution,
         step_conf: &StepConfig,
-        accumulated_cost: &mut f64,
-        step_start: Instant,
+        spend: RunningSpend<'_>,
     ) -> StepOutcome {
-        // Persist the step as running.
-        let _ = self.features.step_update(
-            &step_exec.id,
-            &StepExecutionPatch {
-                last_failure_fingerprint: None,
-                iteration_count: None,
-                status: Some("running".to_string()),
-                cost_usd: Some(Some(*accumulated_cost)),
-                tokens: None,
-                wall_clock_secs: Some(Some(0)),
-                artifact_path: None,
-                artifact_paths: None,
-                error_message: Some(None),
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
-            },
+        update_step_status(
+            self.status_writers(),
+            step_exec,
+            StepTransition::running(*spend.cost, Some(*spend.tokens), 0),
         );
-        let _ = self.notif.emit(&DomainEvent::StepProgress {
-            feature_id: self.f_id.clone(),
-            step_id: step_exec.step_id.0.clone(),
-            status: "running".into(),
-            cost_usd: Some(*accumulated_cost),
-            tokens: None,
-            wall_clock_secs: Some(0),
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-        });
 
         // Resolve the project settings so we know which branch this run is
         // based on. We can't reach `ProjectSettings` from the driver
@@ -118,59 +96,40 @@ impl ExecutionDriver {
             .await
         {
             Ok(outcome) => {
-                let wall = step_start.elapsed().as_secs();
-                let _ = self.features.step_update(
-                    &step_exec.id,
-                    &StepExecutionPatch {
-                        last_failure_fingerprint: None,
-                        iteration_count: None,
-                        status: Some("completed".to_string()),
-                        cost_usd: Some(Some(*accumulated_cost)),
-                        tokens: None,
-                        wall_clock_secs: Some(Some(wall)),
-                        artifact_path: None,
-                        artifact_paths: None,
-                        error_message: Some(None),
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
-                    },
+                update_step_status(
+                    self.status_writers(),
+                    step_exec,
+                    StepTransition::completed(
+                        *spend.cost,
+                        *spend.tokens,
+                        spend.start.elapsed().as_secs(),
+                        None,
+                        CacheTokens::default(),
+                    ),
                 );
-                let _ = self.notif.emit(&DomainEvent::StepProgress {
-                    feature_id: self.f_id.clone(),
-                    step_id: step_exec.step_id.0.clone(),
-                    status: "completed".into(),
-                    cost_usd: Some(*accumulated_cost),
-                    tokens: None,
-                    wall_clock_secs: Some(wall),
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
-                });
                 let _ = outcome.merge_commit_sha;
                 StepOutcome::Completed
             }
-            Err(failure) => {
-                let _ = accumulated_cost;
-                match crate::domain::sync_failure::step_next(&failure) {
-                    SyncStepNext::Resolve {
-                        files,
-                        worktree_path,
-                    } => {
-                        self.resolve_sync_conflicts_in_step(
-                            step_exec,
-                            step_conf,
-                            SyncConflict {
-                                files,
-                                worktree_path,
-                                feature_branch: &feature_branch,
-                                base_branch: &base_branch,
-                            },
-                            step_start,
-                        )
-                        .await
-                    }
-                    SyncStepNext::Fail(raw_error) => StepOutcome::Failed(raw_error.to_string()),
+            Err(failure) => match crate::domain::sync_failure::step_next(&failure) {
+                SyncStepNext::Resolve {
+                    files,
+                    worktree_path,
+                } => {
+                    self.resolve_sync_conflicts_in_step(
+                        step_exec,
+                        step_conf,
+                        SyncConflict {
+                            files,
+                            worktree_path,
+                            feature_branch: &feature_branch,
+                            base_branch: &base_branch,
+                        },
+                        spend,
+                    )
+                    .await
                 }
-            }
+                SyncStepNext::Fail(raw_error) => StepOutcome::Failed(raw_error.to_string()),
+            },
         }
     }
 
@@ -179,7 +138,7 @@ impl ExecutionDriver {
         step_exec: &StepExecution,
         step_conf: &StepConfig,
         conflict: SyncConflict<'_>,
-        step_start: Instant,
+        spend: RunningSpend<'_>,
     ) -> StepOutcome {
         let SyncConflict {
             files: conflict_files,
@@ -187,6 +146,11 @@ impl ExecutionDriver {
             feature_branch,
             base_branch,
         } = conflict;
+        let RunningSpend {
+            cost,
+            tokens,
+            start,
+        } = spend;
         let machine_str = self.machine_id();
         let repo_dir = &self.target_dir;
         let resolved_cwd = worktree_path.unwrap_or(repo_dir);
@@ -205,7 +169,7 @@ impl ExecutionDriver {
 
         let conflict_paths: Vec<String> = conflict_files.iter().map(|f| f.path.clone()).collect();
 
-        match crate::adapters::step_executor::sync_resolve::resolve_sync_conflicts(
+        let outcome = crate::adapters::step_executor::sync_resolve::resolve_sync_conflicts(
             crate::adapters::step_executor::sync_resolve::ResolveSyncContext {
                 exec: &self.exec,
                 registry: &self.registry,
@@ -221,44 +185,31 @@ impl ExecutionDriver {
                 feature_branch,
                 base_branch,
                 conflict_files: &conflict_paths,
-                step_execution_id: &step_exec.id,
+                step_exec,
                 thread_id_prefix: "sync-step-resolver",
                 agent_kind: &agent_kind,
                 override_model: override_model.as_deref(),
                 effort: self.resolve_step_effort(step_conf),
+                max_budget_usd: self.role_max_budget_usd(Self::BUDGET_FRACTION_RESOLVER),
+                cancel: Some(self.cancel_watch.clone()),
+                spend: RunningSpend {
+                    cost: &mut *cost,
+                    tokens: &mut *tokens,
+                    start,
+                },
                 pricing: &self.pricing,
             },
         )
-        .await
-        {
+        .await;
+
+        let wall = start.elapsed().as_secs();
+        match outcome {
             Ok(_) => {
-                let wall = step_start.elapsed().as_secs();
-                let _ = self.features.step_update(
-                    &step_exec.id,
-                    &StepExecutionPatch {
-                        last_failure_fingerprint: None,
-                        iteration_count: None,
-                        status: Some("completed".to_string()),
-                        cost_usd: None,
-                        tokens: None,
-                        wall_clock_secs: Some(Some(wall)),
-                        artifact_path: None,
-                        artifact_paths: None,
-                        error_message: Some(None),
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
-                    },
+                update_step_status(
+                    self.status_writers(),
+                    step_exec,
+                    StepTransition::completed(*cost, *tokens, wall, None, CacheTokens::default()),
                 );
-                let _ = self.notif.emit(&DomainEvent::StepProgress {
-                    feature_id: self.f_id.clone(),
-                    step_id: step_exec.step_id.0.clone(),
-                    status: "completed".into(),
-                    cost_usd: None,
-                    tokens: None,
-                    wall_clock_secs: Some(wall),
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
-                });
 
                 let target = step_conf
                     .on_failure
@@ -271,34 +222,32 @@ impl ExecutionDriver {
                     StepOutcome::Completed
                 }
             }
-            Err(reason) => {
-                let wall = step_start.elapsed().as_secs();
-                let _ = self.features.step_update(
-                    &step_exec.id,
-                    &StepExecutionPatch {
-                        last_failure_fingerprint: None,
-                        iteration_count: None,
-                        status: Some("failed".to_string()),
-                        cost_usd: None,
-                        tokens: None,
-                        wall_clock_secs: Some(Some(wall)),
-                        artifact_path: None,
-                        artifact_paths: None,
-                        error_message: Some(Some(reason.clone())),
-                        cache_read_input_tokens: None,
-                        cache_creation_input_tokens: None,
-                    },
+            Err(ResolveSyncError::Cancelled(reason)) => {
+                update_step_status(
+                    self.status_writers(),
+                    step_exec,
+                    StepTransition::interrupted(
+                        *cost,
+                        *tokens,
+                        wall,
+                        reason,
+                        CacheTokens::default(),
+                    ),
                 );
-                let _ = self.notif.emit(&DomainEvent::StepProgress {
-                    feature_id: self.f_id.clone(),
-                    step_id: step_exec.step_id.0.clone(),
-                    status: "failed".into(),
-                    cost_usd: None,
-                    tokens: None,
-                    wall_clock_secs: Some(wall),
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
-                });
+                StepOutcome::Cancelled
+            }
+            Err(ResolveSyncError::Failed(reason)) => {
+                update_step_status(
+                    self.status_writers(),
+                    step_exec,
+                    StepTransition::failed(
+                        *cost,
+                        Some(*tokens),
+                        wall,
+                        reason.clone(),
+                        CacheTokens::default(),
+                    ),
+                );
                 StepOutcome::Failed(reason)
             }
         }
@@ -385,8 +334,11 @@ impl crate::adapters::step_executor::registry::NodeHandler for SyncNodeHandler {
             .handle_sync_step(
                 ctx.step_exec,
                 ctx.step_conf,
-                ctx.accumulated_cost,
-                ctx.step_start,
+                RunningSpend {
+                    cost: ctx.accumulated_cost,
+                    tokens: ctx.accumulated_tokens,
+                    start: ctx.step_start,
+                },
             )
             .await
     }
