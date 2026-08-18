@@ -425,6 +425,9 @@ pub async fn submit_create_project_step(
                 default_max_budget_usd: None,
                 default_workflow_id: None,
                 review_entrypoint: None,
+                sync_resolver_agent_kind: None,
+                sync_resolver_model: None,
+                sync_resolver_effort: None,
             };
             ctx.projects
                 .save_settings(settings)

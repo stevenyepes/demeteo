@@ -146,7 +146,11 @@ async fn resolve(
     let feature_id = seed(&db, label, feature_status);
 
     let view = executor
-        .feature_resolve_sync_conflicts_impl(&feature_id, &["README.md".to_string()])
+        .feature_resolve_sync_conflicts_impl(
+            &feature_id,
+            &["README.md".to_string()],
+            &Default::default(),
+        )
         .await;
     (view, exec, db, temp_dir)
 }
@@ -270,7 +274,11 @@ async fn a_second_manual_sync_reuses_the_first_ones_row() {
 
     for _ in 0..2 {
         executor
-            .feature_resolve_sync_conflicts_impl(&feature_id, &["README.md".to_string()])
+            .feature_resolve_sync_conflicts_impl(
+                &feature_id,
+                &["README.md".to_string()],
+                &Default::default(),
+            )
             .await
             .expect("the button answers a view, never an insert error");
     }
@@ -304,7 +312,11 @@ async fn a_repeat_resolution_does_not_erase_what_the_first_one_spent() {
         .expect("the first attempt's row");
 
     executor
-        .feature_resolve_sync_conflicts_impl(&feature_id, &["README.md".to_string()])
+        .feature_resolve_sync_conflicts_impl(
+            &feature_id,
+            &["README.md".to_string()],
+            &Default::default(),
+        )
         .await
         .expect("the button answers a view");
 
@@ -403,7 +415,11 @@ async fn a_second_resolution_is_refused_while_the_first_is_in_flight() {
     executor.claim_sync_cancel_for_test(&feature_id, tx);
 
     let refusal = executor
-        .feature_resolve_sync_conflicts_impl(&feature_id, &["README.md".to_string()])
+        .feature_resolve_sync_conflicts_impl(
+            &feature_id,
+            &["README.md".to_string()],
+            &Default::default(),
+        )
         .await
         .expect_err("a second agent was let into the same worktree");
     assert!(refusal.contains("already running"), "{refusal}");
@@ -413,4 +429,232 @@ async fn a_second_resolution_is_refused_while_the_first_is_in_flight() {
         "a refusal may not move the session"
     );
     let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+/// The reconcile's live-conflict answers, plus the resolver's own preflight
+/// read, so the turn reaches the spawn instead of stopping before it.
+fn merge_open_for_the_resolver() -> ScriptedExec {
+    ScriptedExec::new(&[
+        (
+            "git -C /repos/demeteo_wt_sync_conflicted rev-parse --git-dir",
+            Ok(".git\n"),
+        ),
+        (
+            "git -C /repos/demeteo_wt_sync_conflicted status --porcelain",
+            Ok("UU README.md\n"),
+        ),
+        (
+            "git -C /repos/demeteo_wt_sync_conflicted rev-parse --verify --quiet MERGE_HEAD",
+            Ok("b1b2b3b\n"),
+        ),
+        // `preflight` returns on a non-empty unmerged list, so this is the last
+        // thing asked before the spawn.
+        (
+            "git -C /repos/demeteo_wt_sync_conflicted status --porcelain --untracked-files=no",
+            Ok("UU README.md\n"),
+        ),
+    ])
+}
+
+/// Records the identity one spawn was asked for, then refuses. Refusing is the
+/// point: nothing past the spawn is scripted, so the turn stops at the one
+/// question these tests are about.
+struct RecordingRuntime {
+    kind: &'static str,
+    seen: std::sync::Mutex<Vec<Spawned>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Spawned {
+    binary: String,
+    model: Option<String>,
+    effort: Option<crate::domain::models::EffortLevel>,
+}
+
+#[async_trait::async_trait]
+impl crate::ports::agent_runtime::AgentRuntime for RecordingRuntime {
+    fn kind(&self) -> &'static str {
+        self.kind
+    }
+    fn capabilities(&self) -> crate::ports::agent_runtime::AgentCapabilities {
+        crate::ports::agent_runtime::AgentCapabilities {
+            display_label: "Recording",
+            lists_models: false,
+            model_listing: None,
+            default_model: None,
+            effort_levels: &[],
+            personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
+            windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
+        }
+    }
+    async fn availability(
+        &self,
+        _exec: &dyn crate::ports::execution::ExecutionPort,
+        _machine_id: &str,
+    ) -> crate::domain::models::Availability {
+        crate::domain::models::Availability::Installed
+    }
+    fn install_command(&self) -> &'static str {
+        "echo recording"
+    }
+    fn start(
+        &self,
+        ctx: crate::ports::agent_runtime::AgentContext,
+    ) -> crate::ports::agent_runtime::AgentStartFuture<'_> {
+        self.seen.lock().unwrap().push(Spawned {
+            binary: ctx.binary.clone(),
+            model: ctx.model.clone(),
+            effort: ctx.effort,
+        });
+        Box::pin(async move {
+            Err(crate::ports::agent_runtime::AgentStartError::SpawnFailed(
+                "recorded".to_string(),
+            ))
+        })
+    }
+}
+
+/// Press the button on a conflicted feature whose registry can answer, and
+/// report what the spawn was asked for.
+async fn spawned_by(
+    label: &str,
+    kind: &'static str,
+    prepare: impl FnOnce(&Arc<SqliteAdapter>, &crate::domain::models::Feature),
+    asked: crate::domain::sync_resolver::SyncResolverChoice,
+) -> Vec<Spawned> {
+    let temp_dir = scratch_dir(label);
+    let exec = Arc::new(merge_open_for_the_resolver());
+    let runtime = Arc::new(RecordingRuntime {
+        kind,
+        seen: std::sync::Mutex::new(Vec::new()),
+    });
+    let (executor, db) = super::harness::build_test_executor_with_agents(
+        temp_dir.clone(),
+        Arc::new(FakeNotif),
+        exec.clone(),
+        vec![runtime.clone()],
+    )
+    .await;
+    let feature_id = seed(&db, label, "completed");
+    let features: &dyn FeatureRepository = &*db;
+    let feature = features
+        .get(&FeatureId::from(feature_id.clone()))
+        .unwrap()
+        .unwrap();
+    prepare(&db, &feature);
+
+    let _ = executor
+        .feature_resolve_sync_conflicts_impl(&feature_id, &["README.md".to_string()], &asked)
+        .await;
+
+    let seen = runtime.seen.lock().unwrap().clone();
+    let _ = std::fs::remove_dir_all(temp_dir);
+    seen
+}
+
+fn resolver_settings(
+    db: &Arc<SqliteAdapter>,
+    feature: &crate::domain::models::Feature,
+    choice: crate::domain::sync_resolver::SyncResolverChoice,
+) {
+    let projects: &dyn ProjectRepository = &**db;
+    let mut settings = crate::adapters::step_executor::setup::fetch_default_settings();
+    settings.project_id = feature.project_id.clone();
+    settings.sync_resolver_agent_kind = choice.agent_kind;
+    settings.sync_resolver_model = choice.model;
+    settings.sync_resolver_effort = choice.effort;
+    projects.save_settings(settings).unwrap();
+}
+
+/// The project names a conflict resolver; the run was launched with a different
+/// harness. The turn has to spawn the project's, at the project's model and
+/// effort — which is the whole claim of the resolver being a role and not a
+/// step.
+///
+/// Both sync paths used to terminate at a hard-coded `"opencode"` without ever
+/// reading `ProjectSettings`, so this also reddens if the chain is ever
+/// short-circuited back to the feature row.
+#[tokio::test]
+async fn the_projects_conflict_resolver_outranks_the_runs_launch_pin() {
+    use crate::domain::models::EffortLevel;
+    use crate::domain::sync_resolver::SyncResolverChoice;
+
+    let seen = spawned_by(
+        "resolve_pick",
+        "codex",
+        |db, feature| {
+            let features: &dyn FeatureRepository = &**db;
+            features
+                .update(
+                    &feature.id,
+                    &crate::ports::db::FeaturePatch {
+                        agent_kind: Some(Some("opencode".to_string())),
+                        model: Some(Some("sonnet".to_string())),
+                        effort: Some(Some(EffortLevel::Max)),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            resolver_settings(
+                db,
+                feature,
+                SyncResolverChoice {
+                    agent_kind: Some("codex".to_string()),
+                    model: Some("gpt-5-codex".to_string()),
+                    effort: Some(EffortLevel::Low),
+                },
+            );
+        },
+        SyncResolverChoice::default(),
+    )
+    .await;
+
+    assert_eq!(
+        seen,
+        vec![Spawned {
+            binary: "codex".to_string(),
+            model: Some("gpt-5-codex".to_string()),
+            effort: Some(EffortLevel::Low),
+        }],
+        "the project's resolver default never reached the spawn"
+    );
+}
+
+/// What the user picked on the banner outranks everything stored — the tier the
+/// picker exists to fill.
+#[tokio::test]
+async fn the_attempts_own_choice_outranks_the_projects_resolver_default() {
+    use crate::domain::models::EffortLevel;
+    use crate::domain::sync_resolver::SyncResolverChoice;
+
+    let seen = spawned_by(
+        "resolve_asked",
+        "pi",
+        |db, feature| {
+            resolver_settings(
+                db,
+                feature,
+                SyncResolverChoice {
+                    agent_kind: Some("codex".to_string()),
+                    ..Default::default()
+                },
+            );
+        },
+        SyncResolverChoice {
+            agent_kind: Some("pi".to_string()),
+            model: Some("pi-large".to_string()),
+            effort: Some(EffortLevel::XHigh),
+        },
+    )
+    .await;
+
+    assert_eq!(
+        seen,
+        vec![Spawned {
+            binary: "pi".to_string(),
+            model: Some("pi-large".to_string()),
+            effort: Some(EffortLevel::XHigh),
+        }],
+        "the picker's choice never reached the spawn"
+    );
 }

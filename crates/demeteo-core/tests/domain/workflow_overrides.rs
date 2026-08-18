@@ -34,6 +34,9 @@ fn settings() -> ProjectSettings {
         artifact_subdir: "artifacts/".to_string(),
         commit_artifacts: false,
         review_entrypoint: None,
+        sync_resolver_agent_kind: None,
+        sync_resolver_model: None,
+        sync_resolver_effort: None,
     }
 }
 

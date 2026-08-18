@@ -116,9 +116,22 @@ pub(super) async fn build_test_executor_in(
     notif: Arc<dyn NotificationPort>,
     exec: Arc<dyn crate::ports::execution::ExecutionPort>,
 ) -> (DagStepExecutor, Arc<SqliteAdapter>) {
+    build_test_executor_with_agents(temp_dir, notif, exec, vec![]).await
+}
+
+/// [`build_test_executor_in`] with a populated registry, for the tests whose
+/// subject is what an `AgentContext` was built out of. An empty registry
+/// refuses every spawn with `NotFound`, which reads as "the turn failed" and
+/// says nothing about what it asked for.
+pub(super) async fn build_test_executor_with_agents(
+    temp_dir: std::path::PathBuf,
+    notif: Arc<dyn NotificationPort>,
+    exec: Arc<dyn crate::ports::execution::ExecutionPort>,
+    runtimes: Vec<Arc<dyn crate::ports::agent_runtime::AgentRuntime>>,
+) -> (DagStepExecutor, Arc<SqliteAdapter>) {
     let conn = crate::db::init_db(temp_dir.clone()).expect("init_db failed");
     let db = Arc::new(SqliteAdapter::new(conn).unwrap());
-    let registry = Arc::new(AgentRegistry::new(vec![]));
+    let registry = Arc::new(AgentRegistry::new(runtimes));
     let agent_exec = Arc::new(FakeAgentExec);
     let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> = Arc::new(
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),

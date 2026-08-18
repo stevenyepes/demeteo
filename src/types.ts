@@ -1004,6 +1004,15 @@ export interface ProjectSettingsData {
    *  string, which a cleared input writes) = the project names none, and the
    *  step is left to review in its own way. Migration V42. */
   review_entrypoint?: string | null;
+  /** The harness a merge-conflict resolution runs under, outranking the run's
+   *  own launch pin for that turn alone. `null`/absent = no opinion, which
+   *  falls through to the run and then to `default_agent_kind`. Migration
+   *  V44. */
+  sync_resolver_agent_kind?: string | null;
+  /** The model for that turn, inherited independently of the harness. */
+  sync_resolver_model?: string | null;
+  /** The reasoning effort for that turn, clamped per harness at spawn. */
+  sync_resolver_effort?: EffortLevel | null;
 }
 
 export interface SessionInfo {

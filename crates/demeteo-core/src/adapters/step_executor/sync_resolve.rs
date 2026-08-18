@@ -348,6 +348,21 @@ async fn run_resolver_turn(
         platform,
         agent_exec: agent_exec.clone(),
         exec: exec.clone(),
+        // `all_allow`, and not a `StepCapability`, because the resolver edits
+        // conflicted *source* and then runs the project's build: every
+        // capability but `Implement` resolves `write_scope()` to `None` or
+        // `ArtifactsOnly`, whose chmod fence would take write off exactly the
+        // files this turn exists to change. Against `Implement` — whose fence
+        // is a documented no-op — the one dimension that differs is `network`,
+        // deliberately: a resolution may need to read a changelog.
+        //
+        // How tightly `cwd` then confines the turn is the harness's answer, not
+        // this profile's, and the harness is a user's per-attempt choice:
+        // opencode and hermes are handed `"external_directory": "deny"`, codex
+        // a cwd-scoped `workspace-write` sandbox, and claude-code and pi no
+        // path fence at all — for them `cwd` is a working directory and not a
+        // boundary. Narrowing the profile is not the lever for that: a profile
+        // that cannot write source cannot resolve a conflict either.
         permissions: crate::domain::permission::PermissionProfile::all_allow(),
         bare_mode: true,
         keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator

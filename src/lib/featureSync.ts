@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Feature, SyncOutcomeView, SyncSessionView } from "../types";
+import type { EffortLevel, Feature, SyncOutcomeView, SyncSessionView } from "../types";
 
 /**
  * Sync the feature branch with `origin/<default_branch>`. Returns
@@ -23,6 +23,18 @@ export async function syncFeature(featureId: string): Promise<SyncOutcomeView> {
 }
 
 /**
+ * What one resolution attempt asks to be run under. Every field `null` means
+ * "inherit", which is the request this function sent before there was a picker:
+ * the backend falls through the project's conflict-resolver default, the
+ * harness the run was launched with, and then the project default.
+ */
+export interface SyncResolverChoice {
+  agentKind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
+}
+
+/**
  * Spawn a fresh agent session dedicated to resolving the merge
  * conflicts left by `syncFeature`. The agent edits the conflict
  * files in a temporary worktree, commits the resolution, and the
@@ -31,10 +43,14 @@ export async function syncFeature(featureId: string): Promise<SyncOutcomeView> {
 export async function resolveSyncConflicts(
   featureId: string,
   conflictFiles: string[],
+  resolver?: SyncResolverChoice,
 ): Promise<SyncOutcomeView> {
   return invoke<SyncOutcomeView>("feature_resolve_sync_conflicts", {
     featureId,
     conflictFiles,
+    agentKind: resolver?.agentKind ?? null,
+    model: resolver?.model ?? null,
+    effort: resolver?.effort ?? null,
   });
 }
 

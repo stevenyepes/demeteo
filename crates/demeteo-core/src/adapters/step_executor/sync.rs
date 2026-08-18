@@ -34,6 +34,7 @@ use crate::domain::agent_session::budget;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
 use crate::domain::step_seed::manual_sync_step_execution;
+use crate::domain::sync_resolver::{SyncResolverChain, SyncResolverChoice};
 use crate::domain::sync_session::{intervention_refusal, SyncIntervention};
 use crate::paths;
 use crate::ports::db::FeatureRepository;
@@ -137,6 +138,7 @@ impl DagStepExecutor {
         &self,
         feature_id: &str,
         conflict_files: &[String],
+        asked: &SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String> {
         let fid = FeatureId::from(feature_id.to_string());
         let feature = self
@@ -165,18 +167,18 @@ impl DagStepExecutor {
             .projects
             .get_settings(&feature.project_id)?
             .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
-        let agent_kind = feature
-            .agent_kind
-            .clone()
-            .unwrap_or_else(|| "opencode".to_string());
-        let override_model = feature.model.clone();
         // No driver is running here (this is the "Resolve with agent" button),
-        // so walk what the feature row + project settings know: the run
-        // override, then the project default, then the built-in high.
-        let effort = feature
-            .effort
-            .or(settings.default_effort)
-            .unwrap_or(crate::domain::models::EffortLevel::DEFAULT);
+        // so the tiers are read straight off the two rows that hold them.
+        let project_sync = SyncResolverChoice::from_project_sync(&settings);
+        let run = SyncResolverChoice::from_run(&feature);
+        let project_default = SyncResolverChoice::from_project_default(&settings);
+        let chosen = SyncResolverChain {
+            asked,
+            project_sync: &project_sync,
+            run: &run,
+            project_default: &project_default,
+        }
+        .resolve();
 
         // Stop, for a turn no driver owns. Its own map rather than
         // `cancel_senders`: that one is keyed by feature id and owned by
@@ -245,9 +247,9 @@ impl DagStepExecutor {
             conflict_files,
             step_exec: &step_exec,
             thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
-            agent_kind: &agent_kind,
-            override_model: override_model.as_deref(),
-            effort,
+            agent_kind: &chosen.agent_kind,
+            override_model: chosen.model.as_deref(),
+            effort: chosen.effort,
             max_budget_usd: budget::role_max_budget_usd(
                 budget::base_max_budget_usd(
                     feature.max_budget_usd,

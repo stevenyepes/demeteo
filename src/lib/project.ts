@@ -281,6 +281,9 @@ export interface ProjectSettingsInput {
   artifact_subdir?: string;
   commit_artifacts?: boolean;
   review_entrypoint?: string | null;
+  sync_resolver_agent_kind?: string | null;
+  sync_resolver_model?: string | null;
+  sync_resolver_effort?: EffortLevel | null;
 }
 
 /**
@@ -388,6 +391,18 @@ export async function saveProjectSettings(
       input.review_entrypoint !== undefined
         ? input.review_entrypoint
         : (existing?.review_entrypoint ?? null),
+    sync_resolver_agent_kind:
+      input.sync_resolver_agent_kind !== undefined
+        ? input.sync_resolver_agent_kind
+        : (existing?.sync_resolver_agent_kind ?? null),
+    sync_resolver_model:
+      input.sync_resolver_model !== undefined
+        ? input.sync_resolver_model
+        : (existing?.sync_resolver_model ?? null),
+    sync_resolver_effort:
+      input.sync_resolver_effort !== undefined
+        ? input.sync_resolver_effort
+        : (existing?.sync_resolver_effort ?? null),
   };
 
   await invoke("save_project_settings", { projectId, settings: merged });

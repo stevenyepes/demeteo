@@ -145,6 +145,13 @@ interface SettingsCtx {
    *  names none, which persists as `null` and leaves the step to review in
    *  its own way. */
   reviewEntrypoint: string; setReviewEntrypoint: (v: string) => void;
+  /** The harness/model/effort a merge-conflict resolution runs under. `''` on
+   *  all three = no opinion, which persists as `null` and inherits the run and
+   *  then the project defaults. */
+  syncResolverAgentKind: string; setSyncResolverAgentKind: (v: string) => void;
+  syncResolverModel: string; setSyncResolverModel: (v: string) => void;
+  syncResolverEffort: EffortLevel | ''; setSyncResolverEffort: (v: EffortLevel | '') => void;
+  availableModelsForSyncResolver: ConfigOptionValue[]; isLoadingModelsForSyncResolver: boolean;
   // warning modals
   dirtyWarningRepos: RepoDirtyStatus[];
   setDirtyWarningRepos: (v: RepoDirtyStatus[]) => void;
@@ -288,6 +295,11 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [artifactSubdir, setArtifactSubdir] = useState('artifacts/');
   const [commitArtifacts, setCommitArtifacts] = useState(false);
   const [reviewEntrypoint, setReviewEntrypoint] = useState('');
+  const [syncResolverAgentKind, setSyncResolverAgentKind] = useState('');
+  const [syncResolverModel, setSyncResolverModel] = useState('');
+  const [syncResolverEffort, setSyncResolverEffort] = useState<EffortLevel | ''>('');
+  const [availableModelsForSyncResolver, setAvailableModelsForSyncResolver] = useState<ConfigOptionValue[]>([]);
+  const [isLoadingModelsForSyncResolver, setIsLoadingModelsForSyncResolver] = useState(false);
   const [extraWritablePaths, setExtraWritablePaths] = useState<string[]>([]);
   const [newExtraPath, setNewExtraPath] = useState('');
 
@@ -309,6 +321,17 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
 
   const { agents: agentCatalog } = useAgentCatalog();
   const effortLevels = (kind: string) => effortLevelsFor(agentCatalog, kind);
+
+  // Models are a harness's own namespace and the effort ladder is canonical but
+  // not universally supported, so switching the resolver's harness drops the
+  // pinned model and clamps the effort to what the new one accepts — otherwise
+  // a level the previous harness offered lingers in a now-greyed control and is
+  // persisted from it.
+  const onSyncResolverAgentChange = (kind: string) => {
+    setSyncResolverAgentKind(kind);
+    setSyncResolverModel('');
+    setSyncResolverEffort(e => reconcileEffort(e, effortLevels(kind || defaultAgentKind)));
+  };
 
   const inheritedAgent = (workflowId: string, step: StepConfig): string => {
     const wfOv = overrides[ovKey(workflowId, WF_LEVEL)];
@@ -473,6 +496,25 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     return () => { cancelled = true; };
   }, [defaultAgentKind, computeType, remoteHost]);
 
+  // The resolver row pins a model for whichever harness it will actually run
+  // under, so the probe follows the effective kind rather than the pinned one:
+  // a row that inherits the harness can still pin a model for it.
+  const effectiveSyncResolverAgent = syncResolverAgentKind || defaultAgentKind;
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!effectiveSyncResolverAgent) { setAvailableModelsForSyncResolver([]); return; }
+      setIsLoadingModelsForSyncResolver(true);
+      try {
+        const machineId = computeType === 'remote' ? remoteHost : 'local';
+        const models = await getAgentModels(machineId, effectiveSyncResolverAgent);
+        if (!cancelled) setAvailableModelsForSyncResolver(models);
+      } catch { if (!cancelled) setAvailableModelsForSyncResolver([]); }
+      finally { if (!cancelled) setIsLoadingModelsForSyncResolver(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [effectiveSyncResolverAgent, computeType, remoteHost]);
+
   useEffect(() => { setConnectionStatus('idle'); }, [remoteHost]);
 
   useEffect(() => {
@@ -571,6 +613,9 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setArtifactSubdir(res.artifact_subdir || 'artifacts/');
           setCommitArtifacts(Boolean(res.commit_artifacts));
           setReviewEntrypoint(res.review_entrypoint || '');
+          setSyncResolverAgentKind(res.sync_resolver_agent_kind || '');
+          setSyncResolverModel(res.sync_resolver_model || '');
+          setSyncResolverEffort(res.sync_resolver_effort || '');
           setExtraWritablePaths(res.worktree_strategy.extra_writable_paths || []);
         }
         const reposRes = await getRepositoriesForProject(activeProject.id);
@@ -665,7 +710,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
-await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts, review_entrypoint: reviewEntrypoint.trim() || null });
+await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts, review_entrypoint: reviewEntrypoint.trim() || null, sync_resolver_agent_kind: syncResolverAgentKind || null, sync_resolver_model: syncResolverModel || null, sync_resolver_effort: syncResolverEffort || null });
   };
 
   const handleSave = async () => {
@@ -688,7 +733,7 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     } else {
       try {
         await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
-        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts, review_entrypoint: reviewEntrypoint.trim() || null });
+        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts, review_entrypoint: reviewEntrypoint.trim() || null, sync_resolver_agent_kind: syncResolverAgentKind || null, sync_resolver_model: syncResolverModel || null, sync_resolver_effort: syncResolverEffort || null });
         // Keep `compute_type` / `remote_host` in sync with the DB so the
         // Settings tab doesn't fall back to "Local Compute" the next
         // time the user reopens it. Mirrors the re-bootstrap save path
@@ -767,6 +812,10 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     defaultMaxBudgetUsd, setDefaultMaxBudgetUsd,
     agentConfigs, setAgentConfigs, isRefreshingAgents, artifactSubdir, setArtifactSubdir, commitArtifacts, setCommitArtifacts,
     reviewEntrypoint, setReviewEntrypoint,
+    syncResolverAgentKind, setSyncResolverAgentKind: onSyncResolverAgentChange,
+    syncResolverModel, setSyncResolverModel,
+    syncResolverEffort, setSyncResolverEffort,
+    availableModelsForSyncResolver, isLoadingModelsForSyncResolver,
     extraWritablePaths, setExtraWritablePaths, newExtraPath, setNewExtraPath,
     dirtyWarningRepos, setDirtyWarningRepos, pendingActionAfterConfirm, setPendingActionAfterConfirm, showDeleteConfirm, setShowDeleteConfirm,
     workflows, workflowsLoaded, workflowsError,

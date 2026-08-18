@@ -240,8 +240,9 @@ impl StepExecutor for DagStepExecutor {
         &self,
         feature_id: &str,
         conflict_files: &[String],
+        asked: &crate::domain::sync_resolver::SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String> {
-        self.feature_resolve_sync_conflicts_impl(feature_id, conflict_files)
+        self.feature_resolve_sync_conflicts_impl(feature_id, conflict_files, asked)
             .await
     }
 }

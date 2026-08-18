@@ -24,6 +24,7 @@ use crate::adapters::step_executor::step_status::{
 use crate::adapters::step_executor::sync_resolve::ResolveSyncError;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sync_failure::SyncStepNext;
+use crate::domain::sync_resolver::{SyncResolver, SyncResolverChain, SyncResolverChoice};
 
 use super::StepOutcome;
 
@@ -118,6 +119,7 @@ impl ExecutionDriver {
                     self.resolve_sync_conflicts_in_step(
                         step_exec,
                         step_conf,
+                        &settings,
                         SyncConflict {
                             files,
                             worktree_path,
@@ -133,10 +135,60 @@ impl ExecutionDriver {
         }
     }
 
+    /// Who resolves this node's conflict.
+    ///
+    /// The node's own config sits in the `asked` tier under any per-step run
+    /// override, so the two arrive as one opinion; below them the chain is the
+    /// same one the "Resolve with agent" button walks, which is the point of
+    /// there being a chain at all.
+    fn resolve_sync_resolver(
+        &self,
+        step_conf: &StepConfig,
+        settings: &crate::domain::models::ProjectSettings,
+    ) -> SyncResolver {
+        let node = SyncResolverChoice {
+            agent_kind: step_conf.agent_kind.clone(),
+            model: step_conf.model.clone(),
+            effort: step_conf.effort,
+        };
+        let asked = match self
+            .step_overrides
+            .iter()
+            .find(|o| o.step_id == step_conf.id.0)
+        {
+            Some(ov) => SyncResolverChoice {
+                agent_kind: ov.agent_kind.clone(),
+                model: ov.model.clone(),
+                effort: ov.effort,
+            }
+            .or(&node),
+            None => node,
+        };
+        let project_sync = SyncResolverChoice::from_project_sync(settings);
+        let run = SyncResolverChoice {
+            agent_kind: self.feature_agent_kind.clone(),
+            model: self.feature_model.clone(),
+            effort: self.feature_effort,
+        };
+        let project_default = SyncResolverChoice {
+            agent_kind: self.default_agent_kind.clone(),
+            model: self.default_model.clone(),
+            effort: self.default_effort,
+        };
+        SyncResolverChain {
+            asked: &asked,
+            project_sync: &project_sync,
+            run: &run,
+            project_default: &project_default,
+        }
+        .resolve()
+    }
+
     async fn resolve_sync_conflicts_in_step(
         &self,
         step_exec: &StepExecution,
         step_conf: &StepConfig,
+        settings: &crate::domain::models::ProjectSettings,
         conflict: SyncConflict<'_>,
         spend: RunningSpend<'_>,
     ) -> StepOutcome {
@@ -155,17 +207,7 @@ impl ExecutionDriver {
         let repo_dir = &self.target_dir;
         let resolved_cwd = worktree_path.unwrap_or(repo_dir);
 
-        let feature = match self.features.get(&self.f_id) {
-            Ok(Some(f)) => f,
-            _ => return StepOutcome::Failed("Feature not found for sync step".to_string()),
-        };
-
-        let agent_kind = step_conf
-            .agent_kind
-            .clone()
-            .or_else(|| feature.agent_kind.clone())
-            .unwrap_or_else(|| "opencode".to_string());
-        let override_model = feature.model.clone();
+        let chosen = self.resolve_sync_resolver(step_conf, settings);
 
         let conflict_paths: Vec<String> = conflict_files.iter().map(|f| f.path.clone()).collect();
 
@@ -187,9 +229,9 @@ impl ExecutionDriver {
                 conflict_files: &conflict_paths,
                 step_exec,
                 thread_id_prefix: "sync-step-resolver",
-                agent_kind: &agent_kind,
-                override_model: override_model.as_deref(),
-                effort: self.resolve_step_effort(step_conf),
+                agent_kind: &chosen.agent_kind,
+                override_model: chosen.model.as_deref(),
+                effort: chosen.effort,
                 max_budget_usd: self.role_max_budget_usd(Self::BUDGET_FRACTION_RESOLVER),
                 cancel: Some(self.cancel_watch.clone()),
                 spend: RunningSpend {

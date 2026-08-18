@@ -159,6 +159,13 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // as the empty string — see the migration's header.
     add_column_if_missing(conn, "project_settings", "review_entrypoint", "TEXT")?;
 
+    // The harness/model/effort a project wants its merge conflicts resolved
+    // with (V44). All three nullable, and all three inherit — see the
+    // migration's header.
+    add_column_if_missing(conn, "project_settings", "sync_resolver_agent_kind", "TEXT")?;
+    add_column_if_missing(conn, "project_settings", "sync_resolver_model", "TEXT")?;
+    add_column_if_missing(conn, "project_settings", "sync_resolver_effort", "TEXT")?;
+
     Ok(())
 }
 

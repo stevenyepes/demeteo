@@ -1,13 +1,17 @@
 import { AlertTriangle, ExternalLink, GitPullRequest } from 'lucide-react';
 import type { MrState, SyncOutcomeView } from '../../types';
+import type { SyncResolverChoice } from '../../lib/featureSync';
 import { SyncBannerContent } from './SyncBannerContent';
+import type { HarnessOverrides } from './useHarnessOverrides';
 
 interface FeatureStatusBannersProps {
   status: string;
   syncBanner: SyncOutcomeView | null;
   resolving: boolean;
   aborting: boolean;
-  onResolveConflicts: (files: string[]) => void;
+  onResolveConflicts: (files: string[], resolver: SyncResolverChoice) => void;
+  /** The banner's own harness selection — see `SyncBannerContent`. */
+  resolverOverrides: HarnessOverrides;
   onAbortSync: () => void;
   onDismissSyncBanner: () => void;
   mrUrl: string | null;
@@ -22,6 +26,7 @@ export function FeatureStatusBanners({
   resolving,
   aborting,
   onResolveConflicts,
+  resolverOverrides,
   onAbortSync,
   onDismissSyncBanner,
   mrUrl,
@@ -54,7 +59,8 @@ export function FeatureStatusBanners({
           <div className="flex-1 text-xs text-slate-200 space-y-2">
             <SyncBannerContent
               outcome={syncBanner}
-              onResolve={(files) => onResolveConflicts(files)}
+              onResolve={onResolveConflicts}
+              resolverOverrides={resolverOverrides}
               onAbort={onAbortSync}
               resolving={resolving}
               aborting={aborting}

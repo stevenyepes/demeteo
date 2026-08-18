@@ -2,6 +2,7 @@ use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::models::{
     EffortLevel, Feature, GateDecision, SequenceState, StepAttempt, StepExecution,
 };
+use crate::domain::sync_resolver::SyncResolverChoice;
 use crate::error::AppError;
 use crate::ports::step_executor::{FeatureLaunch, SyncOutcomeView};
 use crate::ports::sync_session::{SyncSession, SyncSessionView};
@@ -328,15 +329,35 @@ pub async fn sync_abort(
 /// `feature_sync`. The agent edits the conflict files in a temporary
 /// worktree, commits the resolution, and the worktree is merged back
 /// into the feature branch.
+/// `agent_kind` / `model` / `effort` are what *this* attempt asks the
+/// resolution to run under; each `None` inherits, so an older frontend that
+/// omits them sends the request the button sent before there was a picker. The
+/// kind is checked here rather than deeper down because the resolution turn
+/// kills its agent session on every one of its exit paths, and an early return
+/// added below the spawn is how that process would be leaked.
 #[tauri::command]
 pub async fn feature_resolve_sync_conflicts(
     ctx: State<'_, AppContext>,
     feature_id: String,
     conflict_files: Option<Vec<String>>,
+    agent_kind: Option<String>,
+    model: Option<String>,
+    effort: Option<EffortLevel>,
 ) -> Result<SyncOutcomeView, AppError> {
+    let asked = SyncResolverChoice {
+        agent_kind,
+        model,
+        effort,
+    };
+    if let Some(kind) = asked.unsupported_agent_kind() {
+        return Err(AppError::validation(format!(
+            "Unsupported agent kind: {}",
+            kind
+        )));
+    }
     let files = conflict_files.unwrap_or_default();
     ctx.executor
-        .feature_resolve_sync_conflicts(&feature_id, &files)
+        .feature_resolve_sync_conflicts(&feature_id, &files, &asked)
         .await
         .map_err(AppError::from)
 }

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, ShieldAlert } from 'lucide-react';
 import type { AppView } from '../../types';
 import type { NavigationMode } from '../../context/NavigationContext';
@@ -142,6 +142,19 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     reload: run.reload,
     navigate,
   });
+  // A second selection, deliberately: `overrides` is what a retry re-pins on
+  // whatever step the user has open, and one merge conflict resolved by another
+  // harness must not silently become that. The hook holds no module state and
+  // `getAgentModels` is cached per (machine, kind), so the second instance costs
+  // one extra `listAgentConfigs`. Probed only once a conflict is on screen.
+  const syncResolverOverrides = useHarnessOverrides();
+  const conflicted = mr.syncBanner?.status === 'conflict';
+  const probeSyncResolver = syncResolverOverrides.probeForFeature;
+  useEffect(() => {
+    if (!conflicted || !projectId) return;
+    probeSyncResolver({ agentKind: overrides.featureAgentKind, projectId });
+  }, [conflicted, projectId, overrides.featureAgentKind, probeSyncResolver]);
+
   const routing = useWorktreeRouting({
     featureId,
     featureTitle: run.featureTitle,
@@ -396,6 +409,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         resolving={mr.resolving}
         aborting={mr.aborting}
         onResolveConflicts={mr.handleResolveConflicts}
+        resolverOverrides={syncResolverOverrides}
         onAbortSync={mr.handleAbortSync}
         onDismissSyncBanner={() => mr.setSyncBanner(null)}
         mrUrl={mr.mrUrl}

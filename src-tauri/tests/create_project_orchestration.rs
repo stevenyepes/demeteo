@@ -338,6 +338,7 @@ impl StepExecutor for StubExecutor {
         &self,
         _feature_id: &str,
         _conflict_files: &[String],
+        _asked: &demeteo_core::domain::sync_resolver::SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String> {
         Ok(SyncOutcomeView::Ok {
             merge_commit_sha: "deadbeef".into(),

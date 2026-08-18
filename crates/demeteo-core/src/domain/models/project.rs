@@ -178,6 +178,19 @@ pub struct ProjectSettings {
     /// migration V42.
     #[serde(default)]
     pub review_entrypoint: Option<String>,
+    /// The harness a conflict-resolution turn should run under, outranking the
+    /// run's own launch pin for that turn alone.
+    /// [`sync_resolver`](crate::domain::sync_resolver) holds why a role gets a
+    /// tier above the run, and what `None` falls through to. See migration V44.
+    #[serde(default)]
+    pub sync_resolver_agent_kind: Option<String>,
+    /// The model for that turn, inherited independently of the harness.
+    #[serde(default)]
+    pub sync_resolver_model: Option<String>,
+    /// The reasoning effort for that turn. Clamped per harness at spawn, so a
+    /// level the chosen harness does not offer is never emitted.
+    #[serde(default)]
+    pub sync_resolver_effort: Option<EffortLevel>,
 }
 
 fn default_artifact_subdir() -> String {

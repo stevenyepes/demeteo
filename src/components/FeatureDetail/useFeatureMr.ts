@@ -11,6 +11,7 @@ import {
   resolveSyncConflicts,
   fetchMrState,
 } from '../../lib/featureSync';
+import type { SyncResolverChoice } from '../../lib/featureSync';
 import { cleanupFeature, publishMr } from '../../lib/featureDetail';
 
 /**
@@ -96,10 +97,13 @@ export function useFeatureMr(input: {
    * worktree, commits the resolution, and the worktree is merged
    * back into the feature branch.
    */
-  const handleResolveConflicts = async (conflictFiles: string[]) => {
+  const handleResolveConflicts = async (
+    conflictFiles: string[],
+    resolver?: SyncResolverChoice,
+  ) => {
     setResolving(true);
     try {
-      const outcome = await resolveSyncConflicts(featureId, conflictFiles);
+      const outcome = await resolveSyncConflicts(featureId, conflictFiles, resolver);
       setSyncBanner(outcome);
       reload();
     } catch (err) {

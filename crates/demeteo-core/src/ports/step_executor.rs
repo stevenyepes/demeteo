@@ -120,10 +120,17 @@ pub trait StepExecutor: Send + Sync {
     /// files to remove markers, and commits the resolution. After
     /// committing, the resolution is merged back into the feature
     /// branch on the main repo.
+    ///
+    /// `asked` is what this attempt wants the resolution run with; anything it
+    /// leaves `None` falls through
+    /// [`SyncResolverChain`](crate::domain::sync_resolver::SyncResolverChain),
+    /// so an empty choice is the request the button sent before there was a
+    /// picker.
     async fn feature_resolve_sync_conflicts(
         &self,
         feature_id: &str,
         conflict_files: &[String],
+        asked: &crate::domain::sync_resolver::SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String>;
 }
 
