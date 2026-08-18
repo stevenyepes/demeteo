@@ -1,5 +1,7 @@
 use super::super::common::*;
+use crate::domain::sync_failure::SyncBlockedStage;
 use crate::ports::execution::ExecutionPort;
+use crate::ports::worktree_ops::SyncFailure;
 
 /// The exact bug the user hit: a feature branch is "2 commits
 /// behind" main with overlapping changes. The sync must
@@ -53,17 +55,22 @@ async fn test_sync_feature_with_upstream_detects_conflicts() {
              the merge should have failed because README.md was edited on \
              both sides."
         ),
-        Err(failure) => {
+        Err(SyncFailure::Blocked { stage, raw_error }) => panic!(
+            "A merge that left unmerged paths must not be classified as \
+             blocked ({stage:?}) — the banner would then offer no way to \
+             resolve it. raw_error: {raw_error}"
+        ),
+        Err(SyncFailure::Conflict {
+            files, raw_error, ..
+        }) => {
             assert!(
-                !failure.files.is_empty(),
+                !files.is_empty(),
                 "Sync reported failure but no conflict files were captured. \
-                 raw_error: {}",
-                failure.raw_error
+                 raw_error: {raw_error}"
             );
             assert!(
-                failure.files.iter().any(|f| f.path == "README.md"),
-                "README.md should be in the conflict list, got: {:?}",
-                failure.files
+                files.iter().any(|f| f.path == "README.md"),
+                "README.md should be in the conflict list, got: {files:?}"
             );
         }
     }
@@ -139,13 +146,18 @@ async fn test_sync_feature_with_upstream_reports_fetch_failure() {
               and the caller saw a misleading 'no new commits upstream'.",
             o
         ),
-        Err(failure) => {
+        Err(SyncFailure::Conflict { raw_error, .. }) => panic!(
+            "A fetch that never ran is not a conflict; classifying it as one \
+             is what put a 'Resolve with agent' button under a DNS failure. \
+             raw_error: {raw_error}"
+        ),
+        Err(SyncFailure::Blocked { stage, raw_error }) => {
+            assert_eq!(stage, SyncBlockedStage::Fetch);
             assert!(
-                failure.raw_error.to_lowercase().contains("fetch")
-                    || failure.raw_error.to_lowercase().contains("origin")
-                    || failure.raw_error.to_lowercase().contains("remote"),
-                "Error message should mention the fetch/remote failure, got: {}",
-                failure.raw_error
+                raw_error.to_lowercase().contains("fetch")
+                    || raw_error.to_lowercase().contains("origin")
+                    || raw_error.to_lowercase().contains("remote"),
+                "Error message should mention the fetch/remote failure, got: {raw_error}"
             );
         }
     }
@@ -406,4 +418,163 @@ async fn test_ensure_default_branch_warns_when_dirty_tree() {
 
     let _ = std::fs::remove_dir_all(&local_dir);
     let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+/// Which git call a [`SyncBlockedStage`] is read off, asserted one call at a
+/// time. The stage keys the sentence the banner shows and nothing downstream
+/// can re-derive it, so a stage attached to the wrong call is a banner that
+/// sends the user to check credentials for a push that was rejected — and a
+/// suite that stays green, because the domain tests build the stages by hand
+/// and only ever prove that `view_for` and `step_next` dispatch on them.
+///
+/// A real repo cannot reach most of these: `git fetch` of a branch that is not
+/// on origin fails at the fetch, not at the rev-parse after it.
+mod stage_at_each_call {
+    use super::*;
+    use crate::adapters::database::SqliteAdapter;
+    use crate::adapters::step_executor::scripted_exec::ScriptedExec;
+    use crate::adapters::worktree::git_ops::GitOpsHelper;
+    use crate::ports::db::AppSettingsRepository;
+    use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
+    use rusqlite::Connection;
+    use std::sync::Arc;
+
+    const REPO: &str = "/repo";
+    const BRANCH: &str = "feat/x";
+    const BASE: &str = "main";
+    const WT: &str = "/repo_wt_sync_feat_x";
+
+    const REV_PARSE_BASE: &str = "git -C /repo rev-parse --verify origin/main";
+    const WORKTREE_ADD: &str = "git -C /repo worktree add /repo_wt_sync_feat_x feat/x";
+    const MERGE: &str = "git -C /repo_wt_sync_feat_x merge origin/main \
+                         -m chore(sync): sync feature with origin/main";
+    const PUSH: &str = "git -C /repo_wt_sync_feat_x push origin feat/x";
+
+    /// A sync that reaches the push, answered call by call. Every test below
+    /// breaks exactly one entry, so the stage it gets back names that call and
+    /// nothing else.
+    fn full_run() -> Vec<(&'static str, Result<&'static str, &'static str>)> {
+        vec![
+            ("git -C /repo fetch origin -- main", Ok("")),
+            (REV_PARSE_BASE, Ok("beef")),
+            ("git -C /repo rev-parse refs/heads/feat/x", Ok("cafe")),
+            (
+                "git -C /repo rev-list --count origin/main..refs/heads/feat/x",
+                Ok("0"),
+            ),
+            (
+                "git -C /repo rev-list --count refs/heads/feat/x..origin/main",
+                Ok("2"),
+            ),
+            ("git -C /repo rev-parse --abbrev-ref HEAD", Ok("main")),
+            ("git -C /repo worktree list --porcelain", Ok("")),
+            (WORKTREE_ADD, Ok("")),
+            (MERGE, Ok("")),
+            ("git -C /repo_wt_sync_feat_x rev-parse HEAD", Ok("d00d")),
+            (PUSH, Ok("")),
+            (
+                "git -C /repo_wt_sync_feat_x status --porcelain --untracked-files=no",
+                Ok("UU README.md"),
+            ),
+        ]
+    }
+
+    async fn sync_with(failing: &str, err: &str) -> SyncFailure {
+        let programs: Vec<(&str, Result<&str, &str>)> = full_run()
+            .into_iter()
+            .map(|(key, answer)| {
+                if key == failing {
+                    (key, Err(err))
+                } else {
+                    (key, answer)
+                }
+            })
+            .collect();
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        let db =
+            Arc::new(SqliteAdapter::new(conn).expect("adapter")) as Arc<dyn AppSettingsRepository>;
+        let helper = GitOpsHelper::new(
+            db,
+            Arc::new(ScriptedExec::new(&[]).with_programs(&programs)),
+        );
+        helper
+            .sync_feature_with_upstream(None, REPO, BRANCH, BASE)
+            .await
+            .expect_err("the scripted failure must not sync cleanly")
+    }
+
+    fn stage_of(failure: SyncFailure) -> SyncBlockedStage {
+        match failure {
+            SyncFailure::Blocked { stage, .. } => stage,
+            SyncFailure::Conflict {
+                files, raw_error, ..
+            } => {
+                panic!(
+                    "a call that never merged came back as a conflict over {files:?}: {raw_error}"
+                )
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_base_ref_probe_is_not_the_fetch() {
+        assert_eq!(
+            stage_of(sync_with(REV_PARSE_BASE, "fatal: bad revision").await),
+            SyncBlockedStage::BaseRefMissing
+        );
+    }
+
+    #[tokio::test]
+    async fn the_worktree_add_is_its_own_stage() {
+        assert_eq!(
+            stage_of(sync_with(WORKTREE_ADD, "fatal: already checked out").await),
+            SyncBlockedStage::WorktreeProvision
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rejected_push_names_the_push_and_not_the_remote() {
+        assert_eq!(
+            stage_of(sync_with(PUSH, "! [rejected] feat/x -> feat/x (fetch first)").await),
+            SyncBlockedStage::Push
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merge_the_transport_dropped_is_blocked_not_conflicted() {
+        assert_eq!(
+            stage_of(
+                sync_with(
+                    MERGE,
+                    &format!("{TRANSPORT_ERROR_PREFIX}Connection appears dead")
+                )
+                .await
+            ),
+            SyncBlockedStage::Merge
+        );
+        assert_eq!(
+            stage_of(sync_with(MERGE, &format!("{TIMEOUT_ERROR_PREFIX}exceeded 600s")).await),
+            SyncBlockedStage::Merge
+        );
+    }
+
+    /// The other half of that call: a merge that exited non-zero did reach a
+    /// verdict, and the unmerged paths are read from the worktree it left.
+    #[tokio::test]
+    async fn a_merge_that_exited_non_zero_is_the_conflict() {
+        match sync_with(MERGE, "CONFLICT (content): Merge conflict in README.md").await {
+            SyncFailure::Conflict {
+                files,
+                worktree_path,
+                ..
+            } => {
+                assert_eq!(files.len(), 1, "{files:?}");
+                assert_eq!(files[0].path, "README.md");
+                assert_eq!(worktree_path.as_deref(), Some(WT));
+            }
+            SyncFailure::Blocked { stage, raw_error } => {
+                panic!("a merge that answered was filed as {stage:?}: {raw_error}")
+            }
+        }
+    }
 }

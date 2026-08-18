@@ -29,10 +29,18 @@ pub trait MergeExecutor: Send + Sync {
     /// - `Ok(UpstreamSyncOutcome)` when the feature branch was
     ///   fast-forwarded or a merge commit was created cleanly. The
     ///   `changed` flag is `false` when there was nothing to pull.
-    /// - `Err(UpstreamSyncFailure)` when the merge produced
-    ///   conflicts. The `ConflictReport` embedded inside carries
-    ///   the `ConflictFile` list the resolution agent and the UI
-    ///   render.
+    /// - `Err(UpstreamSyncFailure::Conflict)` when the merge ran and left
+    ///   unmerged paths. The `ConflictReport` embedded inside carries the
+    ///   `ConflictFile` list the resolution agent and the UI render — possibly
+    ///   an empty one, when the porcelain read that fills it failed.
+    /// - `Err(UpstreamSyncFailure::Blocked)` for every other way this can
+    ///   fail, most of which never issued a `git merge` at all. There is no
+    ///   report and no file list: nothing is known to be conflicted, so the
+    ///   resolution agent must not be offered one.
+    ///
+    /// Which of the two it is may never be inferred from the payload; only the
+    /// variant answers it. [`crate::domain::sync_failure`] carries why, and is
+    /// the one place that maps either to a view or to a workflow decision.
     #[allow(clippy::result_large_err)]
     async fn sync_feature_with_upstream(
         &self,

@@ -272,15 +272,16 @@ pub async fn artifact_body(
 /// - `Conflict` when the merge left unmerged files; the UI offers a
 ///   "Resolve with agent" button that calls
 ///   `feature_resolve_sync_conflicts` with the same conflict list.
+/// - `Blocked` when the sync stopped short of a merge; there is
+///   nothing for an agent to resolve.
 /// - `Resolved` after a successful agent resolution.
 #[tauri::command]
 pub async fn feature_sync(
     ctx: State<'_, AppContext>,
     feature_id: String,
-    revalidate_step_execution_id: Option<String>,
 ) -> Result<SyncOutcomeView, AppError> {
     ctx.executor
-        .feature_sync(&feature_id, revalidate_step_execution_id.as_deref())
+        .feature_sync(&feature_id)
         .await
         .map_err(AppError::from)
 }
@@ -288,23 +289,16 @@ pub async fn feature_sync(
 /// Spawn a fresh agent to resolve the conflicts left by
 /// `feature_sync`. The agent edits the conflict files in a temporary
 /// worktree, commits the resolution, and the worktree is merged back
-/// into the feature branch. If `revalidate_step_execution_id` is set,
-/// the named step is replayed so the workflow re-runs validation on
-/// the freshly merged tree.
+/// into the feature branch.
 #[tauri::command]
 pub async fn feature_resolve_sync_conflicts(
     ctx: State<'_, AppContext>,
     feature_id: String,
     conflict_files: Option<Vec<String>>,
-    revalidate_step_execution_id: Option<String>,
 ) -> Result<SyncOutcomeView, AppError> {
     let files = conflict_files.unwrap_or_default();
     ctx.executor
-        .feature_resolve_sync_conflicts(
-            &feature_id,
-            &files,
-            revalidate_step_execution_id.as_deref(),
-        )
+        .feature_resolve_sync_conflicts(&feature_id, &files)
         .await
         .map_err(AppError::from)
 }

@@ -6,45 +6,35 @@ import type { Feature, SyncOutcomeView } from "../types";
  * a tagged result:
  *
  * - `{ status: "ok" }` when the merge was clean.
- * - `{ status: "conflict" }` when conflicts were detected; the
- *   conflict files are in `conflict_files`. The UI surfaces a
- *   "Resolve with agent" button that calls
- *   `resolveSyncConflicts` with the same file list.
+ * - `{ status: "conflict" }` when the merge left unmerged paths; the
+ *   conflict files are in `conflict_files`. This is the only outcome
+ *   that may offer "Resolve with agent" — `resolveSyncConflicts`
+ *   takes the same file list.
+ * - `{ status: "blocked" }` when the sync stopped short of a merge
+ *   verdict. Nothing is known to be conflicted, so there is nothing for
+ *   an agent to do; `stage` says what to fix and `raw_error` is git's
+ *   own words.
  * - `{ status: "resolved" }` after a successful agent resolution.
  * - `{ status: "resolution_failed" }` when the agent could not
  *   clean up the conflicts.
- *
- * `revalidateStepExecutionId` is optional: when provided, the named
- * step is replayed after a successful sync so the workflow re-runs
- * validation on the freshly merged tree.
  */
-export async function syncFeature(
-  featureId: string,
-  revalidateStepExecutionId?: string | null,
-): Promise<SyncOutcomeView> {
-  return invoke<SyncOutcomeView>("feature_sync", {
-    featureId,
-    revalidateStepExecutionId: revalidateStepExecutionId ?? null,
-  });
+export async function syncFeature(featureId: string): Promise<SyncOutcomeView> {
+  return invoke<SyncOutcomeView>("feature_sync", { featureId });
 }
 
 /**
  * Spawn a fresh agent session dedicated to resolving the merge
  * conflicts left by `syncFeature`. The agent edits the conflict
  * files in a temporary worktree, commits the resolution, and the
- * worktree is merged back into the feature branch. If
- * `revalidateStepExecutionId` is set, the named step is replayed
- * so the workflow re-runs validation on the freshly merged tree.
+ * worktree is merged back into the feature branch.
  */
 export async function resolveSyncConflicts(
   featureId: string,
   conflictFiles: string[],
-  revalidateStepExecutionId?: string | null,
 ): Promise<SyncOutcomeView> {
   return invoke<SyncOutcomeView>("feature_resolve_sync_conflicts", {
     featureId,
     conflictFiles,
-    revalidateStepExecutionId: revalidateStepExecutionId ?? null,
   });
 }
 

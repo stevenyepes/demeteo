@@ -595,7 +595,7 @@ pub trait MergeAuditRepository: Send + Sync {
         default_branch: &str,
         status: &str,
         merge_sha: Option<&str>,
-        conflict_json: Option<&str>,
+        detail_json: Option<&str>,
         now: i64,
     ) -> Result<(), String>;
 

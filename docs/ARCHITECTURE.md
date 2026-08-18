@@ -139,7 +139,7 @@ The orchestrator's command surface for features is one trait:
   `loop_iterations`, `step_overrides`, `staged_attachments`) and an
   optional `FeaturePatch`-driven override for the feature row.
   `feature_sync` and `feature_resolve_sync_conflicts` return
-  `SyncOutcomeView::{Ok, Conflict, Resolved, ResolutionFailed}` so the
+  `SyncOutcomeView::{Ok, Conflict, Blocked, Resolved, ResolutionFailed}` so the
   React side can render the outcome without re-parsing the database.
 - **`GatePresenter`** (`ports/step_executor.rs`) — `gate_pending_for_run`,
   `gate_decide`. Both ports are async (Tauri v2 supports async commands

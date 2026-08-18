@@ -732,6 +732,22 @@ export interface EnvironmentNotReadyEvent {
   reason: string;
 }
 
+/**
+ * Where a sync stopped short of a merge verdict. Mirrors
+ * `crate::domain::sync_failure::SyncBlockedStage`; every spelling here is the
+ * wire form, pinned variant by variant on the Rust side by
+ * `the_serialized_shape_is_the_wire_contract`. A stage this union does not
+ * carry is silent on arrival — the banner's per-stage sentence resolves to
+ * `undefined`, which React renders as nothing.
+ */
+export type SyncBlockedStage =
+  | 'fetch'
+  | 'base_ref_missing'
+  | 'worktree_provision'
+  | 'merge'
+  | 'push'
+  | 'repo_context';
+
 /** Return shape for `feature_sync` and `feature_resolve_sync_conflicts`. */
 export type SyncOutcomeView =
   | {
@@ -745,9 +761,13 @@ export type SyncOutcomeView =
       raw_error: string;
     }
   | {
+      status: 'blocked';
+      stage: SyncBlockedStage;
+      raw_error: string;
+    }
+  | {
       status: 'resolved';
       merge_commit_sha: string;
-      revalidated_step_id: string | null;
     }
   | {
       status: 'resolution_failed';

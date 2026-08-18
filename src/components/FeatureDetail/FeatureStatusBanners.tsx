@@ -44,7 +44,7 @@ export function FeatureStatusBanners({
         <div className={`px-6 py-3 border-b flex items-start gap-3 ${
           syncBanner.status === 'ok' ? 'bg-emerald-500/5 border-emerald-500/20' :
           syncBanner.status === 'resolved' ? 'bg-emerald-500/5 border-emerald-500/20' :
-          syncBanner.status === 'conflict' ? 'bg-rose-500/5 border-rose-500/20' :
+          syncBanner.status === 'blocked' ? 'bg-amber-500/5 border-amber-500/20' :
           'bg-rose-500/5 border-rose-500/20'
         }`}>
           <div className="flex-1 text-xs text-slate-200 space-y-2">

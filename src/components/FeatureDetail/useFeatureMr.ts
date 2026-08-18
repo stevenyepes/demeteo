@@ -37,7 +37,7 @@ export function useFeatureMr(input: {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const outcome = await syncFeature(featureId, null);
+      const outcome = await syncFeature(featureId);
       setSyncBanner(outcome);
       reload();
     } catch (err) {
@@ -51,20 +51,12 @@ export function useFeatureMr(input: {
    * Spawn a fresh agent to resolve the conflicts surfaced by
    * `handleSync`. The agent edits the conflict files in a temporary
    * worktree, commits the resolution, and the worktree is merged
-   * back into the feature branch. The optional re-validate step
-   * is replayed so the workflow's validation re-runs.
+   * back into the feature branch.
    */
-  const handleResolveConflicts = async (
-    conflictFiles: string[],
-    revalidateStepExecutionId?: string | null,
-  ) => {
+  const handleResolveConflicts = async (conflictFiles: string[]) => {
     setResolving(true);
     try {
-      const outcome = await resolveSyncConflicts(
-        featureId,
-        conflictFiles,
-        revalidateStepExecutionId,
-      );
+      const outcome = await resolveSyncConflicts(featureId, conflictFiles);
       setSyncBanner(outcome);
       reload();
     } catch (err) {

@@ -111,29 +111,19 @@ pub trait StepExecutor: Send + Sync {
 
     /// Sync the feature branch with `origin/<default_branch>`. Returns
     /// the audit-shaped result so the UI can show a clean merge, no
-    /// changes, or a conflict list. The optional
-    /// `revalidate_step_execution_id` is used after conflict
-    /// resolution: the executor replays that step so the validation
-    /// runs again on the freshly-synced tree.
-    async fn feature_sync(
-        &self,
-        feature_id: &str,
-        revalidate_step_execution_id: Option<&str>,
-    ) -> Result<SyncOutcomeView, String>;
+    /// changes, a conflict list, or the stage the sync never got past.
+    async fn feature_sync(&self, feature_id: &str) -> Result<SyncOutcomeView, String>;
 
     /// Spawn a fresh agent session to resolve the merge conflicts left
     /// over from `feature_sync`. The agent runs in a temporary
     /// worktree on the conflicted feature branch, edits the conflict
     /// files to remove markers, and commits the resolution. After
     /// committing, the resolution is merged back into the feature
-    /// branch on the main repo. If `revalidate_step_execution_id` is
-    /// provided, the named step is replayed so the workflow's
-    /// validation re-runs on the freshly-merged tree.
+    /// branch on the main repo.
     async fn feature_resolve_sync_conflicts(
         &self,
         feature_id: &str,
         conflict_files: &[String],
-        revalidate_step_execution_id: Option<&str>,
     ) -> Result<SyncOutcomeView, String>;
 }
 
@@ -156,12 +146,17 @@ pub enum SyncOutcomeView {
         conflict_files: Vec<crate::domain::models::ConflictFile>,
         raw_error: String,
     },
+    /// The sync never reached a merge, or reached one and could not
+    /// publish it. Nothing is conflicted, so there is nothing for a
+    /// resolution agent to do — the user's next move is fixing what
+    /// `stage` names.
+    Blocked {
+        stage: crate::domain::sync_failure::SyncBlockedStage,
+        raw_error: String,
+    },
     /// A previous conflict was successfully resolved by an agent and
     /// the feature branch is now clean.
-    Resolved {
-        merge_commit_sha: String,
-        revalidated_step_id: Option<String>,
-    },
+    Resolved { merge_commit_sha: String },
     /// The resolution agent was spawned but failed to clean up the
     /// conflicts. The user is expected to take over (the working
     /// tree is still conflicted).

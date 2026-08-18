@@ -7,10 +7,13 @@ pub struct FeatureSync {
     pub feature_id: FeatureId,
     pub feature_branch: String,
     pub default_branch: String,
-    /// pending | ok | conflict | skipped | aborted
+    /// pending | ok | conflict | blocked | skipped | aborted
     pub status: String,
     pub merge_commit_sha: Option<String>,
-    /// JSON-encoded [`ConflictReport`] when `status == "conflict"`.
+    /// JSON-encoded [`ConflictReport`] when `status == "conflict"`, and the
+    /// JSON-encoded [`UpstreamSyncFailure`] when `status == "blocked"` — the
+    /// column is the audit trail's one free-form slot and both classes need a
+    /// reason kept.
     pub conflict_report: Option<String>,
     pub resolution_attempts: i32,
     pub created_at: i64,
@@ -65,13 +68,19 @@ pub struct UpstreamSyncOutcome {
     pub default_branch: String,
 }
 
-/// Result of a failed upstream sync — the merge left the working
-/// tree in a conflicted state.
+/// Result of a failed upstream sync, mirroring
+/// [`SyncFailure`](crate::ports::worktree_ops::SyncFailure) across the merge
+/// executor. In-memory only — [`ConflictReport`] is the persisted half.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct UpstreamSyncFailure {
-    pub report: ConflictReport,
-    /// Path to the sync worktree where the conflict lives (if one was
-    /// provisioned). `None` when the sync was aborted before a working
-    /// tree was needed.
-    pub worktree_path: Option<String>,
+pub enum UpstreamSyncFailure {
+    Conflict {
+        report: ConflictReport,
+        /// Path to the sync worktree where the conflict lives (if one was
+        /// provisioned).
+        worktree_path: Option<String>,
+    },
+    Blocked {
+        stage: crate::domain::sync_failure::SyncBlockedStage,
+        raw_error: String,
+    },
 }

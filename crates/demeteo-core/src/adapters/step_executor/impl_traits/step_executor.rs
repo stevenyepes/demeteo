@@ -220,26 +220,16 @@ impl StepExecutor for DagStepExecutor {
             .steps_for_feature(&FeatureId::from(feature_id.to_string()))
     }
 
-    async fn feature_sync(
-        &self,
-        feature_id: &str,
-        revalidate_step_execution_id: Option<&str>,
-    ) -> Result<SyncOutcomeView, String> {
-        self.feature_sync_impl(feature_id, revalidate_step_execution_id)
-            .await
+    async fn feature_sync(&self, feature_id: &str) -> Result<SyncOutcomeView, String> {
+        self.feature_sync_impl(feature_id).await
     }
 
     async fn feature_resolve_sync_conflicts(
         &self,
         feature_id: &str,
         conflict_files: &[String],
-        revalidate_step_execution_id: Option<&str>,
     ) -> Result<SyncOutcomeView, String> {
-        self.feature_resolve_sync_conflicts_impl(
-            feature_id,
-            conflict_files,
-            revalidate_step_execution_id,
-        )
-        .await
+        self.feature_resolve_sync_conflicts_impl(feature_id, conflict_files)
+            .await
     }
 }

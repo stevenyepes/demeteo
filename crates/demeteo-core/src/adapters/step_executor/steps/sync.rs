@@ -8,6 +8,8 @@
 //! 4. On a conflict, spawns a fresh agent to resolve, then redirects
 //!    to the configured validation step (via `on_failure`) so the
 //!    workflow re-runs validation on the freshly-merged tree.
+//! 5. On anything that stopped short of a merge, fails with git's own words.
+//!    [`crate::domain::sync_failure`] decides which of 4 and 5 applies.
 //!
 //! The step is opt-in: workflows that don't include a `sync` node
 //! behave exactly as before. The `on_failure` redirect is what makes
@@ -19,6 +21,7 @@ use std::time::Instant;
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::sync_worktree::discard_sync_worktree;
 use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::sync_failure::SyncStepNext;
 use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
 
@@ -26,7 +29,7 @@ use super::StepOutcome;
 
 /// What the failed merge left behind, and the two branches it was between.
 ///
-/// `files` and `worktree_path` both come out of the same `ConflictFailure`;
+/// `files` and `worktree_path` both come out of one [`SyncStepNext::Resolve`];
 /// `feature_branch` and `base_branch` are computed together and never used
 /// apart. The resolution turn two frames down already takes a bundle of the
 /// same shape (`sync::ResolveSyncContext`).
@@ -43,10 +46,11 @@ impl ExecutionDriver {
     /// Returns:
     /// - `StepOutcome::Completed` when the merge was clean (or there
     ///   was nothing to merge).
-    /// - `StepOutcome::Failed(msg)` when the merge produced conflicts
-    ///   that the resolution agent could not clean up. The driver
-    ///   will route this through `on_failure` if the step declared
-    ///   one (so the workflow can redirect to re-validate).
+    /// - `StepOutcome::Failed(msg)` when the sync was blocked, carrying git's
+    ///   own words, or when the merge produced conflicts that the resolution
+    ///   agent could not clean up. The driver will route this through
+    ///   `on_failure` if the step declared one (so the workflow can redirect
+    ///   to re-validate).
     /// - `StepOutcome::RedirectTo(idx)` when the resolution succeeded
     ///   and the workflow should jump to a different step (the
     ///   validation step declared via `on_failure`).
@@ -146,22 +150,27 @@ impl ExecutionDriver {
                 StepOutcome::Completed
             }
             Err(failure) => {
-                // Conflicts. Spawn the resolution agent in the sync
-                // worktree (or the main repo as fallback). If the
-                // agent succeeds, redirect to the validation step.
                 let _ = accumulated_cost;
-                self.resolve_sync_conflicts_in_step(
-                    step_exec,
-                    step_conf,
-                    SyncConflict {
-                        files: &failure.report.files,
-                        worktree_path: failure.worktree_path.as_deref(),
-                        feature_branch: &feature_branch,
-                        base_branch: &base_branch,
-                    },
-                    step_start,
-                )
-                .await
+                match crate::domain::sync_failure::step_next(&failure) {
+                    SyncStepNext::Resolve {
+                        files,
+                        worktree_path,
+                    } => {
+                        self.resolve_sync_conflicts_in_step(
+                            step_exec,
+                            step_conf,
+                            SyncConflict {
+                                files,
+                                worktree_path,
+                                feature_branch: &feature_branch,
+                                base_branch: &base_branch,
+                            },
+                            step_start,
+                        )
+                        .await
+                    }
+                    SyncStepNext::Fail(raw_error) => StepOutcome::Failed(raw_error.to_string()),
+                }
             }
         }
     }

@@ -328,11 +328,7 @@ impl StepExecutor for StubExecutor {
     async fn step_list_for_run(&self, _feature_id: &str) -> Result<Vec<StepExecution>, String> {
         Ok(Vec::new())
     }
-    async fn feature_sync(
-        &self,
-        _feature_id: &str,
-        _revalidate_step_execution_id: Option<&str>,
-    ) -> Result<SyncOutcomeView, String> {
+    async fn feature_sync(&self, _feature_id: &str) -> Result<SyncOutcomeView, String> {
         Ok(SyncOutcomeView::Ok {
             merge_commit_sha: "deadbeef".into(),
             changed: false,
@@ -342,7 +338,6 @@ impl StepExecutor for StubExecutor {
         &self,
         _feature_id: &str,
         _conflict_files: &[String],
-        _revalidate_step_execution_id: Option<&str>,
     ) -> Result<SyncOutcomeView, String> {
         Ok(SyncOutcomeView::Ok {
             merge_commit_sha: "deadbeef".into(),

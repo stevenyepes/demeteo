@@ -1,4 +1,5 @@
 use super::{git_request, GitOpsHelper};
+use crate::domain::sync_failure::SyncBlockedStage;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::worktree_ops::{SyncFailure, SyncOutcome};
 
@@ -234,7 +235,11 @@ impl GitOpsHelper {
     ///
     /// The `Ok` variant returns the new HEAD commit SHA (so the
     /// caller can record the merge commit in the audit trail). The
-    /// `Err` variant carries the unmerged file list and raw git error.
+    /// `Err` variant says which of the two failures happened —
+    /// [`SyncFailure::Conflict`] only when the merge itself left unmerged
+    /// paths, and [`SyncFailure::Blocked`] for every stage that stopped short
+    /// of that verdict, the merge's own transport and timeout failures
+    /// included ([`crate::domain::sync_failure`]).
     ///
     /// `base_branch` is the run's declared base
     /// ([`diff_base::resolve`](crate::domain::diff_base::resolve)), which is
@@ -264,14 +269,13 @@ impl GitOpsHelper {
             )
             .await;
         if let Err(fetch_err) = fetch_outcome {
-            return Err(SyncFailure {
-                files: Vec::new(),
+            return Err(SyncFailure::Blocked {
+                stage: SyncBlockedStage::Fetch,
                 raw_error: format!(
                     "Could not fetch origin/{} from remote: {}. \
                      Check the project's remote URL and credentials.",
                     base_branch, fetch_err
                 ),
-                worktree_path: None,
             });
         }
 
@@ -289,14 +293,13 @@ impl GitOpsHelper {
             .await
             .is_err()
         {
-            return Err(SyncFailure {
-                files: Vec::new(),
+            return Err(SyncFailure::Blocked {
+                stage: SyncBlockedStage::BaseRefMissing,
                 raw_error: format!(
                     "Fetched origin but {} does not exist on the remote. \
                      The branch this run is based on ('{}') may be wrong.",
                     tracking, base_branch
                 ),
-                worktree_path: None,
             });
         }
 
@@ -351,10 +354,9 @@ impl GitOpsHelper {
         let wt_path = self
             .provision_sync_worktree(Some(machine_str), repo_dir, feature_branch)
             .await
-            .map_err(|e| SyncFailure {
-                files: Vec::new(),
+            .map_err(|e| SyncFailure::Blocked {
+                stage: SyncBlockedStage::WorktreeProvision,
                 raw_error: e,
-                worktree_path: None,
             })?;
         let merge_out = self
             .exec
@@ -393,13 +395,12 @@ impl GitOpsHelper {
                         )
                         .await
                     {
-                        return Err(SyncFailure {
-                            files: Vec::new(),
+                        return Err(SyncFailure::Blocked {
+                            stage: SyncBlockedStage::Push,
                             raw_error: format!(
                                 "Sync merge succeeded locally but pushing to origin failed: {}",
                                 push_err
                             ),
-                            worktree_path: None,
                         });
                     }
                 }
@@ -409,16 +410,22 @@ impl GitOpsHelper {
                     changed,
                 })
             }
-            Err(raw) => {
-                // The merge left the worktree in a conflicted state.
-                // Parse `git status` in the worktree for the unmerged files.
-                let files = parse_unmerged_files(&*self.exec, machine_str, &wt_path).await;
-                Err(SyncFailure {
-                    files,
+            Err(raw) => match crate::domain::sync_failure::merge_failure_stage(&raw) {
+                Some(stage) => Err(SyncFailure::Blocked {
+                    stage,
                     raw_error: raw,
-                    worktree_path: Some(wt_path.clone()),
-                })
-            }
+                }),
+                None => {
+                    // The merge left the worktree in a conflicted state.
+                    // Parse `git status` in the worktree for the unmerged files.
+                    let files = parse_unmerged_files(&*self.exec, machine_str, &wt_path).await;
+                    Err(SyncFailure::Conflict {
+                        files,
+                        raw_error: raw,
+                        worktree_path: Some(wt_path.clone()),
+                    })
+                }
+            },
         };
 
         // If we used the main repo directly (no worktree), skip cleanup.

@@ -2,18 +2,19 @@
 //!
 //! Two Tauri commands surface this code path:
 //!
-//! - `feature_sync`: merges `origin/<base>` into the feature
-//!   branch. If the merge is clean, returns a `SyncOutcomeView::Ok`.
-//!   If there are conflicts, returns a `SyncOutcomeView::Conflict`
-//!   with the parsed conflict list — the UI then offers a "Resolve
-//!   with agent" button.
+//! - `feature_sync`: merges `origin/<base>` into the feature branch.
+//!   A clean merge is a `SyncOutcomeView::Ok`; unmerged paths are a
+//!   `SyncOutcomeView::Conflict`, which is the only outcome the UI offers
+//!   "Resolve with agent" for. Everything that failed before the merge is a
+//!   `SyncOutcomeView::Blocked` — [`crate::domain::sync_failure`] owns that
+//!   split and `view_for` is the only thing that decides it.
 //!
 //! - `feature_resolve_sync_conflicts`: spawns a fresh agent session
 //!   in a temporary worktree on the conflicted feature branch and
 //!   asks it to remove conflict markers. When the agent finishes
 //!   (or its cost / time budget runs out), the resolution is
-//!   committed, the worktree is merged back into the feature branch
-//!   on the main repo, and the optional re-validate step is replayed.
+//!   committed and the worktree is merged back into the feature
+//!   branch on the main repo.
 //!
 //! Both commands live in `commands/features.rs` (the thin IPC
 //! layer); this module owns the orchestration. It reuses the existing
@@ -35,7 +36,7 @@ use crate::ports::execution::ExecutionPort;
 use crate::ports::notification::DomainEvent;
 use crate::ports::notification::NotificationPort;
 use crate::ports::pricing::PricingTable;
-use crate::ports::step_executor::{StepExecutor, SyncOutcomeView};
+use crate::ports::step_executor::SyncOutcomeView;
 
 use super::sync_worktree::discard_sync_worktree;
 use super::DagStepExecutor;
@@ -380,7 +381,6 @@ impl DagStepExecutor {
     pub(crate) async fn feature_sync_impl(
         &self,
         feature_id: &str,
-        _revalidate_step_execution_id: Option<&str>,
     ) -> Result<SyncOutcomeView, String> {
         let fid = FeatureId::from(feature_id.to_string());
         let feature = self
@@ -395,31 +395,20 @@ impl DagStepExecutor {
         let base_branch = sync_base(&feature, &settings)?;
         let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
-        match self
-            .merge_executor
-            .sync_feature_with_upstream(&fid, &feature_branch, &base_branch)
-            .await
-        {
-            Ok(outcome) => Ok(SyncOutcomeView::Ok {
-                merge_commit_sha: outcome.merge_commit_sha,
-                changed: outcome.changed,
-            }),
-            Err(failure) => Ok(SyncOutcomeView::Conflict {
-                conflict_files: failure.report.files,
-                raw_error: failure.report.raw_error,
-            }),
-        }
+        Ok(crate::domain::sync_failure::view_for(
+            self.merge_executor
+                .sync_feature_with_upstream(&fid, &feature_branch, &base_branch)
+                .await,
+        ))
     }
 
     /// Tauri entry point for the "Resolve with agent" button. Spawns
-    /// a fresh agent session dedicated to the conflict, waits for it
-    /// to commit a resolution, and (optionally) replays the named
-    /// step so the workflow's validation re-runs on the merged tree.
+    /// a fresh agent session dedicated to the conflict and waits for it
+    /// to commit a resolution.
     pub(crate) async fn feature_resolve_sync_conflicts_impl(
         &self,
         feature_id: &str,
         conflict_files: &[String],
-        revalidate_step_execution_id: Option<&str>,
     ) -> Result<SyncOutcomeView, String> {
         let fid = FeatureId::from(feature_id.to_string());
         let feature = self
@@ -527,19 +516,8 @@ impl DagStepExecutor {
             Ok(head_sha) => {
                 discard_sync_worktree(&*self.exec, &machine_str, &repo_dir, &resolved_cwd).await;
 
-                // After a successful resolution, replay the validation step
-                if let Some(se_id) = revalidate_step_execution_id {
-                    if let Err(e) = self.replay_from_step(se_id, None, None, None).await {
-                        return Err(format!(
-                            "Resolution succeeded but re-validate failed: {}",
-                            e
-                        ));
-                    }
-                }
-
                 Ok(SyncOutcomeView::Resolved {
                     merge_commit_sha: head_sha,
-                    revalidated_step_id: revalidate_step_execution_id.map(|s| s.to_string()),
                 })
             }
             Err(reason) => {

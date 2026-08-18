@@ -15,7 +15,7 @@ impl MergeAuditRepository for SqliteAdapter {
         default_branch: &str,
         status: &str,
         merge_sha: Option<&str>,
-        conflict_json: Option<&str>,
+        detail_json: Option<&str>,
         now: i64,
     ) -> Result<(), String> {
         let conn = self.conn.lock()?;
@@ -32,7 +32,7 @@ impl MergeAuditRepository for SqliteAdapter {
                 default_branch,
                 status,
                 merge_sha,
-                conflict_json,
+                detail_json,
                 now
             ],
         )

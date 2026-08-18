@@ -977,7 +977,7 @@ section is retained for traceability.
 - A `parallel` step's subtasks land in `feature/<slug>` via the engine.
 - A conflict between two subtasks surfaces at a gate; the user picks auto-agent (`feature_resolve_sync_conflicts` spawns a resolution agent and revalidates the step) or manual (`GateView` re-render with the file list).
 - A `publish` step at the end of the workflow opens a draft MR with the right title, body, and source/target branches.
-- `feature_sync` syncs `feature/<slug>` against `origin/<default>` and returns a typed `SyncOutcomeView::{Ok, Conflict, Resolved, ResolutionFailed}`.
+- `feature_sync` syncs `feature/<slug>` against `origin/<default>` and returns a typed `SyncOutcomeView::{Ok, Conflict, Blocked, Resolved, ResolutionFailed}`.
 
 ### Phase R7 — UX polish & docs (shipped)
 

@@ -194,16 +194,25 @@ pub struct SyncOutcome {
     pub changed: bool,
 }
 
-/// Result of a failed sync — the merge left the working tree in a
-/// conflicted state. The caller is expected to spawn a resolution
-/// agent or hand the files back to the user.
+/// Why a feature-branch sync did not land. Which variant it is cannot be
+/// inferred from the payload — see [`crate::domain::sync_failure`].
 #[derive(Debug, Clone)]
-pub struct SyncFailure {
-    pub files: Vec<crate::domain::models::ConflictFile>,
-    pub raw_error: String,
-    /// Path to the sync worktree where the conflicted state lives.
-    /// `None` when the sync was aborted before a worktree was created.
-    pub worktree_path: Option<String>,
+pub enum SyncFailure {
+    /// The merge ran and left unmerged paths. `worktree_path` is where the
+    /// conflicted index lives, and the resolution agent must run there;
+    /// `None` when the probe for it failed.
+    Conflict {
+        files: Vec<crate::domain::models::ConflictFile>,
+        raw_error: String,
+        worktree_path: Option<String>,
+    },
+    /// No merge was attempted, or one was and never reached a verdict, or its
+    /// result could not be published. Nothing is known to be conflicted, so
+    /// there is nothing for an agent to do.
+    Blocked {
+        stage: crate::domain::sync_failure::SyncBlockedStage,
+        raw_error: String,
+    },
 }
 
 /// Result of collapsing a feature branch's commits into one.
