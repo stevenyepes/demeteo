@@ -10,8 +10,8 @@ use crate::ports::sync_session::{SyncSession, SyncSessionPatch, SyncSessionPort}
 use super::super::SqliteAdapter;
 
 const COLUMNS: &str = "feature_id, machine_id, repo_dir, feature_branch, base_branch, status,
-     worktree_path, head_before, merge_commit_sha, conflict_files, raw_error, attempts,
-     created_at, updated_at";
+     worktree_path, head_before, merge_commit_sha, conflict_files, raw_error, pushed_at,
+     attempts, created_at, updated_at";
 
 fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SyncSession> {
     let status: String = row.get(5)?;
@@ -33,9 +33,10 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SyncSession> {
             .and_then(|raw| serde_json::from_str(raw).ok())
             .unwrap_or_default(),
         raw_error: row.get(10)?,
-        attempts: row.get(11)?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        pushed_at: row.get(11)?,
+        attempts: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
     })
 }
 
@@ -54,7 +55,7 @@ impl SyncSessionPort for SqliteAdapter {
         conn.execute(
             &format!(
                 "INSERT OR REPLACE INTO sync_sessions ({COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
             ),
             params![
                 session.feature_id,
@@ -68,6 +69,7 @@ impl SyncSessionPort for SqliteAdapter {
                 session.merge_commit_sha,
                 files,
                 session.raw_error,
+                session.pushed_at,
                 session.attempts,
                 session.created_at,
                 session.updated_at,
@@ -110,8 +112,9 @@ impl SyncSessionPort for SqliteAdapter {
                     merge_commit_sha = CASE WHEN ?7 THEN ?8 ELSE merge_commit_sha END,
                     conflict_files   = COALESCE(?9, conflict_files),
                     raw_error        = CASE WHEN ?10 THEN ?11 ELSE raw_error END,
-                    attempts         = attempts + ?12,
-                    updated_at       = ?13
+                    pushed_at        = CASE WHEN ?12 THEN ?13 ELSE pushed_at END,
+                    attempts         = attempts + ?14,
+                    updated_at       = ?15
               WHERE feature_id = ?1",
             params![
                 feature_id.0,
@@ -125,6 +128,8 @@ impl SyncSessionPort for SqliteAdapter {
                 files,
                 patch.raw_error.is_some(),
                 patch.raw_error.clone().flatten(),
+                patch.pushed_at.is_some(),
+                patch.pushed_at.flatten(),
                 i64::from(patch.bump_attempts),
                 now,
             ],

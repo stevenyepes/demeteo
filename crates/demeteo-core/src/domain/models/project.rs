@@ -191,6 +191,13 @@ pub struct ProjectSettings {
     /// level the chosen harness does not offer is never emitted.
     #[serde(default)]
     pub sync_resolver_effort: Option<EffortLevel>,
+    /// Whether a resolved sync waits for a human before it is published.
+    /// `None` is "no opinion", which is not `false` —
+    /// [`publish_policy`](crate::domain::sync_session::publish_policy) holds
+    /// what it resolves to and why the setting can only turn review off. See
+    /// migration V45.
+    #[serde(default)]
+    pub sync_review_before_push: Option<bool>,
 }
 
 fn default_artifact_subdir() -> String {

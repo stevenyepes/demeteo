@@ -91,6 +91,13 @@ pub enum SyncResolution {
     /// The conflicts are gone and committed.
     Succeeded {
         merge_commit_sha: String,
+        /// Whether that commit reached origin, which is the whole of the
+        /// difference between a finished sync and one waiting for a look
+        /// ([`publish_policy`]). Carried on the outcome rather than derived
+        /// from it because the turn is the only thing that knows: the commit
+        /// is on the branch either way, and nothing about the working tree
+        /// afterwards distinguishes the two.
+        published: bool,
         /// Whether the throwaway worktree was *observed* to be gone after the
         /// teardown, which is what decides whether the row may stop naming it.
         ///
@@ -133,8 +140,34 @@ impl SyncResolution {
 /// the window the session status alone cannot: between the merge failing and the
 /// resolution turn recording itself, the row legitimately reads `conflicted`
 /// while the step is still the one holding the worktree.
-pub fn user_may_intervene(status: SyncSessionStatus, feature_status: &str) -> bool {
-    intervention_refusal(SyncIntervention::Abort, status, feature_status).is_none()
+pub fn user_may_intervene(standing: SyncStanding<'_>) -> bool {
+    [
+        SyncIntervention::Abort,
+        SyncIntervention::Resolve,
+        SyncIntervention::Publish,
+        SyncIntervention::Discard,
+    ]
+    .into_iter()
+    .any(|action| intervention_refusal(action, standing).is_none())
+}
+
+/// Everything an intervention is judged against: what the session claims, what
+/// has been published of it, and whether anything else is still driving the
+/// branch.
+///
+/// The three travel together and are meaningless apart — a status without the
+/// feature's own status cannot tell a conflict the user owns from one a run is
+/// mid-way through resolving, and neither of them can tell a resolution that
+/// still needs pushing from one already on origin.
+#[derive(Debug, Clone, Copy)]
+pub struct SyncStanding<'a> {
+    pub status: SyncSessionStatus,
+    /// The resolution reached origin. A row field rather than a status: no
+    /// probe of the working tree can observe it (migration V45).
+    pub published: bool,
+    /// The feature's status, which is what says whether a driver still owns
+    /// the branch.
+    pub feature_status: &'a str,
 }
 
 /// What the user is asking to do to a sync that is not running.
@@ -151,6 +184,10 @@ pub enum SyncIntervention {
     Abort,
     /// Put an agent in the conflicted worktree.
     Resolve,
+    /// Send a resolution that is only on the branch to origin.
+    Publish,
+    /// Put the branch back where the merge found it and give up on the sync.
+    Discard,
 }
 
 /// Why this sync is not the user's to act on, or `None` when it is.
@@ -162,28 +199,85 @@ pub enum SyncIntervention {
 /// the run finishes, the others never will.
 pub fn intervention_refusal(
     action: SyncIntervention,
-    status: SyncSessionStatus,
-    feature_status: &str,
+    standing: SyncStanding<'_>,
 ) -> Option<&'static str> {
-    if run_is_live(feature_status) {
+    if run_is_live(standing.feature_status) {
         return Some(
             "This run is still going and owns its own sync. \
              Wait for it to finish, or stop it first.",
         );
     }
-    match status {
-        SyncSessionStatus::Conflicted | SyncSessionStatus::ResolutionFailed => None,
+    match standing.status {
+        SyncSessionStatus::Conflicted | SyncSessionStatus::ResolutionFailed => match action {
+            SyncIntervention::Abort | SyncIntervention::Resolve => None,
+            SyncIntervention::Publish | SyncIntervention::Discard => {
+                Some("This sync has no resolution yet — there is nothing to publish or undo.")
+            }
+        },
         SyncSessionStatus::Blocked => match action {
             SyncIntervention::Abort => None,
             SyncIntervention::Resolve => Some(
                 "This sync stopped before it reached a merge, so there are no conflicts to \
                  resolve. Fix what blocked it and sync again, or abandon the sync.",
             ),
+            SyncIntervention::Publish | SyncIntervention::Discard => {
+                Some("This sync never reached a merge, so there is nothing to publish or undo.")
+            }
+        },
+        // A resolution is a merge commit sitting on the feature branch. Abort
+        // is refused rather than reused for it: that path undoes an *open*
+        // merge and records a sync nobody published as abandoned, which for a
+        // committed resolution would leave the branch carrying work the row
+        // says was given up on. `Discard` is the one that moves the branch.
+        SyncSessionStatus::Resolved => match action {
+            SyncIntervention::Publish | SyncIntervention::Discard if !standing.published => None,
+            SyncIntervention::Publish | SyncIntervention::Discard => {
+                Some("This resolution is already on origin.")
+            }
+            SyncIntervention::Abort | SyncIntervention::Resolve => {
+                Some("This sync is already resolved. Publish the resolution or discard it.")
+            }
         },
         SyncSessionStatus::Resolving => {
             Some("An agent is already resolving this sync; give it time or stop the run.")
         }
         _ => Some("This sync has nothing left to act on."),
+    }
+}
+
+/// What happens to a resolution the moment it is committed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolutionPublish {
+    /// Send it to origin, as every resolution did before there was a choice.
+    Push,
+    /// Leave it on the branch for someone to look at first.
+    HoldForReview,
+}
+
+/// Whether a resolution landing now could actually be looked at by anybody.
+///
+/// This is the tree's existing answer to "is a human in a position to act on
+/// this sync" — the same [`run_is_live`] the refusals above are built on —
+/// rather than a second notion of attendedness that would have to be kept in
+/// step with it. It falls out correctly for the cases that must never wait: a
+/// workflow's own `sync` node only ever runs while its driver holds the
+/// feature, so a headless run and a detached one both answer `false` here
+/// without anything having to know which transport or which binary it is.
+pub fn resolution_is_reviewable(feature_status: &str) -> bool {
+    !run_is_live(feature_status)
+}
+
+/// Whether a landed resolution publishes itself or waits.
+///
+/// `review_before_push` is the project's setting (migration V45), where `None`
+/// is "no opinion". The setting may only turn review *off*: a request to review
+/// something nobody can reach is granted by holding a commit that nothing will
+/// ever publish, which is worse than the push it was trying to prevent.
+pub fn publish_policy(review_before_push: Option<bool>, reviewable: bool) -> ResolutionPublish {
+    if reviewable && review_before_push.unwrap_or(true) {
+        ResolutionPublish::HoldForReview
+    } else {
+        ResolutionPublish::Push
     }
 }
 
@@ -239,7 +333,18 @@ pub fn reconcile(
         // The tree the session was about is gone — force-removed by a later
         // sync, cleaned up by hand, or never re-created after a restart.
         // Nothing remains to resolve, continue or abort.
-        return Aborted;
+        //
+        // A resolution is the exception, and it is not a small one: its commit
+        // is on the *feature branch*, not in the throwaway tree the merge ran
+        // in, so losing that directory loses nothing at all. Retiring it as
+        // `Aborted` would tell the reader the merge is gone while it is sitting
+        // on their branch, unpublished — and `Aborted` is terminal, so nothing
+        // would ever revisit it to say otherwise.
+        return if matches!(stored, Resolved) {
+            Resolved
+        } else {
+            Aborted
+        };
     }
     match stored {
         // A `resolving` row is only ever *read* by a process that is not the

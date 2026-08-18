@@ -63,6 +63,16 @@ export interface EditorContext {
   branch: string;
   defaultBranch: string;
   initialFile?: string;
+  /** The pair the Changes tab diffs, when the caller has a narrower one in mind
+   *  than "this branch against its base". A sync resolution is reviewed as
+   *  `head_before..merge_commit_sha`: the first-parent form reads correctly and
+   *  goes silently wrong the moment the resolver adds a follow-up commit, and
+   *  nothing afterwards can recover the real base. Omitted = the branch pair,
+   *  as before. */
+  baseRef?: string;
+  headRef?: string;
+  /** Which sidebar tab opens. Omitted = 'files'. */
+  initialTab?: 'files' | 'changes';
 }
 
 export interface WorkflowSummary {
@@ -830,6 +840,12 @@ export interface SyncSessionView {
   conflict_files: ConflictFile[];
   /** git's own stderr, verbatim. */
   raw_error: string | null;
+  /** When the resolution reached origin, or `null` while it is only on the
+   *  branch. `status === 'resolved'` with a `null` here is a resolution waiting
+   *  for a look, not a finished sync — no probe of the working tree can answer
+   *  this, which is why it is a field and not a tenth `status`. Migration
+   *  V45. */
+  pushed_at: number | null;
   attempts: number;
   created_at: number;
   updated_at: number;
@@ -1026,6 +1042,12 @@ export interface ProjectSettingsData {
   sync_resolver_model?: string | null;
   /** The reasoning effort for that turn, clamped per harness at spawn. */
   sync_resolver_effort?: EffortLevel | null;
+  /** Whether a resolved sync waits for a human before it is published.
+   *  `null`/absent = no opinion, which holds only when somebody is in a
+   *  position to look at it and publishes otherwise. `false` opts out. It
+   *  cannot impose review on a run that still owns its branch — see
+   *  `domain::sync_session::publish_policy`. Migration V45. */
+  sync_review_before_push?: boolean | null;
 }
 
 export interface SessionInfo {

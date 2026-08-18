@@ -224,5 +224,6 @@ pub fn fetch_default_settings() -> ProjectSettings {
         sync_resolver_agent_kind: None,
         sync_resolver_model: None,
         sync_resolver_effort: None,
+        sync_review_before_push: None,
     }
 }

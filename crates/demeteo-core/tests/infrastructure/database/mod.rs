@@ -268,6 +268,7 @@ fn project_settings_default_effort_round_trips() {
         sync_resolver_agent_kind: None,
         sync_resolver_model: None,
         sync_resolver_effort: None,
+        sync_review_before_push: None,
     };
 
     adapter
@@ -338,6 +339,7 @@ fn project_settings_default_workflow_id_round_trips() {
         sync_resolver_agent_kind: None,
         sync_resolver_model: None,
         sync_resolver_effort: None,
+        sync_review_before_push: None,
     };
 
     adapter
@@ -428,6 +430,7 @@ fn project_settings_harnesses_and_validation_gates_round_trip() {
         sync_resolver_agent_kind: None,
         sync_resolver_model: None,
         sync_resolver_effort: None,
+        sync_review_before_push: None,
     };
 
     // No selection: the column keeps its pre-HB5 bare-map shape, and the map
@@ -503,6 +506,7 @@ fn project_settings_review_entrypoint_round_trips() {
         sync_resolver_agent_kind: None,
         sync_resolver_model: None,
         sync_resolver_effort: None,
+        sync_review_before_push: None,
     };
 
     adapter
@@ -555,12 +559,17 @@ fn project_settings_sync_resolver_default_round_trips() {
     settings.sync_resolver_agent_kind = Some("codex".to_string());
     settings.sync_resolver_model = Some("gpt-5-codex".to_string());
     settings.sync_resolver_effort = Some(EffortLevel::Low);
+    // `false` and unset are different answers and the column is the only thing
+    // that keeps them apart — a boolean written through an INTEGER column is
+    // the one place `Some(false)` can come back as `None` unnoticed.
+    settings.sync_review_before_push = Some(false);
     adapter.save_settings(settings.clone()).unwrap();
 
     let saved = adapter.get_settings(&pid).unwrap().unwrap();
     assert_eq!(saved.sync_resolver_agent_kind.as_deref(), Some("codex"));
     assert_eq!(saved.sync_resolver_model.as_deref(), Some("gpt-5-codex"));
     assert_eq!(saved.sync_resolver_effort, Some(EffortLevel::Low));
+    assert_eq!(saved.sync_review_before_push, Some(false));
     assert_eq!(saved.review_entrypoint.as_deref(), Some("/code-review"));
     assert_eq!(saved.default_agent_kind.as_deref(), Some("opencode"));
     assert_eq!(saved.default_model.as_deref(), Some("sonnet"));
@@ -569,10 +578,12 @@ fn project_settings_sync_resolver_default_round_trips() {
     settings.sync_resolver_agent_kind = None;
     settings.sync_resolver_model = None;
     settings.sync_resolver_effort = None;
+    settings.sync_review_before_push = None;
     adapter.save_settings(settings).unwrap();
     let cleared = adapter.get_settings(&pid).unwrap().unwrap();
     assert_eq!(cleared.sync_resolver_agent_kind, None);
     assert_eq!(cleared.sync_resolver_model, None);
     assert_eq!(cleared.sync_resolver_effort, None);
+    assert_eq!(cleared.sync_review_before_push, None);
     assert_eq!(cleared.review_entrypoint.as_deref(), Some("/code-review"));
 }

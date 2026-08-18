@@ -37,6 +37,10 @@ pub struct SyncSession {
     /// distinguishes them and nothing downstream has needed to.
     pub conflict_files: Vec<ConflictFile>,
     pub raw_error: Option<String>,
+    /// When the resolution reached origin, or `None` while it is only on the
+    /// branch. Not a [`SyncSessionStatus`] because no probe of the working tree
+    /// can answer it — see migration V45.
+    pub pushed_at: Option<i64>,
     pub attempts: u32,
     pub created_at: i64,
     pub updated_at: i64,
@@ -55,6 +59,7 @@ pub struct SyncSessionPatch {
     pub merge_commit_sha: Option<Option<String>>,
     pub conflict_files: Option<Vec<ConflictFile>>,
     pub raw_error: Option<Option<String>>,
+    pub pushed_at: Option<Option<i64>>,
     pub bump_attempts: bool,
 }
 

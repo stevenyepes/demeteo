@@ -29,6 +29,12 @@ interface CodeEditorViewProps {
   defaultBranch: string;
   featureTitle: string;
   initialFile?: string;
+  /** The pair the Changes tab diffs. Both default to the branch pair —
+   *  `defaultBranch..branch` — which is what every caller but the sync review
+   *  wants. */
+  baseRef?: string;
+  headRef?: string;
+  initialTab?: 'files' | 'changes';
   onBack: () => void;
 }
 
@@ -79,9 +85,14 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
   defaultBranch,
   featureTitle,
   initialFile,
+  baseRef,
+  headRef,
+  initialTab,
   onBack,
 }) => {
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files');
+  const diffBase = baseRef ?? defaultBranch;
+  const diffHead = headRef ?? branch;
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>(initialTab ?? 'files');
 
   // ── File tree state ───────────────────────────────────────────────
   const [nodes, setNodes] = useState<FileNode[]>([]);
@@ -157,8 +168,8 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
       const files = await gitChangedFiles({
         machineId,
         worktreePath,
-        baseRef: defaultBranch,
-        headRef: branch,
+        baseRef: diffBase,
+        headRef: diffHead,
       });
       setChangedFiles(files);
     } catch (err) {
@@ -166,7 +177,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     } finally {
       setChangesLoading(false);
     }
-  }, [machineId, worktreePath, defaultBranch, branch]);
+  }, [machineId, worktreePath, diffBase, diffHead]);
 
   useEffect(() => {
     if (sidebarTab === 'changes') loadChanges();
@@ -204,7 +215,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
           : gitFileAtRef({
               machineId,
               worktreePath,
-              gitRef: defaultBranch,
+              gitRef: diffBase,
               filePath: file.path,
             }),
         file.status === 'D'
@@ -212,7 +223,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
           : gitFileAtRef({
               machineId,
               worktreePath,
-              gitRef: branch,
+              gitRef: diffHead,
               filePath: file.path,
             }),
       ]);
@@ -224,7 +235,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     } finally {
       setDiffLoading(false);
     }
-  }, [machineId, worktreePath, defaultBranch, branch]);
+  }, [machineId, worktreePath, diffBase, diffHead]);
 
   // ── Auto-refresh current file ─────────────────────────────────────
   const refreshCurrentFile = useCallback(async () => {

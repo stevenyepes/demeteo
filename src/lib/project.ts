@@ -281,6 +281,7 @@ export interface ProjectSettingsInput {
   artifact_subdir?: string;
   commit_artifacts?: boolean;
   review_entrypoint?: string | null;
+  sync_review_before_push?: boolean | null;
   sync_resolver_agent_kind?: string | null;
   sync_resolver_model?: string | null;
   sync_resolver_effort?: EffortLevel | null;
@@ -391,6 +392,10 @@ export async function saveProjectSettings(
       input.review_entrypoint !== undefined
         ? input.review_entrypoint
         : (existing?.review_entrypoint ?? null),
+    sync_review_before_push:
+      input.sync_review_before_push !== undefined
+        ? input.sync_review_before_push
+        : (existing?.sync_review_before_push ?? null),
     sync_resolver_agent_kind:
       input.sync_resolver_agent_kind !== undefined
         ? input.sync_resolver_agent_kind

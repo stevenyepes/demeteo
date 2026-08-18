@@ -325,6 +325,45 @@ pub async fn sync_abort(
     .map_err(AppError::from)
 }
 
+/// Publish a resolution that is only on the feature branch.
+///
+/// Idempotent: a resolution already on origin answers with itself rather than
+/// pushing again or refusing. The push is confirmed against the remote-tracking
+/// ref before anything is recorded, so a rejected or unfinished push never
+/// reads back as published.
+#[tauri::command]
+pub async fn sync_publish(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<SyncSessionView>, AppError> {
+    crate::application::sync_session::publish(
+        &ctx.sync_sessions,
+        &ctx.exec,
+        &ctx.features,
+        &FeatureId::from(feature_id),
+    )
+    .await
+    .map_err(AppError::from)
+}
+
+/// Throw a resolution away: move the feature branch back to where the merge
+/// found it and abandon the sync. What comes back is an abandoned sync, not the
+/// conflict — sync again for a fresh one.
+#[tauri::command]
+pub async fn sync_discard(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<SyncSession>, AppError> {
+    crate::application::sync_session::discard_resolution(
+        &ctx.sync_sessions,
+        &ctx.exec,
+        &ctx.features,
+        &FeatureId::from(feature_id),
+    )
+    .await
+    .map_err(AppError::from)
+}
+
 /// Who a resolution would run under if the banner's picker is left alone.
 ///
 /// A read, so the picker can label what it is inheriting and offer that

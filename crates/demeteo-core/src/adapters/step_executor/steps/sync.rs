@@ -25,6 +25,7 @@ use crate::adapters::step_executor::sync_resolve::ResolveSyncError;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::sync_failure::SyncStepNext;
 use crate::domain::sync_resolver::{SyncNodeTiers, SyncResolver, SyncResolverChoice};
+use crate::domain::sync_session::{publish_policy, resolution_is_reviewable};
 
 use super::StepOutcome;
 
@@ -120,6 +121,7 @@ impl ExecutionDriver {
                         step_exec,
                         step_conf,
                         &settings,
+                        &feature.status,
                         SyncConflict {
                             files,
                             worktree_path,
@@ -170,6 +172,7 @@ impl ExecutionDriver {
         step_exec: &StepExecution,
         step_conf: &StepConfig,
         settings: &crate::domain::models::ProjectSettings,
+        feature_status: &str,
         conflict: SyncConflict<'_>,
         spend: RunningSpend<'_>,
     ) -> StepOutcome {
@@ -214,6 +217,10 @@ impl ExecutionDriver {
                 override_model: chosen.model.as_deref(),
                 effort: chosen.effort,
                 max_budget_usd: self.role_max_budget_usd(Self::BUDGET_FRACTION_RESOLVER),
+                publish: publish_policy(
+                    settings.sync_review_before_push,
+                    resolution_is_reviewable(feature_status),
+                ),
                 cancel: Some(self.cancel_watch.clone()),
                 spend: RunningSpend {
                     cost: &mut *cost,

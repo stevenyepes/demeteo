@@ -15,7 +15,7 @@ use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
 use crate::domain::ids::{StepExecutionId, StepId};
 use crate::domain::models::{Availability, EffortLevel, SessionInfo, StepExecution};
-use crate::domain::sync_session::SyncSessionStatus;
+use crate::domain::sync_session::{ResolutionPublish, SyncSessionStatus};
 use crate::ports::agent_runtime::{
     AgentCapabilities, AgentRuntime, AgentSession, AgentStartError, PersonalizationSupport,
 };
@@ -366,6 +366,7 @@ fn open_conflicted(db: &Arc<SqliteAdapter>) {
             merge_commit_sha: None,
             conflict_files: Vec::new(),
             raw_error: None,
+            pushed_at: None,
             attempts: 0,
             created_at: 100,
             updated_at: 100,
@@ -385,6 +386,17 @@ async fn run(
     cancel: Option<watch::Receiver<bool>>,
     cost: &mut f64,
     tokens: &mut i64,
+) -> Result<ResolvedSync, ResolveSyncError> {
+    run_with(p, step_exec, cancel, cost, tokens, ResolutionPublish::Push).await
+}
+
+async fn run_with(
+    p: &Ports,
+    step_exec: &StepExecution,
+    cancel: Option<watch::Receiver<bool>>,
+    cost: &mut f64,
+    tokens: &mut i64,
+    publish: ResolutionPublish,
 ) -> Result<ResolvedSync, ResolveSyncError> {
     resolve_sync_conflicts(ResolveSyncContext {
         exec: &p.exec,
@@ -407,6 +419,7 @@ async fn run(
         override_model: None,
         effort: EffortLevel::DEFAULT,
         max_budget_usd: Some(10.0),
+        publish,
         cancel,
         spend: RunningSpend {
             cost,
@@ -864,4 +877,128 @@ fn merge_markers_are_rejected_before_demeteo_stages_the_resolution() {
         "const value = 1;\n<<<<<<< HEAD\nconst branch = 'feature';\n=======\nconst branch = 'main';\n>>>>>>> origin/master\n"
     ));
     assert!(!has_conflict_marker("const value = 1;\n"));
+}
+
+/// The session as the row holds it, for the two facts publication turns on.
+fn stored_session(db: &Arc<SqliteAdapter>) -> crate::ports::sync_session::SyncSession {
+    let sessions: &dyn SyncSessionPort = &**db;
+    sessions.get(&fid()).unwrap().unwrap()
+}
+
+/// A resolution nobody is watching publishes itself, exactly as every
+/// resolution did before there was a choice — and the row says so, because
+/// `resolved` alone stopped being the whole answer the moment an unpublished
+/// resolution became a real state.
+#[tokio::test]
+async fn a_resolution_with_nobody_to_review_it_reaches_origin() {
+    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime::default())]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let resolved = run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("the happy path resolves");
+
+    assert!(resolved.published);
+    let session = stored_session(&p.db);
+    assert_eq!(session.status, SyncSessionStatus::Resolved);
+    assert!(
+        session.pushed_at.is_some(),
+        "a published resolution has to be recorded as one"
+    );
+}
+
+/// The turn most likely to quietly drop a hunk was the only one that shipped
+/// straight to the open pull request. Held, it commits and stops: the script
+/// below scripts no `push`, and the double errors on anything it was not told
+/// to answer, so a turn that published anyway reddens here rather than passing
+/// on an empty answer.
+///
+/// It also scripts no teardown. The tree is what the review's Discard resets
+/// the branch in, so keeping it is not an oversight — a resolution held for
+/// review is the one success that leaves its worktree standing.
+#[tokio::test]
+async fn a_resolution_somebody_can_look_at_stops_at_the_commit() {
+    let p = ports(
+        ScriptedExec::new(&[
+            (PORCELAIN, Ok("")),
+            (MERGE_HEAD, Ok("b1b2b3b\n")),
+            (ADD_ALL, Ok("")),
+            (
+                COMMIT,
+                Ok("[feature/f-1 c0ffee] chore: resolve sync conflicts"),
+            ),
+            (HEAD, Ok("c0ffeec\n")),
+        ]),
+        vec![Arc::new(ScriptedRuntime::default())],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let resolved = run_with(
+        &p,
+        &row(),
+        None,
+        &mut cost,
+        &mut tokens,
+        ResolutionPublish::HoldForReview,
+    )
+    .await
+    .expect("holding the push is not a failure");
+
+    assert!(!resolved.published);
+    assert_eq!(resolved.merge_commit_sha, "c0ffeec");
+    let session = stored_session(&p.db);
+    assert_eq!(session.status, SyncSessionStatus::Resolved);
+    assert_eq!(session.pushed_at, None);
+    assert_eq!(
+        session.worktree_path.as_deref(),
+        Some(WT),
+        "the tree the branch is checked out in is what Discard resets"
+    );
+}
+
+/// The base a review diff is measured from is the tip the *sync* recorded, and
+/// a resolution may never move it.
+///
+/// `merge_commit^` reads correctly for a merge with one commit on top of it and
+/// goes silently wrong the moment the resolver adds a follow-up — which is the
+/// shape here: the agent committed on its own, so the sha the turn reads back
+/// is not the merge's first parent at all. Nothing on the row could recover the
+/// real base afterwards, which is why it is written before the merge and left
+/// alone.
+#[tokio::test]
+async fn a_follow_up_commit_does_not_move_the_diffs_base() {
+    let scripted = ScriptedExec::new(&[
+        (PORCELAIN, Ok("")),
+        (ADD_ALL, Ok("")),
+        // The agent staged and committed for itself, so there is nothing left
+        // for Demeteo to record — and the tip is its commit, not the merge.
+        (PENDING_STATUS, Ok("")),
+        (HEAD, Ok("f0110up\n")),
+    ])
+    .with_queue(MERGE_HEAD, &[Ok("b1b2b3b\n"), Ok("")]);
+    let p = ports(scripted, vec![Arc::new(ScriptedRuntime::default())]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let resolved = run_with(
+        &p,
+        &row(),
+        None,
+        &mut cost,
+        &mut tokens,
+        ResolutionPublish::HoldForReview,
+    )
+    .await
+    .expect("an agent that committed for itself still resolved the merge");
+
+    let session = stored_session(&p.db);
+    assert_eq!(resolved.merge_commit_sha, "f0110up");
+    assert_eq!(session.merge_commit_sha.as_deref(), Some("f0110up"));
+    assert_eq!(
+        session.head_before.as_deref(),
+        Some("aaaaaaa"),
+        "the pre-merge tip is the diff base and the turn does not own it"
+    );
 }

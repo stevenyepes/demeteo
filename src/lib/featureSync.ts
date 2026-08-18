@@ -93,6 +93,35 @@ export async function abortSync(
 }
 
 /**
+ * Publish a resolution that is only on the feature branch.
+ *
+ * Safe to press twice: a resolution already on origin answers with itself
+ * rather than pushing again. The backend confirms the push against the
+ * remote-tracking ref before recording it, so a rejected or unfinished push
+ * comes back as an error and the session stays unpublished.
+ */
+export async function publishSyncResolution(
+  featureId: string,
+): Promise<SyncSessionView | null> {
+  return invoke<SyncSessionView | null>("sync_publish", { featureId });
+}
+
+/**
+ * Throw a resolution away: move the feature branch back to where the merge
+ * found it and abandon the sync.
+ *
+ * What comes back is an abandoned sync, **not** the conflict — reproducing that
+ * would mean re-running the merge against an origin that has moved since. A
+ * session that never recorded its pre-merge tip is refused rather than reset to
+ * a guess.
+ */
+export async function discardSyncResolution(
+  featureId: string,
+): Promise<SyncSessionView | null> {
+  return invoke<SyncSessionView | null>("sync_discard", { featureId });
+}
+
+/**
  * Refresh the MR state on a feature. Hits the provider's HTTP API
  * (GitHub or GitLab) and returns the latest `mr_state`. The caller
  * is expected to persist the result back to the feature row.

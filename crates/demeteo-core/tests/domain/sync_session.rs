@@ -187,6 +187,16 @@ fn every_status_round_trips_through_its_stored_spelling() {
     assert_eq!(SyncSessionStatus::parse("rebasing"), None);
 }
 
+/// A session in a given standing, with nothing published of it — what every
+/// state below one is, and the shape the refusals are judged against.
+fn unpublished(status: SyncSessionStatus, feature_status: &str) -> SyncStanding<'_> {
+    SyncStanding {
+        status,
+        published: false,
+        feature_status,
+    }
+}
+
 /// A conflict the user may act on, and one they may not. The destructive half
 /// of the banner — abort deletes the worktree, resolve spawns a second agent in
 /// it — must be unreachable while something else holds the tree, and a session
@@ -198,20 +208,37 @@ fn a_sync_somebody_else_is_driving_is_not_the_users_to_touch() {
         SyncSessionStatus::ResolutionFailed,
         SyncSessionStatus::Blocked,
     ] {
-        assert!(user_may_intervene(status, "completed"), "{status:?}");
+        assert!(
+            user_may_intervene(unpublished(status, "completed")),
+            "{status:?}"
+        );
     }
     assert!(
-        !user_may_intervene(SyncSessionStatus::Resolving, "completed"),
+        !user_may_intervene(unpublished(SyncSessionStatus::Resolving, "completed")),
         "a turn is holding this worktree"
     );
+    // A resolution nobody has published is the user's — that is the whole of
+    // the review state. Published, it is finished and there is nothing to
+    // offer.
+    assert!(user_may_intervene(unpublished(
+        SyncSessionStatus::Resolved,
+        "completed"
+    )));
+    assert!(!user_may_intervene(SyncStanding {
+        status: SyncSessionStatus::Resolved,
+        published: true,
+        feature_status: "completed",
+    }));
     for status in [
         SyncSessionStatus::Syncing,
         SyncSessionStatus::UpToDate,
         SyncSessionStatus::Merged,
-        SyncSessionStatus::Resolved,
         SyncSessionStatus::Aborted,
     ] {
-        assert!(!user_may_intervene(status, "completed"), "{status:?}");
+        assert!(
+            !user_may_intervene(unpublished(status, "completed")),
+            "{status:?}"
+        );
     }
 }
 
@@ -230,13 +257,13 @@ fn a_live_run_owns_its_sync_whatever_the_session_says() {
         "syncing_origin",
     ] {
         assert!(
-            !user_may_intervene(SyncSessionStatus::Conflicted, feature_status),
+            !user_may_intervene(unpublished(SyncSessionStatus::Conflicted, feature_status)),
             "{feature_status}"
         );
     }
     for feature_status in ["completed", "failed", "cancelled", "awaiting_mr"] {
         assert!(
-            user_may_intervene(SyncSessionStatus::Conflicted, feature_status),
+            user_may_intervene(unpublished(SyncSessionStatus::Conflicted, feature_status)),
             "{feature_status}"
         );
     }
@@ -254,33 +281,120 @@ fn a_blocked_sync_may_be_abandoned_but_not_resolved() {
     assert_eq!(
         intervention_refusal(
             SyncIntervention::Abort,
-            SyncSessionStatus::Blocked,
-            "completed"
+            unpublished(SyncSessionStatus::Blocked, "completed")
         ),
         None,
         "a blocked sync still holds an unpublished merge to undo"
     );
     let refusal = intervention_refusal(
         SyncIntervention::Resolve,
-        SyncSessionStatus::Blocked,
-        "completed",
+        unpublished(SyncSessionStatus::Blocked, "completed"),
     )
     .expect("there are no conflicts in a sync that never merged");
     assert!(refusal.contains("before it reached a merge"), "{refusal}");
 
     for action in [SyncIntervention::Abort, SyncIntervention::Resolve] {
         assert_eq!(
-            intervention_refusal(action, SyncSessionStatus::Conflicted, "completed"),
+            intervention_refusal(
+                action,
+                unpublished(SyncSessionStatus::Conflicted, "completed")
+            ),
             None,
             "{action:?}"
         );
         assert!(
-            intervention_refusal(action, SyncSessionStatus::Resolving, "completed").is_some(),
+            intervention_refusal(
+                action,
+                unpublished(SyncSessionStatus::Resolving, "completed")
+            )
+            .is_some(),
             "{action:?}"
         );
         assert!(
-            intervention_refusal(action, SyncSessionStatus::Conflicted, "running").is_some(),
+            intervention_refusal(
+                action,
+                unpublished(SyncSessionStatus::Conflicted, "running")
+            )
+            .is_some(),
             "{action:?}"
         );
+    }
+}
+
+/// The state P4 introduced, and the one place it could be lied about.
+///
+/// A resolution's commit is on the feature branch; the sync worktree it was
+/// made in is a throwaway that publishing deletes and that any later sync
+/// force-removes. Folding "the tree is gone" into `Aborted` for this status
+/// would tell the reader the merge was abandoned while it is sitting on their
+/// branch waiting to be published — and `Aborted` is terminal, so nothing
+/// would ever revisit it.
+#[test]
+fn a_resolution_survives_the_worktree_it_was_made_in() {
+    assert_eq!(
+        reconcile(
+            SyncSessionStatus::Resolved,
+            Some(&probe(false, false, false))
+        ),
+        SyncSessionStatus::Resolved
+    );
+}
+
+/// The setting may take review away and may not impose it.
+///
+/// Nothing offers Publish or Discard while a driver holds the feature, so a
+/// resolution held there would wait for a press that no surface can produce:
+/// the run finishes, the branch never gets the merge, and the only evidence is
+/// a row nobody looks at. Holding is therefore conditional on somebody being
+/// able to act, and the project's own `true` cannot override that.
+#[test]
+fn a_resolution_only_waits_when_somebody_can_look_at_it() {
+    use crate::domain::sync_session::{publish_policy, ResolutionPublish};
+
+    for setting in [None, Some(true)] {
+        assert_eq!(
+            publish_policy(setting, true),
+            ResolutionPublish::HoldForReview,
+            "{setting:?}"
+        );
+        assert_eq!(
+            publish_policy(setting, false),
+            ResolutionPublish::Push,
+            "{setting:?} with nobody watching"
+        );
+    }
+    for reviewable in [true, false] {
+        assert_eq!(
+            publish_policy(Some(false), reviewable),
+            ResolutionPublish::Push,
+            "opted out, reviewable={reviewable}"
+        );
+    }
+}
+
+/// Which runs are "unattended" is not a second notion of attendedness: it is
+/// the same [`run_is_live`] set every refusal above is built on. A workflow's
+/// `sync` node only ever runs while its driver holds the feature, so a headless
+/// run and a detached one both answer here without anything having to ask which
+/// binary or which transport is executing.
+#[test]
+fn a_run_that_still_owns_its_branch_has_nobody_to_review_for() {
+    use crate::domain::sync_session::resolution_is_reviewable;
+
+    for feature_status in [
+        "pending",
+        "running",
+        "verifying",
+        "awaiting_gate",
+        "gated",
+        "syncing_origin",
+    ] {
+        assert!(
+            !resolution_is_reviewable(feature_status),
+            "{feature_status}"
+        );
+    }
+    for feature_status in ["completed", "failed", "cancelled", "awaiting_mr"] {
+        assert!(resolution_is_reviewable(feature_status), "{feature_status}");
     }
 }

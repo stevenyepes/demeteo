@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
-import type { AppView, MrState, SyncOutcomeView } from '../../types';
+import type { AppView, MrState, SyncOutcomeView, SyncSessionView } from '../../types';
 import { formatError } from '../../lib/errors';
 import { useErrorBus } from '../../lib/errorBus';
 import {
   abortSync,
+  discardSyncResolution,
   getFeature,
   getSyncSession,
+  publishSyncResolution,
   syncFeature,
   resolveSyncConflicts,
   fetchMrState,
@@ -33,8 +35,27 @@ export function useFeatureMr(input: {
   const [aborting, setAborting] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [syncBanner, setSyncBanner] = useState<SyncOutcomeView | null>(null);
+  const [syncSession, setSyncSession] = useState<SyncSessionView | null>(null);
+  const [reviewPending, setReviewPending] = useState<'push' | 'discard' | null>(null);
   const [mrState, setMrState] = useState<MrState | null>(null);
   const [mrUrl, setMrUrl] = useState<string | null>(null);
+
+  /**
+   * Re-read the durable session. Every mutation below ends here rather than
+   * folding its own answer into state: `sync_publish` and `sync_discard` both
+   * reconcile against the working tree on the way out, so the row they return
+   * is the only one that has been checked against git.
+   */
+  const refreshSyncSession = useCallback(async () => {
+    try {
+      const fresh = await getSyncSession(featureId);
+      setSyncSession(fresh);
+      return fresh;
+    } catch (err) {
+      reportError(err, { kind: 'internal' });
+      return null;
+    }
+  }, [featureId, reportError]);
 
   /**
    * Sync the feature branch with `origin/<default_branch>`. On a
@@ -48,6 +69,7 @@ export function useFeatureMr(input: {
     try {
       const outcome = await syncFeature(featureId);
       setSyncBanner(outcome);
+      await refreshSyncSession();
       reload();
     } catch (err) {
       await messageDialog(formatError(err), { title: 'Sync failed', kind: 'error' });
@@ -73,7 +95,9 @@ export function useFeatureMr(input: {
     (async () => {
       try {
         const session = await getSyncSession(featureId);
-        if (cancelled || session?.status !== 'conflicted') return;
+        if (cancelled) return;
+        setSyncSession(session);
+        if (session?.status !== 'conflicted') return;
         // A conflict the run is still driving is not the user's to see a
         // banner about: its buttons act on a worktree an agent holds.
         if (!session.user_may_intervene) return;
@@ -104,7 +128,13 @@ export function useFeatureMr(input: {
     setResolving(true);
     try {
       const outcome = await resolveSyncConflicts(featureId, conflictFiles, resolver);
-      setSyncBanner(outcome);
+      const fresh = await refreshSyncSession();
+      // A resolution held for review has its own card, which says the thing
+      // the banner cannot: that origin has not seen this yet. Two success
+      // notices for one merge, one of which stops at "resolved", is how a
+      // user concludes it shipped.
+      const awaitingReview = fresh?.status === 'resolved' && fresh.pushed_at === null;
+      setSyncBanner(awaitingReview ? null : outcome);
       reload();
     } catch (err) {
       await messageDialog(formatError(err), { title: 'Resolution failed', kind: 'error' });
@@ -123,11 +153,57 @@ export function useFeatureMr(input: {
     try {
       await abortSync(featureId);
       setSyncBanner(null);
+      await refreshSyncSession();
       reload();
     } catch (err) {
       await messageDialog(formatError(err), { title: 'Abort failed', kind: 'error' });
     } finally {
       setAborting(false);
+    }
+  };
+
+  /**
+   * Publish the resolution the review card is showing.
+   *
+   * The IPC is idempotent — a resolution already on origin answers with itself
+   * rather than pushing twice — so a second press while the first is still in
+   * flight is safe as well as disabled.
+   */
+  const handlePublishSync = async () => {
+    setReviewPending('push');
+    try {
+      setSyncSession(await publishSyncResolution(featureId));
+      reload();
+    } catch (err) {
+      await messageDialog(formatError(err), { title: 'Publish failed', kind: 'error' });
+      await refreshSyncSession();
+    } finally {
+      setReviewPending(null);
+    }
+  };
+
+  /**
+   * Throw the resolution away. The confirmation says what actually happens —
+   * the branch moves back and the sync is abandoned — because the tempting
+   * wording ("back to the conflict") is a promise nothing here keeps.
+   */
+  const handleDiscardSync = async () => {
+    const ok = await confirmDialog(
+      `Move ${syncSession?.feature_branch ?? 'the branch'} back to where it was before the merge and abandon this sync? The conflict is not restored — sync again for a fresh one.`,
+      { title: 'Discard the merge?', kind: 'warning', okLabel: 'Discard', cancelLabel: 'Keep' },
+    );
+    if (!ok) return;
+    setReviewPending('discard');
+    try {
+      await discardSyncResolution(featureId);
+      setSyncBanner(null);
+      await refreshSyncSession();
+      reload();
+    } catch (err) {
+      await messageDialog(formatError(err), { title: 'Discard failed', kind: 'error' });
+      await refreshSyncSession();
+    } finally {
+      setReviewPending(null);
     }
   };
 
@@ -235,6 +311,8 @@ export function useFeatureMr(input: {
     syncing,
     resolving,
     syncBanner,
+    syncSession,
+    reviewPending,
     aborting,
     setSyncBanner,
     mrState,
@@ -242,6 +320,8 @@ export function useFeatureMr(input: {
     handleSync,
     handleResolveConflicts,
     handleAbortSync,
+    handlePublishSync,
+    handleDiscardSync,
     refreshMrState,
     handlePublishClick,
     handleCleanup,

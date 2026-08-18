@@ -35,7 +35,9 @@ use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
 use crate::domain::step_seed::manual_sync_step_execution;
 use crate::domain::sync_resolver::SyncResolverChoice;
-use crate::domain::sync_session::{intervention_refusal, SyncIntervention};
+use crate::domain::sync_session::{
+    intervention_refusal, publish_policy, resolution_is_reviewable, SyncIntervention, SyncStanding,
+};
 use crate::paths;
 use crate::ports::db::FeatureRepository;
 use crate::ports::step_executor::SyncOutcomeView;
@@ -177,9 +179,14 @@ impl DagStepExecutor {
             .ok_or_else(|| {
                 "This feature has no sync to resolve. Run 'Sync with main' first.".to_string()
             })?;
-        if let Some(refusal) =
-            intervention_refusal(SyncIntervention::Resolve, session.status, &feature.status)
-        {
+        if let Some(refusal) = intervention_refusal(
+            SyncIntervention::Resolve,
+            SyncStanding {
+                status: session.status,
+                published: session.pushed_at.is_some(),
+                feature_status: &feature.status,
+            },
+        ) {
             return Err(refusal.to_string());
         }
         let worktree = session.worktree_path.as_deref().ok_or_else(|| {
@@ -269,6 +276,10 @@ impl DagStepExecutor {
                     settings.default_max_budget_usd,
                 ),
                 budget::BUDGET_FRACTION_RESOLVER,
+            ),
+            publish: publish_policy(
+                settings.sync_review_before_push,
+                resolution_is_reviewable(&feature.status),
             ),
             cancel: Some(cancel_rx),
             spend: RunningSpend {

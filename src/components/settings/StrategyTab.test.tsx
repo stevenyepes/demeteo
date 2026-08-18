@@ -37,6 +37,9 @@ interface Scenario {
   storedReviewEntrypoint?: string | null;
   /** What `project_settings.sync_resolver_agent_kind` holds on disk. */
   storedSyncResolverAgentKind?: string | null;
+  /** What `project_settings.sync_review_before_push` holds on disk. Three
+   *  values, not two: `null` is "no opinion" and resolves conditionally. */
+  storedSyncReviewBeforePush?: boolean | null;
 }
 
 function scriptIpc(scenario: Scenario) {
@@ -54,6 +57,7 @@ function scriptIpc(scenario: Scenario) {
       sync_resolver_agent_kind: scenario.storedSyncResolverAgentKind ?? null,
       sync_resolver_model: null,
       sync_resolver_effort: null,
+      sync_review_before_push: scenario.storedSyncReviewBeforePush ?? null,
     }),
     get_repositories_for_project: () => [],
     get_machines: () => [],
@@ -229,5 +233,32 @@ describe('sync conflict resolver default', () => {
 
     await save();
     expect(savedSettings()).toHaveProperty('sync_resolver_agent_kind', null);
+  });
+});
+
+// A tri-state through a two-state column: `false` and unset are different
+// answers, and the merge in `lib/project.ts` writes whatever this sends over
+// the stored value on every save from every tab.
+describe('review before push', () => {
+  const policy = () => screen.getByLabelText('After a resolution') as HTMLSelectElement;
+
+  it('persists an explicit opt-out as false, not as unset', async () => {
+    await mount({ storedSyncReviewBeforePush: null });
+    await waitFor(() => expect(policy()).toHaveValue(''));
+
+    await userEvent.selectOptions(policy(), 'push');
+
+    await save();
+    expect(savedSettings()).toHaveProperty('sync_review_before_push', false);
+  });
+
+  it('shows a stored opt-out and leaves no opinion as null', async () => {
+    await mount({ storedSyncReviewBeforePush: false });
+    await waitFor(() => expect(policy()).toHaveValue('push'));
+
+    await userEvent.selectOptions(policy(), '');
+
+    await save();
+    expect(savedSettings()).toHaveProperty('sync_review_before_push', null);
   });
 });

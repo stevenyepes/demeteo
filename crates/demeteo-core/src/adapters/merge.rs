@@ -139,6 +139,7 @@ impl MergeExecutor for SqliteMergeExecutor {
             merge_commit_sha: None,
             conflict_files: Vec::new(),
             raw_error: None,
+            pushed_at: None,
             attempts: 0,
             created_at: now,
             updated_at: now,
@@ -310,6 +311,20 @@ impl MergeExecutor for SqliteMergeExecutor {
                 },
                 raw_error: match resolution {
                     SyncResolution::Failed { reason } => Some(Some(reason.clone())),
+                    _ => None,
+                },
+                // Written on every `Succeeded`, including the unpublished one,
+                // and written as a *clear* there rather than left alone: this
+                // row is reused by every sync a feature runs, so a resolution
+                // held for review would otherwise inherit the timestamp of the
+                // last one that published and read as already on origin.
+                pushed_at: match resolution {
+                    SyncResolution::Succeeded {
+                        published: true, ..
+                    } => Some(Some(paths::now_ms())),
+                    SyncResolution::Succeeded {
+                        published: false, ..
+                    } => Some(None),
                     _ => None,
                 },
                 ..Default::default()

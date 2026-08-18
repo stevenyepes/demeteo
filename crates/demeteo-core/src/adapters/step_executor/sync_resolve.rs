@@ -30,7 +30,7 @@ use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
-use crate::domain::sync_session::SyncResolution;
+use crate::domain::sync_session::{ResolutionPublish, SyncResolution};
 use crate::paths;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::agent_runtime::AgentContext;
@@ -94,6 +94,16 @@ pub(crate) struct ResolveSyncContext<'a> {
     /// One arithmetic, two callers — a second precedence chain here is how the
     /// button and the node would come to spend different money.
     pub max_budget_usd: Option<f64>,
+    /// Whether the resolution this turn commits also goes to origin, decided
+    /// by [`publish_policy`](crate::domain::sync_session::publish_policy) from
+    /// the project's setting and whether anyone is in a position to look at it.
+    ///
+    /// Carried rather than derived here because deriving it would mean asking
+    /// *who called* — and the whole of this module is the answer to the two
+    /// callers having diverged once already. Both compute it the same way from
+    /// the same two facts; that a workflow node always arrives at `Push` is a
+    /// consequence of the run holding the feature, not a branch on the caller.
+    pub publish: ResolutionPublish,
     /// Stop, as whoever owns this turn hears it: the driver's own watch on the
     /// workflow path, the executor's out-of-band sender on the button's.
     pub cancel: Option<watch::Receiver<bool>>,
@@ -150,6 +160,10 @@ impl ResolveSyncError {
 #[derive(Debug)]
 pub(crate) struct ResolvedSync {
     pub merge_commit_sha: String,
+    /// Whether the commit reached origin. `false` is not a failure — it is a
+    /// resolution waiting for a look, which the session records as `resolved`
+    /// with no `pushed_at`.
+    pub published: bool,
     pub cache: CacheTokens,
 }
 
@@ -195,10 +209,17 @@ pub(crate) async fn resolve_sync_conflicts(
     let outcome = run_resolver_turn(ctx, &pre_unmerged).await;
 
     let verdict = match &outcome {
-        Ok(resolved) => {
+        // A published resolution has nothing left in the tree it was made in.
+        // An unpublished one is the opposite: the branch it is committed on is
+        // checked out there, so that tree is where the review's `Discard` puts
+        // the branch back, and tearing it down here would leave the only way
+        // out of the state a `reset` in the user's own clone against whatever
+        // it happens to have checked out.
+        Ok(resolved) if resolved.published => {
             discard_sync_worktree(&**exec, machine_str, repo_dir, resolved_cwd).await;
             SyncResolution::Succeeded {
                 merge_commit_sha: resolved.merge_commit_sha.clone(),
+                published: true,
                 worktree_discarded: resolved_cwd == repo_dir
                     || crate::application::sync_session::worktree_confirmed_gone(
                         &**exec,
@@ -208,6 +229,11 @@ pub(crate) async fn resolve_sync_conflicts(
                     .await,
             }
         }
+        Ok(resolved) => SyncResolution::Succeeded {
+            merge_commit_sha: resolved.merge_commit_sha.clone(),
+            published: false,
+            worktree_discarded: false,
+        },
         Err(failure) => SyncResolution::Failed {
             reason: failure.message().to_string(),
         },
@@ -306,6 +332,7 @@ async fn run_resolver_turn(
         override_model,
         effort,
         max_budget_usd,
+        publish,
         cancel,
         spend,
         pricing,
@@ -575,28 +602,31 @@ async fn run_resolver_turn(
         }
     };
 
-    if let Err(e) = exec
-        .run_command(
-            machine_str,
-            &format!(
-                "git -C {} push origin {}",
-                paths::shell_escape_posix(resolved_cwd),
-                paths::shell_escape_posix(feature_branch),
-            ),
-        )
-        .await
-    {
-        let _ = registry.kill(&resolver_thread_id).await;
-        return Err(ResolveSyncError::Failed(format!(
-            "Resolution committed locally but push to origin/{} failed: {}. Push the feature branch manually.",
-            feature_branch, e
-        )));
+    if publish == ResolutionPublish::Push {
+        if let Err(e) = exec
+            .run_command(
+                machine_str,
+                &format!(
+                    "git -C {} push origin {}",
+                    paths::shell_escape_posix(resolved_cwd),
+                    paths::shell_escape_posix(feature_branch),
+                ),
+            )
+            .await
+        {
+            let _ = registry.kill(&resolver_thread_id).await;
+            return Err(ResolveSyncError::Failed(format!(
+                "Resolution committed locally but push to origin/{} failed: {}. Publish it from the sync banner once the push can go through.",
+                feature_branch, e
+            )));
+        }
     }
 
     let _ = registry.kill(&resolver_thread_id).await;
 
     Ok(ResolvedSync {
         merge_commit_sha: head_sha,
+        published: publish == ResolutionPublish::Push,
         cache,
     })
 }

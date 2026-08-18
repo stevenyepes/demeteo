@@ -1,7 +1,8 @@
 import { AlertTriangle, ExternalLink, GitPullRequest } from 'lucide-react';
-import type { MrState, SyncOutcomeView } from '../../types';
+import type { MrState, SyncOutcomeView, SyncSessionView } from '../../types';
 import type { SyncResolverChoice } from '../../lib/featureSync';
 import { SyncBannerContent } from './SyncBannerContent';
+import { SyncReviewCard } from './SyncReviewCard';
 import type { SyncResolverSelection } from './useSyncResolverOverrides';
 
 interface FeatureStatusBannersProps {
@@ -14,6 +15,14 @@ interface FeatureStatusBannersProps {
   resolverSelection: SyncResolverSelection;
   onAbortSync: () => void;
   onDismissSyncBanner: () => void;
+  /** The durable sync row. The review card is driven from it rather than from
+   *  `syncBanner`, because a resolution waiting to be published outlives the
+   *  navigation that produced it — the whole point of the row. */
+  syncSession: SyncSessionView | null;
+  reviewPending: 'push' | 'discard' | null;
+  onViewSyncDiff: (refs: { baseRef: string; headRef: string }) => void;
+  onPublishSync: () => void;
+  onDiscardSync: () => void;
   mrUrl: string | null;
   mrState: MrState | null;
   onRefreshMrState: () => void;
@@ -29,6 +38,11 @@ export function FeatureStatusBanners({
   resolverSelection,
   onAbortSync,
   onDismissSyncBanner,
+  syncSession,
+  reviewPending,
+  onViewSyncDiff,
+  onPublishSync,
+  onDiscardSync,
   mrUrl,
   mrState,
   onRefreshMrState,
@@ -69,6 +83,18 @@ export function FeatureStatusBanners({
           </div>
         </div>
       )}
+
+      {syncSession?.status === 'resolved' &&
+        syncSession.pushed_at === null &&
+        syncSession.user_may_intervene && (
+          <SyncReviewCard
+            session={syncSession}
+            pending={reviewPending}
+            onViewDiff={onViewSyncDiff}
+            onPush={onPublishSync}
+            onDiscard={onDiscardSync}
+          />
+        )}
 
       {mrUrl && (
         <div className="px-6 py-2 bg-[#0d0f14]/40 border-b border-white/5 flex items-center justify-between gap-3 text-xs">

@@ -32,6 +32,7 @@ fn ports(
     Arc<dyn SyncSessionPort>,
     Arc<dyn ExecutionPort>,
     Arc<ScriptedExec>,
+    Arc<dyn crate::ports::db::FeatureRepository>,
 ) {
     let db = Arc::new(SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap());
     {
@@ -44,14 +45,16 @@ fn ports(
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO features (id, project_id, title, created_at)
-             VALUES ('f-1', 'p-1', 'sync me', 0)",
+            // `completed`: the refusals these tests are about only arise once
+            // no driver owns the branch, and the column defaults to `running`.
+            "INSERT INTO features (id, project_id, title, status, created_at)
+             VALUES ('f-1', 'p-1', 'sync me', 'completed', 0)",
             [],
         )
         .unwrap();
     }
     let scripted = Arc::new(scripted);
-    (db, scripted.clone(), scripted)
+    (db.clone(), scripted.clone(), scripted, db)
 }
 
 fn conflicted(worktree: Option<&str>) -> SyncSession {
@@ -70,6 +73,7 @@ fn conflicted(worktree: Option<&str>) -> SyncSession {
             kind: "both modified".to_string(),
         }],
         raw_error: Some("CONFLICT (content): Merge conflict in src/lib.rs".to_string()),
+        pushed_at: None,
         attempts: 0,
         created_at: 100,
         updated_at: 100,
@@ -81,7 +85,7 @@ fn conflicted(worktree: Option<&str>) -> SyncSession {
 /// comes back to a live conflicted tree must find the same conflict.
 #[tokio::test]
 async fn a_conflict_is_still_there_when_the_next_reader_asks() {
-    let (sessions, exec, _git) = ports(ScriptedExec::new(&[
+    let (sessions, exec, _git, _features) = ports(ScriptedExec::new(&[
         (GIT_DIR, Ok(".git\n")),
         (MERGE_HEAD, Ok("b1b2b3b\n")),
         (PORCELAIN, Ok("UU src/lib.rs\n")),
@@ -102,7 +106,7 @@ async fn a_conflict_is_still_there_when_the_next_reader_asks() {
 /// next reader is not told the old story again.
 #[tokio::test]
 async fn a_conflict_whose_worktree_went_away_reconciles_to_aborted_and_stays_that_way() {
-    let (sessions, exec, _git) =
+    let (sessions, exec, _git, _features) =
         ports(ScriptedExec::new(&[(GIT_DIR, Err("not a git repository"))]));
     sessions.open(&conflicted(Some(WT))).unwrap();
 
@@ -120,7 +124,7 @@ async fn a_conflict_whose_worktree_went_away_reconciles_to_aborted_and_stays_tha
 
 #[tokio::test]
 async fn a_feature_that_never_synced_has_no_session() {
-    let (sessions, exec, _git) = ports(ScriptedExec::new(&[]));
+    let (sessions, exec, _git, _features) = ports(ScriptedExec::new(&[]));
     assert!(get_reconciled(&sessions, &exec, &fid())
         .await
         .unwrap()
@@ -133,7 +137,7 @@ async fn a_feature_that_never_synced_has_no_session() {
 /// delete here is the checkout.
 #[tokio::test]
 async fn aborting_in_the_clone_itself_undoes_the_merge_and_deletes_nothing() {
-    let (sessions, exec, git) = ports(ScriptedExec::new(&[(
+    let (sessions, exec, git, _features) = ports(ScriptedExec::new(&[(
         "git -C /repos/demeteo merge --abort",
         Ok(""),
     )]));
@@ -153,7 +157,7 @@ async fn aborting_in_the_clone_itself_undoes_the_merge_and_deletes_nothing() {
 /// the same case. Neither may fail, and the second must issue nothing.
 #[tokio::test]
 async fn aborting_twice_is_the_same_as_aborting_once() {
-    let (sessions, exec, git) = ports(ScriptedExec::new(&[(
+    let (sessions, exec, git, _features) = ports(ScriptedExec::new(&[(
         "git -C /repos/demeteo_wt_sync_feature-f-1 merge --abort",
         Err("fatal: There is no merge to abort"),
     )]));
@@ -182,7 +186,7 @@ async fn aborting_twice_is_the_same_as_aborting_once() {
 /// network blip, leaving the worktree on disk named by nothing.
 #[tokio::test]
 async fn a_transport_failure_is_not_evidence_the_worktree_is_gone() {
-    let (sessions, exec, _git) = ports(ScriptedExec::new(&[(
+    let (sessions, exec, _git, _features) = ports(ScriptedExec::new(&[(
         GIT_DIR,
         Err("transport: Connection appears dead: no data and no keepalive ack"),
     )]));
@@ -213,7 +217,7 @@ async fn an_unreadable_merge_head_does_not_mean_the_merge_is_finished() {
     // shape that resolves: clean tree, HEAD moved off the starting sha. So the
     // only thing standing between this session and `resolved` is refusing to
     // read a dead channel as "no merge open".
-    let (sessions, exec, _git) = ports(ScriptedExec::new(&[
+    let (sessions, exec, _git, _features) = ports(ScriptedExec::new(&[
         (GIT_DIR, Ok(".git\n")),
         (MERGE_HEAD, Err("transport: Connection appears dead")),
         (PORCELAIN, Ok("")),
@@ -235,7 +239,7 @@ async fn an_unreadable_merge_head_does_not_mean_the_merge_is_finished() {
 /// and revisited by no reader.
 #[tokio::test]
 async fn aborting_against_an_unreachable_host_leaves_the_session_open() {
-    let (sessions, exec, _git) = ports(ScriptedExec::new(&[
+    let (sessions, exec, _git, _features) = ports(ScriptedExec::new(&[
         (
             "git -C /repos/demeteo_wt_sync_feature-f-1 merge --abort",
             Err("transport: Connection appears dead"),
@@ -252,4 +256,173 @@ async fn aborting_against_an_unreachable_host_leaves_the_session_open() {
         Some(WT),
         "the row must keep naming the tree it did not remove"
     );
+}
+
+const PUSH: &str = "git -C /repos/demeteo push origin feature/f-1";
+const CONTAINS: &str =
+    "git -C /repos/demeteo merge-base --is-ancestor c0ffeec refs/remotes/origin/feature/f-1";
+const DISCARD_WT: &str =
+    "git -C /repos/demeteo worktree remove --force /repos/demeteo_wt_sync_feature-f-1";
+const PRUNE: &str = "git -C /repos/demeteo worktree prune";
+const RESET: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 reset --hard aaaaaaa";
+const MERGE_ABORT: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 merge --abort";
+
+/// A resolution committed on the branch and not yet on origin — the state the
+/// review affordances act on.
+fn resolved(head_before: Option<&str>) -> SyncSession {
+    SyncSession {
+        status: SyncSessionStatus::Resolved,
+        merge_commit_sha: Some("c0ffeec".to_string()),
+        head_before: head_before.map(str::to_string),
+        conflict_files: Vec::new(),
+        raw_error: None,
+        ..conflicted(Some(WT))
+    }
+}
+
+/// The reconcile probe every read runs before it answers, for a tree holding a
+/// committed resolution: it exists, the merge is closed, nothing is modified,
+/// and `HEAD` has moved off where the sync started.
+fn resolved_probe() -> Vec<(&'static str, Result<&'static str, &'static str>)> {
+    vec![
+        (GIT_DIR, Ok(".git\n")),
+        (MERGE_HEAD, Ok("")),
+        (PORCELAIN, Ok("")),
+        (HEAD_SHA, Ok("c0ffeec\n")),
+    ]
+}
+
+fn script(extra: &[(&'static str, Result<&'static str, &'static str>)]) -> ScriptedExec {
+    let mut all = resolved_probe();
+    all.extend_from_slice(extra);
+    ScriptedExec::new(&all)
+}
+
+/// Publishing twice must not push twice, and must not be an error either.
+///
+/// The button sits beside a diff the user is reading, so the honest reading of
+/// a second press is "did the first one work" — which a refusal would answer
+/// with an error dialog. The double errors on anything it was not scripted, so
+/// a second `git push` here reddens rather than passing silently.
+#[tokio::test]
+async fn publishing_a_resolution_twice_pushes_once() {
+    let (sessions, exec, git, features) = ports(script(&[
+        (PUSH, Ok("")),
+        (CONTAINS, Ok("")),
+        (DISCARD_WT, Ok("")),
+        (PRUNE, Ok("")),
+    ]));
+    sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    let first = publish(&sessions, &exec, &features, &fid())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(first.session.pushed_at.is_some());
+
+    let second = publish(&sessions, &exec, &features, &fid())
+        .await
+        .expect("a second press is not an error")
+        .unwrap();
+    assert_eq!(second.session.pushed_at, first.session.pushed_at);
+    assert_eq!(
+        git.commands().iter().filter(|c| *c == PUSH).count(),
+        1,
+        "{:?}",
+        git.commands()
+    );
+}
+
+/// origin refused the push — the branch moved under it, most likely. The user
+/// is owed git's own words and the row must not claim a publication that did
+/// not happen: `pushed_at` set here is a resolution the UI stops offering to
+/// publish, on a PR that never received it.
+#[tokio::test]
+async fn a_rejected_push_is_not_recorded_as_published() {
+    let (sessions, exec, _git, features) = ports(script(&[(
+        PUSH,
+        Err("! [rejected] feature/f-1 -> feature/f-1 (non-fast-forward)"),
+    )]));
+    sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    let err = publish(&sessions, &exec, &features, &fid())
+        .await
+        .expect_err("origin said no");
+    assert!(err.contains("non-fast-forward"), "{err}");
+    assert_eq!(sessions.get(&fid()).unwrap().unwrap().pushed_at, None);
+}
+
+/// `git push` exiting zero is a verdict about the command, not about origin.
+/// The commit not being reachable from the remote-tracking ref afterwards is
+/// the only thing that can prove the publication, and without it nothing is
+/// written — the same rule `abort` applies to the worktree it claims to have
+/// deleted.
+#[tokio::test]
+async fn a_push_that_cannot_be_confirmed_is_not_recorded_either() {
+    let (sessions, exec, _git, features) = ports(script(&[
+        (PUSH, Ok("")),
+        (CONTAINS, Err("transport: Connection appears dead")),
+    ]));
+    sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    let err = publish(&sessions, &exec, &features, &fid())
+        .await
+        .expect_err("an unconfirmed push is not a published one");
+    assert!(err.contains("Press Publish again"), "{err}");
+    assert_eq!(sessions.get(&fid()).unwrap().unwrap().pushed_at, None);
+}
+
+/// Discarding is a branch move, and the only place to move it back to is the
+/// tip the sync recorded. `merge_commit^` names it only until the resolver adds
+/// a follow-up commit, and nothing on the row tells the two apart — so a
+/// session missing the real one is refused rather than reset to a guess.
+#[tokio::test]
+async fn a_resolution_with_no_recorded_base_is_not_discarded() {
+    let (sessions, exec, git, features) = ports(script(&[]));
+    sessions.open(&resolved(None)).unwrap();
+
+    let err = discard_resolution(&sessions, &exec, &features, &fid())
+        .await
+        .expect_err("there is nowhere honest to put the branch");
+    assert!(err.contains("without guessing"), "{err}");
+    assert!(
+        !git.commands().iter().any(|c| c.contains("reset")),
+        "{:?}",
+        git.commands()
+    );
+    assert_eq!(
+        sessions.get(&fid()).unwrap().unwrap().status,
+        SyncSessionStatus::Resolved
+    );
+}
+
+/// What the user actually gets: the branch back where the merge found it, and
+/// an abandoned sync — not the conflict. Reproducing that would mean re-running
+/// the merge against an origin that has moved since, which is a different
+/// operation with a different outcome.
+#[tokio::test]
+async fn discarding_moves_the_branch_back_and_abandons_the_sync() {
+    let (sessions, exec, _git, features) = ports(
+        ScriptedExec::new(&[
+            (GIT_DIR, Ok(".git\n")),
+            (MERGE_HEAD, Ok("")),
+            (PORCELAIN, Ok("")),
+            (RESET, Ok("")),
+            (MERGE_ABORT, Err("fatal: There is no merge to abort")),
+            (DISCARD_WT, Ok("")),
+            (PRUNE, Ok("")),
+        ])
+        // Moved off the starting sha while the resolution stood, and back on it
+        // once the reset lands — which is what the confirmation reads.
+        .with_queue(HEAD_SHA, &[Ok("c0ffeec\n"), Ok("aaaaaaa\n")])
+        .with_queue(GIT_DIR, &[Ok(".git\n"), Err("fatal: not a git repository")]),
+    );
+    sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    let after = discard_resolution(&sessions, &exec, &features, &fid())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.status, SyncSessionStatus::Aborted);
+    assert_eq!(after.worktree_path, None);
 }
