@@ -479,49 +479,95 @@ mod stage_at_each_call {
     const REPO: &str = "/repo";
     const BRANCH: &str = "feat/x";
     const BASE: &str = "main";
-    const WT: &str = "/repo_wt_sync_feat-x";
+
+    /// Derived, never spelled. `sync_worktree_dir` shortens the branch slug on
+    /// a Windows host, so a literal `/repo_wt_sync_feat-x` names the tree this
+    /// code provisions on Linux and nothing at all anywhere else: under Wine
+    /// every test in this module stopped at `worktree add`, came back
+    /// `WorktreeProvision`, and asserted nothing whatever about the call it is
+    /// named for.
+    fn wt() -> String {
+        crate::paths::sync_worktree_dir(
+            REPO,
+            BRANCH,
+            crate::paths::targets_windows_host(crate::domain::ids::LOCAL_MACHINE),
+        )
+    }
 
     const REV_PARSE_BASE: &str = "git -C /repo rev-parse --verify origin/main";
-    const WORKTREE_ADD: &str = "git -C /repo worktree add /repo_wt_sync_feat-x feat/x";
-    const MERGE: &str = "git -C /repo_wt_sync_feat-x merge origin/main \
-                         -m chore(sync): sync feature with origin/main";
-    const PUSH: &str = "git -C /repo_wt_sync_feat-x push origin feat/x";
+
+    fn worktree_add() -> String {
+        format!("git -C {REPO} worktree add {} {BRANCH}", wt())
+    }
+
+    fn merge() -> String {
+        format!(
+            "git -C {} merge origin/main -m chore(sync): sync feature with origin/main",
+            wt()
+        )
+    }
+
+    fn push() -> String {
+        format!("git -C {} push origin {BRANCH}", wt())
+    }
 
     /// A sync that reaches the push, answered call by call. Every test below
     /// breaks exactly one entry, so the stage it gets back names that call and
     /// nothing else.
-    fn full_run() -> Vec<(&'static str, Result<&'static str, &'static str>)> {
+    fn full_run() -> Vec<(String, Result<String, String>)> {
+        let ok = |s: &str| Ok(s.to_string());
+        let wt = wt();
         vec![
-            ("git -C /repo fetch origin -- main", Ok("")),
-            (REV_PARSE_BASE, Ok("beef")),
-            ("git -C /repo rev-parse refs/heads/feat/x", Ok("cafe")),
+            ("git -C /repo fetch origin -- main".to_string(), ok("")),
+            (REV_PARSE_BASE.to_string(), ok("beef")),
             (
-                "git -C /repo rev-list --count origin/main..refs/heads/feat/x",
-                Ok("0"),
+                "git -C /repo rev-parse refs/heads/feat/x".to_string(),
+                ok("cafe"),
             ),
             (
-                "git -C /repo rev-list --count refs/heads/feat/x..origin/main",
-                Ok("2"),
+                "git -C /repo rev-list --count origin/main..refs/heads/feat/x".to_string(),
+                ok("0"),
             ),
-            ("git -C /repo rev-parse --abbrev-ref HEAD", Ok("main")),
-            ("git -C /repo worktree list --porcelain", Ok("")),
-            (WORKTREE_ADD, Ok("")),
-            (MERGE, Ok("")),
-            ("git -C /repo_wt_sync_feat-x rev-parse HEAD", Ok("d00d")),
-            (PUSH, Ok("")),
             (
-                "git -C /repo_wt_sync_feat-x status --porcelain --untracked-files=no",
-                Ok("UU README.md"),
+                "git -C /repo rev-list --count refs/heads/feat/x..origin/main".to_string(),
+                ok("2"),
+            ),
+            (
+                "git -C /repo rev-parse --abbrev-ref HEAD".to_string(),
+                ok("main"),
+            ),
+            ("git -C /repo worktree list --porcelain".to_string(), ok("")),
+            (worktree_add(), ok("")),
+            (merge(), ok("")),
+            (format!("git -C {wt} rev-parse HEAD"), ok("d00d")),
+            (push(), ok("")),
+            (
+                format!("git -C {wt} status --porcelain --untracked-files=no"),
+                ok("UU README.md"),
             ),
         ]
     }
 
+    fn as_script(run: &[(String, Result<String, String>)]) -> Vec<(&str, Result<&str, &str>)> {
+        run.iter()
+            .map(|(k, v)| {
+                (
+                    k.as_str(),
+                    match v {
+                        Ok(s) => Ok(s.as_str()),
+                        Err(e) => Err(e.as_str()),
+                    },
+                )
+            })
+            .collect()
+    }
+
     async fn sync_with(failing: &str, err: &str) -> SyncFailure {
-        let programs: Vec<(&str, Result<&str, &str>)> = full_run()
+        let run: Vec<(String, Result<String, String>)> = full_run()
             .into_iter()
             .map(|(key, answer)| {
                 if key == failing {
-                    (key, Err(err))
+                    (key, Err(err.to_string()))
                 } else {
                     (key, answer)
                 }
@@ -532,7 +578,7 @@ mod stage_at_each_call {
             Arc::new(SqliteAdapter::new(conn).expect("adapter")) as Arc<dyn AppSettingsRepository>;
         let helper = GitOpsHelper::new(
             db,
-            Arc::new(ScriptedExec::new(&[]).with_programs(&programs)),
+            Arc::new(ScriptedExec::new(&[]).with_programs(&as_script(&run))),
         );
         helper
             .sync_feature_with_upstream(None, REPO, BRANCH, BASE, &())
@@ -584,7 +630,8 @@ mod stage_at_each_call {
             }
         }
 
-        let exec = Arc::new(ScriptedExec::new(&[]).with_programs(&full_run()));
+        let run = full_run();
+        let exec = Arc::new(ScriptedExec::new(&[]).with_programs(&as_script(&run)));
         let observer = Recorder::default();
         *observer.exec.lock().unwrap() = Some(exec.clone());
         let conn = Connection::open_in_memory().expect("in-memory db");
@@ -597,12 +644,15 @@ mod stage_at_each_call {
             .await
             .expect("the scripted run merges and pushes cleanly");
 
-        assert_eq!(observer.path.lock().unwrap().as_deref(), Some(WT));
+        assert_eq!(
+            observer.path.lock().unwrap().as_deref(),
+            Some(wt().as_str())
+        );
         let issued = exec.programs();
         let before = *observer.programs_before.lock().unwrap();
         let merged_at = issued
             .iter()
-            .position(|p| p == MERGE)
+            .position(|p| *p == merge())
             .expect("the run reaches its merge");
         assert!(
             before <= merged_at,
@@ -625,7 +675,7 @@ mod stage_at_each_call {
     #[tokio::test]
     async fn the_worktree_add_is_its_own_stage() {
         assert_eq!(
-            stage_of(sync_with(WORKTREE_ADD, "fatal: already checked out").await),
+            stage_of(sync_with(&worktree_add(), "fatal: already checked out").await),
             SyncBlockedStage::WorktreeProvision
         );
     }
@@ -633,7 +683,7 @@ mod stage_at_each_call {
     #[tokio::test]
     async fn a_rejected_push_names_the_push_and_not_the_remote() {
         assert_eq!(
-            stage_of(sync_with(PUSH, "! [rejected] feat/x -> feat/x (fetch first)").await),
+            stage_of(sync_with(&push(), "! [rejected] feat/x -> feat/x (fetch first)").await),
             SyncBlockedStage::Push
         );
     }
@@ -643,7 +693,7 @@ mod stage_at_each_call {
         assert_eq!(
             stage_of(
                 sync_with(
-                    MERGE,
+                    &merge(),
                     &format!("{TRANSPORT_ERROR_PREFIX}Connection appears dead")
                 )
                 .await
@@ -651,7 +701,7 @@ mod stage_at_each_call {
             SyncBlockedStage::Merge
         );
         assert_eq!(
-            stage_of(sync_with(MERGE, &format!("{TIMEOUT_ERROR_PREFIX}exceeded 600s")).await),
+            stage_of(sync_with(&merge(), &format!("{TIMEOUT_ERROR_PREFIX}exceeded 600s")).await),
             SyncBlockedStage::Merge
         );
     }
@@ -660,7 +710,7 @@ mod stage_at_each_call {
     /// verdict, and the unmerged paths are read from the worktree it left.
     #[tokio::test]
     async fn a_merge_that_exited_non_zero_is_the_conflict() {
-        match sync_with(MERGE, "CONFLICT (content): Merge conflict in README.md").await {
+        match sync_with(&merge(), "CONFLICT (content): Merge conflict in README.md").await {
             SyncFailure::Conflict {
                 files,
                 worktree_path,
@@ -668,7 +718,7 @@ mod stage_at_each_call {
             } => {
                 assert_eq!(files.len(), 1, "{files:?}");
                 assert_eq!(files[0].path, "README.md");
-                assert_eq!(worktree_path.as_deref(), Some(WT));
+                assert_eq!(worktree_path.as_deref(), Some(wt().as_str()));
             }
             SyncFailure::Blocked {
                 stage, raw_error, ..

@@ -50,6 +50,16 @@ const PRUNE: &str = "git -C /repos/demeteo worktree prune";
 /// stop naming the worktree.
 const GIT_DIR: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse --git-dir";
 
+/// A path inside the sync worktree as `ensure_conflict_markers_removed` builds
+/// it, which is not the same string on every host.
+fn resolved_file(rel: &str) -> String {
+    crate::paths::join_on(
+        WT,
+        [rel],
+        crate::paths::targets_windows_host(crate::domain::ids::LOCAL_MACHINE),
+    )
+}
+
 fn transport_dead() -> String {
     format!(
         "{}Connection appears dead",
@@ -556,10 +566,11 @@ async fn the_turn_bills_the_totals_it_was_handed_and_streams_to_its_own_row() {
 async fn a_file_outside_the_reported_conflicts_is_staged_with_the_rest() {
     let scripted = happy_path()
         .with_queue(PORCELAIN, &[Ok("UU src/lib.rs\n"), Ok("")])
-        .with_files(&[(
-            "/repos/demeteo_wt_sync_feature-f-1/src/lib.rs",
-            Ok("clean\n"),
-        )]);
+        // Built with the same `join_on` the marker check uses, not spelled: on
+        // a Windows host that join produces a backslash and a POSIX-spelled key
+        // matches nothing, so the read errors and the test asserts nothing
+        // about the staging it is named for.
+        .with_files(&[(resolved_file("src/lib.rs").as_str(), Ok("clean\n"))]);
     let p = ports(scripted, vec![Arc::new(ScriptedRuntime::default())]);
     open_conflicted(&p.db);
     let (mut cost, mut tokens) = (0.0, 0);
