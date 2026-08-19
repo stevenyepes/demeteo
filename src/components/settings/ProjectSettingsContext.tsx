@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useRef, useState, useEffect } from 'react';
 import type { ConfigOptionValue, EffortLevel, ProjectMemoryEntry, StepConfig, Machine, Project } from '../../types';
 import { getAgentModels } from '../../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
@@ -235,6 +235,26 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'general' | 'strategy' | 'overrides' | 'memory'>('general');
   const [status, setStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+  /**
+   * Timers that outlive nothing.
+   *
+   * Both of the delayed resets below fade an indicator ~1.5s after a save, which
+   * is comfortably longer than a test's mount: unowned, the callback ran against
+   * a torn-down jsdom and the run exited non-zero while every test reported
+   * passing — a red exit code beside a green summary, which trains a reader to
+   * re-run rather than look.
+   */
+  const fadeTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(
+    () => () => {
+      for (const timer of fadeTimers.current) clearTimeout(timer);
+      fadeTimers.current = [];
+    },
+    [],
+  );
+  const fadeLater = (fn: () => void, ms: number) => {
+    fadeTimers.current.push(setTimeout(fn, ms));
+  };
   const [errorMsg, setErrorMsg] = useState('');
 
   const [memories, setMemories] = useState<ProjectMemoryEntry[]>([]);
@@ -392,7 +412,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     try {
       await setWorkflowOverride({ projectId: activeProject.id, workflowId, stepId: stepId || null, agentKind: next.agent_kind, model: next.model, effort: next.effort });
       setSavedPulse(prev => ({ ...prev, [key]: true }));
-      setTimeout(() => setSavedPulse(prev => ({ ...prev, [key]: false })), 1400);
+      fadeLater(() => setSavedPulse(prev => ({ ...prev, [key]: false })), 1400);
     } catch (err) { setOverridesError(formatError(err)); }
   };
 
@@ -762,7 +782,7 @@ await saveProjectSettings(activeProject.id, settingsToPersist());
         // below (line ~531).
         setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, name: projectName, repos: selectedRepos.length, nodes: computeType === 'local' ? 4 : 8, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null } : p));
         setStatus('success'); setOriginalRepos(selectedRepos);
-        setTimeout(() => setStatus('idle'), 1500);
+        fadeLater(() => setStatus('idle'), 1500);
       } catch (err) { setStatus('error'); setErrorMsg(formatError(err)); }
     }
   };
