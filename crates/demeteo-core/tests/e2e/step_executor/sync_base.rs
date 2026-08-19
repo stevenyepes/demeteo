@@ -26,7 +26,7 @@ use crate::ports::db::{FeatureRepository, ProjectRepository};
 use crate::ports::step_executor::SyncOutcomeView;
 use crate::ports::sync_session::SyncSessionPort;
 
-const REPO_PATH: &str = "demeteo/sync-base";
+pub(super) const REPO_PATH: &str = "demeteo/sync-base";
 
 /// The git a "Sync with main" on a feature with this `origin` and
 /// `diff_base_branch` issues.
@@ -50,7 +50,7 @@ async fn sync_git(
 
 /// One project, one repository, one feature — the least a sync needs before it
 /// can name a base branch.
-fn seed_feature(
+pub(super) fn seed_feature(
     db: &Arc<SqliteAdapter>,
     label: &str,
     origin: FeatureOrigin,

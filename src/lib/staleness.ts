@@ -19,6 +19,31 @@ export interface StalenessChip {
   title: string;
 }
 
+/**
+ * What a read that failed is: not zero commits behind, and not up to date.
+ *
+ * Both surfaces that count drift resolve a rejection to this rather than to
+ * `null`, because a row whose count could not be taken must not look like a row
+ * nobody has counted yet — that is the two-state collapse this module's header
+ * refuses.
+ */
+export function unmeasuredDrift(checkedAt: number = Date.now()): FeatureDrift {
+  return {
+    divergence: { behind: null, ahead: null },
+    base_ref: '',
+    fetched: false,
+    checked_at: checkedAt,
+  };
+}
+
+/**
+ * The clause the one surface that can pay for a fetch adds to the chip's
+ * tooltip. Not part of `describeStaleness`: the project view renders the same
+ * chip with nothing behind it to press, and copy promising an affordance that
+ * surface does not offer is worse than no copy.
+ */
+export const REFRESH_HINT = 'Click to fetch it now and count again.';
+
 export function describeStaleness(drift: FeatureDrift | null): StalenessChip | null {
   if (drift === null) return null;
 

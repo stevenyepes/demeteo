@@ -372,9 +372,11 @@ impl GitOpsHelper {
                     .ok()
                     .map(|s| s.trim().to_string())
                     .unwrap_or_default();
-                // An unread `head_before` cannot say the tip stayed put, and the
-                // merge only got here because `origin/<base>` was ahead — so the
-                // honest reading of "we don't know" is that something moved.
+                // An unread `head_before` cannot say the tip stayed put, so it
+                // reads as moved. The two mistakes are not the same size: a
+                // push of a ref already at that commit is a no-op, where
+                // withholding one leaves a real merge on the local branch and
+                // the open pull request never sees it.
                 let changed = head_before.as_deref() != Some(head_after.as_str());
 
                 if changed {

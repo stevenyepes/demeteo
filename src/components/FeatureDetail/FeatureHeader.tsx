@@ -1,7 +1,7 @@
 import { Cpu, GitBranch, GitPullRequest, RefreshCw, Terminal } from 'lucide-react';
 import type { FeatureDrift, Project, RemoteRunMirror } from '../../types';
 import { runStatusMeta, TERMINAL_STATUSES } from '../../lib/runStatus';
-import { describeStaleness } from '../../lib/staleness';
+import { describeStaleness, REFRESH_HINT } from '../../lib/staleness';
 import { formatCost, formatTokens } from '../../lib/utils';
 import { Chip } from '../ui/Chip';
 import { Metric, MetricStrip } from '../ui/MetricStrip';
@@ -32,6 +32,8 @@ interface FeatureHeaderProps {
    *  lands. The chip it produces is the answer to "why would I press Sync", and
    *  an unmeasurable branch renders as unknown rather than as current. */
   drift: FeatureDrift | null;
+  /** A fetch of the base ref is in flight, asked for from this header. */
+  driftRefreshing?: boolean;
   mrUrl: string | null;
   /** Quieter chrome for a scrolled run column; `lib/headerCollapse.ts` decides it. */
   collapsed?: boolean;
@@ -42,6 +44,12 @@ interface FeatureHeaderProps {
   onSync: () => void;
   onPublish: () => void;
   onCleanup: () => void;
+  /** Fetch `origin/<base>` and count again. This is the only press in the app
+   *  that moves that ref for a finished feature — a run's bootstrap and a sync
+   *  are the only other things that fetch it, and neither happens while a
+   *  published pull request sits waiting — so without it the chip would answer
+   *  from whatever an unrelated git flow last left behind. */
+  onRefreshDrift?: () => void;
 }
 
 /**
@@ -80,6 +88,7 @@ export function FeatureHeader({
   publishing,
   reviewHeld,
   drift,
+  driftRefreshing = false,
   mrUrl,
   collapsed = false,
   onBack,
@@ -89,6 +98,7 @@ export function FeatureHeader({
   onSync,
   onPublish,
   onCleanup,
+  onRefreshDrift,
 }: FeatureHeaderProps) {
   const staleness = describeStaleness(drift);
 
@@ -145,9 +155,26 @@ export function FeatureHeader({
               : 'Local'}
           </Chip>
           {staleness && (
-            <Chip tone={staleness.tone} dot={false} title={staleness.title}>
-              {staleness.label}
-            </Chip>
+            <button
+              type="button"
+              onClick={onRefreshDrift}
+              disabled={!onRefreshDrift || driftRefreshing}
+              data-testid="drift-refresh"
+              className="rounded-full transition disabled:cursor-default enabled:hover:brightness-125"
+              title={
+                onRefreshDrift
+                  ? `${staleness.title} ${driftRefreshing ? 'Fetching…' : REFRESH_HINT}`
+                  : staleness.title
+              }
+            >
+              <Chip
+                tone={staleness.tone}
+                dot={false}
+                icon={driftRefreshing ? <RefreshCw className="w-3 h-3 animate-spin" /> : undefined}
+              >
+                {staleness.label}
+              </Chip>
+            </button>
           )}
         </div>
         {!collapsed && <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>}

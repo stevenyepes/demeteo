@@ -3,6 +3,7 @@
 //! builds on.
 
 mod bootstrap;
+mod drift;
 mod gate_decide;
 mod harness;
 mod launch_resolution;

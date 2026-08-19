@@ -5,9 +5,11 @@
 // assertion while re-opening audit finding F27.
 
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 
 import { runStatusMeta, TONE_TEXT } from '../../lib/runStatus';
+import { REFRESH_HINT } from '../../lib/staleness';
 import { FeatureHeader } from './FeatureHeader';
 
 function renderHeader(overrides: Partial<Parameters<typeof FeatureHeader>[0]> = {}) {
@@ -216,5 +218,50 @@ describe('FeatureHeader staleness', () => {
   it('calls a measured zero up to date', () => {
     renderHeader({ status: 'completed', drift: drift(0) });
     expect(tones()['Up to date']).toBe('emerald');
+  });
+
+  /**
+   * The chip is the only affordance in the app that fetches `origin/<base>`
+   * for a finished feature. Rendering it read-only leaves every count taken
+   * against whatever ref an unrelated git flow last left behind — which is a
+   * branch arbitrarily far behind trunk shown in emerald.
+   */
+  it('spends a press on a fetch of the base ref', async () => {
+    const onRefreshDrift = vi.fn();
+    renderHeader({ status: 'completed', drift: drift(0), onRefreshDrift });
+
+    await userEvent.click(screen.getByTestId('drift-refresh'));
+
+    expect(onRefreshDrift).toHaveBeenCalledTimes(1);
+  });
+
+  it('says the press is available in the tooltip, and only when it is', () => {
+    const withPress = renderHeader({
+      status: 'completed',
+      drift: drift(0),
+      onRefreshDrift: () => {},
+    });
+    expect(screen.getByTestId('drift-refresh')).toHaveAttribute(
+      'title',
+      expect.stringContaining(REFRESH_HINT) as unknown as string,
+    );
+    withPress.unmount();
+
+    renderHeader({ status: 'completed', drift: drift(0) });
+    expect(screen.getByTestId('drift-refresh').getAttribute('title')).not.toContain(REFRESH_HINT);
+  });
+
+  it('refuses a second press while the fetch it started is still in flight', async () => {
+    const onRefreshDrift = vi.fn();
+    renderHeader({
+      status: 'completed',
+      drift: drift(0),
+      driftRefreshing: true,
+      onRefreshDrift,
+    });
+
+    await userEvent.click(screen.getByTestId('drift-refresh'));
+
+    expect(onRefreshDrift).not.toHaveBeenCalled();
   });
 });

@@ -148,7 +148,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   // Only once the run has stopped committing, and never during a sync: the two
   // are the states the "Sync with main" button itself is offered in, and a
   // count taken between the merge and its push describes neither side.
-  const { drift } = useFeatureDrift({
+  const { drift, refresh: refreshDrift, refreshing: refreshingDrift } = useFeatureDrift({
     featureId,
     enabled: TERMINAL_STATUSES.includes(run.status) && !mr.syncing,
   });
@@ -398,6 +398,8 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         publishing={mr.publishing}
         reviewHeld={mr.reviewHeld}
         drift={drift}
+        driftRefreshing={refreshingDrift}
+        onRefreshDrift={refreshDrift}
         mrUrl={mr.mrUrl}
         onBack={() => navigate({ kind: 'home' })}
         onOpenTerminalTab={routing.handleOpenTerminalTab}

@@ -7,7 +7,7 @@ import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } f
 import { bootstrapProject } from '../lib/createProjectWizard';
 import { fetchActiveFeatures } from '../lib/features';
 import { getFeatureDrift } from '../lib/featureSync';
-import { holdsOpenRequest } from '../lib/staleness';
+import { holdsOpenRequest, unmeasuredDrift } from '../lib/staleness';
 import { listMirroredRuns } from '../lib/remoteRuns';
 import { listWorkflows } from '../lib/workflows';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
@@ -155,13 +155,18 @@ const ProjectHome = () => {
             return;
         }
         let alive = true;
-        Promise.allSettled(
-            ids.map(async (id) => [id, await getFeatureDrift(id)] as const),
-        ).then((results) => {
+        Promise.allSettled(ids.map((id) => getFeatureDrift(id))).then((results) => {
             if (!alive) return;
+            // A read that rejected is unmeasured, not absent: dropping the row
+            // would leave a feature whose count could not be taken looking
+            // exactly like one nobody has counted yet, which is the two-state
+            // collapse `lib/staleness.ts` exists to refuse — and this is the
+            // surface that shows the whole queue at once.
             setDriftByFeature(
                 Object.fromEntries(
-                    results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : [])),
+                    results.map((r, i) =>
+                        [ids[i], r.status === 'fulfilled' ? r.value : unmeasuredDrift()] as const,
+                    ),
                 ),
             );
         });
