@@ -10,6 +10,7 @@ import { useLaunchRun } from '../../hooks/useLaunchRun';
 import { getProposedStrategy } from '../../lib/project';
 import {
   asPullRequestListFailure,
+  describeDetailFailure,
   listOpenPullRequests,
   loadPullRequestDetail,
   type PullRequestListFailure,
@@ -37,6 +38,9 @@ export function CodeReviewView(): React.ReactElement {
   const { navigate } = useNavigation();
   const [state, setState] = useState<ListState>({ status: 'loading' });
   const [defaultAgentKind, setDefaultAgentKind] = useState('');
+  /** Why the tier stopped filling in, once one row's enrichment has failed. Not
+   *  a `ListState`: the listing succeeded and its rows are all still true. */
+  const [detailFailure, setDetailFailure] = useState<PullRequestListFailure | null>(null);
   const latestRead = useRef(0);
   /** Rows whose detail has been requested, so pointing at one twice is one
    *  request and a re-render is none. */
@@ -53,6 +57,7 @@ export function CodeReviewView(): React.ReactElement {
     latestRead.current += 1;
     const read = latestRead.current;
     asked.current.clear();
+    setDetailFailure(null);
     setState({ status: 'loading' });
 
     listOpenPullRequests(currentProjectId)
@@ -95,6 +100,14 @@ export function CodeReviewView(): React.ReactElement {
   // against a rate limit this app can detect and has no way to back off from.
   // A row asks once, when the user points at it; a failure leaves the row as
   // the listing left it, because the identity tier is still true.
+  //
+  // `asked` is therefore not released by a failure. Releasing it made the
+  // pointer the retry loop: the one condition under which this fails at scale
+  // is the throttled token, and a mouse sweeping down a hundred rows and back
+  // would then issue two hundred requests into a quota that is already out —
+  // with the rows no better off, because the second answer is the first one
+  // again. One attempt per row per listing; `load` is the retry, and it is a
+  // press.
   const requestDetail = useCallback(
     (url: string) => {
       if (!currentProjectId || asked.current.has(url)) return;
@@ -114,8 +127,9 @@ export function CodeReviewView(): React.ReactElement {
               : prev,
           );
         })
-        .catch(() => {
-          asked.current.delete(url);
+        .catch((err: unknown) => {
+          if (read !== latestRead.current) return;
+          setDetailFailure(asPullRequestListFailure(err));
         });
     },
     [currentProjectId],
@@ -152,6 +166,17 @@ export function CodeReviewView(): React.ReactElement {
             onConnect={connectProvider}
             onRetry={load}
           />
+        )}
+
+        {state.status === 'ready' && detailFailure && (
+          <p
+            role="status"
+            data-testid="code-review-detail-failure"
+            data-failure={detailFailure.kind}
+            className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-slate-300"
+          >
+            {describeDetailFailure(detailFailure)}
+          </p>
         )}
 
         {state.status === 'ready' &&

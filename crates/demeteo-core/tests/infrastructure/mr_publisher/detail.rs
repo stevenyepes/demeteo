@@ -86,3 +86,153 @@ async fn a_404_is_reported_rather_than_coerced_to_open() {
         "got {err:?}"
     );
 }
+
+/// Which provider the enrichment asks, in a project holding more than one.
+///
+/// The listing resolves a provider per repository and the detail read did not:
+/// it took `repos.first()`, so every row from the second repository onwards was
+/// enriched against the first repository's host and token. Nothing surfaced it
+/// — the row simply stayed undecided — so the routing is asserted here rather
+/// than through a request whose failure looks identical either way.
+mod routing {
+    use std::sync::Arc;
+
+    use rusqlite::Connection;
+
+    use super::super::{FakeHttpClient, HttpMrPublisher};
+    use crate::adapters::database::SqliteAdapter;
+    use crate::adapters::step_executor::scripted_exec::ScriptedExec;
+    use crate::domain::ids::{ProjectId, ProviderId, RepositoryId};
+    use crate::domain::models::{Project, ProviderInstance, Repository};
+    use crate::domain::mr_list_error::MrListError;
+    use crate::ports::db::{AppSettingsRepository, ProjectRepository};
+
+    const PROJECT: &str = "p-1";
+
+    /// One project, and one repository per `(provider kind, host)` given — in
+    /// the order given, so "the first repository" is the first entry.
+    fn seeded(providers: &[(&str, &str, &str)]) -> Arc<SqliteAdapter> {
+        let adapter = Arc::new(SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap());
+        let pid = ProjectId::from(PROJECT.to_string());
+        ProjectRepository::add(
+            adapter.as_ref(),
+            Project {
+                id: pid.clone(),
+                name: "widget".to_string(),
+                compute_type: "local".to_string(),
+                remote_host: None,
+                status: "idle".to_string(),
+                nodes: 1,
+                spend: 0.0,
+                tokens: 0,
+                created_at: 1000,
+            },
+        )
+        .unwrap();
+        for (index, (id, kind, host)) in providers.iter().enumerate() {
+            adapter
+                .add_provider_instance(ProviderInstance {
+                    id: ProviderId::from((*id).to_string()),
+                    kind: (*kind).to_string(),
+                    host: (*host).to_string(),
+                    username: "someone".to_string(),
+                    avatar_url: String::new(),
+                    created_at: 1000,
+                })
+                .unwrap();
+            ProjectRepository::add_repository(
+                adapter.as_ref(),
+                Repository {
+                    id: RepositoryId::from(format!("r-{index}")),
+                    project_id: pid.clone(),
+                    provider_id: ProviderId::from((*id).to_string()),
+                    repo_path: format!("acme/widget-{index}"),
+                },
+            )
+            .unwrap();
+        }
+        adapter
+    }
+
+    fn publisher(adapter: Arc<SqliteAdapter>) -> HttpMrPublisher {
+        HttpMrPublisher::with_http_override(
+            adapter.clone(),
+            adapter.clone(),
+            adapter,
+            Arc::new(ScriptedExec::new(&[])),
+            Arc::new(FakeHttpClient::new()),
+        )
+    }
+
+    fn serving(providers: &[(&str, &str, &str)], url: &str) -> Result<String, MrListError> {
+        publisher(seeded(providers))
+            .provider_serving(&ProjectId::from(PROJECT.to_string()), url)
+            .map(|p| p.host)
+    }
+
+    #[tokio::test]
+    async fn a_row_is_enriched_against_the_host_it_came_from() {
+        assert_eq!(
+            serving(
+                &[
+                    ("prov-ghes", "github", "ghes.corp.com"),
+                    ("prov-gh", "github", "github.com"),
+                ],
+                "https://github.com/acme/widget-1/pull/7",
+            )
+            .as_deref(),
+            Ok("github.com"),
+            "the first repository's enterprise host holds neither this request nor a token for it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_row_on_another_provider_kind_is_not_dispatched_at_this_one() {
+        assert_eq!(
+            serving(
+                &[
+                    ("prov-gl", "gitlab", "gitlab.com"),
+                    ("prov-gh", "github", "github.com"),
+                ],
+                "https://github.com/acme/widget-1/pull/7",
+            )
+            .as_deref(),
+            Ok("github.com"),
+            "a GitHub URL handed to the GitLab reader is refused by its own URL parser"
+        );
+    }
+
+    /// The single-provider project is every project the old resolution was
+    /// right for, and a host spelled in a way `mr_route` cannot match must not
+    /// cost it its enrichment.
+    #[tokio::test]
+    async fn one_provider_answers_for_a_url_it_does_not_look_like_it_serves() {
+        assert_eq!(
+            serving(
+                &[("prov-gl", "gitlab", "git.internal")],
+                "https://vpn.internal/acme/widget/-/merge_requests/7",
+            )
+            .as_deref(),
+            Ok("git.internal")
+        );
+    }
+
+    /// Guessing between several would send the token to a host it was not
+    /// issued for, and report that host's 404 as an unreadable request.
+    #[tokio::test]
+    async fn several_providers_and_no_match_is_refused_rather_than_guessed() {
+        let err = serving(
+            &[
+                ("prov-gl", "gitlab", "gitlab.com"),
+                ("prov-gh", "github", "github.com"),
+            ],
+            "https://ghes.corp.com/acme/widget/pull/7",
+        )
+        .expect_err("no connected provider serves that host");
+
+        assert!(
+            matches!(&err, MrListError::Http { body, .. } if body.contains("ghes.corp.com")),
+            "the refusal has to name the host nobody is connected to; got {err:?}"
+        );
+    }
+}

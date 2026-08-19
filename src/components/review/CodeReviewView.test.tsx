@@ -347,4 +347,39 @@ describe('CodeReviewView', () => {
     await userEvent.hover(row);
     expect(detail).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * The failure path used to release the de-dupe guard, which made the pointer
+   * the retry loop: under the one failure that matters at scale — a throttled
+   * token — sweeping the mouse down the queue and back issued two requests per
+   * row into a quota that was already out, and the structured error was
+   * dropped, so nothing on the page said the tier had stopped filling in.
+   */
+  it('asks once per row even when the answer is a rejection, and says why', async () => {
+    const detail = vi.fn(() =>
+      Promise.reject(
+        '{"kind":"rate-limited","host":"api.github.com","retry_after":120}',
+      ),
+    );
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'list_open_pull_requests') return Promise.resolve([PULL_REQUEST]);
+      if (cmd === 'pull_request_detail') return detail();
+      return Promise.reject(new Error(`unexpected command: ${cmd}`));
+    });
+    mount();
+
+    const row = await screen.findByTestId('pull-request-row');
+    await userEvent.hover(row);
+    await waitFor(() => expect(detail).toHaveBeenCalledTimes(1));
+
+    await userEvent.unhover(row);
+    await userEvent.hover(row);
+    await userEvent.unhover(row);
+    await userEvent.hover(row);
+    expect(detail).toHaveBeenCalledTimes(1);
+
+    const notice = await screen.findByTestId('code-review-detail-failure');
+    expect(notice).toHaveTextContent('api.github.com');
+    expect(notice).toHaveTextContent('in about 2 min');
+  });
 });

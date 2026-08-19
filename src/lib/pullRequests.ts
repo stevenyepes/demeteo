@@ -281,6 +281,30 @@ export function describeListFailure(failure: PullRequestListFailure): FailureCop
   }
 }
 
+/**
+ * The one line an enrichment failure gets, which is not the listing's card.
+ *
+ * The rows are all still on screen and all still true — only the mergeability
+ * verdict and the diffstat are missing — so this states what stopped filling in
+ * and leaves the queue readable. Silence is the wrong answer for the same
+ * reason it is on the listing: under a throttled token every row stays
+ * undecided, and nothing else on the page says why.
+ */
+export function describeDetailFailure(failure: PullRequestListFailure): string {
+  switch (failure.kind) {
+    case 'rate-limited':
+      return `${failure.host} is rate-limiting this token, so merge state stopped filling in. It will read again ${retryWhen(failure.retry_after)} — reviews already running are unaffected.`;
+    case 'unauthorized':
+      return `${failure.host} rejected this token when asked for merge state, so the rows below show only what the listing carried.`;
+    case 'no-credential':
+      return `Nothing was sent to ${failure.host} — no token for this connection is in your keyring — so the rows below show only what the listing carried.`;
+    case 'no-provider':
+      return 'No provider is connected for this request, so the rows below show only what the listing carried.';
+    case 'http':
+      return `${failure.host} answered ${failure.status ?? 'with an error'} when asked for merge state, so the rows below show only what the listing carried.`;
+  }
+}
+
 /** A provider that named a wait gets to keep the number; one that did not gets
  *  the vague word rather than an invented figure. */
 function retryWhen(retryAfter: number | null): string {

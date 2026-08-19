@@ -521,15 +521,57 @@ impl HttpMrPublisher {
             .collect())
     }
 
+    /// The provider that serves `mr_url`, resolved the way the listing that
+    /// produced the row resolved it: per repository, not from `repos.first()`.
+    ///
+    /// [`crate::domain::mr_route`] holds why the host decides it. A project
+    /// whose repositories all sit behind one provider has one answer whatever
+    /// the URL says, so that case keeps working when a host is spelled in a
+    /// way this cannot match; several providers and no match is a request
+    /// Demeteo cannot place, and guessing one would send the token somewhere
+    /// it was not issued for and report the 404 as an unreadable request.
+    fn provider_serving(
+        &self,
+        project_id: &crate::domain::ids::ProjectId,
+        mr_url: &str,
+    ) -> Result<ProviderInstance, MrListError> {
+        let repos = self
+            .projects
+            .get_repositories_for(project_id)
+            .map_err(|e| MrListError::other("", e))?;
+        let mut candidates: Vec<ProviderInstance> = Vec::new();
+        for repo in &repos {
+            let Ok(provider) = resolve_provider(self.app_settings.as_ref(), &repo.provider_id)
+            else {
+                continue;
+            };
+            if crate::domain::mr_route::serves_request(&provider.host, mr_url) {
+                return Ok(provider);
+            }
+            if !candidates.iter().any(|p| p.id == provider.id) {
+                candidates.push(provider);
+            }
+        }
+        match candidates.len() {
+            1 => Ok(candidates.remove(0)),
+            0 => Err(MrListError::NoProvider),
+            _ => Err(MrListError::other(
+                "",
+                format!(
+                    "No provider connected to this project serves {mr_url}. \
+                     Connect the one hosting it in Preferences \u{2192} Providers."
+                ),
+            )),
+        }
+    }
+
     async fn fetch_mr_detail_impl(
         &self,
         project_id: &str,
         mr_url: &str,
     ) -> Result<MrSummary, MrListError> {
         let pid = crate::domain::ids::ProjectId::from(project_id.to_string());
-        let provider = resolve_target(self.app_settings.as_ref(), self.projects.as_ref(), &pid)
-            .map_err(|_| MrListError::NoProvider)?
-            .provider;
+        let provider = self.provider_serving(&pid, mr_url)?;
         let target = ListTarget {
             kind: &provider.kind,
             host: &provider.host,

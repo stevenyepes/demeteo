@@ -46,6 +46,7 @@ pub(crate) mod merge_status;
 pub mod models;
 pub mod mr_comment;
 pub mod mr_list_error;
+pub mod mr_route;
 pub mod mr_summary;
 pub mod permission;
 pub mod platform_context;

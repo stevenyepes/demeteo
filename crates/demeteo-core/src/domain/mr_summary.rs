@@ -153,9 +153,10 @@ impl MrSummary {
             from_fork: mr.source_project_id != mr.target_project_id,
             maintainer_can_modify: mr.allow_collaboration,
             head_repo_push: not_permitted(),
-            has_conflicts: mr
-                .has_conflicts
-                .or_else(|| mr.merge_status.as_deref().and_then(conflict_verdict)),
+            has_conflicts: match mr.merge_status.as_deref() {
+                Some(status) => conflict_verdict(status),
+                None => mr.has_conflicts,
+            },
             additions: None,
             deletions: None,
             changed_files: mr.changes_count.as_deref().and_then(changed_file_count),
@@ -169,10 +170,19 @@ const fn not_permitted() -> bool {
 
 /// Read GitLab's `merge_status`, and only once it has settled.
 ///
-/// `unchecked` and `checking` are the provider still working. Answering `false`
-/// for either is the same lie as reading GitHub's `mergeable: null` as clean,
-/// so they leave the verdict undecided and the row shows no reassurance it was
-/// not given.
+/// `unchecked` and `checking` are the provider still working, as are the two
+/// `cannot_be_merged_recheck*` spellings. Answering `false` for any of them is
+/// the same lie as reading GitHub's `mergeable: null` as clean, so they leave
+/// the verdict undecided and the row shows no reassurance it was not given.
+///
+/// This outranks the payload's own `has_conflicts`, which is not a second
+/// opinion but a projection of this field: GitLab derives it as `merge_status
+/// == "cannot_be_merged"`, so a request mid-check carries `has_conflicts:
+/// false` beside `merge_status: "checking"`. Consulting `has_conflicts` first
+/// therefore reads every undecided merge request as a clean one, and leaves
+/// the arms below unreachable for any payload GitLab actually sends;
+/// `has_conflicts` is the fallback for a payload that carries no status at
+/// all.
 fn conflict_verdict(merge_status: &str) -> Option<bool> {
     match merge_status {
         "cannot_be_merged" => Some(true),

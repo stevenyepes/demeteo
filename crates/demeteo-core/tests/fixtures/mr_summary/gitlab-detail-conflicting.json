@@ -13,6 +13,7 @@
   "source_project_id": 8811,
   "target_project_id": 5150,
   "allow_collaboration": true,
+  "has_conflicts": true,
   "merge_status": "cannot_be_merged",
   "changes_count": "7"
 }
