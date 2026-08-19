@@ -20,14 +20,10 @@ interface FeatureHeaderProps {
   cacheReadTokens: number;
   cacheCreationTokens: number;
   stepCount: number;
-  syncing: boolean;
-  resolving: boolean;
   publishing: boolean;
-  /** A resolution is committed on the branch and waiting to be published or
-   *  discarded. Syncing again is refused while one is — the backend answers
-   *  `held_resolution` — so the button says so here rather than sending a
-   *  request that can only come back as a banner. */
-  reviewHeld: boolean;
+  /** What the Sync pane is holding for a human, if anything. > 0 is shown on
+   *  the button; the pane itself says what it is. */
+  syncBadge: number;
   /** How far behind the base a sync would merge, or `null` before a reading
    *  lands. The chip it produces is the answer to "why would I press Sync", and
    *  an unmeasurable branch renders as unknown rather than as current. */
@@ -41,7 +37,10 @@ interface FeatureHeaderProps {
   onOpenTerminalTab: () => void;
   onBrowseCode: () => void;
   onCancelFeature: () => void;
-  onSync: () => void;
+  /** Select the Sync pane. This press starts nothing: every sync, resolve and
+   *  publish now lives in that one pane, so the rules for when each is offered
+   *  are spelled once, where the buttons are. */
+  onOpenSync: () => void;
   onPublish: () => void;
   onCleanup: () => void;
   /** Fetch `origin/<base>` and count again. This is the only press in the app
@@ -83,10 +82,8 @@ export function FeatureHeader({
   cacheReadTokens,
   cacheCreationTokens,
   stepCount,
-  syncing,
-  resolving,
   publishing,
-  reviewHeld,
+  syncBadge,
   drift,
   driftRefreshing = false,
   mrUrl,
@@ -95,7 +92,7 @@ export function FeatureHeader({
   onOpenTerminalTab,
   onBrowseCode,
   onCancelFeature,
-  onSync,
+  onOpenSync,
   onPublish,
   onCleanup,
   onRefreshDrift,
@@ -227,17 +224,13 @@ export function FeatureHeader({
           {(status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'awaiting_mr') && (
             <>
               <button
-                onClick={onSync}
-                disabled={syncing || resolving || reviewHeld}
-                className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
-                title={
-                  reviewHeld
-                    ? 'A resolution from the last sync is still waiting to be published or discarded. Deal with it below, then sync again.'
-                    : 'Merge origin/main into this feature branch (resolves conflicts with a fresh agent when needed)'
-                }
+                onClick={onOpenSync}
+                data-testid="open-sync"
+                className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
+                title="Show this branch's sync: how far behind it is, any conflict, and what to do about it"
               >
-                {syncing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
-                Sync with main
+                <GitBranch className="w-3.5 h-3.5" />
+                {syncBadge > 0 ? `Sync · ${syncBadge}` : 'Sync'}
               </button>
               {/* The finalize step opens the PR itself at the end of a run,
                   so once there is a URL the only useful action is to go

@@ -1,9 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { RefreshCw, ShieldAlert } from 'lucide-react';
 import type { AppView } from '../../types';
 import type { NavigationMode } from '../../context/NavigationContext';
 import { DEFAULT_DENSITY } from '../../lib/density';
 import { TERMINAL_STATUSES } from '../../lib/runStatus';
+import { isOutOfBandStep } from '../../lib/featureSync';
+import { describeSyncPanel } from '../../lib/syncPanel';
 import { densityPref, inspectorWidthPref } from '../../lib/uiPrefs';
 import { usePersistedPref } from '../../hooks/usePersistedPref';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
@@ -26,12 +28,14 @@ import { FeatureHeader } from './FeatureHeader';
 import { FeatureStatusBanners } from './FeatureStatusBanners';
 import { GateStrip } from './GateStrip';
 import { InitialPromptPanel } from './InitialPromptPanel';
+import { InspectorColumn, type InspectorPane } from './InspectorColumn';
 import { ReplayModal } from './ReplayModal';
 import { RunGraphPanel } from './RunGraphPanel';
 import { RunMetaColumn } from './RunMetaColumn';
 import { RunPanes } from './RunPanes';
 import { StepInspector } from './StepInspector';
 import { StepTimeline } from './StepTimeline';
+import { SyncPanel } from './sync/SyncPanel';
 import { useAgentStream } from './useAgentStream';
 import { useArtifactSelection } from './useArtifactSelection';
 import { useAttachmentPreview } from './useAttachmentPreview';
@@ -48,6 +52,8 @@ import { useRerunActions } from './useRerunActions';
 import { useRunGraph } from './useRunGraph';
 import { useRunShortcuts } from './useRunShortcuts';
 import { useStepSelection } from './useStepSelection';
+import { useSyncActions } from './useSyncActions';
+import { useSyncSession } from './useSyncSession';
 import { useWorktreeRouting } from './useWorktreeRouting';
 
 type DetailView = Extract<AppView, { kind: 'detail' }>;
@@ -145,17 +151,27 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     reload: run.reload,
     navigate,
   });
+  const sync = useSyncSession({ featureId, status: run.status, reload: run.reload });
   // Only once the run has stopped committing, and never during a sync: the two
-  // are the states the "Sync with main" button itself is offered in, and a
-  // count taken between the merge and its push describes neither side.
+  // are the states a sync is offered in at all, and a count taken between the
+  // merge and its push describes neither side.
   const { drift, refresh: refreshDrift, refreshing: refreshingDrift } = useFeatureDrift({
     featureId,
-    enabled: TERMINAL_STATUSES.includes(run.status) && !mr.syncing,
+    enabled: TERMINAL_STATUSES.includes(run.status) && sync.pending === null,
   });
+  const syncModel = useMemo(
+    () =>
+      describeSyncPanel({
+        session: sync.session,
+        drift,
+        canSync: TERMINAL_STATUSES.includes(run.status),
+      }),
+    [sync.session, drift, run.status],
+  );
   const syncResolver = useSyncResolverOverrides({
     featureId,
     projectId,
-    conflicted: mr.syncBanner?.status === 'conflict',
+    conflicted: syncModel.showResolver,
   });
 
   const routing = useWorktreeRouting({
@@ -200,6 +216,9 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
    *  it is a silent break. Persist this only once that poll no longer hangs off
    *  the disclosure (`useRemoteRun`, at the `onEvents` tap). */
   const [activityOpen, setActivityOpen] = useState(true);
+  /** Not persisted, for `activityOpen`'s reason: a pane left on Sync days ago
+   *  should not be what hides the step inspector on the next run. */
+  const [inspectorPane, setInspectorPane] = useState<InspectorPane>('step');
   /** Split, the meta track and the gap are already spent — so every inspector
    *  verdict is asked of what is left, never of the column. */
   const runPair = runPairSize(runColumnSize, runLayout);
@@ -225,6 +244,23 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   );
 
   const deselectStep = useCallback(() => selection.selectStep(null), [selection.selectStep]);
+
+  /** The resolver's own `step_executions` row. It lands beside the run's rows
+   *  and nothing in it marks it out of band, so it is found by its step id. */
+  const resolverStep = run.steps.find((step) => isOutOfBandStep(step.step_id)) ?? null;
+
+  const showResolverStream = useCallback(() => {
+    if (resolverStep) selection.selectStep(resolverStep.id);
+    setInspectorPane('step');
+  }, [resolverStep, selection.selectStep]);
+
+  const handleSyncAction = useSyncActions({
+    sync,
+    resolver: syncResolver,
+    refreshDrift,
+    openDiffRange: routing.openDiffRange,
+    showResolverStream,
+  });
 
   // The unified feed the Activity panel reads: local runs push it through
   // `useRunEvents`; remote runs fill `remoteRunEvents` from that panel's own
@@ -261,40 +297,59 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     setViewMode: graph.setViewMode,
   });
 
-  /** The one inspector, docked beside whichever run surface is showing
-   *  (UI_REDESIGN_PLAN §3.1). It subscribes to the live stream itself — see
-   *  `StepInspector`'s header for why that subscription may not live here.
+  /** The inspector column, docked beside whichever run surface is showing
+   *  (UI_REDESIGN_PLAN §3.1). Its step pane subscribes to the live stream
+   *  itself — see `StepInspector`'s header for why that subscription may not
+   *  live here.
    *
-   *  The wrapper is a focus target, not a box: `Enter` aims at the tab strip's
-   *  roving entry, and an *empty* inspector has neither a tab strip nor any
-   *  other focusable child, so `tabIndex={-1}` covers that case. It carries its
-   *  own ring because that case is the one nothing else draws — the populated
-   *  pane lands on a real tab button that brings its own, while a bare
-   *  `outline-none` div would take the keypress and leave the screen identical.
-   *  It states no size of its own — both seats size the pane through `h-full`
-   *  (`RunPanes`), and breaking that chain collapses the tabs inside it. */
+   *  The wrapper is a focus target, not a box: `Enter` aims at the column's
+   *  roving entry, which the pane switch now provides in every state — but the
+   *  `tabIndex={-1}` stays, because it is also the thing that gives the ring a
+   *  home when focus lands on a pane rather than a tab. It states no size of
+   *  its own — both seats size the pane through `h-full` (`RunPanes`), and
+   *  breaking that chain collapses the tabs inside it. */
   const inspector = (
     <div
       ref={inspectorPaneRef}
       tabIndex={-1}
       className="h-full min-h-0 outline-none focus-visible:ring-1 focus-visible:ring-cyan-500/50"
     >
-      <StepInspector
-        className="h-full"
-        featureId={featureId}
-        target={selection.target}
-        graphDef={graphDef}
-        statusByNode={graph.runStatusByNode}
-        streamStore={stream.store}
-        harnessBaseline={run.harnessBaseline}
-        overrides={overrides}
-        onDeselect={deselectStep}
-        onOpenEditorForPath={routing.openEditorForPath}
-        onOpenArtifact={artifact.openArtifact}
-        onRetry={rerun.handleRetryStep}
-        onReplay={graph.startReplayFromInspector}
-        onStop={rerun.handleStopStep}
-        onDecideGate={decideGate}
+      <InspectorColumn
+        pane={inspectorPane}
+        onPaneChange={setInspectorPane}
+        syncBadge={syncModel.badge}
+        stepInspector={
+          <StepInspector
+            className="h-full"
+            featureId={featureId}
+            target={selection.target}
+            graphDef={graphDef}
+            statusByNode={graph.runStatusByNode}
+            streamStore={stream.store}
+            harnessBaseline={run.harnessBaseline}
+            overrides={overrides}
+            onDeselect={deselectStep}
+            onOpenEditorForPath={routing.openEditorForPath}
+            onOpenArtifact={artifact.openArtifact}
+            onRetry={rerun.handleRetryStep}
+            onReplay={graph.startReplayFromInspector}
+            onStop={rerun.handleStopStep}
+            onDecideGate={decideGate}
+          />
+        }
+        syncPanel={
+          <SyncPanel
+            className="h-full"
+            model={syncModel}
+            session={sync.session}
+            drift={drift}
+            resolverStep={syncModel.showTelemetry ? resolverStep : null}
+            pending={sync.pending}
+            resolverSelection={syncResolver}
+            onAction={handleSyncAction}
+            onOpenPath={routing.openEditorForPath}
+          />
+        }
       />
     </div>
   );
@@ -393,10 +448,8 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         cacheReadTokens={run.cacheReadTokens}
         cacheCreationTokens={run.cacheCreationTokens}
         stepCount={run.steps.length}
-        syncing={mr.syncing}
-        resolving={mr.resolving}
         publishing={mr.publishing}
-        reviewHeld={mr.reviewHeld}
+        syncBadge={syncModel.badge}
         drift={drift}
         driftRefreshing={refreshingDrift}
         onRefreshDrift={refreshDrift}
@@ -405,25 +458,13 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         onOpenTerminalTab={routing.handleOpenTerminalTab}
         onBrowseCode={routing.openEditor}
         onCancelFeature={rerun.handleCancelFeature}
-        onSync={mr.handleSync}
+        onOpenSync={() => setInspectorPane('sync')}
         onPublish={mr.handlePublishClick}
         onCleanup={() => mr.handleCleanup()}
       />
 
       <FeatureStatusBanners
         status={run.status}
-        syncBanner={mr.syncBanner}
-        resolving={mr.resolving}
-        aborting={mr.aborting}
-        onResolveConflicts={mr.handleResolveConflicts}
-        resolverSelection={syncResolver}
-        onAbortSync={mr.handleAbortSync}
-        onDismissSyncBanner={() => mr.setSyncBanner(null)}
-        syncSession={mr.syncSession}
-        reviewPending={mr.reviewPending}
-        onViewSyncDiff={routing.openDiffRange}
-        onPublishSync={mr.handlePublishSync}
-        onDiscardSync={mr.handleDiscardSync}
         mrUrl={mr.mrUrl}
         mrState={mr.mrState}
         onRefreshMrState={mr.refreshMrState}

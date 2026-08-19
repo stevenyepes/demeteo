@@ -1,9 +1,8 @@
-import React from 'react';
 import { AlertCircle, RefreshCw, RotateCcw, ShieldCheck, XCircle } from 'lucide-react';
 
 import { isOutOfBandStep } from '../../../lib/featureSync';
-import { TONE_TEXT } from '../../../lib/runStatus';
 import type { StepAttempt } from '../../../types';
+import { ActionRow } from '../../ui/ActionRow';
 import { RerunOptions } from '../../FeatureDetail/RerunOptions';
 import type { HarnessOverrides } from '../../FeatureDetail/useHarnessOverrides';
 import type { NodeConfigV2, NodeRunStatus } from '../types';
@@ -143,57 +142,6 @@ export function ActionsTab({
           <span>{guardMsg}</span>
         </div>
       )}
-    </div>
-  );
-}
-
-const ACTION_TONE: Record<string, string> = {
-  ruby: 'border-rose-500/20 bg-rose-950/10',
-  cyan: 'border-cyan-500/20 bg-cyan-950/10',
-  amber: 'border-amber-500/20 bg-amber-950/10',
-};
-const ACTION_BTN: Record<string, string> = {
-  ruby: 'bg-rose-600 hover:bg-rose-500 text-white',
-  cyan: 'bg-cyan-600 hover:bg-cyan-500 text-white',
-  amber: 'bg-amber-500 hover:bg-amber-600 text-black',
-};
-
-function ActionRow({
-  icon,
-  tone,
-  title,
-  desc,
-  buttonLabel,
-  onClick,
-  disabled,
-  disabledReason,
-}: {
-  icon: React.ReactNode;
-  tone: 'ruby' | 'cyan' | 'amber';
-  title: string;
-  desc: string;
-  buttonLabel: string;
-  onClick: () => void;
-  disabled?: boolean;
-  disabledReason?: string;
-}) {
-  return (
-    <div className={`flex items-center gap-3 rounded-xl border p-3.5 ${ACTION_TONE[tone]}`}>
-      <div className={`shrink-0 ${TONE_TEXT[tone as keyof typeof TONE_TEXT] ?? 'text-slate-400'}`}>
-        {icon}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="text-xs font-bold uppercase tracking-wider text-slate-200">{title}</div>
-        <div className="mt-0.5 text-[11px] leading-relaxed text-slate-400">{desc}</div>
-      </div>
-      <button
-        onClick={onClick}
-        disabled={disabled}
-        title={disabled ? disabledReason : undefined}
-        className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:bg-slate-700/40 disabled:text-slate-500 ${ACTION_BTN[tone]}`}
-      >
-        {buttonLabel}
-      </button>
     </div>
   );
 }

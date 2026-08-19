@@ -1,26 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
-import type { AppView, MrState, SyncOutcomeView, SyncSessionView } from '../../types';
+import type { AppView, MrState } from '../../types';
 import { formatError } from '../../lib/errors';
 import { useErrorBus } from '../../lib/errorBus';
-import {
-  abortSync,
-  discardSyncResolution,
-  getFeature,
-  getSyncSession,
-  isAwaitingSyncReview,
-  publishSyncResolution,
-  syncFeature,
-  resolveSyncConflicts,
-  fetchMrState,
-} from '../../lib/featureSync';
-import type { SyncResolverChoice } from '../../lib/featureSync';
+import { fetchMrState, getFeature } from '../../lib/featureSync';
 import { cleanupFeature, publishMr } from '../../lib/featureDetail';
 
 /**
- * Everything the feature does with its branch once the run is over: sync it
- * with main, resolve the conflicts that produced, publish the PR/MR, track
- * its state, and apply the project's lifecycle policy.
+ * The feature's pull request: publish it, track its state, and apply the
+ * project's lifecycle policy.
+ *
+ * The branch's own state — sync, conflict, resolution — left here for
+ * `useSyncSession`, which reads the durable row instead of remembering.
  */
 export function useFeatureMr(input: {
   featureId: string;
@@ -32,180 +23,8 @@ export function useFeatureMr(input: {
   const { featureId, projectId, status, reload, navigate } = input;
   const { reportError } = useErrorBus();
   const [publishing, setPublishing] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [aborting, setAborting] = useState(false);
-  const [resolving, setResolving] = useState(false);
-  const [syncBanner, setSyncBanner] = useState<SyncOutcomeView | null>(null);
-  const [syncSession, setSyncSession] = useState<SyncSessionView | null>(null);
-  const [reviewPending, setReviewPending] = useState<'push' | 'discard' | null>(null);
   const [mrState, setMrState] = useState<MrState | null>(null);
   const [mrUrl, setMrUrl] = useState<string | null>(null);
-
-  /**
-   * Re-read the durable session. Every mutation below ends here rather than
-   * folding its own answer into state: `sync_publish` and `sync_discard` both
-   * reconcile against the working tree on the way out, so the row they return
-   * is the only one that has been checked against git.
-   */
-  const refreshSyncSession = useCallback(async () => {
-    try {
-      const fresh = await getSyncSession(featureId);
-      setSyncSession(fresh);
-      return fresh;
-    } catch (err) {
-      reportError(err, { kind: 'internal' });
-      return null;
-    }
-  }, [featureId, reportError]);
-
-  /**
-   * Sync the feature branch with `origin/<default_branch>`. On a
-   * clean merge, the operation is invisible (or shows a small
-   * "synced" toast). On conflict, the conflict files are surfaced
-   * inline so the user can either resolve them themselves or click
-   * the "Resolve with agent" button.
-   */
-  const handleSync = async () => {
-    setSyncing(true);
-    try {
-      const outcome = await syncFeature(featureId);
-      setSyncBanner(outcome);
-      await refreshSyncSession();
-      reload();
-    } catch (err) {
-      await messageDialog(formatError(err), { title: 'Sync failed', kind: 'error' });
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  /**
-   * A conflict outlives this component. It lives in a worktree with
-   * `MERGE_HEAD` set and in the feature's sync session, so navigating away —
-   * or restarting the app — must not be how the user loses it: before this
-   * ran, the banner was the only place the conflict existed at all, and the
-   * only thing that ever cleaned the worktree up was the next sync
-   * force-removing it.
-   *
-   * Only `conflicted` hydrates. The other states are either terminal or have
-   * nothing on disk to come back to, and a banner replayed on every mount for
-   * a sync that finished last week is noise the user cannot dismiss.
-   */
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const session = await getSyncSession(featureId);
-        if (cancelled) return;
-        setSyncSession(session);
-        if (session?.status !== 'conflicted') return;
-        // A conflict the run is still driving is not the user's to see a
-        // banner about: its buttons act on a worktree an agent holds.
-        if (!session.user_may_intervene) return;
-        setSyncBanner({
-          status: 'conflict',
-          conflict_files: session.conflict_files,
-          raw_error: session.raw_error ?? '',
-        });
-      } catch (err) {
-        reportError(err, { kind: 'internal' });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [featureId]);
-
-  /**
-   * Spawn a fresh agent to resolve the conflicts surfaced by
-   * `handleSync`. The agent edits the conflict files in a temporary
-   * worktree, commits the resolution, and the worktree is merged
-   * back into the feature branch.
-   */
-  const handleResolveConflicts = async (
-    conflictFiles: string[],
-    resolver?: SyncResolverChoice,
-  ) => {
-    setResolving(true);
-    try {
-      const outcome = await resolveSyncConflicts(featureId, conflictFiles, resolver);
-      const fresh = await refreshSyncSession();
-      // A resolution held for review has its own card, which says the thing
-      // the banner cannot: that origin has not seen this yet. Two success
-      // notices for one merge, one of which stops at "resolved", is how a
-      // user concludes it shipped.
-      setSyncBanner(isAwaitingSyncReview(fresh) ? null : outcome);
-      reload();
-    } catch (err) {
-      await messageDialog(formatError(err), { title: 'Resolution failed', kind: 'error' });
-    } finally {
-      setResolving(false);
-    }
-  };
-
-  /**
-   * Give up on the sync: undo the merge, discard the worktree and close the
-   * session. The banner goes with it — there is no longer anything for it to
-   * describe.
-   */
-  const handleAbortSync = async () => {
-    setAborting(true);
-    try {
-      await abortSync(featureId);
-      setSyncBanner(null);
-      await refreshSyncSession();
-      reload();
-    } catch (err) {
-      await messageDialog(formatError(err), { title: 'Abort failed', kind: 'error' });
-    } finally {
-      setAborting(false);
-    }
-  };
-
-  /**
-   * Publish the resolution the review card is showing.
-   *
-   * The IPC is idempotent — a resolution already on origin answers with itself
-   * rather than pushing twice — so a second press while the first is still in
-   * flight is safe as well as disabled.
-   */
-  const handlePublishSync = async () => {
-    setReviewPending('push');
-    try {
-      setSyncSession(await publishSyncResolution(featureId));
-      reload();
-    } catch (err) {
-      await messageDialog(formatError(err), { title: 'Publish failed', kind: 'error' });
-      await refreshSyncSession();
-    } finally {
-      setReviewPending(null);
-    }
-  };
-
-  /**
-   * Throw the resolution away. The confirmation says what actually happens —
-   * the branch moves back and the sync is abandoned — because the tempting
-   * wording ("back to the conflict") is a promise nothing here keeps.
-   */
-  const handleDiscardSync = async () => {
-    const ok = await confirmDialog(
-      `Move ${syncSession?.feature_branch ?? 'the branch'} back to where it was before the merge and abandon this sync? The conflict is not restored — sync again for a fresh one.`,
-      { title: 'Discard the merge?', kind: 'warning', okLabel: 'Discard', cancelLabel: 'Keep' },
-    );
-    if (!ok) return;
-    setReviewPending('discard');
-    try {
-      await discardSyncResolution(featureId);
-      setSyncBanner(null);
-      await refreshSyncSession();
-      reload();
-    } catch (err) {
-      await messageDialog(formatError(err), { title: 'Discard failed', kind: 'error' });
-      await refreshSyncSession();
-    } finally {
-      setReviewPending(null);
-    }
-  };
 
   /**
    * Refresh the MR state from the provider. The badge updates
@@ -308,21 +127,8 @@ export function useFeatureMr(input: {
 
   return {
     publishing,
-    syncing,
-    resolving,
-    syncBanner,
-    syncSession,
-    reviewHeld: isAwaitingSyncReview(syncSession),
-    reviewPending,
-    aborting,
-    setSyncBanner,
     mrState,
     mrUrl,
-    handleSync,
-    handleResolveConflicts,
-    handleAbortSync,
-    handlePublishSync,
-    handleDiscardSync,
     refreshMrState,
     handlePublishClick,
     handleCleanup,

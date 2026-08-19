@@ -9,21 +9,14 @@ import type {
 } from "../types";
 
 /**
- * Sync the feature branch with `origin/<default_branch>`. Returns
- * a tagged result:
+ * Sync the feature branch with `origin/<default_branch>`.
  *
- * - `{ status: "ok" }` when the merge was clean.
- * - `{ status: "conflict" }` when the merge left unmerged paths; the
- *   conflict files are in `conflict_files`. This is the only outcome
- *   that may offer "Resolve with agent" — `resolveSyncConflicts`
- *   takes the same file list.
- * - `{ status: "blocked" }` when the sync stopped short of a merge
- *   verdict. Nothing is known to be conflicted, so there is nothing for
- *   an agent to do; `stage` says what to fix and `raw_error` is git's
- *   own words.
- * - `{ status: "resolved" }` after a successful agent resolution.
- * - `{ status: "resolution_failed" }` when the agent could not
- *   clean up the conflicts.
+ * The tagged result is the call's immediate answer and **not** what the UI
+ * renders: the same verdict is written to the sync session, which is what
+ * survives the navigation that started it, so every surface reads
+ * `getSyncSession` afterwards instead. One field is only on this side —
+ * `blocked.stage`, the named precondition that failed. Nothing persists it, so
+ * a session re-read after a blocked sync has git's words and not that label.
  */
 export async function syncFeature(featureId: string): Promise<SyncOutcomeView> {
   return invoke<SyncOutcomeView>("feature_sync", { featureId });
@@ -31,7 +24,7 @@ export async function syncFeature(featureId: string): Promise<SyncOutcomeView> {
 
 /**
  * How far the feature branch has fallen behind the base a sync would merge —
- * the reason to press "Sync with main", answered without merging anything.
+ * the reason to sync at all, answered without merging anything.
  *
  * `refresh` fetches `origin/<base>` first. Left off, the counts are as of
  * whenever that ref last moved; the answer's `fetched` says which it was, so a
@@ -135,27 +128,6 @@ export async function discardSyncResolution(
   featureId: string,
 ): Promise<SyncSessionView | null> {
   return invoke<SyncSessionView | null>("sync_discard", { featureId });
-}
-
-/**
- * Whether this session holds a resolution that is committed on the branch,
- * has not reached origin, and is the user's to act on — the one state the
- * review card exists for, and the one the "resolved" success banner must be
- * suppressed under so nobody reads it as shipped.
- *
- * One predicate because it is asserted in three places that must not drift:
- * the card's render gate, the banner's suppression, and whether "Sync with
- * main" is still offered. `user_may_intervene` is the backend's answer and not
- * re-derived here; it is what keeps a resolution a live run still owns out of
- * all three.
- */
-export function isAwaitingSyncReview(session: SyncSessionView | null): boolean {
-  return (
-    session !== null &&
-    session.status === 'resolved' &&
-    session.pushed_at === null &&
-    session.user_may_intervene
-  );
 }
 
 /**

@@ -1,48 +1,26 @@
 import { AlertTriangle, ExternalLink, GitPullRequest } from 'lucide-react';
-import type { MrState, SyncOutcomeView, SyncSessionView } from '../../types';
-import { isAwaitingSyncReview, type SyncResolverChoice } from '../../lib/featureSync';
-import { SyncBannerContent } from './SyncBannerContent';
-import { SyncReviewCard } from './SyncReviewCard';
-import type { SyncResolverSelection } from './useSyncResolverOverrides';
+import type { MrState } from '../../types';
 
 interface FeatureStatusBannersProps {
   status: string;
-  syncBanner: SyncOutcomeView | null;
-  resolving: boolean;
-  aborting: boolean;
-  onResolveConflicts: (files: string[], resolver: SyncResolverChoice) => void;
-  /** The banner's own harness selection — see `SyncBannerContent`. */
-  resolverSelection: SyncResolverSelection;
-  onAbortSync: () => void;
-  onDismissSyncBanner: () => void;
-  /** The durable sync row. The review card is driven from it rather than from
-   *  `syncBanner`, because a resolution waiting to be published outlives the
-   *  navigation that produced it — the whole point of the row. */
-  syncSession: SyncSessionView | null;
-  reviewPending: 'push' | 'discard' | null;
-  onViewSyncDiff: (refs: { baseRef: string; headRef: string }) => void;
-  onPublishSync: () => void;
-  onDiscardSync: () => void;
   mrUrl: string | null;
   mrState: MrState | null;
   onRefreshMrState: () => void;
 }
 
-/** The awaiting_mr nudge, the sync result, and the published PR/MR row. */
+/**
+ * The awaiting_mr nudge and the published PR/MR row.
+ *
+ * Sync used to be here too — a result banner, a review card, and the abort
+ * button on one branch of the first. They are gone, not moved twice: a strip of
+ * stacked notices above the run is where a state ends up when each phase adds
+ * its own, and the pane in the inspector column is the one place that answers
+ * "what is happening with this branch". What is left is the two notices that
+ * describe the *pull request*, which is the run's output rather than its
+ * branch's state.
+ */
 export function FeatureStatusBanners({
   status,
-  syncBanner,
-  resolving,
-  aborting,
-  onResolveConflicts,
-  resolverSelection,
-  onAbortSync,
-  onDismissSyncBanner,
-  syncSession,
-  reviewPending,
-  onViewSyncDiff,
-  onPublishSync,
-  onDiscardSync,
   mrUrl,
   mrState,
   onRefreshMrState,
@@ -61,37 +39,6 @@ export function FeatureStatusBanners({
             </span>
           </div>
         </div>
-      )}
-
-      {syncBanner && (
-        <div className={`px-6 py-3 border-b flex items-start gap-3 ${
-          syncBanner.status === 'ok' ? 'bg-emerald-500/5 border-emerald-500/20' :
-          syncBanner.status === 'resolved' ? 'bg-emerald-500/5 border-emerald-500/20' :
-          syncBanner.status === 'blocked' ? 'bg-amber-500/5 border-amber-500/20' :
-          'bg-rose-500/5 border-rose-500/20'
-        }`}>
-          <div className="flex-1 text-xs text-slate-200 space-y-2">
-            <SyncBannerContent
-              outcome={syncBanner}
-              onResolve={onResolveConflicts}
-              resolverSelection={resolverSelection}
-              onAbort={onAbortSync}
-              resolving={resolving}
-              aborting={aborting}
-              onDismiss={onDismissSyncBanner}
-            />
-          </div>
-        </div>
-      )}
-
-      {syncSession && isAwaitingSyncReview(syncSession) && (
-        <SyncReviewCard
-          session={syncSession}
-          pending={reviewPending}
-          onViewDiff={onViewSyncDiff}
-          onPush={onPublishSync}
-          onDiscard={onDiscardSync}
-        />
       )}
 
       {mrUrl && (

@@ -146,12 +146,19 @@ describe('the run view drives its own selection from the keyboard', () => {
     await waitFor(() => expect(currentStepId()).toBe('se-3'));
   });
 
-  it('lands Enter inside the inspector the view rendered', async () => {
+  /** Enter aims at the column's roving entry point, and the column gained an
+   *  outer strip: Step/Sync now sits above the card, so the first
+   *  `[role="tab"][tabindex="0"]` inside the wrapper is the pane switch rather
+   *  than the step inspector's Overview. That is the outermost choice in the
+   *  column and the right first stop — and it is a behaviour change, which is
+   *  why it is asserted here rather than left to be noticed. */
+  it('lands Enter on the pane switch the column opens with', async () => {
     mount();
-    const pane = await screen.findByTestId('inspector');
+    const column = await screen.findByTestId('inspector-column');
 
     fireEvent.keyDown(document.body, { key: 'Enter' });
-    expect(pane.contains(document.activeElement)).toBe(true);
+    expect(column.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toHaveAccessibleName('Step');
   });
 
   it('goes quiet under an overlay this view does not mount', async () => {

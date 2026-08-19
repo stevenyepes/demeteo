@@ -3,7 +3,7 @@ import type { SyncResolverSelection } from './useSyncResolverOverrides';
 
 /**
  * The harness, model and effort one conflict resolution runs under, offered
- * beside the "Resolve with agent" button.
+ * above the "Resolve with agent" row in the Sync pane.
  *
  * `HarnessModelPicker` is the control set; what only this call site knows is
  * what an untouched control means here. Blank is not "inherit a default" and

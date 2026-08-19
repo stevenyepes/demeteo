@@ -11,7 +11,7 @@ export interface SyncResolverSelection {
 }
 
 /**
- * The conflict banner's own harness selection, and the identity it inherits.
+ * The Sync pane's own harness selection, and the identity it inherits.
  *
  * A second `useHarnessOverrides` deliberately: the one `FeatureDetailView`
  * hands the step cards is what a retry re-pins, so sharing it would make a
