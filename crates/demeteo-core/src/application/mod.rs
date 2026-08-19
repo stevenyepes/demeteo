@@ -9,6 +9,7 @@ pub mod providers;
 pub mod remote_runs;
 pub mod run_view;
 pub mod sync_session;
+pub mod sync_turns;
 pub mod timeouts;
 pub mod workflows;
 pub mod worktree;

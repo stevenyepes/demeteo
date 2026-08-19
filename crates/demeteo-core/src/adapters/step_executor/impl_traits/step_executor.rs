@@ -150,9 +150,7 @@ impl StepExecutor for DagStepExecutor {
         // The out-of-band turns too: a manual sync resolution runs on a feature
         // whose run has already ended, so it never has a driver and its sender
         // is never in the map above.
-        if let Some(tx) = lock_registry(&self.sync_cancels).get(feature_id) {
-            let _ = tx.send(true);
-        }
+        self.sync_turns.cancel(feature_id);
         Ok(())
     }
 

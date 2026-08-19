@@ -55,6 +55,38 @@ pub enum SyncBlockedStage {
     HeldResolution,
 }
 
+impl SyncBlockedStage {
+    /// The stable identifier the column holds (migration V46), which is the
+    /// serde spelling above and the same one the frontend union carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fetch => "fetch",
+            Self::BaseRefMissing => "base_ref_missing",
+            Self::WorktreeProvision => "worktree_provision",
+            Self::Merge => "merge",
+            Self::Push => "push",
+            Self::RepoContext => "repo_context",
+            Self::HeldResolution => "held_resolution",
+        }
+    }
+
+    /// `None` for anything unrecognised, so a row written by a newer build is
+    /// read as a blocked sync whose stage this build cannot name — which is
+    /// what every pre-V46 row is too, and what the pane already has copy for.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "fetch" => Some(Self::Fetch),
+            "base_ref_missing" => Some(Self::BaseRefMissing),
+            "worktree_provision" => Some(Self::WorktreeProvision),
+            "merge" => Some(Self::Merge),
+            "push" => Some(Self::Push),
+            "repo_context" => Some(Self::RepoContext),
+            "held_resolution" => Some(Self::HeldResolution),
+            _ => None,
+        }
+    }
+}
+
 /// Whether a failed `git merge` is a blocked sync, and at which stage.
 ///
 /// `None` is the only answer that means unmerged paths: a non-zero exit is the

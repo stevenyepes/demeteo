@@ -1,7 +1,7 @@
 use super::{git_request, GitOpsHelper};
 use crate::domain::sync_failure::SyncBlockedStage;
 use crate::ports::execution::ExecutionPort;
-use crate::ports::worktree_ops::{SyncFailure, SyncOutcome};
+use crate::ports::worktree_ops::{SyncFailure, SyncOutcome, SyncWorktreeObserver};
 
 impl GitOpsHelper {
     /// Fetch the latest state of `default_branch` from `origin` and update
@@ -244,12 +244,18 @@ impl GitOpsHelper {
     /// `base_branch` is the run's declared base
     /// ([`diff_base::resolve`](crate::domain::diff_base::resolve)), which is
     /// the project's default branch only for a run that started there.
+    ///
+    /// `observer` is told the merge worktree the instant one exists, which is
+    /// the only moment a caller keeping a durable row can learn it: every
+    /// failure between here and the verdict returns without one, and an
+    /// interrupted sync returns nothing at all.
     pub async fn sync_feature_with_upstream(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
         base_branch: &str,
+        observer: &dyn SyncWorktreeObserver,
     ) -> Result<SyncOutcome, SyncFailure> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let tracking = format!("origin/{}", base_branch);
@@ -278,6 +284,7 @@ impl GitOpsHelper {
                 ),
                 worktree_path: None,
                 head_before: None,
+                merge_commit_sha: None,
             });
         }
 
@@ -304,6 +311,7 @@ impl GitOpsHelper {
                 ),
                 worktree_path: None,
                 head_before: None,
+                merge_commit_sha: None,
             });
         }
 
@@ -346,7 +354,9 @@ impl GitOpsHelper {
                 raw_error: e,
                 worktree_path: None,
                 head_before: head_before.clone(),
+                merge_commit_sha: None,
             })?;
+        observer.provisioned(&wt_path);
         let merge_out = self
             .exec
             .run_program(
@@ -397,6 +407,7 @@ impl GitOpsHelper {
                             ),
                             worktree_path: Some(wt_path.clone()),
                             head_before: head_before.clone(),
+                            merge_commit_sha: Some(head_after.clone()),
                         });
                     }
                 }
@@ -413,6 +424,7 @@ impl GitOpsHelper {
                     raw_error: raw,
                     worktree_path: Some(wt_path.clone()),
                     head_before: head_before.clone(),
+                    merge_commit_sha: None,
                 }),
                 None => {
                     // The merge left the worktree in a conflicted state.

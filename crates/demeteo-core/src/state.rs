@@ -154,6 +154,14 @@ pub struct AppContext {
     /// directly: the row is a claim and the working tree is the authority.
     pub sync_sessions: Arc<dyn SyncSessionPort>,
 
+    /// The out-of-band syncs running in this process
+    /// ([`crate::application::sync_turns`]). Half of what
+    /// [`sync_liveness`](crate::domain::sync_session::sync_liveness) needs, and
+    /// the half nothing durable can hold: a row claiming a live turn would
+    /// survive the process that made it and freeze the session its worker died
+    /// holding.
+    pub sync_turns: Arc<crate::application::sync_turns::SyncTurns>,
+
     /// Serializes local mirror dismissal with reconciliation's guarded
     /// status/hydration work. A reconciler may list a row before cleanup,
     /// but it must reclaim that row under this guard before it can apply any

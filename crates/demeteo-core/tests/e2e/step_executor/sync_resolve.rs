@@ -120,6 +120,7 @@ fn seed(db: &Arc<SqliteAdapter>, label: &str, feature_status: &str) -> String {
             merge_commit_sha: None,
             conflict_files: Vec::new(),
             raw_error: Some("CONFLICT (content): Merge conflict in README.md".to_string()),
+            blocked_stage: None,
             pushed_at: None,
             attempts: 0,
             created_at: paths::now_ms(),

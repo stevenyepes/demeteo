@@ -4,18 +4,20 @@
 use rusqlite::params;
 
 use crate::domain::ids::FeatureId;
+use crate::domain::sync_failure::SyncBlockedStage;
 use crate::domain::sync_session::SyncSessionStatus;
 use crate::ports::sync_session::{SyncSession, SyncSessionPatch, SyncSessionPort};
 
 use super::super::SqliteAdapter;
 
 const COLUMNS: &str = "feature_id, machine_id, repo_dir, feature_branch, base_branch, status,
-     worktree_path, head_before, merge_commit_sha, conflict_files, raw_error, pushed_at,
-     attempts, created_at, updated_at";
+     worktree_path, head_before, merge_commit_sha, conflict_files, raw_error, blocked_stage,
+     pushed_at, attempts, created_at, updated_at";
 
 fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SyncSession> {
     let status: String = row.get(5)?;
     let conflict_files: Option<String> = row.get(9)?;
+    let blocked_stage: Option<String> = row.get(11)?;
     Ok(SyncSession {
         feature_id: row.get(0)?,
         machine_id: row.get(1)?,
@@ -33,10 +35,14 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SyncSession> {
             .and_then(|raw| serde_json::from_str(raw).ok())
             .unwrap_or_default(),
         raw_error: row.get(10)?,
-        pushed_at: row.get(11)?,
-        attempts: row.get(12)?,
-        created_at: row.get(13)?,
-        updated_at: row.get(14)?,
+        // A stage this build cannot name is left unnamed rather than guessed
+        // at; `blocked_refusal` already owes an unnamed stage the cautious
+        // answer, which is the same one every pre-V46 row gets.
+        blocked_stage: blocked_stage.as_deref().and_then(SyncBlockedStage::parse),
+        pushed_at: row.get(12)?,
+        attempts: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
@@ -55,7 +61,7 @@ impl SyncSessionPort for SqliteAdapter {
         conn.execute(
             &format!(
                 "INSERT OR REPLACE INTO sync_sessions ({COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)"
             ),
             params![
                 session.feature_id,
@@ -69,6 +75,7 @@ impl SyncSessionPort for SqliteAdapter {
                 session.merge_commit_sha,
                 files,
                 session.raw_error,
+                session.blocked_stage.map(SyncBlockedStage::as_str),
                 session.pushed_at,
                 session.attempts,
                 session.created_at,
@@ -112,9 +119,10 @@ impl SyncSessionPort for SqliteAdapter {
                     merge_commit_sha = CASE WHEN ?7 THEN ?8 ELSE merge_commit_sha END,
                     conflict_files   = COALESCE(?9, conflict_files),
                     raw_error        = CASE WHEN ?10 THEN ?11 ELSE raw_error END,
-                    pushed_at        = CASE WHEN ?12 THEN ?13 ELSE pushed_at END,
-                    attempts         = attempts + ?14,
-                    updated_at       = ?15
+                    blocked_stage    = CASE WHEN ?12 THEN ?13 ELSE blocked_stage END,
+                    pushed_at        = CASE WHEN ?14 THEN ?15 ELSE pushed_at END,
+                    attempts         = attempts + ?16,
+                    updated_at       = ?17
               WHERE feature_id = ?1",
             params![
                 feature_id.0,
@@ -128,6 +136,8 @@ impl SyncSessionPort for SqliteAdapter {
                 files,
                 patch.raw_error.is_some(),
                 patch.raw_error.clone().flatten(),
+                patch.blocked_stage.is_some(),
+                patch.blocked_stage.flatten().map(SyncBlockedStage::as_str),
                 patch.pushed_at.is_some(),
                 patch.pushed_at.flatten(),
                 i64::from(patch.bump_attempts),

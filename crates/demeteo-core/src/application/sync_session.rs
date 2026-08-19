@@ -1,9 +1,10 @@
 //! Reading and ending a feature's live sync.
 //!
-//! Free functions over the two ports they need rather than methods on the step
-//! executor: neither reads a workflow, a driver or an agent, and AGENTS.md §3
+//! Free functions over the few ports they need rather than methods on the step
+//! executor: none reads a workflow, a driver or an agent, and AGENTS.md §3
 //! makes the narrower dependency the testable one — everything here is
-//! reachable with a strict [`ExecutionPort`] double and an in-memory database.
+//! reachable with a strict [`ExecutionPort`] double, an in-memory database and
+//! an empty [`SyncTurns`].
 //!
 //! Everything here treats the working tree as the authority
 //! ([`crate::ports::sync_session`]). The probe is here because it does I/O;
@@ -12,15 +13,28 @@
 use std::sync::Arc;
 
 use crate::adapters::step_executor::sync_worktree::discard_sync_worktree;
+use crate::application::sync_turns::SyncTurns;
 use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
 use crate::domain::ids::FeatureId;
 use crate::domain::sync_session::{
-    intervention_refusal, reconcile, user_may_intervene, SyncIntervention, SyncSessionStatus,
-    SyncStanding, SyncWorkspaceProbe,
+    intervention_refusal, published_status, reconcile, sync_liveness, user_may_intervene,
+    SyncIntervention, SyncSessionStatus, SyncStanding, SyncWorkspaceProbe,
 };
 use crate::paths;
 use crate::ports::execution::{ask, Answer, ExecutionPort};
 use crate::ports::sync_session::{SyncSession, SyncSessionPatch, SyncSessionPort, SyncSessionView};
+
+/// The ports every read here needs, bundled because none of them answers on
+/// its own: the row is the claim, the working tree and the turn registry are
+/// the two observations that correct it, and the feature's status is half of
+/// the second one (AGENTS.md §3 on parameters that travel together).
+#[derive(Clone)]
+pub struct SyncPorts<'a> {
+    pub sessions: &'a Arc<dyn SyncSessionPort>,
+    pub exec: &'a Arc<dyn ExecutionPort>,
+    pub features: &'a Arc<dyn crate::ports::db::FeatureRepository>,
+    pub turns: &'a Arc<SyncTurns>,
+}
 
 /// The feature's session as the working tree says it stands.
 ///
@@ -28,13 +42,10 @@ use crate::ports::sync_session::{SyncSession, SyncSessionPatch, SyncSessionPort,
 /// persisted, so the next reader and the UI cannot disagree about a session
 /// whose worktree has since gone.
 pub async fn get_reconciled(
-    sessions: &Arc<dyn SyncSessionPort>,
-    exec: &Arc<dyn ExecutionPort>,
+    ports: SyncPorts<'_>,
     feature_id: &FeatureId,
 ) -> Result<Option<SyncSession>, String> {
-    Ok(reconciled(sessions, exec, feature_id)
-        .await?
-        .map(|(session, _)| session))
+    Ok(reconciled(ports, feature_id).await?.map(|r| r.session))
 }
 
 /// What one look at a sync worktree came back with.
@@ -50,15 +61,32 @@ struct WorktreeReading {
     head: Option<String>,
 }
 
-/// [`get_reconciled`], keeping the observation the correction was made from.
+/// A session read back, with everything the read already established: no caller
+/// needs to ask the feature repository a second time for a status this had to
+/// have in order to reconcile at all.
+struct Reconciled {
+    session: SyncSession,
+    reading: Option<WorktreeReading>,
+    feature_status: String,
+}
+
+/// [`get_reconciled`], keeping the observations the correction was made from.
 async fn reconciled(
-    sessions: &Arc<dyn SyncSessionPort>,
-    exec: &Arc<dyn ExecutionPort>,
+    ports: SyncPorts<'_>,
     feature_id: &FeatureId,
-) -> Result<Option<(SyncSession, Option<WorktreeReading>)>, String> {
+) -> Result<Option<Reconciled>, String> {
+    let SyncPorts {
+        sessions,
+        exec,
+        features,
+        turns,
+    } = ports;
     let Some(mut session) = sessions.get(feature_id)? else {
         return Ok(None);
     };
+    // A feature the row outlived is not a run holding anything.
+    let feature_status = feature_status_of(features, feature_id)?;
+    let liveness = sync_liveness(turns.claimed(&feature_id.0), &feature_status);
     // A session naming no worktree and a worktree that would not answer arrive
     // at `reconcile` as the same `None`, and that is deliberate: neither is an
     // observation, so neither may move the stored status.
@@ -74,7 +102,7 @@ async fn reconciled(
         }
         None => None,
     };
-    let corrected = reconcile(session.status, reading.as_ref().map(|r| &r.probe));
+    let corrected = reconcile(session.status, reading.as_ref().map(|r| &r.probe), liveness);
     // The user who finished the merge in their own editor is the case this
     // module opens on, and it is the one resolution nothing recorded a commit
     // for: `reconcile` promotes it out of a moved `HEAD` alone. Left unwritten,
@@ -84,44 +112,48 @@ async fn reconciled(
         Some(r) if r.probe.head_advanced == Some(true) => r.head.clone(),
         _ => None,
     };
-    let commit = match (corrected, &session.merge_commit_sha) {
+    let commit = match (corrected.status, &session.merge_commit_sha) {
         (SyncSessionStatus::Resolved, None) => observed_commit,
         _ => None,
     };
-    if corrected != session.status || commit.is_some() {
+    if corrected.status != session.status || commit.is_some() {
         let now = paths::now_ms();
         sessions.update(
             feature_id,
             &SyncSessionPatch {
-                status: Some(corrected),
+                status: Some(corrected.status),
+                blocked_stage: corrected.blocked_stage.map(Some),
                 merge_commit_sha: commit.clone().map(Some),
                 ..Default::default()
             },
             now,
         )?;
-        session.status = corrected;
+        session.status = corrected.status;
+        if let Some(stage) = corrected.blocked_stage {
+            session.blocked_stage = Some(stage);
+        }
         if commit.is_some() {
             session.merge_commit_sha = commit;
         }
         session.updated_at = now;
     }
-    Ok(Some((session, reading)))
+    Ok(Some(Reconciled {
+        session,
+        reading,
+        feature_status,
+    }))
 }
 
 /// The session plus the one question the UI may not answer for itself: whether
 /// this sync is the user's to abort or re-resolve, or something else's.
 pub async fn get_reconciled_view(
-    sessions: &Arc<dyn SyncSessionPort>,
-    exec: &Arc<dyn ExecutionPort>,
-    features: &Arc<dyn crate::ports::db::FeatureRepository>,
+    ports: SyncPorts<'_>,
     feature_id: &FeatureId,
 ) -> Result<Option<SyncSessionView>, String> {
-    let Some(session) = get_reconciled(sessions, exec, feature_id).await? else {
+    let Some(read) = reconciled(ports, feature_id).await? else {
         return Ok(None);
     };
-    // A feature the row outlived is not a run holding anything.
-    let feature_status = feature_status_of(features, feature_id)?;
-    Ok(Some(view(session, &feature_status)))
+    Ok(Some(view(read.session, &read.feature_status)))
 }
 
 /// The row and the feature's status, in the shape every refusal is judged
@@ -130,6 +162,7 @@ fn standing<'a>(session: &SyncSession, feature_status: &'a str) -> SyncStanding<
     SyncStanding {
         status: session.status,
         published: session.pushed_at.is_some(),
+        blocked_stage: session.blocked_stage,
         feature_status,
     }
 }
@@ -156,15 +189,14 @@ fn standing<'a>(session: &SyncSession, feature_status: &'a str) -> SyncStanding<
 /// whose resolution reached origin, and demanding the tip *be* the merge commit
 /// would refuse to record a push that plainly happened, forever.
 pub async fn publish(
-    sessions: &Arc<dyn SyncSessionPort>,
-    exec: &Arc<dyn ExecutionPort>,
-    features: &Arc<dyn crate::ports::db::FeatureRepository>,
+    ports: SyncPorts<'_>,
     feature_id: &FeatureId,
 ) -> Result<Option<SyncSessionView>, String> {
-    let Some(session) = get_reconciled(sessions, exec, feature_id).await? else {
+    let SyncPorts { sessions, exec, .. } = ports;
+    let Some(read) = reconciled(ports.clone(), feature_id).await? else {
         return Ok(None);
     };
-    let feature_status = feature_status_of(features, feature_id)?;
+    let (session, feature_status) = (read.session, read.feature_status);
     if session.pushed_at.is_some() {
         return Ok(Some(view(session, &feature_status)));
     }
@@ -231,10 +263,19 @@ pub async fn publish(
     }
 
     let now = paths::now_ms();
+    // A `Push`-blocked sync is not what it was the moment origin has the merge:
+    // the failed push *was* the block, and nothing about it was ever conflicted
+    // ([`published_status`]). Leaving it `blocked` would keep a finished sync
+    // offering an abandon, and keep the row naming a stage that no longer
+    // describes anything.
+    let status = published_status(session.status);
+    let promoted = status != session.status;
     sessions.update(
         feature_id,
         &SyncSessionPatch {
             pushed_at: Some(Some(now)),
+            status: promoted.then_some(status),
+            blocked_stage: promoted.then_some(None),
             ..Default::default()
         },
         now,
@@ -242,6 +283,10 @@ pub async fn publish(
     let mut published = session;
     published.pushed_at = Some(now);
     published.updated_at = now;
+    if promoted {
+        published.status = status;
+        published.blocked_stage = None;
+    }
 
     // The tree was kept only so the resolution could be looked at and, if it
     // came to it, undone in the checkout that holds the branch. Published,
@@ -300,15 +345,18 @@ pub async fn publish(
 /// thrown away by it — the same evidence-before-record rule [`publish`] applies
 /// to origin, pointed the other way.
 pub async fn discard_resolution(
-    sessions: &Arc<dyn SyncSessionPort>,
-    exec: &Arc<dyn ExecutionPort>,
-    features: &Arc<dyn crate::ports::db::FeatureRepository>,
+    ports: SyncPorts<'_>,
     feature_id: &FeatureId,
 ) -> Result<Option<SyncSessionView>, String> {
-    let Some((session, reading)) = reconciled(sessions, exec, feature_id).await? else {
+    let SyncPorts { sessions, exec, .. } = ports;
+    let Some(read) = reconciled(ports.clone(), feature_id).await? else {
         return Ok(None);
     };
-    let feature_status = feature_status_of(features, feature_id)?;
+    let Reconciled {
+        session,
+        reading,
+        feature_status,
+    } = read;
     if let Some(refusal) = intervention_refusal(
         SyncIntervention::Discard,
         standing(&session, &feature_status),
@@ -452,20 +500,24 @@ fn view(session: SyncSession, feature_status: &str) -> SyncSessionView {
 /// The refusal is read against the *reconciled* status and not the stored one,
 /// because the session abort exists for is precisely the one whose writer died:
 /// a row left `resolving` by a killed resolver would otherwise be turned away
-/// with "an agent is already resolving this sync". An already-`aborted` session
+/// with "an agent is already resolving this sync". Which is exactly what a
+/// resolver that is still alive *is* turned away with — the two rows are
+/// identical and only
+/// [`sync_liveness`](crate::domain::sync_session::sync_liveness) separates
+/// them, which is why this is the one command that must never reconcile
+/// without it. An already-`aborted` session
 /// skips the refusal rather than being turned away by it — the common case is a
 /// second press, or a first one after a restart, and an error dialog is the
 /// wrong answer to "did that work".
 pub async fn abort(
-    sessions: &Arc<dyn SyncSessionPort>,
-    exec: &Arc<dyn ExecutionPort>,
-    features: &Arc<dyn crate::ports::db::FeatureRepository>,
+    ports: SyncPorts<'_>,
     feature_id: &FeatureId,
 ) -> Result<Option<SyncSessionView>, String> {
-    let Some(session) = get_reconciled(sessions, exec, feature_id).await? else {
+    let SyncPorts { sessions, exec, .. } = ports;
+    let Some(read) = reconciled(ports.clone(), feature_id).await? else {
         return Ok(None);
     };
-    let feature_status = feature_status_of(features, feature_id)?;
+    let (session, feature_status) = (read.session, read.feature_status);
     if session.status != SyncSessionStatus::Aborted {
         if let Some(refusal) =
             intervention_refusal(SyncIntervention::Abort, standing(&session, &feature_status))

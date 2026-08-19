@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::sync_failure::SyncBlockedStage;
+
 /// The state a feature's sync is in, as the schema spells it (V43).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -152,19 +154,24 @@ pub fn user_may_intervene(standing: SyncStanding<'_>) -> bool {
 }
 
 /// Everything an intervention is judged against: what the session claims, what
-/// has been published of it, and whether anything else is still driving the
-/// branch.
+/// has been published of it, where it stopped, and whether anything else is
+/// still driving the branch.
 ///
-/// The three travel together and are meaningless apart — a status without the
+/// They travel together and are meaningless apart — a status without the
 /// feature's own status cannot tell a conflict the user owns from one a run is
-/// mid-way through resolving, and neither of them can tell a resolution that
-/// still needs pushing from one already on origin.
+/// mid-way through resolving, neither of them can tell a resolution that still
+/// needs pushing from one already on origin, and none of them can tell the one
+/// blocked sync holding a real merge from the six that hold nothing.
 #[derive(Debug, Clone, Copy)]
 pub struct SyncStanding<'a> {
     pub status: SyncSessionStatus,
     /// The resolution reached origin. A row field rather than a status: no
     /// probe of the working tree can observe it (migration V45).
     pub published: bool,
+    /// Where a [`SyncSessionStatus::Blocked`] session stopped, or `None` on any
+    /// other status and on a row written before migration V46 recorded it.
+    /// Meaningless for every other status and never consulted there.
+    pub blocked_stage: Option<SyncBlockedStage>,
     /// The feature's status, which is what says whether a driver still owns
     /// the branch.
     pub feature_status: &'a str,
@@ -214,16 +221,7 @@ pub fn intervention_refusal(
                 Some("This sync has no resolution yet — there is nothing to publish or undo.")
             }
         },
-        SyncSessionStatus::Blocked => match action {
-            SyncIntervention::Abort => None,
-            SyncIntervention::Resolve => Some(
-                "This sync stopped before it reached a merge, so there are no conflicts to \
-                 resolve. Fix what blocked it and sync again, or abandon the sync.",
-            ),
-            SyncIntervention::Publish | SyncIntervention::Discard => {
-                Some("This sync never reached a merge, so there is nothing to publish or undo.")
-            }
-        },
+        SyncSessionStatus::Blocked => blocked_refusal(action, standing),
         // A resolution is a merge commit sitting on the feature branch. Abort
         // is refused rather than reused for it: that path undoes an *open*
         // merge and records a sync nobody published as abandoned, which for a
@@ -242,6 +240,51 @@ pub fn intervention_refusal(
             Some("An agent is already resolving this sync; give it time or stop the run.")
         }
         _ => Some("This sync has nothing left to act on."),
+    }
+}
+
+/// The refusals a [`SyncSessionStatus::Blocked`] session owes, which are not
+/// one answer but two.
+///
+/// [`SyncBlockedStage::Push`] is the stage where the merge is committed on the
+/// feature branch and only its publication failed, and the six others are
+/// stages where nothing was merged at all. Told apart, the push-blocked row can
+/// offer the press that finishes what it started; collapsed, the only thing on
+/// offer was a retry — which merges nothing, since the branch already has
+/// `origin/<base>`, and reports `up_to_date` while the unpublished merge sits
+/// where it was left.
+fn blocked_refusal(action: SyncIntervention, standing: SyncStanding<'_>) -> Option<&'static str> {
+    let carries_merge = standing.blocked_stage == Some(SyncBlockedStage::Push);
+    match action {
+        SyncIntervention::Abort => None,
+        SyncIntervention::Resolve => Some(
+            "This sync stopped before it reached a merge, so there are no conflicts to \
+             resolve. Fix what blocked it and sync again, or abandon the sync.",
+        ),
+        SyncIntervention::Publish if carries_merge && !standing.published => None,
+        SyncIntervention::Publish if carries_merge => Some("This merge is already on origin."),
+        SyncIntervention::Discard if carries_merge => Some(
+            "This sync's merge is committed on the branch. Publish it, or move the branch \
+             back yourself — undoing it here would be a guess at what else has landed since.",
+        ),
+        SyncIntervention::Publish | SyncIntervention::Discard => {
+            Some("This sync never reached a merge, so there is nothing to publish or undo.")
+        }
+    }
+}
+
+/// What a session becomes once origin is confirmed to hold its merge.
+///
+/// A resolution keeps its status: `pushed_at` is where publication is recorded
+/// (V45) and the review card is selected on `resolved`, so promoting it would
+/// take the state away from the reader it was held for. A `Push`-blocked sync
+/// is the opposite case — nothing about it was ever conflicted, and the failed
+/// push *was* the whole of the failure, so once it lands the session is the
+/// clean merge it would have been.
+pub fn published_status(status: SyncSessionStatus) -> SyncSessionStatus {
+    match status {
+        SyncSessionStatus::Blocked => SyncSessionStatus::Merged,
+        other => other,
     }
 }
 
@@ -304,6 +347,40 @@ pub fn publish_policy(review_before_push: Option<bool>, reviewable: bool) -> Res
     }
 }
 
+/// Whether anything is still running this feature's sync, as an observation
+/// rather than something inferred from the row.
+///
+/// `resolving` and `syncing` are the two statuses whose writer may still be
+/// alive, and nothing a probe of the worktree can see separates a merge in
+/// progress from one whose process died holding it. Correcting them without
+/// this is what put Abort — `git merge --abort`, `worktree remove --force`,
+/// `remove_dir_all` — in front of a directory an agent was mid-write in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncLiveness {
+    /// Something is running it now, so the row it wrote stands.
+    Live,
+    /// Nothing is. The correction is owed, and after a restart this is what a
+    /// process-local claim that died answers — which is what keeps a conflict
+    /// its resolver abandoned recoverable rather than frozen.
+    Gone,
+}
+
+/// The two traces a running sync leaves, combined into the one answer.
+///
+/// Neither covers the other, and that is why both are read. An out-of-band turn
+/// — the pane's own Sync and Resolve presses — runs on a feature no driver
+/// owns, so its only trace is the process-local claim; a workflow's `sync` node
+/// runs under a driver that holds no entry any reader can see, and its trace is
+/// the feature status. A restart empties the first and leaves the second to the
+/// watchdog that owns run recovery, so neither outlives the work it describes.
+pub fn sync_liveness(turn_claimed: bool, feature_status: &str) -> SyncLiveness {
+    if turn_claimed || run_is_live(feature_status) {
+        SyncLiveness::Live
+    } else {
+        SyncLiveness::Gone
+    }
+}
+
 /// Feature statuses during which a driver still owns the branch.
 ///
 /// A run parked at a gate counts: the driver is alive and will carry on through
@@ -333,48 +410,98 @@ pub struct SyncWorkspaceProbe {
     pub head_advanced: Option<bool>,
 }
 
-/// The stored status corrected by what is on disk.
+/// The stored status corrected by what is on disk, and the stage that goes
+/// with it.
+///
+/// `blocked_stage` is `Some` only when this correction is what decided the
+/// session is blocked; `None` leaves whatever the row already recorded, so a
+/// `Blocked` row passed through keeps the stage its own failure named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncVerdict {
+    pub status: SyncSessionStatus,
+    pub blocked_stage: Option<SyncBlockedStage>,
+}
+
+impl From<SyncSessionStatus> for SyncVerdict {
+    fn from(status: SyncSessionStatus) -> Self {
+        Self {
+            status,
+            blocked_stage: None,
+        }
+    }
+}
+
+/// The stored status corrected by what is on disk and by what is still running.
 ///
 /// `probe` is `None` when the tree was not observed — either the session names
 /// none to look at, or the look did not come back. Neither is the same as
 /// looking and finding nothing: a sync that has not provisioned a worktree yet
 /// would otherwise read as abandoned on its first poll, and a dropped
 /// connection would retire a live conflict permanently.
+///
+/// `liveness` is the second observation and it is not interchangeable with the
+/// first. A worktree with `MERGE_HEAD` set looks the same whether the process
+/// that opened it is still there or died an hour ago, so the probe alone can
+/// only correct the second case by also destroying the first.
 pub fn reconcile(
     stored: SyncSessionStatus,
     probe: Option<&SyncWorkspaceProbe>,
-) -> SyncSessionStatus {
+    liveness: SyncLiveness,
+) -> SyncVerdict {
     use SyncSessionStatus::*;
 
     if stored.is_terminal() {
-        return stored;
+        return stored.into();
     }
-    let Some(probe) = probe else {
-        return stored;
-    };
-    if !probe.worktree_exists {
-        // The tree the session was about is gone — force-removed by a later
-        // sync, cleaned up by hand, or never re-created after a restart.
-        // Nothing remains to resolve, continue or abort.
-        //
-        // A resolution is the exception, and it is not a small one: its commit
-        // is on the *feature branch*, not in the throwaway tree the merge ran
-        // in, so losing that directory loses nothing at all. Retiring it as
-        // `Aborted` would tell the reader the merge is gone while it is sitting
-        // on their branch, unpublished — and `Aborted` is terminal, so nothing
-        // would ever revisit it to say otherwise.
-        return if matches!(stored, Resolved) {
-            Resolved
-        } else {
-            Aborted
+    if let Some(probe) = probe {
+        if !probe.worktree_exists {
+            // The tree the session was about is gone — force-removed by a later
+            // sync, cleaned up by hand, or never re-created after a restart.
+            // Nothing remains to resolve, continue or abort, and that holds
+            // whether or not something is still nominally running: a turn whose
+            // worktree has been deleted under it is not going to finish.
+            //
+            // A resolution is the exception, and it is not a small one: its
+            // commit is on the *feature branch*, not in the throwaway tree the
+            // merge ran in, so losing that directory loses nothing at all.
+            // Retiring it as `Aborted` would tell the reader the merge is gone
+            // while it is sitting on their branch, unpublished — and `Aborted`
+            // is terminal, so nothing would ever revisit it to say otherwise.
+            return if matches!(stored, Resolved) {
+                Resolved.into()
+            } else {
+                Aborted.into()
+            };
+        }
+    }
+    // The two statuses a live writer is still entitled to. Their rows are not
+    // claims to be checked while the thing that wrote them is running; they are
+    // the only report of it there is.
+    if matches!(stored, Syncing | Resolving) && matches!(liveness, SyncLiveness::Live) {
+        return stored.into();
+    }
+    if matches!(stored, Syncing) {
+        // A merge nobody is running never reached a verdict, and what its tree
+        // holds is unknown by construction — possibly clean, possibly
+        // half-applied. `Blocked` is that fact: it offers the abort that
+        // reclaims the directory and withholds the resolver, which would go
+        // looking for conflicts nothing has established are there. Reading it
+        // as a conflict is the mistake `sync_failure::merge_failure_stage`
+        // refuses at the other end of the same sync.
+        return SyncVerdict {
+            status: Blocked,
+            blocked_stage: Some(SyncBlockedStage::Merge),
         };
     }
+    let Some(probe) = probe else {
+        return stored.into();
+    };
     match stored {
-        // A `resolving` row is only ever *read* by a process that is not the
-        // one which wrote it, so seeing one means its writer is gone. An open
-        // merge is then a conflict waiting for someone, not work in progress.
-        Resolving if probe.merge_in_progress => Conflicted,
-        Resolved if probe.merge_in_progress => Conflicted,
+        // Reached only once `liveness` has said nothing is resolving, so the
+        // open merge is a conflict waiting for somebody rather than work in
+        // progress.
+        Resolving if probe.merge_in_progress => Conflicted.into(),
+        Resolved if probe.merge_in_progress => Conflicted.into(),
         // The merge is closed over a clean tree. Two things do that and they
         // want opposite answers: a resolution somebody committed — an agent
         // that staged on its own, or the user in their own editor — and a
@@ -387,12 +514,12 @@ pub fn reconcile(
         // exactly this shape, and nothing about it was ever conflicted.
         Conflicted | Resolving | ResolutionFailed if !probe.merge_in_progress && !probe.dirty => {
             match probe.head_advanced {
-                Some(true) => Resolved,
-                Some(false) => Aborted,
-                None => stored,
+                Some(true) => Resolved.into(),
+                Some(false) => Aborted.into(),
+                None => stored.into(),
             }
         }
-        other => other,
+        other => other.into(),
     }
 }
 

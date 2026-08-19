@@ -293,7 +293,7 @@ impl WorktreeOpsPort for GitOpsHelper {
         feature_branch: &str,
         base_branch: &str,
     ) -> Result<SyncOutcome, SyncFailure> {
-        self.sync_feature_with_upstream(machine_id, repo_dir, feature_branch, base_branch)
+        self.sync_feature_with_upstream(machine_id, repo_dir, feature_branch, base_branch, &())
             .await
     }
 

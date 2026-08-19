@@ -46,7 +46,7 @@ async fn test_sync_feature_with_upstream_detects_conflicts() {
     //    conflict (because the README.md was edited on both
     //    sides), not a silent "no new commits upstream".
     let outcome = helper
-        .sync_feature_with_upstream(None, &local, "feature/f-1", "main")
+        .sync_feature_with_upstream(None, &local, "feature/f-1", "main", &())
         .await;
 
     match outcome {
@@ -99,7 +99,7 @@ async fn test_sync_feature_with_upstream_noop_when_already_in_sync() {
         .await;
 
     let outcome = helper
-        .sync_feature_with_upstream(None, &local, "feature/f-1", "main")
+        .sync_feature_with_upstream(None, &local, "feature/f-1", "main", &())
         .await
         .expect("Sync should succeed when there is nothing to merge");
 
@@ -124,7 +124,7 @@ async fn test_sync_feature_with_upstream_does_not_call_an_unmeasurable_branch_sy
     let local = local_dir.to_string_lossy().to_string();
 
     let outcome = helper
-        .sync_feature_with_upstream(None, &local, "feature/never-cut", "main")
+        .sync_feature_with_upstream(None, &local, "feature/never-cut", "main", &())
         .await;
 
     match outcome {
@@ -172,7 +172,7 @@ async fn test_sync_feature_with_upstream_reports_fetch_failure() {
         .await;
 
     let outcome = helper
-        .sync_feature_with_upstream(None, &local, "feature/f-1", "main")
+        .sync_feature_with_upstream(None, &local, "feature/f-1", "main", &())
         .await;
     match outcome {
         Ok(o) => panic!(
@@ -242,7 +242,7 @@ async fn test_resolver_must_run_in_main_repo_not_worktree() {
 
     // 3. Sync in the main repo — leaves it conflicted.
     let _ = helper
-        .sync_feature_with_upstream(None, &local, "feature/f-resolver", "main")
+        .sync_feature_with_upstream(None, &local, "feature/f-resolver", "main", &())
         .await;
 
     // 4. Critical assertion: the main repo's working tree DOES
@@ -535,7 +535,7 @@ mod stage_at_each_call {
             Arc::new(ScriptedExec::new(&[]).with_programs(&programs)),
         );
         helper
-            .sync_feature_with_upstream(None, REPO, BRANCH, BASE)
+            .sync_feature_with_upstream(None, REPO, BRANCH, BASE, &())
             .await
             .expect_err("the scripted failure must not sync cleanly")
     }
@@ -551,6 +551,67 @@ mod stage_at_each_call {
                 )
             }
         }
+    }
+
+    /// Everything after this point can be cut short — the merge itself most of
+    /// all — and a caller holding a durable row learns the worktree from the
+    /// return value, which an interrupted sync never produces. So the row named
+    /// no tree for the one state it exists for, and the directory was
+    /// reclaimed only by the next sync's force-remove.
+    ///
+    /// The assertion is the *ordering*, not the value: told after the merge,
+    /// this would still be told on every path that returns and still leave the
+    /// interrupted one blind.
+    #[tokio::test]
+    async fn the_merge_worktree_is_reported_before_the_merge_runs() {
+        #[derive(Default)]
+        struct Recorder {
+            path: std::sync::Mutex<Option<String>>,
+            programs_before: std::sync::Mutex<usize>,
+            exec: std::sync::Mutex<Option<Arc<ScriptedExec>>>,
+        }
+        impl crate::ports::worktree_ops::SyncWorktreeObserver for Recorder {
+            fn provisioned(&self, worktree_path: &str) {
+                *self.path.lock().unwrap() = Some(worktree_path.to_string());
+                let issued = self
+                    .exec
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|e| e.programs().len())
+                    .unwrap_or_default();
+                *self.programs_before.lock().unwrap() = issued;
+            }
+        }
+
+        let exec = Arc::new(ScriptedExec::new(&[]).with_programs(&full_run()));
+        let observer = Recorder::default();
+        *observer.exec.lock().unwrap() = Some(exec.clone());
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        let db =
+            Arc::new(SqliteAdapter::new(conn).expect("adapter")) as Arc<dyn AppSettingsRepository>;
+        let helper = GitOpsHelper::new(db, exec.clone());
+
+        helper
+            .sync_feature_with_upstream(None, REPO, BRANCH, BASE, &observer)
+            .await
+            .expect("the scripted run merges and pushes cleanly");
+
+        assert_eq!(observer.path.lock().unwrap().as_deref(), Some(WT));
+        let issued = exec.programs();
+        let before = *observer.programs_before.lock().unwrap();
+        let merged_at = issued
+            .iter()
+            .position(|p| p == MERGE)
+            .expect("the run reaches its merge");
+        assert!(
+            before <= merged_at,
+            "the worktree was reported after {} of {} calls, with the merge at {}: {:?}",
+            before,
+            issued.len(),
+            merged_at,
+            issued
+        );
     }
 
     #[tokio::test]

@@ -49,6 +49,7 @@ fn conflicted() -> SyncSession {
             kind: "both modified".to_string(),
         }],
         raw_error: Some("CONFLICT (content): Merge conflict in src/lib.rs".to_string()),
+        blocked_stage: None,
         pushed_at: None,
         attempts: 0,
         created_at: 100,

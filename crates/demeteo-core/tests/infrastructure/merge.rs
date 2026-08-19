@@ -45,6 +45,8 @@ fn executor(scripted: ScriptedExec) -> (SqliteMergeExecutor, Arc<SqliteAdapter>)
         SqliteMergeExecutor::new(
             db.clone(),
             db.clone(),
+            db.clone(),
+            Arc::new(crate::application::sync_turns::SyncTurns::default()),
             GitOpsHelper::new(app_settings, exec.clone()),
             exec,
             std::path::PathBuf::from("/workspace"),
@@ -66,6 +68,7 @@ fn session(status: SyncSessionStatus, pushed_at: Option<i64>) -> SyncSession {
         merge_commit_sha: Some("c0ffeec".to_string()),
         conflict_files: Vec::new(),
         raw_error: None,
+        blocked_stage: None,
         pushed_at,
         attempts: 0,
         created_at: 100,

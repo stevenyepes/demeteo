@@ -25,6 +25,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::adapters::worktree::git_ops::GitOpsHelper;
+use crate::application::sync_turns::SyncTurns;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{
     ConflictReport, FeatureDrift, RepoContext, UpstreamSyncFailure, UpstreamSyncOutcome,
@@ -32,24 +33,52 @@ use crate::domain::models::{
 use crate::domain::sync_failure::SyncBlockedStage;
 use crate::domain::sync_session::SyncSessionStatus;
 use crate::paths;
-use crate::ports::db::MergeAuditRepository;
+use crate::ports::db::{FeatureRepository, MergeAuditRepository};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::merge::MergeExecutor;
 use crate::ports::sync_session::{SyncSession, SyncSessionPatch, SyncSessionPort};
-use crate::ports::worktree_ops::SyncFailure;
+use crate::ports::worktree_ops::{SyncFailure, SyncWorktreeObserver};
 
 pub struct SqliteMergeExecutor {
     merge_audit: Arc<dyn MergeAuditRepository>,
     sync_sessions: Arc<dyn SyncSessionPort>,
+    features: Arc<dyn FeatureRepository>,
+    turns: Arc<SyncTurns>,
     git_ops: GitOpsHelper,
     exec: Arc<dyn ExecutionPort>,
     workspace_dir: std::path::PathBuf,
+}
+
+/// Writes the merge worktree onto the session the moment git hands one over.
+///
+/// The row is opened before the fetch and everything after it can be cut short,
+/// so this is the difference between an interrupted sync leaving a row that
+/// names its tree — probeable, reconcilable, abortable — and one that names
+/// nothing and can only be reclaimed by the next sync's force-remove.
+struct RecordWorktree<'a> {
+    sessions: &'a Arc<dyn SyncSessionPort>,
+    feature_id: &'a FeatureId,
+}
+
+impl SyncWorktreeObserver for RecordWorktree<'_> {
+    fn provisioned(&self, worktree_path: &str) {
+        let _ = self.sessions.update(
+            self.feature_id,
+            &SyncSessionPatch {
+                worktree_path: Some(Some(worktree_path.to_string())),
+                ..Default::default()
+            },
+            paths::now_ms(),
+        );
+    }
 }
 
 impl SqliteMergeExecutor {
     pub fn new(
         merge_audit: Arc<dyn MergeAuditRepository>,
         sync_sessions: Arc<dyn SyncSessionPort>,
+        features: Arc<dyn FeatureRepository>,
+        turns: Arc<SyncTurns>,
         git_ops: GitOpsHelper,
         exec: Arc<dyn ExecutionPort>,
         workspace_dir: std::path::PathBuf,
@@ -57,9 +86,21 @@ impl SqliteMergeExecutor {
         Self {
             merge_audit,
             sync_sessions,
+            features,
+            turns,
             git_ops,
             exec,
             workspace_dir,
+        }
+    }
+
+    /// The ports every session read here goes through.
+    fn sync_ports(&self) -> crate::application::sync_session::SyncPorts<'_> {
+        crate::application::sync_session::SyncPorts {
+            sessions: &self.sync_sessions,
+            exec: &self.exec,
+            features: &self.features,
+            turns: &self.turns,
         }
     }
 
@@ -117,12 +158,7 @@ impl MergeExecutor for SqliteMergeExecutor {
         // ([`resync_refusal`](crate::domain::sync_session::resync_refusal)). A
         // row that could not be read is not evidence there is none, so it
         // refuses on the same terms rather than syncing over a maybe.
-        match crate::application::sync_session::get_reconciled(
-            &self.sync_sessions,
-            &self.exec,
-            feature_id,
-        )
-        .await
+        match crate::application::sync_session::get_reconciled(self.sync_ports(), feature_id).await
         {
             Ok(Some(existing)) => {
                 if let Some(refusal) = crate::domain::sync_session::resync_refusal(
@@ -178,6 +214,7 @@ impl MergeExecutor for SqliteMergeExecutor {
             merge_commit_sha: None,
             conflict_files: Vec::new(),
             raw_error: None,
+            blocked_stage: None,
             pushed_at: None,
             attempts: 0,
             created_at: now,
@@ -195,6 +232,10 @@ impl MergeExecutor for SqliteMergeExecutor {
                 &repo_dir,
                 feature_branch,
                 default_branch,
+                &RecordWorktree {
+                    sessions: &self.sync_sessions,
+                    feature_id,
+                },
             )
             .await
         {
@@ -228,6 +269,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                         }),
                         head_before: Some(outcome.head_before.clone()),
                         merge_commit_sha: Some(Some(outcome.merge_commit_sha.clone())),
+                        blocked_stage: Some(None),
                         ..Default::default()
                     },
                     paths::now_ms(),
@@ -253,6 +295,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                         head_before: Some(head_before),
                         conflict_files: Some(files.clone()),
                         raw_error: Some(Some(raw_error.clone())),
+                        blocked_stage: Some(None),
                         ..Default::default()
                     },
                     now,
@@ -285,6 +328,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                 raw_error,
                 worktree_path,
                 head_before,
+                merge_commit_sha,
             }) => {
                 // A blocked attempt can still have provisioned a tree — `Push`
                 // always has, and it holds a real unpublished merge. Naming it on
@@ -297,6 +341,13 @@ impl MergeExecutor for SqliteMergeExecutor {
                         raw_error: Some(Some(raw_error.clone())),
                         worktree_path: Some(worktree_path),
                         head_before: Some(head_before),
+                        // Written in both directions rather than only when
+                        // there is one: this row is an upsert over whatever the
+                        // last attempt left, and a stage inherited from it
+                        // would say a merge is waiting on the branch when the
+                        // fetch never even ran.
+                        blocked_stage: Some(Some(stage)),
+                        merge_commit_sha: Some(merge_commit_sha),
                         ..Default::default()
                     },
                     paths::now_ms(),
@@ -372,12 +423,7 @@ impl MergeExecutor for SqliteMergeExecutor {
         &self,
         feature_id: &FeatureId,
     ) -> Result<Option<crate::ports::sync_session::SyncSession>, String> {
-        crate::application::sync_session::get_reconciled(
-            &self.sync_sessions,
-            &self.exec,
-            feature_id,
-        )
-        .await
+        crate::application::sync_session::get_reconciled(self.sync_ports(), feature_id).await
     }
 }
 

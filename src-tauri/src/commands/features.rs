@@ -305,6 +305,17 @@ pub async fn feature_drift(
         .map_err(AppError::from)
 }
 
+/// The four sync commands' shared reach: the row, the tree, the feature's own
+/// status and this process's in-flight turns.
+fn sync_ports(ctx: &AppContext) -> crate::application::sync_session::SyncPorts<'_> {
+    crate::application::sync_session::SyncPorts {
+        sessions: &ctx.sync_sessions,
+        exec: &ctx.exec,
+        features: &ctx.features,
+        turns: &ctx.sync_turns,
+    }
+}
+
 /// The feature's live sync, or `null` if it has never synced.
 ///
 /// Reconciled against the working tree before it answers, so a session left
@@ -316,9 +327,7 @@ pub async fn sync_session_get(
     feature_id: String,
 ) -> Result<Option<SyncSessionView>, AppError> {
     crate::application::sync_session::get_reconciled_view(
-        &ctx.sync_sessions,
-        &ctx.exec,
-        &ctx.features,
+        sync_ports(&ctx),
         &FeatureId::from(feature_id),
     )
     .await
@@ -337,14 +346,9 @@ pub async fn sync_abort(
     ctx: State<'_, AppContext>,
     feature_id: String,
 ) -> Result<Option<SyncSessionView>, AppError> {
-    crate::application::sync_session::abort(
-        &ctx.sync_sessions,
-        &ctx.exec,
-        &ctx.features,
-        &FeatureId::from(feature_id),
-    )
-    .await
-    .map_err(AppError::from)
+    crate::application::sync_session::abort(sync_ports(&ctx), &FeatureId::from(feature_id))
+        .await
+        .map_err(AppError::from)
 }
 
 /// Publish a resolution that is only on the feature branch.
@@ -358,14 +362,9 @@ pub async fn sync_publish(
     ctx: State<'_, AppContext>,
     feature_id: String,
 ) -> Result<Option<SyncSessionView>, AppError> {
-    crate::application::sync_session::publish(
-        &ctx.sync_sessions,
-        &ctx.exec,
-        &ctx.features,
-        &FeatureId::from(feature_id),
-    )
-    .await
-    .map_err(AppError::from)
+    crate::application::sync_session::publish(sync_ports(&ctx), &FeatureId::from(feature_id))
+        .await
+        .map_err(AppError::from)
 }
 
 /// Throw a resolution away: move the feature branch back to where the merge
@@ -377,9 +376,7 @@ pub async fn sync_discard(
     feature_id: String,
 ) -> Result<Option<SyncSessionView>, AppError> {
     crate::application::sync_session::discard_resolution(
-        &ctx.sync_sessions,
-        &ctx.exec,
-        &ctx.features,
+        sync_ports(&ctx),
         &FeatureId::from(feature_id),
     )
     .await

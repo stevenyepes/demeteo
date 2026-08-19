@@ -335,6 +335,8 @@ fn ports(scripted: ScriptedExec, runtimes: Vec<Arc<dyn AgentRuntime>>) -> Ports 
         Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
             db.clone(),
             db.clone(),
+            db.clone(),
+            Arc::new(crate::application::sync_turns::SyncTurns::default()),
             GitOpsHelper::new(app_settings.clone(), exec.clone()),
             exec.clone(),
             std::path::PathBuf::from("/workspace"),
@@ -370,6 +372,7 @@ fn open_conflicted(db: &Arc<SqliteAdapter>) {
             merge_commit_sha: None,
             conflict_files: Vec::new(),
             raw_error: None,
+            blocked_stage: None,
             pushed_at: None,
             attempts: 0,
             created_at: 100,

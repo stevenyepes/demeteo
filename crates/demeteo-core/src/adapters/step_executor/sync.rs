@@ -40,7 +40,6 @@ use crate::paths;
 use crate::ports::db::FeatureRepository;
 use crate::ports::step_executor::SyncOutcomeView;
 
-use super::impl_traits::lock_registry;
 use super::DagStepExecutor;
 
 /// The row this feature's out-of-band syncs report through, created on the
@@ -89,7 +88,7 @@ impl DagStepExecutor {
     /// serialises two of them is assertable without racing two real turns.
     #[cfg(test)]
     pub(crate) fn claim_sync_cancel_for_test(&self, feature_id: &str, tx: watch::Sender<bool>) {
-        lock_registry(&self.sync_cancels).insert(feature_id.to_string(), tx);
+        self.sync_turns.claim(feature_id, Some(tx));
     }
 
     /// Tauri entry point for the "Sync with main" command. Resolves
@@ -113,11 +112,24 @@ impl DagStepExecutor {
         let base_branch = sync_base(&feature, &settings)?;
         let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
-        Ok(crate::domain::sync_failure::view_for(
-            self.merge_executor
-                .sync_feature_with_upstream(&fid, &feature_branch, &base_branch)
-                .await,
-        ))
+        // The merge holds the sync worktree for as long as it runs, and nothing
+        // durable says so: this feature's run has already finished, so
+        // `run_is_live` answers no and a reader correcting the `syncing` row
+        // would offer an Abort aimed at the tree git is merging in. The claim is
+        // that fact, and it is also what serialises a merge against a
+        // resolution of the same feature.
+        if !self.sync_turns.claim(feature_id, None) {
+            return Err(
+                "A sync is already running for this feature; wait for it or stop it.".to_string(),
+            );
+        }
+        let outcome = self
+            .merge_executor
+            .sync_feature_with_upstream(&fid, &feature_branch, &base_branch)
+            .await;
+        self.sync_turns.release(feature_id);
+
+        Ok(crate::domain::sync_failure::view_for(outcome))
     }
 
     /// Tauri entry point for the staleness signal on the run header.
@@ -209,6 +221,7 @@ impl DagStepExecutor {
             SyncStanding {
                 status: session.status,
                 published: session.pushed_at.is_some(),
+                blocked_stage: session.blocked_stage,
                 feature_status: &feature.status,
             },
         ) {
@@ -241,15 +254,11 @@ impl DagStepExecutor {
         // `user_may_intervene` exists to prevent. It would also displace this
         // turn's sender and swallow its Stop.
         let (cancel_tx, cancel_rx) = watch::channel(false);
-        {
-            let mut cancels = lock_registry(&self.sync_cancels);
-            if cancels.contains_key(feature_id) {
-                return Err(
-                    "A resolution is already running for this feature; wait for it or stop it."
-                        .to_string(),
-                );
-            }
-            cancels.insert(feature_id.to_string(), cancel_tx);
+        if !self.sync_turns.claim(feature_id, Some(cancel_tx)) {
+            return Err(
+                "A resolution is already running for this feature; wait for it or stop it."
+                    .to_string(),
+            );
         }
 
         // A persisted row, because the id the turn streams against has to be one
@@ -314,7 +323,7 @@ impl DagStepExecutor {
         })
         .await;
 
-        lock_registry(&self.sync_cancels).remove(feature_id);
+        self.sync_turns.release(feature_id);
 
         let wall = start.elapsed().as_secs();
         match outcome {

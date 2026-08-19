@@ -13,6 +13,7 @@
 //! between the two binaries.
 
 use crate::adapters;
+use crate::application;
 use crate::ports;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::agent_runtime::AgentRuntime;
@@ -179,6 +180,13 @@ pub fn build_core_context(
     // conflict-report shape. Wired here so the feature_sync command and
     // the existing subtask→feature merge share the same
     // conflict-detection code path.
+    // Shared by the merge executor and the step executor: it is the process's
+    // only record of an out-of-band sync being in flight, and both the thing
+    // that starts one and every reader that has to tell a live session from an
+    // abandoned one need the same instance
+    // (`domain::sync_session::sync_liveness`).
+    let sync_turns = Arc::new(application::sync_turns::SyncTurns::default());
+
     let merge_executor: Arc<dyn ports::merge::MergeExecutor> = {
         let git_ops_for_merge = adapters::worktree::git_ops::GitOpsHelper::new(
             app_settings_repo.clone(),
@@ -187,6 +195,8 @@ pub fn build_core_context(
         Arc::new(adapters::merge::SqliteMergeExecutor::new(
             merge_audit_repo.clone(),
             sync_sessions_repo.clone(),
+            features_repo.clone(),
+            sync_turns.clone(),
             git_ops_for_merge,
             exec_inner.clone(),
             workspace_dir.clone(),
@@ -228,6 +238,7 @@ pub fn build_core_context(
             workspace_dir.clone(),
             pricing.clone(),
             remote_run_mirror_repo.clone(),
+            sync_turns.clone(),
         );
         // Only the desktop lets a finished run open its own PR. The headless
         // runner (`LocalOnly`) publishes at the end of `run.rs` instead, with
@@ -321,6 +332,7 @@ pub fn build_core_context(
         run_events: run_events_repo,
         remote_run_mirror: remote_run_mirror_repo,
         sync_sessions: sync_sessions_repo,
+        sync_turns,
         remote_run_mirror_guard: Arc::new(tokio::sync::Mutex::new(())),
         run_view,
     }

@@ -139,12 +139,15 @@ pub(super) async fn build_test_executor_with_agents(
     let attachments: Arc<dyn crate::ports::attachment_store::AttachmentStore> =
         Arc::new(crate::adapters::attachment_store::fs::FsAttachmentStore::new(temp_dir.clone()));
 
+    let sync_turns = Arc::new(crate::application::sync_turns::SyncTurns::default());
     let merge_executor: Arc<dyn crate::ports::merge::MergeExecutor> = {
         let git_ops =
             crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
         Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
             db.clone(),
             db.clone(),
+            db.clone(),
+            sync_turns.clone(),
             git_ops,
             exec.clone(),
             temp_dir.clone(),
@@ -179,6 +182,7 @@ pub(super) async fn build_test_executor_with_agents(
         temp_dir.clone(),
         pricing,
         db.clone(), // remote-run mirror — SqliteAdapter implements the port
+        sync_turns,
     );
     (executor, db)
 }

@@ -261,7 +261,31 @@ pub enum SyncFailure {
         /// the refs are read, and a `Push` failure leaves a real merge commit
         /// sitting on top of it.
         head_before: Option<String>,
+        /// The merge this attempt committed before it was blocked — `Push` and
+        /// nothing else, because it is the only stage reached after the merge
+        /// succeeded. Without it the session names a merge it cannot identify,
+        /// and publishing one has no sha to confirm against origin afterwards,
+        /// which is the only evidence a push may be recorded on.
+        merge_commit_sha: Option<String>,
     },
+}
+
+/// Told where a sync's merge is about to run, the moment there is an answer.
+///
+/// The session row is opened before the fetch, because a sync cut short is the
+/// case it exists for — and until this existed it named no tree, so the
+/// interrupted sync was the one state nothing could probe, `reconcile` passed
+/// through untouched and every intervention refused. The path is known here
+/// and nowhere else until the whole call returns, which for an interrupted sync
+/// is never.
+pub trait SyncWorktreeObserver: Send + Sync {
+    fn provisioned(&self, worktree_path: &str);
+}
+
+/// For a caller with no row to keep — the port's own trait method, and the
+/// tests that drive git directly.
+impl SyncWorktreeObserver for () {
+    fn provisioned(&self, _worktree_path: &str) {}
 }
 
 /// Result of collapsing a feature branch's commits into one.
@@ -496,6 +520,9 @@ pub trait WorktreeOpsPort: Send + Sync {
     ) -> Result<(), String>;
 
     /// Sync feature branch with upstream default branch.
+    ///
+    /// Reports no worktree: a caller holding a session row wants
+    /// [`SyncWorktreeObserver`] and reaches `GitOpsHelper` directly for it.
     async fn sync_feature_with_upstream(
         &self,
         machine_id: Option<&str>,

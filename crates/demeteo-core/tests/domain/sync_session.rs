@@ -1,6 +1,7 @@
 // Tests extracted from `crates/demeteo-core/src/domain/sync_session.rs` (mirrored-tests convention). `super` = that module.
 
 use super::*;
+use crate::domain::sync_failure::SyncBlockedStage;
 
 fn probe(worktree_exists: bool, merge_in_progress: bool, dirty: bool) -> SyncWorkspaceProbe {
     SyncWorkspaceProbe {
@@ -9,6 +10,15 @@ fn probe(worktree_exists: bool, merge_in_progress: bool, dirty: bool) -> SyncWor
         dirty,
         head_advanced: None,
     }
+}
+
+/// The corrected status, with nothing running.
+///
+/// That is the standing every correction below is about: a row whose writer is
+/// gone is the only one a probe is entitled to move, and the two statuses a
+/// live writer still holds have tests of their own.
+fn dead(stored: SyncSessionStatus, probe: Option<&SyncWorkspaceProbe>) -> SyncSessionStatus {
+    reconcile(stored, probe, SyncLiveness::Gone).status
 }
 
 fn probe_head(
@@ -37,7 +47,7 @@ fn a_conflict_whose_worktree_is_gone_is_an_abandoned_sync() {
         SyncSessionStatus::Syncing,
     ] {
         assert_eq!(
-            reconcile(stored, Some(&gone)),
+            dead(stored, Some(&gone)),
             SyncSessionStatus::Aborted,
             "{stored:?}"
         );
@@ -51,7 +61,7 @@ fn a_conflict_whose_worktree_is_gone_is_an_abandoned_sync() {
 #[test]
 fn a_resolve_nobody_is_driving_falls_back_to_the_conflict() {
     assert_eq!(
-        reconcile(SyncSessionStatus::Resolving, Some(&probe(true, true, true))),
+        dead(SyncSessionStatus::Resolving, Some(&probe(true, true, true))),
         SyncSessionStatus::Conflicted
     );
 }
@@ -69,7 +79,7 @@ fn a_closed_merge_over_a_clean_tree_is_resolved_whatever_the_row_says() {
         SyncSessionStatus::ResolutionFailed,
     ] {
         assert_eq!(
-            reconcile(stored, Some(&done)),
+            dead(stored, Some(&done)),
             SyncSessionStatus::Resolved,
             "{stored:?}"
         );
@@ -91,7 +101,7 @@ fn a_merge_undone_by_hand_is_abandoned_not_resolved() {
         SyncSessionStatus::ResolutionFailed,
     ] {
         assert_eq!(
-            reconcile(stored, Some(&undone)),
+            dead(stored, Some(&undone)),
             SyncSessionStatus::Aborted,
             "{stored:?}"
         );
@@ -109,7 +119,7 @@ fn a_closed_merge_with_no_starting_sha_leaves_the_row_alone() {
         SyncSessionStatus::Resolving,
         SyncSessionStatus::ResolutionFailed,
     ] {
-        assert_eq!(reconcile(stored, Some(&unknowable)), stored, "{stored:?}");
+        assert_eq!(dead(stored, Some(&unknowable)), stored, "{stored:?}");
     }
 }
 
@@ -120,7 +130,7 @@ fn a_closed_merge_with_no_starting_sha_leaves_the_row_alone() {
 #[test]
 fn a_blocked_sync_over_a_clean_tree_stays_blocked() {
     assert_eq!(
-        reconcile(SyncSessionStatus::Blocked, Some(&probe(true, false, false))),
+        dead(SyncSessionStatus::Blocked, Some(&probe(true, false, false))),
         SyncSessionStatus::Blocked
     );
 }
@@ -131,23 +141,194 @@ fn a_blocked_sync_over_a_clean_tree_stays_blocked() {
 #[test]
 fn a_resolution_the_merge_outlived_is_a_conflict_again() {
     assert_eq!(
-        reconcile(SyncSessionStatus::Resolved, Some(&probe(true, true, false))),
+        dead(SyncSessionStatus::Resolved, Some(&probe(true, true, false))),
         SyncSessionStatus::Conflicted
     );
 }
 
 /// `None` is "this session names no worktree", not "we looked and found
-/// nothing". A sync that has not provisioned one yet would otherwise read as
-/// abandoned on its very first poll.
+/// nothing", so nothing about the tree may move the row.
+///
+/// `Syncing` is the one status that is corrected without a tree, and on the
+/// other observation entirely — see
+/// [`a_merge_nobody_is_running_never_reached_a_verdict`].
 #[test]
 fn a_session_with_no_worktree_to_look_at_is_believed() {
     assert_eq!(
-        reconcile(SyncSessionStatus::Syncing, None),
-        SyncSessionStatus::Syncing
+        dead(SyncSessionStatus::Blocked, None),
+        SyncSessionStatus::Blocked
     );
     assert_eq!(
-        reconcile(SyncSessionStatus::Blocked, None),
-        SyncSessionStatus::Blocked
+        dead(SyncSessionStatus::Conflicted, None),
+        SyncSessionStatus::Conflicted
+    );
+    assert_eq!(
+        reconcile(SyncSessionStatus::Syncing, None, SyncLiveness::Live).status,
+        SyncSessionStatus::Syncing,
+        "a merge that has not provisioned its tree yet is still a merge"
+    );
+}
+
+/// The safety bug this observation exists for.
+///
+/// `resolving` was corrected to `conflicted` on the strength of an open merge
+/// alone, on the reasoning that only a process other than the writer ever reads
+/// one. Both resolution entry points now write it *while their turn runs*, and
+/// a session corrected out from under a live turn is offered Abort — which
+/// issues `git merge --abort`, `worktree remove --force` and a recursive delete
+/// on the directory the agent is editing in.
+#[test]
+fn a_live_resolution_is_not_corrected_out_from_under_itself() {
+    let open_merge = probe(true, true, false);
+    assert_eq!(
+        reconcile(
+            SyncSessionStatus::Resolving,
+            Some(&open_merge),
+            SyncLiveness::Live
+        )
+        .status,
+        SyncSessionStatus::Resolving
+    );
+    assert!(
+        !user_may_intervene(unpublished(SyncSessionStatus::Resolving, "completed")),
+        "and nothing destructive is offered for it"
+    );
+    assert_eq!(
+        dead(SyncSessionStatus::Resolving, Some(&open_merge)),
+        SyncSessionStatus::Conflicted,
+        "a resolver that really did die still owes the conflict back"
+    );
+    assert!(user_may_intervene(unpublished(
+        SyncSessionStatus::Conflicted,
+        "completed"
+    )));
+}
+
+/// What survives a restart, and what must not.
+///
+/// The process-local claim is gone — that is the point of it being process
+/// local — so a turn that died with its process answers `Gone` and its session
+/// becomes recoverable again. A run the feature's own status still vouches for
+/// answers `Live` on the same terms every other refusal already reads it on,
+/// and run recovery is what retires that, not this.
+#[test]
+fn a_claim_does_not_outlive_the_process_that_made_it() {
+    assert_eq!(sync_liveness(true, "completed"), SyncLiveness::Live);
+    assert_eq!(
+        sync_liveness(false, "completed"),
+        SyncLiveness::Gone,
+        "an empty registry after a restart is what gives the conflict back"
+    );
+    assert_eq!(
+        sync_liveness(false, "running"),
+        SyncLiveness::Live,
+        "a driver still owns its own sync with no claim in any map"
+    );
+}
+
+/// A sync cut short mid-merge, which used to be the one state nothing could
+/// correct and no user action could clear: `syncing` passed through every
+/// reconcile and every intervention was refused for it, so only the next sync's
+/// force-remove ever reclaimed the worktree.
+///
+/// `Blocked` and not `Conflicted`: nothing established that the tree holds
+/// unmerged paths, and reading it as a conflict is what sends the resolver
+/// looking for a `MERGE_HEAD` nobody wrote. Blocked offers the abort that
+/// reclaims the directory and withholds the resolver.
+#[test]
+fn a_merge_nobody_is_running_never_reached_a_verdict() {
+    for observation in [
+        None,
+        Some(probe(true, true, false)),
+        Some(probe(true, false, true)),
+    ] {
+        let verdict = reconcile(
+            SyncSessionStatus::Syncing,
+            observation.as_ref(),
+            SyncLiveness::Gone,
+        );
+        assert_eq!(
+            verdict.status,
+            SyncSessionStatus::Blocked,
+            "{observation:?}"
+        );
+        assert_eq!(
+            verdict.blocked_stage,
+            Some(SyncBlockedStage::Merge),
+            "{observation:?}"
+        );
+    }
+    assert!(
+        user_may_intervene(unpublished(SyncSessionStatus::Blocked, "completed")),
+        "and the user can finally clear it"
+    );
+    assert_eq!(
+        reconcile(
+            SyncSessionStatus::Syncing,
+            Some(&probe(true, true, false)),
+            SyncLiveness::Live
+        ),
+        SyncSessionStatus::Syncing.into(),
+        "a merge that is still running is not a merge that stopped"
+    );
+}
+
+/// The one blocked stage that leaves work behind, told from the six that do
+/// not.
+///
+/// A `push` failure has already committed the merge onto the feature branch.
+/// Offered only a retry, the second sync finds `origin/<base>` already merged,
+/// changes nothing, reports up to date — and the unpublished merge stays in a
+/// worktree the next sync force-removes. Publishing is the press that finishes
+/// it, and it is reachable only because the stage is on the row (V46).
+#[test]
+fn only_a_push_blocked_sync_has_a_merge_to_publish() {
+    use crate::domain::sync_session::{intervention_refusal, published_status, SyncIntervention};
+
+    let blocked = |stage, published| SyncStanding {
+        status: SyncSessionStatus::Blocked,
+        published,
+        blocked_stage: stage,
+        feature_status: "completed",
+    };
+    assert_eq!(
+        intervention_refusal(
+            SyncIntervention::Publish,
+            blocked(Some(SyncBlockedStage::Push), false)
+        ),
+        None
+    );
+    for stage in [
+        None,
+        Some(SyncBlockedStage::Fetch),
+        Some(SyncBlockedStage::BaseRefMissing),
+        Some(SyncBlockedStage::WorktreeProvision),
+        Some(SyncBlockedStage::Merge),
+        Some(SyncBlockedStage::RepoContext),
+        Some(SyncBlockedStage::HeldResolution),
+    ] {
+        assert!(
+            intervention_refusal(SyncIntervention::Publish, blocked(stage, false)).is_some(),
+            "{stage:?} merged nothing, so there is nothing of it to publish"
+        );
+    }
+    assert!(
+        intervention_refusal(
+            SyncIntervention::Publish,
+            blocked(Some(SyncBlockedStage::Push), true)
+        )
+        .is_some(),
+        "pressing it twice is not a second push"
+    );
+    assert_eq!(
+        published_status(SyncSessionStatus::Blocked),
+        SyncSessionStatus::Merged,
+        "the failed push was the whole of the block"
+    );
+    assert_eq!(
+        published_status(SyncSessionStatus::Resolved),
+        SyncSessionStatus::Resolved,
+        "a resolution's publication is `pushed_at`, and the review card reads the status"
     );
 }
 
@@ -162,8 +343,8 @@ fn a_terminal_status_survives_any_observation() {
         SyncSessionStatus::Aborted,
     ] {
         assert!(stored.is_terminal(), "{stored:?}");
-        assert_eq!(reconcile(stored, Some(&probe(true, true, true))), stored);
-        assert_eq!(reconcile(stored, Some(&probe(false, false, false))), stored);
+        assert_eq!(dead(stored, Some(&probe(true, true, true))), stored);
+        assert_eq!(dead(stored, Some(&probe(false, false, false))), stored);
     }
 }
 
@@ -193,6 +374,7 @@ fn unpublished(status: SyncSessionStatus, feature_status: &str) -> SyncStanding<
     SyncStanding {
         status,
         published: false,
+        blocked_stage: None,
         feature_status,
     }
 }
@@ -227,6 +409,7 @@ fn a_sync_somebody_else_is_driving_is_not_the_users_to_touch() {
     assert!(!user_may_intervene(SyncStanding {
         status: SyncSessionStatus::Resolved,
         published: true,
+        blocked_stage: None,
         feature_status: "completed",
     }));
     for status in [
@@ -332,7 +515,7 @@ fn a_blocked_sync_may_be_abandoned_but_not_resolved() {
 #[test]
 fn a_resolution_survives_the_worktree_it_was_made_in() {
     assert_eq!(
-        reconcile(
+        dead(
             SyncSessionStatus::Resolved,
             Some(&probe(false, false, false))
         ),

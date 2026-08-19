@@ -8,6 +8,13 @@
 //! non-terminal status. `application::sync_session::get_reconciled` is the one
 //! place that does both, and is what a command should call.
 //!
+//! The tree is not the only authority, and reading it as if it were is what
+//! aimed a worktree delete at a live agent: a merge in progress looks the same
+//! whether the process holding it is running or died an hour ago. Whether
+//! anything still is, is the second observation
+//! ([`crate::domain::sync_session::sync_liveness`]), and the same one call
+//! supplies it.
+//!
 //! `feature_syncs` (V9) stays the append-only audit of attempts and is not
 //! read here; this table holds the single mutable row a feature is allowed.
 
@@ -15,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::ids::FeatureId;
 use crate::domain::models::ConflictFile;
+use crate::domain::sync_failure::SyncBlockedStage;
 use crate::domain::sync_session::{SyncResolution, SyncSessionStatus};
 
 /// One feature's live sync, as the row holds it.
@@ -37,6 +45,12 @@ pub struct SyncSession {
     /// distinguishes them and nothing downstream has needed to.
     pub conflict_files: Vec<ConflictFile>,
     pub raw_error: Option<String>,
+    /// Where a [`SyncSessionStatus::Blocked`] session stopped (migration V46),
+    /// or `None` on any other status and on a row this build's vocabulary
+    /// cannot name. Not derivable from anything else on the row: `raw_error`
+    /// is git's prose and `merge_commit_sha` is set for a stage that failed
+    /// after committing as readily as for one that never merged.
+    pub blocked_stage: Option<SyncBlockedStage>,
     /// When the resolution reached origin, or `None` while it is only on the
     /// branch. Not a [`SyncSessionStatus`] because no probe of the working tree
     /// can answer it — see migration V45.
@@ -59,6 +73,7 @@ pub struct SyncSessionPatch {
     pub merge_commit_sha: Option<Option<String>>,
     pub conflict_files: Option<Vec<ConflictFile>>,
     pub raw_error: Option<Option<String>>,
+    pub blocked_stage: Option<Option<SyncBlockedStage>>,
     pub pushed_at: Option<Option<i64>>,
     pub bump_attempts: bool,
 }

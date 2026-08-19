@@ -7,6 +7,7 @@ use tokio::sync::watch;
 use crate::adapters::agent::registry::AgentRegistry;
 use crate::adapters::step_executor::driver_registry::DriverRegistry;
 use crate::adapters::step_executor::gate_waiter::GateWaiter;
+use crate::application::sync_turns::SyncTurns;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::attachment_store::{AttachmentJsonPort, AttachmentStore};
@@ -127,13 +128,18 @@ pub struct DagStepExecutor {
     /// doubling up on an in-flight run.
     driver_registry: Arc<DriverRegistry>,
     cancel_senders: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
-    /// Cancel senders for the turns that run outside a driver — today only the
-    /// manual sync resolution. Kept apart from `cancel_senders` because that
-    /// map belongs to `start_execution_with_ctx`, keyed by the same feature id:
-    /// one map would have a sync displace a live run's sender, and its entries
-    /// are never removed, so a stale `true` would abort the next turn before it
-    /// started. Entries here last exactly as long as the turn.
-    sync_cancels: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
+    /// The out-of-band sync work this process is running, and its Stop channels
+    /// (`crate::application::sync_turns`). Kept apart from `cancel_senders`
+    /// because that map belongs to `start_execution_with_ctx`, keyed by the same
+    /// feature id: one map would have a sync displace a live run's sender, and
+    /// its entries are never removed, so a stale `true` would abort the next
+    /// turn before it started.
+    ///
+    /// Shared with the merge executor rather than owned here, because it is half
+    /// of what tells a session's writer being alive from its writer having died
+    /// ([`sync_liveness`](crate::domain::sync_session::sync_liveness)) and every
+    /// reader of a session owes that answer.
+    sync_turns: Arc<SyncTurns>,
     /// Model → USD pricing. Plumbed through to every driver + agent turn
     /// so [`UsageAccumulator`](crate::domain::usage::UsageAccumulator) can
     /// backfill `cost_usd` when the agent's wire format omits it.
@@ -201,6 +207,7 @@ impl DagStepExecutor {
         workspace_dir: PathBuf,
         pricing: Arc<dyn PricingTable>,
         remote_run_mirror: Arc<dyn crate::ports::remote_run_mirror::RemoteRunMirrorPort>,
+        sync_turns: Arc<SyncTurns>,
     ) -> Self {
         let git_ops = GitOpsHelper::new(app_settings.clone(), exec.clone());
         Self {
@@ -229,7 +236,7 @@ impl DagStepExecutor {
             gate_waiters: Arc::new(Mutex::new(HashMap::new())),
             driver_registry: DriverRegistry::new(),
             cancel_senders: Arc::new(Mutex::new(HashMap::new())),
-            sync_cancels: Arc::new(Mutex::new(HashMap::new())),
+            sync_turns,
             pricing,
             remote_run_mirror,
             mr_publisher: None,
