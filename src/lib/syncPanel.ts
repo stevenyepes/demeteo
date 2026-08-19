@@ -8,7 +8,9 @@
  * its own half of a sync in a `useState`, and a conflict therefore existed only
  * for as long as the component that had watched it happen stayed mounted. The
  * row is the only thing that survives a navigation, a remount or a restart, so
- * it is the only thing this reads.
+ * it is the only thing this reads. `pending` is the one input that is not the
+ * row, and it says which call is outstanding rather than what any call found —
+ * see its own note for why the two live arms need it.
  *
  * Drift decides the copy only in the arms where no sync is live. `up_to_date`,
  * `merged` and `aborted` sessions describe a sync that is over; what the user
@@ -85,6 +87,44 @@ export interface SyncPanelInput {
   /** Whether a sync may be started at all: a run still committing to this
    *  branch would be merging into its own working tree. */
   canSync: boolean;
+  /**
+   * The intent whose call has not answered yet, or `null`.
+   *
+   * Not an exception to reading the durable row. `feature_sync` opens a
+   * `syncing` row *before* the merge and `feature_resolve_sync_conflicts` moves
+   * the row to `resolving` at the top of the turn, and both answer only once the
+   * whole thing is over — so for the length of a merge the row already says what
+   * these two arms say, and the one thing missing is that anybody re-read it.
+   * What is local here is that a call is outstanding, never what it found; the
+   * verdict still comes from the row. Without it the pane spent every merge it
+   * started saying "Nothing has been read yet".
+   */
+  pending: SyncIntent | null;
+}
+
+/**
+ * Whether an intent in flight can move the branch a drift count describes.
+ *
+ * The count is suspended while one can, because a number taken between a merge
+ * and its push describes neither side. `refresh` is the one intent that cannot:
+ * it *is* the count, and suspending the read on it is how the pane's own
+ * Refresh came to pay for a `git fetch` and then throw the answer away.
+ */
+export function syncIntentMovesBranch(intent: SyncIntent | null): boolean {
+  if (intent === null || intent === 'refresh') return false;
+  return !isReadOnlySyncIntent(intent);
+}
+
+/**
+ * Whether an intent reaches for nothing the backend can be mid-way through.
+ *
+ * These two select a step row and open a read-only diff, so another sync action
+ * being in flight is no reason to refuse them — and `watch` in particular is
+ * offered *only* while a resolver is running, which is exactly when a blanket
+ * "another sync action is still running" would take it away.
+ */
+export function isReadOnlySyncIntent(intent: SyncIntent): boolean {
+  return intent === 'watch' || intent === 'review';
 }
 
 const REFRESH: SyncAction = {
@@ -119,6 +159,23 @@ const RESOLVE: SyncAction = {
   desc: 'Spawns a fresh agent in the sync worktree to clean up the conflict markers and commit the result.',
 };
 
+/**
+ * Abort, worded for a blocked sync.
+ *
+ * `ABORT`'s copy promises the branch goes back to where the sync found it,
+ * which is true of an open merge and false of the one blocked stage that
+ * persists work: a failed *push* has already committed the merge onto the
+ * feature branch, and `close_session` undoes the merge inside the throwaway
+ * tree and removes it without moving a single ref.
+ */
+const ABANDON: SyncAction = {
+  intent: 'abort',
+  label: 'Abandon sync',
+  tone: 'ruby',
+  title: 'Discard the sync worktree and close this session',
+  desc: 'Discards the sync worktree and closes the session. Anything git already committed to the branch stays on it.',
+};
+
 const WATCH: SyncAction = {
   intent: 'watch',
   label: 'Open the stream',
@@ -140,8 +197,8 @@ const WATCH: SyncAction = {
  * the row still reads `conflicted` while a step owns it is exactly what it
  * closes.
  */
-export function describeSyncPanel({ session, drift, canSync }: SyncPanelInput): SyncPanelModel {
-  const base: Omit<SyncPanelModel, 'state' | 'tone' | 'chipLabel' | 'headline' | 'body'> = {
+export function describeSyncPanel({ session, drift, canSync, pending }: SyncPanelInput): SyncPanelModel {
+  const base: PanelBase = {
     live: false,
     detail: null,
     conflictFiles: [],
@@ -154,6 +211,13 @@ export function describeSyncPanel({ session, drift, canSync }: SyncPanelInput): 
     badge: 0,
   };
 
+  if (pending === 'sync') {
+    return syncingArm(base, session?.base_branch ?? null, session?.feature_branch ?? null);
+  }
+  if (pending === 'resolve' && session !== null) {
+    return resolvingArm(base, session);
+  }
+
   if (session === null || session.status === 'up_to_date' || session.status === 'merged' || session.status === 'aborted') {
     return { ...base, ...quiet(drift, canSync) };
   }
@@ -164,26 +228,29 @@ export function describeSyncPanel({ session, drift, canSync }: SyncPanelInput): 
 
   switch (session.status) {
     case 'syncing':
-      return {
-        ...base,
-        state: 'syncing',
-        tone: 'cyan',
-        chipLabel: 'Syncing',
-        live: true,
-        headline: `Merging ${baseBranch} into ${branch}`,
-        body: 'The merge is running. What it finds — a clean merge, a conflict, or a reason it could not start — lands here.',
-      };
+      return syncingArm(base, baseBranch, branch);
 
+    /**
+     * `stage` is on the call's answer and nothing persists it, so this arm
+     * cannot name what stopped — and must not guess. `SyncBlockedStage::Push`
+     * lands here too, and it has already committed the merge onto the feature
+     * branch, so the reassurance this arm used to carry ("nothing was merged")
+     * was false for the one blocked stage that leaves work behind.
+     */
     case 'blocked':
       return {
         ...base,
         state: 'blocked',
         tone: 'amber',
         chipLabel: 'Blocked',
-        headline: 'The sync stopped before git reached a verdict',
-        body: 'Nothing was merged and nothing is conflicted, so there is nothing for an agent to do. git said why below; fix that and sync again.',
+        headline: 'The sync stopped short of a verdict',
+        body: "Nothing is conflicted, so there is nothing for an agent to do. Read git's words below before retrying: this row does not record which step stopped, and a push that failed has already committed the merge to the branch.",
         detail: session.raw_error,
-        actions: canSync ? [{ ...SYNC, label: 'Retry sync', tone: 'amber' }, REFRESH] : [REFRESH],
+        actions: [
+          ...(canSync ? [{ ...SYNC, label: 'Retry sync', tone: 'amber' as const }] : []),
+          REFRESH,
+          ...(mine ? [ABANDON] : []),
+        ],
         badge: 1,
       };
 
@@ -203,18 +270,7 @@ export function describeSyncPanel({ session, drift, canSync }: SyncPanelInput): 
       };
 
     case 'resolving':
-      return {
-        ...base,
-        state: 'resolving',
-        tone: 'violet',
-        chipLabel: 'Resolving',
-        live: true,
-        headline: 'An agent is resolving the conflict',
-        body: 'It is editing the conflict files in the sync worktree and will commit the result. Its output streams on the step pane.',
-        conflictFiles: session.conflict_files,
-        showTelemetry: true,
-        actions: mine ? [WATCH, ABORT] : [WATCH],
-      };
+      return resolvingArm(base, session);
 
     case 'resolution_failed':
       return {
@@ -237,7 +293,11 @@ export function describeSyncPanel({ session, drift, canSync }: SyncPanelInput): 
         ? {
             ...base,
             state: 'awaiting_review',
-            tone: 'emerald',
+            // Amber, not emerald. `runStatus.ts` fixes the vocabulary — emerald
+            // is "done well", amber is "needs a human" — and the whole point of
+            // this state is that the merge is on the branch, origin has not seen
+            // it, and nothing publishes it without a press.
+            tone: 'amber',
             chipLabel: 'Not published',
             headline: 'Conflicts resolved, not published',
             body: `The merge is on ${branch} and origin has not seen it. Read it before it reaches the pull request.`,
@@ -256,6 +316,54 @@ export function describeSyncPanel({ session, drift, canSync }: SyncPanelInput): 
             actions: [REFRESH],
           };
   }
+}
+
+type PanelBase = Omit<SyncPanelModel, 'state' | 'tone' | 'chipLabel' | 'headline' | 'body'>;
+
+/**
+ * A merge that is running. Reached from the stored `syncing` row and from an
+ * unanswered `sync` call, which describe the same thing from either side of the
+ * IPC boundary.
+ *
+ * `Refresh` is the only affordance, and it is not decoration: nothing polls this
+ * row, `reconcile` passes `Syncing` through untouched and every intervention is
+ * refused for it, so without a press that re-reads the row a merge that finished
+ * — or a `syncing` row left behind by a restart — is visible only by navigating
+ * away and back.
+ */
+function syncingArm(base: PanelBase, baseBranch: string | null, branch: string | null): SyncPanelModel {
+  return {
+    ...base,
+    state: 'syncing',
+    tone: 'cyan',
+    chipLabel: 'Syncing',
+    live: true,
+    headline: baseBranch && branch ? `Merging ${baseBranch} into ${branch}` : 'Merging the base branch in',
+    body: 'The merge is running. What it finds — a clean merge, a conflict, or a reason it could not start — lands here.',
+    actions: [REFRESH],
+  };
+}
+
+/**
+ * An agent in the sync worktree. Reached from the stored `resolving` row and
+ * from an unanswered `resolve` call: `resolve_sync_conflicts` moves the row to
+ * `resolving` at the top of the turn and answers only when the turn is over, so
+ * the pane spent the whole resolution rendering the `conflicted` row it started
+ * from — ruby chip, "N conflicts", no telemetry and no way to reach the stream.
+ */
+function resolvingArm(base: PanelBase, session: SyncSessionView): SyncPanelModel {
+  return {
+    ...base,
+    state: 'resolving',
+    tone: 'violet',
+    chipLabel: 'Resolving',
+    live: true,
+    headline: 'An agent is resolving the conflict',
+    body: 'It is editing the conflict files in the sync worktree and will commit the result. Its output streams on the step pane.',
+    conflictFiles: session.conflict_files,
+    showTelemetry: true,
+    actions: session.user_may_intervene ? [WATCH, ABORT] : [WATCH],
+  };
 }
 
 /**

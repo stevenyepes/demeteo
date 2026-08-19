@@ -11,7 +11,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { describeSyncPanel } from '../../../lib/syncPanel';
+import { describeSyncPanel, type SyncIntent } from '../../../lib/syncPanel';
 import type { FeatureDrift, SyncSessionView } from '../../../types';
 import type { HarnessOverrides } from '../useHarnessOverrides';
 import type { SyncResolverSelection } from '../useSyncResolverOverrides';
@@ -67,19 +67,21 @@ function mount(
   over: {
     session?: SyncSessionView | null;
     drift?: FeatureDrift | null;
+    pending?: SyncIntent | null;
     onAction?: (intent: string) => void;
   } = {},
 ) {
   const sessionRow = over.session === undefined ? session() : over.session;
   const drift = over.drift ?? null;
-  const model = describeSyncPanel({ session: sessionRow, drift, canSync: true });
+  const pending = over.pending ?? null;
+  const model = describeSyncPanel({ session: sessionRow, drift, canSync: true, pending });
   const result = render(
     <SyncPanel
       model={model}
       session={sessionRow}
       drift={drift}
       resolverStep={null}
-      pending={null}
+      pending={pending}
       resolverSelection={resolverSelection}
       onAction={over.onAction ?? (() => {})}
       onOpenPath={() => {}}
@@ -136,11 +138,25 @@ describe('SyncPanel', () => {
     expect(buttons()).toContain('Open the stream');
   });
 
+  /** A resolve turn runs for as long as the agent does, and `Open the stream`
+   *  is offered only while one is running — so a blanket "another sync action is
+   *  still running" takes the watch away exactly when there is something to
+   *  watch. It reaches for nothing the backend can be mid-way through. */
+  it('keeps the stream reachable while the resolve it belongs to is in flight', () => {
+    mount({ session: session(), pending: 'resolve' });
+
+    expect(pane()).toHaveAttribute('data-sync-state', 'resolving');
+    expect(screen.getByRole('button', { name: /Open the stream/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Abort sync/ })).toBeDisabled();
+  });
+
   it('offers the diff, the publish and the discard on a held resolution', () => {
     mount({ session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222' }) });
 
     expect(pane()).toHaveAttribute('data-sync-state', 'awaiting_review');
-    expect(paneTone()).toBe('emerald');
+    // Amber: this state needs a human, and emerald is what the tree says about
+    // one that does not.
+    expect(paneTone()).toBe('amber');
     expect(buttons()).toEqual(
       expect.arrayContaining(['Review diff', 'Publish', 'Discard merge']),
     );

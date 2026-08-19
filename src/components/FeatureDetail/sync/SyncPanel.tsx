@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 
 import { TONE_TEXT } from '../../../lib/runStatus';
-import type { SyncAction, SyncIntent, SyncPanelModel } from '../../../lib/syncPanel';
+import { isReadOnlySyncIntent, type SyncAction, type SyncIntent, type SyncPanelModel } from '../../../lib/syncPanel';
 import { formatCost, formatDuration, formatTokens, relativeTime } from '../../../lib/utils';
 import type { FeatureDrift, StepExecution, SyncSessionView } from '../../../types';
 import { Chip } from '../../ui/Chip';
@@ -193,7 +193,7 @@ function SyncActionRow({
   pending: SyncIntent | null;
   onAction: (intent: SyncIntent) => void;
 }) {
-  const busy = pending !== null;
+  const busy = pending !== null && !isReadOnlySyncIntent(action.intent);
   return (
     <ActionRow
       icon={ACTION_ICON[action.intent]}

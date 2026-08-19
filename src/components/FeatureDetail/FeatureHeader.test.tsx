@@ -263,3 +263,37 @@ describe('FeatureHeader staleness', () => {
     expect(onRefreshDrift).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The whole premise of one Sync pane is that it is reached through this button,
+ * and its count is what advertises a conflict waiting on the header. Both were
+ * asserted by nothing: replacing `onClick` with a no-op and flattening the badge
+ * to a constant each left the suite green.
+ */
+describe('the header entry into the Sync pane', () => {
+  it('opens the pane on a press', async () => {
+    const onOpenSync = vi.fn();
+    renderHeader({ status: 'completed', onOpenSync });
+
+    await userEvent.click(screen.getByTestId('open-sync'));
+
+    expect(onOpenSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries the count the pane is waiting on, and none when it is zero', () => {
+    const counted = renderHeader({ status: 'completed', syncBadge: 3 });
+    expect(screen.getByTestId('open-sync')).toHaveTextContent('Sync · 3');
+    counted.unmount();
+
+    renderHeader({ status: 'completed', syncBadge: 0 });
+    expect(screen.getByTestId('open-sync')).toHaveTextContent(/^Sync$/);
+  });
+
+  /** A run still writing to the branch owns its own sync, so there is no pane
+   *  worth opening — and the button is absent rather than disabled. */
+  it('offers no entry while the run is still going', () => {
+    renderHeader({ status: 'running' });
+
+    expect(screen.queryByTestId('open-sync')).toBeNull();
+  });
+});

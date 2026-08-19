@@ -5,7 +5,7 @@ import type { NavigationMode } from '../../context/NavigationContext';
 import { DEFAULT_DENSITY } from '../../lib/density';
 import { TERMINAL_STATUSES } from '../../lib/runStatus';
 import { isOutOfBandStep } from '../../lib/featureSync';
-import { describeSyncPanel } from '../../lib/syncPanel';
+import { describeSyncPanel, syncIntentMovesBranch } from '../../lib/syncPanel';
 import { densityPref, inspectorWidthPref } from '../../lib/uiPrefs';
 import { usePersistedPref } from '../../hooks/usePersistedPref';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
@@ -152,12 +152,15 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     navigate,
   });
   const sync = useSyncSession({ featureId, status: run.status, reload: run.reload });
-  // Only once the run has stopped committing, and never during a sync: the two
-  // are the states a sync is offered in at all, and a count taken between the
-  // merge and its push describes neither side.
+  // Only once the run has stopped committing, and never while something in
+  // flight can move the branch: those are the states a sync is offered in at
+  // all, and a count taken between the merge and its push describes neither
+  // side. `syncIntentMovesBranch` is what keeps the pane's own Refresh out of
+  // that gate — suspending the read on *any* pending intent superseded the very
+  // fetch that press had just paid for.
   const { drift, refresh: refreshDrift, refreshing: refreshingDrift } = useFeatureDrift({
     featureId,
-    enabled: TERMINAL_STATUSES.includes(run.status) && sync.pending === null,
+    enabled: TERMINAL_STATUSES.includes(run.status) && !syncIntentMovesBranch(sync.pending),
   });
   const syncModel = useMemo(
     () =>
@@ -165,8 +168,9 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         session: sync.session,
         drift,
         canSync: TERMINAL_STATUSES.includes(run.status),
+        pending: sync.pending,
       }),
-    [sync.session, drift, run.status],
+    [sync.session, drift, run.status, sync.pending],
   );
   const syncResolver = useSyncResolverOverrides({
     featureId,
@@ -245,14 +249,39 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
 
   const deselectStep = useCallback(() => selection.selectStep(null), [selection.selectStep]);
 
-  /** The resolver's own `step_executions` row. It lands beside the run's rows
-   *  and nothing in it marks it out of band, so it is found by its step id. */
-  const resolverStep = run.steps.find((step) => isOutOfBandStep(step.step_id)) ?? null;
+  /** The resolver's own `step_executions` row.
+   *
+   *  An out-of-band sync records itself under a reserved step id and lands
+   *  beside the run's rows with nothing marking it out of band, so it is found
+   *  by that id. A workflow's own `sync` node resolves through the same
+   *  `resolve_sync_conflicts` path but streams under its *own* step id, and
+   *  `s-sync-manual` is reserved for out-of-band syncs alone — so matching only
+   *  that id left `Open the stream` selecting nothing in exactly the sessions
+   *  where WATCH is the only action offered. Both rows carry `step_kind: 'sync'`
+   *  (`step_seed.rs`), which is what the two have in common. */
+  const syncSteps = run.steps.filter((step) => step.step_kind === 'sync');
+  const lastSyncStep = syncSteps.length > 0 ? syncSteps[syncSteps.length - 1] : null;
+  const resolverStep = syncSteps.find((step) => isOutOfBandStep(step.step_id)) ?? lastSyncStep;
 
   const showResolverStream = useCallback(() => {
     if (resolverStep) selection.selectStep(resolverStep.id);
     setInspectorPane('step');
   }, [resolverStep, selection.selectStep]);
+
+  const inspectorPaneRef = useRef<HTMLDivElement | null>(null);
+
+  /** The header's press has to *show* the pane, not only select it. Stacked,
+   *  the inspector is rendered below the run surface and may be off-screen
+   *  entirely, so a press that changed nothing visible read as a dead button.
+   *  Focus goes to the column wrapper — the same target `Enter` aims at — so
+   *  the keyboard follows the eye. */
+  const openSync = useCallback(() => {
+    setInspectorPane('sync');
+    const pane = inspectorPaneRef.current;
+    if (!pane) return;
+    pane.scrollIntoView({ block: 'nearest' });
+    pane.focus({ preventScroll: true });
+  }, []);
 
   const handleSyncAction = useSyncActions({
     sync,
@@ -268,8 +297,6 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   const panelRunEvents = remote.remoteRun ? remote.remoteRunEvents : graph.localRunEvents;
 
   const { graphDef } = graph;
-
-  const inspectorPaneRef = useRef<HTMLDivElement | null>(null);
 
   /** Anything covering the run takes the keyboard with it, and this view is not
    *  where most of it is mounted: `App.tsx` renders the palette, the docs panel
@@ -458,7 +485,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         onOpenTerminalTab={routing.handleOpenTerminalTab}
         onBrowseCode={routing.openEditor}
         onCancelFeature={rerun.handleCancelFeature}
-        onOpenSync={() => setInspectorPane('sync')}
+        onOpenSync={openSync}
         onPublish={mr.handlePublishClick}
         onCleanup={() => mr.handleCleanup()}
       />

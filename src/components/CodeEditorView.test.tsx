@@ -1,9 +1,10 @@
 /**
- * The far end of the review route. `SyncReviewCard` asserts the refs it hands
- * to its callback and stops there, so everything between that callback and the
+ * The far end of the review route. `reviewActions` in `src/lib/syncPanel.ts`
+ * decides the refs and `useSyncActions.test.tsx` asserts the pair it hands to
+ * `openDiffRange`; both stop there, so everything between that call and the
  * diff on screen was untested: replacing `head_before..merge_commit_sha` with
  * the branch pair — which shows a diff that omits the merge under review —
- * left tsc and all 1790 tests green.
+ * left tsc and the whole suite green.
  *
  * The two display strings are asserted as well as the refs, because they went
  * wrong in exactly the way a green suite cannot see. The content is the
