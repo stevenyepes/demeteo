@@ -326,7 +326,7 @@ function syncingArm(base: PanelBase, baseBranch: string | null, branch: string |
 
 /**
  * What each blocked stage means for the person reading it, which is not one
- * sentence but seven.
+ * sentence but one per stage.
  *
  * The stage lives on the row since V46. Before that this arm knew only that
  * *something* stopped, so its copy had to be true of a fetch that moved no git
@@ -348,7 +348,13 @@ const BLOCKED_COPY: Record<SyncBlockedStage, { headline: string; body: string }>
   },
   merge: {
     headline: 'The merge stopped without a verdict',
-    body: 'It was cut short rather than answered, so what the sync worktree holds is unknown — possibly clean, possibly half-applied. Nothing reached the branch. Abandon it to reclaim the worktree, then sync again.',
+    // No claim about the branch. The two sentences used to end "Nothing
+    // reached the branch", which is the one thing this stage means nobody
+    // observed: the merge ran in a worktree with the feature branch checked
+    // out, so a merge that completed and then lost its channel has already
+    // committed there. Abandoning reclaims the tree and a retry then merges
+    // nothing, so the reassurance was pointing at the case that loses work.
+    body: 'It was cut short rather than answered, so what the sync worktree holds is unknown — possibly clean, possibly half-applied, possibly a merge that committed before the connection went. Check the branch before retrying; abandoning reclaims the worktree either way.',
   },
   push: {
     headline: 'The merge is on the branch and origin has not seen it',
@@ -361,6 +367,10 @@ const BLOCKED_COPY: Record<SyncBlockedStage, { headline: string; body: string }>
   held_resolution: {
     headline: 'A resolution is still waiting to be read',
     body: 'The last sync left a merge on this branch that nobody has published or discarded, so no new sync was started.',
+  },
+  turn_in_flight: {
+    headline: 'Another sync is already running on this feature',
+    body: 'Nothing was merged: the sync worktree belongs to the turn that already holds it. Wait for that one to finish, or stop it.',
   },
 };
 
@@ -405,7 +415,13 @@ function blockedArm(
   const copy = stage === null ? UNNAMED_BLOCK : BLOCKED_COPY[stage];
   const retry: SyncAction[] =
     !held && canSync ? [{ ...SYNC, label: 'Retry sync', tone: 'amber' as const }] : [];
-  const publish: SyncAction[] = held && mine && session.merge_commit_sha !== null ? [PUBLISH_BLOCKED] : [];
+  // A sha this row does not carry is the whole of what stands between Publish
+  // and a press that cannot succeed: `publish` refuses without one, and the
+  // confirmation it would otherwise run is `git merge-base --is-ancestor <sha>`,
+  // which git rejects outright for an empty argument — so the user is told the
+  // push did not land, forever, about one that did.
+  const named = (session.merge_commit_sha ?? '') !== '';
+  const publish: SyncAction[] = held && mine && named ? [PUBLISH_BLOCKED] : [];
   return {
     ...base,
     state: 'blocked',

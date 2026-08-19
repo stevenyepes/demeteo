@@ -4,7 +4,7 @@ use super::*;
 use crate::domain::models::ConflictReport;
 use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
 
-const EVERY_STAGE: [SyncBlockedStage; 7] = [
+const EVERY_STAGE: [SyncBlockedStage; 8] = [
     SyncBlockedStage::Fetch,
     SyncBlockedStage::BaseRefMissing,
     SyncBlockedStage::WorktreeProvision,
@@ -12,6 +12,7 @@ const EVERY_STAGE: [SyncBlockedStage; 7] = [
     SyncBlockedStage::Push,
     SyncBlockedStage::RepoContext,
     SyncBlockedStage::HeldResolution,
+    SyncBlockedStage::TurnInFlight,
 ];
 
 fn blocked(stage: SyncBlockedStage) -> UpstreamSyncFailure {
@@ -141,6 +142,7 @@ fn the_serialized_shape_is_the_wire_contract() {
             SyncBlockedStage::Push => "push",
             SyncBlockedStage::RepoContext => "repo_context",
             SyncBlockedStage::HeldResolution => "held_resolution",
+            SyncBlockedStage::TurnInFlight => "turn_in_flight",
         };
         assert_eq!(
             json(&SyncOutcomeView::Blocked {

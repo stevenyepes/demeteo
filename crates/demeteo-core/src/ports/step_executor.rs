@@ -186,7 +186,9 @@ pub enum SyncOutcomeView {
     /// The merge produced a clean commit (or there was nothing to
     /// merge from upstream).
     Ok {
-        merge_commit_sha: String,
+        /// `None` when the tip the merge left could not be read — the absence
+        /// stays an absence rather than becoming a commit named `""`.
+        merge_commit_sha: Option<String>,
         changed: bool,
     },
     /// The merge left the working tree in a conflicted state and no

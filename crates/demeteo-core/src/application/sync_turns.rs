@@ -33,19 +33,28 @@ impl SyncTurns {
     /// not: `sync_feature_with_upstream` runs git to completion and there is
     /// nothing to signal, but it still owns the worktree for the duration and
     /// so still has to be visible here.
-    pub fn claim(&self, feature_id: &str, cancel: Option<watch::Sender<bool>>) -> bool {
+    ///
+    /// The slot comes back when the guard drops, and only that way. Released by
+    /// hand it survived every `?` between the claim and the call that gave it
+    /// back, and a leaked entry does not expire: nothing sweeps this map, so the
+    /// feature's next sync, its next resolution and — since the entry became
+    /// half of [`sync_liveness`](crate::domain::sync_session::sync_liveness) —
+    /// every intervention on the session are all refused for the life of the
+    /// process. Restarting the app was the only cure.
+    pub fn claim(
+        &self,
+        feature_id: &str,
+        cancel: Option<watch::Sender<bool>>,
+    ) -> Option<SyncTurn<'_>> {
         let mut claims = self.lock();
         if claims.contains_key(feature_id) {
-            return false;
+            return None;
         }
         claims.insert(feature_id.to_string(), cancel);
-        true
-    }
-
-    /// Give the slot back. Entries last exactly as long as the turn — a stale
-    /// one would refuse the next press and hold a dead session uncorrectable.
-    pub fn release(&self, feature_id: &str) {
-        self.lock().remove(feature_id);
+        Some(SyncTurn {
+            turns: self,
+            feature_id: feature_id.to_string(),
+        })
     }
 
     pub fn claimed(&self, feature_id: &str) -> bool {
@@ -65,3 +74,24 @@ impl SyncTurns {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
+
+/// One feature's slot, held for as long as this lives.
+///
+/// Whether the turn returned, returned early through a `?`, panicked or had its
+/// future dropped, the slot is given back — which is the difference between a
+/// crashed resolver the user can still abort and a session frozen `Live` until
+/// the app restarts.
+pub struct SyncTurn<'a> {
+    turns: &'a SyncTurns,
+    feature_id: String,
+}
+
+impl Drop for SyncTurn<'_> {
+    fn drop(&mut self) {
+        self.turns.lock().remove(&self.feature_id);
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/application/sync_turns.rs"]
+mod tests;

@@ -55,13 +55,45 @@ pub struct SqliteMergeExecutor {
 /// so this is the difference between an interrupted sync leaving a row that
 /// names its tree — probeable, reconcilable, abortable — and one that names
 /// nothing and can only be reclaimed by the next sync's force-remove.
+///
+/// Writing it eagerly is also what makes the *success* path owe a clear: the
+/// clean merge removes that tree on its way out, and a row still naming it
+/// sends the pane's "Sync worktree" section at a directory the sync deleted.
 struct RecordWorktree<'a> {
     sessions: &'a Arc<dyn SyncSessionPort>,
     feature_id: &'a FeatureId,
+    /// What `provisioned` was told, for the caller that has to tidy up after
+    /// it. The path is knowable here and, for an outcome that carries none,
+    /// nowhere else.
+    path: std::sync::Mutex<Option<String>>,
+}
+
+impl RecordWorktree<'_> {
+    fn new<'a>(
+        sessions: &'a Arc<dyn SyncSessionPort>,
+        feature_id: &'a FeatureId,
+    ) -> RecordWorktree<'a> {
+        RecordWorktree {
+            sessions,
+            feature_id,
+            path: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn provisioned_path(&self) -> Option<String> {
+        self.path
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
 }
 
 impl SyncWorktreeObserver for RecordWorktree<'_> {
     fn provisioned(&self, worktree_path: &str) {
+        *self
+            .path
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(worktree_path.to_string());
         let _ = self.sessions.update(
             self.feature_id,
             &SyncSessionPatch {
@@ -101,6 +133,42 @@ impl SqliteMergeExecutor {
             exec: &self.exec,
             features: &self.features,
             turns: &self.turns,
+        }
+    }
+
+    /// Whether the row may stop naming the tree a clean sync provisioned —
+    /// `Some(None)` to clear it, `None` to leave it exactly as it is.
+    ///
+    /// A clean merge force-removes its throwaway worktree on the way out, so a
+    /// row that keeps naming it points the pane at a directory that is not
+    /// there. The delete is best-effort and reports nothing, though, and this
+    /// is the last reader that will ever look at this session — `merged` and
+    /// `up_to_date` are terminal — so a column cleared on a delete nobody
+    /// confirmed would leave a directory on disk that no row names, which is
+    /// the leak V43 closed. Same rule as
+    /// [`close_session`](crate::application::sync_session::abort): the verdict
+    /// comes from a probe, never from the teardown.
+    ///
+    /// `worktree == repo_dir` is the case with nothing to confirm:
+    /// `provision_sync_worktree` returns the clone when the feature branch is
+    /// already checked out there, nothing is removed, and the clone is not a
+    /// sync worktree to tell anybody about.
+    async fn swept_worktree(
+        &self,
+        machine: &str,
+        repo_dir: &str,
+        observer: &RecordWorktree<'_>,
+    ) -> Option<Option<String>> {
+        match observer.provisioned_path() {
+            None => None,
+            Some(path) if path == repo_dir => Some(None),
+            Some(path) => crate::application::sync_session::worktree_confirmed_gone(
+                &*self.exec,
+                machine,
+                &path,
+            )
+            .await
+            .then_some(None),
         }
     }
 
@@ -164,6 +232,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                 if let Some(refusal) = crate::domain::sync_session::resync_refusal(
                     existing.status,
                     existing.pushed_at.is_some(),
+                    existing.blocked_stage,
                 ) {
                     return Err(UpstreamSyncFailure::Blocked {
                         stage: SyncBlockedStage::HeldResolution,
@@ -183,6 +252,25 @@ impl MergeExecutor for SqliteMergeExecutor {
                 });
             }
         }
+
+        // After the read above and before anything that touches the working
+        // tree. `provision_sync_worktree` sweeps every `_wt_sync` worktree
+        // checked out on this branch with `worktree remove --force` and
+        // `remove_dir_all`, and the tree an out-of-band resolution is being
+        // written in is exactly one of those — so the slot is taken here,
+        // where every entry point passes, rather than at one of them. The
+        // workflow's own `sync` node reached this function without one.
+        //
+        // Nothing has been written to the session yet, and nothing may be: the
+        // row belongs to whichever turn holds the slot.
+        let Some(_turn) = self.turns.claim(&feature_id.0, None) else {
+            return Err(UpstreamSyncFailure::Blocked {
+                stage: SyncBlockedStage::TurnInFlight,
+                raw_error: "A sync or resolution is already running for this feature; \
+                            wait for it to finish, or stop it first."
+                    .to_string(),
+            });
+        };
 
         let (machine_id_opt, repo_dir) = match self.repo_target(feature_id).await {
             Ok(v) => v,
@@ -225,6 +313,7 @@ impl MergeExecutor for SqliteMergeExecutor {
         // SyncOutcome / SyncFailure into the upstream-sync domain
         // types. The repo context is already resolved; the helper
         // doesn't need to look it up again.
+        let observer = RecordWorktree::new(&self.sync_sessions, feature_id);
         match self
             .git_ops
             .sync_feature_with_upstream(
@@ -232,10 +321,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                 &repo_dir,
                 feature_branch,
                 default_branch,
-                &RecordWorktree {
-                    sessions: &self.sync_sessions,
-                    feature_id,
-                },
+                &observer,
             )
             .await
         {
@@ -255,7 +341,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                     feature_branch,
                     default_branch,
                     "ok",
-                    Some(&outcome.merge_commit_sha),
+                    outcome.merge_commit_sha.as_deref(),
                     None,
                     paths::now_ms(),
                 );
@@ -268,7 +354,10 @@ impl MergeExecutor for SqliteMergeExecutor {
                             SyncSessionStatus::UpToDate
                         }),
                         head_before: Some(outcome.head_before.clone()),
-                        merge_commit_sha: Some(Some(outcome.merge_commit_sha.clone())),
+                        merge_commit_sha: Some(outcome.merge_commit_sha.clone()),
+                        worktree_path: self
+                            .swept_worktree(&machine_str, &repo_dir, &observer)
+                            .await,
                         blocked_stage: Some(None),
                         ..Default::default()
                     },

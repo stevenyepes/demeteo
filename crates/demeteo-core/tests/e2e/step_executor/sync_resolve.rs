@@ -414,7 +414,7 @@ async fn a_second_resolution_is_refused_while_the_first_is_in_flight() {
     let feature_id = seed(&db, "resolve_race", "completed");
 
     let (tx, _rx) = tokio::sync::watch::channel(false);
-    executor.claim_sync_cancel_for_test(&feature_id, tx);
+    let _turn = executor.claim_sync_cancel_for_test(&feature_id, tx);
 
     let refusal = executor
         .feature_resolve_sync_conflicts_impl(

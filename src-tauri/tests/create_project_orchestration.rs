@@ -330,7 +330,7 @@ impl StepExecutor for StubExecutor {
     }
     async fn feature_sync(&self, _feature_id: &str) -> Result<SyncOutcomeView, String> {
         Ok(SyncOutcomeView::Ok {
-            merge_commit_sha: "deadbeef".into(),
+            merge_commit_sha: Some("deadbeef".to_string()),
             changed: false,
         })
     }
@@ -348,7 +348,7 @@ impl StepExecutor for StubExecutor {
         _asked: &demeteo_core::domain::sync_resolver::SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String> {
         Ok(SyncOutcomeView::Ok {
-            merge_commit_sha: "deadbeef".into(),
+            merge_commit_sha: Some("deadbeef".to_string()),
             changed: false,
         })
     }

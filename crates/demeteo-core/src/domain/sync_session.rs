@@ -138,10 +138,11 @@ impl SyncResolution {
 /// mid-write in, resolve puts a second agent in the same tree — are both worse
 /// than doing nothing.
 ///
-/// The feature's own status is read as well as the session's, because it covers
-/// the window the session status alone cannot: between the merge failing and the
-/// resolution turn recording itself, the row legitimately reads `conflicted`
-/// while the step is still the one holding the worktree.
+/// The session's own status is the one input that cannot answer this. Between
+/// the merge failing and the turn that takes it over recording itself, the row
+/// legitimately reads `conflicted` while something else holds the worktree —
+/// which is why [`SyncStanding`] carries both traces of a live turn instead
+/// ([`sync_liveness`]).
 pub fn user_may_intervene(standing: SyncStanding<'_>) -> bool {
     [
         SyncIntervention::Abort,
@@ -175,6 +176,17 @@ pub struct SyncStanding<'a> {
     /// The feature's status, which is what says whether a driver still owns
     /// the branch.
     pub feature_status: &'a str,
+    /// Whether anything is running this sync *now*
+    /// ([`sync_liveness`]), which no status can stand in for.
+    ///
+    /// A turn writes `resolving` after it has already claimed the worktree —
+    /// `feature_resolve_sync_conflicts` runs a preflight of several round trips
+    /// in between, and the write itself is best-effort — so between the two the
+    /// row still reads `conflicted` while an agent edits in that directory.
+    /// Judging the refusals on status alone offered Abort for that window:
+    /// `git merge --abort`, `worktree remove --force`, `remove_dir_all`, aimed
+    /// at a live tree.
+    pub liveness: SyncLiveness,
 }
 
 /// What the user is asking to do to a sync that is not running.
@@ -212,6 +224,15 @@ pub fn intervention_refusal(
         return Some(
             "This run is still going and owns its own sync. \
              Wait for it to finish, or stop it first.",
+        );
+    }
+    // Two reasons, not one: the first clears itself when the run ends and the
+    // second when the turn does, and a reader told the wrong one waits on the
+    // wrong thing.
+    if matches!(standing.liveness, SyncLiveness::Live) {
+        return Some(
+            "A sync or resolution is already running on this feature and owns its \
+             worktree. Wait for it to finish, or stop it first.",
         );
     }
     match standing.status {
@@ -304,11 +325,25 @@ pub fn published_status(status: SyncSessionStatus) -> SyncSessionStatus {
 /// on [`SyncSessionStatus::UpToDate`] — terminal, which `reconcile` then passes
 /// through forever and every intervention refuses. Refusing the sync is what
 /// keeps the resolution reachable.
-pub fn resync_refusal(status: SyncSessionStatus, published: bool) -> Option<&'static str> {
-    (matches!(status, SyncSessionStatus::Resolved) && !published).then_some(
-        "The last sync left a resolution on this branch that nobody has published or \
-         discarded. Publish it or discard it first, then sync again.",
-    )
+pub fn resync_refusal(
+    status: SyncSessionStatus,
+    published: bool,
+    blocked_stage: Option<SyncBlockedStage>,
+) -> Option<&'static str> {
+    if published {
+        return None;
+    }
+    match status {
+        SyncSessionStatus::Resolved => Some(
+            "The last sync left a resolution on this branch that nobody has published or \
+             discarded. Publish it or discard it first, then sync again.",
+        ),
+        SyncSessionStatus::Blocked if blocked_stage == Some(SyncBlockedStage::Push) => Some(
+            "The last sync committed a merge on this branch and could not push it. \
+             Publish it or abandon the sync first, then sync again.",
+        ),
+        _ => None,
+    }
 }
 
 /// What happens to a resolution the moment it is committed.

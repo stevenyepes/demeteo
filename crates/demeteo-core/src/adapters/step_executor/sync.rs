@@ -7,7 +7,7 @@
 //!   `SyncOutcomeView::Conflict`, which is the only outcome the UI offers
 //!   "Resolve with agent" for. Everything that failed before the merge is a
 //!   `SyncOutcomeView::Blocked` — [`crate::domain::sync_failure`] owns that
-//!   split and `view_for` is the only thing that decides it.
+//!   split and `command_view` is the only thing that decides it.
 //!
 //! - `feature_resolve_sync_conflicts`: hands the conflict the merge left to
 //!   [`crate::adapters::step_executor::sync_resolve`], which is the same turn
@@ -35,7 +35,9 @@ use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
 use crate::domain::step_seed::manual_sync_step_execution;
 use crate::domain::sync_resolver::SyncResolverChoice;
-use crate::domain::sync_session::{intervention_refusal, SyncIntervention, SyncStanding};
+use crate::domain::sync_session::{
+    intervention_refusal, sync_liveness, SyncIntervention, SyncStanding,
+};
 use crate::paths;
 use crate::ports::db::FeatureRepository;
 use crate::ports::step_executor::SyncOutcomeView;
@@ -86,9 +88,18 @@ pub(crate) fn sync_base(
 impl DagStepExecutor {
     /// Hold the in-flight entry a resolution would claim, so the refusal that
     /// serialises two of them is assertable without racing two real turns.
+    ///
+    /// The guard is handed back because dropping it releases the slot: bound to
+    /// `_` the claim would be gone before the call under test made it.
     #[cfg(test)]
-    pub(crate) fn claim_sync_cancel_for_test(&self, feature_id: &str, tx: watch::Sender<bool>) {
-        self.sync_turns.claim(feature_id, Some(tx));
+    pub(crate) fn claim_sync_cancel_for_test(
+        &self,
+        feature_id: &str,
+        tx: watch::Sender<bool>,
+    ) -> crate::application::sync_turns::SyncTurn<'_> {
+        self.sync_turns
+            .claim(feature_id, Some(tx))
+            .expect("the fixture's registry starts empty")
     }
 
     /// Tauri entry point for the "Sync with main" command. Resolves
@@ -112,24 +123,16 @@ impl DagStepExecutor {
         let base_branch = sync_base(&feature, &settings)?;
         let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
-        // The merge holds the sync worktree for as long as it runs, and nothing
-        // durable says so: this feature's run has already finished, so
-        // `run_is_live` answers no and a reader correcting the `syncing` row
-        // would offer an Abort aimed at the tree git is merging in. The claim is
-        // that fact, and it is also what serialises a merge against a
-        // resolution of the same feature.
-        if !self.sync_turns.claim(feature_id, None) {
-            return Err(
-                "A sync is already running for this feature; wait for it or stop it.".to_string(),
-            );
-        }
-        let outcome = self
-            .merge_executor
-            .sync_feature_with_upstream(&fid, &feature_branch, &base_branch)
-            .await;
-        self.sync_turns.release(feature_id);
-
-        Ok(crate::domain::sync_failure::view_for(outcome))
+        // The slot this merge needs is claimed inside
+        // `sync_feature_with_upstream`, which is the one frame every entry
+        // point — this command, and the workflow's own `sync` node — passes
+        // through, and the frame the destructive worktree sweep lives under.
+        // Claimed here instead, the node reached that sweep holding nothing.
+        crate::domain::sync_failure::command_view(
+            self.merge_executor
+                .sync_feature_with_upstream(&fid, &feature_branch, &base_branch)
+                .await,
+        )
     }
 
     /// Tauri entry point for the staleness signal on the run header.
@@ -223,6 +226,7 @@ impl DagStepExecutor {
                 published: session.pushed_at.is_some(),
                 blocked_stage: session.blocked_stage,
                 feature_status: &feature.status,
+                liveness: sync_liveness(self.sync_turns.claimed(feature_id), &feature.status),
             },
         ) {
             return Err(refusal.to_string());
@@ -254,12 +258,12 @@ impl DagStepExecutor {
         // `user_may_intervene` exists to prevent. It would also displace this
         // turn's sender and swallow its Stop.
         let (cancel_tx, cancel_rx) = watch::channel(false);
-        if !self.sync_turns.claim(feature_id, Some(cancel_tx)) {
+        let Some(_turn) = self.sync_turns.claim(feature_id, Some(cancel_tx)) else {
             return Err(
                 "A resolution is already running for this feature; wait for it or stop it."
                     .to_string(),
             );
-        }
+        };
 
         // A persisted row, because the id the turn streams against has to be one
         // the inspector can subscribe to — see `ResolveSyncContext::step_exec`.
@@ -322,8 +326,6 @@ impl DagStepExecutor {
             pricing: &self.pricing,
         })
         .await;
-
-        self.sync_turns.release(feature_id);
 
         let wall = start.elapsed().as_secs();
         match outcome {

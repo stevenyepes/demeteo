@@ -138,6 +138,81 @@ fn an_untouched_field_keeps_its_value_and_a_cleared_one_goes_null() {
     assert_eq!(read.attempts, 1, "an unbumped patch must not re-count");
 }
 
+/// The stage a push-blocked row carries can only have come from an `update`:
+/// `open` runs first on every sync and always inserts `None` (V46), so this is
+/// the write the Publish affordance rests on. It is also the one column whose
+/// clear is load-bearing — the row is an upsert over whatever the last attempt
+/// left, and a stage inherited from it says a merge is waiting on the branch
+/// when the fetch never ran.
+#[test]
+fn the_blocked_stage_is_written_in_both_directions() {
+    use crate::domain::sync_failure::SyncBlockedStage;
+
+    let db = db();
+    db.open(&conflicted()).unwrap();
+    assert_eq!(
+        SyncSessionPort::get(&db, &fid())
+            .unwrap()
+            .unwrap()
+            .blocked_stage,
+        None,
+        "the fixture starts with nothing to inherit"
+    );
+
+    db.update(
+        &fid(),
+        &SyncSessionPatch {
+            status: Some(SyncSessionStatus::Blocked),
+            blocked_stage: Some(Some(SyncBlockedStage::Push)),
+            ..Default::default()
+        },
+        200,
+    )
+    .unwrap();
+    assert_eq!(
+        SyncSessionPort::get(&db, &fid())
+            .unwrap()
+            .unwrap()
+            .blocked_stage,
+        Some(SyncBlockedStage::Push)
+    );
+
+    db.update(
+        &fid(),
+        &SyncSessionPatch {
+            status: Some(SyncSessionStatus::Blocked),
+            ..Default::default()
+        },
+        300,
+    )
+    .unwrap();
+    assert_eq!(
+        SyncSessionPort::get(&db, &fid())
+            .unwrap()
+            .unwrap()
+            .blocked_stage,
+        Some(SyncBlockedStage::Push),
+        "a patch that says nothing about the stage must leave it alone"
+    );
+
+    db.update(
+        &fid(),
+        &SyncSessionPatch {
+            blocked_stage: Some(None),
+            ..Default::default()
+        },
+        400,
+    )
+    .unwrap();
+    assert_eq!(
+        SyncSessionPort::get(&db, &fid())
+            .unwrap()
+            .unwrap()
+            .blocked_stage,
+        None
+    );
+}
+
 /// A status this build cannot name is one it cannot act on, and the worktree
 /// that row points at is not ours to keep alive — so it reads as abandoned
 /// rather than panicking or being believed.

@@ -290,6 +290,7 @@ fn only_a_push_blocked_sync_has_a_merge_to_publish() {
         published,
         blocked_stage: stage,
         feature_status: "completed",
+        liveness: SyncLiveness::Gone,
     };
     assert_eq!(
         intervention_refusal(
@@ -376,6 +377,7 @@ fn unpublished(status: SyncSessionStatus, feature_status: &str) -> SyncStanding<
         published: false,
         blocked_stage: None,
         feature_status,
+        liveness: SyncLiveness::Gone,
     }
 }
 
@@ -411,6 +413,7 @@ fn a_sync_somebody_else_is_driving_is_not_the_users_to_touch() {
         published: true,
         blocked_stage: None,
         feature_status: "completed",
+        liveness: SyncLiveness::Gone,
     }));
     for status in [
         SyncSessionStatus::Syncing,
@@ -593,9 +596,9 @@ fn a_run_that_still_owns_its_branch_has_nobody_to_review_for() {
 fn a_resolution_nobody_has_read_is_not_something_the_next_sync_may_write_over() {
     use crate::domain::sync_session::resync_refusal;
 
-    assert!(resync_refusal(SyncSessionStatus::Resolved, false).is_some());
+    assert!(resync_refusal(SyncSessionStatus::Resolved, false, None).is_some());
     assert_eq!(
-        resync_refusal(SyncSessionStatus::Resolved, true),
+        resync_refusal(SyncSessionStatus::Resolved, true, None),
         None,
         "a resolution origin already has is nothing to protect"
     );
@@ -610,9 +613,129 @@ fn a_resolution_nobody_has_read_is_not_something_the_next_sync_may_write_over() 
         SyncSessionStatus::Aborted,
     ] {
         assert_eq!(
-            resync_refusal(status, false),
+            resync_refusal(status, false, None),
             None,
             "{status:?} holds no committed resolution and must not block a sync"
+        );
+    }
+}
+
+/// The second row shape that carries a committed merge nobody has published,
+/// and the one the refusal above did not cover.
+///
+/// A `push`-blocked session holds the merge on the branch plus the only copy of
+/// `head_before` and `merge_commit_sha`. `open` is an upsert, so the next sync
+/// takes all three; the merge it then runs finds `origin/<base>` already in the
+/// branch, changes nothing, and lands the row on a terminal `up_to_date` from
+/// which Publish is refused — leaving a merge on the local branch that the pull
+/// request will never see. The pane withholds the retry, but the IPC behind it
+/// stays reachable and the `merge` stage produces the same row shape while
+/// offering one.
+#[test]
+fn a_committed_merge_that_never_reached_origin_is_not_something_to_sync_over() {
+    use crate::domain::sync_session::resync_refusal;
+
+    assert!(
+        resync_refusal(
+            SyncSessionStatus::Blocked,
+            false,
+            Some(SyncBlockedStage::Push)
+        )
+        .is_some(),
+        "the only copy of head_before and the merge commit is on this row"
+    );
+    assert_eq!(
+        resync_refusal(
+            SyncSessionStatus::Blocked,
+            true,
+            Some(SyncBlockedStage::Push)
+        ),
+        None,
+        "a merge origin already has is nothing to protect"
+    );
+    for stage in [
+        SyncBlockedStage::Fetch,
+        SyncBlockedStage::BaseRefMissing,
+        SyncBlockedStage::WorktreeProvision,
+        SyncBlockedStage::Merge,
+        SyncBlockedStage::RepoContext,
+        SyncBlockedStage::HeldResolution,
+        SyncBlockedStage::TurnInFlight,
+    ] {
+        assert_eq!(
+            resync_refusal(SyncSessionStatus::Blocked, false, Some(stage)),
+            None,
+            "{stage:?} merged nothing, so the next sync must not be refused"
+        );
+    }
+}
+
+/// The status a turn holds its worktree under is not the status it wrote.
+///
+/// `feature_resolve_sync_conflicts` claims the slot, then runs a preflight of
+/// several round trips before `record_sync_resolution(Started)` — and that
+/// write is best-effort, so a contended one leaves the row on `conflicted` for
+/// the whole turn. Judged on status alone, every one of those windows offered
+/// Abort: `git merge --abort`, `worktree remove --force`, `remove_dir_all`, at
+/// the directory the agent is editing in. `reconcile` guards `syncing` and
+/// `resolving` and nothing else, which is why the observation has to reach the
+/// refusals too rather than only the correction.
+#[test]
+fn nothing_is_offered_while_a_turn_is_holding_the_worktree() {
+    use crate::domain::sync_session::{intervention_refusal, SyncIntervention, SyncLiveness};
+
+    for status in [
+        SyncSessionStatus::Syncing,
+        SyncSessionStatus::Blocked,
+        SyncSessionStatus::Conflicted,
+        SyncSessionStatus::Resolving,
+        SyncSessionStatus::Resolved,
+        SyncSessionStatus::ResolutionFailed,
+    ] {
+        let held = SyncStanding {
+            status,
+            published: false,
+            blocked_stage: Some(SyncBlockedStage::Push),
+            feature_status: "completed",
+            liveness: SyncLiveness::Live,
+        };
+        assert!(!user_may_intervene(held), "{status:?}");
+        for action in [
+            SyncIntervention::Abort,
+            SyncIntervention::Resolve,
+            SyncIntervention::Publish,
+            SyncIntervention::Discard,
+        ] {
+            let refusal = intervention_refusal(action, held)
+                .unwrap_or_else(|| panic!("{action:?} was offered on a live {status:?}"));
+            assert!(refusal.contains("already running"), "{refusal}");
+        }
+    }
+}
+
+/// The opposite failure, and the one that makes the guard above safe to have.
+///
+/// A resolver that died leaves the same row a live one does, and the registry
+/// is process-local precisely so a restart answers `Gone` for it. If liveness
+/// ever outlived the turn, a conflict would be frozen with all four actions
+/// refused and no way back.
+#[test]
+fn a_conflict_whose_turn_is_over_is_the_users_again() {
+    use crate::domain::sync_session::SyncLiveness;
+
+    for status in [
+        SyncSessionStatus::Conflicted,
+        SyncSessionStatus::ResolutionFailed,
+    ] {
+        assert!(
+            user_may_intervene(SyncStanding {
+                status,
+                published: false,
+                blocked_stage: None,
+                feature_status: "completed",
+                liveness: SyncLiveness::Gone,
+            }),
+            "{status:?}"
         );
     }
 }

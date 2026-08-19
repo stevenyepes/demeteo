@@ -757,7 +757,8 @@ export type SyncBlockedStage =
   | 'merge'
   | 'push'
   | 'repo_context'
-  | 'held_resolution';
+  | 'held_resolution'
+  | 'turn_in_flight';
 
 /**
  * How far a feature branch has drifted from the base a sync would merge.
@@ -787,7 +788,8 @@ export interface FeatureDrift {
 export type SyncOutcomeView =
   | {
       status: 'ok';
-      merge_commit_sha: string;
+      /** `null` when the tip the merge left could not be read. */
+      merge_commit_sha: string | null;
       changed: boolean;
     }
   | {

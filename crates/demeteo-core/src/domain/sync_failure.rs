@@ -53,6 +53,12 @@ pub enum SyncBlockedStage {
     /// no new sync was started
     /// ([`resync_refusal`](crate::domain::sync_session::resync_refusal)).
     HeldResolution,
+    /// Another sync or resolution of this feature was already running, so this
+    /// one never started. The only stage that is a refusal rather than a
+    /// verdict, and the only one never written to a row: the sync it would
+    /// describe belongs to the turn that holds the slot, and overwriting that
+    /// turn's row is the thing the refusal exists to avoid.
+    TurnInFlight,
 }
 
 impl SyncBlockedStage {
@@ -67,6 +73,7 @@ impl SyncBlockedStage {
             Self::Push => "push",
             Self::RepoContext => "repo_context",
             Self::HeldResolution => "held_resolution",
+            Self::TurnInFlight => "turn_in_flight",
         }
     }
 
@@ -82,6 +89,7 @@ impl SyncBlockedStage {
             "push" => Some(Self::Push),
             "repo_context" => Some(Self::RepoContext),
             "held_resolution" => Some(Self::HeldResolution),
+            "turn_in_flight" => Some(Self::TurnInFlight),
             _ => None,
         }
     }
@@ -149,6 +157,26 @@ pub fn view_for(result: Result<UpstreamSyncOutcome, UpstreamSyncFailure>) -> Syn
         Err(UpstreamSyncFailure::Blocked { stage, raw_error }) => {
             SyncOutcomeView::Blocked { stage, raw_error }
         }
+    }
+}
+
+/// The same attempt, as the "Sync with main" press is answered.
+///
+/// [`SyncBlockedStage::TurnInFlight`] is the one outcome that must not come
+/// back as a view. The pane throws a `SyncOutcomeView` away and re-reads the
+/// session row, and the row a refused press would re-read belongs to the turn
+/// that refused it — so it reads `syncing`, and a press that did nothing at all
+/// renders as one that started a merge. An `Err` reaches the error bus, which
+/// is where a refusal the user can act on belongs.
+pub fn command_view(
+    result: Result<UpstreamSyncOutcome, UpstreamSyncFailure>,
+) -> Result<SyncOutcomeView, String> {
+    match result {
+        Err(UpstreamSyncFailure::Blocked {
+            stage: SyncBlockedStage::TurnInFlight,
+            raw_error,
+        }) => Err(raw_error),
+        other => Ok(view_for(other)),
     }
 }
 

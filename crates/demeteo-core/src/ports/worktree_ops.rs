@@ -213,8 +213,10 @@ impl BranchDivergence {
 /// Result of a successful feature branch sync.
 #[derive(Debug, Clone)]
 pub struct SyncOutcome {
-    /// SHA of the merge commit (empty when there was nothing to merge).
-    pub merge_commit_sha: String,
+    /// The tip the sync left the branch on — the merge commit, or the tip it
+    /// found when there was nothing to merge. `None` when `rev-parse` did not
+    /// answer, which is not a commit named `""` and may not be stored as one.
+    pub merge_commit_sha: Option<String>,
     /// `false` when `origin/<default>` didn't exist or had no new
     /// commits since the last sync.
     pub changed: bool,

@@ -134,6 +134,18 @@ describe('describeSyncPanel', () => {
     });
     expect(held.body).not.toMatch(/nothing was merged/i);
     expect(held.body).toMatch(/push/i);
+
+    // `merge` is the stage that observed nothing at all about the branch: the
+    // merge ran in a worktree with the feature branch checked out, so one that
+    // committed before the channel dropped is already on it. The reassurance
+    // the other stages carry is an assertion nobody made here.
+    const cut = panel({
+      session: session({ status: 'blocked', blocked_stage: 'merge' }),
+      drift: null,
+      canSync: true,
+    });
+    expect(cut.body).not.toMatch(/nothing reached the branch/i);
+    expect(cut.body).not.toMatch(/nothing was merged/i);
   });
 
   /** The action a `push`-blocked row actually needs. "Retry sync" merges
@@ -155,7 +167,16 @@ describe('describeSyncPanel', () => {
    *  a retry is exactly right. A row from before the column existed names no
    *  stage, and an unnamed stage may not be read as any particular one. */
   it('offers no publish for a blocked sync that merged nothing', () => {
-    for (const stage of ['fetch', 'base_ref_missing', 'worktree_provision', 'merge', 'repo_context', null] as const) {
+    for (const stage of [
+      'fetch',
+      'base_ref_missing',
+      'worktree_provision',
+      'merge',
+      'repo_context',
+      'held_resolution',
+      'turn_in_flight',
+      null,
+    ] as const) {
       const model = panel({
         session: session({ status: 'blocked', blocked_stage: stage }),
         drift: null,
@@ -163,6 +184,25 @@ describe('describeSyncPanel', () => {
       });
       expect(intents(model), `${stage}`).not.toContain('publish');
       expect(intents(model), `${stage}`).toContain('sync');
+      expect(model.headline, `${stage}`).not.toBe('');
+    }
+  });
+
+  /** The guard between a `push`-blocked row that recorded no commit and a
+   *  Publish whose backend answer is a hard error. `publish` refuses without a
+   *  sha, and the confirmation it would otherwise run — `git merge-base
+   *  --is-ancestor <sha> origin/<branch>` — is refused outright by git for an
+   *  empty one, so the user is told the push did not land about one that did.
+   *  Both spellings of "no commit" have to withhold it: the column's own null,
+   *  and the empty string an unread `rev-parse HEAD` used to be flattened to. */
+  it('withholds publish from a push-blocked sync that recorded no commit', () => {
+    for (const sha of [null, ''] as const) {
+      const model = panel({
+        session: session({ status: 'blocked', blocked_stage: 'push', merge_commit_sha: sha }),
+        drift: null,
+        canSync: true,
+      });
+      expect(intents(model), `${JSON.stringify(sha)}`).not.toContain('publish');
     }
   });
 

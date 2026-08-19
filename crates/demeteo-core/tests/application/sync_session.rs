@@ -620,6 +620,11 @@ async fn a_sync_that_never_came_back_can_be_read_and_cleared() {
         view.session.blocked_stage,
         Some(crate::domain::sync_failure::SyncBlockedStage::Merge)
     );
+    assert_eq!(
+        fx.sessions.get(&fid()).unwrap().unwrap().blocked_stage,
+        Some(crate::domain::sync_failure::SyncBlockedStage::Merge),
+        "the correction is persisted or the next reader is told nothing stopped where"
+    );
     assert!(
         view.user_may_intervene,
         "an interrupted sync the user cannot touch is the wedge itself"
@@ -643,7 +648,7 @@ async fn a_merge_this_process_is_running_is_not_offered_an_abort() {
     fx.sessions
         .open(&stalled(SyncSessionStatus::Syncing))
         .unwrap();
-    fx.turns.claim("f-1", None);
+    let _turn = fx.turns.claim("f-1", None).expect("the registry is empty");
 
     let view = get_reconciled_view(fx.ports(), &fid())
         .await
@@ -655,7 +660,7 @@ async fn a_merge_this_process_is_running_is_not_offered_an_abort() {
     let refusal = abort(fx.ports(), &fid())
         .await
         .expect_err("the sync worktree is in use");
-    assert!(refusal.contains("nothing left to act on"), "{refusal}");
+    assert!(refusal.contains("already running"), "{refusal}");
 }
 
 /// A live resolution, over the same tree the abort would delete.
@@ -676,7 +681,10 @@ async fn a_resolution_this_process_is_running_is_not_offered_an_abort() {
         .open(&stalled(SyncSessionStatus::Resolving))
         .unwrap();
     let (tx, _rx) = tokio::sync::watch::channel(false);
-    fx.turns.claim("f-1", Some(tx));
+    let turn = fx
+        .turns
+        .claim("f-1", Some(tx))
+        .expect("the registry is empty");
 
     let view = get_reconciled_view(fx.ports(), &fid())
         .await
@@ -690,7 +698,7 @@ async fn a_resolution_this_process_is_running_is_not_offered_an_abort() {
 
     // The turn ends — or the process it was in did — and the conflict is the
     // user's again, with the same row and the same tree underneath it.
-    fx.turns.release("f-1");
+    drop(turn);
     let after = get_reconciled_view(fx.ports(), &fid())
         .await
         .unwrap()
@@ -777,4 +785,68 @@ async fn a_fetch_blocked_sync_has_nothing_to_publish() {
         "{:?}",
         fx.git.commands()
     );
+}
+
+/// The window a resolution turn spends holding a `conflicted` row.
+///
+/// The turn claims the slot at the top of
+/// `feature_resolve_sync_conflicts_impl` and only reaches
+/// `record_sync_resolution(Started)` after a preflight of several round trips —
+/// which over SSH is seconds — and that write is best-effort, so a contended
+/// one leaves the row saying `conflicted` for the whole resolution.
+/// `reconcile` freezes only `syncing` and `resolving`, so this row read back
+/// clean and the pane offered Abort: `git merge --abort` in the tree the agent
+/// is editing, then `worktree remove --force` and `remove_dir_all` on it.
+#[tokio::test]
+async fn a_conflicted_row_a_turn_is_holding_is_not_offered_an_abort_either() {
+    let fx = ports(ScriptedExec::new(&[
+        (GIT_DIR, Ok(".git\n")),
+        (MERGE_HEAD, Ok("b1b2b3b\n")),
+        (PORCELAIN, Ok("UU src/lib.rs\n")),
+    ]));
+    fx.sessions.open(&conflicted(Some(WT))).unwrap();
+    let (tx, _rx) = tokio::sync::watch::channel(false);
+    let turn = fx
+        .turns
+        .claim("f-1", Some(tx))
+        .expect("the registry is empty");
+
+    let view = get_reconciled_view(fx.ports(), &fid())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(view.session.status, SyncSessionStatus::Conflicted);
+    assert!(
+        !view.user_may_intervene,
+        "the status a turn writes is not the status it holds the tree under"
+    );
+
+    abort(fx.ports(), &fid())
+        .await
+        .expect_err("an agent is editing in that directory");
+    let ran = fx.git.commands();
+    assert!(
+        !ran.iter().any(|c| c.contains("merge --abort")),
+        "the refusal must come before any git that touches the tree: {ran:?}"
+    );
+    assert_eq!(
+        fx.sessions
+            .get(&fid())
+            .unwrap()
+            .unwrap()
+            .worktree_path
+            .as_deref(),
+        Some(WT),
+        "and the row must still name the tree the agent is in"
+    );
+
+    // The turn ends and the conflict is the user's again — the recovery the
+    // process-local registry exists to keep.
+    drop(turn);
+    let after = get_reconciled_view(fx.ports(), &fid())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.session.status, SyncSessionStatus::Conflicted);
+    assert!(after.user_may_intervene);
 }

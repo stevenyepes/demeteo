@@ -18,7 +18,7 @@ use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
 use crate::domain::ids::FeatureId;
 use crate::domain::sync_session::{
     intervention_refusal, published_status, reconcile, sync_liveness, user_may_intervene,
-    SyncIntervention, SyncSessionStatus, SyncStanding, SyncWorkspaceProbe,
+    SyncIntervention, SyncLiveness, SyncSessionStatus, SyncStanding, SyncWorkspaceProbe,
 };
 use crate::paths;
 use crate::ports::execution::{ask, Answer, ExecutionPort};
@@ -68,6 +68,11 @@ struct Reconciled {
     session: SyncSession,
     reading: Option<WorktreeReading>,
     feature_status: String,
+    /// The second observation the correction was made from, kept for the same
+    /// reason as the first: every refusal below is judged against it, and
+    /// asking the registry a second time could answer differently from the read
+    /// that produced this status.
+    liveness: SyncLiveness,
 }
 
 /// [`get_reconciled`], keeping the observations the correction was made from.
@@ -141,6 +146,7 @@ async fn reconciled(
         session,
         reading,
         feature_status,
+        liveness,
     }))
 }
 
@@ -153,17 +159,25 @@ pub async fn get_reconciled_view(
     let Some(read) = reconciled(ports, feature_id).await? else {
         return Ok(None);
     };
-    Ok(Some(view(read.session, &read.feature_status)))
+    Ok(Some(view(
+        read.session,
+        &read.feature_status,
+        read.liveness,
+    )))
 }
 
-/// The row and the feature's status, in the shape every refusal is judged
-/// against.
-fn standing<'a>(session: &SyncSession, feature_status: &'a str) -> SyncStanding<'a> {
+/// The row and both observations, in the shape every refusal is judged against.
+fn standing<'a>(
+    session: &SyncSession,
+    feature_status: &'a str,
+    liveness: SyncLiveness,
+) -> SyncStanding<'a> {
     SyncStanding {
         status: session.status,
         published: session.pushed_at.is_some(),
         blocked_stage: session.blocked_stage,
         feature_status,
+        liveness,
     }
 }
 
@@ -196,13 +210,13 @@ pub async fn publish(
     let Some(read) = reconciled(ports.clone(), feature_id).await? else {
         return Ok(None);
     };
-    let (session, feature_status) = (read.session, read.feature_status);
+    let (session, feature_status, liveness) = (read.session, read.feature_status, read.liveness);
     if session.pushed_at.is_some() {
-        return Ok(Some(view(session, &feature_status)));
+        return Ok(Some(view(session, &feature_status, liveness)));
     }
     if let Some(refusal) = intervention_refusal(
         SyncIntervention::Publish,
-        standing(&session, &feature_status),
+        standing(&session, &feature_status, liveness),
     ) {
         return Err(refusal.to_string());
     }
@@ -316,7 +330,7 @@ pub async fn publish(
             }
         }
     }
-    Ok(Some(view(published, &feature_status)))
+    Ok(Some(view(published, &feature_status, liveness)))
 }
 
 /// Throw the resolution away: put the feature branch back where the merge found
@@ -356,10 +370,11 @@ pub async fn discard_resolution(
         session,
         reading,
         feature_status,
+        liveness,
     } = read;
     if let Some(refusal) = intervention_refusal(
         SyncIntervention::Discard,
-        standing(&session, &feature_status),
+        standing(&session, &feature_status, liveness),
     ) {
         return Err(refusal.to_string());
     }
@@ -466,7 +481,7 @@ pub async fn discard_resolution(
     // here too. `abort` itself is not what runs: this session is `resolved`,
     // which is the one standing that entry point must turn away.
     let closed = close_session(sessions, exec, session).await?;
-    Ok(Some(view(closed, &feature_status)))
+    Ok(Some(view(closed, &feature_status, liveness)))
 }
 
 fn feature_status_of(
@@ -479,9 +494,9 @@ fn feature_status_of(
         .unwrap_or_default())
 }
 
-fn view(session: SyncSession, feature_status: &str) -> SyncSessionView {
+fn view(session: SyncSession, feature_status: &str, liveness: SyncLiveness) -> SyncSessionView {
     SyncSessionView {
-        user_may_intervene: user_may_intervene(standing(&session, feature_status)),
+        user_may_intervene: user_may_intervene(standing(&session, feature_status, liveness)),
         session,
     }
 }
@@ -517,16 +532,17 @@ pub async fn abort(
     let Some(read) = reconciled(ports.clone(), feature_id).await? else {
         return Ok(None);
     };
-    let (session, feature_status) = (read.session, read.feature_status);
+    let (session, feature_status, liveness) = (read.session, read.feature_status, read.liveness);
     if session.status != SyncSessionStatus::Aborted {
-        if let Some(refusal) =
-            intervention_refusal(SyncIntervention::Abort, standing(&session, &feature_status))
-        {
+        if let Some(refusal) = intervention_refusal(
+            SyncIntervention::Abort,
+            standing(&session, &feature_status, liveness),
+        ) {
             return Err(refusal.to_string());
         }
     }
     let closed = close_session(sessions, exec, session).await?;
-    Ok(Some(view(closed, &feature_status)))
+    Ok(Some(view(closed, &feature_status, liveness)))
 }
 
 /// Undo whatever merge is open, remove the throwaway tree, and record the sync

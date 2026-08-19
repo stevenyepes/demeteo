@@ -338,7 +338,7 @@ impl GitOpsHelper {
         // turns out to have nothing to do costs a worktree.
         if divergence.behind == Some(0) {
             return Ok(SyncOutcome {
-                merge_commit_sha: head_before.clone().unwrap_or_default(),
+                merge_commit_sha: head_before.clone(),
                 changed: false,
                 head_before,
             });
@@ -380,14 +380,24 @@ impl GitOpsHelper {
                     .run_program(machine_str, git_request(&wt_path, ["rev-parse", "HEAD"]))
                     .await
                     .ok()
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_default();
-                // An unread `head_before` cannot say the tip stayed put, so it
-                // reads as moved. The two mistakes are not the same size: a
-                // push of a ref already at that commit is a no-op, where
+                    .map(|s| s.trim().to_string());
+                // An unread tip on either side cannot say the tip stayed put,
+                // so it reads as moved. The two mistakes are not the same size:
+                // a push of a ref already at that commit is a no-op, where
                 // withholding one leaves a real merge on the local branch and
                 // the open pull request never sees it.
-                let changed = head_before.as_deref() != Some(head_after.as_str());
+                //
+                // What that rule may *not* do is name the commit. An unread
+                // `rev-parse HEAD` flattened to `""` was stored as this sync's
+                // merge commit, and an empty sha passes every `is some` guard
+                // between here and the pane: Publish is offered, the push runs,
+                // and `git merge-base --is-ancestor '' …` then refuses forever,
+                // so the user is told their push did not land about one that
+                // did.
+                let changed = match (head_before.as_deref(), head_after.as_deref()) {
+                    (Some(before), Some(after)) => before != after,
+                    _ => true,
+                };
 
                 if changed {
                     // Push the successful clean merge to origin so remote MR is updated
@@ -407,7 +417,7 @@ impl GitOpsHelper {
                             ),
                             worktree_path: Some(wt_path.clone()),
                             head_before: head_before.clone(),
-                            merge_commit_sha: Some(head_after.clone()),
+                            merge_commit_sha: head_after.clone(),
                         });
                     }
                 }

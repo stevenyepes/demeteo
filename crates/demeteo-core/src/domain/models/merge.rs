@@ -59,8 +59,10 @@ pub struct ConflictReport {
 /// the workflow execution continue.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UpstreamSyncOutcome {
-    /// SHA of the merge commit (empty when there was nothing to merge).
-    pub merge_commit_sha: String,
+    /// The tip the sync left the branch on, on the same terms as
+    /// [`SyncOutcome::merge_commit_sha`](crate::ports::worktree_ops::SyncOutcome::merge_commit_sha):
+    /// `None` when the read did not answer.
+    pub merge_commit_sha: Option<String>,
     /// `false` when `origin/<default>` had no new commits since the
     /// last sync.
     pub changed: bool,
