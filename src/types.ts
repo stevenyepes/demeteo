@@ -865,6 +865,12 @@ export interface SyncSessionView {
   conflict_files: ConflictFile[];
   /** git's own stderr, verbatim. */
   raw_error: string | null;
+  /** Where a `blocked` sync stopped (migration V46), or `null` on any other
+   *  status and on a row written before that migration. `'push'` is the one
+   *  stage that has already committed the merge onto the feature branch, so it
+   *  is the one a retry would strand — read it, never guess it from
+   *  `raw_error`. */
+  blocked_stage: SyncBlockedStage | null;
   /** When the resolution reached origin, or `null` while it is only on the
    *  branch. `status === 'resolved'` with a `null` here is a resolution waiting
    *  for a look, not a finished sync — no probe of the working tree can answer

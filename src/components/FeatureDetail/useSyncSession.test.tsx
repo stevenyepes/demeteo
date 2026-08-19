@@ -47,6 +47,7 @@ const session = (over: Partial<SyncSessionView> = {}): SyncSessionView => ({
   merge_commit_sha: null,
   conflict_files: [{ path: 'src/lib.rs', kind: 'both-modified' }],
   raw_error: 'CONFLICT (content): Merge conflict in src/lib.rs',
+  blocked_stage: null,
   pushed_at: null,
   user_may_intervene: true,
   attempts: 1,

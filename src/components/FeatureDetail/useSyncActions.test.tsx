@@ -37,6 +37,7 @@ const session = (over: Partial<SyncSessionView> = {}): SyncSessionView => ({
     { path: 'src/main.rs', kind: 'added-by-them' },
   ],
   raw_error: null,
+  blocked_stage: null,
   pushed_at: null,
   user_may_intervene: true,
   attempts: 1,

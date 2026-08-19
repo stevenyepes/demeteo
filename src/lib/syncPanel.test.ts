@@ -33,6 +33,7 @@ const session = (over: Partial<SyncSessionView> = {}): SyncSessionView => ({
     { path: 'src/main.rs', kind: 'added-by-them' },
   ],
   raw_error: 'CONFLICT (content): Merge conflict in src/lib.rs',
+  blocked_stage: null,
   pushed_at: null,
   user_may_intervene: true,
   attempts: 1,
@@ -108,19 +109,61 @@ describe('describeSyncPanel', () => {
     expect(model.showResolver).toBe(false);
   });
 
-  /** `SyncBlockedStage::Push` persists as `Blocked` and has already committed
-   *  the merge onto the feature branch (`adapters/merge.rs`), so a body claiming
-   *  nothing was merged is false in exactly the stage that leaves work behind —
-   *  and `stage` is not persisted, so this arm cannot tell which one it has. */
-  it('does not tell a blocked sync that nothing was merged', () => {
+  /** The stage is on the row since V46, and the two ends of it want opposite
+   *  things said. A `push` failure has already committed the merge onto the
+   *  feature branch, so the reassurance the other stages carry is false for it
+   *  — and it is the one stage that must never be told "nothing was merged". */
+  it('says which step stopped a blocked sync', () => {
+    const stopped = panel({
+      session: session({ status: 'blocked', blocked_stage: 'fetch', raw_error: 'fatal: could not read from remote' }),
+      drift: null,
+      canSync: true,
+    });
+    expect(stopped.headline).toMatch(/fetch/i);
+    expect(stopped.body).toMatch(/nothing was merged/i);
+
+    const held = panel({
+      session: session({
+        status: 'blocked',
+        blocked_stage: 'push',
+        merge_commit_sha: 'c0ffeec',
+        raw_error: 'Sync merge succeeded locally but pushing to origin failed',
+      }),
+      drift: null,
+      canSync: true,
+    });
+    expect(held.body).not.toMatch(/nothing was merged/i);
+    expect(held.body).toMatch(/push/i);
+  });
+
+  /** The action a `push`-blocked row actually needs. "Retry sync" merges
+   *  nothing — the branch already contains the base — so it reports up to date
+   *  and abandons the commit in a worktree the next sync force-removes. */
+  it('offers a push-blocked sync the publish a retry would strand', () => {
     const model = panel({
-      session: session({ status: 'blocked', raw_error: 'Sync merge succeeded locally but pushing to origin failed' }),
+      session: session({ status: 'blocked', blocked_stage: 'push', merge_commit_sha: 'c0ffeec' }),
       drift: null,
       canSync: true,
     });
 
-    expect(model.body).not.toMatch(/nothing was merged/i);
-    expect(model.body).toMatch(/push/i);
+    expect(intents(model)).toContain('publish');
+    expect(intents(model)).not.toContain('sync');
+    expect(intents(model)).not.toContain('resolve');
+  });
+
+  /** Every other stage merged nothing, so there is nothing of it to publish and
+   *  a retry is exactly right. A row from before the column existed names no
+   *  stage, and an unnamed stage may not be read as any particular one. */
+  it('offers no publish for a blocked sync that merged nothing', () => {
+    for (const stage of ['fetch', 'base_ref_missing', 'worktree_provision', 'merge', 'repo_context', null] as const) {
+      const model = panel({
+        session: session({ status: 'blocked', blocked_stage: stage }),
+        drift: null,
+        canSync: true,
+      });
+      expect(intents(model), `${stage}`).not.toContain('publish');
+      expect(intents(model), `${stage}`).toContain('sync');
+    }
   });
 
   /** The backend permits `Abort` for a `Blocked` session and the row names the

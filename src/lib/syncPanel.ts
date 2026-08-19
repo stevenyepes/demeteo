@@ -19,7 +19,7 @@
  * chip and this pane would come to disagree about the same branch.
  */
 
-import type { ConflictFile, FeatureDrift, SyncSessionView } from '../types';
+import type { ConflictFile, FeatureDrift, SyncBlockedStage, SyncSessionView } from '../types';
 import type { RunStatusTone } from './runStatus';
 import { describeStaleness } from './staleness';
 
@@ -230,29 +230,8 @@ export function describeSyncPanel({ session, drift, canSync, pending }: SyncPane
     case 'syncing':
       return syncingArm(base, baseBranch, branch);
 
-    /**
-     * `stage` is on the call's answer and nothing persists it, so this arm
-     * cannot name what stopped — and must not guess. `SyncBlockedStage::Push`
-     * lands here too, and it has already committed the merge onto the feature
-     * branch, so the reassurance this arm used to carry ("nothing was merged")
-     * was false for the one blocked stage that leaves work behind.
-     */
     case 'blocked':
-      return {
-        ...base,
-        state: 'blocked',
-        tone: 'amber',
-        chipLabel: 'Blocked',
-        headline: 'The sync stopped short of a verdict',
-        body: "Nothing is conflicted, so there is nothing for an agent to do. Read git's words below before retrying: this row does not record which step stopped, and a push that failed has already committed the merge to the branch.",
-        detail: session.raw_error,
-        actions: [
-          ...(canSync ? [{ ...SYNC, label: 'Retry sync', tone: 'amber' as const }] : []),
-          REFRESH,
-          ...(mine ? [ABANDON] : []),
-        ],
-        badge: 1,
-      };
+      return blockedArm(base, session, canSync, mine);
 
     case 'conflicted':
       return {
@@ -326,10 +305,11 @@ type PanelBase = Omit<SyncPanelModel, 'state' | 'tone' | 'chipLabel' | 'headline
  * IPC boundary.
  *
  * `Refresh` is the only affordance, and it is not decoration: nothing polls this
- * row, `reconcile` passes `Syncing` through untouched and every intervention is
- * refused for it, so without a press that re-reads the row a merge that finished
- * — or a `syncing` row left behind by a restart — is visible only by navigating
- * away and back.
+ * row, and while the merge is running every intervention is refused for it, so
+ * without a press that re-reads the row a merge that finished is visible only by
+ * navigating away and back. A press is also what retires a `syncing` row left
+ * behind by a restart — the read reconciles it to `blocked`, which is a state
+ * the user can finally clear.
  */
 function syncingArm(base: PanelBase, baseBranch: string | null, branch: string | null): SyncPanelModel {
   return {
@@ -341,6 +321,101 @@ function syncingArm(base: PanelBase, baseBranch: string | null, branch: string |
     headline: baseBranch && branch ? `Merging ${baseBranch} into ${branch}` : 'Merging the base branch in',
     body: 'The merge is running. What it finds — a clean merge, a conflict, or a reason it could not start — lands here.',
     actions: [REFRESH],
+  };
+}
+
+/**
+ * What each blocked stage means for the person reading it, which is not one
+ * sentence but seven.
+ *
+ * The stage lives on the row since V46. Before that this arm knew only that
+ * *something* stopped, so its copy had to be true of a fetch that moved no git
+ * object and of a push that had already committed the merge — which left it
+ * saying almost nothing, and offering "Retry sync" to both.
+ */
+const BLOCKED_COPY: Record<SyncBlockedStage, { headline: string; body: string }> = {
+  fetch: {
+    headline: 'The base branch could not be fetched',
+    body: 'Nothing was merged and nothing moved. The remote is unreachable, or the stored credentials no longer open it.',
+  },
+  base_ref_missing: {
+    headline: 'The base branch is not on the remote',
+    body: 'The fetch worked; the branch this run is based on does not exist upstream. Nothing was merged — check the run\u2019s base branch.',
+  },
+  worktree_provision: {
+    headline: 'The sync worktree could not be created',
+    body: 'The merge never started, so nothing was merged. git\u2019s reason is below.',
+  },
+  merge: {
+    headline: 'The merge stopped without a verdict',
+    body: 'It was cut short rather than answered, so what the sync worktree holds is unknown — possibly clean, possibly half-applied. Nothing reached the branch. Abandon it to reclaim the worktree, then sync again.',
+  },
+  push: {
+    headline: 'The merge is on the branch and origin has not seen it',
+    body: 'The merge succeeded and is committed; only the push failed. Syncing again would merge nothing and leave it here — publish it instead.',
+  },
+  repo_context: {
+    headline: 'This feature has no repository to sync',
+    body: 'No git command was ever issued. The project\u2019s repository row could not be resolved.',
+  },
+  held_resolution: {
+    headline: 'A resolution is still waiting to be read',
+    body: 'The last sync left a merge on this branch that nobody has published or discarded, so no new sync was started.',
+  },
+};
+
+const UNNAMED_BLOCK = {
+  headline: 'The sync stopped short of a verdict',
+  body: "Nothing is conflicted, so there is nothing for an agent to do. This row predates the column that records which step stopped, so read git\u2019s words below before retrying.",
+};
+
+/**
+ * Publish, worded for a merge that never got past its own push.
+ *
+ * `reviewActions`\u2019 Publish sits beside a diff of a *resolution*; this one
+ * publishes a clean merge nobody resolved anything in, and the reason to press
+ * it is that the alternative — a retry — quietly does nothing: the branch
+ * already contains the base, so the second merge changes nothing, reports up to
+ * date, and abandons the commit here.
+ */
+const PUBLISH_BLOCKED: SyncAction = {
+  intent: 'publish',
+  label: 'Publish merge',
+  tone: 'emerald',
+  title: 'Push the merge that already landed on this branch',
+  desc: 'Pushes the merge the sync already committed. Safe to press twice — one already on origin answers with itself.',
+};
+
+/**
+ * A sync that stopped, said in the stage\u2019s own terms.
+ *
+ * `push` is the only stage with work at risk, and it is the only one that does
+ * not offer a retry: a second sync finds the base already merged, changes
+ * nothing, and leaves the commit sitting in a worktree the sync after it
+ * force-removes.
+ */
+function blockedArm(
+  base: PanelBase,
+  session: SyncSessionView,
+  canSync: boolean,
+  mine: boolean,
+): SyncPanelModel {
+  const stage = session.blocked_stage;
+  const held = stage === 'push';
+  const copy = stage === null ? UNNAMED_BLOCK : BLOCKED_COPY[stage];
+  const retry: SyncAction[] =
+    !held && canSync ? [{ ...SYNC, label: 'Retry sync', tone: 'amber' as const }] : [];
+  const publish: SyncAction[] = held && mine && session.merge_commit_sha !== null ? [PUBLISH_BLOCKED] : [];
+  return {
+    ...base,
+    state: 'blocked',
+    tone: 'amber',
+    chipLabel: held ? 'Not published' : 'Blocked',
+    headline: copy.headline,
+    body: copy.body,
+    detail: session.raw_error,
+    actions: [...publish, ...retry, REFRESH, ...(mine ? [ABANDON] : [])],
+    badge: 1,
   };
 }
 
