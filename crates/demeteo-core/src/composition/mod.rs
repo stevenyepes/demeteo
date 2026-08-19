@@ -337,3 +337,7 @@ pub fn build_core_context(
         run_view,
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/infrastructure/composition.rs"]
+mod tests;
