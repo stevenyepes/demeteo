@@ -37,7 +37,15 @@ const PENDING_STATUS: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 status -
 const COMMIT: &str = "git -c core.hooksPath=/dev/null -C /repos/demeteo_wt_sync_feature-f-1 \
                       -c user.email=demeteo@local -c user.name=demeteo commit -m \
                       'chore: resolve sync conflicts with origin/master'";
+/// The push, as `run_program` renders it. Byte-identical to the shell string
+/// it used to be — only the port changed, because a credential helper needs
+/// argv and env, and a shell command string has nowhere to put either.
 const PUSH: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 push origin feature/f-1";
+/// Read before every push, to see whether the remote needs a credential at all.
+const REMOTE_URL: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 remote get-url origin";
+/// An ssh remote authenticates itself, so these tests push uncredentialed —
+/// which is the shape every assertion here was written against.
+const SSH_REMOTE: &str = "git@github.com:acme/widgets.git\n";
 /// The push's own confirmation: `git push` exiting zero is a verdict about the
 /// command, and this is the one about origin.
 const CONTAINS: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 merge-base --is-ancestor \
@@ -501,13 +509,13 @@ fn happy_path() -> ScriptedExec {
             Ok("[feature/f-1 c0ffee] chore: resolve sync conflicts"),
         ),
         (HEAD, Ok("c0ffeec\n")),
-        (PUSH, Ok("")),
         (CONTAINS, Ok("")),
         (DISCARD, Ok("")),
         (PRUNE, Ok("")),
         // The teardown's confirmation: the tree really is gone.
         (GIT_DIR, Err("fatal: not a git repository")),
     ])
+    .with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, Ok(""))])
 }
 
 /// The turn that ends before it starts, and the row that has to say so.
@@ -630,11 +638,11 @@ async fn an_agent_that_committed_on_its_own_does_not_fail_the_sync() {
         (ADD_ALL, Ok("")),
         (PENDING_STATUS, Ok("")),
         (HEAD, Ok("c0ffeec\n")),
-        (PUSH, Ok("")),
         (DISCARD, Ok("")),
         (PRUNE, Ok("")),
         (GIT_DIR, Err("fatal: not a git repository")),
     ])
+    .with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, Ok(""))])
     // Open when the turn starts, consumed by the agent's own commit by the
     // time Demeteo asks whether one is still owed.
     .with_queue(MERGE_HEAD, &[Ok("b1b2b3b\n"), Ok("")]);
@@ -695,16 +703,20 @@ async fn the_resolution_is_committed_before_it_is_published() {
     let outcome = run(&p, &row(), None, &mut cost, &mut tokens).await;
     assert!(outcome.is_ok(), "{outcome:?}");
 
-    let commands = p.scripted.commands();
-    let commit = commands.iter().position(|c| c == COMMIT);
-    let push = commands.iter().position(|c| c == PUSH);
+    // One interleaved list, because the commit goes out as a shell command and
+    // the push as a program: read from the two separate recorders, the order
+    // between them cannot be seen at all.
+    let calls = p.scripted.calls();
+    let commit = calls.iter().position(|c| c == COMMIT);
+    let push = calls.iter().position(|c| c == PUSH);
     assert!(
         commit.is_some(),
-        "the merge the agent resolved has to be committed: {commands:?}"
+        "the merge the agent resolved has to be committed: {calls:?}"
     );
+    assert!(push.is_some(), "and published: {calls:?}");
     assert!(
         commit < push,
-        "and committed before it is published: {commands:?}"
+        "and committed before it is published: {calls:?}"
     );
 }
 
@@ -779,10 +791,12 @@ async fn a_stop_that_arrives_mid_turn_ends_it_before_the_turn_is_billed() {
     assert_eq!(cost, 0.0, "an interrupted turn is billed nothing");
     let commands = p.scripted.commands();
     assert!(
-        !commands
-            .iter()
-            .any(|c| c == ADD_ALL || c == COMMIT || c == PUSH),
-        "a stopped turn stages, commits and publishes nothing: {commands:?}"
+        !commands.iter().any(|c| c == ADD_ALL || c == COMMIT),
+        "a stopped turn stages and commits nothing: {commands:?}"
+    );
+    assert!(
+        !p.scripted.programs().iter().any(|c| c == PUSH),
+        "and publishes nothing"
     );
     assert_eq!(
         stored_status(&p.db),
@@ -812,8 +826,12 @@ async fn a_stop_that_arrives_after_the_turn_still_stops_the_resolution() {
     assert_eq!(cost, 1.25, "this turn ran and has to be paid for");
     let commands = p.scripted.commands();
     assert!(
-        !commands.iter().any(|c| c == ADD_ALL || c == PUSH),
-        "nothing is staged or published after a stop: {commands:?}"
+        !commands.iter().any(|c| c == ADD_ALL),
+        "nothing is staged after a stop: {commands:?}"
+    );
+    assert!(
+        !p.scripted.programs().iter().any(|c| c == PUSH),
+        "and nothing is published"
     );
 }
 
@@ -823,7 +841,10 @@ async fn a_stop_that_arrives_after_the_turn_still_stops_the_resolution() {
 /// accumulates for the life of the app.
 #[tokio::test]
 async fn a_push_that_failed_still_reaps_the_resolver() {
-    let scripted = happy_path().with_queue(PUSH, &[Err("fatal: remote rejected")]);
+    let scripted = happy_path().with_programs(&[
+        (REMOTE_URL, Ok(SSH_REMOTE)),
+        (PUSH, Err("fatal: remote rejected")),
+    ]);
     let runtime = Arc::new(ScriptedRuntime::default());
     let p = ports(scripted, vec![runtime.clone()]);
     open_conflicted(&p.db);
@@ -861,8 +882,12 @@ async fn an_unreadable_commit_guard_keeps_the_worktree_and_the_verdict_honest() 
     );
     let commands = p.scripted.commands();
     assert!(
-        !commands.iter().any(|c| c == PUSH || c == DISCARD),
-        "nothing may be published or deleted on an answer nobody got: {commands:?}"
+        !commands.iter().any(|c| c == DISCARD),
+        "nothing may be deleted on an answer nobody got: {commands:?}"
+    );
+    assert!(
+        !p.scripted.programs().iter().any(|c| c == PUSH),
+        "nor published"
     );
     assert_eq!(stored_status(&p.db), SyncSessionStatus::ResolutionFailed);
     let session: &dyn SyncSessionPort = &*p.db;
@@ -1098,11 +1123,10 @@ async fn a_push_origin_did_not_confirm_leaves_the_resolution_waiting() {
             Ok("[feature/f-1 c0ffee] chore: resolve sync conflicts"),
         ),
         (HEAD, Ok("c0ffeec\n")),
-        (PUSH, Ok("")),
         (CONTAINS, Err("fatal: not an ancestor")),
     ];
     let p = ports(
-        ScriptedExec::new(&script),
+        ScriptedExec::new(&script).with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, Ok(""))]),
         vec![Arc::new(ScriptedRuntime::default())],
     );
     open_conflicted(&p.db);

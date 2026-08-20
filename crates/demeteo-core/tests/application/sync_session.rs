@@ -35,6 +35,7 @@ struct Fixture {
     git: Arc<ScriptedExec>,
     features: Arc<dyn crate::ports::db::FeatureRepository>,
     turns: Arc<crate::application::sync_turns::SyncTurns>,
+    app_settings: Arc<dyn crate::ports::db::AppSettingsRepository>,
 }
 
 impl Fixture {
@@ -44,6 +45,7 @@ impl Fixture {
             exec: &self.exec,
             features: &self.features,
             turns: &self.turns,
+            app_settings: &self.app_settings,
         }
     }
 }
@@ -73,8 +75,13 @@ fn ports(scripted: ScriptedExec) -> Fixture {
         sessions: db.clone(),
         exec: scripted.clone(),
         git: scripted,
-        features: db,
+        features: db.clone(),
         turns: Arc::new(crate::application::sync_turns::SyncTurns::default()),
+        // No provider instance is seeded, so `credential_for_repo` answers
+        // `None` and the push these tests script is the uncredentialed one —
+        // which is what a project cloned over ssh gets, and what every
+        // assertion here was written against.
+        app_settings: db,
     }
 }
 
@@ -282,7 +289,15 @@ async fn aborting_against_an_unreachable_host_leaves_the_session_open() {
     );
 }
 
+/// The push, as `run_program` renders it. The string is the one it always was
+/// — only the port changed, because a credential helper needs argv and env and
+/// a shell command string has nowhere to put either.
 const PUSH: &str = "git -C /repos/demeteo push origin feature/f-1";
+/// Read before every push, to see whether the remote needs a credential.
+const REMOTE_URL: &str = "git -C /repos/demeteo remote get-url origin";
+/// An ssh remote authenticates itself, so these publish uncredentialed —
+/// the shape every assertion here was written against.
+const SSH_REMOTE: &str = "git@github.com:acme/widgets.git\n";
 const CONTAINS: &str =
     "git -C /repos/demeteo merge-base --is-ancestor c0ffeec refs/remotes/origin/feature/f-1";
 const DISCARD_WT: &str =
@@ -322,6 +337,15 @@ fn script(extra: &[(&'static str, Result<&'static str, &'static str>)]) -> Scrip
     ScriptedExec::new(&all)
 }
 
+/// `extra` are shell commands; the push is the one *program* a publish issues,
+/// and its answer is what most of these tests vary.
+fn script_with_push(
+    extra: &[(&'static str, Result<&'static str, &'static str>)],
+    push: Result<&'static str, &'static str>,
+) -> ScriptedExec {
+    script(extra).with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, push)])
+}
+
 /// Publishing twice must not push twice, and must not be an error either.
 ///
 /// The button sits beside a diff the user is reading, so the honest reading of
@@ -330,12 +354,10 @@ fn script(extra: &[(&'static str, Result<&'static str, &'static str>)]) -> Scrip
 /// a second `git push` here reddens rather than passing silently.
 #[tokio::test]
 async fn publishing_a_resolution_twice_pushes_once() {
-    let fx = ports(script(&[
-        (PUSH, Ok("")),
-        (CONTAINS, Ok("")),
-        (DISCARD_WT, Ok("")),
-        (PRUNE, Ok("")),
-    ]));
+    let fx = ports(script_with_push(
+        &[(CONTAINS, Ok("")), (DISCARD_WT, Ok("")), (PRUNE, Ok(""))],
+        Ok(""),
+    ));
     fx.sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
 
     let first = publish(fx.ports(), &fid()).await.unwrap().unwrap();
@@ -347,10 +369,10 @@ async fn publishing_a_resolution_twice_pushes_once() {
         .unwrap();
     assert_eq!(second.session.pushed_at, first.session.pushed_at);
     assert_eq!(
-        fx.git.commands().iter().filter(|c| *c == PUSH).count(),
+        fx.git.programs().iter().filter(|c| *c == PUSH).count(),
         1,
         "{:?}",
-        fx.git.commands()
+        fx.git.programs()
     );
 }
 
@@ -360,10 +382,10 @@ async fn publishing_a_resolution_twice_pushes_once() {
 /// publish, on a PR that never received it.
 #[tokio::test]
 async fn a_rejected_push_is_not_recorded_as_published() {
-    let fx = ports(script(&[(
-        PUSH,
+    let fx = ports(script_with_push(
+        &[],
         Err("! [rejected] feature/f-1 -> feature/f-1 (non-fast-forward)"),
-    )]));
+    ));
     fx.sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
 
     let err = publish(fx.ports(), &fid())
@@ -380,10 +402,10 @@ async fn a_rejected_push_is_not_recorded_as_published() {
 /// deleted.
 #[tokio::test]
 async fn a_push_that_cannot_be_confirmed_is_not_recorded_either() {
-    let fx = ports(script(&[
-        (PUSH, Ok("")),
-        (CONTAINS, Err("transport: Connection appears dead")),
-    ]));
+    let fx = ports(script_with_push(
+        &[(CONTAINS, Err("transport: Connection appears dead"))],
+        Ok(""),
+    ));
     fx.sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
 
     let err = publish(fx.ports(), &fid())
@@ -717,7 +739,6 @@ async fn a_push_blocked_sync_publishes_the_merge_it_already_made() {
         (MERGE_HEAD, Err("")),
         (PORCELAIN, Ok("")),
         (HEAD_SHA, Ok("c0ffeec\n")),
-        ("git -C /repos/demeteo push origin feature/f-1", Ok("")),
         (
             "git -C /repos/demeteo merge-base --is-ancestor c0ffeec refs/remotes/origin/feature/f-1",
             Ok(""),
@@ -731,7 +752,8 @@ async fn a_push_blocked_sync_publishes_the_merge_it_already_made() {
     .with_queue(
         GIT_DIR,
         &[Ok(".git\n"), Err("fatal: not a git repository")],
-    ));
+    )
+    .with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, Ok(""))]));
     fx.sessions
         .open(&SyncSession {
             merge_commit_sha: Some("c0ffeec".to_string()),
@@ -749,11 +771,9 @@ async fn a_push_blocked_sync_publishes_the_merge_it_already_made() {
     );
     assert_eq!(published.session.blocked_stage, None);
     assert!(
-        fx.git
-            .commands()
-            .contains(&"git -C /repos/demeteo push origin feature/f-1".to_string()),
+        fx.git.programs().contains(&PUSH.to_string()),
         "{:?}",
-        fx.git.commands()
+        fx.git.programs()
     );
 }
 

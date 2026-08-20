@@ -306,13 +306,15 @@ pub async fn feature_drift(
 }
 
 /// The four sync commands' shared reach: the row, the tree, the feature's own
-/// status and this process's in-flight turns.
+/// status, this process's in-flight turns, and the provider a publish
+/// authenticates against.
 fn sync_ports(ctx: &AppContext) -> crate::application::sync_session::SyncPorts<'_> {
     crate::application::sync_session::SyncPorts {
         sessions: &ctx.sync_sessions,
         exec: &ctx.exec,
         features: &ctx.features,
         turns: &ctx.sync_turns,
+        app_settings: &ctx.app_settings,
     }
 }
 

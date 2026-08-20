@@ -133,6 +133,7 @@ impl SqliteMergeExecutor {
             exec: &self.exec,
             features: &self.features,
             turns: &self.turns,
+            app_settings: &self.git_ops.app_settings,
         }
     }
 
