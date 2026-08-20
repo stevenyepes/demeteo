@@ -119,16 +119,20 @@ impl ExecutionDriver {
                 produced_artifacts = outcome.produced_artifacts;
                 None
             }
-            crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
+            crate::adapters::agent::event_stream::TurnResult::Failed { reason, spent } => {
+                *spend.cost += spent.cost_usd;
+                *spend.tokens += spent.tokens;
                 Some(SequenceError::Failed(format!(
                     "sequence task '{}': agent error: {}",
-                    task.id, descriptive
+                    task.id, reason
                 )))
             }
-            crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
+            crate::adapters::agent::event_stream::TurnResult::Environmental { reason, spent } => {
+                *spend.cost += spent.cost_usd;
+                *spend.tokens += spent.tokens;
                 Some(SequenceError::Environmental(format!(
                     "sequence task '{}': agent error: {}",
-                    task.id, descriptive
+                    task.id, reason
                 )))
             }
             crate::adapters::agent::event_stream::TurnResult::Interrupted => {

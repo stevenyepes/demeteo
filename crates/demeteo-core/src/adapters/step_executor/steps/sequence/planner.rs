@@ -249,20 +249,27 @@ impl ExecutionDriver {
                         .await;
                     return Err(StepOutcome::Cancelled);
                 }
-                crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
+                crate::adapters::agent::event_stream::TurnResult::Failed { reason, spent } => {
+                    *spend.cost += spent.cost_usd;
+                    *spend.tokens += spent.tokens;
                     self.cleanup_planner(&planner_thread_id, &planner_wt_id)
                         .await;
                     return Err(StepOutcome::Failed(format!(
                         "sequence step: planner failed: {}",
-                        descriptive
+                        reason
                     )));
                 }
-                crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
+                crate::adapters::agent::event_stream::TurnResult::Environmental {
+                    reason,
+                    spent,
+                } => {
+                    *spend.cost += spent.cost_usd;
+                    *spend.tokens += spent.tokens;
                     self.cleanup_planner(&planner_thread_id, &planner_wt_id)
                         .await;
                     return Err(StepOutcome::Environmental(format!(
                         "sequence step: planner failed: {}",
-                        descriptive
+                        reason
                     )));
                 }
                 crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {

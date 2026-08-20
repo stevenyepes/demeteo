@@ -178,8 +178,18 @@ struct ScriptedRuntime {
     seen: std::sync::Mutex<Vec<SpawnedWith>>,
     linger: Option<std::time::Duration>,
     stop: Option<(StopAt, watch::Sender<bool>)>,
+    /// The turn's own ending, when the harness imposed one instead of the
+    /// agent reporting back. Replaces the `TurnComplete` below, which is the
+    /// only difference between a resolver that said "done" and one the CLI cut
+    /// off — and the whole of what the tree-is-the-authority tests turn on.
+    ends_with_error: bool,
     killed: Arc<std::sync::atomic::AtomicBool>,
 }
+
+/// What a tripped `--max-turns` reaches the turn loop as: a non-recoverable
+/// `cli_error` whose text is the adapter's, because claude's own error result
+/// carries no `result` field to quote.
+const CAP_TRIPPED: &str = "the agent stopped at its turn cap (--max-turns) without reporting back";
 
 impl ScriptedRuntime {
     /// A turn that pauses after its first token and trips `stop` at `at`.
@@ -187,6 +197,15 @@ impl ScriptedRuntime {
         Self {
             linger: Some(std::time::Duration::from_millis(300)),
             stop: Some((at, stop)),
+            ..Default::default()
+        }
+    }
+
+    /// A turn that spent its tokens and was then ended by its own harness,
+    /// never reporting back.
+    fn cut_off() -> Self {
+        Self {
+            ends_with_error: true,
             ..Default::default()
         }
     }
@@ -212,7 +231,14 @@ impl ScriptedRuntime {
                 cost_usd: Some(1.25),
             }),
         ];
-        if !matches!(self.stop, Some((StopAt::StreamEnd, _))) {
+        if self.ends_with_error {
+            events.push(AgentEvent::Error {
+                code: "cli_error".to_string(),
+                message: CAP_TRIPPED.to_string(),
+                recoverable: false,
+                usage: None,
+            });
+        } else if !matches!(self.stop, Some((StopAt::StreamEnd, _))) {
             events.push(AgentEvent::TurnComplete {
                 stop_reason: StopReason::EndOfTurn,
                 usage: None,
@@ -440,6 +466,7 @@ async fn run_with(
         feature_branch: "feature/f-1",
         base_branch: "master",
         conflict_files: &["src/lib.rs".to_string()],
+        test_command: None,
         step_exec,
         thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
         agent_kind: "opencode",
@@ -1131,5 +1158,129 @@ async fn a_follow_up_commit_does_not_move_the_diffs_base() {
         session.head_before.as_deref(),
         Some("aaaaaaa"),
         "the pre-merge tip is the diff base and the turn does not own it"
+    );
+}
+
+/// The turn's exit status is not a reading of the tree.
+///
+/// A resolver that tripped `--max-turns` four turns after writing a correct
+/// resolution was answered with `resolution_failed` and a `raw_error` of
+/// "agent error", while the resolution itself sat unstaged in a throwaway
+/// worktree the teardown would take with it. The marker check, the `add -A`
+/// and the index re-check below are the completion check this file exists to
+/// keep honest, and they were all downstream of the early return that read the
+/// agent's exit instead of git's index.
+#[tokio::test]
+async fn a_turn_the_harness_cut_off_over_a_resolved_tree_still_lands_the_resolution() {
+    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime::cut_off())]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let outcome = run(&p, &row(), None, &mut cost, &mut tokens).await;
+
+    assert_eq!(
+        outcome.unwrap().merge_commit_sha,
+        "c0ffeec",
+        "git said the conflicts were gone; the agent's exit code does not overrule it"
+    );
+    assert_eq!(
+        stored_status(&p.db),
+        SyncSessionStatus::Resolved,
+        "the session has to read the resolution that is actually on the branch"
+    );
+    assert!(
+        p.scripted.commands().iter().any(|c| c == ADD_ALL),
+        "a resolution nothing staged is a resolution the teardown deletes"
+    );
+}
+
+/// The tokens a cut-off turn burned are still spent.
+///
+/// `TurnResult::Failed` carried a string and nothing else, so the turn that
+/// ran for three minutes and cost real dollars closed its row at `$0.00` —
+/// the one class of turn whose spend is least visible reporting none at all.
+#[tokio::test]
+async fn a_turn_the_harness_cut_off_still_bills_what_it_spent() {
+    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime::cut_off())]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let _ = run(&p, &row(), None, &mut cost, &mut tokens).await;
+
+    assert_eq!(
+        cost, 1.25,
+        "the cut-off turn's dollars still reach the caller"
+    );
+    assert_eq!(tokens, 1000, "and so do its tokens");
+}
+
+/// When the tree really is unresolved, both halves of why reach the user.
+///
+/// The tree says *what* is wrong and cannot say why nobody fixed it; the
+/// turn's ending is the other half and is worth exactly that much — an
+/// explanation, never the verdict.
+#[tokio::test]
+async fn a_tree_still_conflicted_reports_the_turns_ending_beside_it() {
+    let scripted = ScriptedExec::new(&[(ADD_ALL, Ok(""))])
+        .with_queue(PORCELAIN, &[Ok("UU src/lib.rs\n"), Ok("UU src/lib.rs\n")])
+        .with_files(&[(resolved_file("src/lib.rs").as_str(), Ok("no markers\n"))]);
+    let p = ports(scripted, vec![Arc::new(ScriptedRuntime::cut_off())]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let outcome = run(&p, &row(), None, &mut cost, &mut tokens).await;
+
+    let Err(ResolveSyncError::Failed(reason)) = outcome else {
+        panic!("an index git still reports as unmerged is a failed resolution: {outcome:?}");
+    };
+    assert!(
+        reason.contains("did not resolve every conflicted file"),
+        "the tree's own verdict has to lead: {reason}"
+    );
+    assert!(
+        reason.contains(CAP_TRIPPED),
+        "and the turn's ending is what explains it: {reason}"
+    );
+    assert_eq!(stored_status(&p.db), SyncSessionStatus::ResolutionFailed);
+}
+
+/// The verification line names the project's command, because the agent
+/// cannot.
+///
+/// "Run the project's build / test suite" is not an instruction, it is a
+/// search: one resolver resolved its conflict in four turns and spent the
+/// other twenty guessing at cargo test targets before its cap ended it.
+#[test]
+fn the_prompt_names_the_projects_own_test_command() {
+    let files = vec!["src/lib.rs".to_string()];
+    let prompt =
+        build_resolver_prompt("feature/f-1", "master", &files, Some("npm run checks:code"));
+
+    assert!(
+        prompt.contains("`npm run checks:code`"),
+        "the command has to be quoted verbatim: {prompt}"
+    );
+    assert!(
+        prompt.contains("Do NOT go looking for another command"),
+        "naming it is only half — the other half is not hunting for a second: {prompt}"
+    );
+}
+
+/// A project with no test command gets no verification line at all.
+///
+/// An instruction the agent cannot satisfy costs more than a missing one: it
+/// is what a search is, and a search is turns.
+#[test]
+fn the_prompt_asks_for_no_verification_when_the_project_names_no_command() {
+    let files = vec!["src/lib.rs".to_string()];
+    let prompt = build_resolver_prompt("feature/f-1", "master", &files, None);
+
+    assert!(
+        !prompt.contains("verify"),
+        "no command, no verification line: {prompt}"
+    );
+    assert!(
+        prompt.contains("Do NOT stage or commit"),
+        "the rest of the contract is unchanged: {prompt}"
     );
 }

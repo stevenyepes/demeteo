@@ -642,3 +642,42 @@ fn args_allowlist_coexists_with_disallowed_tools() {
         "got {args:?}"
     );
 }
+
+/// The endings the CLI imposes carry no `result` text, and `subtype` is the
+/// only place it says which one happened.
+///
+/// Read nowhere, a tripped `--max-turns` reached the user as "agent error" —
+/// a string with no diagnosis in it — over a sync session filed
+/// `resolution_failed` for a reason nobody could name.
+#[test]
+fn a_resultless_error_is_named_by_its_subtype() {
+    let line = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"stop_reason":"max_turns","total_cost_usd":0.42}"#;
+
+    match parse_claude_event(line) {
+        Some(AgentEvent::Error { message, .. }) => {
+            assert!(
+                message.contains("--max-turns"),
+                "the ending has to name itself: {message}"
+            );
+            assert!(
+                !message.contains("agent error"),
+                "and must not fall back to the string that says nothing: {message}"
+            );
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+/// A subtype this build has not heard of still names the ending, so a new one
+/// degrades to a quote rather than back to "agent error".
+#[test]
+fn an_unrecognised_error_subtype_is_quoted_rather_than_flattened() {
+    let line = r#"{"type":"result","subtype":"error_something_new","is_error":true,"stop_reason":"error"}"#;
+
+    match parse_claude_event(line) {
+        Some(AgentEvent::Error { message, .. }) => {
+            assert!(message.contains("error_something_new"), "{message}");
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}

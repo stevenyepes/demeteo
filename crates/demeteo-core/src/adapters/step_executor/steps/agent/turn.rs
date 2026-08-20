@@ -40,35 +40,43 @@ pub(crate) enum TurnDisposition {
 
 /// Fold one completed turn into the feature's running totals.
 ///
-/// Only a `Success` spends anything, so only a `Success` writes: an
-/// interrupted or broken turn leaves both cache slots holding whatever the
+/// Every ending that ran writes, not only the green one: a turn that failed
+/// bought the tokens it read up to the failure, and a step whose retry ladder
+/// is measured in dollars has to see them ([`TurnResult`]). Only
+/// `Interrupted` leaves the slots alone — the totals then keep whatever the
 /// previous turn of this step put there, which is what the UI's cache chip
-/// should keep showing.
+/// should go on showing.
 pub(crate) fn apply_turn_result(res: TurnResult, spend: &mut AgentSpend<'_>) -> TurnDisposition {
     match res {
         TurnResult::Interrupted => TurnDisposition::Cancelled,
-        TurnResult::Failed(descriptive) => {
-            TurnDisposition::Broken(StepOutcome::Failed(descriptive))
+        TurnResult::Failed { reason, spent } => {
+            bill(&spent, spend);
+            TurnDisposition::Broken(StepOutcome::Failed(reason))
         }
-        TurnResult::Environmental(descriptive) => {
-            TurnDisposition::Broken(StepOutcome::Environmental(descriptive))
+        TurnResult::Environmental { reason, spent } => {
+            bill(&spent, spend);
+            TurnDisposition::Broken(StepOutcome::Environmental(reason))
         }
         TurnResult::Success(outcome) => {
-            *spend.cost += outcome.cost_usd;
-            *spend.tokens += outcome.tokens;
-            // Surface cache telemetry from the just-completed
-            // turn on the out-params. The driver loop reads
-            // these for the final `StepProgress` notification
-            // + DB row update so the UI's "Saved $X by cache"
-            // chip has fresh numbers.
-            *spend.cache_read = Some(outcome.cache_read_input_tokens);
-            *spend.cache_creation = Some(outcome.cache_creation_input_tokens);
+            bill(&outcome, spend);
             TurnDisposition::Answered {
                 text: outcome.text,
                 produced: outcome.produced_artifacts,
             }
         }
     }
+}
+
+/// Advance the step's totals by one turn's spend.
+///
+/// The cache slots are out-params the driver loop reads for the final
+/// `StepProgress` notification and DB row update, so the UI's "Saved $X by
+/// cache" chip has this turn's numbers rather than the previous turn's.
+fn bill(outcome: &crate::adapters::agent::event_stream::TurnOutcome, spend: &mut AgentSpend<'_>) {
+    *spend.cost += outcome.cost_usd;
+    *spend.tokens += outcome.tokens;
+    *spend.cache_read = Some(outcome.cache_read_input_tokens);
+    *spend.cache_creation = Some(outcome.cache_creation_input_tokens);
 }
 
 impl ExecutionDriver {

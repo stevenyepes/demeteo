@@ -303,6 +303,7 @@ impl DagStepExecutor {
             feature_branch: &session.feature_branch,
             base_branch: &session.base_branch,
             conflict_files,
+            test_command: settings.worktree_strategy.test_command.as_deref(),
             step_exec: &step_exec,
             thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
             agent_kind: &chosen.agent_kind,

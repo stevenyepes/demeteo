@@ -215,11 +215,10 @@ fn parse_claude_result_event(v: &serde_json::Value) -> Option<AgentEvent> {
         // with `error_max_turns` or `error_during_execution` would
         // otherwise burn quota and report 0.
         let usage = parse_claude_result_usage(v);
-        let msg = v
-            .get("result")
-            .and_then(|s| s.as_str())
-            .unwrap_or("agent error")
-            .to_string();
+        let msg = match v.get("result").and_then(|s| s.as_str()) {
+            Some(reported) => reported.to_string(),
+            None => claude_error_subtype(v.get("subtype").and_then(|s| s.as_str())),
+        };
         return Some(AgentEvent::Error {
             code: "cli_error".to_string(),
             message: msg,
@@ -238,6 +237,31 @@ fn parse_claude_result_event(v: &serde_json::Value) -> Option<AgentEvent> {
     let usage = parse_claude_result_usage(v);
 
     Some(AgentEvent::TurnComplete { stop_reason, usage })
+}
+
+/// What stopped a turn whose error result carried no `result` text.
+///
+/// The `result` field is the agent's own account of what went wrong and is
+/// present whenever there is one; the endings that carry none are the ones the
+/// CLI imposed from outside, and `subtype` is the only place it says which. Read
+/// nowhere, "agent error" was what a tripped `--max-turns` told the user — a
+/// string with no diagnosis in it at all, which is worse than useless on a
+/// resolution that then reads `resolution_failed` for a reason nobody can name.
+///
+/// An unrecognised subtype is quoted rather than flattened: a subtype this
+/// build has not heard of still names the ending, and pretending otherwise
+/// reproduces exactly the string this exists to remove.
+fn claude_error_subtype(subtype: Option<&str>) -> String {
+    match subtype {
+        Some("error_max_turns") => {
+            "the agent stopped at its turn cap (--max-turns) without reporting back".to_string()
+        }
+        Some("error_during_execution") => {
+            "the agent CLI failed mid-turn and reported no message".to_string()
+        }
+        Some(other) => format!("the agent CLI ended the turn: {}", other),
+        None => "agent error".to_string(),
+    }
 }
 
 /// Extract `Usage` from the `result` event JSON, or `None` if no

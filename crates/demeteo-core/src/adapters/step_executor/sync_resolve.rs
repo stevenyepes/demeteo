@@ -31,7 +31,7 @@ use crate::domain::agent_event::AgentEvent;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
 use crate::domain::sync_session::{
-    publish_policy, resolution_is_reviewable, ResolutionPublish, SyncResolution,
+    publish_policy, resolution_is_reviewable, resolution_refusal, ResolutionPublish, SyncResolution,
 };
 use crate::paths;
 use crate::ports::agent_execution::AgentExecutionPort;
@@ -77,6 +77,14 @@ pub(crate) struct ResolveSyncContext<'a> {
     pub feature_branch: &'a str,
     pub base_branch: &'a str,
     pub conflict_files: &'a [String],
+    /// The project's own `test_command`, or `None` when it has none.
+    ///
+    /// Passed rather than left to the agent to discover, because Demeteo
+    /// already knows it and the agent does not: asked to "run the project's
+    /// build / test suite" with nothing named, one resolver spent four turns
+    /// resolving the conflict and the remaining twenty guessing at cargo test
+    /// targets before its turn cap ended it.
+    pub test_command: Option<&'a str>,
     /// The persisted row this turn reports through.
     ///
     /// `AgentStream` is keyed to its execution id and `StepProgress` to its
@@ -119,8 +127,15 @@ pub(crate) struct ResolveSyncContext<'a> {
 }
 
 /// Anti-runaway cap on the resolver's agentic turns, the verifier's number and
-/// its reasoning: a tripped cap fails through the normal error path, and the
-/// caller's own retry ladder owns recovery.
+/// its reasoning: a tripped cap ends the turn through the normal error path,
+/// and the caller's own retry ladder owns recovery.
+///
+/// It is not a cap on the *resolution*. Tripping it after the conflicted files
+/// were already correct still lands the resolution, because the tree is read
+/// afterwards either way — the reasoning is on
+/// [`resolution_refusal`](crate::domain::sync_session::resolution_refusal).
+/// That is what keeps this number free to be conservative: the cost of it
+/// being too low is a turn that stops early, not work thrown away.
 const RESOLVER_MAX_TURNS: u32 = 25;
 
 /// What a stopped resolution reads as, wherever the stop was noticed.
@@ -332,6 +347,7 @@ async fn run_resolver_turn(
         feature_branch,
         base_branch,
         conflict_files,
+        test_command,
         step_exec,
         thread_id_prefix,
         agent_kind,
@@ -411,7 +427,7 @@ async fn run_resolver_turn(
         .await
         .map_err(|e| ResolveSyncError::Failed(format!("Failed to spawn resolver agent: {}", e)))?;
 
-    let prompt = build_resolver_prompt(feature_branch, base_branch, conflict_files);
+    let prompt = build_resolver_prompt(feature_branch, base_branch, conflict_files, test_command);
 
     let timeouts = crate::application::timeouts::resolve_effective(app_settings.as_ref());
     let base_cost = *accumulated_cost;
@@ -448,25 +464,43 @@ async fn run_resolver_turn(
     )
     .await;
 
-    let cache = match turn_res {
+    // A turn that ended badly is *not* a reading of the tree, and only the tree
+    // decides here — `domain::sync_session::resolution_refusal` carries the
+    // whole of why. So every
+    // ending but a stop falls through to the marker check, the staging and the
+    // index re-check below, which are the same evidence a clean exit is judged
+    // on. What the ending is still good for is explaining a tree that really is
+    // unresolved, and it is kept for exactly that.
+    let (cache, turn_stop) = match turn_res {
         crate::adapters::agent::event_stream::TurnResult::Interrupted => {
             let _ = registry.kill(&resolver_thread_id).await;
             return Err(ResolveSyncError::Cancelled(CANCELLED_REASON.to_string()));
         }
-        crate::adapters::agent::event_stream::TurnResult::Failed(descriptive)
-        | crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
-            let _ = registry.kill(&resolver_thread_id).await;
-            return Err(ResolveSyncError::Failed(descriptive));
+        crate::adapters::agent::event_stream::TurnResult::Failed { reason, spent }
+        | crate::adapters::agent::event_stream::TurnResult::Environmental { reason, spent } => {
+            *accumulated_cost += spent.cost_usd;
+            *accumulated_tokens += spent.tokens;
+            (
+                CacheTokens {
+                    read: Some(spent.cache_read_input_tokens),
+                    creation: Some(spent.cache_creation_input_tokens),
+                },
+                Some(reason),
+            )
         }
         crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
             *accumulated_cost += outcome.cost_usd;
             *accumulated_tokens += outcome.tokens;
-            CacheTokens {
-                read: Some(outcome.cache_read_input_tokens),
-                creation: Some(outcome.cache_creation_input_tokens),
-            }
+            (
+                CacheTokens {
+                    read: Some(outcome.cache_read_input_tokens),
+                    creation: Some(outcome.cache_creation_input_tokens),
+                },
+                None,
+            )
         }
     };
+    let turn_stop = turn_stop.as_deref();
 
     if cancelled(&cancel) {
         let _ = registry.kill(&resolver_thread_id).await;
@@ -480,7 +514,9 @@ async fn run_resolver_turn(
         ensure_conflict_markers_removed(&**exec, machine_str, resolved_cwd, pre_unmerged).await
     {
         let _ = registry.kill(&resolver_thread_id).await;
-        return Err(ResolveSyncError::Failed(reason));
+        return Err(ResolveSyncError::Failed(resolution_refusal(
+            turn_stop, &reason,
+        )));
     }
 
     // `-A`, not the conflicted paths the merge reported. The sync worktree is a
@@ -519,9 +555,10 @@ async fn run_resolver_turn(
     };
     if !still_unmerged.is_empty() {
         let _ = registry.kill(&resolver_thread_id).await;
-        return Err(ResolveSyncError::Failed(
-            "Resolver did not resolve every conflicted file.".to_string(),
-        ));
+        return Err(ResolveSyncError::Failed(resolution_refusal(
+            turn_stop,
+            "Resolver did not resolve every conflicted file.",
+        )));
     }
 
     let message = format!("chore: resolve sync conflicts with origin/{}", base_branch);
@@ -699,16 +736,34 @@ fn has_conflict_marker(content: &str) -> bool {
 /// The agent is told exactly which files to edit and explicitly
 /// forbidden from touching anything else — keeps the cost low and
 /// the resolution deterministic.
+///
+/// The verification line is the one that has to be exact. "Run the project's
+/// build / test suite" reads as a complete instruction and is not one: the
+/// agent has to *find* the command first, and a search is a turn each against
+/// a cap of [`RESOLVER_MAX_TURNS`]. Naming the project's own command turns
+/// that search into a single call, and a project with no command configured
+/// gets no verification line at all rather than a vague one — an unanswerable
+/// instruction is more expensive than a missing one.
 fn build_resolver_prompt(
     feature_branch: &str,
     base_branch: &str,
     conflict_files: &[String],
+    test_command: Option<&str>,
 ) -> String {
     let files_list = conflict_files
         .iter()
         .map(|f| format!("- {}", f))
         .collect::<Vec<_>>()
         .join("\n");
+    let verification = match test_command.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(cmd) => format!(
+            "- When done, verify with this project's own command, exactly as written: `{}`.\n\
+             - Do NOT go looking for another command if that one does not work here — \
+             say so in your summary and stop.\n",
+            cmd
+        ),
+        None => String::new(),
+    };
     format!(
         "We just merged origin/{base} into {feature}. A merge conflict was detected.\n\
          Please resolve the conflicts in the following files:\n\
@@ -718,12 +773,13 @@ fn build_resolver_prompt(
          - Integrate the changes from both sides correctly.\n\
          - Remove all conflict markers.\n\
          - Do NOT modify any other file or any other part of the listed files.\n\
-         - When done, run the project's build / test suite to confirm nothing is broken.\n\
+         {verification}\
          - Do NOT stage or commit — Demeteo validates, stages, and commits the resolution.\n\
          - Report back with a one-line summary when you're done.",
         base = base_branch,
         feature = feature_branch,
         files = files_list,
+        verification = verification,
     )
 }
 

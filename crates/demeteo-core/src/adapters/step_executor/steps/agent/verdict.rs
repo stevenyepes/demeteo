@@ -142,13 +142,23 @@ impl ExecutionDriver {
         }
 
         let correction = correction_prompt(&verifier_cfg.verdict_key);
-        let correction_res = self.run_silent_turn(session, &correction, target, wt).await;
-        if let crate::adapters::agent::event_stream::TurnResult::Success(outcome) = correction_res {
-            *spend.cost += outcome.cost_usd;
-            *spend.tokens += outcome.tokens;
-            return parse_verdict_text(&outcome.text, &verifier_cfg.verdict_key);
+        // Billed whichever way it ends. A correction that failed still asked
+        // the model, and falling back to the original verdict is not a reason
+        // for the turn to have been free.
+        use crate::adapters::agent::event_stream::TurnResult;
+        match self.run_silent_turn(session, &correction, target, wt).await {
+            TurnResult::Success(outcome) => {
+                *spend.cost += outcome.cost_usd;
+                *spend.tokens += outcome.tokens;
+                parse_verdict_text(&outcome.text, &verifier_cfg.verdict_key)
+            }
+            TurnResult::Failed { spent, .. } | TurnResult::Environmental { spent, .. } => {
+                *spend.cost += spent.cost_usd;
+                *spend.tokens += spent.tokens;
+                verdict
+            }
+            TurnResult::Interrupted => verdict,
         }
-        verdict
     }
 }
 
