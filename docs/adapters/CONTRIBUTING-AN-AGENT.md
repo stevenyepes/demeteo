@@ -32,7 +32,7 @@ runtime:
 | `build_args` | `fn(&AgentContext, Option<&str>, &str) -> Vec<String>` | Build the argv for one turn |
 | `perm_env` | `fn(&PermissionProfile) -> HashMap<String,String>` | Translate the permission policy to native env |
 | `effort_env` | `fn(Option<EffortLevel>) -> HashMap<String,String>` | Translate the resolved effort to native env |
-| `AgentCapabilities` | struct | Declared `display_label`, `model_listing`, `default_model`, `effort_levels` |
+| `AgentCapabilities` | struct | Declared `display_label`, `model_listing`, `default_model`, `effort_levels`, `personalization`, `path_containment` |
 
 Look at `adapters/agent/claude_code/mod.rs` (a mature CLI with structured
 stream output) as the closest template, or `opencode`/`hermes` for the
@@ -156,6 +156,17 @@ pub fn runtime() -> UnifiedCliRuntime {
         model_listing: Some(ModelListing::MODELS_SUBCOMMAND), // `<binary> models`
         default_model: None,                // Some("...") to seed cost fallback
         effort_levels: EffortLevel::supported_for(AgentKind::YourName), // may be &[]
+        // What Demeteo's own spawn does to this harness's personalization, and
+        // what holds its turn inside the worktree. Both are declared, both are
+        // shown to the user before a run, and the conformance tests in
+        // `tests/infrastructure/agent/registry.rs` check each against your
+        // `build_args` / `perm_env` rather than against a second list.
+        //
+        // Start from `UNFENCED` and move a dimension only on a capture of that
+        // harness refusing the access. What Demeteo *emits* is not evidence
+        // that the harness reads it.
+        personalization: PersonalizationSupport::Native,
+        path_containment: PathContainment::UNFENCED,
     }
 }
 ```

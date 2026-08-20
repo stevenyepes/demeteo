@@ -6,7 +6,7 @@
 //! reaching it there means a `DagStepExecutor` with every port those
 //! neighbouring phases touch, which is why none of this was asserted anywhere.
 
-use crate::domain::ids::{FeatureId, StepExecutionId};
+use crate::domain::ids::{FeatureId, StepExecutionId, StepId};
 use crate::domain::models::{StepConfig, StepExecution};
 
 /// Whether `step_execution_id` names one of `feature_id`'s rows.
@@ -62,6 +62,92 @@ pub fn seed_step_executions(
             updated_at: now,
         })
         .collect()
+}
+
+/// The `step_id` an out-of-band sync records itself under.
+///
+/// Reserved rather than borrowed from the run's own graph: a manual sync is
+/// work on a run that already ended, and writing it onto the workflow's `sync`
+/// node would overwrite what that node did during the run — a verdict a replay
+/// then rewinds and re-reads. It is also the handle
+/// [`abandoned_out_of_band`](crate::domain::restart_reconcile::abandoned_out_of_band)
+/// recognises a stranded row by, which a real graph node could not offer
+/// without colliding with the reconciliation the run loop's own rows get.
+pub const MANUAL_SYNC_STEP_ID: &str = "s-sync-manual";
+
+/// Whether `step_id` names a row that reports work no workflow node did.
+///
+/// The predicate rather than the constant, at every site that has to ask, so a
+/// second out-of-band row is one arm here instead of a comparison spread across
+/// the tree. Both readers of it are guards over graph-shaped machinery
+/// ([`out_of_band_refusal`](crate::domain::run_control::out_of_band_refusal),
+/// and the workflow recovery that matches a legacy feature's rows against a
+/// definition's) — machinery whose every lookup answers "not found" for this
+/// id and then falls back to something built for a node.
+pub fn is_out_of_band(step_id: &str) -> bool {
+    step_id == MANUAL_SYNC_STEP_ID
+}
+
+/// Is `workflow_step_ids` the definition a feature whose rows are
+/// `row_step_ids` ran under?
+///
+/// The recovery for a feature with no `workflow_id` — a run from before the
+/// column existed — is to find the one workflow whose steps are exactly its
+/// rows, and the comparison has to be exact or a superset would match a
+/// starter it never ran. Out-of-band rows are subtracted first for that same
+/// reason in reverse: one manual sync leaves such a feature matching *nothing*,
+/// for good, and retry and replay then fail on every real step it has.
+pub fn workflow_matches_rows(workflow_step_ids: &[String], row_step_ids: &[String]) -> bool {
+    let ran: Vec<&String> = row_step_ids
+        .iter()
+        .filter(|id| !is_out_of_band(id))
+        .collect();
+    workflow_step_ids.len() == ran.len() && workflow_step_ids.iter().zip(ran).all(|(w, r)| w == r)
+}
+
+/// The row one out-of-band sync attempt reports through.
+///
+/// Derived like [`seed_step_executions`]'s ids, so the second attempt on a
+/// feature names the first attempt's row instead of colliding with it —
+/// `step_create` is a bare `INSERT`.
+///
+/// `step_index` is `u32::MAX` so that `steps_for_feature`'s
+/// `ORDER BY step_index ASC` puts it last, which is where the timeline should
+/// show it, and so that
+/// [`active_predecessor_refusal`](crate::domain::run_control::active_predecessor_refusal)
+/// reads every real node as upstream of it.
+///
+/// That reading inverts the moment this row is the *pivot* rather than a
+/// sibling — the replay rewind then takes only this row and promotes every
+/// graph node to "ancestor" — which is why the actions that would make it the
+/// pivot are refused outright
+/// ([`out_of_band_refusal`](crate::domain::run_control::out_of_band_refusal))
+/// rather than taught a wider fallback.
+pub fn manual_sync_step_execution(feature_id: &FeatureId, now: i64) -> StepExecution {
+    StepExecution {
+        id: StepExecutionId::from(format!(
+            "se-{}-{}",
+            feature_id.as_str(),
+            MANUAL_SYNC_STEP_ID
+        )),
+        feature_id: feature_id.clone(),
+        step_id: StepId(MANUAL_SYNC_STEP_ID.to_string()),
+        step_index: u32::MAX,
+        step_kind: "sync".to_string(),
+        status: "pending".to_string(),
+        cost_usd: Some(0.0),
+        tokens: Some(0),
+        wall_clock_secs: Some(0),
+        artifact_path: None,
+        artifact_paths: Vec::new(),
+        error_message: None,
+        iteration_count: 0,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+        last_failure_fingerprint: None,
+        created_at: now,
+        updated_at: now,
+    }
 }
 
 #[cfg(test)]

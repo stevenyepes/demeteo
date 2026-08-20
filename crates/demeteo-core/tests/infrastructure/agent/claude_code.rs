@@ -289,6 +289,7 @@ fn ctx_for_test(bare_mode: bool) -> AgentContext {
         exec: Arc::new(StubExec),
         permissions: PermissionProfile::all_allow(),
         bare_mode,
+        keep_harness_personalization: false,
         tool_allowlist: None,
         max_turns: None,
         max_budget_usd: None,
@@ -338,6 +339,27 @@ fn isolation_flags_only_when_bare_mode_true() {
     assert!(!without_bare.contains(&"--strict-mcp-config".to_string()));
 }
 
+/// The guard against implementing "keep the harness's personalization" as
+/// `bare_mode: !uses_agent_skills`. This one block carries `--strict-mcp-config`
+/// too, so dropping it would re-enable every MCP server the *reviewed*
+/// repository commits — arbitrary processes with network access, inside a
+/// capability whose profile denies the network — and would pick up
+/// `settings.local.json` besides. Claude Code loads the user's and the
+/// project's own skills under this block already, so the step's answer has
+/// nothing to buy here and must change nothing.
+#[test]
+fn keeping_a_steps_personalization_never_loosens_claude_isolation() {
+    let mut keeping = ctx_for_test(true);
+    keeping.keep_harness_personalization = true;
+    let kept = build_claude_args(&keeping, None, "");
+
+    assert!(
+        kept.contains(&"--strict-mcp-config".to_string()),
+        "got {kept:?}"
+    );
+    assert_eq!(kept, build_claude_args(&ctx_for_test(true), None, ""));
+}
+
 #[test]
 fn args_model_passed_through() {
     let args = build_claude_args(&ctx_for_test(false), None, "");
@@ -368,6 +390,11 @@ fn args_never_emit_settings() {
     // natively, so Demeteo injects no auth at all. (Note: `--settings`
     // is distinct from the `--setting-sources` flag emitted in bare
     // mode; this asserts the former is absent.)
+    //
+    // `--settings` is also where a worktree fence would be spelled, and no
+    // such fence is expressible. The measurements that establish it, and the
+    // flag that would carry one instead, sit on the `path_containment`
+    // declaration in `claude_code/mod.rs`.
     let with_bare = build_claude_args(&ctx_for_test(true), Some("sess-1"), "");
     assert!(
         !with_bare.contains(&"--settings".to_string()),

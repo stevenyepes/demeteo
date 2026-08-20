@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
-import { Zap, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Sliders, Terminal } from 'lucide-react';
-import { Feature, Repository } from '../types';
+import { Zap, ChevronRight, Settings, AlertTriangle, RotateCw, Check, GitPullRequest, Sliders, Terminal } from 'lucide-react';
+import { Feature, FeatureDrift, Repository } from '../types';
 import { formatError } from '../lib/errors';
 import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } from '../lib/project';
 import { bootstrapProject } from '../lib/createProjectWizard';
 import { fetchActiveFeatures } from '../lib/features';
+import { getFeatureDrift } from '../lib/featureSync';
+import { holdsOpenRequest, unmeasuredDrift } from '../lib/staleness';
 import { listMirroredRuns } from '../lib/remoteRuns';
 import { listWorkflows } from '../lib/workflows';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
@@ -16,6 +18,7 @@ import { PipelineListSkeleton } from './PipelineListSkeleton';
 import { ProjectTelemetry } from './ProjectTelemetry';
 import { StartSessionButton } from './StartSessionButton';
 import { DensityToggle } from './ui/DensityToggle';
+import { TabBar, type TabDef } from './ui/TabBar';
 import { DEFAULT_DENSITY, pipelineDensityClasses } from '../lib/density';
 import { filterPipelines } from '../lib/pipelineFilter';
 import { densityPref } from '../lib/uiPrefs';
@@ -30,6 +33,16 @@ import {
     stageBrowserFilesForLaunch,
 } from '../lib/attachments';
 
+/**
+ * The strip's three entries, of which only two swap the body below: Code
+ * Review is a route, so choosing it unmounts this component. It sits here
+ * rather than in the header because every header entry is global and this
+ * surface is project-scoped — and because `lib/headerLayout.ts` measures the
+ * labelled nav cluster at 485px against a 1382px threshold, so a fifth entry
+ * would open the 1440 default window icon-only for the first time.
+ */
+type ProjectSection = 'pipelines' | 'terminal';
+
 const ProjectHome = () => {
     const { navigate } = useNavigation();
     const { state: { currentProjectId, projects, providers }, dispatch: projDispatch } = useProject();
@@ -37,8 +50,9 @@ const ProjectHome = () => {
     const activeProject = projects.find(p => p.id === currentProjectId)!;
     const [featureInput, setFeatureInput] = useState('');
     const [features, setFeatures] = useState<Feature[]>([]);
+    const [driftByFeature, setDriftByFeature] = useState<Record<string, FeatureDrift>>({});
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
-    const [activeTab, setActiveTab] = useState<'pipelines' | 'terminal'>('pipelines');
+    const [activeTab, setActiveTab] = useState<ProjectSection>('pipelines');
     const [pipelineFilter, setPipelineFilter] = usePersistedPipelineFilter();
     const [density, setDensity] = usePersistedPref(densityPref, DEFAULT_DENSITY);
     const [activeRepositoryId, setActiveRepositoryId] = useState<string>('');
@@ -122,6 +136,45 @@ const ProjectHome = () => {
         navigate({ kind: 'detail', featureId, featureTitle });
     }, [navigate]);
 
+    // Which rows are worth counting, as a string so an unrelated re-render of
+    // the feature list — a status event, a keystroke in the composer — does not
+    // re-issue every `git` call behind it.
+    const driftTargets = useMemo(
+        () => features.filter(holdsOpenRequest).map((f) => f.id).join(','),
+        [features],
+    );
+
+    // One reading per open request, and none with a fetch: the counts come off
+    // local refs and say so, and paying a network round trip per row on every
+    // visit to the project view is a cost the signal is not worth. The run
+    // header is where a user can ask for a current one.
+    useEffect(() => {
+        const ids = driftTargets ? driftTargets.split(',') : [];
+        if (ids.length === 0) {
+            setDriftByFeature({});
+            return;
+        }
+        let alive = true;
+        Promise.allSettled(ids.map((id) => getFeatureDrift(id))).then((results) => {
+            if (!alive) return;
+            // A read that rejected is unmeasured, not absent: dropping the row
+            // would leave a feature whose count could not be taken looking
+            // exactly like one nobody has counted yet, which is the two-state
+            // collapse `lib/staleness.ts` exists to refuse — and this is the
+            // surface that shows the whole queue at once.
+            setDriftByFeature(
+                Object.fromEntries(
+                    results.map((r, i) =>
+                        [ids[i], r.status === 'fulfilled' ? r.value : unmeasuredDrift()] as const,
+                    ),
+                ),
+            );
+        });
+        return () => {
+            alive = false;
+        };
+    }, [driftTargets]);
+
     /** `filterPipelines` returns `features` itself when nothing was dropped and
      *  nothing moved, so this memo genuinely holds across a keystroke in the
      *  composer — which is the same component's state. `pipelineDensityClasses`
@@ -132,6 +185,21 @@ const ProjectHome = () => {
         [features, pipelineFilter],
     );
     const densityClasses = pipelineDensityClasses(density);
+
+    // Terminal stays remote-only, as it was before the strip carried two
+    // entries: a local project reaches a session through the button above.
+    //
+    // Code Review is deliberately NOT in here. `TabBar` is a `tablist` whose
+    // arrow keys move *and* select, by its own documented contract — a route in
+    // that strip means ArrowRight navigates the app away and unmounts this
+    // component mid-keypress, which also puts every tab after it out of reach.
+    // It sits beside the strip as a link instead, because that is what it is.
+    const tabs: TabDef<ProjectSection>[] = [
+        { value: 'pipelines', label: 'Pipelines', icon: <Sliders className="w-3.5 h-3.5" /> },
+        ...(activeProject.compute_type === 'remote'
+            ? [{ value: 'terminal' as const, label: 'Terminal', icon: <Terminal className="w-3.5 h-3.5" /> }]
+            : []),
+    ];
 
     const openStartFeature = () => {
         uiDispatch({
@@ -562,25 +630,24 @@ const ProjectHome = () => {
                     />
                 </div>
 
-                {/* Tabs Selector */}
-                {activeProject.compute_type === 'remote' && (
-                    <div className="tabs-bar shrink-0">
-                        <button
-                            onClick={() => setActiveTab('pipelines')}
-                            className={`tab ${activeTab === 'pipelines' ? 'active' : ''}`}
-                        >
-                            <Sliders className="w-3.5 h-3.5" />
-                            <span>Pipelines</span>
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('terminal')}
-                            className={`tab ${activeTab === 'terminal' ? 'active' : ''}`}
-                        >
-                            <Terminal className="w-3.5 h-3.5" />
-                            <span>Terminal</span>
-                        </button>
-                    </div>
-                )}
+                <div className="flex items-end justify-between gap-3 shrink-0">
+                    <TabBar
+                        tabs={tabs}
+                        activeTab={activeTab}
+                        onChange={setActiveTab}
+                        ariaLabel="Project sections"
+                        className="min-w-0 flex-1"
+                    />
+                    <button
+                        type="button"
+                        data-testid="open-code-review"
+                        onClick={() => navigate({ kind: 'code-review' })}
+                        className="mb-1 flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-white/10 hover:text-slate-100"
+                    >
+                        <GitPullRequest className="w-3.5 h-3.5" />
+                        Code Review
+                    </button>
+                </div>
 
                 {activeTab === 'pipelines' || activeProject.compute_type !== 'remote' ? (
                     <div className="flex-1 overflow-y-auto space-y-8 pr-1 min-h-0">
@@ -694,6 +761,7 @@ const ProjectHome = () => {
                                     detached={detachedIds.has(feature.id)}
                                     computeType={activeProject.compute_type}
                                     remoteHost={activeProject.remote_host}
+                                    drift={driftByFeature[feature.id] ?? null}
                                     density={densityClasses}
                                     onOpen={openFeature}
                                 />

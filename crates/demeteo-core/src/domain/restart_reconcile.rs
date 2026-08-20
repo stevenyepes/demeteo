@@ -86,6 +86,29 @@ pub fn orphaned_by_feature_end(feature_status: &str, step_status: &str) -> Optio
     None
 }
 
+/// A row left `running` by a turn that ran outside the run loop, and the
+/// message it is closed with.
+///
+/// Everything else here is scoped to a feature the run loop owned, and that
+/// scoping is exactly why this case escapes: the manual sync is only offered
+/// on a feature that has already finished, so the first pass never looks at it
+/// (`running`/`gated` only) and [`orphaned_by_feature_end`] never fires
+/// (`cancelled`/`failed`, and only for `pending`). A killed resolver's row
+/// would then read `running` for the rest of the feature's life with nothing
+/// left that could move it.
+///
+/// The step id is the input rather than the feature's status because that is
+/// what makes the rule safe to apply to *every* feature: only the reserved
+/// [`MANUAL_SYNC_STEP_ID`](crate::domain::step_seed::MANUAL_SYNC_STEP_ID) row
+/// is out of band, and a graph node in the same status is the first pass's to
+/// decide.
+pub fn abandoned_out_of_band(step_id: &str, step_status: &str) -> Option<String> {
+    if step_id == crate::domain::step_seed::MANUAL_SYNC_STEP_ID && step_status == "running" {
+        return Some("Sync interrupted by system restart".to_string());
+    }
+    None
+}
+
 #[cfg(test)]
 #[path = "../../tests/domain/restart_reconcile.rs"]
 mod tests;

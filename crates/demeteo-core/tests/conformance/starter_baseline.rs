@@ -50,6 +50,7 @@ use crate::domain::ids::{FeatureId, ProviderId};
 use crate::domain::models::ProviderInstance;
 use crate::paths;
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
 const REPO_PATH: &str = "demeteo/starter-baseline";
@@ -330,23 +331,14 @@ async fn run_starter(name: &str) -> StarterSnapshot {
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            &format!("Baseline {name}"),
-            "Deterministic starter-baseline run under the stub agent.",
-            Some("stub"),
-            // model / effort / commit_artifacts / loop_iterations /
-            // max_budget_usd: inherit.
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: format!("Baseline {name}").clone(),
+            description: "Deterministic starter-baseline run under the stub agent.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
 
@@ -463,6 +455,11 @@ async fn starter_baseline_experiment() {
 #[tokio::test]
 async fn starter_baseline_refactor() {
     assert_starter_baseline("refactor").await;
+}
+
+#[tokio::test]
+async fn starter_baseline_code_review() {
+    assert_starter_baseline("code-review").await;
 }
 
 #[tokio::test]

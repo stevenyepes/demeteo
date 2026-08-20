@@ -23,7 +23,7 @@ trait catalogue), see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - Three agent configurations out of the box: **`opencode`**, **`hermes`**, and **`claude-code`** — all via their CLI's JSON-output mode (`opencode run --format json`, `hermes run --format json`, `claude --print --verbose --output-format stream-json`). Each declares the same [capability contract](#41-the-trait) (`display_label`, `lists_models`, `default_model`), so adding a fourth is filling in one descriptor plus `parse_event` / `build_args` / `perm_env` — see [`docs/adapters/CONTRIBUTING-AN-AGENT.md`](docs/adapters/CONTRIBUTING-AN-AGENT.md).
 - The runtime serves **both** the planner (an agent session that decomposes the feature into a step DAG) and the subtask agents (sessions that execute a single `agent` or `parallel` step's work). Same trait, same plumbing, different prompts.
 - Eager agent session lifecycle scoped to step executions (a process is spawned per `prompt` call, torn down on completion).
-- A four-axis `PermissionProfile` (`read_fs | write_fs | execute | network`, each `Allow` or `Deny`) plus a path-shaped `WriteScope` (`None | ArtifactsOnly | All`). Compiled per step from the step's `StepCapability`. Each agent adapter translates the abstract profile to its native dialect at spawn (opencode / hermes → `OPENCODE_PERMISSION` env; claude-code → `--disallowedTools`). `external_directory: "deny"` (opencode) is the worktree scope fence; the chmod fence in `adapters/worktree/git_ops/scope.rs` enforces the artifacts-vs-source path-shape uniformly across every agent.
+- A four-axis `PermissionProfile` (`read_fs | write_fs | execute | network`, each `Allow` or `Deny`) plus a path-shaped `WriteScope` (`None | ArtifactsOnly | All`). Compiled per step from the step's `StepCapability`. Each agent adapter translates the abstract profile to its native dialect at spawn (opencode / hermes → `OPENCODE_PERMISSION` env; claude-code → `--disallowedTools`). The chmod fence in `adapters/worktree/git_ops/scope.rs` enforces the artifacts-vs-source path-shape uniformly across every agent; whether anything then holds the turn to that directory is the harness's own answer, and it differs for reads, writes and shell — read it off `PathContainment` (`domain/models/sandbox.rs`) rather than inferring it from what the profile emits.
 - Cross-step conversation continuity via per-agent session-id flags so a multi-step workflow shares the agent's context.
 - A typed three-layer error model (per-action `ActionError` / per-step `AgentEvent::Error` / per-feature watchdog).
 - Per-step checkpoint persistence (DB-backed, populated on every state transition via `StepExecutionPatch`).
@@ -277,7 +277,7 @@ walks `steps_for_feature(target.feature_id)` and returns
 
 Subtask worktrees branch off `feature/<slug>` (decision 16). The orchestrator creates `feature/<slug>` off the project's canonical branch at feature start. Each subtask's worktree is branched off the *latest* `feature/<slug>` (i.e., after any prior subtask merges). Subtask branches merge into `feature/<slug>` in topological DAG order via the `MergeExecutor`.
 
-The worktree scope is enforced via the agent's own `external_directory: "deny"` permission rule (rendered by `PermissionPolicyPort::render_for` into the `OPENCODE_PERMISSION` env var). The `PermissionPolicy` struct maps to the JSON shape `{"external_directory": "deny", "edit": "allow", ...}`. The user's `feature/<slug>` branch is touched only at merge time, never by an agent directly.
+Agents that speak it are handed an `external_directory: "deny"` permission rule (rendered by `PermissionPolicyPort::render_for` into the `OPENCODE_PERMISSION` env var). The `PermissionPolicy` struct maps to the JSON shape `{"external_directory": "deny", "edit": "allow", ...}`. The user's `feature/<slug>` branch is touched only at merge time, never by an agent directly.
 
 ---
 
@@ -586,9 +586,11 @@ The four axes (`read_fs`, `write_fs`, `execute`, `network`) are each
 distinction is enforced uniformly by the OS-level chmod fence in
 `adapters/worktree/git_ops/scope.rs`, driven by
 `StepCapability::write_scope`. `external_directory: "deny"` (opencode)
-is the worktree scope fence; the binary refuses to operate on paths
-outside `cwd`. claude-code has no equivalent tool-level setting, so the
-chmod fence is the only enforcement on that agent.
+fences that harness's file tools to `cwd`; claude-code has no equivalent
+tool-level setting, so the chmod fence is the only enforcement on that
+agent. Neither is a whole-turn fence — what each harness refuses, per
+class of access, is declared by `PathContainment`
+(`domain/models/sandbox.rs`).
 
 There is **no** `bash: "ask"` path in the compiled policy. A denied
 tool is rejected instantly; the agent gets a tool-result error and
@@ -668,8 +670,9 @@ The scope fence has three layers:
 1. **Tool-level.** opencode / hermes use the
    `OPENCODE_PERMISSION` env var (§5.5) for tool-level allow / deny.
    claude-code uses `--disallowedTools` with the same intent. The
-   `external_directory: "deny"` rule (opencode only) is the worktree
-   scope fence: paths outside `cwd` are refused at the binary level.
+   `external_directory: "deny"` rule (opencode only) makes the binary
+   refuse paths outside `cwd` for that harness's file tools, rather than
+   for every command a turn runs.
 2. **Path-shaped.** The OS-level chmod fence in
    `adapters/worktree/git_ops/scope.rs` sets `chmod a-w` on
    source-tree paths before each step and restores it after. The
@@ -977,7 +980,7 @@ section is retained for traceability.
 - A `parallel` step's subtasks land in `feature/<slug>` via the engine.
 - A conflict between two subtasks surfaces at a gate; the user picks auto-agent (`feature_resolve_sync_conflicts` spawns a resolution agent and revalidates the step) or manual (`GateView` re-render with the file list).
 - A `publish` step at the end of the workflow opens a draft MR with the right title, body, and source/target branches.
-- `feature_sync` syncs `feature/<slug>` against `origin/<default>` and returns a typed `SyncOutcomeView::{Ok, Conflict, Resolved, ResolutionFailed}`.
+- `feature_sync` syncs `feature/<slug>` against `origin/<default>` and returns a typed `SyncOutcomeView::{Ok, Conflict, Blocked, Resolved, ResolutionFailed}`.
 
 ### Phase R7 — UX polish & docs (shipped)
 

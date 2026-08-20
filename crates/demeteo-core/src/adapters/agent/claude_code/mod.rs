@@ -545,6 +545,55 @@ pub fn runtime() -> UnifiedCliRuntime {
         model_listing: None,
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::ClaudeCode),
+        // `build_claude_args` answers `bare_mode` with `--setting-sources
+        // user,project`, which keeps the user's and the repo's own settings —
+        // skills, commands, agents — loaded; `settings.local.json` is the only
+        // source it drops.
+        personalization: crate::ports::agent_runtime::PersonalizationSupport::Loaded,
+        // Two levers reach paths here, and neither confines a turn.
+        // `disallowed_tools_for` denies tools by *name*, which has no spelling
+        // for "Bash inside the worktree, not outside". The second is
+        // `--settings` carrying an inline `permissions.deny` payload, measured
+        // against claude 2.1.236 rather than reasoned about: those rules do
+        // fire under `--dangerously-skip-permissions`, a single
+        // `Read(//abs/**)` rule covers Read, Write and Bash, and the fence
+        // survives every flag the `bare_mode` block adds as well as a
+        // `--resume`. It still cannot express containment, for three reasons
+        // that compose:
+        //
+        //   - deny outranks both `permissions.allow` and `--add-dir`, so
+        //     "deny everything, then allow the worktree" has no spelling;
+        //   - the pattern language has no working negation, so the complement
+        //     of the cwd cannot be built either. `[!i]*` did not mean "not i":
+        //     it denied `inside` and left `outside` readable, the class being
+        //     read as the positive set `{!, i}`. A complement written that way
+        //     fences off the worktree itself;
+        //   - what is left is an enumerated blocklist of absolute prefixes,
+        //     and every prefix worth naming — the main checkout, the sibling
+        //     worktrees, the user's home — is an *ancestor* of the worktree,
+        //     which the first reason makes unnameable.
+        //
+        // A containment claim here would therefore be a claim about paths
+        // nobody enumerated. `git_ops/scope.rs` remains the only boundary, and
+        // it fences writes within the worktree, not reads outside it.
+        //
+        // Two traps for whoever revisits this. `Read(/abs/**)` — the spelling
+        // written first — is read as cwd-relative, matches nothing, and
+        // reports nothing; only the doubled slash is an absolute-path rule.
+        // And a valid-JSON rule with a typo is dropped silently in `--print`
+        // mode: exit 0, empty stderr, no fence, and nothing in the event
+        // stream to say so.
+        //
+        // What would move this arm is `--permission-mode`, not `--settings`.
+        // Under `dontAsk` an outside-cwd Read was refused while an inside-cwd
+        // one was served, so Read is genuinely path-scoped there; Bash refused
+        // `cat <outside>` and served `ls -1 .`, which a read-only-command
+        // classifier explains equally well and so settles nothing. Write was
+        // refused everywhere, which no implement step survives. `acceptEdits`
+        // plus an explicit tool allowlist is the untested shape, and it costs
+        // `--dangerously-skip-permissions` — a change to the
+        // autonomous-pipeline guarantee, not a flag addition.
+        path_containment: crate::domain::models::PathContainment::UNFENCED,
         // Headless hygiene: no self-update check on spawn (latency, and a
         // mid-fleet version drift hazard) and no non-essential background
         // traffic. Both are documented Claude Code env switches; callers

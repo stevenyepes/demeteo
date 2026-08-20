@@ -42,6 +42,7 @@
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::spend::RunningSpend;
 use crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files;
+use crate::adapters::step_executor::steps::pending_commit::{self, PendingCommit};
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::models::StepExecution;
 use crate::paths;
@@ -190,70 +191,41 @@ impl ExecutionDriver {
             )));
         }
 
-        // Commit the resolution — but only if the agent has not already done
-        // it for us, which is common: told to fix conflict markers, an agent
-        // very often stages and commits on its own. That consumes `MERGE_HEAD`
-        // and leaves a clean tree, so an unconditional `git commit -am` exits
-        // non-zero with "nothing to commit" and we would fail the step —
-        // rolling back a merge that in fact succeeded.
-        //
-        // A clean tree with the conflicts gone *is* the success condition, so
-        // treat "nothing to commit" as done rather than as an error.
-        if worktree_has_pending_commit(&*self.exec, machine_str, wt_path).await {
-            self.exec
-                .run_command(
-                    machine_str,
-                    &format!(
-                        "{} commit -am {}",
-                        paths::git_no_hooks(wt_path),
-                        paths::shell_escape_posix(&format!(
-                            "chore: resolve merge conflicts with {}",
-                            self.branch_name
-                        )),
-                    ),
-                )
-                .await
-                .map_err(|e| {
-                    ConflictPassError::Failed(format!(
-                        "failed to commit the merge-conflict resolution: {}",
-                        e
-                    ))
-                })?;
+        // `-am` rather than the sync resolver's `add -A` + `-m`: nothing is
+        // staged above, and this worktree outlives the pass — the step goes on
+        // working in it — so an untracked file lying in it is not part of the
+        // resolution. See `steps::pending_commit` for why the guard is here.
+        match pending_commit::probe(&*self.exec, machine_str, wt_path).await {
+            PendingCommit::Nothing => {}
+            PendingCommit::Unreadable(why) => {
+                return Err(ConflictPassError::Failed(format!(
+                "could not tell whether the merge-conflict resolution still needs committing: {}",
+                why
+            )))
+            }
+            PendingCommit::Pending => {
+                self.exec
+                    .run_command(
+                        machine_str,
+                        &format!(
+                            "{} commit -am {}",
+                            paths::git_no_hooks(wt_path),
+                            paths::shell_escape_posix(&format!(
+                                "chore: resolve merge conflicts with {}",
+                                self.branch_name
+                            )),
+                        ),
+                    )
+                    .await
+                    .map_err(|e| {
+                        ConflictPassError::Failed(format!(
+                            "failed to commit the merge-conflict resolution: {}",
+                            e
+                        ))
+                    })?;
+            }
         }
 
         Ok(ConflictPass::Resolved(billing))
     }
 }
-
-/// Is there anything for `git commit` to record in `wt_path` — either an
-/// in-progress merge to conclude, or modified tracked files?
-///
-/// `git status --porcelain` is empty exactly when the tree is clean, and
-/// `MERGE_HEAD` exists exactly while a merge is awaiting its commit. An
-/// agent that resolved *and committed* leaves neither.
-async fn worktree_has_pending_commit(
-    exec: &dyn crate::ports::execution::ExecutionPort,
-    machine_str: &str,
-    wt_path: &str,
-) -> bool {
-    let safe = paths::shell_escape_posix(wt_path);
-    let merge_in_progress = exec
-        .run_command(
-            machine_str,
-            &format!("git -C {} rev-parse --verify --quiet MERGE_HEAD", safe),
-        )
-        .await
-        .map(|out| !out.trim().is_empty())
-        .unwrap_or(false);
-    if merge_in_progress {
-        return true;
-    }
-    exec.run_command(machine_str, &format!("git -C {} status --porcelain", safe))
-        .await
-        .map(|out| !out.trim().is_empty())
-        .unwrap_or(false)
-}
-
-#[cfg(test)]
-#[path = "../../../../tests/infrastructure/step_executor/steps/pending_commit.rs"]
-mod pending_commit_tests;

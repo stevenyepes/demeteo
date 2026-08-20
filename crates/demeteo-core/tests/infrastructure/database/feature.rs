@@ -1,6 +1,7 @@
 use rusqlite::Connection;
 
 use super::super::super::SqliteAdapter;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::harness_baseline::{BaselineProducer, HarnessBaseline, HarnessBaselineRun};
 use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::Feature;
@@ -58,6 +59,9 @@ fn make_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> FeatureI
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         },
     )
     .unwrap();
@@ -111,6 +115,9 @@ fn feature_description_round_trips_through_get_and_get_active() {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         },
     )
     .unwrap();
@@ -171,6 +178,9 @@ fn feature_max_budget_usd_round_trips_through_get_and_get_active() {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         },
     )
     .unwrap();
@@ -308,6 +318,9 @@ fn feature_effort_and_step_override_effort_round_trip() {
             }],
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         },
     )
     .unwrap();
@@ -624,4 +637,184 @@ fn the_baseline_column_is_restored_on_a_database_that_predates_v37() {
         adapter.get(&fid).unwrap().unwrap().harness_baseline,
         Some(record)
     );
+}
+
+// ── Run origin, diff base, resolved branch (V41) ─────────────────────────────
+
+fn store_with_origin(
+    adapter: &SqliteAdapter,
+    id: &str,
+    project_id: &str,
+    origin: FeatureOrigin,
+) -> Feature {
+    let seed = make_feature(adapter, &format!("{id}_seed"), project_id);
+    let mut feature = adapter.get(&seed).unwrap().unwrap();
+    feature.id = FeatureId::from(id.to_string());
+    feature.origin = origin;
+    feature.diff_base_branch = Some("release/2.0".to_string());
+    feature.resolved_branch = Some(format!("demeteo/features/{id}"));
+    FeatureRepository::add(adapter, feature).unwrap();
+    adapter
+        .get(&FeatureId::from(id.to_string()))
+        .unwrap()
+        .unwrap()
+}
+
+#[test]
+fn every_origin_round_trips_through_the_real_column_list() {
+    // Against the real repository, because the failure this guards is a
+    // positional one: a fake round-trips the struct and would pass with the
+    // SELECT list and the row indices disagreeing by one.
+    let adapter = setup();
+    let branch = FeatureOrigin::Branch {
+        base: "develop".to_string(),
+    };
+    let pull_head = FeatureOrigin::Ref {
+        fetch_spec: "refs/pull/42/head".to_string(),
+        label: "#42 fix the thing".to_string(),
+    };
+    for (id, origin) in [
+        ("f_origin_default", FeatureOrigin::DefaultBranch),
+        ("f_origin_branch", branch.clone()),
+        ("f_origin_ref", pull_head),
+    ] {
+        let stored = store_with_origin(&adapter, id, "p_origin", origin.clone());
+        assert_eq!(stored.origin, origin);
+        assert_eq!(stored.diff_base_branch.as_deref(), Some("release/2.0"));
+        assert_eq!(
+            stored.resolved_branch,
+            Some(format!("demeteo/features/{id}"))
+        );
+    }
+
+    let listed = adapter
+        .get_active(&ProjectId::from("p_origin".to_string()))
+        .unwrap()
+        .into_iter()
+        .find(|f| f.id.0 == "f_origin_branch")
+        .expect("the branch-origin feature is active");
+    assert_eq!(listed.origin, branch);
+    assert_eq!(listed.diff_base_branch.as_deref(), Some("release/2.0"));
+    assert_eq!(
+        listed.resolved_branch.as_deref(),
+        Some("demeteo/features/f_origin_branch")
+    );
+}
+
+#[test]
+fn a_null_origin_column_reads_back_as_the_default_branch() {
+    // The pre-V41 guarantee. Nothing backfills the column, and every row
+    // written before it existed cut from the project's default branch —
+    // so NULL is that variant, not a fourth answer.
+    let adapter = setup();
+    let fid = make_feature(&adapter, "f_pre_v41", "p_pre_v41");
+    {
+        let conn = adapter.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE features SET origin_json = NULL, diff_base_branch = NULL,
+             resolved_branch = NULL WHERE id = ?1",
+            rusqlite::params![fid.0],
+        )
+        .unwrap();
+    }
+    let stored = adapter.get(&fid).unwrap().unwrap();
+    assert_eq!(stored.origin, FeatureOrigin::DefaultBranch);
+    assert_eq!(stored.diff_base_branch, None);
+    assert_eq!(stored.resolved_branch, None);
+}
+
+#[test]
+fn a_corrupt_origin_column_refuses_to_read_the_row() {
+    // Unlike the baseline column above, whose corruption honestly reads as
+    // "no baseline measured": there is no honest reading of an unnameable
+    // origin, and the default branch is a *different* run.
+    let adapter = setup();
+    let fid = make_feature(&adapter, "f_bad_origin", "p_bad_origin");
+    {
+        let conn = adapter.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE features SET origin_json = ?2 WHERE id = ?1",
+            rusqlite::params![fid.0, r#"{"kind":"from_the_moon"}"#],
+        )
+        .unwrap();
+    }
+    assert!(adapter.get(&fid).is_err());
+    assert!(adapter
+        .get_active(&ProjectId::from("p_bad_origin".to_string()))
+        .is_err());
+}
+
+#[test]
+fn the_default_origin_is_written_as_null() {
+    // One spelling of the default in the column, so a query that asks which
+    // runs started somewhere else can trust `origin_json IS NOT NULL`.
+    let adapter = setup();
+    let fid = make_feature(&adapter, "f_default_null", "p_default_null");
+    let conn = adapter.conn.lock().unwrap();
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT origin_json FROM features WHERE id = ?1",
+            rusqlite::params![fid.0],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(raw, None);
+}
+
+#[test]
+fn the_origin_columns_replicate_through_the_update_patch() {
+    let adapter = setup();
+    let fid = make_feature(&adapter, "f_patched", "p_patched");
+    let origin = FeatureOrigin::Ref {
+        fetch_spec: "refs/merge-requests/7/head".to_string(),
+        label: "!7".to_string(),
+    };
+
+    FeatureRepository::update(
+        &adapter,
+        &fid,
+        &FeaturePatch {
+            origin: Some(origin.clone()),
+            diff_base_branch: Some(Some("main".to_string())),
+            resolved_branch: Some(Some("demeteo/features/f_patched".to_string())),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let stored = adapter.get(&fid).unwrap().unwrap();
+    assert_eq!(stored.origin, origin);
+    assert_eq!(stored.diff_base_branch.as_deref(), Some("main"));
+    assert_eq!(
+        stored.resolved_branch.as_deref(),
+        Some("demeteo/features/f_patched")
+    );
+
+    // A patch that says nothing about them leaves all three alone...
+    FeatureRepository::update(
+        &adapter,
+        &fid,
+        &FeaturePatch {
+            status: Some("done".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let untouched = adapter.get(&fid).unwrap().unwrap();
+    assert_eq!(untouched.origin, origin);
+    assert_eq!(
+        untouched.resolved_branch.as_deref(),
+        Some("demeteo/features/f_patched")
+    );
+
+    // ...and `Some(None)` restores the project default branch as the base.
+    FeatureRepository::update(
+        &adapter,
+        &fid,
+        &FeaturePatch {
+            diff_base_branch: Some(None),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(adapter.get(&fid).unwrap().unwrap().diff_base_branch, None);
 }

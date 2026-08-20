@@ -63,6 +63,16 @@ export interface EditorContext {
   branch: string;
   defaultBranch: string;
   initialFile?: string;
+  /** The pair the Changes tab diffs, when the caller has a narrower one in mind
+   *  than "this branch against its base". A sync resolution is reviewed as
+   *  `head_before..merge_commit_sha`: the first-parent form reads correctly and
+   *  goes silently wrong the moment the resolver adds a follow-up commit, and
+   *  nothing afterwards can recover the real base. Omitted = the branch pair,
+   *  as before. */
+  baseRef?: string;
+  headRef?: string;
+  /** Which sidebar tab opens. Omitted = 'files'. */
+  initialTab?: 'files' | 'changes';
 }
 
 export interface WorkflowSummary {
@@ -104,6 +114,7 @@ export type AppView =
   | { kind: 'new-project' }
   | { kind: 'create-project' }
   | { kind: 'project-settings' }
+  | { kind: 'code-review' }
   | { kind: 'workflows' }
   | { kind: 'workflow-editor'; workflowId: string | null }
   | { kind: 'providers' }
@@ -589,7 +600,31 @@ export interface Feature {
    * not "everything was green" — see {@link HarnessBaseline}.
    */
   harness_baseline?: HarnessBaseline | null;
+  /** Where this run's branch was cut from (`features.origin_json`, V41).
+   *  Absent on every row written before V41, which cut from the default
+   *  branch. */
+  origin?: FeatureOrigin | null;
+  /** The branch the run is measured against. `null` = the project's default
+   *  branch. Not interchangeable with {@link Feature.origin}: a run started
+   *  from a pull-request head reviews against the branch it merges into, not
+   *  against the snapshot it began at. */
+  diff_base_branch?: string | null;
+  /** The branch the run actually works on, written down at cut time.
+   *  `null` on pre-V41 rows, which re-derive `{branch_prefix}{id}`. */
+  resolved_branch?: string | null;
 }
+
+/** Mirrors the Rust `FeatureOrigin` (`domain/feature_origin.rs`), which serde
+ *  tags internally on `kind` with snake_case arm names. Declared twice with no
+ *  codegen between them, so the discriminants here are the wire contract.
+ *
+ *  `ref` carries a `fetch_spec` the Rust side re-validates into a `Refspec` on
+ *  the way in — TypeScript can state the shape but not the constraint, so
+ *  nothing here may treat an accepted string as a safe one. */
+export type FeatureOrigin =
+  | { kind: 'default_branch' }
+  | { kind: 'branch'; base: string }
+  | { kind: 'ref'; fetch_spec: string; label: string };
 
 /** Which producer measured one gate — mirrors the Rust `BaselineProducer`.
  *  Recorded per gate, not per record, because a partial re-measurement merges
@@ -707,11 +742,54 @@ export interface EnvironmentNotReadyEvent {
   reason: string;
 }
 
+/**
+ * Where a sync stopped short of a merge verdict. Mirrors
+ * `crate::domain::sync_failure::SyncBlockedStage`; every spelling here is the
+ * wire form, pinned variant by variant on the Rust side by
+ * `the_serialized_shape_is_the_wire_contract`. A stage this union does not
+ * carry is silent on arrival — the banner's per-stage sentence resolves to
+ * `undefined`, which React renders as nothing.
+ */
+export type SyncBlockedStage =
+  | 'fetch'
+  | 'base_ref_missing'
+  | 'worktree_provision'
+  | 'merge'
+  | 'push'
+  | 'repo_context'
+  | 'held_resolution'
+  | 'turn_in_flight';
+
+/**
+ * How far a feature branch has drifted from the base a sync would merge.
+ *
+ * Both counts are nullable because "we could not measure it" and "there is
+ * nothing to merge" are different facts, and only the second one means the
+ * branch is current. Rendering a null as `0` is how a branch nobody could look
+ * at ends up labelled up to date.
+ */
+export interface BranchDivergence {
+  behind: number | null;
+  ahead: number | null;
+}
+
+/** Return shape for `feature_drift`. */
+export interface FeatureDrift {
+  divergence: BranchDivergence;
+  /** The ref the counts were taken against, e.g. `origin/main`. */
+  base_ref: string;
+  /** `false` when the fetch was skipped or failed, so the counts are as of
+   *  whenever that ref last moved rather than as of now. */
+  fetched: boolean;
+  checked_at: number;
+}
+
 /** Return shape for `feature_sync` and `feature_resolve_sync_conflicts`. */
 export type SyncOutcomeView =
   | {
       status: 'ok';
-      merge_commit_sha: string;
+      /** `null` when the tip the merge left could not be read. */
+      merge_commit_sha: string | null;
       changed: boolean;
     }
   | {
@@ -720,9 +798,13 @@ export type SyncOutcomeView =
       raw_error: string;
     }
   | {
+      status: 'blocked';
+      stage: SyncBlockedStage;
+      raw_error: string;
+    }
+  | {
       status: 'resolved';
       merge_commit_sha: string;
-      revalidated_step_id: string | null;
     }
   | {
       status: 'resolution_failed';
@@ -730,10 +812,85 @@ export type SyncOutcomeView =
       conflict_files: ConflictFile[];
     };
 
+/**
+ * Who would resolve a conflict on this feature if the banner's picker is left
+ * alone, as `feature_sync_resolver` answers it. Read rather than derived: the
+ * chain behind it puts the project's conflict-resolver setting above the
+ * harness the run was launched with, so the feature's own row is the wrong
+ * answer for any project that has set one.
+ */
+export interface SyncResolverView {
+  agent_kind: string;
+  model: string | null;
+  effort: EffortLevel;
+}
+
 export interface ConflictFile {
   path: string;
   /** "both-modified" | "added-by-them" | "added-by-us" | "deleted-by-them" | "deleted-by-us". */
   kind: string;
+}
+
+/**
+ * The state a feature's sync is in. Mirrors
+ * `crate::domain::sync_session::SyncSessionStatus`; every spelling here is the
+ * wire form.
+ */
+export type SyncSessionState =
+  | 'syncing'
+  | 'up_to_date'
+  | 'merged'
+  | 'blocked'
+  | 'conflicted'
+  | 'resolving'
+  | 'resolved'
+  | 'resolution_failed'
+  | 'aborted';
+
+/**
+ * One feature's live sync, as `sync_session_get` answers it — reconciled
+ * against the working tree on the way out, so a `conflicted` session here is
+ * one git still agrees with.
+ */
+export interface SyncSessionView {
+  feature_id: string;
+  machine_id: string;
+  repo_dir: string;
+  feature_branch: string;
+  base_branch: string;
+  status: SyncSessionState;
+  worktree_path: string | null;
+  /** The feature branch's tip before the merge — the base a review diff of the
+   *  resolution has to be computed from. */
+  head_before: string | null;
+  merge_commit_sha: string | null;
+  conflict_files: ConflictFile[];
+  /** git's own stderr, verbatim. */
+  raw_error: string | null;
+  /** Where a `blocked` sync stopped (migration V46), or `null` on any other
+   *  status and on a row written before that migration. `'push'` is the one
+   *  stage that has already committed the merge onto the feature branch, so it
+   *  is the one a retry would strand — read it, never guess it from
+   *  `raw_error`. */
+  blocked_stage: SyncBlockedStage | null;
+  /** When the resolution reached origin, or `null` while it is only on the
+   *  branch. `status === 'resolved'` with a `null` here is a resolution waiting
+   *  for a look, not a finished sync — no probe of the working tree can answer
+   *  this, which is why it is a field and not a tenth `status`. Migration
+   *  V45. */
+  pushed_at: number | null;
+  attempts: number;
+  created_at: number;
+  updated_at: number;
+  /** Whether this sync is the user's to abort or re-resolve, rather than one a
+   *  live run is already driving. Computed by
+   *  `domain::sync_session::user_may_intervene` — a `resolving` session, or any
+   *  session on a feature whose run is still going, belongs to that turn: abort
+   *  would delete the worktree an agent is writing in and resolve would put a
+   *  second agent in the same tree. Never re-derive this from `status` here; the
+   *  window where the row still reads `conflicted` while the step owns it is
+   *  exactly what the backend flag closes. */
+  user_may_intervene: boolean;
 }
 
 export interface Repository {
@@ -903,6 +1060,27 @@ export interface ProjectSettingsData {
   default_max_budget_usd?: number | null;
   artifact_subdir?: string;
   commit_artifacts?: boolean;
+  /** The command a reviewing step starts from, as the user wrote it. Carried
+   *  into the prompt verbatim — Demeteo neither validates it against a harness
+   *  nor wraps it in review vocabulary of its own. `null`/absent (and the empty
+   *  string, which a cleared input writes) = the project names none, and the
+   *  step is left to review in its own way. Migration V42. */
+  review_entrypoint?: string | null;
+  /** The harness a merge-conflict resolution runs under, outranking the run's
+   *  own launch pin for that turn alone. `null`/absent = no opinion, which
+   *  falls through to the run and then to `default_agent_kind`. Migration
+   *  V44. */
+  sync_resolver_agent_kind?: string | null;
+  /** The model for that turn, inherited independently of the harness. */
+  sync_resolver_model?: string | null;
+  /** The reasoning effort for that turn, clamped per harness at spawn. */
+  sync_resolver_effort?: EffortLevel | null;
+  /** Whether a resolved sync waits for a human before it is published.
+   *  `null`/absent = no opinion, which holds only when somebody is in a
+   *  position to look at it and publishes otherwise. `false` opts out. It
+   *  cannot impose review on a run that still owns its branch — see
+   *  `domain::sync_session::publish_policy`. Migration V45. */
+  sync_review_before_push?: boolean | null;
 }
 
 export interface SessionInfo {

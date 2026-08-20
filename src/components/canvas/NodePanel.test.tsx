@@ -81,6 +81,7 @@ const BASELINE: HarnessBaseline = {
 };
 
 const overrides = (over: Partial<HarnessOverrides> = {}): HarnessOverrides => ({
+  machineAgents: [],
   availableModels: [],
   selectedModel: '',
   setSelectedModel: vi.fn(),

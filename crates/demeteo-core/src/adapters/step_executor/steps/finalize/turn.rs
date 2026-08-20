@@ -79,6 +79,8 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions,
             bare_mode: true,
+            keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator
+                .keeps_harness_personalization(),
             // The diff and commit log are inlined in the prompt; read tools
             // stay available for the truncated-diff case, but the denied
             // tools (Bash/Edit/Write/Web) lose their *definitions* too —

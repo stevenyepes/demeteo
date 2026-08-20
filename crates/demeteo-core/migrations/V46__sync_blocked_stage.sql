@@ -1,0 +1,24 @@
+-- Where a blocked sync stopped, kept on the row rather than only on the answer
+-- to the call that produced it.
+--
+-- `SyncOutcomeView::Blocked` has carried the stage across IPC since the split
+-- that created it, but it is the return value of one command: it lives as long
+-- as the component that made the call, and a reader that has only the session
+-- row — which is every reader after a navigation, a remount or a restart —
+-- could tell that a sync was blocked and nothing else.
+--
+-- The two ends of the range want opposite things from the user. `fetch` means
+-- no git object moved at all and the answer is to fix the remote and sync
+-- again; `push` means the merge is committed on the feature branch and only its
+-- publication failed, so syncing again merges nothing (the branch already
+-- contains `origin/<base>`), reports up to date, and leaves an unpublished
+-- merge in a worktree the next sync force-removes. Collapsed into one status
+-- that is exactly what "Retry sync" did, and the pane's copy had to be softened
+-- to something merely not-false to cover both.
+--
+-- Nullable, and NULL is not a stage: it is every row written before this
+-- migration, plus every session that is not blocked at all. A reader may not
+-- read it as any particular stage — `domain::sync_session::blocked_refusal`
+-- treats an unnamed stage as one that holds no merge, which is the answer that
+-- withholds an action rather than offering one that could strand work.
+ALTER TABLE sync_sessions ADD COLUMN blocked_stage TEXT;

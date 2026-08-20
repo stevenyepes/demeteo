@@ -33,6 +33,18 @@ fn create_project_kind_str_is_exact_literal() {
 }
 
 #[test]
+fn code_review_serialises_as_kebab_case_literal() {
+    let view = AppView::CodeReview;
+    assert_eq!(
+        serde_json::to_string(&view).unwrap(),
+        r#"{"kind":"code-review"}"#
+    );
+    assert_eq!(view.kind_str(), "code-review");
+    let back: AppView = serde_json::from_str(r#"{"kind":"code-review"}"#).unwrap();
+    assert_eq!(back, view);
+}
+
+#[test]
 fn detail_view_serialises_with_optional_gate_id_absent() {
     // `gate_step_execution_id` must be elided from the JSON when
     // None so existing TypeScript callers (which read it as an
@@ -103,6 +115,7 @@ fn unit_variants_have_no_payload_field() {
         (AppView::NewProject, r#"{"kind":"new-project"}"#),
         (AppView::CreateProject, r#"{"kind":"create-project"}"#),
         (AppView::ProjectSettings, r#"{"kind":"project-settings"}"#),
+        (AppView::CodeReview, r#"{"kind":"code-review"}"#),
         (AppView::Workflows, r#"{"kind":"workflows"}"#),
         (AppView::Providers, r#"{"kind":"providers"}"#),
         (AppView::Settings, r#"{"kind":"settings"}"#),
@@ -136,6 +149,7 @@ fn all_kind_strings_are_distinct() {
         AppView::NewProject,
         AppView::CreateProject,
         AppView::ProjectSettings,
+        AppView::CodeReview,
         AppView::Workflows,
         AppView::WorkflowEditor { workflow_id: None },
         AppView::Providers,

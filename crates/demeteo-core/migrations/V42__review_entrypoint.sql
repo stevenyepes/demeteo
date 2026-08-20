@@ -1,0 +1,13 @@
+-- The command a project wants a reviewing step to start from, verbatim.
+--
+-- NULL and the empty string mean the same thing here — the project names no
+-- entrypoint — and the reader collapses both, because a settings form that
+-- writes "" for a cleared text input would otherwise create a second spelling
+-- of unset that renders as a blank line in a prompt instead of nothing.
+--
+-- Free text, like `harnesses` and `prepare_command`: the user names the
+-- command, Demeteo only puts it in front of the agent. It is deliberately not
+-- validated against anything — no harness publishes the list of commands it
+-- answers to, so the only check available would be a guess about a CLI
+-- Demeteo does not own.
+ALTER TABLE project_settings ADD COLUMN review_entrypoint TEXT;

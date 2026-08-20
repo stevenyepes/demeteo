@@ -222,6 +222,8 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
             bare_mode: true,
+            keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator
+                .keeps_harness_personalization(),
             // The entire input is inlined in the prompt and the entire output is
             // one JSON array — no tool definitions in context, no agentic loop.
             // It also means the extractor *cannot* run a command, which is what

@@ -32,9 +32,11 @@ export function formatDuration(secs: number | null | undefined): string {
   return remM > 0 ? `${h}h ${remM}m` : `${h}h`;
 }
 
-/** Coarse "3m ago"-style age for a millisecond timestamp. */
-export function relativeTime(ms: number): string {
-  const deltaSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+/** Coarse "3m ago"-style age for a millisecond timestamp. `now` is a parameter
+ *  so a caller that derives several ages at once reads them against one instant
+ *  — and so a test can pin it without faking the clock. */
+export function relativeTime(ms: number, now: number = Date.now()): string {
+  const deltaSec = Math.max(0, Math.floor((now - ms) / 1000));
   if (deltaSec < 60) return 'just now';
   const deltaMin = Math.floor(deltaSec / 60);
   if (deltaMin < 60) return `${deltaMin}m ago`;

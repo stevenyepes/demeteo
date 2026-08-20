@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::models::{EffortLevel, ProjectSettings, StepOverride};
 
 /// A pre-launch attachment for a detached run. The laptop spools the
@@ -48,6 +49,29 @@ pub struct RunBudget {
     pub max_cost_usd: Option<f64>,
     #[serde(default)]
     pub max_wall_clock_secs: Option<u64>,
+}
+
+/// A run's declared starting point, as it arrives over the wire.
+///
+/// [`FeatureOrigin`] is internally tagged, so a `kind` this build has never
+/// heard of would otherwise fail the whole [`RunSpec`] parse and answer a
+/// perfectly ordinary submit with a serde complaint about a field no operator
+/// typed. Keeping the undecoded document instead lets
+/// [`RunSpec::origin_to_honour`] refuse it by name.
+///
+/// The refusal is the point of the type. The two shapes that would make the
+/// field parse everywhere — a `#[serde(other)]` arm on `FeatureOrigin`, or
+/// decoding into `Option` and dropping what fails — both resolve an origin
+/// this build cannot honour to [`FeatureOrigin::DefaultBranch`] and then *run
+/// it*: the run succeeds, pushes, opens its PR, and the diff a reviewer reads
+/// is against a tree nobody chose. There is no error anywhere in that
+/// sequence, which is why the decoding has to keep the evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RunOrigin {
+    Supported(FeatureOrigin),
+    /// The document as it arrived, so the refusal can quote it.
+    Unsupported(serde_json::Value),
 }
 
 /// A run submitted to a headless runner: enough to bootstrap a project,
@@ -121,11 +145,50 @@ pub struct RunSpec {
     /// lifecycle rather than runner-side re-detected defaults
     /// (docs/MULTI_CLIENT_RUNNER.md MC-D4 / P0.5, gap **f**). The runner
     /// overlays these onto the row it persists via `save_settings` *before*
-    /// the shared `feature_start` reads it — keeping the bootstrap-detected
-    /// `default_branch` (ground truth for the actual clone). `None` (an old
+    /// the shared `feature_start` reads it, resolving `default_branch` from
+    /// this run's own base rather than from this copy. `None` (an old
     /// client) reproduces today's behavior exactly: detected strategy +
     /// engine defaults. `project_id` on the payload is ignored — the runner
     /// re-homes it onto the run's own project.
     #[serde(default)]
     pub project_settings: Option<ProjectSettings>,
+    /// Where this run's branch is cut from (V41). `None` — an old client, or
+    /// a launch that chose nothing — is [`FeatureOrigin::DefaultBranch`],
+    /// which is what every detached run did before this field existed. Read
+    /// through [`RunSpec::origin_to_honour`], never directly.
+    #[serde(default)]
+    pub origin: Option<RunOrigin>,
+    /// What the run's review diff is measured against and what its PR
+    /// targets, when that is not where it started — a run cut from a PR head
+    /// reviews against the branch it will merge into. `None` = the origin's
+    /// own base, then the project's default branch. See
+    /// [`FeatureOrigin::base_branch`].
+    #[serde(default)]
+    pub diff_base_branch: Option<String>,
 }
+
+impl RunSpec {
+    /// Where this run must start, or the reason to refuse it outright.
+    ///
+    /// "Absent is not green" applied to a run's own base: a spec naming an
+    /// origin this build cannot resolve is refused, never folded to
+    /// [`FeatureOrigin::DefaultBranch`]. A runner one release behind the
+    /// client that submitted to it is the ordinary way to arrive here, and it
+    /// is exactly the case where falling back looks harmless — the run would
+    /// complete, and nothing but the diff would show that it reviewed the
+    /// wrong tree.
+    pub fn origin_to_honour(&self) -> Result<FeatureOrigin, String> {
+        match &self.origin {
+            None => Ok(FeatureOrigin::DefaultBranch),
+            Some(RunOrigin::Supported(origin)) => Ok(origin.clone()),
+            Some(RunOrigin::Unsupported(raw)) => Err(format!(
+                "this runner cannot start a run from the origin the client sent ({raw}) — \
+                 upgrade demeteo-runner on this machine"
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/domain/run_spec.rs"]
+mod tests;

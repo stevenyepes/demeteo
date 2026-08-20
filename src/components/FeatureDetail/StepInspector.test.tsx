@@ -125,6 +125,7 @@ const BASELINE: HarnessBaseline = {
 };
 
 const OVERRIDES: HarnessOverrides = {
+  machineAgents: [],
   availableModels: [],
   selectedModel: '',
   setSelectedModel: () => {},
@@ -292,6 +293,31 @@ describe('StepInspector — a step', () => {
     });
     await user.click(await screen.findByRole('tab', { name: 'Actions' }));
     expect(screen.getByLabelText('Harness')).toBeInTheDocument();
+  });
+
+  /**
+   * The manual sync's row is a `step_executions` row with no graph node behind
+   * it, and both of these actions walk the graph from their target: the backend
+   * refuses them (`domain::run_control::out_of_band_refusal`), so offering them
+   * is a button whose only outcome is an error toast — and before that refusal
+   * existed, Retry rewound nothing, restored every failed node to `completed`
+   * and armed a driver on a run that had finished.
+   */
+  it('offers neither retry nor replay on the out-of-band sync row', async () => {
+    invoke.mockResolvedValue([]);
+    const user = (await import('@testing-library/user-event')).default;
+    mount(
+      {
+        kind: 'step',
+        step: step({ status: 'failed', step_id: 's-sync-manual', step_kind: 'sync' }),
+        blockedBy: null,
+      },
+      null,
+    );
+    await user.click(await screen.findByRole('tab', { name: 'Actions' }));
+    expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /replay/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId('inspector')).toHaveTextContent(/no actions available/i);
   });
 
   it('offers the gate decision on a waiting gate', async () => {

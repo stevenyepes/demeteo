@@ -88,11 +88,7 @@ pub async fn feature_cleanup(
                 .first()
                 .map(|r| r.repo_path.clone())
                 .ok_or_else(|| "Project has no repositories".to_string())?;
-            let branch = format!(
-                "{}{}",
-                settings.worktree_strategy.branch_prefix,
-                fid.as_str(),
-            );
+            let branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
             // Phase 1: Git cleanup (best-effort — errors become warnings).
             let mut warnings = Vec::new();

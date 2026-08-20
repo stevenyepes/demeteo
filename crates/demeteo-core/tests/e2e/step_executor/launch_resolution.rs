@@ -8,11 +8,12 @@
 use std::sync::Arc;
 
 use super::harness::{build_test_executor, FakeNotif};
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId};
 use crate::domain::models::Feature;
 use crate::paths;
 use crate::ports::db::{FeatureRepository, ProjectRepository};
-use crate::ports::step_executor::StepExecutor;
+use crate::ports::step_executor::{FeatureLaunch, StepExecutor};
 
 // ─────────────────────────────────────────────────────────────────────────
 // Effort resolution, end to end: a project default of `medium` and a
@@ -147,26 +148,20 @@ async fn effort_resolution_reaches_the_agent_per_step() {
     // Tier 1: a per-step launch override on the second step only.
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            "Effort Feature",
-            "Exercise the effort resolution chain.",
-            Some("stub"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![StepOverride {
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: "Effort Feature".to_string(),
+            description: "Exercise the effort resolution chain.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            step_overrides: vec![StepOverride {
                 step_id: "s-two".to_string(),
                 agent_kind: None,
                 model: None,
                 effort: Some(EffortLevel::Max),
             }],
-            vec![],
-        )
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
 
@@ -275,21 +270,13 @@ async fn test_feature_start_pins_workflow_version() {
         .unwrap();
 
     let feature = executor
-        .feature_start(
-            None,
-            "p-pin",
-            wf_id.as_str(),
-            "Pin Feature",
-            "a description",
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: "p-pin".to_string(),
+            workflow_id: wf_id.0.clone(),
+            title: "Pin Feature".to_string(),
+            description: "a description".to_string(),
+            ..Default::default()
+        })
         .await
         .expect("feature_start returns the eager row");
     assert_eq!(
@@ -356,6 +343,9 @@ async fn test_feature_start_pins_workflow_version() {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         })
         .unwrap();
     let resolved = executor

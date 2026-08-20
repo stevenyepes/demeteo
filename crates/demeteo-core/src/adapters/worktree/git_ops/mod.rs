@@ -1,4 +1,5 @@
 use crate::domain::branch_listing::BranchOption;
+use crate::domain::feature_origin::Refspec;
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
@@ -75,6 +76,7 @@ pub fn subtask_branch_name(feature_branch: &str, subtask_id: &str) -> String {
 }
 
 pub(crate) mod clone;
+pub(crate) mod divergence;
 pub(crate) mod health;
 pub(crate) mod merge;
 pub(crate) mod scope;
@@ -221,6 +223,27 @@ impl WorktreeOpsPort for GitOpsHelper {
             .await
     }
 
+    async fn fetch_origin_refspec(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        refspec: &Refspec,
+    ) -> Result<(), String> {
+        self.fetch_origin_refspec(machine_id, repo_dir, refspec)
+            .await
+    }
+
+    async fn cut_branch_at(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        start_point: &str,
+        branch_name: &str,
+    ) -> Result<(), String> {
+        self.cut_branch_at(machine_id, repo_dir, start_point, branch_name)
+            .await
+    }
+
     async fn provision_subtask_worktree(
         &self,
         machine_id: Option<&str>,
@@ -268,9 +291,9 @@ impl WorktreeOpsPort for GitOpsHelper {
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_branch: &str,
     ) -> Result<SyncOutcome, SyncFailure> {
-        self.sync_feature_with_upstream(machine_id, repo_dir, feature_branch, default_branch)
+        self.sync_feature_with_upstream(machine_id, repo_dir, feature_branch, base_branch, &())
             .await
     }
 
@@ -289,17 +312,11 @@ impl WorktreeOpsPort for GitOpsHelper {
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_ref: &str,
         message: &str,
     ) -> Result<SquashOutcome, String> {
-        self.squash_feature_branch(
-            machine_id,
-            repo_dir,
-            feature_branch,
-            default_branch,
-            message,
-        )
-        .await
+        self.squash_feature_branch(machine_id, repo_dir, feature_branch, base_ref, message)
+            .await
     }
 
     async fn restore_pre_squash(

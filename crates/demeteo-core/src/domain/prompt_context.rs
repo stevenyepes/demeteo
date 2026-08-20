@@ -164,6 +164,9 @@ pub(crate) const BOUND_TOKENS: &[&str] = &[
     "retry_feedback_section",
     "platform_context",
     "review_base_section",
+    // Project-level review entrypoint: empty until the project names one, and
+    // a review step is expected to proceed on its own method when it does not.
+    "review_entrypoint",
     "gate_feedback",
     "gate_decision",
     "retry_feedback",

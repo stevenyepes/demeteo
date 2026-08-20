@@ -280,6 +280,11 @@ export interface ProjectSettingsInput {
   default_max_budget_usd?: number | null;
   artifact_subdir?: string;
   commit_artifacts?: boolean;
+  review_entrypoint?: string | null;
+  sync_review_before_push?: boolean | null;
+  sync_resolver_agent_kind?: string | null;
+  sync_resolver_model?: string | null;
+  sync_resolver_effort?: EffortLevel | null;
 }
 
 /**
@@ -383,6 +388,26 @@ export async function saveProjectSettings(
       input.artifact_subdir ?? existing?.artifact_subdir ?? "artifacts/",
     commit_artifacts:
       input.commit_artifacts ?? existing?.commit_artifacts ?? false,
+    review_entrypoint:
+      input.review_entrypoint !== undefined
+        ? input.review_entrypoint
+        : (existing?.review_entrypoint ?? null),
+    sync_review_before_push:
+      input.sync_review_before_push !== undefined
+        ? input.sync_review_before_push
+        : (existing?.sync_review_before_push ?? null),
+    sync_resolver_agent_kind:
+      input.sync_resolver_agent_kind !== undefined
+        ? input.sync_resolver_agent_kind
+        : (existing?.sync_resolver_agent_kind ?? null),
+    sync_resolver_model:
+      input.sync_resolver_model !== undefined
+        ? input.sync_resolver_model
+        : (existing?.sync_resolver_model ?? null),
+    sync_resolver_effort:
+      input.sync_resolver_effort !== undefined
+        ? input.sync_resolver_effort
+        : (existing?.sync_resolver_effort ?? null),
   };
 
   await invoke("save_project_settings", { projectId, settings: merged });

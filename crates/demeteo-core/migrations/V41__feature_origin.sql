@@ -1,0 +1,36 @@
+-- Where a run started, what its review diff is measured against, and what
+-- its branch is actually called.
+--
+-- origin_json holds the serialised FeatureOrigin (domain/feature_origin.rs).
+-- NULL means DefaultBranch — the variant — and deliberately not "no origin
+-- recorded". A run has no state in which it started from nowhere: every row
+-- written before this column existed cut its branch from the project's
+-- default branch, because that was the only thing the code could do. Encoding
+-- absence as a distinct third state would force every reader to answer "and
+-- what do we do when we don't know?", and the only correct answer is
+-- DefaultBranch — so readers collapse NULL to it and the question never
+-- reaches them. The writer is the same map in reverse: DefaultBranch stores
+-- as NULL rather than as '{"kind":"default_branch"}', so the column has one
+-- spelling of the default instead of two.
+--
+-- diff_base_branch is what the review diff is computed against, which is not
+-- always where the branch was cut from: a run started from a PR head reviews
+-- against the branch it will merge into, not against the snapshot it began
+-- at. NULL means the project's default branch.
+--
+-- resolved_branch is the run's actual branch name, and it is the column that
+-- earns this migration. The name is currently re-derived from
+-- `{branch_prefix}{feature_id}` at seven call sites — two in
+-- adapters/step_executor/sync.rs, plus adapters/step_executor/steps/sync.rs,
+-- adapters/step_executor/impl_traits/execution_context/mod.rs,
+-- application/worktree.rs, application/lifecycle.rs,
+-- adapters/mr_publisher/mod.rs and crates/demeteo-runner/src/run.rs. Each one
+-- reads branch_prefix out of ProjectSettings at the moment it runs, so
+-- editing that setting mid-run silently splits a live run's branch in two:
+-- the worktree keeps the old name, the publisher pushes the new one. Writing
+-- the name down once at cut time makes every one of those a read instead of
+-- an eighth derivation. NULL means the row predates this column; those
+-- readers keep deriving.
+ALTER TABLE features ADD COLUMN origin_json TEXT;
+ALTER TABLE features ADD COLUMN diff_base_branch TEXT;
+ALTER TABLE features ADD COLUMN resolved_branch TEXT;

@@ -4,6 +4,7 @@ use super::{
 };
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::harness_baseline::{BaselineProducer, HarnessBaseline, HarnessBaselineRun};
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, StepId};
 use crate::domain::models::feature::{Feature, StepExecution};
@@ -137,6 +138,9 @@ fn runner_feature(harness_baseline: Option<HarnessBaseline>) -> Feature {
         step_overrides: Vec::new(),
         attachments: Vec::new(),
         harness_baseline,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: Some("demeteo/features/f_shadow".to_string()),
     }
 }
 
@@ -161,6 +165,18 @@ fn the_shadow_patch_mirrors_the_measured_baseline() {
     };
     let patch = shadow_feature_patch(&runner_feature(Some(baseline.clone())));
     assert_eq!(patch.harness_baseline, Some(Some(baseline)));
+}
+
+#[test]
+fn the_shadow_patch_mirrors_the_branch_the_runner_cut_but_not_the_launch_inputs() {
+    let patch = shadow_feature_patch(&runner_feature(None));
+    assert_eq!(
+        patch.resolved_branch,
+        Some(Some("demeteo/features/f_shadow".to_string())),
+        "only the runner knows what it named the branch"
+    );
+    assert!(patch.origin.is_none());
+    assert!(patch.diff_base_branch.is_none());
 }
 
 #[test]
@@ -284,6 +300,9 @@ fn sequence_test_feature() -> Feature {
         step_overrides: Vec::new(),
         attachments: Vec::new(),
         harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
     }
 }
 

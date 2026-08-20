@@ -1,11 +1,13 @@
 use super::super::DagStepExecutor;
 use crate::adapters::step_executor::setup::{
-    build_base_ctx, fetch_default_settings, slug_from_description, FeatureIdentity, ProjectCommands,
+    build_base_ctx, fetch_default_settings, slug_from_description, FeatureIdentity,
+    ProjectCommands, ProjectProse,
 };
 use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
 use crate::domain::models::workflow_v2::definition_matches_steps;
 use crate::domain::models::{ProjectSettings, StepConfig};
 use crate::domain::prompt_context::PromptContext;
+use crate::domain::review_entrypoint::review_entrypoint_binding;
 use crate::domain::workflow_overrides::{bake_step_overrides, overlay_workflow_defaults};
 use crate::paths;
 
@@ -17,6 +19,9 @@ pub struct ExecutionContext {
     pub settings: ProjectSettings,
     pub target_dir: String,
     pub branch_name: String,
+    /// Where this run's branch was cut from, read back from the row rather
+    /// than assumed, so a resume prepares the same start point the launch did.
+    pub origin: crate::domain::feature_origin::FeatureOrigin,
     pub steps: Vec<StepConfig>,
     /// The pinned version's **schema-v2 definition** — the run's scheduling
     /// topology (P1.12), taken from the stored document when the version has
@@ -280,7 +285,28 @@ impl DagStepExecutor {
         bake_step_overrides(&mut steps, &project_overrides);
 
         let slug = slug_from_description(description);
-        let branch_name = format!("{}{}", settings.worktree_strategy.branch_prefix, feature_id);
+        // A read that failed is not a row that is absent: the absent row means
+        // this launch is the first write and the origin is whatever the
+        // launcher passed, while a failed read leaves the run's declared start
+        // point unknown, and defaulting it cuts the branch somewhere the user
+        // did not ask for.
+        let existing_feature = match self.features.get(&FeatureId::from(feature_id.to_string())) {
+            Ok(found) => found,
+            Err(e) => {
+                emit(bp::PREPARING, "failed", Some(e.clone()));
+                return Err(e);
+            }
+        };
+        let origin = existing_feature
+            .as_ref()
+            .map(|f| f.origin.clone())
+            .unwrap_or_default();
+        let branch_name = existing_feature
+            .as_ref()
+            .map(|f| f.run_branch(&settings.worktree_strategy.branch_prefix))
+            .unwrap_or_else(|| {
+                origin.branch_to_cut(&settings.worktree_strategy.branch_prefix, feature_id)
+            });
 
         let machine_id_opt = machine_id.map(|s| s.to_string());
         let machine_id_for_check = machine_id_opt
@@ -342,8 +368,11 @@ impl DagStepExecutor {
                 build: &build_cmd,
                 coverage: &coverage_cmd,
             },
-            &conventions_content,
-            &memory_md,
+            ProjectProse {
+                conventions: &conventions_content,
+                memory: &memory_md,
+                review_entrypoint: review_entrypoint_binding(settings.review_entrypoint.as_deref()),
+            },
             &settings.artifact_subdir,
             // First turn of the feature → no recap needed. The
             // watchdog populates this on subsequent turns when
@@ -358,10 +387,8 @@ impl DagStepExecutor {
         // if one is already in the DB (replay / re-entry path).
         let artifact_subdir = settings.artifact_subdir.clone();
         let mut commit_artifacts = settings.commit_artifacts;
-        if let Ok(Some(existing)) = self.features.get(&FeatureId::from(feature_id.to_string())) {
-            if let Some(override_flag) = existing.commit_artifacts {
-                commit_artifacts = override_flag;
-            }
+        if let Some(override_flag) = existing_feature.and_then(|f| f.commit_artifacts) {
+            commit_artifacts = override_flag;
         }
 
         Ok(ExecutionContext {
@@ -370,6 +397,7 @@ impl DagStepExecutor {
             settings,
             target_dir,
             branch_name,
+            origin,
             steps,
             definition,
             base_ctx,

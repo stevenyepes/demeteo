@@ -29,6 +29,13 @@ pub struct FeatureWorktreeInfo {
     pub machine_id: String,
     pub worktree_path: String,
     pub branch: String,
+    /// The branch the in-app editor diffs `branch` against — this run's own
+    /// base ([`diff_base::resolve`](crate::domain::diff_base::resolve)), which
+    /// is the project's default branch only for a run that started there.
+    ///
+    /// Named for what it held before V41 because the name is on the wire: the
+    /// laptop reads this field off the runner's `get_worktree` reply, and a
+    /// rename would answer an older runner with nothing.
     pub default_branch: String,
 }
 
@@ -45,7 +52,7 @@ pub async fn resolve_feature_worktree(
         .get(feature_id)?
         .ok_or_else(|| "Feature not found".to_string())?;
 
-    let project_id = feature.project_id;
+    let project_id = feature.project_id.clone();
     let project = ctx
         .projects
         .get_projects()?
@@ -90,15 +97,19 @@ pub async fn resolve_feature_worktree(
         .await?
     };
 
-    let branch = format!(
-        "{}{}",
-        settings.worktree_strategy.branch_prefix, feature_id.0
-    );
+    let branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
+    let default_branch = crate::domain::diff_base::resolve(
+        feature.diff_base_branch.as_deref(),
+        &feature.origin,
+        &settings.worktree_strategy.default_branch,
+    )
+    .unwrap_or(&settings.worktree_strategy.default_branch)
+    .to_string();
 
     Ok(FeatureWorktreeInfo {
         machine_id,
         worktree_path,
         branch,
-        default_branch: settings.worktree_strategy.default_branch.clone(),
+        default_branch,
     })
 }

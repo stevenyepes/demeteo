@@ -194,7 +194,8 @@ impl ExecutionDriver {
     /// `shell` is what the agent's runtime declares its command tool runs
     /// there; [`place_platform_context`] decides what that pair is worth saying
     /// and where.
-    /// `fork_point` is the commit this feature left the default branch at —
+    /// `fork_point` is where the branch last shared history with this run's
+    /// base ([`resolve_fork_point_ref`](Self::resolve_fork_point_ref)) —
     /// `None` both when it could not be resolved and when
     /// [`wants_review_base`](Self::wants_review_base) said not to look, which
     /// [`place_review_base`] does not need to tell apart: a step that renders

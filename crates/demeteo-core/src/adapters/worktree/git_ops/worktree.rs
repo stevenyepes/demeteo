@@ -1,5 +1,6 @@
 use super::{git_request, git_request_vec, GitOpsHelper};
 use crate::domain::branch_listing::BranchOption;
+use crate::domain::feature_origin::Refspec;
 use crate::domain::models::WorktreeInfo;
 use crate::paths;
 use crate::ports::worktree_ops::{TerminalWorktreeCreated, TerminalWorktreeRequest};
@@ -367,6 +368,50 @@ impl GitOpsHelper {
             delete_worktree_residue(self.exec.as_ref(), machine_str, &area.to_string_lossy()).await;
 
         Ok(stale.len())
+    }
+
+    /// Fetch one refspec from origin. See
+    /// [`WorktreeOpsPort::fetch_origin_refspec`](crate::ports::worktree_ops::WorktreeOpsPort::fetch_origin_refspec)
+    /// for why this one is not best-effort like its neighbours.
+    pub async fn fetch_origin_refspec(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        refspec: &Refspec,
+    ) -> Result<(), String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let spec = refspec.as_str();
+        self.exec
+            .run_program(
+                machine_str,
+                // Never drop the `--`: without it git reads a refspec
+                // beginning with `-` as an option. See `Refspec`.
+                git_request(repo_dir, ["fetch", "origin", "--", spec]),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("Failed to fetch '{spec}' from origin: {e}"))
+    }
+
+    /// Point a branch at an already-resolvable start point, with no fallback.
+    /// See
+    /// [`WorktreeOpsPort::cut_branch_at`](crate::ports::worktree_ops::WorktreeOpsPort::cut_branch_at).
+    pub async fn cut_branch_at(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        start_point: &str,
+        branch_name: &str,
+    ) -> Result<(), String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        self.exec
+            .run_program(
+                machine_str,
+                git_request(repo_dir, ["branch", "-f", branch_name, start_point]),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("Failed to create branch '{branch_name}' at '{start_point}': {e}"))
     }
 
     /// Create a feature branch off the default branch in the main repo.
@@ -845,33 +890,86 @@ impl GitOpsHelper {
     }
 
     /// Resolve the commit where `branch` most recently diverged from
-    /// `default_branch` — the feature's fork point. Used to compute a
+    /// `base_branch` — the feature's fork point. Used to compute a
     /// review diff that always covers the complete feature change,
     /// independent of how many `on_failure` retries have merged work
     /// back into `branch` since (a per-attempt base SHA, recaptured as
     /// `branch`'s current tip on each retry, already includes prior
     /// attempts' merged commits and so understates the diff).
     ///
-    /// Returns `None` if either ref doesn't resolve or `git merge-base`
+    /// `refs/remotes/origin/<base_branch>` is tried before the bare name: a
+    /// run's base is often a branch this clone has never checked out, so the
+    /// bare name resolves to nothing and the whole review degrades to "orient
+    /// yourself from the log" while still reading as finished. The bare name
+    /// remains as the fallback for a repo with no origin (tests, air-gapped
+    /// clones).
+    ///
+    /// `base_branch` here is a branch name — [`diff_base::resolve`] answers
+    /// with one or with nothing — so unlike
+    /// [`squash_feature_branch`](Self::squash_feature_branch), which is handed
+    /// [`FeatureOrigin::squash_base`] and so must also accept a fully-qualified
+    /// ref, there is no `refs/` case to skip the remote candidate for.
+    ///
+    /// [`diff_base::resolve`]: crate::domain::diff_base::resolve
+    /// [`FeatureOrigin::squash_base`]: crate::domain::feature_origin::FeatureOrigin::squash_base
+    ///
+    /// Returns `None` if neither candidate resolves or `git merge-base`
     /// fails (e.g. the two branches share no history) — callers fall
     /// back to their pre-existing per-attempt base.
     pub async fn merge_base(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
-        default_branch: &str,
+        base_branch: &str,
         branch: &str,
     ) -> Option<String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        self.exec
+        let remote = format!("refs/remotes/origin/{base_branch}");
+        for candidate in [remote.as_str(), base_branch] {
+            let resolved = self
+                .exec
+                .run_program(
+                    machine_str,
+                    git_request(repo_dir, ["merge-base", candidate, branch]),
+                )
+                .await
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            if resolved.is_some() {
+                return resolved;
+            }
+        }
+        None
+    }
+
+    /// [`merge_base`](Self::merge_base) against a base this clone may never
+    /// have fetched.
+    ///
+    /// The bootstrap's
+    /// [`ensure_default_branch_updated`](Self::ensure_default_branch_updated)
+    /// fetches exactly one branch by name — the project's default — so a run
+    /// whose base is anything else has no fresh `origin/<base>` to measure
+    /// from, and on a fresh clone no `origin/<base>` at all. The fetch is
+    /// best-effort for the reason the squash's is: an unreachable origin
+    /// should degrade to whatever refs are local, not fail the review.
+    pub async fn fork_point(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        base_branch: &str,
+        branch: &str,
+    ) -> Option<String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let _ = self
+            .exec
             .run_program(
                 machine_str,
-                git_request(repo_dir, ["merge-base", default_branch, branch]),
+                git_request(repo_dir, ["fetch", "origin", "--", base_branch]),
             )
+            .await;
+        self.merge_base(machine_id, repo_dir, base_branch, branch)
             .await
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
     }
 }
 

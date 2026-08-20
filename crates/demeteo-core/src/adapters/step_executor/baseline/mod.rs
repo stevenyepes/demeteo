@@ -371,7 +371,8 @@ impl ExecutionDriver {
     /// [`HarnessBaseline::covers`] — because two resolutions that could
     /// disagree would silently disable the subtraction rather than fail.
     ///
-    /// `None` on any failure (no settings, no merge-base, dead transport).
+    /// `None` on any failure (no settings, no base branch named, no
+    /// merge-base, dead transport).
     /// Callers treat that as *no baseline evidence*, which is today's
     /// behaviour — never as a green base.
     pub(crate) async fn resolve_base_sha(&self) -> Option<String> {
@@ -381,12 +382,17 @@ impl ExecutionDriver {
             .get_settings(&feature.project_id)
             .ok()
             .flatten()?;
+        let base_branch = crate::domain::diff_base::resolve(
+            feature.diff_base_branch.as_deref(),
+            &feature.origin,
+            &settings.worktree_strategy.default_branch,
+        )?;
         let sha = self
             .git_ops
             .merge_base(
                 self.machine_id_opt.as_deref(),
                 &self.target_dir,
-                &settings.worktree_strategy.default_branch,
+                base_branch,
                 &self.branch_name,
             )
             .await;

@@ -16,6 +16,7 @@ import RemoteRunInbox from "./components/RemoteRunInbox";
 import { Plus, Globe, Box, Zap, Sliders, Settings as SettingsIcon, BookOpen, Server, Terminal as TerminalIcon } from "lucide-react";
 import ProjectHome from "./components/ProjectHome";
 import ProjectSettings from "./components/ProjectSettings";
+import { CodeReviewView } from "./components/review/CodeReviewView";
 import { WorkflowList } from "./components/WorkflowList";
 import { WorkflowBuilderScreen } from "./components/canvas/WorkflowBuilderScreen";
 import { FeatureDetail } from "./components/FeatureDetail";
@@ -421,6 +422,9 @@ function AppInner() {
               defaultBranch={view.editorContext.defaultBranch}
               featureTitle={view.featureTitle}
               initialFile={view.editorContext.initialFile}
+              baseRef={view.editorContext.baseRef}
+              headRef={view.editorContext.headRef}
+              initialTab={view.editorContext.initialTab}
               onBack={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle })}
             />
           )}
@@ -430,6 +434,8 @@ function AppInner() {
           {view.kind === 'create-project' && <CreateProjectWizard />}
 
           {view.kind === 'project-settings' && currentProject && <ProjectSettings />}
+
+          {view.kind === 'code-review' && currentProject && <CodeReviewView />}
 
           {view.kind === 'workflows' && (
             <WorkflowList

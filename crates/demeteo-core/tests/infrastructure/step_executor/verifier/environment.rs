@@ -9,6 +9,7 @@
 // Three doubles, all of which refuse anything they were not told to answer.
 
 use super::*;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, StepId, WorkflowId};
 use crate::domain::models::{Feature, Notification, NotificationKind};
 use std::sync::Mutex;
@@ -63,6 +64,9 @@ fn feature() -> Feature {
         step_overrides: Vec::new(),
         attachments: Vec::new(),
         harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
     }
 }
 

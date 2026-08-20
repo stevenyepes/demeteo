@@ -350,32 +350,47 @@ impl GitOpsHelper {
         Some(direct)
     }
 
-    /// Collapse `<default_branch>..<feature_branch>` into one commit.
+    /// Collapse `<base_ref>..<feature_branch>` into one commit.
+    ///
+    /// `base_ref` is [`FeatureOrigin::squash_base`], where the rationale for
+    /// that revision lives: whatever it names, everything between it and the
+    /// branch tip becomes the one commit this produces.
+    ///
+    /// [`FeatureOrigin::squash_base`]: crate::domain::feature_origin::FeatureOrigin::squash_base
     pub async fn squash_feature_branch(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_ref: &str,
         message: &str,
     ) -> Result<SquashOutcome, String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
 
-        // Prefer the pushed default branch: it is what the PR will be
-        // diffed against. Fall back to the local ref for repos with no
-        // origin (tests, air-gapped clones).
-        let _ = self
-            .exec
-            .run_program(
-                machine_str,
-                git_request(repo_dir, ["fetch", "origin", default_branch]),
-            )
-            .await;
+        // Prefer the pushed base branch: it is what the PR will be diffed
+        // against. Fall back to the local ref for repos with no origin
+        // (tests, air-gapped clones). A fully-qualified `base_ref` has
+        // neither: it names a ref this clone's own bootstrap fetch created,
+        // which the remote has never heard of, so it is asked for as it
+        // stands.
+        let remote_tracking =
+            (!base_ref.starts_with("refs/")).then(|| format!("refs/remotes/origin/{}", base_ref));
+        if remote_tracking.is_some() {
+            let _ = self
+                .exec
+                .run_program(
+                    machine_str,
+                    git_request(repo_dir, ["fetch", "origin", base_ref]),
+                )
+                .await;
+        }
         let base = {
-            let remote = format!("refs/remotes/origin/{}", default_branch);
-            let candidates = [remote.as_str(), default_branch];
             let mut found = None;
-            for cand in candidates {
+            for cand in remote_tracking
+                .as_deref()
+                .into_iter()
+                .chain(std::iter::once(base_ref))
+            {
                 if let Ok(sha) = self
                     .exec
                     .run_program(
@@ -393,8 +408,8 @@ impl GitOpsHelper {
             }
             found.ok_or_else(|| {
                 format!(
-                    "cannot squash {}: no merge base with {} (or origin/{})",
-                    feature_branch, default_branch, default_branch
+                    "cannot squash {}: no merge base with {}",
+                    feature_branch, base_ref
                 )
             })?
         };

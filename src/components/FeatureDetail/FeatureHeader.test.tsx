@@ -5,9 +5,11 @@
 // assertion while re-opening audit finding F27.
 
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 
 import { runStatusMeta, TONE_TEXT } from '../../lib/runStatus';
+import { REFRESH_HINT } from '../../lib/staleness';
 import { FeatureHeader } from './FeatureHeader';
 
 function renderHeader(overrides: Partial<Parameters<typeof FeatureHeader>[0]> = {}) {
@@ -27,15 +29,15 @@ function renderHeader(overrides: Partial<Parameters<typeof FeatureHeader>[0]> = 
       cacheReadTokens={1_200_000}
       cacheCreationTokens={4_500}
       stepCount={7}
-      syncing={false}
-      resolving={false}
+      drift={null}
       publishing={false}
+      syncBadge={0}
       mrUrl={null}
       onBack={noop}
       onOpenTerminalTab={noop}
       onBrowseCode={noop}
       onCancelFeature={noop}
-      onSync={noop}
+      onOpenSync={noop}
       onPublish={noop}
       onCleanup={noop}
       {...overrides}
@@ -173,5 +175,125 @@ describe('FeatureHeader motion budget', () => {
 
     renderHeader({ remoteRun: mirror('completed'), remoteMachineName: 'gpu-box' });
     expect(chip('Remote · Detached').querySelector('[data-testid="chip-dot"]')).toBeNull();
+  });
+});
+
+describe('FeatureHeader staleness', () => {
+  function drift(behind: number | null) {
+    return {
+      divergence: { behind, ahead: 1 },
+      base_ref: 'origin/main',
+      fetched: true,
+      checked_at: 0,
+    };
+  }
+
+  function tones(): Record<string, string> {
+    return Object.fromEntries(
+      screen
+        .getAllByTestId('chip')
+        .map((c) => [c.textContent ?? '', c.getAttribute('data-tone') ?? '']),
+    );
+  }
+
+  it('says nothing at all before a reading lands', () => {
+    renderHeader({ status: 'completed', drift: null });
+    expect(screen.queryByText(/behind/i)).toBeNull();
+    expect(screen.queryByText(/up to date/i)).toBeNull();
+  });
+
+  it('names the commits a sync would pull in', () => {
+    renderHeader({ status: 'completed', drift: drift(4) });
+    expect(tones()['4 behind']).toBe('cyan');
+  });
+
+  it('keeps a branch nobody could measure out of the up-to-date state', () => {
+    renderHeader({ status: 'completed', drift: drift(null) });
+    expect(tones()['Drift unknown']).toBe('slate');
+    expect(screen.queryByText(/up to date/i)).toBeNull();
+  });
+
+  it('calls a measured zero up to date', () => {
+    renderHeader({ status: 'completed', drift: drift(0) });
+    expect(tones()['Up to date']).toBe('emerald');
+  });
+
+  /**
+   * The chip is the only affordance in the app that fetches `origin/<base>`
+   * for a finished feature. Rendering it read-only leaves every count taken
+   * against whatever ref an unrelated git flow last left behind — which is a
+   * branch arbitrarily far behind trunk shown in emerald.
+   */
+  it('spends a press on a fetch of the base ref', async () => {
+    const onRefreshDrift = vi.fn();
+    renderHeader({ status: 'completed', drift: drift(0), onRefreshDrift });
+
+    await userEvent.click(screen.getByTestId('drift-refresh'));
+
+    expect(onRefreshDrift).toHaveBeenCalledTimes(1);
+  });
+
+  it('says the press is available in the tooltip, and only when it is', () => {
+    const withPress = renderHeader({
+      status: 'completed',
+      drift: drift(0),
+      onRefreshDrift: () => {},
+    });
+    expect(screen.getByTestId('drift-refresh')).toHaveAttribute(
+      'title',
+      expect.stringContaining(REFRESH_HINT) as unknown as string,
+    );
+    withPress.unmount();
+
+    renderHeader({ status: 'completed', drift: drift(0) });
+    expect(screen.getByTestId('drift-refresh').getAttribute('title')).not.toContain(REFRESH_HINT);
+  });
+
+  it('refuses a second press while the fetch it started is still in flight', async () => {
+    const onRefreshDrift = vi.fn();
+    renderHeader({
+      status: 'completed',
+      drift: drift(0),
+      driftRefreshing: true,
+      onRefreshDrift,
+    });
+
+    await userEvent.click(screen.getByTestId('drift-refresh'));
+
+    expect(onRefreshDrift).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The whole premise of one Sync pane is that it is reached through this button,
+ * and its count is what advertises a conflict waiting on the header. Both were
+ * asserted by nothing: replacing `onClick` with a no-op and flattening the badge
+ * to a constant each left the suite green.
+ */
+describe('the header entry into the Sync pane', () => {
+  it('opens the pane on a press', async () => {
+    const onOpenSync = vi.fn();
+    renderHeader({ status: 'completed', onOpenSync });
+
+    await userEvent.click(screen.getByTestId('open-sync'));
+
+    expect(onOpenSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries the count the pane is waiting on, and none when it is zero', () => {
+    const counted = renderHeader({ status: 'completed', syncBadge: 3 });
+    expect(screen.getByTestId('open-sync')).toHaveTextContent('Sync · 3');
+    counted.unmount();
+
+    renderHeader({ status: 'completed', syncBadge: 0 });
+    expect(screen.getByTestId('open-sync')).toHaveTextContent(/^Sync$/);
+  });
+
+  /** A run still writing to the branch owns its own sync, so there is no pane
+   *  worth opening — and the button is absent rather than disabled. */
+  it('offers no entry while the run is still going', () => {
+    renderHeader({ status: 'running' });
+
+    expect(screen.queryByTestId('open-sync')).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 import { GitBranch, Zap, Settings, FileText, Activity, Check, RotateCw, Trash2, Plus, FolderOpen } from 'lucide-react';
 import { DEFAULT_EFFORT, EFFORT_LABELS, reconcileEffort, type EffortLevel } from '../../lib/effortLevels';
+import { HarnessModelPicker } from '../ui/HarnessModelPicker';
 import { HarnessesSection } from './HarnessesSection';
 import { useSettings } from './ProjectSettingsContext';
 import { UNSET_DEFAULT_WORKFLOW_HINT } from '../../lib/workflowDefault';
@@ -10,6 +11,9 @@ export function StrategyTab() {
   // hermes as the project default there is nothing to pick, so the control
   // greys out rather than pretending a level would apply.
   const effortLevels = s.effortLevelsFor(s.defaultAgentKind);
+  // The resolver row runs under its own harness when it names one, so its
+  // ladder is that harness's — not the project default's.
+  const resolverEffortLevels = s.effortLevelsFor(s.syncResolverAgentKind || s.defaultAgentKind);
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -54,6 +58,11 @@ export function StrategyTab() {
             <option value="keep">Keep active</option>
             <option value="auto_delete">Auto delete branch after MR merge</option>
           </select>
+        </div>
+        <div>
+          <label htmlFor="review-entrypoint" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Code review entrypoint</label>
+          <input id="review-entrypoint" type="text" value={s.reviewEntrypoint} onChange={e => s.setReviewEntrypoint(e.target.value)} placeholder="e.g. /code-review" className="w-full bg-black/40 border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+          <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Run this instead of asking the agent to review in its own way. Leave blank to let the agent choose — Demeteo does not supply review criteria either way.</p>
         </div>
       </div>
 
@@ -128,6 +137,40 @@ export function StrategyTab() {
             <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Default Per-Turn Budget (USD)</label>
             <input type="number" min={0} step={0.5} value={s.defaultMaxBudgetUsd} onChange={e => s.setDefaultMaxBudgetUsd(e.target.value)} placeholder="20 (engine default)" className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
             <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Dollar ceiling per agent turn (<span className="font-mono">--max-budget-usd</span>). The coding turn gets the full amount; shorter role turns get a fraction. Anti-runaway guard, not a whole-run cap. Leave blank for the engine default ($20). Overridable per run.</p>
+          </div>
+          <div className="mt-4 pt-4 border-t border-white/5">
+            <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Sync Conflict Resolver</label>
+            <HarnessModelPicker
+              agentKinds={s.agentConfigs.filter(a => a.enabled && a.available).map(a => a.kind)}
+              models={s.availableModelsForSyncResolver}
+              modelsLoading={s.isLoadingModelsForSyncResolver}
+              agentKind={s.syncResolverAgentKind}
+              model={s.syncResolverModel}
+              onAgentKindChange={s.setSyncResolverAgentKind}
+              onModelChange={s.setSyncResolverModel}
+              onClear={() => { s.setSyncResolverAgentKind(''); s.setSyncResolverModel(''); s.setSyncResolverEffort(''); }}
+              inheritedAgentKind={s.defaultAgentKind}
+              agentPlaceholder={s.defaultAgentKind ? `Inherit (${s.defaultAgentKind.replace(/-/g, ' ')})` : 'Inherit the run'}
+              modelPlaceholder="Inherit"
+              effort={s.syncResolverEffort}
+              onEffortChange={s.setSyncResolverEffort}
+              effortLevels={resolverEffortLevels}
+              effortPlaceholder="Inherit"
+            />
+            <div className="mt-3">
+              <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">After a resolution</label>
+              <select
+                aria-label="After a resolution"
+                value={s.syncReviewBeforePush}
+                onChange={e => s.setSyncReviewBeforePush(e.target.value as '' | 'push')}
+                className="w-64 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50"
+              >
+                <option value="">Review it when someone is there</option>
+                <option value="push">Always push to origin</option>
+              </select>
+              <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Whether a resolved merge stops for a look before it reaches the open pull request. The default holds it only when the run is over and somebody can act on it; a resolution a run produces mid-flight is always pushed, because nothing offers a review button while the run still owns the branch — waiting there would leave the merge on the branch and nobody able to publish it. There is no "always wait" for the same reason: the setting can only take the review away.</p>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Who cleans up a merge conflict when a sync hits one — the workflow's <span className="font-mono">sync</span> node and the "Resolve with agent" button alike. Set this when merge conflicts want a different harness from the coding work; it outranks the harness a run was launched with, for that turn only. Leave blank to inherit the run, then the defaults above. Note the harnesses differ in how tightly the resolver is confined to the sync worktree.</p>
           </div>
         </div>
       </div>

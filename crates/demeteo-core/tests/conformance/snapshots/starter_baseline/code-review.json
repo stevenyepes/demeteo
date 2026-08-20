@@ -1,0 +1,20 @@
+{
+  "starter": "code-review",
+  "terminal_status": "awaiting_mr",
+  "steps": [
+    {
+      "step_id": "s-review",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    }
+  ],
+  "artifacts": [
+    [
+      "s-review",
+      "code-review.md",
+      "# stub artifact\n\npath: artifacts/code-review.md\ngenerated-by: demeteo stub agent\n"
+    ]
+  ]
+}

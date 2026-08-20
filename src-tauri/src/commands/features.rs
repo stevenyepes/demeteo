@@ -1,9 +1,11 @@
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::models::{
-    EffortLevel, Feature, GateDecision, SequenceState, StepAttempt, StepExecution,
+    EffortLevel, Feature, FeatureDrift, GateDecision, SequenceState, StepAttempt, StepExecution,
 };
+use crate::domain::sync_resolver::SyncResolverChoice;
 use crate::error::AppError;
-use crate::ports::step_executor::SyncOutcomeView;
+use crate::ports::step_executor::{FeatureLaunch, SyncOutcomeView, SyncResolverView};
+use crate::ports::sync_session::SyncSessionView;
 use crate::state::AppContext;
 use tauri::State;
 
@@ -57,23 +59,29 @@ pub async fn start_feature(
     max_budget_usd: Option<f64>,
     step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
     staged_attachments: Option<Vec<crate::commands::attachments::StagedAttachmentInput>>,
+    // Omitted (a frontend older than the origin picker) = `None`, which
+    // `FeatureLaunch::origin` and `FeatureLaunch::diff_base_branch` define.
+    origin: Option<crate::domain::feature_origin::FeatureOrigin>,
+    diff_base_branch: Option<String>,
 ) -> Result<Feature, AppError> {
     ctx.executor
-        .feature_start(
-            None,
-            &project_id,
-            &workflow_id,
-            &title,
-            &description,
-            agent_kind.as_deref(),
-            model.as_deref(),
+        .feature_start(FeatureLaunch {
+            project_id,
+            workflow_id,
+            title,
+            description,
+            agent_kind,
+            model,
             effort,
             commit_artifacts,
             loop_iterations,
             max_budget_usd,
-            step_overrides.unwrap_or_default(),
-            staged_attachments.unwrap_or_default(),
-        )
+            step_overrides: step_overrides.unwrap_or_default(),
+            staged_attachments: staged_attachments.unwrap_or_default(),
+            origin: origin.unwrap_or_default(),
+            diff_base_branch,
+            ..FeatureLaunch::default()
+        })
         .await
         .map_err(AppError::from)
 }
@@ -266,15 +274,127 @@ pub async fn artifact_body(
 /// - `Conflict` when the merge left unmerged files; the UI offers a
 ///   "Resolve with agent" button that calls
 ///   `feature_resolve_sync_conflicts` with the same conflict list.
+/// - `Blocked` when the sync stopped short of a merge; there is
+///   nothing for an agent to resolve.
 /// - `Resolved` after a successful agent resolution.
 #[tauri::command]
 pub async fn feature_sync(
     ctx: State<'_, AppContext>,
     feature_id: String,
-    revalidate_step_execution_id: Option<String>,
 ) -> Result<SyncOutcomeView, AppError> {
     ctx.executor
-        .feature_sync(&feature_id, revalidate_step_execution_id.as_deref())
+        .feature_sync(&feature_id)
+        .await
+        .map_err(AppError::from)
+}
+
+/// How far the feature branch has fallen behind the base a sync would merge —
+/// the reason to press "Sync with main", answered without merging anything.
+///
+/// `refresh` fetches `origin/<base>` first. Left off, the counts are as of
+/// whenever that ref last moved, and the answer says so.
+#[tauri::command]
+pub async fn feature_drift(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+    refresh: Option<bool>,
+) -> Result<FeatureDrift, AppError> {
+    ctx.executor
+        .feature_drift(&feature_id, refresh.unwrap_or(false))
+        .await
+        .map_err(AppError::from)
+}
+
+/// The four sync commands' shared reach: the row, the tree, the feature's own
+/// status and this process's in-flight turns.
+fn sync_ports(ctx: &AppContext) -> crate::application::sync_session::SyncPorts<'_> {
+    crate::application::sync_session::SyncPorts {
+        sessions: &ctx.sync_sessions,
+        exec: &ctx.exec,
+        features: &ctx.features,
+        turns: &ctx.sync_turns,
+    }
+}
+
+/// The feature's live sync, or `null` if it has never synced.
+///
+/// Reconciled against the working tree before it answers, so a session left
+/// `resolving` by a process that died — or a conflict whose worktree a later
+/// sync force-removed — is never handed to the UI as if it were still true.
+#[tauri::command]
+pub async fn sync_session_get(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<SyncSessionView>, AppError> {
+    crate::application::sync_session::get_reconciled_view(
+        sync_ports(&ctx),
+        &FeatureId::from(feature_id),
+    )
+    .await
+    .map_err(AppError::from)
+}
+
+/// Give up on the feature's sync: undo the merge, discard the worktree, and
+/// close the session. Safe on a worktree that is already gone, which is the
+/// common case, and on a session already abandoned.
+///
+/// Refused for a committed resolution — that is `sync_discard`'s, because
+/// undoing an open merge would leave the commit on the branch beside a row
+/// calling the sync abandoned.
+#[tauri::command]
+pub async fn sync_abort(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<SyncSessionView>, AppError> {
+    crate::application::sync_session::abort(sync_ports(&ctx), &FeatureId::from(feature_id))
+        .await
+        .map_err(AppError::from)
+}
+
+/// Publish a resolution that is only on the feature branch.
+///
+/// Idempotent: a resolution already on origin answers with itself rather than
+/// pushing again or refusing. The push is confirmed against the remote-tracking
+/// ref before anything is recorded, so a rejected or unfinished push never
+/// reads back as published.
+#[tauri::command]
+pub async fn sync_publish(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<SyncSessionView>, AppError> {
+    crate::application::sync_session::publish(sync_ports(&ctx), &FeatureId::from(feature_id))
+        .await
+        .map_err(AppError::from)
+}
+
+/// Throw a resolution away: move the feature branch back to where the merge
+/// found it and abandon the sync. What comes back is an abandoned sync, not the
+/// conflict — sync again for a fresh one.
+#[tauri::command]
+pub async fn sync_discard(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<SyncSessionView>, AppError> {
+    crate::application::sync_session::discard_resolution(
+        sync_ports(&ctx),
+        &FeatureId::from(feature_id),
+    )
+    .await
+    .map_err(AppError::from)
+}
+
+/// Who a resolution would run under if the banner's picker is left alone.
+///
+/// A read, so the picker can label what it is inheriting and offer that
+/// harness's models and effort levels rather than the run's — the two differ
+/// exactly when a project has set a conflict resolver of its own.
+#[tauri::command]
+pub async fn feature_sync_resolver(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<SyncResolverView, AppError> {
+    ctx.executor
+        .feature_sync_resolver(&feature_id)
         .await
         .map_err(AppError::from)
 }
@@ -282,23 +402,36 @@ pub async fn feature_sync(
 /// Spawn a fresh agent to resolve the conflicts left by
 /// `feature_sync`. The agent edits the conflict files in a temporary
 /// worktree, commits the resolution, and the worktree is merged back
-/// into the feature branch. If `revalidate_step_execution_id` is set,
-/// the named step is replayed so the workflow re-runs validation on
-/// the freshly merged tree.
+/// into the feature branch.
+/// `agent_kind` / `model` / `effort` are what *this* attempt asks the
+/// resolution to run under; each `None` inherits, so an older frontend that
+/// omits them sends the request the button sent before there was a picker. The
+/// kind is checked here rather than deeper down because the resolution turn
+/// kills its agent session on every one of its exit paths, and an early return
+/// added below the spawn is how that process would be leaked.
 #[tauri::command]
 pub async fn feature_resolve_sync_conflicts(
     ctx: State<'_, AppContext>,
     feature_id: String,
     conflict_files: Option<Vec<String>>,
-    revalidate_step_execution_id: Option<String>,
+    agent_kind: Option<String>,
+    model: Option<String>,
+    effort: Option<EffortLevel>,
 ) -> Result<SyncOutcomeView, AppError> {
+    let asked = SyncResolverChoice {
+        agent_kind,
+        model,
+        effort,
+    };
+    if let Some(kind) = asked.unsupported_agent_kind() {
+        return Err(AppError::validation(format!(
+            "Unsupported agent kind: {}",
+            kind
+        )));
+    }
     let files = conflict_files.unwrap_or_default();
     ctx.executor
-        .feature_resolve_sync_conflicts(
-            &feature_id,
-            &files,
-            revalidate_step_execution_id.as_deref(),
-        )
+        .feature_resolve_sync_conflicts(&feature_id, &files, &asked)
         .await
         .map_err(AppError::from)
 }

@@ -1,25 +1,26 @@
 import { AlertTriangle, ExternalLink, GitPullRequest } from 'lucide-react';
-import type { MrState, SyncOutcomeView } from '../../types';
-import { SyncBannerContent } from './SyncBannerContent';
+import type { MrState } from '../../types';
 
 interface FeatureStatusBannersProps {
   status: string;
-  syncBanner: SyncOutcomeView | null;
-  resolving: boolean;
-  onResolveConflicts: (files: string[]) => void;
-  onDismissSyncBanner: () => void;
   mrUrl: string | null;
   mrState: MrState | null;
   onRefreshMrState: () => void;
 }
 
-/** The awaiting_mr nudge, the sync result, and the published PR/MR row. */
+/**
+ * The awaiting_mr nudge and the published PR/MR row.
+ *
+ * Sync used to be here too — a result banner, a review card, and the abort
+ * button on one branch of the first. They are gone, not moved twice: a strip of
+ * stacked notices above the run is where a state ends up when each phase adds
+ * its own, and the pane in the inspector column is the one place that answers
+ * "what is happening with this branch". What is left is the two notices that
+ * describe the *pull request*, which is the run's output rather than its
+ * branch's state.
+ */
 export function FeatureStatusBanners({
   status,
-  syncBanner,
-  resolving,
-  onResolveConflicts,
-  onDismissSyncBanner,
   mrUrl,
   mrState,
   onRefreshMrState,
@@ -36,24 +37,6 @@ export function FeatureStatusBanners({
               go through. Publish above to open one — the agent's summary is used
               if it wrote one.
             </span>
-          </div>
-        </div>
-      )}
-
-      {syncBanner && (
-        <div className={`px-6 py-3 border-b flex items-start gap-3 ${
-          syncBanner.status === 'ok' ? 'bg-emerald-500/5 border-emerald-500/20' :
-          syncBanner.status === 'resolved' ? 'bg-emerald-500/5 border-emerald-500/20' :
-          syncBanner.status === 'conflict' ? 'bg-rose-500/5 border-rose-500/20' :
-          'bg-rose-500/5 border-rose-500/20'
-        }`}>
-          <div className="flex-1 text-xs text-slate-200 space-y-2">
-            <SyncBannerContent
-              outcome={syncBanner}
-              onResolve={(files) => onResolveConflicts(files)}
-              resolving={resolving}
-              onDismiss={onDismissSyncBanner}
-            />
           </div>
         </div>
       )}

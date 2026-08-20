@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useRef, useState, useEffect } from 'react';
 import type { ConfigOptionValue, EffortLevel, ProjectMemoryEntry, StepConfig, Machine, Project } from '../../types';
 import { getAgentModels } from '../../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
@@ -21,6 +21,7 @@ import {
   updateProject,
   upsertProjectMemory,
   type CommandProbeReport,
+  type ProjectSettingsInput,
   type RepoDirtyStatus,
   type RepoHealthStatus,
 } from '../../lib/project';
@@ -141,6 +142,24 @@ interface SettingsCtx {
   isRefreshingAgents: boolean;
   artifactSubdir: string; setArtifactSubdir: (v: string) => void;
   commitArtifacts: boolean; setCommitArtifacts: (v: boolean) => void;
+  /** The command a reviewing step starts from, verbatim. `''` = the project
+   *  names none, which persists as `null` and leaves the step to review in
+   *  its own way. */
+  reviewEntrypoint: string; setReviewEntrypoint: (v: string) => void;
+  /** The harness/model/effort a merge-conflict resolution runs under. `''` on
+   *  all three = no opinion, which persists as `null` and inherits the run and
+   *  then the project defaults. */
+  syncResolverAgentKind: string; setSyncResolverAgentKind: (v: string) => void;
+  syncResolverModel: string; setSyncResolverModel: (v: string) => void;
+  syncResolverEffort: EffortLevel | ''; setSyncResolverEffort: (v: EffortLevel | '') => void;
+  /** '' = no opinion, which holds a resolution only when somebody can look at
+   *  it. 'review' / 'push' pin it. Three states because `null` and `false` are
+   *  different answers on the wire (migration V45). */
+  /** Two states, not three: `publish_policy` reads the column as
+   *  `unwrap_or(true)`, so a stored `true` and a stored NULL are the same
+   *  behaviour for every input. The setting's one real power is opting out. */
+  syncReviewBeforePush: '' | 'push'; setSyncReviewBeforePush: (v: '' | 'push') => void;
+  availableModelsForSyncResolver: ConfigOptionValue[]; isLoadingModelsForSyncResolver: boolean;
   // warning modals
   dirtyWarningRepos: RepoDirtyStatus[];
   setDirtyWarningRepos: (v: RepoDirtyStatus[]) => void;
@@ -216,6 +235,26 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'general' | 'strategy' | 'overrides' | 'memory'>('general');
   const [status, setStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+  /**
+   * Timers that outlive nothing.
+   *
+   * Both of the delayed resets below fade an indicator ~1.5s after a save, which
+   * is comfortably longer than a test's mount: unowned, the callback ran against
+   * a torn-down jsdom and the run exited non-zero while every test reported
+   * passing — a red exit code beside a green summary, which trains a reader to
+   * re-run rather than look.
+   */
+  const fadeTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(
+    () => () => {
+      for (const timer of fadeTimers.current) clearTimeout(timer);
+      fadeTimers.current = [];
+    },
+    [],
+  );
+  const fadeLater = (fn: () => void, ms: number) => {
+    fadeTimers.current.push(setTimeout(fn, ms));
+  };
   const [errorMsg, setErrorMsg] = useState('');
 
   const [memories, setMemories] = useState<ProjectMemoryEntry[]>([]);
@@ -283,6 +322,13 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [isLoadingModelsForDefault, setIsLoadingModelsForDefault] = useState(false);
   const [artifactSubdir, setArtifactSubdir] = useState('artifacts/');
   const [commitArtifacts, setCommitArtifacts] = useState(false);
+  const [reviewEntrypoint, setReviewEntrypoint] = useState('');
+  const [syncResolverAgentKind, setSyncResolverAgentKind] = useState('');
+  const [syncResolverModel, setSyncResolverModel] = useState('');
+  const [syncResolverEffort, setSyncResolverEffort] = useState<EffortLevel | ''>('');
+  const [syncReviewBeforePush, setSyncReviewBeforePush] = useState<'' | 'push'>('');
+  const [availableModelsForSyncResolver, setAvailableModelsForSyncResolver] = useState<ConfigOptionValue[]>([]);
+  const [isLoadingModelsForSyncResolver, setIsLoadingModelsForSyncResolver] = useState(false);
   const [extraWritablePaths, setExtraWritablePaths] = useState<string[]>([]);
   const [newExtraPath, setNewExtraPath] = useState('');
 
@@ -304,6 +350,17 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
 
   const { agents: agentCatalog } = useAgentCatalog();
   const effortLevels = (kind: string) => effortLevelsFor(agentCatalog, kind);
+
+  // Models are a harness's own namespace and the effort ladder is canonical but
+  // not universally supported, so switching the resolver's harness drops the
+  // pinned model and clamps the effort to what the new one accepts — otherwise
+  // a level the previous harness offered lingers in a now-greyed control and is
+  // persisted from it.
+  const onSyncResolverAgentChange = (kind: string) => {
+    setSyncResolverAgentKind(kind);
+    setSyncResolverModel('');
+    setSyncResolverEffort(e => reconcileEffort(e, effortLevels(kind || defaultAgentKind)));
+  };
 
   const inheritedAgent = (workflowId: string, step: StepConfig): string => {
     const wfOv = overrides[ovKey(workflowId, WF_LEVEL)];
@@ -355,7 +412,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     try {
       await setWorkflowOverride({ projectId: activeProject.id, workflowId, stepId: stepId || null, agentKind: next.agent_kind, model: next.model, effort: next.effort });
       setSavedPulse(prev => ({ ...prev, [key]: true }));
-      setTimeout(() => setSavedPulse(prev => ({ ...prev, [key]: false })), 1400);
+      fadeLater(() => setSavedPulse(prev => ({ ...prev, [key]: false })), 1400);
     } catch (err) { setOverridesError(formatError(err)); }
   };
 
@@ -468,6 +525,25 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     return () => { cancelled = true; };
   }, [defaultAgentKind, computeType, remoteHost]);
 
+  // The resolver row pins a model for whichever harness it will actually run
+  // under, so the probe follows the effective kind rather than the pinned one:
+  // a row that inherits the harness can still pin a model for it.
+  const effectiveSyncResolverAgent = syncResolverAgentKind || defaultAgentKind;
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!effectiveSyncResolverAgent) { setAvailableModelsForSyncResolver([]); return; }
+      setIsLoadingModelsForSyncResolver(true);
+      try {
+        const machineId = computeType === 'remote' ? remoteHost : 'local';
+        const models = await getAgentModels(machineId, effectiveSyncResolverAgent);
+        if (!cancelled) setAvailableModelsForSyncResolver(models);
+      } catch { if (!cancelled) setAvailableModelsForSyncResolver([]); }
+      finally { if (!cancelled) setIsLoadingModelsForSyncResolver(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [effectiveSyncResolverAgent, computeType, remoteHost]);
+
   useEffect(() => { setConnectionStatus('idle'); }, [remoteHost]);
 
   useEffect(() => {
@@ -565,6 +641,13 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setDefaultMaxBudgetUsd(res.default_max_budget_usd != null ? String(res.default_max_budget_usd) : '');
           setArtifactSubdir(res.artifact_subdir || 'artifacts/');
           setCommitArtifacts(Boolean(res.commit_artifacts));
+          setReviewEntrypoint(res.review_entrypoint || '');
+          setSyncResolverAgentKind(res.sync_resolver_agent_kind || '');
+          setSyncResolverModel(res.sync_resolver_model || '');
+          setSyncResolverEffort(res.sync_resolver_effort || '');
+          setSyncReviewBeforePush(
+            res.sync_review_before_push === false ? 'push' : '',
+          );
           setExtraWritablePaths(res.worktree_strategy.extra_writable_paths || []);
         }
         const reposRes = await getRepositoriesForProject(activeProject.id);
@@ -652,6 +735,16 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const gatesToPersist = () =>
     validationGates.filter(g => Object.prototype.hasOwnProperty.call(harnesses, g));
 
+  /** The whole settings record, spelled once.
+   *
+   *  Two call sites save it — `handleSave` and the strategy-approval
+   *  `saveAllSettings` — and `save_project_settings` is an `INSERT OR REPLACE`
+   *  behind a hand-written merge, so a field this object omits is NULLed for
+   *  every project that goes through the site that omitted it. Spelled twice,
+   *  that omission is invisible to the compiler and to any test that exercises
+   *  only the other site. */
+  const settingsToPersist = (): ProjectSettingsInput => ({ default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts, review_entrypoint: reviewEntrypoint.trim() || null, sync_resolver_agent_kind: syncResolverAgentKind || null, sync_resolver_model: syncResolverModel || null, sync_resolver_effort: syncResolverEffort || null, sync_review_before_push: syncReviewBeforePush === 'push' ? false : null });
+
   const saveAllSettings = async () => {
     const machineId = computeType === 'remote' ? remoteHost : 'local';
     if (machineId) {
@@ -659,7 +752,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
     await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
-await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+await saveProjectSettings(activeProject.id, settingsToPersist());
   };
 
   const handleSave = async () => {
@@ -682,14 +775,14 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     } else {
       try {
         await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
-        await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts });
+        await saveProjectSettings(activeProject.id, settingsToPersist());
         // Keep `compute_type` / `remote_host` in sync with the DB so the
         // Settings tab doesn't fall back to "Local Compute" the next
         // time the user reopens it. Mirrors the re-bootstrap save path
         // below (line ~531).
         setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, name: projectName, repos: selectedRepos.length, nodes: computeType === 'local' ? 4 : 8, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null } : p));
         setStatus('success'); setOriginalRepos(selectedRepos);
-        setTimeout(() => setStatus('idle'), 1500);
+        fadeLater(() => setStatus('idle'), 1500);
       } catch (err) { setStatus('error'); setErrorMsg(formatError(err)); }
     }
   };
@@ -760,6 +853,12 @@ await saveProjectSettings(activeProject.id, { default_branch: defaultBranch, bra
     defaultLoopIterations, setDefaultLoopIterations, availableModelsForDefault, isLoadingModelsForDefault,
     defaultMaxBudgetUsd, setDefaultMaxBudgetUsd,
     agentConfigs, setAgentConfigs, isRefreshingAgents, artifactSubdir, setArtifactSubdir, commitArtifacts, setCommitArtifacts,
+    reviewEntrypoint, setReviewEntrypoint,
+    syncResolverAgentKind, setSyncResolverAgentKind: onSyncResolverAgentChange,
+    syncResolverModel, setSyncResolverModel,
+    syncResolverEffort, setSyncResolverEffort,
+    syncReviewBeforePush, setSyncReviewBeforePush,
+    availableModelsForSyncResolver, isLoadingModelsForSyncResolver,
     extraWritablePaths, setExtraWritablePaths, newExtraPath, setNewExtraPath,
     dirtyWarningRepos, setDirtyWarningRepos, pendingActionAfterConfirm, setPendingActionAfterConfirm, showDeleteConfirm, setShowDeleteConfirm,
     workflows, workflowsLoaded, workflowsError,

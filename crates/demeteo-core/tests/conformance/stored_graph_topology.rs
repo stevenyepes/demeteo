@@ -32,6 +32,7 @@ use crate::domain::models::workflow_v2::WorkflowDefinitionV2;
 use crate::domain::models::{ProviderInstance, Workflow, WorkflowVersion};
 use crate::paths;
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
 const REPO_PATH: &str = "demeteo/stored-graph";
@@ -255,21 +256,14 @@ async fn run_diamond(tag: &str, store_v2: bool) -> (AppContext, PathBuf, Feature
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            wf_id.as_str(),
-            "Diamond run",
-            "Run a stored fan-out / fan-in graph.",
-            Some("stub"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: wf_id.0.clone(),
+            title: "Diamond run".to_string(),
+            description: "Run a stored fan-out / fan-in graph.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
 

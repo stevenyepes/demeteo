@@ -5,7 +5,7 @@ import { runStatusMeta } from '../../lib/runStatus';
 import { useErrorBus } from '../../lib/errorBus';
 import { formatError } from '../../lib/errors';
 import { formatDuration } from '../../lib/utils';
-import { getFeature } from '../../lib/featureSync';
+import { getFeature, isOutOfBandStep } from '../../lib/featureSync';
 import { listStepsForRun } from '../../lib/featureDetail';
 import { readHarnessBaseline, readHarnessEvidence } from '../../lib/harnessVerdict';
 import { reconcileSteps } from '../../lib/stepReconcile';
@@ -180,16 +180,22 @@ export function useFeatureRun(input: {
   // rendered as such — never as a pass; see `HarnessGateTable`.
   const [harnessBaseline, setHarnessBaseline] = useState<HarnessBaseline | null>(null);
 
+  // The headline is a verdict on the *run*, so an out-of-band sync is not part
+  // of it: that row is work on a run which already ended, and letting it into
+  // the rollup makes a manual resolution the user abandoned report a completed
+  // run as failed, permanently. Spend below still counts it — the dollars are
+  // the feature's either way.
+  const runSteps = useMemo(() => steps.filter(s => !isOutOfBandStep(s.step_id)), [steps]);
   const status = useMemo(() => {
     if (featureStatus === 'cancelled') return 'cancelled';
-    if (steps.some(s => s.status === 'awaiting_gate')) return 'gated';
-    if (steps.some(s => s.status === 'failed')) return 'failed';
-    if (steps.some(s => s.status === 'interrupted')) return 'cancelled';
-    if (steps.some(s => s.status === 'running')) return 'running';
-    if (steps.some(s => s.status === 'verifying')) return 'verifying';
-    if (steps.length > 0 && steps.every(s => s.status === 'completed')) return 'completed';
+    if (runSteps.some(s => s.status === 'awaiting_gate')) return 'gated';
+    if (runSteps.some(s => s.status === 'failed')) return 'failed';
+    if (runSteps.some(s => s.status === 'interrupted')) return 'cancelled';
+    if (runSteps.some(s => s.status === 'running')) return 'running';
+    if (runSteps.some(s => s.status === 'verifying')) return 'verifying';
+    if (runSteps.length > 0 && runSteps.every(s => s.status === 'completed')) return 'completed';
     return featureStatus;
-  }, [steps, featureStatus]);
+  }, [runSteps, featureStatus]);
   const statusMeta = runStatusMeta(status);
   const anyStepStarted = steps.some((s) => s.status !== 'pending');
   // What this run's persisted step failures say about the same gates the

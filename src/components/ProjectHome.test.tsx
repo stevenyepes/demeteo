@@ -216,6 +216,64 @@ beforeEach(() => {
   vi.mocked(invoke).mockReset();
 });
 
+/**
+ * A drift read that rejected has to reach the row as an unmeasured count. The
+ * project view is the surface that shows the whole queue at once, so a feature
+ * nobody could count and a feature nobody has counted yet rendering alike is
+ * exactly where the three-state signal quietly becomes two.
+ */
+describe('ProjectHome staleness', () => {
+  function featureWithOpenRequest(): Feature {
+    return {
+      id: 'f-1',
+      project_id: 'proj-1',
+      title: 'Say how far behind a branch is',
+      status: 'completed',
+      mr_url: 'https://github.com/stvcloud/demeteo/pull/7',
+      mr_state: 'open',
+    } as unknown as Feature;
+  }
+
+  function mockBackendWithDrift(drift: () => Promise<unknown>) {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case 'fetch_active_features':
+          return Promise.resolve([featureWithOpenRequest()]);
+        case 'feature_drift':
+          return drift();
+        case 'get_repositories_for_project':
+        case 'workflow_list':
+        case 'remote_list_mirrored_runs':
+        case 'list_terminal_sessions':
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(undefined);
+      }
+    });
+    mount(baseProject({ compute_type: 'local' }));
+  }
+
+  it('renders a count that could not be taken as unknown, not as up to date', async () => {
+    mockBackendWithDrift(() => Promise.reject('the repository is not on this machine'));
+
+    expect(await screen.findByText('Drift unknown')).toBeInTheDocument();
+    expect(screen.queryByText('Up to date')).toBeNull();
+  });
+
+  it('renders the count when the read answered', async () => {
+    mockBackendWithDrift(() =>
+      Promise.resolve({
+        divergence: { behind: 4, ahead: 1 },
+        base_ref: 'origin/main',
+        fetched: false,
+        checked_at: 0,
+      }),
+    );
+
+    expect(await screen.findByText('4 behind')).toBeInTheDocument();
+  });
+});
+
 describe('ProjectHome inline composer paste', () => {
   it('prevents the event and stages a supported image paste on the composer container', async () => {
     renderHome();

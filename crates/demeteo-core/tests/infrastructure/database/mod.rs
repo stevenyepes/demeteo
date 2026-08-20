@@ -264,6 +264,11 @@ fn project_settings_default_effort_round_trips() {
         default_max_budget_usd: Some(7.25),
         artifact_subdir: "artifacts/".to_string(),
         commit_artifacts: false,
+        review_entrypoint: None,
+        sync_resolver_agent_kind: None,
+        sync_resolver_model: None,
+        sync_resolver_effort: None,
+        sync_review_before_push: None,
     };
 
     adapter
@@ -330,6 +335,11 @@ fn project_settings_default_workflow_id_round_trips() {
         default_max_budget_usd: Some(3.5),
         artifact_subdir: "artifacts/".to_string(),
         commit_artifacts: false,
+        review_entrypoint: None,
+        sync_resolver_agent_kind: None,
+        sync_resolver_model: None,
+        sync_resolver_effort: None,
+        sync_review_before_push: None,
     };
 
     adapter
@@ -416,6 +426,11 @@ fn project_settings_harnesses_and_validation_gates_round_trip() {
         default_max_budget_usd: None,
         artifact_subdir: "artifacts/".to_string(),
         commit_artifacts: false,
+        review_entrypoint: None,
+        sync_resolver_agent_kind: None,
+        sync_resolver_model: None,
+        sync_resolver_effort: None,
+        sync_review_before_push: None,
     };
 
     // No selection: the column keeps its pre-HB5 bare-map shape, and the map
@@ -436,4 +451,139 @@ fn project_settings_harnesses_and_validation_gates_round_trip() {
         saved.worktree_strategy.validation_gates,
         Some(vec!["unit".to_string(), "lint".to_string()])
     );
+}
+
+/// Both column lists are written out in full, so a new column reaches the row
+/// through two edits that must agree. When they don't, every value after the
+/// disagreement reads back as its neighbour — which is why the two adjacent
+/// TEXT columns are given values that would still be a legal answer for each
+/// other.
+#[test]
+fn project_settings_review_entrypoint_round_trips() {
+    let conn = Connection::open_in_memory().unwrap();
+    let adapter = SqliteAdapter::new(conn).unwrap();
+    let pid = ProjectId::from("p_settings_review".to_string());
+    adapter
+        .add(Project {
+            id: pid.clone(),
+            name: "review entrypoint settings".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 1000,
+        })
+        .unwrap();
+
+    let settings = |entrypoint: Option<String>| ProjectSettings {
+        project_id: pid.clone(),
+        worktree_strategy: WorktreeStrategy {
+            default_branch: "main".to_string(),
+            branch_prefix: "feat/".to_string(),
+            test_command: None,
+            build_command: None,
+            coverage_command: None,
+            conventions_file: None,
+            pr_template: None,
+            harnesses: None,
+            validation_gates: None,
+            prepare_command: None,
+            extra_writable_paths: Vec::new(),
+        },
+        conflict_policy: "manual".to_string(),
+        feature_lifecycle: "keep".to_string(),
+        default_agent_kind: None,
+        default_model: None,
+        default_effort: None,
+        default_workflow_id: Some("wf_starter_code_review".to_string()),
+        default_loop_iterations: None,
+        default_max_budget_usd: None,
+        artifact_subdir: "artifacts/".to_string(),
+        commit_artifacts: false,
+        review_entrypoint: entrypoint,
+        sync_resolver_agent_kind: None,
+        sync_resolver_model: None,
+        sync_resolver_effort: None,
+        sync_review_before_push: None,
+    };
+
+    adapter
+        .save_settings(settings(Some("/code-review".to_string())))
+        .unwrap();
+    let saved = adapter.get_settings(&pid).unwrap().unwrap();
+    assert_eq!(saved.review_entrypoint, Some("/code-review".to_string()));
+    assert_eq!(
+        saved.default_workflow_id,
+        Some("wf_starter_code_review".to_string())
+    );
+
+    adapter.save_settings(settings(None)).unwrap();
+    let cleared = adapter.get_settings(&pid).unwrap().unwrap();
+    assert_eq!(cleared.review_entrypoint, None);
+    assert_eq!(
+        cleared.default_workflow_id,
+        Some("wf_starter_code_review".to_string())
+    );
+}
+
+/// The V44 triple, through the same two column lists — and read back beside a
+/// value that would be a legal answer for either of its TEXT neighbours, so an
+/// off-by-one in the positional read is a failure rather than a plausible row.
+#[test]
+fn project_settings_sync_resolver_default_round_trips() {
+    let conn = Connection::open_in_memory().unwrap();
+    let adapter = SqliteAdapter::new(conn).unwrap();
+    let pid = ProjectId::from("p_settings_resolver".to_string());
+    adapter
+        .add(Project {
+            id: pid.clone(),
+            name: "sync resolver settings".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 1000,
+        })
+        .unwrap();
+
+    let mut settings = crate::adapters::step_executor::setup::fetch_default_settings();
+    settings.project_id = pid.clone();
+    settings.review_entrypoint = Some("/code-review".to_string());
+    settings.default_agent_kind = Some("opencode".to_string());
+    settings.default_model = Some("sonnet".to_string());
+    settings.default_effort = Some(EffortLevel::Max);
+    settings.sync_resolver_agent_kind = Some("codex".to_string());
+    settings.sync_resolver_model = Some("gpt-5-codex".to_string());
+    settings.sync_resolver_effort = Some(EffortLevel::Low);
+    // `false` and unset are different answers and the column is the only thing
+    // that keeps them apart — a boolean written through an INTEGER column is
+    // the one place `Some(false)` can come back as `None` unnoticed.
+    settings.sync_review_before_push = Some(false);
+    adapter.save_settings(settings.clone()).unwrap();
+
+    let saved = adapter.get_settings(&pid).unwrap().unwrap();
+    assert_eq!(saved.sync_resolver_agent_kind.as_deref(), Some("codex"));
+    assert_eq!(saved.sync_resolver_model.as_deref(), Some("gpt-5-codex"));
+    assert_eq!(saved.sync_resolver_effort, Some(EffortLevel::Low));
+    assert_eq!(saved.sync_review_before_push, Some(false));
+    assert_eq!(saved.review_entrypoint.as_deref(), Some("/code-review"));
+    assert_eq!(saved.default_agent_kind.as_deref(), Some("opencode"));
+    assert_eq!(saved.default_model.as_deref(), Some("sonnet"));
+    assert_eq!(saved.default_effort, Some(EffortLevel::Max));
+
+    settings.sync_resolver_agent_kind = None;
+    settings.sync_resolver_model = None;
+    settings.sync_resolver_effort = None;
+    settings.sync_review_before_push = None;
+    adapter.save_settings(settings).unwrap();
+    let cleared = adapter.get_settings(&pid).unwrap().unwrap();
+    assert_eq!(cleared.sync_resolver_agent_kind, None);
+    assert_eq!(cleared.sync_resolver_model, None);
+    assert_eq!(cleared.sync_resolver_effort, None);
+    assert_eq!(cleared.sync_review_before_push, None);
+    assert_eq!(cleared.review_entrypoint.as_deref(), Some("/code-review"));
 }

@@ -15,6 +15,7 @@ import type { HarnessOverrides } from './useHarnessOverrides';
 
 function overrides(over: Partial<HarnessOverrides> = {}): HarnessOverrides {
   return {
+    machineAgents: [],
     availableModels: [{ value: 'sonnet', name: 'Claude Sonnet' }],
     selectedModel: '',
     setSelectedModel: vi.fn(),

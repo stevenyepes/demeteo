@@ -178,8 +178,10 @@ fn every_token_the_starters_reference_is_bound() {
     let mut seen_any = false;
 
     for name in [
+        "address-review",
         "bugfix-pipeline",
         "ci-fix",
+        "code-review",
         "docs-update",
         "experiment",
         "refactor",

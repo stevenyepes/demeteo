@@ -46,14 +46,13 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use demeteo_lib::adapters::create_project_adapter::CreateProjectAdapter;
-use demeteo_lib::commands::attachments::StagedAttachmentInput;
 use demeteo_lib::commands::create_project::{BootstrapOutcome, CreateProjectStepPayload};
 use demeteo_lib::domain::bootstrap::{BootstrapState, BootstrapStep, STEP_ORDER};
+use demeteo_lib::domain::feature_origin::FeatureOrigin;
 use demeteo_lib::domain::ids::{ProjectId, ProviderId, RepositoryId, WorkflowId};
 use demeteo_lib::domain::models::GateDecision;
 use demeteo_lib::domain::models::{
     Feature, Project, ProjectSettings, ProjectWorkflowOverride, Repository, StepExecution,
-    StepOverride,
 };
 use demeteo_lib::error::AppError;
 use demeteo_lib::ports::create_project_port::{CreateProjectPort, LaunchedFeature};
@@ -62,7 +61,9 @@ use demeteo_lib::ports::provider_http::{
     CreateRepoRequest, CreatedRepo, NamespaceSummary, ProviderHttpPort, ProviderUserInfo,
     RepoSummary,
 };
-use demeteo_lib::ports::step_executor::{GatePresenter, StepExecutor, SyncOutcomeView};
+use demeteo_lib::ports::step_executor::{
+    FeatureLaunch, GatePresenter, StepExecutor, SyncOutcomeView,
+};
 
 // ── Stub ports ─────────────────────────────────────────────────────────
 //
@@ -246,45 +247,39 @@ struct StubExecutor {
 
 #[async_trait]
 impl StepExecutor for StubExecutor {
-    async fn feature_start(
-        &self,
-        _feature_id: Option<String>,
-        project_id: &str,
-        workflow_id: &str,
-        title: &str,
-        description: &str,
-        agent_kind: Option<&str>,
-        model: Option<&str>,
-        _effort: Option<demeteo_lib::domain::models::EffortLevel>,
-        _commit_artifacts: Option<bool>,
-        _loop_iterations: Option<u32>,
-        _max_budget_usd: Option<f64>,
-        _step_overrides: Vec<StepOverride>,
-        _staged_attachments: Vec<StagedAttachmentInput>,
-    ) -> Result<Feature, String> {
+    async fn feature_start(&self, launch: FeatureLaunch) -> Result<Feature, String> {
+        let FeatureLaunch {
+            project_id,
+            workflow_id,
+            title,
+            description,
+            agent_kind,
+            model,
+            ..
+        } = launch;
         self.calls.features_started.lock().unwrap().push((
-            project_id.to_string(),
-            workflow_id.to_string(),
-            title.to_string(),
-            description.to_string(),
-            agent_kind.map(|s| s.to_string()),
-            model.map(|s| s.to_string()),
+            project_id.clone(),
+            workflow_id.clone(),
+            title.clone(),
+            description,
+            agent_kind.clone(),
+            model.clone(),
         ));
         Ok(Feature {
             effort: None,
             id: demeteo_lib::domain::ids::FeatureId(format!("feat-{}", project_id)),
-            project_id: ProjectId::from(project_id.to_string()),
-            workflow_id: Some(WorkflowId::from(workflow_id.to_string())),
+            project_id: ProjectId::from(project_id),
+            workflow_id: Some(WorkflowId::from(workflow_id)),
             workflow_version_id: None,
-            title: title.to_string(),
+            title,
             description: String::new(),
             status: "running".to_string(),
             created_at: 0,
             total_cost: 0.0,
             duration: "0s".to_string(),
             tokens: 0,
-            agent_kind: agent_kind.map(|s| s.to_string()),
-            model: model.map(|s| s.to_string()),
+            agent_kind,
+            model,
             mr_url: None,
             mr_state: Some("none".to_string()),
             pr_title: None,
@@ -295,6 +290,9 @@ impl StepExecutor for StubExecutor {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         })
     }
     async fn feature_pause(&self, _feature_id: &str) -> Result<(), String> {
@@ -330,25 +328,38 @@ impl StepExecutor for StubExecutor {
     async fn step_list_for_run(&self, _feature_id: &str) -> Result<Vec<StepExecution>, String> {
         Ok(Vec::new())
     }
-    async fn feature_sync(
-        &self,
-        _feature_id: &str,
-        _revalidate_step_execution_id: Option<&str>,
-    ) -> Result<SyncOutcomeView, String> {
+    async fn feature_sync(&self, _feature_id: &str) -> Result<SyncOutcomeView, String> {
         Ok(SyncOutcomeView::Ok {
-            merge_commit_sha: "deadbeef".into(),
+            merge_commit_sha: Some("deadbeef".to_string()),
             changed: false,
         })
+    }
+    async fn feature_drift(
+        &self,
+        _feature_id: &str,
+        _refresh: bool,
+    ) -> Result<demeteo_core::domain::models::FeatureDrift, String> {
+        Err("this stub counts nothing".into())
     }
     async fn feature_resolve_sync_conflicts(
         &self,
         _feature_id: &str,
         _conflict_files: &[String],
-        _revalidate_step_execution_id: Option<&str>,
+        _asked: &demeteo_core::domain::sync_resolver::SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String> {
         Ok(SyncOutcomeView::Ok {
-            merge_commit_sha: "deadbeef".into(),
+            merge_commit_sha: Some("deadbeef".to_string()),
             changed: false,
+        })
+    }
+    async fn feature_sync_resolver(
+        &self,
+        _feature_id: &str,
+    ) -> Result<demeteo_core::ports::step_executor::SyncResolverView, String> {
+        Ok(demeteo_core::ports::step_executor::SyncResolverView {
+            agent_kind: "opencode".into(),
+            model: None,
+            effort: demeteo_core::domain::models::EffortLevel::DEFAULT,
         })
     }
 }

@@ -1,6 +1,6 @@
 {
   "name": "demeteo",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "license": "MIT",
   "author": "Steven Yepes <contact@stvcloud.dev>",
@@ -21,7 +21,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "checks": "bash scripts/checks.sh",
-    "checks:code": "cross-env CHECKS_SKIP_COMMITLINT=1 bash scripts/checks.sh",
+    "checks:code": "bash scripts/checks.sh --skip-commitlint",
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {

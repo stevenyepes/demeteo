@@ -193,6 +193,16 @@ pub fn runtime() -> UnifiedCliRuntime {
         model_listing: Some(crate::ports::agent_runtime::ModelListing::MODELS_SUBCOMMAND),
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Hermes),
+        // `build_hermes_args` reads no `bare_mode`: Demeteo emits no flag that
+        // would either keep or drop this harness's own setup.
+        personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
+        // Unmeasured, so the weakest claim. Hermes shares
+        // `opencode_permission_env`, and emitting a variable in another
+        // harness's namespace is not evidence that this one reads it — nothing
+        // in this tree establishes that it does, and it is not installed here
+        // to ask. A `DEMETEO_AGENT_TRACE` capture of a hermes turn refusing a
+        // read outside its worktree is what moves this.
+        path_containment: crate::domain::models::PathContainment::UNFENCED,
         static_env: &[],
         // Upstream calls native Windows experimental and points users at WSL2,
         // so there is no stable answer here to declare — under WSL the agent is

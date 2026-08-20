@@ -26,7 +26,7 @@
 //!   tools have to write `target/`, `node_modules/` — and before any agent
 //!   turn. Hoisting `apply_artifact_scope` for tidiness silently breaks
 //!   every project whose gate builds anything, and nothing goes red.
-//! * The capability-driven scope fence (`AGENTS.md` §2: never widen it) is
+//! * The capability-driven scope fence (`AGENTS.md` §2: never widened) is
 //!   applied after the harness-first run and **before** the spawn.
 //! * The post-step diff guard runs **before** the merge, so files it reverts
 //!   never reach the feature branch.

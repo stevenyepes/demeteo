@@ -33,6 +33,7 @@ use crate::domain::ids::{FeatureId, ProjectId, ProviderId};
 use crate::domain::models::ProviderInstance;
 use crate::paths;
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
 const REPO_PATH: &str = "demeteo/harness-gates";
@@ -246,21 +247,15 @@ async fn run_gate_leg(
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            "Gates Feature",
-            "Exercise HB5 multi-harness gating.",
-            Some("stub"),
-            None,
-            None,
-            None,
-            Some(1),
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: "Gates Feature".to_string(),
+            description: "Exercise HB5 multi-harness gating.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            loop_iterations: Some(1),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
 

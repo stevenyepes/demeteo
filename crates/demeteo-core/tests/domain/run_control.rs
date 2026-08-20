@@ -265,3 +265,24 @@ fn the_first_blocking_ancestor_in_row_order_is_the_one_named() {
         )
     );
 }
+
+/// The manual sync writes a real step row so the inspector can stream it, and
+/// the inspector then offers it every action a node gets. Retry and Replay make
+/// their target the pivot of a graph walk this row is not in, so both fall back
+/// to comparing `step_index` against `u32::MAX`: the rewind takes only this row
+/// and every real node reads as an ancestor to be restored. The refusal is the
+/// only thing between that and a finished run being re-armed.
+#[test]
+fn an_out_of_band_row_is_neither_retried_nor_replayed_from() {
+    use crate::domain::run_control::out_of_band_refusal;
+    use crate::domain::step_seed::MANUAL_SYNC_STEP_ID;
+
+    for action in [RunAction::Retry, RunAction::Replay] {
+        let refusal = out_of_band_refusal(action, MANUAL_SYNC_STEP_ID)
+            .unwrap_or_else(|| panic!("{action:?} was allowed on the manual sync row"));
+        assert!(refusal.contains(MANUAL_SYNC_STEP_ID), "{refusal}");
+        assert!(refusal.contains("sync banner"), "{refusal}");
+        assert_eq!(out_of_band_refusal(action, "s-implement"), None);
+        assert_eq!(out_of_band_refusal(action, "s-sync"), None);
+    }
+}

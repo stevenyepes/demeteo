@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "demeteo"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "demeteo-core",
@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "demeteo-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -870,7 +870,7 @@ dependencies = [
 
 [[package]]
 name = "demeteo-runner"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "demeteo-core",

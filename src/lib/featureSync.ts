@@ -1,51 +1,133 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Feature, SyncOutcomeView } from "../types";
+import type {
+  EffortLevel,
+  Feature,
+  FeatureDrift,
+  SyncOutcomeView,
+  SyncResolverView,
+  SyncSessionView,
+} from "../types";
 
 /**
- * Sync the feature branch with `origin/<default_branch>`. Returns
- * a tagged result:
+ * Sync the feature branch with `origin/<default_branch>`.
  *
- * - `{ status: "ok" }` when the merge was clean.
- * - `{ status: "conflict" }` when conflicts were detected; the
- *   conflict files are in `conflict_files`. The UI surfaces a
- *   "Resolve with agent" button that calls
- *   `resolveSyncConflicts` with the same file list.
- * - `{ status: "resolved" }` after a successful agent resolution.
- * - `{ status: "resolution_failed" }` when the agent could not
- *   clean up the conflicts.
- *
- * `revalidateStepExecutionId` is optional: when provided, the named
- * step is replayed after a successful sync so the workflow re-runs
- * validation on the freshly merged tree.
+ * The tagged result is the call's immediate answer and **not** what the UI
+ * renders: the same verdict is written to the sync session, which is what
+ * survives the navigation that started it, so every surface reads
+ * `getSyncSession` afterwards instead. One field is only on this side —
+ * `blocked.stage`, the named precondition that failed. Nothing persists it, so
+ * a session re-read after a blocked sync has git's words and not that label.
  */
-export async function syncFeature(
+export async function syncFeature(featureId: string): Promise<SyncOutcomeView> {
+  return invoke<SyncOutcomeView>("feature_sync", { featureId });
+}
+
+/**
+ * How far the feature branch has fallen behind the base a sync would merge —
+ * the reason to sync at all, answered without merging anything.
+ *
+ * `refresh` fetches `origin/<base>` first. Left off, the counts are as of
+ * whenever that ref last moved; the answer's `fetched` says which it was, so a
+ * caller never presents a week-old number as this minute's.
+ */
+export async function getFeatureDrift(
   featureId: string,
-  revalidateStepExecutionId?: string | null,
-): Promise<SyncOutcomeView> {
-  return invoke<SyncOutcomeView>("feature_sync", {
-    featureId,
-    revalidateStepExecutionId: revalidateStepExecutionId ?? null,
-  });
+  refresh = false,
+): Promise<FeatureDrift> {
+  return invoke<FeatureDrift>("feature_drift", { featureId, refresh });
+}
+
+/**
+ * What one resolution attempt asks to be run under. Every field `null` means
+ * "inherit", which is the request this function sent before there was a picker:
+ * the backend falls through the project's conflict-resolver default, the
+ * harness the run was launched with, and then the project default.
+ */
+export interface SyncResolverChoice {
+  agentKind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
+}
+
+/**
+ * Who a resolution would run under with every field of the choice left
+ * `null` — the label the picker shows for "Inherit", read from the same chain
+ * the resolve call walks rather than guessed from the feature.
+ */
+export async function getSyncResolver(featureId: string): Promise<SyncResolverView> {
+  return invoke<SyncResolverView>("feature_sync_resolver", { featureId });
 }
 
 /**
  * Spawn a fresh agent session dedicated to resolving the merge
  * conflicts left by `syncFeature`. The agent edits the conflict
  * files in a temporary worktree, commits the resolution, and the
- * worktree is merged back into the feature branch. If
- * `revalidateStepExecutionId` is set, the named step is replayed
- * so the workflow re-runs validation on the freshly merged tree.
+ * worktree is merged back into the feature branch.
  */
 export async function resolveSyncConflicts(
   featureId: string,
   conflictFiles: string[],
-  revalidateStepExecutionId?: string | null,
+  resolver?: SyncResolverChoice,
 ): Promise<SyncOutcomeView> {
   return invoke<SyncOutcomeView>("feature_resolve_sync_conflicts", {
     featureId,
     conflictFiles,
-    revalidateStepExecutionId: revalidateStepExecutionId ?? null,
+    agentKind: resolver?.agentKind ?? null,
+    model: resolver?.model ?? null,
+    effort: resolver?.effort ?? null,
   });
+}
+
+/**
+ * The feature's live sync, or `null` when it has never synced.
+ *
+ * Reconciled against the working tree by the backend before it answers, so a
+ * `conflicted` session is one git still agrees with rather than a row nothing
+ * has revisited since a process died.
+ */
+export async function getSyncSession(
+  featureId: string,
+): Promise<SyncSessionView | null> {
+  return invoke<SyncSessionView | null>("sync_session_get", { featureId });
+}
+
+/**
+ * Give up on the feature's sync: undo the merge, discard the sync worktree and
+ * close the session. Safe when the worktree is already gone.
+ */
+export async function abortSync(
+  featureId: string,
+): Promise<SyncSessionView | null> {
+  return invoke<SyncSessionView | null>("sync_abort", { featureId });
+}
+
+/**
+ * Publish a resolution that is only on the feature branch.
+ *
+ * Safe to press twice: a resolution already on origin answers with itself
+ * rather than pushing again. The backend confirms the push against the
+ * remote-tracking ref before recording it, so a rejected or unfinished push
+ * comes back as an error and the session stays unpublished.
+ */
+export async function publishSyncResolution(
+  featureId: string,
+): Promise<SyncSessionView | null> {
+  return invoke<SyncSessionView | null>("sync_publish", { featureId });
+}
+
+/**
+ * Throw a resolution away: move the feature branch back to where the merge
+ * found it and abandon the sync.
+ *
+ * What comes back is an abandoned sync, **not** the conflict — reproducing that
+ * would mean re-running the merge against an origin that has moved since. A
+ * session that never recorded its pre-merge tip is refused rather than reset to
+ * a guess.
+ */
+export async function discardSyncResolution(
+  featureId: string,
+): Promise<SyncSessionView | null> {
+  return invoke<SyncSessionView | null>("sync_discard", { featureId });
 }
 
 /**
@@ -63,4 +145,23 @@ export async function fetchMrState(
 /** Lightweight `feature_get` wrapper that returns `null` on 404. */
 export async function getFeature(featureId: string): Promise<Feature | null> {
   return invoke<Feature | null>("feature_get", { featureId });
+}
+
+/**
+ * The `step_id` an out-of-band sync records itself under
+ * (`domain::step_seed::MANUAL_SYNC_STEP_ID`).
+ *
+ * The row exists so the resolution can stream to an id the inspector
+ * subscribes to, and it lands in `step_executions` beside the run's own rows —
+ * which is also the frontend's rollup input. Nothing in the row marks it as
+ * out-of-band, so every reader that summarises a *run* has to exclude it: a
+ * manual sync the user tried once and gave up on would otherwise report a
+ * finished run as failed forever, and the actions the inspector offers a node
+ * are refused for it by the backend.
+ */
+export const MANUAL_SYNC_STEP_ID = "s-sync-manual";
+
+/** Whether `stepId` names a row no workflow node produced. */
+export function isOutOfBandStep(stepId: string): boolean {
+  return stepId === MANUAL_SYNC_STEP_ID;
 }

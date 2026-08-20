@@ -33,6 +33,11 @@ fn settings() -> ProjectSettings {
         default_max_budget_usd: None,
         artifact_subdir: "artifacts/".to_string(),
         commit_artifacts: false,
+        review_entrypoint: None,
+        sync_resolver_agent_kind: None,
+        sync_resolver_model: None,
+        sync_resolver_effort: None,
+        sync_review_before_push: None,
     }
 }
 

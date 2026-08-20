@@ -88,6 +88,7 @@ pub(crate) mod conflict_pass;
 pub(crate) mod finalize;
 pub(crate) mod gate;
 pub(crate) mod list_unmerged;
+pub(crate) mod pending_commit;
 pub(crate) mod sequence;
 pub(crate) mod sync;
 

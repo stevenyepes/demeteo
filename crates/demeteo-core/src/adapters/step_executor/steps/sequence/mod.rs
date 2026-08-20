@@ -126,12 +126,16 @@ impl ExecutionDriver {
         let (agent_kind, override_model) = self.resolve_step_agent(step_conf);
         let machine_str = self.machine_id().to_string();
         // Resolved once for the whole step, so the planner turn, every task
-        // turn and the merge-conflict turn are spawned against one answer.
+        // turn and the merge-conflict turn are spawned against one answer —
+        // save for the one field a stage overrides for itself, which carries
+        // its own reason.
         let target = RunTarget {
             machine: &machine_str,
             agent_kind: &agent_kind,
             override_model: override_model.as_deref(),
             effort: self.resolve_step_effort(step_conf),
+            keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator
+                .keeps_harness_personalization(),
             platform: crate::ports::agent_runtime::resolve_agent_platform(
                 self.exec.as_ref(),
                 &machine_str,

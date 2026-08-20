@@ -727,6 +727,8 @@ fn remote_availability_probe_uses_a_login_shell() {
         default_model: None,
         static_env: &[],
         effort_levels: &[],
+        personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
+        path_containment: crate::domain::models::PathContainment::UNFENCED,
         windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         windows_shell_env: &[],
     };
