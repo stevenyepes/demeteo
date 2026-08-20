@@ -72,6 +72,34 @@ pub(crate) enum ConflictPassError {
     Environmental(String),
 }
 
+/// How the resolution turn ended, when it did not end well.
+///
+/// Held rather than returned, because the tree has not been read yet and the
+/// tree is what decides. Kept as two arms rather than one string because the
+/// classes route differently once the tree *does* refuse: an environmental stop
+/// must not feed a rework loop
+/// ([`is_process_level_error`](crate::adapters::agent::cli_runtime)), and a
+/// class folded into prose is a class the next reader has to parse back out.
+enum TurnStop {
+    Reported(String),
+    Environmental(String),
+}
+
+impl TurnStop {
+    /// This stop, as the explanation of a tree that is still conflicted.
+    fn refuse(self, tree_refusal: &str) -> ConflictPassError {
+        use crate::domain::sync_session::resolution_refusal;
+        match self {
+            Self::Reported(stop) => {
+                ConflictPassError::Failed(resolution_refusal(Some(&stop), tree_refusal))
+            }
+            Self::Environmental(stop) => {
+                ConflictPassError::Environmental(resolution_refusal(Some(&stop), tree_refusal))
+            }
+        }
+    }
+}
+
 impl ExecutionDriver {
     /// Merge the feature branch into `wt_path` and have `session` resolve
     /// whatever conflicts that surfaces, committing the resolution.
@@ -113,15 +141,27 @@ impl ExecutionDriver {
             .map(|f| format!("- {} ({})", f.path, f.kind))
             .collect::<Vec<_>>()
             .join("\n");
+        // The verification sentence names the project's own command for the
+        // reason `sync_resolve::build_resolver_prompt` spells out: "make sure
+        // all code builds and passes tests" leaves the agent to find the
+        // command first, and every guess is a turn against a budget.
+        let verification = match self.base_ctx.get("test_command").trim() {
+            "" => String::new(),
+            cmd => format!(
+                " Then verify with this project's own command, exactly as written: `{}` — \
+                 do not go looking for another one if it does not work here.",
+                cmd
+            ),
+        };
         let prompt = format!(
             "We encountered a merge conflict while merging the latest changes from the feature \
              branch '{}' into your workspace.\n\
              Please resolve the conflicts in the following files:\n\
              {}\n\n\
              Ensure you edit these files to remove conflict markers (<<<<<<<, =======, >>>>>>>) \
-             and integrate the changes correctly. Make sure all code builds and passes tests. \
+             and integrate the changes correctly.{} \
              Once done, let me know.",
-            self.branch_name, files_list
+            self.branch_name, files_list, verification
         );
 
         let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
@@ -159,23 +199,48 @@ impl ExecutionDriver {
         )
         .await;
 
-        let billing = match turn_res {
+        // Only a stop short-circuits. Git's index is what says whether the
+        // conflicts are gone, and an agent's exit status is not a reading of it
+        // — the same rule stated in full on
+        // `domain::sync_session::resolution_refusal`. A turn that hit its dollar
+        // ceiling one edit after finishing the work was answered here with a
+        // discarded implementation and a step failure.
+        let (billing, turn_stop) = match turn_res {
             crate::adapters::agent::event_stream::TurnResult::Interrupted => {
                 return Err(ConflictPassError::Cancelled)
             }
-            crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
-                return Err(ConflictPassError::Failed(descriptive))
+            crate::adapters::agent::event_stream::TurnResult::Failed { reason, spent } => {
+                *accumulated_cost += spent.cost_usd;
+                *accumulated_tokens += spent.tokens;
+                (
+                    ConflictPassBilling {
+                        cache_read_input_tokens: spent.cache_read_input_tokens,
+                        cache_creation_input_tokens: spent.cache_creation_input_tokens,
+                    },
+                    Some(TurnStop::Reported(reason)),
+                )
             }
-            crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
-                return Err(ConflictPassError::Environmental(descriptive))
+            crate::adapters::agent::event_stream::TurnResult::Environmental { reason, spent } => {
+                *accumulated_cost += spent.cost_usd;
+                *accumulated_tokens += spent.tokens;
+                (
+                    ConflictPassBilling {
+                        cache_read_input_tokens: spent.cache_read_input_tokens,
+                        cache_creation_input_tokens: spent.cache_creation_input_tokens,
+                    },
+                    Some(TurnStop::Environmental(reason)),
+                )
             }
             crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
                 *accumulated_cost += outcome.cost_usd;
                 *accumulated_tokens += outcome.tokens;
-                ConflictPassBilling {
-                    cache_read_input_tokens: outcome.cache_read_input_tokens,
-                    cache_creation_input_tokens: outcome.cache_creation_input_tokens,
-                }
+                (
+                    ConflictPassBilling {
+                        cache_read_input_tokens: outcome.cache_read_input_tokens,
+                        cache_creation_input_tokens: outcome.cache_creation_input_tokens,
+                    },
+                    None,
+                )
             }
         };
 
@@ -185,10 +250,14 @@ impl ExecutionDriver {
 
         let still_unmerged = list_unmerged_files(&*self.exec, machine_str, wt_path).await;
         if !still_unmerged.is_empty() {
-            return Err(ConflictPassError::Failed(format!(
+            let tree_refusal = format!(
                 "agent failed to resolve merge conflicts in: {:?}",
                 still_unmerged.iter().map(|f| &f.path).collect::<Vec<_>>()
-            )));
+            );
+            return Err(match turn_stop {
+                Some(stop) => stop.refuse(&tree_refusal),
+                None => ConflictPassError::Failed(tree_refusal),
+            });
         }
 
         // `-am` rather than the sync resolver's `add -A` + `-m`: nothing is

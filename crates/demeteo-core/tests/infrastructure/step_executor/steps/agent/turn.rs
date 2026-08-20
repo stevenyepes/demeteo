@@ -40,8 +40,8 @@ impl Slots {
     }
 }
 
-fn success(cost: f64, tokens: i64, cache_read: u64, cache_creation: u64) -> TurnResult {
-    TurnResult::Success(TurnOutcome {
+fn outcome(cost: f64, tokens: i64, cache_read: u64, cache_creation: u64) -> TurnOutcome {
+    TurnOutcome {
         text: "the reply".into(),
         produced_artifacts: vec![Artifact::tool_write(
             "report",
@@ -52,7 +52,11 @@ fn success(cost: f64, tokens: i64, cache_read: u64, cache_creation: u64) -> Turn
         tokens,
         cache_read_input_tokens: cache_read,
         cache_creation_input_tokens: cache_creation,
-    })
+    }
+}
+
+fn success(cost: f64, tokens: i64, cache_read: u64, cache_creation: u64) -> TurnResult {
+    TurnResult::Success(outcome(cost, tokens, cache_read, cache_creation))
 }
 
 #[test]
@@ -109,17 +113,35 @@ fn an_interrupted_turn_spends_nothing_and_touches_no_slot() {
     );
 }
 
+/// A turn that failed still bought what it read.
+///
+/// The tokens are gone whether or not the turn reached a verdict — a tripped
+/// `--max-turns`, a dollar ceiling, an API error mid-flight — and a step whose
+/// budget and retry ladder are counted in dollars has to see them. Left
+/// unbilled, the most expensive turns in a run were the ones that reported
+/// costing nothing.
 #[test]
-fn an_agent_failure_is_failed_and_spends_nothing() {
+fn an_agent_failure_is_failed_and_bills_what_it_spent() {
     let mut slots = Slots::seeded();
     let mut spend = slots.spend();
-    let disposition = apply_turn_result(TurnResult::Failed("model refused".into()), &mut spend);
+    let disposition = apply_turn_result(
+        TurnResult::Failed {
+            reason: "model refused".into(),
+            spent: outcome(0.25, 40, 11, 13),
+        },
+        &mut spend,
+    );
 
     match disposition {
         TurnDisposition::Broken(StepOutcome::Failed(msg)) => assert_eq!(msg, "model refused"),
         _ => panic!("an agent failure must be Broken(Failed)"),
     }
-    assert_eq!((slots.cache_read, slots.cache_creation), (Some(7), Some(9)));
+    assert_eq!(slots.cost, 1.75, "the failed turn's dollars are not free");
+    assert_eq!(slots.tokens, 140);
+    assert_eq!(
+        (slots.cache_read, slots.cache_creation),
+        (Some(11), Some(13))
+    );
 }
 
 #[test]
@@ -127,7 +149,10 @@ fn a_broken_box_is_environmental_not_failed() {
     let mut slots = Slots::seeded();
     let mut spend = slots.spend();
     let disposition = apply_turn_result(
-        TurnResult::Environmental("silence timeout".into()),
+        TurnResult::Environmental {
+            reason: "silence timeout".into(),
+            spent: outcome(0.25, 40, 11, 13),
+        },
         &mut spend,
     );
 
@@ -140,6 +165,5 @@ fn a_broken_box_is_environmental_not_failed() {
              that would route a broken box into the re-implementation retry loop"
         ),
     }
-    assert_eq!(slots.cost, 1.5);
-    assert_eq!((slots.cache_read, slots.cache_creation), (Some(7), Some(9)));
+    assert_eq!(slots.cost, 1.75, "a turn the box broke still bought tokens");
 }

@@ -382,6 +382,32 @@ pub fn publish_policy(review_before_push: Option<bool>, reviewable: bool) -> Res
     }
 }
 
+/// How a resolver turn's own ending folds into what git then says about the
+/// tree it left.
+///
+/// This module's rule, one level down: the worktree is the authority, and an
+/// agent's exit status is not a reading of it. A resolver that tripped its turn
+/// cap having already written a correct resolution has resolved the conflict,
+/// and one that exited clean having done nothing has not — so the ending never
+/// decides, it only ever explains. Dropped when git reports a resolved tree,
+/// and prefixed to the refusal when it does not, because *why nobody fixed it*
+/// is exactly the half the tree cannot answer.
+///
+/// The failure it exists to prevent is not hypothetical: a `--max-turns` stop
+/// after a correct edit was recorded as `resolution_failed`, and the resolution
+/// — staged by nothing, because the staging is downstream of the check that
+/// returned — sat in a throwaway worktree with a `raw_error` of "agent error"
+/// over it.
+pub fn resolution_refusal(turn_stop: Option<&str>, tree_refusal: &str) -> String {
+    match turn_stop {
+        Some(stop) => format!(
+            "{} The turn itself had already ended: {}",
+            tree_refusal, stop
+        ),
+        None => tree_refusal.to_string(),
+    }
+}
+
 /// Whether anything is still running this feature's sync, as an observation
 /// rather than something inferred from the row.
 ///

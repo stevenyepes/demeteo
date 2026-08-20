@@ -739,3 +739,39 @@ fn a_conflict_whose_turn_is_over_is_the_users_again() {
         );
     }
 }
+
+/// A tree git reports as resolved is a resolution, whatever ended the turn.
+///
+/// The ending is dropped here rather than appended, because a refusal is the
+/// only thing it explains — carried onto a resolution that landed it would read
+/// as a caveat on work that has none.
+#[test]
+fn a_resolved_tree_keeps_no_trace_of_how_the_turn_ended() {
+    assert_eq!(
+        resolution_refusal(None, "Resolver left merge conflict markers in a.rs."),
+        "Resolver left merge conflict markers in a.rs.",
+        "with nothing to explain, the refusal stands on its own"
+    );
+}
+
+/// The tree says what is wrong; only the turn's ending says why nobody fixed
+/// it, and a user given one half of that cannot act on it.
+///
+/// "agent error" was the whole of what a tripped turn cap told the user, over a
+/// session reading `resolution_failed`.
+#[test]
+fn a_refused_tree_carries_the_turns_ending_after_it() {
+    let reason = resolution_refusal(
+        Some("the agent stopped at its turn cap (--max-turns) without reporting back"),
+        "Resolver did not resolve every conflicted file.",
+    );
+
+    assert!(
+        reason.starts_with("Resolver did not resolve every conflicted file."),
+        "the tree's verdict leads — it is the one that decided: {reason}"
+    );
+    assert!(
+        reason.contains("turn cap (--max-turns)"),
+        "and the ending follows as the explanation: {reason}"
+    );
+}

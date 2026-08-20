@@ -128,7 +128,7 @@ fn a_non_recoverable_agent_error_still_fails_the_turn() {
     ]);
 
     match result {
-        TurnResult::Failed(reason) => {
+        TurnResult::Failed { reason, .. } => {
             assert!(reason.contains("context window exceeded"), "got: {reason}")
         }
         other => panic!("expected Failed, got {other:?}"),
@@ -148,7 +148,45 @@ fn a_lost_stream_is_environmental_not_an_implementation_failure() {
     }]);
 
     assert!(
-        matches!(result, TurnResult::Environmental(_)),
+        matches!(result, TurnResult::Environmental { .. }),
         "got: {result:?}"
     );
+}
+
+/// A turn that failed still bought what it read.
+///
+/// The harnesses go out of their way to put usage on an error result — the
+/// claude adapter's `parse_claude_result_event` says so in as many words —
+/// and the loop then returned the reason alone and dropped the accumulator.
+/// So the turns whose spend is hardest to notice, the ones that ended without
+/// reporting back, were exactly the ones billed at zero.
+#[test]
+fn a_failed_turn_carries_what_it_spent() {
+    let (result, _) = run(vec![
+        AgentEvent::Usage(crate::domain::agent_event::Usage {
+            input_tokens: 400,
+            output_tokens: 600,
+            cache_read_input_tokens: 70,
+            cache_creation_input_tokens: 30,
+            cost_usd: Some(0.8),
+        }),
+        AgentEvent::Error {
+            code: "cli_error".into(),
+            message: "the agent stopped at its turn cap (--max-turns)".into(),
+            recoverable: false,
+            usage: None,
+        },
+    ]);
+
+    match result {
+        TurnResult::Failed { spent, .. } => {
+            assert_eq!(
+                spent.cost_usd, 0.8,
+                "the dollars the turn spent are not free"
+            );
+            assert_eq!(spent.tokens, 1000);
+            assert_eq!(spent.cache_read_input_tokens, 70);
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
 }

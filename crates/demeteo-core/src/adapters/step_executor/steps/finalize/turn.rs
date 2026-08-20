@@ -137,7 +137,11 @@ impl ExecutionDriver {
 
         match turn_res {
             TurnResult::Interrupted => FinalizeTurn::Cancelled,
-            TurnResult::Failed(why) | TurnResult::Environmental(why) => FinalizeTurn::Broken(why),
+            TurnResult::Failed { reason, spent } | TurnResult::Environmental { reason, spent } => {
+                *spend.cost += spent.cost_usd;
+                *spend.tokens += spent.tokens;
+                FinalizeTurn::Broken(reason)
+            }
             TurnResult::Success(outcome) => {
                 *spend.cost += outcome.cost_usd;
                 *spend.tokens += outcome.tokens;
