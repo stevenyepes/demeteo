@@ -33,6 +33,16 @@ use crate::ports::execution::ExecutionPort;
 use crate::ports::mr_publisher::MrPublisher;
 use provider::{resolve_pat, resolve_pat_best_effort, resolve_provider, resolve_target, MrTarget};
 
+/// The provider PAT, for the one caller outside this module that needs it.
+///
+/// `adapters::git_push` authenticates every push in the app, including the
+/// three that are nothing to do with a merge request. The keyring lookup and
+/// its cache live here because this is where a provider instance is otherwise
+/// only ever resolved; the name is the qualified one a distant caller reads.
+pub(crate) fn resolve_pat_for(provider_id: &str) -> Result<String, String> {
+    resolve_pat(provider_id)
+}
+
 pub use http::{HttpClient, HttpResponse, ReqwestHttp};
 
 pub struct HttpMrPublisher {

@@ -30,6 +30,7 @@ pub mod feature_origin;
 pub(crate) mod finalize;
 pub mod fix_destination;
 pub(crate) mod gate;
+pub mod git_push;
 pub mod harness_attribution;
 pub mod harness_baseline;
 pub mod harness_delta;

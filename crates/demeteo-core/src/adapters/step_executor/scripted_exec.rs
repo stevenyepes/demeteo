@@ -35,6 +35,15 @@ pub(crate) struct ScriptedExec {
     dirs: HashSet<String>,
     seen: Mutex<Vec<(String, ShellOptions)>>,
     seen_programs: Mutex<Vec<String>>,
+    /// Both of the above, interleaved in the order they actually happened.
+    ///
+    /// The two recorders above are separate so a test over shell commands is
+    /// not perturbed by git plumbing beside it — but that leaves an ordering
+    /// property spanning both ports invisible in either. A sync resolution
+    /// commits through `run_command` and pushes through `run_program`, and
+    /// "committed before published" is exactly such a property: with only the
+    /// two lists it reads as a push that never happened.
+    seen_all: Mutex<Vec<String>>,
 }
 
 /// The argv of a [`ProgramRequest`] joined by single spaces — the form a test
@@ -73,6 +82,7 @@ impl ScriptedExec {
             dirs: HashSet::new(),
             seen: Mutex::new(Vec::new()),
             seen_programs: Mutex::new(Vec::new()),
+            seen_all: Mutex::new(Vec::new()),
         }
     }
 
@@ -133,6 +143,7 @@ impl ScriptedExec {
             dirs: self.dirs,
             seen: self.seen,
             seen_programs: self.seen_programs,
+            seen_all: self.seen_all,
         }
     }
 
@@ -143,6 +154,11 @@ impl ScriptedExec {
             .iter()
             .map(|(c, _)| c.clone())
             .collect()
+    }
+
+    /// Every command and every program, in one order — see `seen_all`.
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.seen_all.lock().unwrap().clone()
     }
 
     pub(crate) fn timeouts(&self) -> Vec<Option<Duration>> {
@@ -172,6 +188,7 @@ impl ExecutionPort for ScriptedExec {
     async fn run_program(&self, _m: &str, request: ProgramRequest) -> Result<String, String> {
         let key = rendered(&request);
         self.seen_programs.lock().unwrap().push(key.clone());
+        self.seen_all.lock().unwrap().push(key.clone());
         self.programs
             .get(&key)
             .cloned()
@@ -184,6 +201,7 @@ impl ExecutionPort for ScriptedExec {
         o: ShellOptions,
     ) -> Result<String, String> {
         self.seen.lock().unwrap().push((cmd.to_string(), o));
+        self.seen_all.lock().unwrap().push(cmd.to_string());
         if let Some(queue) = self.queued.lock().unwrap().get_mut(cmd) {
             return queue
                 .pop()

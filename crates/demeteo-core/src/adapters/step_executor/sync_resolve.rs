@@ -655,13 +655,26 @@ async fn run_resolver_turn(
     // is on the branch either way — so it lands as a resolution still waiting,
     // which is the state that keeps a surface pointing at it.
     let published = if publish == ResolutionPublish::Push {
+        // The credential the remote needs, read from the remote itself. A
+        // resolution that is committed and unpushed is recoverable from the
+        // banner; one that cannot authenticate is recoverable from nowhere
+        // until the provider is reconnected, which is why the failure says
+        // which of the two it is.
+        let credential = crate::adapters::git_push::credential_for_repo(
+            &**exec,
+            app_settings.as_ref(),
+            machine_str,
+            resolved_cwd,
+        )
+        .await;
         if let Err(e) = exec
-            .run_command(
+            .run_program(
                 machine_str,
-                &format!(
-                    "git -C {} push origin {}",
-                    paths::shell_escape_posix(resolved_cwd),
-                    paths::shell_escape_posix(feature_branch),
+                crate::adapters::git_push::push_request(
+                    resolved_cwd,
+                    feature_branch,
+                    false,
+                    credential.as_ref(),
                 ),
             )
             .await
@@ -669,7 +682,8 @@ async fn run_resolver_turn(
             let _ = registry.kill(&resolver_thread_id).await;
             return Err(ResolveSyncError::Failed(format!(
                 "Resolution committed locally but push to origin/{} failed: {}. Publish it from the sync banner once the push can go through.",
-                feature_branch, e
+                feature_branch,
+                crate::adapters::git_push::push_failure(&e, credential.as_ref())
             )));
         }
         matches!(

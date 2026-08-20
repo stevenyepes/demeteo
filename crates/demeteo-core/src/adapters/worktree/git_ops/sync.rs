@@ -401,11 +401,23 @@ impl GitOpsHelper {
 
                 if changed {
                     // Push the successful clean merge to origin so remote MR is updated
+                    let credential = crate::adapters::git_push::credential_for_repo(
+                        &*self.exec,
+                        self.app_settings.as_ref(),
+                        machine_str,
+                        &wt_path,
+                    )
+                    .await;
                     if let Err(push_err) = self
                         .exec
                         .run_program(
                             machine_str,
-                            git_request(&wt_path, ["push", "origin", feature_branch]),
+                            crate::adapters::git_push::push_request(
+                                &wt_path,
+                                feature_branch,
+                                false,
+                                credential.as_ref(),
+                            ),
                         )
                         .await
                     {
@@ -413,7 +425,10 @@ impl GitOpsHelper {
                             stage: SyncBlockedStage::Push,
                             raw_error: format!(
                                 "Sync merge succeeded locally but pushing to origin failed: {}",
-                                push_err
+                                crate::adapters::git_push::push_failure(
+                                    &push_err,
+                                    credential.as_ref()
+                                )
                             ),
                             worktree_path: Some(wt_path.clone()),
                             head_before: head_before.clone(),

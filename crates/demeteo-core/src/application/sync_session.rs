@@ -34,6 +34,11 @@ pub struct SyncPorts<'a> {
     pub exec: &'a Arc<dyn ExecutionPort>,
     pub features: &'a Arc<dyn crate::ports::db::FeatureRepository>,
     pub turns: &'a Arc<SyncTurns>,
+    /// Where the provider behind a push is looked up. Only [`publish`] reads
+    /// it, and only to authenticate: `mr_publisher` leaves `origin` pointing at
+    /// a token-free HTTPS URL, so a push with no credential attached is a push
+    /// that cannot happen.
+    pub app_settings: &'a Arc<dyn crate::ports::db::AppSettingsRepository>,
 }
 
 /// The feature's session as the working tree says it stands.
@@ -85,6 +90,7 @@ async fn reconciled(
         exec,
         features,
         turns,
+        ..
     } = ports;
     let Some(mut session) = sessions.get(feature_id)? else {
         return Ok(None);
@@ -206,7 +212,12 @@ pub async fn publish(
     ports: SyncPorts<'_>,
     feature_id: &FeatureId,
 ) -> Result<Option<SyncSessionView>, String> {
-    let SyncPorts { sessions, exec, .. } = ports;
+    let SyncPorts {
+        sessions,
+        exec,
+        app_settings,
+        ..
+    } = ports;
     let Some(read) = reconciled(ports.clone(), feature_id).await? else {
         return Ok(None);
     };
@@ -228,16 +239,34 @@ pub async fn publish(
     // From the clone rather than the sync worktree. Linked worktrees share the
     // refs and the remotes, so both push the same branch — but the worktree is
     // the throwaway, and it is gone the moment this succeeds.
-    let repo = paths::shell_escape_posix(&session.repo_dir);
-    let branch = paths::shell_escape_posix(&session.feature_branch);
+    let credential = crate::adapters::git_push::credential_for_repo(
+        &**exec,
+        &**app_settings,
+        &session.machine_id,
+        &session.repo_dir,
+    )
+    .await;
     if let Err(e) = exec
-        .run_command(
+        .run_program(
             &session.machine_id,
-            &format!("git -C {} push origin {}", repo, branch),
+            crate::adapters::git_push::push_request(
+                &session.repo_dir,
+                &session.feature_branch,
+                false,
+                credential.as_ref(),
+            ),
         )
         .await
     {
         return Err(match classify_exec_failure(&e) {
+            // A push git could not authenticate never reached origin, so "the
+            // branch moved, fetch and sync again" is advice that cannot work —
+            // and for a while it was the only thing the user was told.
+            HarnessExecFailure::NonZeroExit
+                if crate::domain::git_push::is_credential_failure(&e) =>
+            {
+                crate::adapters::git_push::push_failure(&e, credential.as_ref())
+            }
             HarnessExecFailure::NonZeroExit => format!(
                 "origin refused the push. The branch may have moved since the resolution was \
                  made — fetch and sync again before publishing.\n\n{}",

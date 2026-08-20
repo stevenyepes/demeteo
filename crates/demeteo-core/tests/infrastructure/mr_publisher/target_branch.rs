@@ -12,7 +12,7 @@ use rusqlite::Connection;
 
 use super::{FakeHttpClient, HttpMrPublisher};
 use crate::adapters::database::SqliteAdapter;
-use crate::adapters::mr_publisher::push::push_request;
+use crate::adapters::git_push::{push_request, GitCredential};
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, ProviderId, RepositoryId};
@@ -108,7 +108,15 @@ fn push_exec(remote_user: &str, host: &str) -> Arc<ScriptedExec> {
         .to_string();
     let set_url =
         format!("git -C {dir} remote set-url origin https://{remote_user}@{host}/{REPO_PATH}");
-    let push = rendered(&push_request(&dir, SOURCE_BRANCH, remote_user, PAT));
+    let credential = GitCredential {
+        user: if remote_user == "x-access-token" {
+            "x-access-token"
+        } else {
+            "oauth2"
+        },
+        pat: PAT.to_string(),
+    };
+    let push = rendered(&push_request(&dir, SOURCE_BRANCH, true, Some(&credential)));
     Arc::new(
         ScriptedExec::new(&[])
             .with_programs(&[(set_url.as_str(), Ok("")), (push.as_str(), Ok(""))]),
