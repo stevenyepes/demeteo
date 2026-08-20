@@ -73,6 +73,7 @@ function progress(overrides: Partial<StepProgressPayload> & { step_id: string })
  *  breaks here instead of being silently absent. */
 function fakeOverrides(): HarnessOverrides {
   return {
+    machineAgents: [],
     availableModels: [],
     selectedModel: '',
     setSelectedModel: () => {},

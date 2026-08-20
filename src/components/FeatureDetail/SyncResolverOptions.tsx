@@ -1,4 +1,6 @@
+import { HarnessContainmentNote } from './HarnessContainmentNote';
 import { HarnessModelPicker } from '../ui/HarnessModelPicker';
+import { useAgentCatalog } from '../../lib/agentCatalog';
 import type { SyncResolverSelection } from './useSyncResolverOverrides';
 
 /**
@@ -15,30 +17,39 @@ import type { SyncResolverSelection } from './useSyncResolverOverrides';
  * ladder that would all be wrong.
  *
  * Which harness is picked also decides how tightly the turn is confined to the
- * sync worktree: opencode and hermes are denied every directory outside it and
- * codex is sandboxed to it, while claude-code and pi are given no path fence at
- * all. `adapters/step_executor/sync_resolve.rs` records that at the spawn.
+ * sync worktree, which is why the choice carries a containment note: each
+ * harness declares its own answer as a `PathContainment`, so no surface keeps a
+ * list of who is fenced. The note reads that answer off the rows the *feature's
+ * machine* returned rather than off the catalog (`lib/pathContainment.ts`).
  */
 export function SyncResolverOptions({ selection }: { selection: SyncResolverSelection }) {
   const { overrides, inherited } = selection;
+  const { agents } = useAgentCatalog();
   const inheritedKind = inherited?.agent_kind ?? '';
   return (
-    <HarnessModelPicker
-      agentKinds={overrides.availableAgents}
-      models={overrides.availableModels}
-      modelsLoading={overrides.isLoadingModels}
-      agentKind={overrides.selectedAgent}
-      model={overrides.selectedModel}
-      onAgentKindChange={overrides.onAgentChange}
-      onModelChange={overrides.setSelectedModel}
-      inheritedAgentKind={inheritedKind}
-      agentPlaceholder={inheritedKind ? `Inherit (${inheritedKind.replace(/-/g, ' ')})` : 'Inherit'}
-      modelPlaceholder={inherited?.model ? `Inherit (${inherited.model})` : 'Inherit'}
-      effort={overrides.selectedEffort}
-      onEffortChange={overrides.setSelectedEffort}
-      effortLevels={overrides.retryEffortLevels}
-      effortPlaceholder={inherited ? `Inherit (${inherited.effort})` : 'Inherit'}
-    />
+    <div className="space-y-2">
+      <HarnessModelPicker
+        agentKinds={overrides.availableAgents}
+        models={overrides.availableModels}
+        modelsLoading={overrides.isLoadingModels}
+        agentKind={overrides.selectedAgent}
+        model={overrides.selectedModel}
+        onAgentKindChange={overrides.onAgentChange}
+        onModelChange={overrides.setSelectedModel}
+        inheritedAgentKind={inheritedKind}
+        agentPlaceholder={inheritedKind ? `Inherit (${inheritedKind.replace(/-/g, ' ')})` : 'Inherit'}
+        modelPlaceholder={inherited?.model ? `Inherit (${inherited.model})` : 'Inherit'}
+        effort={overrides.selectedEffort}
+        onEffortChange={overrides.setSelectedEffort}
+        effortLevels={overrides.retryEffortLevels}
+        effortPlaceholder={inherited ? `Inherit (${inherited.effort})` : 'Inherit'}
+      />
+      <HarnessContainmentNote
+        agents={agents}
+        machineAgents={overrides.machineAgents}
+        kind={overrides.selectedAgent || inheritedKind}
+      />
+    </div>
   );
 }
 

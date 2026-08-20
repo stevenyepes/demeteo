@@ -50,6 +50,7 @@ function harness(over: Partial<SyncResolverSelection['overrides']> = {}): SyncRe
   return {
     inherited: null,
     overrides: {
+      machineAgents: [],
       availableModels: [],
       selectedModel: '',
       setSelectedModel: () => {},

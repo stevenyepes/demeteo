@@ -196,11 +196,21 @@ pub struct AgentConfigView {
     /// Human-facing name from the runtime's declared capabilities, so the UI
     /// never has to derive a label from the kind slug.
     pub display_label: String,
+    /// What holds a turn of this harness inside the worktree it is given, on
+    /// *this machine* — the row is per-machine and the answer is too, because
+    /// codex's fence is a kernel facility that two of the three shipped
+    /// platforms have and the third has never been observed to.
+    pub path_containment: crate::domain::models::PathContainment,
 }
 
 /// A registered coding agent and the capabilities Demeteo asks of it, exposed
 /// to the frontend so the UI has a single source of truth for "which agents
 /// exist" instead of a hardcoded list per component.
+///
+/// One list for every machine, and fetched once per session. A capability
+/// whose answer depends on the host — anything a kernel is behind — cannot be
+/// stated here truthfully and belongs on [`AgentConfigView`], which is read
+/// per machine.
 #[derive(Serialize)]
 pub struct AgentCatalogEntry {
     pub kind: String,

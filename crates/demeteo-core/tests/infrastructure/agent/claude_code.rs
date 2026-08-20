@@ -390,6 +390,11 @@ fn args_never_emit_settings() {
     // natively, so Demeteo injects no auth at all. (Note: `--settings`
     // is distinct from the `--setting-sources` flag emitted in bare
     // mode; this asserts the former is absent.)
+    //
+    // `--settings` is also where a worktree fence would be spelled, and no
+    // such fence is expressible. The measurements that establish it, and the
+    // flag that would carry one instead, sit on the `path_containment`
+    // declaration in `claude_code/mod.rs`.
     let with_bare = build_claude_args(&ctx_for_test(true), Some("sess-1"), "");
     assert!(
         !with_bare.contains(&"--settings".to_string()),

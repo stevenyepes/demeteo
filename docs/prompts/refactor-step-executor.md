@@ -101,8 +101,8 @@ AGENTS.md §2 — no approved workaround. The ones this work will run into:
   (`ports/execution.rs`) → `docs/EXECUTION_PARITY.md`. **This module is the single place
   most able to break that**, which is why the conformance gates below are mandatory here.
 - **Never bypass `PermissionPolicyPort`** when spawning agent processes, and never widen
-  the worktree fence (`external_directory: "deny"` plus the chmod fence in
-  `adapters/worktree/git_ops/scope.rs`).
+  either fence: the chmod fence in `adapters/worktree/git_ops/scope.rs`, or the harness's
+  own, which varies by harness and is declared by `PathContainment`.
 - The compiled `PermissionProfile` is complete and uses only `allow`/`deny`, never `ask`.
 - **Secrets live in the OS keyring only.** Moving code must not move a credential into a
   log line or a struct that gets serialised.

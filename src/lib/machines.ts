@@ -63,8 +63,10 @@ export function parseMachineAgents(agentsJson: string | null | undefined): Machi
   );
 }
 
-/** An agent kind on one machine, with the availability probe's verdict.
- *  Mirrors the Rust `AgentConfigView` (`state.rs`). */
+/** An agent kind on one machine, with the availability probe's verdict. The
+ *  settings tab's half of the Rust `AgentConfigView` (`state.rs`); the row's
+ *  containment answer is read off the same command by `AgentAvailability`,
+ *  which is the run surface's own narrower view of it. */
 export interface AgentConfigView {
   kind: string;
   enabled: boolean;

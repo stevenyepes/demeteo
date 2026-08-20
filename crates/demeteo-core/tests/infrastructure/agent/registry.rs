@@ -17,6 +17,7 @@ impl AgentRuntime for NoopRuntime {
             default_model: None,
             effort_levels: &[],
             personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
+            path_containment: crate::domain::models::PathContainment::UNFENCED,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }
@@ -167,6 +168,167 @@ fn every_supported_kind_declares_what_bare_mode_does_to_its_personalization() {
             ),
         }
     }
+}
+
+/// The containment counterpart, and the reason it is not a second copy of the
+/// table: the assertion is the fence itself, on the wire. A declaration and a
+/// hand-written expectation would agree forever after someone deleted the
+/// `external_directory` deny or made the sandbox selection conditional, and the
+/// sync pane would keep telling that user their conflict resolution is confined
+/// to the worktree.
+///
+/// Each dimension is bound to the one mechanism that could back it. The kernel
+/// sandbox binds both ways — codex is the only harness that sends one and the
+/// only one that claims one. The harness denial binds one way only, because
+/// Demeteo sends it to a harness that is not credited with reading it; the test
+/// below holds that gap open deliberately.
+///
+/// What no wire test reaches is `Harness` versus `HarnessPartial`: that
+/// difference lives inside the harness's own dispatch, and the adapter
+/// declaring the partial arm owns the evidence. Asserted here instead is that
+/// the arm's two preconditions are both on the wire — the denial exists, and
+/// the shell that walks past it is permitted.
+///
+/// Read for a Linux target because that is what the declaration is for, and
+/// because the remote runner is always Linux; the platform-keyed answer is
+/// `PathContainment::for_agent`'s own unit tests. The profile is `all_allow`
+/// because that is what the sync resolver spawns with, so the argv here is the
+/// argv of the turn the claim is made about.
+#[test]
+fn every_supported_kind_declares_what_confines_its_turn_to_the_worktree() {
+    use crate::adapters::agent::cli_runtime::{ArgsBuilder, PermEnvBuilder};
+    use crate::adapters::agent::test_stubs::{StubAgentExec, StubExec};
+    use crate::domain::models::{AgentKind, Enforcement, PathContainment, Platform};
+    use crate::domain::permission::PermissionProfile;
+    use crate::ports::agent_runtime::AgentContext;
+
+    let ctx = AgentContext {
+        thread_id: "t1".into(),
+        machine_id: "local".into(),
+        binary: "agent".into(),
+        args: vec![],
+        env: Default::default(),
+        cwd: ".".into(),
+        model: None,
+        effort: None,
+        title: None,
+        platform: Some(Platform::Linux),
+        agent_exec: Arc::new(StubAgentExec),
+        exec: Arc::new(StubExec),
+        permissions: PermissionProfile::all_allow(),
+        bare_mode: true,
+        keep_harness_personalization: false,
+        tool_allowlist: None,
+        max_turns: None,
+        max_budget_usd: None,
+    };
+
+    for kind in AgentKind::ALL {
+        let (declared, build, perm): (PathContainment, ArgsBuilder, PermEnvBuilder) = match kind {
+            AgentKind::ClaudeCode => {
+                let rt = crate::adapters::agent::claude_code::runtime();
+                (rt.path_containment, rt.build_args, rt.perm_env)
+            }
+            AgentKind::Pi => {
+                let rt = crate::adapters::agent::pi::runtime();
+                (rt.path_containment, rt.build_args, rt.perm_env)
+            }
+            AgentKind::Codex => {
+                let rt = crate::adapters::agent::codex::runtime();
+                (rt.path_containment, rt.build_args, rt.perm_env)
+            }
+            AgentKind::Hermes => {
+                let rt = crate::adapters::agent::hermes::runtime();
+                (rt.path_containment, rt.build_args, rt.perm_env)
+            }
+            AgentKind::Opencode => (
+                crate::adapters::agent::opencode::runtime()
+                    .capabilities()
+                    .path_containment,
+                crate::adapters::agent::opencode::build_opencode_args as ArgsBuilder,
+                crate::ports::agent_runtime::opencode_permission_env as PermEnvBuilder,
+            ),
+        };
+
+        assert_eq!(
+            declared,
+            PathContainment::for_agent(kind, Some(Platform::Linux)),
+            "{kind} declares one thing in its adapter and another in the domain table"
+        );
+
+        let argv = build(&ctx, None, "hi").join(" ");
+        let perm_env: String = perm(&ctx.permissions)
+            .into_values()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let kernel_write_fence = argv.contains("sandbox_mode=workspace-write");
+        let outside_denied = perm_env.contains(r#""external_directory":"deny""#);
+        let shell_permitted = perm_env.contains(r#""bash":"allow""#);
+
+        assert_eq!(
+            declared.writes == Enforcement::Os,
+            kernel_write_fence,
+            "{kind}: an OS write fence is claimed exactly where the sandbox selection is sent — argv was `{argv}`"
+        );
+        assert_eq!(
+            declared.shell == Enforcement::Os,
+            kernel_write_fence,
+            "{kind}: that sandbox is process-wide, so it backs the shell dimension and the write one together — argv was `{argv}`"
+        );
+        assert_ne!(
+            declared.reads,
+            Enforcement::Os,
+            "{kind}: nothing Demeteo puts on a wire refuses a read — the one OS mechanism here is `sandbox_mode`, and `all_allow` selects its write-fencing mode"
+        );
+
+        for (dimension, enforcement) in [("reads", declared.reads), ("writes", declared.writes)] {
+            let claims_harness = matches!(
+                enforcement,
+                Enforcement::Harness | Enforcement::HarnessPartial
+            );
+            assert!(
+                !claims_harness || outside_denied,
+                "{kind}: a harness fence on {dimension} with no directory denial on the wire — perm env was `{perm_env}`"
+            );
+        }
+
+        if declared.shell == Enforcement::HarnessPartial {
+            assert!(
+                outside_denied && shell_permitted,
+                "{kind}: the partial arm names a gap in a directory denial that a permitted shell walks past — take either away and it is the wrong word. Perm env was `{perm_env}`"
+            );
+        }
+    }
+}
+
+/// Emission is not enforcement, and hermes is where the two come apart. It
+/// shares opencode's `perm_env` translator, so it is handed the identical
+/// `OPENCODE_PERMISSION` payload — and nothing in this tree establishes that a
+/// harness reads a variable in another harness's namespace, nor is hermes
+/// installed here to ask. Making the claim agree with the wire is the mistake
+/// this exists to catch; what moves hermes is the capture named on its
+/// declaration.
+#[test]
+fn hermes_is_handed_opencodes_directory_denial_and_still_claims_no_fence() {
+    use crate::domain::models::{AgentKind, PathContainment, Platform};
+    use crate::domain::permission::PermissionProfile;
+
+    let rt = crate::adapters::agent::hermes::runtime();
+    let payload = (rt.perm_env)(&PermissionProfile::all_allow());
+    assert_eq!(
+        payload,
+        crate::ports::agent_runtime::opencode_permission_env(&PermissionProfile::all_allow()),
+        "hermes no longer shares opencode's translator, so this test is asserting the wrong wire"
+    );
+    assert!(payload
+        .values()
+        .any(|v| v.contains(r#""external_directory":"deny""#)));
+
+    assert_eq!(rt.path_containment, PathContainment::UNFENCED);
+    assert_eq!(
+        PathContainment::for_agent(AgentKind::Hermes, Some(Platform::Linux)),
+        PathContainment::UNFENCED
+    );
 }
 
 /// The half the argv comparison above cannot see: that pi's `bare_mode` block
@@ -443,6 +605,7 @@ impl AgentRuntime for FlippableRuntime {
             default_model: None,
             effort_levels: &[],
             personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
+            path_containment: crate::domain::models::PathContainment::UNFENCED,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }
@@ -506,6 +669,7 @@ impl AgentRuntime for FixedRuntime {
             default_model: None,
             effort_levels: &[],
             personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
+            path_containment: crate::domain::models::PathContainment::UNFENCED,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }

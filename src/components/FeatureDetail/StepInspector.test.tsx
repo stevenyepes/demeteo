@@ -125,6 +125,7 @@ const BASELINE: HarnessBaseline = {
 };
 
 const OVERRIDES: HarnessOverrides = {
+  machineAgents: [],
   availableModels: [],
   selectedModel: '',
   setSelectedModel: () => {},

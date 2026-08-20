@@ -11,7 +11,9 @@ use thiserror::Error;
 use tokio_stream::Stream;
 
 use crate::domain::agent_event::AgentEvent;
-use crate::domain::models::{Availability, EffortLevel, Platform, SessionInfo, WindowsAgentShell};
+use crate::domain::models::{
+    Availability, EffortLevel, PathContainment, Platform, SessionInfo, WindowsAgentShell,
+};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_execution::AgentExecutionPort;
 
@@ -162,7 +164,9 @@ pub struct AgentContext {
 /// The policy is *complete* (every gated tool has an explicit value) and
 /// only ever uses `allow` / `deny` — never `ask` — so opencode runs fully
 /// non-interactively with no permission prompts. `external_directory` is
-/// always `deny` (scopes the agent to its worktree); `read` is always
+/// always `deny`, which is a rule handed to a harness rather than a fence on
+/// the turn: what it buys, per harness and per class of access, is declared by
+/// [`PathContainment`] and nothing here may be read as more. `read` is always
 /// `allow` (file reads, grep/glob/list are separate read tools, *not* the
 /// shell, so denying `bash` never blocks codebase inspection).
 pub fn opencode_permission_json(p: &PermissionProfile) -> String {
@@ -446,6 +450,19 @@ pub struct AgentCapabilities {
     /// Read the adapter's `build_args` before changing a value here; the type's
     /// own docs carry why it is a claim about Demeteo and not about the harness.
     pub personalization: PersonalizationSupport,
+    /// What holds a capability-scoped turn of this harness inside its
+    /// worktree, on a POSIX host.
+    ///
+    /// Declared beside the argv and env builders that are the whole of the
+    /// claim, which is what makes it the evidence: the conformance suite reads
+    /// it against those builders' output, and against
+    /// [`PathContainment::for_agent`]'s POSIX arm. No surface reads it — what a
+    /// user is told comes from that function, keyed on the platform of the
+    /// machine the turn will run on, because a fence backed by a kernel
+    /// facility is not the same claim on a kernel that has never been observed
+    /// to carry it. The type's own docs carry why the answer is about Demeteo
+    /// and not about the harness.
+    pub path_containment: PathContainment,
     /// The interpreter this harness runs agent-authored commands under on
     /// Windows, which decides what the platform block may promise about
     /// command syntax. Read through

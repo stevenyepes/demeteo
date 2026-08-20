@@ -136,7 +136,7 @@ pub(crate) async fn materialize_user_attachments_to_worktree(
 /// into `{wt_path}/artifacts/_context/` so the agent can read them
 /// without needing `external_directory: allow`.
 ///
-/// Opencode's `external_directory: deny` restricts all tool access to
+/// Opencode's `external_directory: deny` restricts its file tools to
 /// the worktree `--dir`. Artifact paths in path manifests are absolute
 /// paths under the app data directory (e.g. `~/Library/Application
 /// Support/…/artifacts/…`) — outside the worktree. This function

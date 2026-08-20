@@ -235,6 +235,7 @@ impl AgentRuntime for ScriptedRuntime {
             default_model: None,
             effort_levels: &[],
             personalization: PersonalizationSupport::Native,
+            path_containment: crate::domain::models::PathContainment::UNFENCED,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }

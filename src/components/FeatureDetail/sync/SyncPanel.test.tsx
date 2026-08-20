@@ -48,6 +48,7 @@ const behindDrift: FeatureDrift = {
 const resolverSelection: SyncResolverSelection = {
   inherited: { agent_kind: 'opencode', model: null, effort: 'medium' },
   overrides: {
+    machineAgents: [],
     availableModels: [],
     selectedModel: '',
     setSelectedModel: () => {},

@@ -392,13 +392,11 @@ async fn run_resolver_turn(
         // is a documented no-op — the one dimension that differs is `network`,
         // deliberately: a resolution may need to read a changelog.
         //
-        // How tightly `cwd` then confines the turn is the harness's answer, not
-        // this profile's, and the harness is a user's per-attempt choice:
-        // opencode and hermes are handed `"external_directory": "deny"`, codex
-        // a cwd-scoped `workspace-write` sandbox, and claude-code and pi no
-        // path fence at all — for them `cwd` is a working directory and not a
-        // boundary. Narrowing the profile is not the lever for that: a profile
-        // that cannot write source cannot resolve a conflict either.
+        // How tightly `cwd` then confines the turn is the harness's answer and
+        // not this profile's — `PathContainment` in
+        // `domain/models/sandbox.rs`. Narrowing the profile is not the lever
+        // for it either: a profile that cannot write source cannot resolve a
+        // conflict.
         permissions: crate::domain::permission::PermissionProfile::all_allow(),
         bare_mode: true,
         keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator
