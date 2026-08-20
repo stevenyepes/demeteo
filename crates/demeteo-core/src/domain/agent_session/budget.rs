@@ -18,6 +18,13 @@ pub const BUDGET_FRACTION_FINALIZE: f64 = 0.10;
 pub const BUDGET_FRACTION_VERIFIER: f64 = 0.25;
 pub const BUDGET_FRACTION_PLANNER: f64 = 0.40;
 
+/// The conflict resolver's share, and the one role above that is not a
+/// read-and-answer turn: it edits files, may run the project's build, and holds
+/// the full toolset. It is still bounded where the coding turn is not — the
+/// file set is enumerated before it starts — so it sits between the planner and
+/// the uncapped `1.0`. At the $20 default this is $10.
+pub const BUDGET_FRACTION_RESOLVER: f64 = 0.50;
+
 /// The resolved *base* per-turn dollar budget for this run: the per-run
 /// override, else the project default, else the engine default. Always
 /// `Some` — every turn carries a ceiling (see

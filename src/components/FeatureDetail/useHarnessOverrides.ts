@@ -3,9 +3,15 @@ import { getAgentModels } from '../../lib/agentModels';
 import { useErrorBus } from '../../lib/errorBus';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
 import { reconcileEffort, type EffortLevel } from '../../lib/effortLevels';
-import { getProjectById, listAgentConfigs } from '../../lib/featureDetail';
+import { getProjectById, listAgentConfigs, type AgentAvailability } from '../../lib/featureDetail';
 
 export interface HarnessOverrides {
+  /** Every harness row the feature's machine answered for, probe result and
+   *  containment included. It travels with the selection because the machine
+   *  is what this hook resolved and nothing downstream knows it — unlike the
+   *  session-wide catalog, which any site fetches for itself through
+   *  `useAgentCatalog`. */
+  machineAgents: AgentAvailability[];
   availableModels: Array<{ value: string; name: string }>;
   selectedModel: string;
   setSelectedModel: (model: string) => void;
@@ -37,11 +43,12 @@ export function useHarnessOverrides(): HarnessOverrides {
   const [availableModels, setAvailableModels] = useState<Array<{ value: string; name: string }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [isLoadingModels, setIsLoadingModels] = useState(false);
-  // Harness (coding agent) selection for replay/retry. `availableAgents` is the
-  // set installed *and* enabled on the feature's machine; `selectedAgent === ''`
-  // means "keep the feature's current harness". `featureAgentKind` /
-  // `featureMachineId` are captured so a harness switch can re-probe models.
-  const [availableAgents, setAvailableAgents] = useState<string[]>([]);
+  // Harness (coding agent) selection for replay/retry. `machineAgents` is what
+  // the feature's machine answered for every registered harness;
+  // `selectedAgent === ''` means "keep the feature's current harness".
+  // `featureAgentKind` / `featureMachineId` are captured so a harness switch
+  // can re-probe models.
+  const [machineAgents, setMachineAgents] = useState<AgentAvailability[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string>('');
   // Re-pin the feature-wide effort on a retry/replay, exactly as the model and
   // harness selects do. `''` keeps whatever the feature already carries.
@@ -49,6 +56,13 @@ export function useHarnessOverrides(): HarnessOverrides {
   const { agents: agentCatalog } = useAgentCatalog();
   const [featureAgentKind, setFeatureAgentKind] = useState<string>('opencode');
   const [featureMachineId, setFeatureMachineId] = useState<string>('local');
+
+  // Installed *and* enabled: a picker offering a harness the machine does not
+  // have fails at spawn instead.
+  const availableAgents = useMemo(
+    () => machineAgents.filter((a) => a.enabled && a.available).map((a) => a.kind),
+    [machineAgents],
+  );
 
   // The effort levels the harness the rerun will actually use accepts. Empty
   // (hermes) disables the control rather than offering a level the adapter
@@ -83,11 +97,7 @@ export function useHarnessOverrides(): HarnessOverrides {
           listAgentConfigs({ machineId, refresh: false }).catch(() => []),
         ]);
         setAvailableModels(models as Array<{ value: string; name: string }>);
-        setAvailableAgents(
-          (configs || [])
-            .filter(a => a.enabled && a.available)
-            .map(a => a.kind),
-        );
+        setMachineAgents(configs || []);
       } catch (err) {
         reportError(err, { kind: "internal" });
       } finally {
@@ -121,6 +131,7 @@ export function useHarnessOverrides(): HarnessOverrides {
 
   return useMemo(
     () => ({
+      machineAgents,
       availableModels,
       selectedModel,
       setSelectedModel,
@@ -136,6 +147,7 @@ export function useHarnessOverrides(): HarnessOverrides {
       probeForFeature,
     }),
     [
+      machineAgents,
       availableModels,
       isLoadingModels,
       availableAgents,

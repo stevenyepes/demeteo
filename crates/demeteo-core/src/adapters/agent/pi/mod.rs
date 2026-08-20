@@ -468,6 +468,11 @@ pub fn runtime() -> UnifiedCliRuntime {
         // capability-scoped step runs on nothing the user taught this harness
         // unless it asked to keep it (`keep_harness_personalization`).
         personalization: crate::ports::agent_runtime::PersonalizationSupport::Suppressed,
+        // The only lever `build_pi_args` has over what a turn reaches is
+        // `-xt`, which denies built-ins by *name* (`excluded_tools_for`) and
+        // has no spelling for a directory. Nothing else pi exposes takes a
+        // path, so there is no fence to declare.
+        path_containment: crate::domain::models::PathContainment::UNFENCED,
         // Headless hygiene, plus one behavioural pin: `long` retention buys the
         // extended provider prompt cache (1h Anthropic, 24h OpenAI), which is
         // what makes cross-step `--session` continuation actually pay off.

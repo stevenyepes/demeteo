@@ -19,6 +19,7 @@ impl ExecutionDriver {
     pub(crate) const BUDGET_FRACTION_FINALIZE: f64 = budget::BUDGET_FRACTION_FINALIZE;
     pub(crate) const BUDGET_FRACTION_VERIFIER: f64 = budget::BUDGET_FRACTION_VERIFIER;
     pub(crate) const BUDGET_FRACTION_PLANNER: f64 = budget::BUDGET_FRACTION_PLANNER;
+    pub(crate) const BUDGET_FRACTION_RESOLVER: f64 = budget::BUDGET_FRACTION_RESOLVER;
 
     pub(crate) fn base_max_budget_usd(&self) -> f64 {
         budget::base_max_budget_usd(

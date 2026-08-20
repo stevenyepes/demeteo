@@ -422,6 +422,9 @@ function AppInner() {
               defaultBranch={view.editorContext.defaultBranch}
               featureTitle={view.featureTitle}
               initialFile={view.editorContext.initialFile}
+              baseRef={view.editorContext.baseRef}
+              headRef={view.editorContext.headRef}
+              initialTab={view.editorContext.initialTab}
               onBack={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle })}
             />
           )}

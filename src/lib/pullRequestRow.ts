@@ -67,7 +67,14 @@ export function describePullRequestRow(
 function chipsFor(pr: PullRequestSummary): RowChip[] {
   const chips: RowChip[] = [];
   if (pr.draft) chips.push({ label: 'Draft', tone: 'slate' });
+  // Three readings of one field: a verdict, the absence of one, and no claim.
+  // `false` says nothing on purpose — a queue where every clean row carries a
+  // reassurance is a queue nobody scans.
   if (pr.has_conflicts === true) chips.push({ label: 'Conflicts', tone: 'amber' });
+  else if (pr.has_conflicts === null) {
+    chips.push({ label: 'Merge unknown', tone: 'slate' });
+  }
+
   if (pr.review_status) {
     const meta = runStatusMeta(pr.review_status);
     chips.push({ label: meta.label, tone: meta.tone });

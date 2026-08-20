@@ -595,14 +595,11 @@ pub trait MergeAuditRepository: Send + Sync {
         default_branch: &str,
         status: &str,
         merge_sha: Option<&str>,
-        conflict_json: Option<&str>,
+        detail_json: Option<&str>,
         now: i64,
     ) -> Result<(), String>;
 
     fn lookup_repo_context(&self, feature_id: &FeatureId) -> Result<RepoContext, String>;
-
-    fn get_last_sync_worktree_path(&self, feature_id: &FeatureId)
-        -> Result<Option<String>, String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

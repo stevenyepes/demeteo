@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 import { ChevronRight } from 'lucide-react';
 
 import { Chip } from '../ui/Chip';
@@ -14,6 +14,14 @@ export interface PullRequestRowProps {
    *  actually runs on. Empty until the settings read lands, or when the project
    *  has stored none. */
   agentKind: string;
+  /**
+   * Ask for this row's review tier — mergeability and the diffstat, which no
+   * list endpoint carries for GitHub. Called when the user points at the row
+   * rather than on mount, because the alternative is one provider request per
+   * row per refresh; `CodeReviewView` records the rate-limit reasoning and
+   * makes a repeat call free.
+   */
+  onRequestDetail?: (pullRequestUrl: string) => void;
   /** Pinned by tests; a real row reads the clock at render. Left off the
    *  parent's call on purpose — a `Date.now()` passed down changes every
    *  render and would defeat the memo below. */
@@ -39,12 +47,19 @@ function PullRequestRowImpl({
   pullRequest,
   onReview,
   agentKind,
+  onRequestDetail,
   now,
 }: PullRequestRowProps): React.ReactElement {
   const row = describePullRequestRow(pullRequest, now);
+  const url = pullRequest.web_url;
+  const requestDetail = useCallback(() => onRequestDetail?.(url), [onRequestDetail, url]);
 
   return (
-    <div className="group rounded-xl border border-white/5 bg-black/20 transition-colors hover:border-cyan-500/30">
+    <div
+      className="group rounded-xl border border-white/5 bg-black/20 transition-colors hover:border-cyan-500/30"
+      onMouseEnter={requestDetail}
+      onFocusCapture={requestDetail}
+    >
       <a
         href={row.url}
         target="_blank"

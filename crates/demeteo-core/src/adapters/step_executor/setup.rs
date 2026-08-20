@@ -221,5 +221,9 @@ pub fn fetch_default_settings() -> ProjectSettings {
         default_loop_iterations: None,
         default_max_budget_usd: None,
         review_entrypoint: None,
+        sync_resolver_agent_kind: None,
+        sync_resolver_model: None,
+        sync_resolver_effort: None,
+        sync_review_before_push: None,
     }
 }

@@ -71,6 +71,8 @@ function mockBackend() {
     switch (cmd) {
       case 'step_list_for_run':
         return Promise.resolve([STEP]);
+      case 'sync_session_get':
+        return Promise.resolve(null);
       case 'feature_get':
         return Promise.resolve({ id: FEATURE_ID, status: 'completed' });
       case 'feature_workflow_graph':

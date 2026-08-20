@@ -9,6 +9,12 @@ const SAME_REPO: &str = include_str!("../fixtures/mr_summary/github-same-repo.js
 const FORK: &str = include_str!("../fixtures/mr_summary/github-fork.json");
 const DRAFT: &str = include_str!("../fixtures/mr_summary/github-draft-unauthenticated.json");
 const GITLAB_FORK: &str = include_str!("../fixtures/mr_summary/gitlab-fork.json");
+const GITHUB_CHECKING: &str = include_str!("../fixtures/mr_summary/github-detail-checking.json");
+const GITHUB_CONFLICTING: &str =
+    include_str!("../fixtures/mr_summary/github-detail-conflicting.json");
+const GITLAB_CHECKING: &str = include_str!("../fixtures/mr_summary/gitlab-detail-checking.json");
+const GITLAB_CONFLICTING: &str =
+    include_str!("../fixtures/mr_summary/gitlab-detail-conflicting.json");
 
 fn payload(raw: &str) -> Value {
     serde_json::from_str(raw).expect("fixture is not JSON")
@@ -168,4 +174,108 @@ fn the_head_fetch_spec_is_one_a_run_can_start_from() {
             "a summary must not hold a spec the bootstrap refuses"
         );
     }
+}
+
+#[test]
+fn a_mergeability_still_being_computed_is_not_a_clean_merge() {
+    let checking = github(GITHUB_CHECKING);
+    assert_eq!(
+        checking.has_conflicts, None,
+        "GitHub answers `mergeable: null` until it has finished deciding; \
+         reading that as a clean merge hands a reviewer a verdict nobody gave"
+    );
+
+    let conflicting = github(GITHUB_CONFLICTING);
+    assert_eq!(conflicting.has_conflicts, Some(true));
+
+    let checking = gitlab(GITLAB_CHECKING);
+    assert_eq!(
+        checking.has_conflicts, None,
+        "`merge_status: checking` is the same undecided answer in GitLab's spelling, \
+         and the `has_conflicts: false` GitLab sends beside it is that status \
+         projected rather than a verdict of its own"
+    );
+
+    let conflicting = gitlab(GITLAB_CONFLICTING);
+    assert_eq!(conflicting.has_conflicts, Some(true));
+}
+
+/// The fallback exists for a payload naming no status at all; nothing GitLab
+/// sends reaches it, which is why the fixtures above carry both fields.
+#[test]
+fn a_merge_request_with_no_status_falls_back_to_the_flag() {
+    let mut raw = payload(GITLAB_CONFLICTING);
+    raw.as_object_mut()
+        .expect("the merge request fixture is an object")
+        .remove("merge_status");
+
+    assert_eq!(
+        MrSummary::from_gitlab(&raw)
+            .expect("merge_status is not identity")
+            .has_conflicts,
+        Some(true)
+    );
+}
+
+#[test]
+fn the_review_tier_is_read_where_a_payload_carries_it() {
+    let pr = github(GITHUB_CHECKING);
+    assert_eq!(pr.additions, Some(120));
+    assert_eq!(pr.deletions, Some(8));
+    assert_eq!(pr.changed_files, Some(3));
+
+    let mr = gitlab(GITLAB_CHECKING);
+    assert_eq!(
+        mr.changed_files,
+        Some(1000),
+        "GitLab caps `changes_count` at \"1000+\"; the floor is what the label means, \
+         and a failed parse would claim the request touches nothing"
+    );
+    assert_eq!(
+        (mr.additions, mr.deletions),
+        (None, None),
+        "neither GitLab merge-request endpoint carries a line diffstat"
+    );
+}
+
+/// A field the review tier added must not become a field a listing requires.
+///
+/// `list_one_repo` drops an element it cannot map, so one missing
+/// `#[serde(default)]` empties the whole queue and reports nothing wrong. The
+/// list fixtures carry none of the four, which is exactly the payload that
+/// would trip it.
+#[test]
+fn a_list_element_missing_the_review_tier_still_maps() {
+    for (label, pr) in [
+        ("github", github(SAME_REPO)),
+        ("github fork", github(FORK)),
+        ("gitlab", gitlab(GITLAB_FORK)),
+    ] {
+        assert_eq!(
+            (
+                pr.has_conflicts,
+                pr.additions,
+                pr.deletions,
+                pr.changed_files
+            ),
+            (None, None, None, None),
+            "{label} list element must map with an empty review tier, not fail"
+        );
+    }
+}
+
+/// The undecided verdict has to survive the wire, or the frontend cannot tell
+/// it from a clean one. The diffstat may be skipped; this may not.
+#[test]
+fn an_undecided_verdict_is_serialized_rather_than_skipped() {
+    let json = serde_json::to_value(github(SAME_REPO)).expect("summary is serializable");
+    assert_eq!(
+        json.get("has_conflicts"),
+        Some(&Value::Null),
+        "an absent `has_conflicts` reads as a clean merge on the other side"
+    );
+    assert!(
+        json.get("additions").is_none(),
+        "absent and unknown are the same fact for a diffstat"
+    );
 }

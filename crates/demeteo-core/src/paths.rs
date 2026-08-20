@@ -533,6 +533,42 @@ pub fn feature_cache_dir(repo_dir: &str, feature_branch: &str) -> String {
     format!("{}_cache_{}", repo_dir, slug)
 }
 
+/// The throwaway worktree one feature's upstream sync merges in:
+/// `{repo_dir}_wt_sync_{slug}`.
+///
+/// A sibling of the clone on the same terms as [`feature_cache_dir`] and the
+/// step worktrees, and a suffix rather than a join for the reason
+/// `git_ops::worktree` records: nothing here descends into a directory, so
+/// there is no separator to get wrong on any platform, and the suffix keeps
+/// every worktree out of the repo it was cut from.
+///
+/// `windows_host` per the [`windows_host_target`] convention. On a
+/// Windows-local target the branch is folded to a [`short_path_segment`],
+/// because `CreateProcessW` rejects a working directory past `MAX_PATH`
+/// whatever `core.longpaths` says and a branch name is unbounded — the same
+/// limit `worktree_dir`'s `shorten` flag exists for. Off Windows the branch
+/// stays readable, through the character whitelist rather than a bare
+/// `replace('/', "_")`: a branch may carry anything a ref allows, and a `:` or
+/// a `*` reaching a path is a directory some filesystem refuses to create.
+///
+/// Provisioning, the stale-worktree scan that keys on the `_wt_sync` infix,
+/// and the teardown all read this one spelling; a second one would leave a
+/// live worktree nothing can name.
+pub fn sync_worktree_dir(repo_dir: &str, feature_branch: &str, windows_host: bool) -> String {
+    let slug: String = if windows_host {
+        short_path_segment(feature_branch)
+    } else {
+        feature_branch
+            .chars()
+            .map(|c| match c {
+                'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => c,
+                _ => '-',
+            })
+            .collect()
+    };
+    format!("{}_wt_sync_{}", repo_dir, slug)
+}
+
 /// Current wall-clock time in milliseconds since the UNIX epoch.
 ///
 /// Used for `created_at` / `updated_at` columns, sidebar ordering, and

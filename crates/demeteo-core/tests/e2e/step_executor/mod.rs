@@ -3,6 +3,7 @@
 //! builds on.
 
 mod bootstrap;
+mod drift;
 mod gate_decide;
 mod harness;
 mod launch_resolution;
@@ -10,3 +11,4 @@ mod origin_cut;
 mod remote_mirror;
 mod retry_guards;
 mod sync_base;
+mod sync_resolve;

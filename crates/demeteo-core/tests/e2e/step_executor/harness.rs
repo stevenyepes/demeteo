@@ -116,9 +116,22 @@ pub(super) async fn build_test_executor_in(
     notif: Arc<dyn NotificationPort>,
     exec: Arc<dyn crate::ports::execution::ExecutionPort>,
 ) -> (DagStepExecutor, Arc<SqliteAdapter>) {
+    build_test_executor_with_agents(temp_dir, notif, exec, vec![]).await
+}
+
+/// [`build_test_executor_in`] with a populated registry, for the tests whose
+/// subject is what an `AgentContext` was built out of. An empty registry
+/// refuses every spawn with `NotFound`, which reads as "the turn failed" and
+/// says nothing about what it asked for.
+pub(super) async fn build_test_executor_with_agents(
+    temp_dir: std::path::PathBuf,
+    notif: Arc<dyn NotificationPort>,
+    exec: Arc<dyn crate::ports::execution::ExecutionPort>,
+    runtimes: Vec<Arc<dyn crate::ports::agent_runtime::AgentRuntime>>,
+) -> (DagStepExecutor, Arc<SqliteAdapter>) {
     let conn = crate::db::init_db(temp_dir.clone()).expect("init_db failed");
     let db = Arc::new(SqliteAdapter::new(conn).unwrap());
-    let registry = Arc::new(AgentRegistry::new(vec![]));
+    let registry = Arc::new(AgentRegistry::new(runtimes));
     let agent_exec = Arc::new(FakeAgentExec);
     let artifacts: Arc<dyn crate::ports::artifact_store::ArtifactStore> = Arc::new(
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
@@ -126,11 +139,15 @@ pub(super) async fn build_test_executor_in(
     let attachments: Arc<dyn crate::ports::attachment_store::AttachmentStore> =
         Arc::new(crate::adapters::attachment_store::fs::FsAttachmentStore::new(temp_dir.clone()));
 
+    let sync_turns = Arc::new(crate::application::sync_turns::SyncTurns::default());
     let merge_executor: Arc<dyn crate::ports::merge::MergeExecutor> = {
         let git_ops =
             crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
         Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
             db.clone(),
+            db.clone(),
+            db.clone(),
+            sync_turns.clone(),
             git_ops,
             exec.clone(),
             temp_dir.clone(),
@@ -165,6 +182,7 @@ pub(super) async fn build_test_executor_in(
         temp_dir.clone(),
         pricing,
         db.clone(), // remote-run mirror — SqliteAdapter implements the port
+        sync_turns,
     );
     (executor, db)
 }

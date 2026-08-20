@@ -328,25 +328,38 @@ impl StepExecutor for StubExecutor {
     async fn step_list_for_run(&self, _feature_id: &str) -> Result<Vec<StepExecution>, String> {
         Ok(Vec::new())
     }
-    async fn feature_sync(
-        &self,
-        _feature_id: &str,
-        _revalidate_step_execution_id: Option<&str>,
-    ) -> Result<SyncOutcomeView, String> {
+    async fn feature_sync(&self, _feature_id: &str) -> Result<SyncOutcomeView, String> {
         Ok(SyncOutcomeView::Ok {
-            merge_commit_sha: "deadbeef".into(),
+            merge_commit_sha: Some("deadbeef".to_string()),
             changed: false,
         })
+    }
+    async fn feature_drift(
+        &self,
+        _feature_id: &str,
+        _refresh: bool,
+    ) -> Result<demeteo_core::domain::models::FeatureDrift, String> {
+        Err("this stub counts nothing".into())
     }
     async fn feature_resolve_sync_conflicts(
         &self,
         _feature_id: &str,
         _conflict_files: &[String],
-        _revalidate_step_execution_id: Option<&str>,
+        _asked: &demeteo_core::domain::sync_resolver::SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String> {
         Ok(SyncOutcomeView::Ok {
-            merge_commit_sha: "deadbeef".into(),
+            merge_commit_sha: Some("deadbeef".to_string()),
             changed: false,
+        })
+    }
+    async fn feature_sync_resolver(
+        &self,
+        _feature_id: &str,
+    ) -> Result<demeteo_core::ports::step_executor::SyncResolverView, String> {
+        Ok(demeteo_core::ports::step_executor::SyncResolverView {
+            agent_kind: "opencode".into(),
+            model: None,
+            effort: demeteo_core::domain::models::EffortLevel::DEFAULT,
         })
     }
 }

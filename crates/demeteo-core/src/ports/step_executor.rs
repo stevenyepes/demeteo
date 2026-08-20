@@ -111,30 +111,70 @@ pub trait StepExecutor: Send + Sync {
 
     /// Sync the feature branch with `origin/<default_branch>`. Returns
     /// the audit-shaped result so the UI can show a clean merge, no
-    /// changes, or a conflict list. The optional
-    /// `revalidate_step_execution_id` is used after conflict
-    /// resolution: the executor replays that step so the validation
-    /// runs again on the freshly-synced tree.
-    async fn feature_sync(
+    /// changes, a conflict list, or the stage the sync never got past.
+    async fn feature_sync(&self, feature_id: &str) -> Result<SyncOutcomeView, String>;
+
+    /// How far the feature branch has fallen behind the base it will merge
+    /// into, without merging anything.
+    ///
+    /// `refresh` fetches `origin/<base>` first; the answer says whether that
+    /// happened, so a count taken against a ref nothing has moved in a week is
+    /// not shown as this week's.
+    async fn feature_drift(
         &self,
         feature_id: &str,
-        revalidate_step_execution_id: Option<&str>,
-    ) -> Result<SyncOutcomeView, String>;
+        refresh: bool,
+    ) -> Result<crate::domain::models::FeatureDrift, String>;
 
     /// Spawn a fresh agent session to resolve the merge conflicts left
     /// over from `feature_sync`. The agent runs in a temporary
     /// worktree on the conflicted feature branch, edits the conflict
     /// files to remove markers, and commits the resolution. After
     /// committing, the resolution is merged back into the feature
-    /// branch on the main repo. If `revalidate_step_execution_id` is
-    /// provided, the named step is replayed so the workflow's
-    /// validation re-runs on the freshly-merged tree.
+    /// branch on the main repo.
+    ///
+    /// `asked` is what this attempt wants the resolution run with; anything it
+    /// leaves `None` falls through
+    /// [`SyncResolverChain`](crate::domain::sync_resolver::SyncResolverChain),
+    /// so an empty choice is the request the button sent before there was a
+    /// picker.
     async fn feature_resolve_sync_conflicts(
         &self,
         feature_id: &str,
         conflict_files: &[String],
-        revalidate_step_execution_id: Option<&str>,
+        asked: &crate::domain::sync_resolver::SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String>;
+
+    /// What `feature_resolve_sync_conflicts` would run under if this attempt
+    /// asked for nothing — the same chain, with an empty choice.
+    ///
+    /// A read for the conflict banner, whose picker has to name the harness it
+    /// is offering models and effort levels *for*. It cannot derive that: the
+    /// resolver's tier order puts the project's setting above the feature's own
+    /// row, so the run's harness is the wrong answer whenever a project has
+    /// configured one, and the ladder shown for it can offer a level the
+    /// harness that really runs would drop.
+    async fn feature_sync_resolver(&self, feature_id: &str) -> Result<SyncResolverView, String>;
+}
+
+/// A resolved resolver identity, for a UI that has to name it before the turn
+/// exists. [`crate::domain::sync_resolver::SyncResolver`] with a serde
+/// derive — the domain type stays free of one.
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncResolverView {
+    pub agent_kind: String,
+    pub model: Option<String>,
+    pub effort: EffortLevel,
+}
+
+impl From<crate::domain::sync_resolver::SyncResolver> for SyncResolverView {
+    fn from(r: crate::domain::sync_resolver::SyncResolver) -> Self {
+        SyncResolverView {
+            agent_kind: r.agent_kind,
+            model: r.model,
+            effort: r.effort,
+        }
+    }
 }
 
 /// What `feature_sync` and `feature_resolve_sync_conflicts` return to
@@ -146,7 +186,9 @@ pub enum SyncOutcomeView {
     /// The merge produced a clean commit (or there was nothing to
     /// merge from upstream).
     Ok {
-        merge_commit_sha: String,
+        /// `None` when the tip the merge left could not be read — the absence
+        /// stays an absence rather than becoming a commit named `""`.
+        merge_commit_sha: Option<String>,
         changed: bool,
     },
     /// The merge left the working tree in a conflicted state and no
@@ -156,12 +198,17 @@ pub enum SyncOutcomeView {
         conflict_files: Vec<crate::domain::models::ConflictFile>,
         raw_error: String,
     },
+    /// The sync never reached a merge, or reached one and could not
+    /// publish it. Nothing is conflicted, so there is nothing for a
+    /// resolution agent to do — the user's next move is fixing what
+    /// `stage` names.
+    Blocked {
+        stage: crate::domain::sync_failure::SyncBlockedStage,
+        raw_error: String,
+    },
     /// A previous conflict was successfully resolved by an agent and
     /// the feature branch is now clean.
-    Resolved {
-        merge_commit_sha: String,
-        revalidated_step_id: Option<String>,
-    },
+    Resolved { merge_commit_sha: String },
     /// The resolution agent was spawned but failed to clean up the
     /// conflicts. The user is expected to take over (the working
     /// tree is still conflicted).

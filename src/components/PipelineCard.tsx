@@ -25,7 +25,8 @@ import { DEFAULT_DENSITY, pipelineDensityClasses, type PipelineDensityClasses } 
 import { pipelineCardMeta } from '../lib/pipelineCard';
 import { type RunStatusTone } from '../lib/runStatus';
 import type { WorkflowMeta } from '../lib/workflowBadge';
-import type { Feature } from '../types';
+import { describeStaleness } from '../lib/staleness';
+import type { Feature, FeatureDrift } from '../types';
 
 /**
  * Left accent bar per tone. Local to this component (the way StatusBadge
@@ -51,6 +52,13 @@ export interface PipelineCardProps {
     computeType: string | undefined;
     remoteHost: string | null | undefined;
     /**
+     * How far this feature's branch has fallen behind the base a sync would
+     * merge, or `null`/absent when nothing has counted it. Passed in rather
+     * than read here: the count costs two `git` calls per feature, so the list
+     * decides which rows are worth spending them on — see `ProjectHome`.
+     */
+    drift?: FeatureDrift | null;
+    /**
      * Resolved by `pipelineDensityClasses` — one stable object per density, or
      * the memo below sees a changed prop on every parent render. A caller that
      * offers no density control gets comfortable.
@@ -65,9 +73,11 @@ function PipelineCardInner({
     detached,
     computeType,
     remoteHost,
+    drift = null,
     density = COMFORTABLE,
     onOpen,
 }: PipelineCardProps) {
+    const staleness = describeStaleness(drift);
     const { scan, context, detail } = useMemo(
         () => pipelineCardMeta({ feature, workflowById, detached, computeType, remoteHost }),
         [feature, workflowById, detached, computeType, remoteHost],
@@ -132,6 +142,11 @@ function PipelineCardInner({
                 >
                     {context.transport.label}
                 </Chip>
+                {staleness && (
+                    <Chip tone={staleness.tone} size="sm" dot={false} title={staleness.title}>
+                        {staleness.label}
+                    </Chip>
+                )}
                 <span className="text-slate-300" title="Cost so far">{context.cost}</span>
                 <span className="flex items-center gap-1" title="Tokens">
                     <Zap className="w-3 h-3 text-cyan-400" />

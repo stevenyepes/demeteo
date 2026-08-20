@@ -16,13 +16,7 @@ pub(super) async fn fetch_gitlab_mr_state(
     mr_url: &str,
     pat: &str,
 ) -> Result<String, String> {
-    let (project_path, iid) = parse_gitlab_mr_url(mr_url)?;
-    let url = format!(
-        "https://{}/api/v4/projects/{}/merge_requests/{}",
-        host,
-        urlencoded(&project_path),
-        iid
-    );
+    let url = gitlab_mr_api_url(host, mr_url)?;
     let headers: Vec<(String, String)> = vec![
         ("PRIVATE-TOKEN".to_string(), pat.to_string()),
         ("Accept".to_string(), "application/json".to_string()),
@@ -38,16 +32,47 @@ pub(super) async fn fetch_gitlab_mr_state_unauth(
     host: &str,
     mr_url: &str,
 ) -> Result<String, String> {
+    let url = gitlab_mr_api_url(host, mr_url)?;
+    let headers: Vec<(String, String)> =
+        vec![("Accept".to_string(), "application/json".to_string())];
+    fetch_gitlab_mr_state_with_headers(http, &url, &headers).await
+}
+
+/// The API URL of one merge request, shared by every read of that resource —
+/// see this module's GitHub sibling for why it is one function.
+fn gitlab_mr_api_url(host: &str, mr_url: &str) -> Result<String, String> {
     let (project_path, iid) = parse_gitlab_mr_url(mr_url)?;
-    let url = format!(
+    Ok(format!(
         "https://{}/api/v4/projects/{}/merge_requests/{}",
         host,
         urlencoded(&project_path),
         iid
-    );
-    let headers: Vec<(String, String)> =
-        vec![("Accept".to_string(), "application/json".to_string())];
-    fetch_gitlab_mr_state_with_headers(http, &url, &headers).await
+    ))
+}
+
+/// Read one merge request in full, for `changes_count` and a settled
+/// `merge_status`. A non-2xx is a failure here, not an "open".
+pub(super) async fn fetch_gitlab_mr_detail(
+    http: &dyn HttpClient,
+    host: &str,
+    mr_url: &str,
+    pat: &str,
+) -> Result<serde_json::Value, MrListError> {
+    let url = gitlab_mr_api_url(host, mr_url).map_err(|e| MrListError::other(host, e))?;
+    let headers: Vec<(String, String)> = vec![
+        ("PRIVATE-TOKEN".to_string(), pat.to_string()),
+        ("Accept".to_string(), "application/json".to_string()),
+    ];
+    super::read_object(
+        http,
+        &url,
+        &headers,
+        super::ListTarget {
+            kind: "gitlab",
+            host,
+        },
+    )
+    .await
 }
 
 /// Normalize a raw GitLab `state` value to the canonical set

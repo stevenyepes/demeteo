@@ -24,6 +24,12 @@ use crate::ports::execution::{ExecutionPort, ProgramRequest, ShellOptions};
 
 pub(crate) struct ScriptedExec {
     answers: HashMap<String, Result<String, String>>,
+    /// Answers consumed in call order for one command, for the reads whose
+    /// whole subject is that git's answer *changed* — the same
+    /// `status --porcelain` before and after a resolution. A queue that runs
+    /// out errors rather than falling back, so "it asked once more than the
+    /// test anticipated" stays a failure.
+    queued: Mutex<HashMap<String, Vec<Result<String, String>>>>,
     files: HashMap<String, Result<String, String>>,
     programs: HashMap<String, Result<String, String>>,
     dirs: HashSet<String>,
@@ -61,12 +67,30 @@ impl ScriptedExec {
     pub(crate) fn new(answers: &[(&str, Result<&str, &str>)]) -> Self {
         Self {
             answers: script(answers),
+            queued: Mutex::new(HashMap::new()),
             files: HashMap::new(),
             programs: HashMap::new(),
             dirs: HashSet::new(),
             seen: Mutex::new(Vec::new()),
             seen_programs: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Script successive answers for one command, consumed in call order.
+    pub(crate) fn with_queue(mut self, cmd: &str, answers: &[Result<&str, &str>]) -> Self {
+        let queue = answers
+            .iter()
+            .rev()
+            .map(|v| match v {
+                Ok(s) => Ok(s.to_string()),
+                Err(e) => Err(e.to_string()),
+            })
+            .collect();
+        self.queued
+            .get_mut()
+            .unwrap()
+            .insert(cmd.to_string(), queue);
+        self
     }
 
     /// Script [`ExecutionPort::run_program`] answers, keyed by [`rendered`]
@@ -103,6 +127,7 @@ impl ScriptedExec {
     pub(crate) fn map_keys(self, f: impl Fn(&str) -> String) -> Self {
         Self {
             answers: self.answers.into_iter().map(|(k, v)| (f(&k), v)).collect(),
+            queued: self.queued,
             files: self.files,
             programs: self.programs,
             dirs: self.dirs,
@@ -159,6 +184,11 @@ impl ExecutionPort for ScriptedExec {
         o: ShellOptions,
     ) -> Result<String, String> {
         self.seen.lock().unwrap().push((cmd.to_string(), o));
+        if let Some(queue) = self.queued.lock().unwrap().get_mut(cmd) {
+            return queue
+                .pop()
+                .unwrap_or_else(|| Err(format!("ScriptedExec: queue exhausted for `{cmd}`")));
+        }
         self.answers
             .get(cmd)
             .cloned()

@@ -1,4 +1,5 @@
-//! Which branch a sync merges in, asserted as the ref git was asked for.
+//! Which branch a sync merges in, asserted as the ref git was asked for, and
+//! which class the failure of that fetch comes back as.
 //!
 //! The half of a run's origin that is easiest to leave behind: the branch
 //! *name* moved to the row while the merge base stayed
@@ -7,18 +8,25 @@
 //! in every commit the release branch was deliberately without.
 //!
 //! Nothing here is scripted, so the fetch fails and the flow stops at its
-//! first git call. That call is the whole subject.
+//! first git call. That call is the whole subject — plus what the caller is
+//! handed when it fails, which used to be a conflict report with no conflict
+//! in it.
 
 use std::sync::Arc;
 
 use super::harness::{build_test_executor_in, scratch_dir, FakeNotif};
+use crate::adapters::database::SqliteAdapter;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, ProviderId, RepositoryId};
+use crate::domain::sync_failure::SyncBlockedStage;
+use crate::domain::sync_session::SyncSessionStatus;
 use crate::paths;
 use crate::ports::db::{FeatureRepository, ProjectRepository};
+use crate::ports::step_executor::SyncOutcomeView;
+use crate::ports::sync_session::SyncSessionPort;
 
-const REPO_PATH: &str = "demeteo/sync-base";
+pub(super) const REPO_PATH: &str = "demeteo/sync-base";
 
 /// The git a "Sync with main" on a feature with this `origin` and
 /// `diff_base_branch` issues.
@@ -26,21 +34,47 @@ async fn sync_git(
     label: &str,
     origin: FeatureOrigin,
     diff_base_branch: Option<&str>,
-) -> Vec<String> {
+) -> (Vec<String>, Result<SyncOutcomeView, String>) {
     let temp_dir = scratch_dir(label);
-    let project_id = format!("p-{label}");
-    let feature_id = format!("f-{label}");
     let exec = Arc::new(ScriptedExec::new(&[]));
     let (executor, db) =
         build_test_executor_in(temp_dir.clone(), Arc::new(FakeNotif), exec.clone()).await;
+    let feature_id = seed_feature(&db, label, origin, diff_base_branch);
 
-    let projects: &dyn ProjectRepository = &*db;
+    let view = executor.feature_sync_impl(&feature_id).await;
+
+    let ran = exec.programs();
+    let _ = std::fs::remove_dir_all(temp_dir);
+    (ran, view)
+}
+
+/// One project, one repository, one feature — the least a sync needs before it
+/// can name a base branch.
+pub(super) fn seed_feature(
+    db: &Arc<SqliteAdapter>,
+    label: &str,
+    origin: FeatureOrigin,
+    diff_base_branch: Option<&str>,
+) -> String {
+    let project_id = seed_project(db, label, "local", None);
+    seed_repository(db, label, &project_id);
+    seed_feature_row(db, label, &project_id, origin, diff_base_branch)
+}
+
+fn seed_project(
+    db: &Arc<SqliteAdapter>,
+    label: &str,
+    compute_type: &str,
+    remote_host: Option<&str>,
+) -> String {
+    let project_id = format!("p-{label}");
+    let projects: &dyn ProjectRepository = &**db;
     projects
         .add(crate::domain::models::Project {
             id: ProjectId::from(project_id.clone()),
             name: label.to_string(),
-            compute_type: "local".to_string(),
-            remote_host: None,
+            compute_type: compute_type.to_string(),
+            remote_host: remote_host.map(|h| crate::domain::ids::MachineId::from(h.to_string())),
             status: "idle".to_string(),
             nodes: 0,
             spend: 0.0,
@@ -48,20 +82,34 @@ async fn sync_git(
             created_at: paths::now_ms(),
         })
         .expect("add project");
+    project_id
+}
+
+fn seed_repository(db: &Arc<SqliteAdapter>, label: &str, project_id: &str) {
+    let projects: &dyn ProjectRepository = &**db;
     projects
         .add_repository(crate::domain::models::Repository {
             id: RepositoryId::from(format!("r-{label}")),
-            project_id: ProjectId::from(project_id.clone()),
+            project_id: ProjectId::from(project_id.to_string()),
             provider_id: ProviderId::from("sync-base-provider"),
             repo_path: REPO_PATH.to_string(),
         })
         .expect("add repository");
+}
 
-    let features: &dyn FeatureRepository = &*db;
+fn seed_feature_row(
+    db: &Arc<SqliteAdapter>,
+    label: &str,
+    project_id: &str,
+    origin: FeatureOrigin,
+    diff_base_branch: Option<&str>,
+) -> String {
+    let feature_id = format!("f-{label}");
+    let features: &dyn FeatureRepository = &**db;
     features
         .add(crate::domain::models::Feature {
             id: FeatureId::from(feature_id.clone()),
-            project_id: ProjectId::from(project_id.clone()),
+            project_id: ProjectId::from(project_id.to_string()),
             workflow_id: None,
             workflow_version_id: None,
             title: "Sync base".to_string(),
@@ -90,11 +138,7 @@ async fn sync_git(
         })
         .expect("add feature");
 
-    let _ = executor.feature_sync_impl(&feature_id, None).await;
-
-    let ran = exec.programs();
-    let _ = std::fs::remove_dir_all(temp_dir);
-    ran
+    feature_id
 }
 
 fn fetched_branch(ran: &[String]) -> Option<String> {
@@ -105,7 +149,7 @@ fn fetched_branch(ran: &[String]) -> Option<String> {
 
 #[tokio::test]
 async fn a_run_cut_from_a_release_branch_syncs_from_that_branch() {
-    let ran = sync_git(
+    let (ran, _) = sync_git(
         "sync_base_branch",
         FeatureOrigin::Branch {
             base: "release/2.0".to_string(),
@@ -122,7 +166,7 @@ async fn a_run_cut_from_a_release_branch_syncs_from_that_branch() {
 
 #[tokio::test]
 async fn a_declared_base_is_what_a_pull_request_run_syncs_from() {
-    let ran = sync_git(
+    let (ran, _) = sync_git(
         "sync_base_declared",
         FeatureOrigin::Ref {
             fetch_spec: "refs/pull/9/head".to_string(),
@@ -140,6 +184,143 @@ async fn a_declared_base_is_what_a_pull_request_run_syncs_from() {
 
 #[tokio::test]
 async fn a_run_that_declared_nothing_still_syncs_from_the_project_default() {
-    let ran = sync_git("sync_base_default", FeatureOrigin::DefaultBranch, None).await;
+    let (ran, _) = sync_git("sync_base_default", FeatureOrigin::DefaultBranch, None).await;
     assert_eq!(fetched_branch(&ran).as_deref(), Some("main"), "{ran:?}");
+}
+
+/// A fetch that never ran reached the banner as "Merge conflict in 0 file(s)"
+/// beside a button that spawned an agent into a tree with no merge in it. The
+/// class has to survive `git_ops` -> the merge executor -> the view, and this
+/// is the only test that walks all three.
+#[tokio::test]
+async fn an_unreachable_origin_comes_back_blocked_rather_than_conflicted() {
+    let (_, view) = sync_git("sync_blocked_fetch", FeatureOrigin::DefaultBranch, None).await;
+    match view.expect("a failed fetch is an outcome, not a command error") {
+        SyncOutcomeView::Blocked { stage, raw_error } => {
+            assert_eq!(stage, SyncBlockedStage::Fetch);
+            assert!(
+                raw_error.contains("Could not fetch origin/main"),
+                "git's own words are the only evidence the user gets: {raw_error}"
+            );
+        }
+        other => panic!("a fetch that never ran rendered as {other:?}"),
+    }
+}
+
+/// The one failure that issues no git at all: with no `repositories` row there
+/// is no directory to run `git -C` in. It has to arrive as the same class as
+/// the rest, or the banner offers an agent a tree that was never located.
+#[tokio::test]
+async fn a_feature_with_no_repository_row_is_blocked_before_any_git() {
+    let label = "sync_no_repo";
+    let temp_dir = scratch_dir(label);
+    let exec = Arc::new(ScriptedExec::new(&[]));
+    let (executor, db) =
+        build_test_executor_in(temp_dir.clone(), Arc::new(FakeNotif), exec.clone()).await;
+    let project_id = seed_project(&db, label, "local", None);
+    let feature_id = seed_feature_row(
+        &db,
+        label,
+        &project_id,
+        FeatureOrigin::DefaultBranch,
+        Some("main"),
+    );
+
+    let view = executor.feature_sync_impl(&feature_id).await;
+
+    match view.expect("a missing repository row is an outcome, not a command error") {
+        SyncOutcomeView::Blocked { stage, raw_error } => {
+            assert_eq!(stage, SyncBlockedStage::RepoContext);
+            assert!(raw_error.contains("repository"), "{raw_error}");
+        }
+        other => panic!("a feature with no repository rendered as {other:?}"),
+    }
+    assert!(
+        exec.programs().is_empty(),
+        "nothing may be run against a repo dir that was never resolved: {:?}",
+        exec.programs()
+    );
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+/// The remote half of the same stage: the row is there, and resolving the
+/// machine's home — the first thing the repo dir is built from — is what fails.
+#[tokio::test]
+async fn a_remote_whose_repo_dir_will_not_resolve_is_blocked_too() {
+    let label = "sync_remote_repo_dir";
+    let temp_dir = scratch_dir(label);
+    let exec = Arc::new(ScriptedExec::new(&[]));
+    let (executor, db) =
+        build_test_executor_in(temp_dir.clone(), Arc::new(FakeNotif), exec.clone()).await;
+    let project_id = seed_project(&db, label, "remote", Some("box"));
+    seed_repository(&db, label, &project_id);
+    let feature_id = seed_feature_row(
+        &db,
+        label,
+        &project_id,
+        FeatureOrigin::DefaultBranch,
+        Some("main"),
+    );
+
+    let view = executor.feature_sync_impl(&feature_id).await;
+
+    match view.expect("an unresolvable repo dir is an outcome, not a command error") {
+        SyncOutcomeView::Blocked { stage, .. } => assert_eq!(stage, SyncBlockedStage::RepoContext),
+        other => panic!("an unresolvable remote repo dir rendered as {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+/// The seam every other sync-session test takes on faith.
+///
+/// The domain, repository and application suites all call `open()` themselves
+/// before asserting, so they prove `reconcile` and `abort` work on a row the
+/// product may never actually write. This is the only place the *production*
+/// write is exercised: replace the `open()` in `adapters::merge` with a no-op
+/// and nothing else in the tree notices, while in the app the banner would
+/// never hydrate, `sync_abort` would have nothing to close, and every one of
+/// those tests would still pass.
+#[tokio::test]
+async fn a_sync_leaves_a_session_row_behind_for_the_ui_to_find() {
+    let label = "sync_session_written";
+    let temp_dir = scratch_dir(label);
+    let (executor, db) = build_test_executor_in(
+        temp_dir.clone(),
+        Arc::new(FakeNotif),
+        Arc::new(ScriptedExec::new(&[])),
+    )
+    .await;
+    let feature_id = seed_feature(&db, label, FeatureOrigin::DefaultBranch, None);
+    let fid = FeatureId::from(feature_id.clone());
+
+    let _ = executor.feature_sync_impl(&feature_id).await;
+
+    let sessions: &dyn SyncSessionPort = &*db;
+    let session = sessions
+        .get(&fid)
+        .expect("read the session")
+        .expect("a sync must open a session row");
+    assert_eq!(
+        session.status,
+        SyncSessionStatus::Blocked,
+        "the unscripted fetch fails, so the verdict patch must land too"
+    );
+    assert_eq!(
+        session.feature_branch,
+        format!("demeteo/features/{feature_id}")
+    );
+    assert_eq!(session.base_branch, "main");
+    assert!(
+        session
+            .raw_error
+            .as_deref()
+            .is_some_and(|e| e.contains("fetch") || e.contains("origin")),
+        "the row has to keep git's own words: {:?}",
+        session.raw_error
+    );
+    assert_eq!(
+        session.worktree_path, None,
+        "a fetch that never ran provisioned nothing to name"
+    );
+    let _ = std::fs::remove_dir_all(temp_dir);
 }

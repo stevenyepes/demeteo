@@ -141,8 +141,18 @@ approval layers, and "unattended" must relax only one of them.**
 2. **Per-command permission intercept** — the policy/allowlist layer
    (`domain/permission.rs`, `domain/intercept.rs`; `DirectExecutionPort` is the
    documented *no-policy* variant, and Machines already carry
-   `auto_approved_rules` command allowlists). This plus the
-   `external_directory: deny` worktree fence is the sandbox.
+   `auto_approved_rules` command allowlists). This plus Demeteo's own
+   artifact-scope chmod/ACL fence (`adapters/worktree/git_ops/scope.rs`) is the
+   sandbox, and it is the whole of what every harness gets.
+
+   It does **not** include a promise that the turn stays inside its worktree.
+   The harness's own path fence varies by harness and by class of access, and
+   only `PathContainment` (`domain/models/sandbox.rs`) states it — read that
+   before concluding a credential-bearing box is covered. Two traps sit right
+   here: `external_directory: deny` is checked at file-tool dispatch, so a
+   shell command is a separate question with a separate answer; and being
+   handed that variable is not reading it, which is why hermes shares
+   opencode's env and not its claim.
 
 **Rule (R6):** unattended relaxes **gates**; it keeps the per-command policy
 layer and the filesystem fence **on**. Auto-approving *gates* is not

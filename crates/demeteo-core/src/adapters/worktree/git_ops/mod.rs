@@ -76,6 +76,7 @@ pub fn subtask_branch_name(feature_branch: &str, subtask_id: &str) -> String {
 }
 
 pub(crate) mod clone;
+pub(crate) mod divergence;
 pub(crate) mod health;
 pub(crate) mod merge;
 pub(crate) mod scope;
@@ -292,7 +293,7 @@ impl WorktreeOpsPort for GitOpsHelper {
         feature_branch: &str,
         base_branch: &str,
     ) -> Result<SyncOutcome, SyncFailure> {
-        self.sync_feature_with_upstream(machine_id, repo_dir, feature_branch, base_branch)
+        self.sync_feature_with_upstream(machine_id, repo_dir, feature_branch, base_branch, &())
             .await
     }
 

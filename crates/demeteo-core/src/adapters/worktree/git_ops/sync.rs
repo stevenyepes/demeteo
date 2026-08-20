@@ -1,6 +1,7 @@
 use super::{git_request, GitOpsHelper};
+use crate::domain::sync_failure::SyncBlockedStage;
 use crate::ports::execution::ExecutionPort;
-use crate::ports::worktree_ops::{SyncFailure, SyncOutcome};
+use crate::ports::worktree_ops::{SyncFailure, SyncOutcome, SyncWorktreeObserver};
 
 impl GitOpsHelper {
     /// Fetch the latest state of `default_branch` from `origin` and update
@@ -234,17 +235,27 @@ impl GitOpsHelper {
     ///
     /// The `Ok` variant returns the new HEAD commit SHA (so the
     /// caller can record the merge commit in the audit trail). The
-    /// `Err` variant carries the unmerged file list and raw git error.
+    /// `Err` variant says which of the two failures happened —
+    /// [`SyncFailure::Conflict`] only when the merge itself left unmerged
+    /// paths, and [`SyncFailure::Blocked`] for every stage that stopped short
+    /// of that verdict, the merge's own transport and timeout failures
+    /// included ([`crate::domain::sync_failure`]).
     ///
     /// `base_branch` is the run's declared base
     /// ([`diff_base::resolve`](crate::domain::diff_base::resolve)), which is
     /// the project's default branch only for a run that started there.
+    ///
+    /// `observer` is told the merge worktree the instant one exists, which is
+    /// the only moment a caller keeping a durable row can learn it: every
+    /// failure between here and the verdict returns without one, and an
+    /// interrupted sync returns nothing at all.
     pub async fn sync_feature_with_upstream(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
         base_branch: &str,
+        observer: &dyn SyncWorktreeObserver,
     ) -> Result<SyncOutcome, SyncFailure> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let tracking = format!("origin/{}", base_branch);
@@ -264,14 +275,16 @@ impl GitOpsHelper {
             )
             .await;
         if let Err(fetch_err) = fetch_outcome {
-            return Err(SyncFailure {
-                files: Vec::new(),
+            return Err(SyncFailure::Blocked {
+                stage: SyncBlockedStage::Fetch,
                 raw_error: format!(
                     "Could not fetch origin/{} from remote: {}. \
                      Check the project's remote URL and credentials.",
                     base_branch, fetch_err
                 ),
                 worktree_path: None,
+                head_before: None,
+                merge_commit_sha: None,
             });
         }
 
@@ -289,14 +302,16 @@ impl GitOpsHelper {
             .await
             .is_err()
         {
-            return Err(SyncFailure {
-                files: Vec::new(),
+            return Err(SyncFailure::Blocked {
+                stage: SyncBlockedStage::BaseRefMissing,
                 raw_error: format!(
                     "Fetched origin but {} does not exist on the remote. \
                      The branch this run is based on ('{}') may be wrong.",
                     tracking, base_branch
                 ),
                 worktree_path: None,
+                head_before: None,
+                merge_commit_sha: None,
             });
         }
 
@@ -307,42 +322,25 @@ impl GitOpsHelper {
             .run_program(machine_str, git_request(repo_dir, ["rev-parse", &feat_ref]))
             .await
             .ok()
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
-        let _behind_count = self
-            .exec
-            .run_program(
-                machine_str,
-                git_request(
-                    repo_dir,
-                    ["rev-list", "--count", &format!("{tracking}..{feat_ref}")],
-                ),
-            )
-            .await
-            .ok()
-            .map(|s| s.trim().parse::<u64>().unwrap_or(0))
-            .unwrap_or(0);
-        let ahead_count = self
-            .exec
-            .run_program(
-                machine_str,
-                git_request(
-                    repo_dir,
-                    ["rev-list", "--count", &format!("{feat_ref}..{tracking}")],
-                ),
-            )
-            .await
-            .ok()
-            .map(|s| s.trim().parse::<u64>().unwrap_or(0))
-            .unwrap_or(0);
+            .map(|s| s.trim().to_string());
+        let divergence = super::divergence::count_divergence(
+            &*self.exec,
+            machine_str,
+            repo_dir,
+            &feat_ref,
+            &tracking,
+        )
+        .await;
 
-        // If origin/<base> is not ahead of the feature branch,
-        // the feature is already up to date with upstream. No merge
-        // is needed and the call is a true no-op.
-        if ahead_count == 0 {
+        // Only a measured zero is a no-op. A count that did not resolve says
+        // nothing about whether upstream moved, and skipping the merge on it
+        // costs the user the sync they asked for — where attempting one that
+        // turns out to have nothing to do costs a worktree.
+        if divergence.behind == Some(0) {
             return Ok(SyncOutcome {
-                merge_commit_sha: head_before,
+                merge_commit_sha: head_before.clone(),
                 changed: false,
+                head_before,
             });
         }
 
@@ -351,11 +349,14 @@ impl GitOpsHelper {
         let wt_path = self
             .provision_sync_worktree(Some(machine_str), repo_dir, feature_branch)
             .await
-            .map_err(|e| SyncFailure {
-                files: Vec::new(),
+            .map_err(|e| SyncFailure::Blocked {
+                stage: SyncBlockedStage::WorktreeProvision,
                 raw_error: e,
                 worktree_path: None,
+                head_before: head_before.clone(),
+                merge_commit_sha: None,
             })?;
+        observer.provisioned(&wt_path);
         let merge_out = self
             .exec
             .run_program(
@@ -379,9 +380,24 @@ impl GitOpsHelper {
                     .run_program(machine_str, git_request(&wt_path, ["rev-parse", "HEAD"]))
                     .await
                     .ok()
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_default();
-                let changed = head_after != head_before;
+                    .map(|s| s.trim().to_string());
+                // An unread tip on either side cannot say the tip stayed put,
+                // so it reads as moved. The two mistakes are not the same size:
+                // a push of a ref already at that commit is a no-op, where
+                // withholding one leaves a real merge on the local branch and
+                // the open pull request never sees it.
+                //
+                // What that rule may *not* do is name the commit. An unread
+                // `rev-parse HEAD` flattened to `""` was stored as this sync's
+                // merge commit, and an empty sha passes every `is some` guard
+                // between here and the pane: Publish is offered, the push runs,
+                // and `git merge-base --is-ancestor '' …` then refuses forever,
+                // so the user is told their push did not land about one that
+                // did.
+                let changed = match (head_before.as_deref(), head_after.as_deref()) {
+                    (Some(before), Some(after)) => before != after,
+                    _ => true,
+                };
 
                 if changed {
                     // Push the successful clean merge to origin so remote MR is updated
@@ -393,13 +409,15 @@ impl GitOpsHelper {
                         )
                         .await
                     {
-                        return Err(SyncFailure {
-                            files: Vec::new(),
+                        return Err(SyncFailure::Blocked {
+                            stage: SyncBlockedStage::Push,
                             raw_error: format!(
                                 "Sync merge succeeded locally but pushing to origin failed: {}",
                                 push_err
                             ),
-                            worktree_path: None,
+                            worktree_path: Some(wt_path.clone()),
+                            head_before: head_before.clone(),
+                            merge_commit_sha: head_after.clone(),
                         });
                     }
                 }
@@ -407,18 +425,29 @@ impl GitOpsHelper {
                 Ok(SyncOutcome {
                     merge_commit_sha: head_after.clone(),
                     changed,
+                    head_before: head_before.clone(),
                 })
             }
-            Err(raw) => {
-                // The merge left the worktree in a conflicted state.
-                // Parse `git status` in the worktree for the unmerged files.
-                let files = parse_unmerged_files(&*self.exec, machine_str, &wt_path).await;
-                Err(SyncFailure {
-                    files,
+            Err(raw) => match crate::domain::sync_failure::merge_failure_stage(&raw) {
+                Some(stage) => Err(SyncFailure::Blocked {
+                    stage,
                     raw_error: raw,
                     worktree_path: Some(wt_path.clone()),
-                })
-            }
+                    head_before: head_before.clone(),
+                    merge_commit_sha: None,
+                }),
+                None => {
+                    // The merge left the worktree in a conflicted state.
+                    // Parse `git status` in the worktree for the unmerged files.
+                    let files = parse_unmerged_files(&*self.exec, machine_str, &wt_path).await;
+                    Err(SyncFailure::Conflict {
+                        files,
+                        raw_error: raw,
+                        worktree_path: Some(wt_path.clone()),
+                        head_before: head_before.clone(),
+                    })
+                }
+            },
         };
 
         // If we used the main repo directly (no worktree), skip cleanup.
@@ -487,8 +516,11 @@ impl GitOpsHelper {
                 .await;
         }
 
-        // Use a deterministic path for this feature branch's sync worktree
-        let wt_path = format!("{}_wt_sync_{}", repo_dir, feature_branch.replace('/', "_"));
+        let wt_path = crate::paths::sync_worktree_dir(
+            repo_dir,
+            feature_branch,
+            crate::paths::targets_windows_host(machine_str),
+        );
 
         // Force remove any pre-existing worktree at that path to avoid collisions
         let _ = self

@@ -141,6 +141,7 @@ impl AgentRuntime for StubRuntime {
             default_model: None,
             effort_levels: &[],
             personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
+            path_containment: crate::domain::models::PathContainment::UNFENCED,
             windows_agent_shell: crate::domain::models::WindowsAgentShell::Unknown,
         }
     }

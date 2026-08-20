@@ -147,6 +147,10 @@ impl StepExecutor for DagStepExecutor {
         if let Some(tx) = lock_registry(&self.cancel_senders).get(feature_id) {
             let _ = tx.send(true);
         }
+        // The out-of-band turns too: a manual sync resolution runs on a feature
+        // whose run has already ended, so it never has a driver and its sender
+        // is never in the map above.
+        self.sync_turns.cancel(feature_id);
         Ok(())
     }
 
@@ -173,6 +177,12 @@ impl StepExecutor for DagStepExecutor {
             })?;
 
         if let Some(refusal) = retry_refusal(&step_exec.status) {
+            return Err(AppError::validation(refusal));
+        }
+
+        if let Some(refusal) =
+            crate::domain::run_control::out_of_band_refusal(RunAction::Retry, &step_exec.step_id.0)
+        {
             return Err(AppError::validation(refusal));
         }
 
@@ -220,26 +230,32 @@ impl StepExecutor for DagStepExecutor {
             .steps_for_feature(&FeatureId::from(feature_id.to_string()))
     }
 
-    async fn feature_sync(
+    async fn feature_sync(&self, feature_id: &str) -> Result<SyncOutcomeView, String> {
+        self.feature_sync_impl(feature_id).await
+    }
+
+    async fn feature_drift(
         &self,
         feature_id: &str,
-        revalidate_step_execution_id: Option<&str>,
-    ) -> Result<SyncOutcomeView, String> {
-        self.feature_sync_impl(feature_id, revalidate_step_execution_id)
-            .await
+        refresh: bool,
+    ) -> Result<crate::domain::models::FeatureDrift, String> {
+        self.feature_drift_impl(feature_id, refresh).await
     }
 
     async fn feature_resolve_sync_conflicts(
         &self,
         feature_id: &str,
         conflict_files: &[String],
-        revalidate_step_execution_id: Option<&str>,
+        asked: &crate::domain::sync_resolver::SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String> {
-        self.feature_resolve_sync_conflicts_impl(
-            feature_id,
-            conflict_files,
-            revalidate_step_execution_id,
-        )
-        .await
+        self.feature_resolve_sync_conflicts_impl(feature_id, conflict_files, asked)
+            .await
+    }
+
+    async fn feature_sync_resolver(
+        &self,
+        feature_id: &str,
+    ) -> Result<crate::ports::step_executor::SyncResolverView, String> {
+        self.feature_sync_resolver_impl(feature_id)
     }
 }
