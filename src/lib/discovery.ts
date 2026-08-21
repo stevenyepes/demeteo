@@ -4,11 +4,17 @@ import type {
   DiscoveryBoard,
   DiscoveryDetail,
   DiscoveryMessage,
+  DiscoverySummary,
   EffortLevel,
   Feature,
   Ticket,
 } from "../types";
-import type { AttachedFile } from "./attachments";
+import {
+  attachmentWire,
+  type AttachedFile,
+  type AttachmentInput,
+  type StagedAttachmentInput,
+} from "./attachments";
 
 /**
  * Typed IPC wrappers for Discovery and its Tickets — the commands in
@@ -20,9 +26,31 @@ import type { AttachedFile } from "./attachments";
  * goes through `formatError`.
  */
 
-/** Mirrors `discovery_list` — every Discovery in a project, open or closed. */
-export async function listDiscoveries(projectId: string): Promise<Discovery[]> {
-  return invoke<Discovery[]>("discovery_list", { projectId });
+/**
+ * Mirrors `discovery_list` — every Discovery in a project, open or closed,
+ * each carrying the two numbers its card renders that the row does not hold:
+ * how many turns have been taken, and the ticket counter.
+ *
+ * The counter is the one `discovery_board` derives, so the card and the
+ * workspace a click later cannot disagree about how much is done.
+ */
+export async function listDiscoveries(projectId: string): Promise<DiscoverySummary[]> {
+  return invoke<DiscoverySummary[]>("discovery_list", { projectId });
+}
+
+/**
+ * The summary a Discovery has the instant it is created, so the list can show
+ * it without a second round trip.
+ *
+ * Both numbers are facts about a Discovery that has just opened rather than
+ * placeholders: no turn has been taken, and nothing has been proposed.
+ */
+export function summaryOfNew(discovery: Discovery): DiscoverySummary {
+  return {
+    ...discovery,
+    message_count: 0,
+    progress: { blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 0, live: 0 },
+  };
 }
 
 /** Mirrors `discovery_get` — the Discovery and its whole transcript. */
@@ -34,8 +62,15 @@ export async function getDiscovery(discoveryId: string): Promise<DiscoveryDetail
  * Mirrors `discovery_create`. No worktree and no agent process yet — both wait
  * for the first turn that needs them.
  *
- * The machine is not an argument: the repository this interview reads exists
- * on exactly one host, so the backend takes the project's.
+ * `machineId` is the picker's value: §4.5 makes the host part of the
+ * interviewer choice, and a blank one is the same as none, which takes the
+ * project's own host. A machine nothing is configured for is refused here
+ * rather than three screens later, while the user is still looking at the
+ * control they set it with.
+ *
+ * `stagedAttachments` land before the row is handed back, so the first turn a
+ * user can take already sees every file — the ordering `start_feature` exists
+ * to guarantee, one aggregate over.
  */
 export async function createDiscovery(input: {
   projectId: string;
@@ -43,6 +78,8 @@ export async function createDiscovery(input: {
   agentKind: string;
   model: string | null;
   effort: EffortLevel | null;
+  machineId: string | null;
+  stagedAttachments?: StagedAttachmentInput[];
 }): Promise<Discovery> {
   return invoke<Discovery>("discovery_create", {
     input: {
@@ -51,6 +88,8 @@ export async function createDiscovery(input: {
       agent_kind: input.agentKind,
       model: input.model,
       effort: input.effort,
+      machine_id: input.machineId,
+      staged_attachments: input.stagedAttachments ?? [],
     },
   });
 }
@@ -66,6 +105,34 @@ export async function sendDiscoveryTurn(
   text: string,
 ): Promise<DiscoveryMessage> {
   return invoke<DiscoveryMessage>("discovery_send_turn", { discoveryId, text });
+}
+
+/**
+ * Mirrors `discovery_add_attachment`. A file is added to the Discovery
+ * *before* the turn that talks about it, never passed to one: attachments are
+ * owned by the interview, not by a turn, which is what keeps the composer's
+ * chip row standing after the turn that added it (§4.6).
+ */
+export async function addDiscoveryAttachment(
+  discoveryId: string,
+  input: AttachmentInput,
+): Promise<AttachedFile> {
+  const wire = await attachmentWire(input);
+  return invoke<AttachedFile>("discovery_add_attachment", {
+    discoveryId,
+    sourcePath: wire.sourcePath,
+    mime: wire.mime,
+    sourceFilename: wire.sourceFilename,
+    bytes: wire.bytes,
+  });
+}
+
+/** Mirrors `discovery_remove_attachment`. Idempotent. */
+export async function removeDiscoveryAttachment(
+  discoveryId: string,
+  attachmentId: string,
+): Promise<void> {
+  return invoke<void>("discovery_remove_attachment", { discoveryId, attachmentId });
 }
 
 /** Mirrors `discovery_cancel_turn`. What the turn spent is still billed and

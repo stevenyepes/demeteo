@@ -1221,10 +1221,28 @@ export interface Discovery {
   effort: EffortLevel | null;
   resume_session_id: string | null;
   worktree_path: string | null;
+  /** What the user handed the interviewer. Owned by the Discovery rather than
+   *  by a turn, so the composer's chip row survives the turn that added it and
+   *  every later turn is prompted with the same set. */
+  attachments: AttachedFile[];
   total_cost: number;
   tokens: number;
   created_at: number;
   updated_at: number;
+}
+
+/**
+ * Mirrors `DiscoverySummary`, which `#[serde(flatten)]`s the `Discovery` — so
+ * the row's own fields arrive alongside the two the card needs and the row
+ * does not carry.
+ *
+ * `progress` is the counter `discovery_board` derives, from the same pass over
+ * the same rows: a second, SQL-shaped opinion would disagree with the card the
+ * user then opens.
+ */
+export interface DiscoverySummary extends Discovery {
+  message_count: number;
+  progress: TicketProgress;
 }
 
 /** Mirrors `QuestionOption`. */

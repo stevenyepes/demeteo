@@ -553,6 +553,7 @@ pub fn run() {
             commands::tickets::discovery_board,
             commands::tickets::discovery_delete,
             commands::tickets::ticket_briefing,
+            commands::tickets::ticket_update,
             commands::tickets::ticket_start,
             commands::tickets::ticket_force_start,
             commands::tickets::ticket_drop,

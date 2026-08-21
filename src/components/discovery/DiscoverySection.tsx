@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Compass } from 'lucide-react';
 
-import { getDiscoveryBoard } from '../../lib/discovery';
-import type { Discovery, DiscoveryBoard } from '../../types';
+import { getDiscoveryBoard, summaryOfNew } from '../../lib/discovery';
+import type { DiscoveryBoard, DiscoverySummary } from '../../types';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import EmptyStateCard from '../EmptyStateCard';
 import { PipelineListSkeleton } from '../PipelineListSkeleton';
@@ -11,13 +11,14 @@ import { NewDiscoveryModal } from './NewDiscoveryModal';
 
 interface DiscoverySectionProps {
   projectId: string;
-  /** Where the interview would run — the project's machine. */
+  /** The project's own host: where its repository was cloned, and so what the
+   *  modal's machine picker starts on (§4.5). */
   machineId: string;
-  discoveries: Discovery[];
+  discoveries: DiscoverySummary[];
   isLoading: boolean;
   /** A Discovery this session just opened, so the list does not have to wait
    *  for the project fetch to re-run. */
-  onCreated: (discovery: Discovery) => void;
+  onCreated: (discovery: DiscoverySummary) => void;
   onOpen: (discoveryId: string, title: string) => void;
 }
 
@@ -161,7 +162,7 @@ export function DiscoverySection({
           onCreated={(discovery) => {
             setModalOpen(false);
             setSeed('');
-            onCreated(discovery);
+            onCreated(summaryOfNew(discovery));
           }}
         />
       )}

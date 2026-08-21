@@ -214,8 +214,8 @@ export function DiscoveryView({
   }
 
   const selected = selectedId !== null ? index.get(selectedId) : undefined;
-  const progress = board ? progressText(board) : null;
-  const segments = board ? progressSegments(board) : null;
+  const progress = board ? progressText(board.progress) : null;
+  const segments = board ? progressSegments(board.progress) : null;
 
   if (!detail) {
     return (
@@ -267,6 +267,7 @@ export function DiscoveryView({
           pending={pending || sending}
           store={store}
           onSend={(text) => void send(text)}
+          onRefresh={() => void refresh()}
         />
 
         <div className="flex min-w-0 min-h-0 flex-1 flex-col">

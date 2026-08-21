@@ -7,11 +7,26 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DiscoveryCard } from './DiscoveryCard';
-import type { Discovery, DiscoveryBoard, TicketLane, TicketView } from '../../types';
+import type {
+  DiscoveryBoard,
+  DiscoverySummary,
+  TicketLane,
+  TicketProgress,
+  TicketView,
+} from '../../types';
 
 afterEach(cleanup);
 
-function discovery(overrides: Partial<Discovery> = {}): Discovery {
+const NOTHING_PROPOSED: TicketProgress = {
+  blocked: 0,
+  ready: 0,
+  in_flight: 0,
+  landed: 0,
+  dropped: 0,
+  live: 0,
+};
+
+function discovery(overrides: Partial<DiscoverySummary> = {}): DiscoverySummary {
   return {
     id: 'dsc-1',
     project_id: 'p1',
@@ -23,10 +38,13 @@ function discovery(overrides: Partial<Discovery> = {}): Discovery {
     effort: 'high',
     resume_session_id: null,
     worktree_path: null,
+    attachments: [],
     total_cost: 2.14,
     tokens: 486_000,
     created_at: 0,
     updated_at: 0,
+    message_count: 4,
+    progress: NOTHING_PROPOSED,
     ...overrides,
   };
 }
@@ -78,7 +96,7 @@ describe('DiscoveryCard', () => {
   it('counts landed against live tickets, not against the whole set', () => {
     render(
       <DiscoveryCard
-        discovery={discovery()}
+        discovery={discovery({ progress: SEVEN_ONE_DROPPED.progress })}
         board={SEVEN_ONE_DROPPED}
         turnRunning={false}
         now={0}
@@ -93,14 +111,55 @@ describe('DiscoveryCard', () => {
     );
   });
 
+  // The counter rides on the list row, so it is drawn with the card rather
+  // than a board fetch later — which is what `DiscoverySummary` exists for.
+  it('draws the bar from the list row, before any board has answered', () => {
+    render(
+      <DiscoveryCard
+        discovery={discovery({ progress: SEVEN_ONE_DROPPED.progress })}
+        board={null}
+        turnRunning={false}
+        now={0}
+        onOpen={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('1 of 6 landed · 1 in flight')).toBeTruthy();
+  });
+
+  it('reads its turn count off the row', () => {
+    render(
+      <DiscoveryCard
+        discovery={discovery({ message_count: 4 })}
+        board={null}
+        turnRunning={false}
+        now={0}
+        onOpen={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('4 turns')).toBeTruthy();
+  });
+
+  it('says one turn, not one turns', () => {
+    render(
+      <DiscoveryCard
+        discovery={discovery({ message_count: 1 })}
+        board={null}
+        turnRunning={false}
+        now={0}
+        onOpen={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('1 turn')).toBeTruthy();
+  });
+
   it('shows no progress arithmetic before anything has been proposed', () => {
     render(
       <DiscoveryCard
         discovery={discovery()}
-        board={{
-          tickets: [],
-          progress: { blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 0, live: 0 },
-        }}
+        board={{ tickets: [], progress: NOTHING_PROPOSED }}
         turnRunning={false}
         now={0}
         onOpen={() => {}}

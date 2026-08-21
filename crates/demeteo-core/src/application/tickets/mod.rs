@@ -14,6 +14,7 @@
 
 pub mod attachments;
 pub mod briefing;
+pub mod edit;
 pub mod launch;
 pub mod release;
 
@@ -154,7 +155,7 @@ pub fn briefing_for(ctx: &AppContext, ticket_id: &TicketId) -> Result<String, St
 pub fn deletion_refusal(tickets: &[Ticket]) -> Option<String> {
     let started: Vec<String> = tickets
         .iter()
-        .filter(|t| t.feature_id.is_some())
+        .filter(|t| is_locked(t))
         .map(|t| format!("#{}", t.seq))
         .collect();
     if started.is_empty() {
@@ -172,6 +173,24 @@ pub fn deletion_refusal(tickets: &[Ticket]) -> Option<String> {
         started.join(", "),
         if started.len() == 1 { "has" } else { "have" },
     ))
+}
+
+/// Whether this Ticket is closed to being changed — §5.3's line, drawn at
+/// **has a Feature** and nowhere else.
+///
+/// That is what leaves a dropped Ticket open: it never got one, and
+/// [`diff_proposal`](crate::domain::ticket_graph::diff_proposal) already lets
+/// a re-decomposition revise it for the same reason. Refusing the user there
+/// would leave hand-editing narrower than the interview it exists to save
+/// (§12 #19), and the record §6.6 keeps is the drop reason, which is not an
+/// editable field.
+///
+/// Both spellings of the fact are read and either one locks. They are written
+/// together by [`launch::start`], so a row where they disagree is drift — and
+/// `repos/ticket.rs` resolves a `state` this build cannot name to `started`
+/// deliberately, which consulting `feature_id` alone would quietly undo.
+pub fn is_locked(ticket: &Ticket) -> bool {
+    ticket.feature_id.is_some() || ticket.state == TicketState::Started
 }
 
 fn load(ctx: &AppContext, ticket_id: &TicketId) -> Result<Ticket, String> {

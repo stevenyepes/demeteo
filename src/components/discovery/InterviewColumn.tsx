@@ -23,6 +23,8 @@ interface InterviewColumnProps {
   pending: boolean;
   store: DiscoveryStreamStore;
   onSend: (text: string) => void;
+  /** Re-read the Discovery — its attachments are what the composer edits. */
+  onRefresh: () => void;
 }
 
 /**
@@ -42,6 +44,7 @@ export function InterviewColumn({
   pending,
   store,
   onSend,
+  onRefresh,
 }: InterviewColumnProps): React.ReactElement {
   const [draft, setDraft] = useState('');
   const composerRef = useRef<HTMLInputElement | null>(null);
@@ -107,12 +110,15 @@ export function InterviewColumn({
       )}
 
       <InterviewComposer
+        discoveryId={discovery.id}
+        attachments={discovery.attachments}
         awaiting={awaiting}
         pending={pending}
         disabled={closed}
         value={draft}
         onChange={setDraft}
         onSend={() => send(draft)}
+        onAttachmentsChanged={onRefresh}
         inputRef={composerRef}
       />
     </div>

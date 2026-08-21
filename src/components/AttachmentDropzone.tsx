@@ -23,12 +23,31 @@ import { AttachmentChip } from "./AttachmentChip";
  */
 export type { LaunchStageEntry } from "../lib/attachments";
 
+/**
+ * `direct` mode against an aggregate that is not a Feature: the two commands
+ * to call, and the list its owner already holds.
+ *
+ * Without one, `direct` writes through the Feature commands keyed by
+ * `featureId` and shows only what it added this session. With one, the chips
+ * are the owner's own list, so they stand across a remount — which is what a
+ * composer that outlives the turn that added a file needs
+ * (`DISCOVERY_UI_SPEC.md` §3.4.6).
+ */
+export interface DirectAttachmentPort {
+  attachments: AttachedFile[];
+  add: (input: AttachmentInput) => Promise<AttachedFile>;
+  remove: (attachmentId: string) => Promise<void>;
+}
+
 interface AttachmentDropzoneProps {
   /** `launch` keeps entries local until {@link onCommitLaunch} runs;
    *  `direct` calls `addAttachment` immediately per pick. */
   mode: "launch" | "direct";
-  /** Required for `direct` mode (the feature the attachment is added to). */
+  /** Required for `direct` mode (the feature the attachment is added to),
+   *  unless {@link AttachmentDropzoneProps.port} names another owner. */
   featureId?: string;
+  /** Where `direct` mode writes, when it is not a Feature. */
+  port?: DirectAttachmentPort;
   /** Visible label, e.g. "Attachments" / "Add files". */
   label?: string;
   /** Compact variant for collapsed chip rows (no border, no padding). */
@@ -71,6 +90,7 @@ interface AttachmentDropzoneProps {
 export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
   mode,
   featureId,
+  port,
   label,
   compact,
   maxChips,
@@ -276,6 +296,10 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
 
   const ingestOneDirect = useCallback(
     async (input: AttachmentInput) => {
+      if (port) {
+        onAdded?.(await port.add(input));
+        return;
+      }
       if (!featureId) {
         throw new Error("AttachmentDropzone: featureId is required for direct mode");
       }
@@ -286,7 +310,7 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
       ]);
       onAdded?.(created);
     },
-    [featureId, onAdded],
+    [featureId, port, onAdded],
   );
 
   const ingestOneLaunch = useCallback(
@@ -353,6 +377,30 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
       }));
     }
     if (mode === "direct") {
+      if (port) {
+        const owner = port;
+        return owner.attachments.map((a) => ({
+          key: a.id,
+          entry: {
+            sha256: a.sha256,
+            name: a.name,
+            source_filename: a.source_filename,
+            mime: a.mime,
+            size: a.size,
+            previewUrl: null,
+            file: null,
+            sourcePath: null,
+          },
+          remove: async () => {
+            try {
+              await owner.remove(a.id);
+              onRemoved?.(a.id);
+            } catch (err) {
+              onError?.(formatError(err));
+            }
+          },
+        }));
+      }
       return directAttachments.map((a) => ({
         key: a.id,
         entry: {
@@ -380,7 +428,7 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
       }));
     }
     return [];
-  }, [mode, stageEntries, directAttachments, featureId, onChangeStage, onRemoved, onError]);
+  }, [mode, stageEntries, directAttachments, featureId, port, onChangeStage, onRemoved, onError]);
 
   const visibleLimited =
     typeof maxChips === "number" ? visibleEntries.slice(0, maxChips) : visibleEntries;

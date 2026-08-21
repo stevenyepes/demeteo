@@ -153,7 +153,7 @@ pub fn drop_ticket(ctx: &AppContext, ticket_id: &TicketId, reason: &str) -> Resu
         );
     }
     let ticket = load(ctx, ticket_id)?;
-    if ticket.state == TicketState::Started {
+    if super::is_locked(&ticket) {
         return Err(format!(
             "ticket #{} has already been started. Close or merge its pull request instead — the \
              forge is what releases whatever waits on it.",

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Zap } from 'lucide-react';
 
-import type { Discovery, DiscoveryBoard } from '../../types';
+import type { DiscoveryBoard, DiscoverySummary } from '../../types';
 import type { RunStatusTone } from '../../lib/runStatus';
 import {
   discoveryDetailLine,
@@ -25,10 +25,12 @@ const TONE_ACCENT: Partial<Record<RunStatusTone, string>> = {
 };
 
 interface DiscoveryCardProps {
-  discovery: Discovery;
-  /** `null` until `discovery_board` answers. Everything derived from the
-   *  ticket set is simply absent until then rather than shown as zero, which
-   *  would read as a plan that proposed nothing. */
+  /** The list row: the Discovery, its turn count and its ticket counter, all
+   *  from `discovery_list`. */
+  discovery: DiscoverySummary;
+  /** `null` until `discovery_board` answers. Only the detail line waits on it
+   *  — the counter above arrives with the row, so the bar does not appear a
+   *  beat after the card it sits in. */
   board: DiscoveryBoard | null;
   /** A turn is streaming right now — the only thing that pulses. */
   turnRunning: boolean;
@@ -43,9 +45,10 @@ export function DiscoveryCard({
   now,
   onOpen,
 }: DiscoveryCardProps): React.ReactElement {
-  const lifecycle = discoveryLifecycle(discovery, board?.tickets.length ?? 0, turnRunning);
-  const progress = board ? progressText(board) : null;
-  const segments = board ? progressSegments(board) : null;
+  const ticketCount = discovery.progress.live + discovery.progress.dropped;
+  const lifecycle = discoveryLifecycle(discovery, ticketCount, turnRunning);
+  const progress = progressText(discovery.progress);
+  const segments = progressSegments(discovery.progress);
   const detail = board ? discoveryDetailLine(board) : null;
 
   return (
@@ -77,6 +80,7 @@ export function DiscoveryCard({
       <div className="mt-2.5 flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
         <Chip size="sm" tone="cyan">{discovery.agent_kind}</Chip>
         {discovery.model && <Chip size="sm" tone="violet">{discovery.model}</Chip>}
+        <span className="text-slate-300">{turnCount(discovery.message_count)}</span>
         <span className="text-slate-300">{formatCost(discovery.total_cost)}</span>
         <span className="flex items-center gap-1 text-slate-300">
           <Zap className="h-3 w-3 text-cyan-400" aria-hidden="true" />
@@ -84,7 +88,7 @@ export function DiscoveryCard({
         </span>
       </div>
 
-      {progress && segments && (
+      {progress && (
         <div className="mt-3.5 flex items-center gap-3.5">
           <TicketProgressBar
             landedPct={segments.landedPct}
@@ -99,6 +103,12 @@ export function DiscoveryCard({
       {detail && <p className="mt-2.5 text-xs leading-relaxed text-slate-500">{detail}</p>}
     </button>
   );
+}
+
+/** How many turns have been taken. The count is of stored messages, which is
+ *  what `DiscoverySummary` carries and what the transcript renders. */
+function turnCount(messages: number): string {
+  return messages === 1 ? '1 turn' : `${messages} turns`;
 }
 
 export default DiscoveryCard;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { Zap, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Compass, GitPullRequest, Sliders, Terminal } from 'lucide-react';
-import { Discovery, Feature, FeatureDrift, Repository } from '../types';
+import { DiscoverySummary, Feature, FeatureDrift, Repository } from '../types';
 import { formatError } from '../lib/errors';
 import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } from '../lib/project';
 import { bootstrapProject } from '../lib/createProjectWizard';
@@ -65,7 +65,7 @@ const ProjectHome = () => {
     // Every Discovery in this project, open or closed. Fetched with the rest
     // of the workspace so the tab is populated the moment it is chosen; the
     // ticket boards behind each card are DiscoverySection's own read.
-    const [discoveries, setDiscoveries] = useState<Discovery[]>([]);
+    const [discoveries, setDiscoveries] = useState<DiscoverySummary[]>([]);
     const [isLoadingDiscoveries, setIsLoadingDiscoveries] = useState(true);
 
     useEffect(() => {

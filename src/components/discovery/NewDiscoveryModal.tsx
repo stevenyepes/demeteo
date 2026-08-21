@@ -1,11 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
-import { getAgentModels } from '../../lib/agentModels';
+import { getAgentModels, modelSupportsImages } from '../../lib/agentModels';
+import { stagedAttachmentInputs } from '../../lib/attachments';
 import { createDiscovery } from '../../lib/discovery';
 import { DEFAULT_EFFORT, EFFORT_LABELS, type EffortLevel } from '../../lib/effortLevels';
 import { formatError } from '../../lib/errors';
-import type { Discovery } from '../../types';
+import { listMachines } from '../../lib/machines';
+import { interviewerMachineOptions, noVisionNote } from '../../lib/newDiscovery';
+import type { ConfigOptionValue, Discovery, Machine } from '../../types';
+import { AttachmentDropzone, type LaunchStageEntry } from '../AttachmentDropzone';
 import { FieldLabel } from '../ui/FieldLabel';
 import { Modal } from '../ui/Modal';
 import { OptionPill } from './OptionPill';
@@ -17,9 +21,9 @@ const DIMMED_EFFORTS: readonly EffortLevel[] = ['low', 'medium', 'high'];
 
 interface NewDiscoveryModalProps {
   projectId: string;
-  /** The host the interview runs on. Not a choice: the repository it reads
-   *  exists on exactly one machine, so `discovery_create` takes the project's
-   *  and ignores anything else. */
+  /** The project's own host, which is where its repository was cloned. The
+   *  picker starts there and the user may move it: §4.5 makes the host part of
+   *  the interviewer choice, so a value they give is never overridden. */
   machineId: string;
   /** Whatever was typed into the hero card, carried in as the seed. */
   seedTitle: string;
@@ -39,8 +43,12 @@ export function NewDiscoveryModal({
   const [agentKind, setAgentKind] = useState('');
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
-  const [models, setModels] = useState<string[]>([]);
+  const [machine, setMachine] = useState(machineId);
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [models, setModels] = useState<ConfigOptionValue[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [attachments, setAttachments] = useState<LaunchStageEntry[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,6 +60,25 @@ export function NewDiscoveryModal({
     setAgentKind(agents[0].kind);
   }, [agents, agentKind]);
 
+  useEffect(() => {
+    let cancelled = false;
+    listMachines()
+      .then((list) => {
+        if (!cancelled) setMachines(list ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setMachines([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const machineOptions = useMemo(
+    () => interviewerMachineOptions(machines, machineId),
+    [machines, machineId],
+  );
+
   const effortLevels = useMemo(
     () => effortLevelsFor(agents, agentKind),
     [agents, agentKind],
@@ -60,18 +87,19 @@ export function NewDiscoveryModal({
 
   // Picking an interviewer resets the model to that agent's first entry
   // (`DISCOVERY_UI_SPEC.md` §2.4): a model list is per-harness, so carrying
-  // the previous pick across would send one harness another's model.
+  // the previous pick across would send one harness another's model. The
+  // probe runs against the chosen host, which is the one that will answer.
   useEffect(() => {
     if (!agentKind) return;
     let cancelled = false;
     setModelsLoading(true);
     setModel('');
-    getAgentModels(machineId, agentKind)
+    getAgentModels(machine, agentKind)
       .then((list) => {
         if (cancelled) return;
-        const values = (list ?? []).map((m) => m.value);
+        const values = list ?? [];
         setModels(values);
-        setModel(values[0] ?? '');
+        setModel(values[0]?.value ?? '');
       })
       .catch(() => {
         if (!cancelled) setModels([]);
@@ -82,13 +110,22 @@ export function NewDiscoveryModal({
     return () => {
       cancelled = true;
     };
-  }, [agentKind, machineId]);
+  }, [agentKind, machine]);
 
   // An agent with no per-invocation effort control gets none sent, rather than
   // one silently dropped on the floor.
   useEffect(() => {
     if (effortSupported && !effortLevels.includes(effort)) setEffort(effortLevels[0]);
   }, [effortLevels, effortSupported, effort]);
+
+  // Probe-aware rather than name-only: the model list is already in hand, so
+  // the backend's own `supports_images` answers, and the name heuristic is
+  // reached only for a model it does not carry.
+  const noVision = noVisionNote({
+    model,
+    readsImages: modelSupportsImages(models, agentKind, model),
+    attachments,
+  });
 
   const canStart = title.trim().length > 0 && agentKind !== '' && !submitting;
 
@@ -103,6 +140,8 @@ export function NewDiscoveryModal({
         agentKind,
         model: model || null,
         effort: effortSupported ? effort : null,
+        machineId: machine,
+        stagedAttachments: await stagedAttachmentInputs(attachments),
       });
       onCreated(discovery);
     } catch (err) {
@@ -169,13 +208,13 @@ export function NewDiscoveryModal({
                 </p>
               ) : (
                 <div role="radiogroup" aria-label="Model" className="flex flex-wrap gap-2">
-                  {models.map((value) => (
+                  {models.map((option) => (
                     <OptionPill
-                      key={value}
-                      selected={value === model}
-                      onSelect={() => setModel(value)}
+                      key={option.value}
+                      selected={option.value === model}
+                      onSelect={() => setModel(option.value)}
                     >
-                      {value}
+                      {option.value}
                     </OptionPill>
                   ))}
                 </div>
@@ -205,15 +244,47 @@ export function NewDiscoveryModal({
             <FieldLabel htmlFor="discovery-machine">Machine</FieldLabel>
             <select
               id="discovery-machine"
-              value={machineId}
-              disabled
-              className="input-field cursor-not-allowed appearance-none bg-[var(--bg-app)] opacity-60"
+              value={machine}
+              onChange={(e) => setMachine(e.target.value)}
+              className="input-field cursor-pointer appearance-none bg-[var(--bg-app)]"
             >
-              <option value={machineId}>{machineId}</option>
+              {machineOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
             </select>
             <p className="mt-2 text-[11px] text-slate-500">
-              The repository this interview reads exists on one host, so it runs there.
+              Starts on this project's own host, where its repository was cloned. Move it and
+              the interview runs there instead.
             </p>
+          </div>
+
+          <div>
+            <FieldLabel>Attachments</FieldLabel>
+            <AttachmentDropzone
+              mode="launch"
+              label="Attach"
+              stageEntries={attachments}
+              onChangeStage={setAttachments}
+              onError={setAttachmentError}
+              maxChips={6}
+            />
+            {attachmentError && (
+              <p role="alert" className="mt-2 font-mono text-[11px] text-ruby-200">
+                {attachmentError}
+              </p>
+            )}
+            {noVision && (
+              <p
+                data-testid="discovery-no-vision"
+                className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 text-[11px] leading-relaxed text-amber-200/90"
+              >
+                {noVision.model} cannot read images.{' '}
+                <span className="font-mono">{noVision.filenames.join(', ')}</span> will be
+                attached and ignored.
+              </p>
+            )}
           </div>
 
           <div className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2.5 text-[11px] leading-relaxed">

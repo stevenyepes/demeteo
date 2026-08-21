@@ -91,13 +91,13 @@ describe('progressText', () => {
   // tickets, one of them dropped. §9.2 counts landed against *live* tickets,
   // so 6 is the number and both surfaces read it from here.
   it('counts landed against live tickets, excluding dropped', () => {
-    expect(progressText(seededBoard())).toBe('1 of 6 landed · 1 in flight');
+    expect(progressText(seededBoard().progress)).toBe('1 of 6 landed · 1 in flight');
   });
 
   it('drops the in-flight clause when nothing is in flight', () => {
     const board = seededBoard();
     board.progress = { blocked: 0, ready: 0, in_flight: 0, landed: 5, dropped: 0, live: 5 };
-    expect(progressText(board)).toBe('5 of 5 landed');
+    expect(progressText(board.progress)).toBe('5 of 5 landed');
   });
 
   // A bar that counted a run which finished without merging would contradict
@@ -110,32 +110,26 @@ describe('progressText', () => {
         feature: { id: 'f1', status: 'completed', mr_state: 'closed', mr_url: 'https://x/pull/9' },
       }),
     ];
-    expect(progressText(board)).toBe('0 of 0 landed');
+    expect(progressText(board.progress)).toBe('0 of 0 landed');
   });
 
   it('says nothing at all before a decomposition has proposed anything', () => {
     expect(
-      progressText({
-        tickets: [],
-        progress: { blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 0, live: 0 },
-      }),
+      progressText({ blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 0, live: 0 }),
     ).toBeNull();
   });
 });
 
 describe('progressSegments', () => {
   it('sizes both segments against the live denominator', () => {
-    const { landedPct, inFlightPct } = progressSegments(seededBoard());
+    const { landedPct, inFlightPct } = progressSegments(seededBoard().progress);
     expect(landedPct).toBeCloseTo(100 / 6);
     expect(inFlightPct).toBeCloseTo(100 / 6);
   });
 
   it('is empty rather than infinite when every ticket was dropped', () => {
     expect(
-      progressSegments({
-        tickets: [ticket(1, 'dropped')],
-        progress: { blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 1, live: 0 },
-      }),
+      progressSegments({ blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 1, live: 0 }),
     ).toEqual({ landedPct: 0, inFlightPct: 0 });
   });
 });
@@ -169,6 +163,7 @@ describe('discoveryLifecycle', () => {
     effort: 'high',
     resume_session_id: null,
     worktree_path: null,
+    attachments: [],
     total_cost: 2.14,
     tokens: 486_000,
     created_at: 0,

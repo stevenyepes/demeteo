@@ -71,3 +71,17 @@ fn a_discovery_with_a_started_ticket_refuses_deletion() {
 fn a_discovery_of_unstarted_tickets_may_go() {
     assert!(deletion_refusal(&[ticket("t-1", 1), ticket("t-2", 2)]).is_none());
 }
+
+/// The two spellings of "has a Feature" are one answer, and either locks. A
+/// row whose `state` this build could not name reads as `started` on purpose;
+/// consulting `feature_id` alone would hand it back as editable.
+#[test]
+fn a_started_row_with_no_feature_still_locks() {
+    let mut t = ticket("t-1", 1);
+    t.state = TicketState::Started;
+    assert!(is_locked(&t));
+
+    let mut t = ticket("t-2", 2);
+    t.state = TicketState::Dropped;
+    assert!(!is_locked(&t));
+}

@@ -1,5 +1,5 @@
 import type { RunStatusTone } from './runStatus';
-import type { Discovery, DiscoveryBoard, TicketView } from '../types';
+import type { Discovery, DiscoveryBoard, TicketProgress, TicketView } from '../types';
 
 /**
  * The derived readings a Discovery card and a Discovery workspace both show,
@@ -27,27 +27,33 @@ export function ticketLabel(seq: number): string {
 /**
  * The progress readout, computed and never stored.
  *
+ * Over the counter alone rather than the ticket set, because Project Home's
+ * card is given only the counter (`DiscoverySummary.progress`) and reading it
+ * a second way there is exactly the divergence this module exists to prevent.
+ * Every ticket sits in one lane, so `live + dropped` *is* the size of the set.
+ *
  * `null` when the Discovery has proposed nothing yet: there is no arithmetic
  * to report, and `0 of 0 landed` reads as a failure rather than as an
- * interview still in progress.
+ * interview still in progress. A Discovery whose every ticket was dropped has
+ * proposed something, and does read `0 of 0 landed`.
  *
  * The *in flight* clause is dropped at zero, which is how the mock renders a
  * finished Discovery (`5 of 5 landed`).
  */
-export function progressText(board: DiscoveryBoard): string | null {
-  const { landed, live, in_flight: inFlight } = board.progress;
-  if (board.tickets.length === 0) return null;
+export function progressText(progress: TicketProgress): string | null {
+  const { landed, live, dropped, in_flight: inFlight } = progress;
+  if (live + dropped === 0) return null;
   const head = `${landed} of ${live} landed`;
   return inFlight > 0 ? `${head} · ${inFlight} in flight` : head;
 }
 
 /** The two segments of the split bar, as percentages of the same *live*
  *  denominator the text uses. */
-export function progressSegments(board: DiscoveryBoard): {
+export function progressSegments(progress: TicketProgress): {
   landedPct: number;
   inFlightPct: number;
 } {
-  const { landed, live, in_flight: inFlight } = board.progress;
+  const { landed, live, in_flight: inFlight } = progress;
   if (live <= 0) return { landedPct: 0, inFlightPct: 0 };
   return {
     landedPct: (landed / live) * 100,

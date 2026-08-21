@@ -3,6 +3,7 @@ import { startFeature } from '../lib/createProjectWizard';
 import { submitRemoteRun } from '../lib/remoteRuns';
 import { useNavigation } from '../context';
 import { useErrorBus } from '../lib/errorBus';
+import { stagedAttachmentInputs } from '../lib/attachments';
 import type { LaunchStageEntry } from '../components/AttachmentDropzone';
 import type { EffortLevel, Feature, FeatureOrigin } from '../types';
 
@@ -68,23 +69,14 @@ export function useLaunchRun(options: {
           throw new Error('No active project to launch a feature in.');
         }
 
-        // Convert staged attachments (which carry a browser File handle
-        // or an absolute drag-drop path) into the Rust wire shape. On
-        // the local path the orchestrator persists them BEFORE the
-        // driver is spawned (see `StepExecutor::feature_start`); on the
-        // detached path `remote_submit_run` spools the bytes onto the
-        // runner host over SFTP before submitting. Without this batch,
-        // the agent's first turn races the post-launch
-        // `feature_add_attachment` calls and the user sees "no image
-        // attached" responses from a freshly-attached screenshot.
-        const stagedAttachments = await Promise.all(
-          (params.attachments ?? []).map(async (a) => ({
-            source_path: a.sourcePath ?? '',
-            mime: a.mime ?? null,
-            source_filename: a.source_filename ?? null,
-            bytes: a.file ? Array.from(new Uint8Array(await a.file.arrayBuffer())) : null,
-          })),
-        );
+        // Both transports honour the batch before the agent runs: locally
+        // `StepExecutor::feature_start` persists it before the driver is
+        // spawned, and `remote_submit_run` spools the bytes onto the runner
+        // host over SFTP before submitting. Post-launch
+        // `feature_add_attachment` calls would race the first turn instead,
+        // and the user sees "no image attached" for a screenshot they watched
+        // themselves attach.
+        const stagedAttachments = await stagedAttachmentInputs(params.attachments ?? []);
 
         if (params.machineId) {
           // Detached run (docs/REMOTE_EXECUTION.md M6.1): the

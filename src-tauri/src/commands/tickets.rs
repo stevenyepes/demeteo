@@ -10,6 +10,7 @@ use crate::domain::ids::{DiscoveryId, TicketId};
 use crate::domain::models::{Feature, Ticket};
 use crate::state::AppContext;
 use demeteo_core::application::discovery;
+use demeteo_core::application::tickets::edit::TicketEdit;
 use demeteo_core::application::tickets::{self, DiscoveryBoard};
 use tauri::State;
 
@@ -26,6 +27,19 @@ pub fn discovery_board(
 #[tauri::command]
 pub fn ticket_briefing(ctx: State<'_, AppContext>, ticket_id: String) -> Result<String, String> {
     tickets::briefing_for(&ctx, &TicketId::from(ticket_id))
+}
+
+/// Save the editor drawer's whole form (§5.4, `DISCOVERY_UI_SPEC.md` §5).
+///
+/// Returns the board rather than the row: an edited edge moves everything
+/// under it, and §9.2 refuses to let the two disagree.
+#[tauri::command]
+pub fn ticket_update(
+    ctx: State<'_, AppContext>,
+    ticket_id: String,
+    edit: TicketEdit,
+) -> Result<DiscoveryBoard, String> {
+    tickets::edit::update(&ctx, &TicketId::from(ticket_id), &edit)
 }
 
 #[tauri::command]
