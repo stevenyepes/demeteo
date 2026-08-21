@@ -40,7 +40,8 @@ use crate::domain::ids::{
 use crate::domain::models::{
     AgentConfig, AgentProfile, Feature, GateDecision, Machine, Message, Notification, Project,
     ProjectSettings, ProjectWorkflowOverride, ProviderInstance, RepoContext, Repository,
-    StepExecution, ThreadSession, Workflow, WorkflowSchedule, WorkflowVersion, WorkingMemoryEntry,
+    StepExecution, SubtaskRunMirrorRow, ThreadSession, Workflow, WorkflowSchedule, WorkflowVersion,
+    WorkingMemoryEntry,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -365,6 +366,31 @@ pub trait FeatureRepository: Send + Sync {
         &self,
         step_execution_id: &StepExecutionId,
     ) -> Result<Vec<crate::domain::models::SubtaskRunRow>, String>;
+
+    /// Every `subtask_runs` row for a step execution, whole — the
+    /// `demeteo-runner`-side read behind the `get_sequence_state` RPC
+    /// (C4.1), which needs `id`/`agent_id`/`worktree_path`/`branch` to
+    /// reconstruct the row on the laptop; [`subtask_runs_for_step`](Self::subtask_runs_for_step)
+    /// drops those for the drill-down's read shape.
+    fn subtask_runs_mirror_for_step(
+        &self,
+        step_execution_id: &StepExecutionId,
+    ) -> Result<Vec<SubtaskRunMirrorRow>, String>;
+
+    /// Replace every `subtask_runs` row for a step execution with `rows`,
+    /// in one write. The mirror counterpart to `subtask_run_start`/
+    /// `subtask_run_finish` (`SubtaskRunRepository`): those are event-shaped
+    /// for a step this laptop is actually driving, but a detached run's
+    /// telemetry arrives as one runner-authoritative snapshot per poll
+    /// (`hydrate_shadow_feature`), so the mirror write replaces the set
+    /// outright rather than replaying start/finish events for rows this
+    /// laptop never opened.
+    fn subtask_runs_replace_for_step(
+        &self,
+        feature_id: &FeatureId,
+        step_execution_id: &StepExecutionId,
+        rows: &[SubtaskRunMirrorRow],
+    ) -> Result<(), String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -128,6 +128,20 @@ impl FeatureRepository for RecordingFeatures {
     fn subtask_runs_for_step(&self, _: &StepExecutionId) -> Result<Vec<SubtaskRunRow>, String> {
         reject_feature_call!()
     }
+    fn subtask_runs_mirror_for_step(
+        &self,
+        _: &StepExecutionId,
+    ) -> Result<Vec<crate::domain::models::SubtaskRunMirrorRow>, String> {
+        reject_feature_call!()
+    }
+    fn subtask_runs_replace_for_step(
+        &self,
+        _: &FeatureId,
+        _: &StepExecutionId,
+        _: &[crate::domain::models::SubtaskRunMirrorRow],
+    ) -> Result<(), String> {
+        reject_feature_call!()
+    }
 }
 
 struct RecordingMirrors {

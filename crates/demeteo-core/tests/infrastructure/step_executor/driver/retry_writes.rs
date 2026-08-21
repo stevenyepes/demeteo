@@ -137,6 +137,20 @@ impl FeatureRepository for FeaturesDouble {
     ) -> Result<Vec<crate::domain::models::SubtaskRunRow>, String> {
         panic!("unscripted subtask_runs_for_step")
     }
+    fn subtask_runs_mirror_for_step(
+        &self,
+        _id: &StepExecutionId,
+    ) -> Result<Vec<crate::domain::models::SubtaskRunMirrorRow>, String> {
+        panic!("unscripted subtask_runs_mirror_for_step")
+    }
+    fn subtask_runs_replace_for_step(
+        &self,
+        _feature_id: &FeatureId,
+        _id: &StepExecutionId,
+        _rows: &[crate::domain::models::SubtaskRunMirrorRow],
+    ) -> Result<(), String> {
+        panic!("unscripted subtask_runs_replace_for_step")
+    }
 }
 
 /// Records the status of every `StepProgress` and the reason of every

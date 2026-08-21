@@ -427,6 +427,22 @@ impl FeatureRepository for SqliteAdapter {
     ) -> Result<Vec<crate::domain::models::SubtaskRunRow>, String> {
         super::subtask_run::subtask_runs_for_step(self, step_execution_id)
     }
+
+    fn subtask_runs_mirror_for_step(
+        &self,
+        step_execution_id: &StepExecutionId,
+    ) -> Result<Vec<crate::domain::models::SubtaskRunMirrorRow>, String> {
+        super::subtask_run::subtask_runs_mirror_for_step(self, step_execution_id)
+    }
+
+    fn subtask_runs_replace_for_step(
+        &self,
+        feature_id: &FeatureId,
+        step_execution_id: &StepExecutionId,
+        rows: &[crate::domain::models::SubtaskRunMirrorRow],
+    ) -> Result<(), String> {
+        super::subtask_run::subtask_runs_replace_for_step(self, feature_id, step_execution_id, rows)
+    }
 }
 
 #[cfg(test)]
