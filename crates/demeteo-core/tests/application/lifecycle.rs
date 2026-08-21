@@ -406,6 +406,7 @@ impl WorktreeOpsPort for RecordingWorktrees {
         _: &str,
         _: &str,
         _: &str,
+        _: crate::ports::worktree_ops::MergeGate<'_>,
     ) -> Result<SyncOutcome, SyncFailure> {
         panic!("unexpected WorktreeOpsPort call")
     }

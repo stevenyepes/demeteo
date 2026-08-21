@@ -267,17 +267,31 @@ pub fn intervention_refusal(
 /// The refusals a [`SyncSessionStatus::Blocked`] session owes, which are not
 /// one answer but two.
 ///
-/// [`SyncBlockedStage::Push`] is the stage where the merge is committed on the
-/// feature branch and only its publication failed, and the six others are
-/// stages where nothing was merged at all. Told apart, the push-blocked row can
-/// offer the press that finishes what it started; collapsed, the only thing on
-/// offer was a retry — which merges nothing, since the branch already has
-/// `origin/<base>`, and reports `up_to_date` while the unpublished merge sits
-/// where it was left.
+/// [`SyncBlockedStage::Push`] and [`SyncBlockedStage::Verify`] are the stages
+/// where the merge is committed on the feature branch and only its publication
+/// was withheld — by the remote in the first case, by the project's own harness
+/// in the second — and the rest are stages where nothing was merged at all.
+/// Told apart, a row that carries a merge can offer the press that finishes
+/// what it started; collapsed, the only thing on offer was a retry — which
+/// merges nothing, since the branch already has `origin/<base>`, and reports
+/// `up_to_date` while the unpublished merge sits where it was left.
 fn blocked_refusal(action: SyncIntervention, standing: SyncStanding<'_>) -> Option<&'static str> {
-    let carries_merge = standing.blocked_stage == Some(SyncBlockedStage::Push);
+    let carries_merge = matches!(
+        standing.blocked_stage,
+        Some(SyncBlockedStage::Push | SyncBlockedStage::Verify)
+    );
     match action {
         SyncIntervention::Abort => None,
+        // Two refusals, because the premise differs. A `Verify` block *did*
+        // reach a merge and committed it; telling that user the sync "stopped
+        // before it reached a merge" would send them looking for work that is
+        // sitting on their branch. What both share is the part that matters:
+        // nothing is conflicted, so there is nothing for a resolver to open.
+        SyncIntervention::Resolve if carries_merge => Some(
+            "This merge is clean — nothing is conflicted, so there is nothing for an \
+             agent to resolve. Fix what the checks found on the branch, publish it \
+             anyway, or abandon the sync.",
+        ),
         SyncIntervention::Resolve => Some(
             "This sync stopped before it reached a merge, so there are no conflicts to \
              resolve. Fix what blocked it and sync again, or abandon the sync.",
@@ -298,10 +312,12 @@ fn blocked_refusal(action: SyncIntervention, standing: SyncStanding<'_>) -> Opti
 ///
 /// A resolution keeps its status: `pushed_at` is where publication is recorded
 /// (V45) and the review card is selected on `resolved`, so promoting it would
-/// take the state away from the reader it was held for. A `Push`-blocked sync
-/// is the opposite case — nothing about it was ever conflicted, and the failed
-/// push *was* the whole of the failure, so once it lands the session is the
-/// clean merge it would have been.
+/// take the state away from the reader it was held for. A blocked sync is the
+/// opposite case — nothing about either stage that carries a merge was ever
+/// conflicted, so once the commit lands the session is the clean merge it would
+/// have been. That holds for `Verify` too, where publishing is the user
+/// overruling their own harness: the block was about whether to push, and it
+/// has been answered.
 pub fn published_status(status: SyncSessionStatus) -> SyncSessionStatus {
     match status {
         SyncSessionStatus::Blocked => SyncSessionStatus::Merged,
@@ -341,6 +357,15 @@ pub fn resync_refusal(
         SyncSessionStatus::Blocked if blocked_stage == Some(SyncBlockedStage::Push) => Some(
             "The last sync committed a merge on this branch and could not push it. \
              Publish it or abandon the sync first, then sync again.",
+        ),
+        // The same shape as `Push`, and refused for the same reason rather
+        // than for the harness's: the merge is on the branch either way, so a
+        // second sync finds `origin/<base>` already in it, merges nothing, and
+        // lands on `UpToDate` — taking the red verdict, and the commit it was
+        // about, with it.
+        SyncSessionStatus::Blocked if blocked_stage == Some(SyncBlockedStage::Verify) => Some(
+            "The last sync committed a merge on this branch and its checks failed, so it \
+             was not pushed. Publish it or abandon the sync first, then sync again.",
         ),
         _ => None,
     }

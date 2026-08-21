@@ -93,7 +93,12 @@ impl ExecutionDriver {
         // are routed to the resolution agent.
         match self
             .merge_executor
-            .sync_feature_with_upstream(&self.f_id, &feature_branch, &base_branch)
+            .sync_feature_with_upstream(
+                &self.f_id,
+                &feature_branch,
+                &base_branch,
+                crate::adapters::step_executor::sync::sync_gate(&settings),
+            )
             .await
         {
             Ok(outcome) => {

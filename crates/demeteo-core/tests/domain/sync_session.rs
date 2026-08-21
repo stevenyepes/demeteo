@@ -273,16 +273,18 @@ fn a_merge_nobody_is_running_never_reached_a_verdict() {
     );
 }
 
-/// The one blocked stage that leaves work behind, told from the six that do
+/// The two blocked stages that leave work behind, told from the six that do
 /// not.
 ///
-/// A `push` failure has already committed the merge onto the feature branch.
-/// Offered only a retry, the second sync finds `origin/<base>` already merged,
-/// changes nothing, reports up to date — and the unpublished merge stays in a
-/// worktree the next sync force-removes. Publishing is the press that finishes
-/// it, and it is reachable only because the stage is on the row (V46).
+/// `push` and `verify` have both already committed the merge onto the feature
+/// branch — one was refused by the remote, the other withheld by the project's
+/// own harness. Offered only a retry, the second sync finds `origin/<base>`
+/// already merged, changes nothing, reports up to date — and the unpublished
+/// merge stays in a worktree the next sync force-removes. Publishing is the
+/// press that finishes it, and it is reachable only because the stage is on the
+/// row (V46).
 #[test]
-fn only_a_push_blocked_sync_has_a_merge_to_publish() {
+fn only_a_sync_that_committed_a_merge_has_one_to_publish() {
     use crate::domain::sync_session::{intervention_refusal, published_status, SyncIntervention};
 
     let blocked = |stage, published| SyncStanding {
@@ -292,13 +294,23 @@ fn only_a_push_blocked_sync_has_a_merge_to_publish() {
         feature_status: "completed",
         liveness: SyncLiveness::Gone,
     };
-    assert_eq!(
-        intervention_refusal(
-            SyncIntervention::Publish,
-            blocked(Some(SyncBlockedStage::Push), false)
-        ),
-        None
-    );
+    for stage in [SyncBlockedStage::Push, SyncBlockedStage::Verify] {
+        assert_eq!(
+            intervention_refusal(SyncIntervention::Publish, blocked(Some(stage), false)),
+            None,
+            "{stage:?} left a merge committed on the branch and unpublished"
+        );
+        assert!(
+            intervention_refusal(SyncIntervention::Discard, blocked(Some(stage), false)).is_some(),
+            "{stage:?} committed a merge here; undoing it would be a guess at what \
+             else has landed since"
+        );
+        assert!(
+            intervention_refusal(SyncIntervention::Resolve, blocked(Some(stage), false)).is_some(),
+            "{stage:?} has no unmerged paths, so the resolver would open a worktree \
+             with nothing in it to resolve"
+        );
+    }
     for stage in [
         None,
         Some(SyncBlockedStage::Fetch),
@@ -313,14 +325,12 @@ fn only_a_push_blocked_sync_has_a_merge_to_publish() {
             "{stage:?} merged nothing, so there is nothing of it to publish"
         );
     }
-    assert!(
-        intervention_refusal(
-            SyncIntervention::Publish,
-            blocked(Some(SyncBlockedStage::Push), true)
-        )
-        .is_some(),
-        "pressing it twice is not a second push"
-    );
+    for stage in [SyncBlockedStage::Push, SyncBlockedStage::Verify] {
+        assert!(
+            intervention_refusal(SyncIntervention::Publish, blocked(Some(stage), true)).is_some(),
+            "pressing it twice is not a second push"
+        );
+    }
     assert_eq!(
         published_status(SyncSessionStatus::Blocked),
         SyncSessionStatus::Merged,
@@ -597,6 +607,16 @@ fn a_resolution_nobody_has_read_is_not_something_the_next_sync_may_write_over() 
     use crate::domain::sync_session::resync_refusal;
 
     assert!(resync_refusal(SyncSessionStatus::Resolved, false, None).is_some());
+    // A merge the harness refused to publish is protected on the same terms:
+    // it is committed on the branch, so the next sync merges nothing and
+    // lands on a terminal `up_to_date` that takes the commit's only record
+    // with it.
+    assert!(resync_refusal(
+        SyncSessionStatus::Blocked,
+        false,
+        Some(crate::domain::sync_failure::SyncBlockedStage::Verify)
+    )
+    .is_some());
     assert_eq!(
         resync_refusal(SyncSessionStatus::Resolved, true, None),
         None,

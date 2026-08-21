@@ -4,8 +4,8 @@ use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
 use crate::ports::worktree_ops::{
-    CommitMessageRejected, SquashOutcome, SyncFailure, SyncOutcome, TerminalWorktreeCreated,
-    TerminalWorktreeRequest, WorktreeOpsPort,
+    CommitMessageRejected, MergeGate, SquashOutcome, SyncFailure, SyncOutcome,
+    TerminalWorktreeCreated, TerminalWorktreeRequest, WorktreeOpsPort,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -83,6 +83,7 @@ pub(crate) mod scope;
 pub(crate) mod squash;
 pub(crate) mod strategy;
 pub(crate) mod sync;
+pub(crate) mod sync_verify;
 pub(crate) mod trusted;
 pub(crate) mod worktree;
 
@@ -292,9 +293,17 @@ impl WorktreeOpsPort for GitOpsHelper {
         repo_dir: &str,
         feature_branch: &str,
         base_branch: &str,
+        gate: MergeGate<'_>,
     ) -> Result<SyncOutcome, SyncFailure> {
-        self.sync_feature_with_upstream(machine_id, repo_dir, feature_branch, base_branch, &())
-            .await
+        self.sync_feature_with_upstream(
+            machine_id,
+            repo_dir,
+            feature_branch,
+            base_branch,
+            gate,
+            &(),
+        )
+        .await
     }
 
     async fn validate_commit_message(

@@ -4,12 +4,13 @@ use super::*;
 use crate::domain::models::ConflictReport;
 use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
 
-const EVERY_STAGE: [SyncBlockedStage; 8] = [
+const EVERY_STAGE: [SyncBlockedStage; 9] = [
     SyncBlockedStage::Fetch,
     SyncBlockedStage::BaseRefMissing,
     SyncBlockedStage::WorktreeProvision,
     SyncBlockedStage::Merge,
     SyncBlockedStage::Push,
+    SyncBlockedStage::Verify,
     SyncBlockedStage::RepoContext,
     SyncBlockedStage::HeldResolution,
     SyncBlockedStage::TurnInFlight,
@@ -140,6 +141,7 @@ fn the_serialized_shape_is_the_wire_contract() {
             SyncBlockedStage::WorktreeProvision => "worktree_provision",
             SyncBlockedStage::Merge => "merge",
             SyncBlockedStage::Push => "push",
+            SyncBlockedStage::Verify => "verify",
             SyncBlockedStage::RepoContext => "repo_context",
             SyncBlockedStage::HeldResolution => "held_resolution",
             SyncBlockedStage::TurnInFlight => "turn_in_flight",

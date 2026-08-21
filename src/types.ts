@@ -756,6 +756,7 @@ export type SyncBlockedStage =
   | 'worktree_provision'
   | 'merge'
   | 'push'
+  | 'verify'
   | 'repo_context'
   | 'held_resolution'
   | 'turn_in_flight';

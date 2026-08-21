@@ -1,6 +1,7 @@
 use super::{git_request, GitOpsHelper};
 use crate::domain::sync_failure::SyncBlockedStage;
 use crate::ports::execution::ExecutionPort;
+use crate::ports::worktree_ops::MergeGate;
 use crate::ports::worktree_ops::{SyncFailure, SyncOutcome, SyncWorktreeObserver};
 
 impl GitOpsHelper {
@@ -255,6 +256,7 @@ impl GitOpsHelper {
         repo_dir: &str,
         feature_branch: &str,
         base_branch: &str,
+        gate: MergeGate<'_>,
         observer: &dyn SyncWorktreeObserver,
     ) -> Result<SyncOutcome, SyncFailure> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
@@ -347,7 +349,7 @@ impl GitOpsHelper {
         // Do the merge in a temporary worktree (not the main repo) so
         // concurrent features cannot race on the shared checkout.
         let wt_path = self
-            .provision_sync_worktree(Some(machine_str), repo_dir, feature_branch)
+            .provision_sync_worktree(Some(machine_str), repo_dir, feature_branch, gate)
             .await
             .map_err(|e| SyncFailure::Blocked {
                 stage: SyncBlockedStage::WorktreeProvision,
@@ -400,6 +402,30 @@ impl GitOpsHelper {
                 };
 
                 if changed {
+                    // Between the commit and the push, because those are the
+                    // only two points where the answer can still change
+                    // anything: before the merge there is no tree to ask about,
+                    // and after the push the pull request has already seen it.
+                    if let Some(raw_error) = super::sync_verify::merge_gate_refusal(
+                        &*self.exec,
+                        machine_str,
+                        gate,
+                        crate::adapters::step_executor::harness_shell::harness_shell_options(
+                            self.app_settings.as_ref(),
+                            &wt_path,
+                        ),
+                    )
+                    .await
+                    {
+                        return Err(SyncFailure::Blocked {
+                            stage: SyncBlockedStage::Verify,
+                            raw_error,
+                            worktree_path: Some(wt_path.clone()),
+                            head_before: head_before.clone(),
+                            merge_commit_sha: head_after.clone(),
+                        });
+                    }
+
                     // Push the successful clean merge to origin so remote MR is updated
                     let credential = crate::adapters::git_push::credential_for_repo(
                         &*self.exec,
@@ -498,6 +524,7 @@ impl GitOpsHelper {
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
+        gate: MergeGate<'_>,
     ) -> Result<String, String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
 
@@ -563,6 +590,24 @@ impl GitOpsHelper {
                     feature_branch, e
                 )
             })?;
+
+        // Only for a sync that is going to run something. A merge worktree is
+        // throwaway and nothing else in it reads a dependency tree, so the
+        // links are pure cost until a harness needs `node_modules` to resolve
+        // an import — and without them every gated sync of a JS project would
+        // report a red build about the install it was never given, which is
+        // the false red `sync_verify` refuses to produce from the other side.
+        if !gate.is_empty() {
+            super::worktree::share_dependency_caches(
+                self.exec.as_ref(),
+                machine_str,
+                repo_dir,
+                &wt_path,
+                &crate::paths::feature_cache_dir(repo_dir, feature_branch),
+                crate::paths::targets_windows_host(machine_str),
+            )
+            .await;
+        }
 
         Ok(wt_path)
     }

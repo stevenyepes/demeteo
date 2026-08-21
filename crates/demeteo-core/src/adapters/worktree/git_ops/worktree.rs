@@ -1412,7 +1412,7 @@ fn validate_git_branch_name(branch: &str) -> Result<(), String> {
 /// neither is reachable from a test spelled inside this `async fn`.
 ///
 /// Best-effort throughout: a failure here costs a re-install, not the step.
-async fn share_dependency_caches(
+pub(super) async fn share_dependency_caches(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
     repo_dir: &str,

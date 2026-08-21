@@ -10,6 +10,7 @@ use crate::adapters::database::SqliteAdapter;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::sync_session::SyncSessionStatus;
 use crate::ports::sync_session::SyncSessionPort;
+use crate::ports::worktree_ops::MergeGate;
 use rusqlite::{params, Connection};
 
 const REPO: &str = "/repos/demeteo";
@@ -266,7 +267,7 @@ async fn a_sync_may_not_start_over_a_resolution_nobody_has_read() {
         .unwrap();
 
     let failure = executor
-        .sync_feature_with_upstream(&fid(), "feature/f-1", "master")
+        .sync_feature_with_upstream(&fid(), "feature/f-1", "master", MergeGate::default())
         .await
         .expect_err("the held resolution is what stops it");
     match failure {
@@ -298,7 +299,7 @@ async fn a_published_resolution_does_not_stand_in_the_way_of_the_next_sync() {
         .unwrap();
 
     let failure = executor
-        .sync_feature_with_upstream(&fid(), "feature/f-1", "master")
+        .sync_feature_with_upstream(&fid(), "feature/f-1", "master", MergeGate::default())
         .await
         .expect_err("this fixture configures no repository");
     match failure {
@@ -337,7 +338,7 @@ async fn a_sync_may_not_start_over_a_merge_that_never_reached_origin() {
     sessions.open(&row).unwrap();
 
     let failure = executor
-        .sync_feature_with_upstream(&fid(), "feature/f-1", "master")
+        .sync_feature_with_upstream(&fid(), "feature/f-1", "master", MergeGate::default())
         .await
         .expect_err("the unpublished merge is what stops it");
     match failure {
@@ -369,7 +370,7 @@ async fn a_sync_will_not_start_while_another_turn_holds_the_feature() {
 
     let failure = fx
         .executor
-        .sync_feature_with_upstream(&fid(), "feature/f-1", "master")
+        .sync_feature_with_upstream(&fid(), "feature/f-1", "master", MergeGate::default())
         .await
         .expect_err("the slot is taken");
     match failure {
@@ -393,7 +394,7 @@ async fn a_sync_will_not_start_while_another_turn_holds_the_feature() {
     drop(held);
     let _ = fx
         .executor
-        .sync_feature_with_upstream(&fid(), "feature/f-1", "master")
+        .sync_feature_with_upstream(&fid(), "feature/f-1", "master", MergeGate::default())
         .await;
     assert!(
         !fx.exec.programs().is_empty(),
@@ -420,7 +421,7 @@ async fn a_clean_sync_stops_naming_the_worktree_it_deleted() {
     );
 
     fx.executor
-        .sync_feature_with_upstream(&fid(), "feature/f-1", "master")
+        .sync_feature_with_upstream(&fid(), "feature/f-1", "master", MergeGate::default())
         .await
         .expect("the scripted run merges and pushes cleanly");
 
@@ -460,7 +461,7 @@ async fn a_worktree_the_teardown_left_behind_is_still_named_on_the_row() {
     );
 
     fx.executor
-        .sync_feature_with_upstream(&fid(), "feature/f-1", "master")
+        .sync_feature_with_upstream(&fid(), "feature/f-1", "master", MergeGate::default())
         .await
         .expect("the scripted run merges and pushes cleanly");
 
@@ -490,7 +491,7 @@ async fn a_push_that_failed_records_the_stage_and_the_commit_it_left() {
 
     let failure = fx
         .executor
-        .sync_feature_with_upstream(&fid(), "feature/f-1", "master")
+        .sync_feature_with_upstream(&fid(), "feature/f-1", "master", MergeGate::default())
         .await
         .expect_err("the push was rejected");
     assert!(matches!(
@@ -545,7 +546,7 @@ async fn a_push_blocked_sync_that_could_not_read_its_head_records_no_commit() {
 
     let failure = fx
         .executor
-        .sync_feature_with_upstream(&fid(), "feature/f-1", "master")
+        .sync_feature_with_upstream(&fid(), "feature/f-1", "master", MergeGate::default())
         .await
         .expect_err("the push was rejected");
     assert!(matches!(

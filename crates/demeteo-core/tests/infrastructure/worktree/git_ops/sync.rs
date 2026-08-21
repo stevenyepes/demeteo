@@ -1,7 +1,7 @@
 use super::super::common::*;
 use crate::domain::sync_failure::SyncBlockedStage;
 use crate::ports::execution::ExecutionPort;
-use crate::ports::worktree_ops::SyncFailure;
+use crate::ports::worktree_ops::{MergeGate, SyncFailure};
 
 /// The exact bug the user hit: a feature branch is "2 commits
 /// behind" main with overlapping changes. The sync must
@@ -46,7 +46,14 @@ async fn test_sync_feature_with_upstream_detects_conflicts() {
     //    conflict (because the README.md was edited on both
     //    sides), not a silent "no new commits upstream".
     let outcome = helper
-        .sync_feature_with_upstream(None, &local, "feature/f-1", "main", &())
+        .sync_feature_with_upstream(
+            None,
+            &local,
+            "feature/f-1",
+            "main",
+            MergeGate::default(),
+            &(),
+        )
         .await;
 
     match outcome {
@@ -99,7 +106,14 @@ async fn test_sync_feature_with_upstream_noop_when_already_in_sync() {
         .await;
 
     let outcome = helper
-        .sync_feature_with_upstream(None, &local, "feature/f-1", "main", &())
+        .sync_feature_with_upstream(
+            None,
+            &local,
+            "feature/f-1",
+            "main",
+            MergeGate::default(),
+            &(),
+        )
         .await
         .expect("Sync should succeed when there is nothing to merge");
 
@@ -124,7 +138,14 @@ async fn test_sync_feature_with_upstream_does_not_call_an_unmeasurable_branch_sy
     let local = local_dir.to_string_lossy().to_string();
 
     let outcome = helper
-        .sync_feature_with_upstream(None, &local, "feature/never-cut", "main", &())
+        .sync_feature_with_upstream(
+            None,
+            &local,
+            "feature/never-cut",
+            "main",
+            MergeGate::default(),
+            &(),
+        )
         .await;
 
     match outcome {
@@ -172,7 +193,14 @@ async fn test_sync_feature_with_upstream_reports_fetch_failure() {
         .await;
 
     let outcome = helper
-        .sync_feature_with_upstream(None, &local, "feature/f-1", "main", &())
+        .sync_feature_with_upstream(
+            None,
+            &local,
+            "feature/f-1",
+            "main",
+            MergeGate::default(),
+            &(),
+        )
         .await;
     match outcome {
         Ok(o) => panic!(
@@ -242,7 +270,14 @@ async fn test_resolver_must_run_in_main_repo_not_worktree() {
 
     // 3. Sync in the main repo — leaves it conflicted.
     let _ = helper
-        .sync_feature_with_upstream(None, &local, "feature/f-resolver", "main", &())
+        .sync_feature_with_upstream(
+            None,
+            &local,
+            "feature/f-resolver",
+            "main",
+            MergeGate::default(),
+            &(),
+        )
         .await;
 
     // 4. Critical assertion: the main repo's working tree DOES
@@ -581,7 +616,7 @@ mod stage_at_each_call {
             Arc::new(ScriptedExec::new(&[]).with_programs(&as_script(&run))),
         );
         helper
-            .sync_feature_with_upstream(None, REPO, BRANCH, BASE, &())
+            .sync_feature_with_upstream(None, REPO, BRANCH, BASE, MergeGate::default(), &())
             .await
             .expect_err("the scripted failure must not sync cleanly")
     }
@@ -640,7 +675,7 @@ mod stage_at_each_call {
         let helper = GitOpsHelper::new(db, exec.clone());
 
         helper
-            .sync_feature_with_upstream(None, REPO, BRANCH, BASE, &observer)
+            .sync_feature_with_upstream(None, REPO, BRANCH, BASE, MergeGate::default(), &observer)
             .await
             .expect("the scripted run merges and pushes cleanly");
 

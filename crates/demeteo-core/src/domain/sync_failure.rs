@@ -43,8 +43,20 @@ pub enum SyncBlockedStage {
     /// the deadline expired. Whatever the worktree holds, it is not a verdict.
     Merge,
     /// The merge landed cleanly and is committed locally; publishing it to
-    /// origin failed. The only stage where work exists and is at risk.
+    /// origin failed. One of the two stages where work exists and is at risk.
     Push,
+    /// The merge landed cleanly, and the project's harness then answered red
+    /// in the tree it produced, so it was never pushed.
+    ///
+    /// Not a conflict, and the distinction is the reason this stage exists:
+    /// git merges text, so two edits that never touch the same line merge
+    /// without complaint and can still leave a tree that does not build — a
+    /// field added to a struct on the base branch against a new literal of it
+    /// on the feature branch is the whole failure, in two files that have
+    /// nothing to say to each other. Nothing about such a tree is *unmerged*,
+    /// so there is no `MERGE_HEAD`, no conflicted path, and nothing for the
+    /// conflict resolver to open.
+    Verify,
     /// The feature's project repository row could not be resolved, so no git
     /// command was ever issued.
     RepoContext,
@@ -71,6 +83,7 @@ impl SyncBlockedStage {
             Self::WorktreeProvision => "worktree_provision",
             Self::Merge => "merge",
             Self::Push => "push",
+            Self::Verify => "verify",
             Self::RepoContext => "repo_context",
             Self::HeldResolution => "held_resolution",
             Self::TurnInFlight => "turn_in_flight",
@@ -87,6 +100,7 @@ impl SyncBlockedStage {
             "worktree_provision" => Some(Self::WorktreeProvision),
             "merge" => Some(Self::Merge),
             "push" => Some(Self::Push),
+            "verify" => Some(Self::Verify),
             "repo_context" => Some(Self::RepoContext),
             "held_resolution" => Some(Self::HeldResolution),
             "turn_in_flight" => Some(Self::TurnInFlight),
@@ -112,6 +126,30 @@ pub fn merge_failure_stage(err: &str) -> Option<SyncBlockedStage> {
             Some(SyncBlockedStage::Merge)
         }
         HarnessExecFailure::NonZeroExit => None,
+    }
+}
+
+/// Whether a red harness over a cleanly merged tree withholds the push, and at
+/// which stage.
+///
+/// [`merge_failure_stage`]'s question, asked one stage later and answered by
+/// the same rule: only a non-zero exit is a verdict. A harness the transport
+/// cut short or the deadline abandoned never ran, and a build that never ran
+/// is not a red build — so it may not withhold a merge that is already
+/// committed on the branch. The two mistakes are not the same size. Pushing an
+/// unverified merge leaves the pull request exactly where a sync without this
+/// gate would have left it; withholding one on a dropped connection strands a
+/// real merge locally and tells the user their branch is broken on the strength
+/// of nothing.
+///
+/// `None` therefore means "push it", for both of the reasons a caller can have:
+/// the harness passed, or nobody is in a position to say it did not.
+pub fn verify_failure_stage(err: &str) -> Option<SyncBlockedStage> {
+    use crate::domain::harness_failure::HarnessExecFailure;
+
+    match crate::domain::harness_failure::classify_exec_failure(err) {
+        HarnessExecFailure::NonZeroExit => Some(SyncBlockedStage::Verify),
+        HarnessExecFailure::Transport | HarnessExecFailure::Timeout => None,
     }
 }
 

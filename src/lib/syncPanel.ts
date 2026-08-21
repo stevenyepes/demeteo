@@ -403,6 +403,15 @@ const BLOCKED_COPY: Record<SyncBlockedStage, { headline: string; body: string }>
     headline: 'The merge is on the branch and origin has not seen it',
     body: 'The merge succeeded and is committed; only the push failed. Syncing again would merge nothing and leave it here — publish it instead.',
   },
+  verify: {
+    headline: 'The merge is committed and the checks failed in it',
+    // No suggestion that anything is conflicted. git merges text, so two edits
+    // that never share a line merge cleanly and can still leave a tree that
+    // does not build — nothing here has unmerged paths, and the resolver
+    // `blocked_refusal` withholds would open a worktree with nothing in it to
+    // resolve.
+    body: 'The merge is clean and committed; the project\u2019s own checks then went red in it, so it was not pushed. Fix it on the branch and publish, or publish it anyway and let CI say the same thing.',
+  },
   repo_context: {
     headline: 'This feature has no repository to sync',
     body: 'No git command was ever issued. The project\u2019s repository row could not be resolved.',
@@ -442,10 +451,12 @@ const PUBLISH_BLOCKED: SyncAction = {
 /**
  * A sync that stopped, said in the stage\u2019s own terms.
  *
- * `push` is the only stage with work at risk, and it is the only one that does
- * not offer a retry: a second sync finds the base already merged, changes
- * nothing, and leaves the commit sitting in a worktree the sync after it
- * force-removes.
+ * `push` and `verify` are the stages with work at risk, and they are the two
+ * that do not offer a retry: the merge is already committed on the branch, so a
+ * second sync finds the base merged, changes nothing, and leaves the commit
+ * sitting in a worktree the sync after it force-removes. What separates them is
+ * only *who* withheld the push — the remote, or the project\u2019s own harness —
+ * which is a difference in copy, not in what the row may be offered.
  */
 function blockedArm(
   base: PanelBase,
@@ -454,7 +465,7 @@ function blockedArm(
   mine: boolean,
 ): SyncPanelModel {
   const stage = session.blocked_stage;
-  const held = stage === 'push';
+  const held = stage === 'push' || stage === 'verify';
   const copy = stage === null ? UNNAMED_BLOCK : BLOCKED_COPY[stage];
   const retry: SyncAction[] =
     !held && canSync ? [{ ...SYNC, label: 'Retry sync', tone: 'amber' as const }] : [];
