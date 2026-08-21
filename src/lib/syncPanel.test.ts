@@ -148,19 +148,26 @@ describe('describeSyncPanel', () => {
     expect(cut.body).not.toMatch(/nothing was merged/i);
   });
 
-  /** The action a `push`-blocked row actually needs. "Retry sync" merges
-   *  nothing — the branch already contains the base — so it reports up to date
-   *  and abandons the commit in a worktree the next sync force-removes. */
-  it('offers a push-blocked sync the publish a retry would strand', () => {
-    const model = panel({
-      session: session({ status: 'blocked', blocked_stage: 'push', merge_commit_sha: 'c0ffeec' }),
-      drift: null,
-      canSync: true,
-    });
+  /** The action a row that committed a merge actually needs. "Retry sync"
+   *  merges nothing — the branch already contains the base — so it reports up
+   *  to date and abandons the commit in a worktree the next sync force-removes.
+   *  `verify` is the second such stage: the merge is clean and committed, and
+   *  what withheld it was the project's own harness rather than the remote. */
+  it('offers a sync that committed a merge the publish a retry would strand', () => {
+    for (const stage of ['push', 'verify'] as const) {
+      const model = panel({
+        session: session({ status: 'blocked', blocked_stage: stage, merge_commit_sha: 'c0ffeec' }),
+        drift: null,
+        canSync: true,
+      });
 
-    expect(intents(model)).toContain('publish');
-    expect(intents(model)).not.toContain('sync');
-    expect(intents(model)).not.toContain('resolve');
+      expect(intents(model), stage).toContain('publish');
+      expect(intents(model), stage).not.toContain('sync');
+      // Nothing is conflicted in either, so the resolver would open a worktree
+      // with nothing in it to resolve.
+      expect(intents(model), stage).not.toContain('resolve');
+      expect(model.headline, stage).not.toBe('');
+    }
   });
 
   /** Every other stage merged nothing, so there is nothing of it to publish and
@@ -195,10 +202,10 @@ describe('describeSyncPanel', () => {
    *  empty one, so the user is told the push did not land about one that did.
    *  Both spellings of "no commit" have to withhold it: the column's own null,
    *  and the empty string an unread `rev-parse HEAD` used to be flattened to. */
-  it('withholds publish from a push-blocked sync that recorded no commit', () => {
+  it('withholds publish from a merge-carrying sync that recorded no commit', () => {
     for (const sha of [null, ''] as const) {
       const model = panel({
-        session: session({ status: 'blocked', blocked_stage: 'push', merge_commit_sha: sha }),
+        session: session({ status: 'blocked', blocked_stage: 'verify', merge_commit_sha: sha }),
         drift: null,
         canSync: true,
       });
@@ -346,6 +353,58 @@ describe('describeSyncPanel', () => {
 
     expect(model.state).toBe('published');
     expect(intents(model)).toEqual(['refresh']);
+  });
+
+  /**
+   * The session table holds one row per feature and `published_status` leaves a
+   * published resolution on `resolved` forever, so this arm is where a feature
+   * that ever hit a conflict spends the rest of its life. Answered as a dead
+   * end it withheld Sync permanently while the header chip beside it went on
+   * counting — and `resync_refusal` allows the sync all along.
+   */
+  it('offers the sync again once the base branch has moved past a published resolution', () => {
+    const model = panel({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 }),
+      drift: drift(4),
+      canSync: true,
+    });
+
+    expect(model.state).toBe('published');
+    expect(model.chipLabel).toBe('4 behind');
+    expect(model.tone).toBe(describeStaleness(drift(4))?.tone);
+    expect(model.badge).toBe(4);
+    expect(intents(model)).toEqual(['sync', 'refresh']);
+  });
+
+  /** A count that failed is not a count of zero — the same three-state rule
+   *  `staleness.ts` opens on. A merge answers what the count could not. */
+  it('offers the sync on a published resolution whose count could not be taken', () => {
+    const model = panel({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 }),
+      drift: drift(null, null),
+      canSync: true,
+    });
+
+    expect(intents(model)).toEqual(['sync', 'refresh']);
+  });
+
+  /** A measured zero is the one reading that settles it, and a run that has
+   *  started writing to the branch again takes the press away regardless. */
+  it('settles a published resolution the base branch has not moved past', () => {
+    const even = panel({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 }),
+      drift: drift(0),
+      canSync: true,
+    });
+    const running = panel({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 }),
+      drift: drift(4),
+      canSync: false,
+    });
+
+    expect(even.tone).toBe('emerald');
+    expect(intents(even)).toEqual(['refresh']);
+    expect(intents(running)).toEqual(['refresh']);
   });
 
   /** The pre-merge tip is unrecoverable once the merge lands, so a session

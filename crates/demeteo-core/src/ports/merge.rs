@@ -41,12 +41,21 @@ pub trait MergeExecutor: Send + Sync {
     /// Which of the two it is may never be inferred from the payload; only the
     /// variant answers it. [`crate::domain::sync_failure`] carries why, and is
     /// the one place that maps either to a view or to a workflow decision.
+    ///
+    /// `gate` is what the merged tree must prove before the merge reaches
+    /// origin ([`MergeGate`](crate::ports::worktree_ops::MergeGate)). It comes
+    /// from the caller rather than from a project row read here, because both
+    /// callers have already resolved the same
+    /// [`ProjectSettings`](crate::domain::models::ProjectSettings) to work out
+    /// which base to sync from — and a second lookup is a second chance for the
+    /// button and the workflow node to gate on different commands.
     #[allow(clippy::result_large_err)]
     async fn sync_feature_with_upstream(
         &self,
         feature_id: &FeatureId,
         feature_branch: &str,
         base_branch: &str,
+        gate: crate::ports::worktree_ops::MergeGate<'_>,
     ) -> Result<UpstreamSyncOutcome, UpstreamSyncFailure>;
 
     /// How far this feature's branch has drifted from the base it will merge

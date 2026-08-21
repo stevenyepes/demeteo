@@ -23,6 +23,7 @@ pub mod attachment;
 pub mod bootstrap;
 pub mod branch_listing;
 pub(crate) mod command_step;
+pub mod dependency_cache;
 pub mod diff_base;
 pub mod ecosystem;
 pub mod expr;

@@ -314,6 +314,32 @@ pub struct CommitMessageRejected {
     pub hook_output: String,
 }
 
+/// What a project asks of a tree a clean merge produced, before that merge is
+/// allowed to reach origin.
+///
+/// The two commands travel together and are meaningless apart — a harness run
+/// without the prepare that installs what it imports reports a red build about
+/// a missing dependency — so they arrive as one value rather than two
+/// parameters a call site could supply half of.
+///
+/// The default is the empty gate, which is not "everything passed": it is a
+/// project that named no command, and nothing is run or withheld for it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MergeGate<'a> {
+    /// `WorktreeStrategy::prepare_command`, or `None`.
+    pub prepare: Option<&'a str>,
+    /// `WorktreeStrategy::test_command`, or `None`.
+    pub harness: Option<&'a str>,
+}
+
+impl MergeGate<'_> {
+    /// Whether this gate has anything to say, which is what decides whether a
+    /// sync pays for a worktree equipped to answer it.
+    pub fn is_empty(&self) -> bool {
+        self.harness.is_none()
+    }
+}
+
 #[async_trait]
 pub trait WorktreeOpsPort: Send + Sync {
     /// Check if the repository is dirty.
@@ -525,12 +551,19 @@ pub trait WorktreeOpsPort: Send + Sync {
     ///
     /// Reports no worktree: a caller holding a session row wants
     /// [`SyncWorktreeObserver`] and reaches `GitOpsHelper` directly for it.
+    ///
+    /// `gate` is what the merged tree must prove before it reaches origin
+    /// ([`MergeGate`]). It is a parameter rather than a field the adapter reads
+    /// because the commands belong to the *project*, which this port has no
+    /// row for — and because a second path that quietly skipped it would be a
+    /// sync that pushes on different terms than the one beside it.
     async fn sync_feature_with_upstream(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
         base_branch: &str,
+        gate: MergeGate<'_>,
     ) -> Result<SyncOutcome, SyncFailure>;
 
     /// Run the repo's own `commit-msg` hook against a proposed message,

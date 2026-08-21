@@ -221,6 +221,7 @@ impl MergeExecutor for SqliteMergeExecutor {
         feature_id: &FeatureId,
         feature_branch: &str,
         default_branch: &str,
+        gate: crate::ports::worktree_ops::MergeGate<'_>,
     ) -> Result<UpstreamSyncOutcome, UpstreamSyncFailure> {
         // Before anything is resolved or fetched, because the row this would
         // overwrite is the only copy of a resolution nobody has read yet
@@ -322,6 +323,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                 &repo_dir,
                 feature_branch,
                 default_branch,
+                gate,
                 &observer,
             )
             .await
@@ -421,9 +423,10 @@ impl MergeExecutor for SqliteMergeExecutor {
                 merge_commit_sha,
             }) => {
                 // A blocked attempt can still have provisioned a tree — `Push`
-                // always has, and it holds a real unpublished merge. Naming it on
-                // the row is what lets `sync_abort` reclaim it; otherwise the only
-                // thing that ever removes it is the next sync's force-remove.
+                // and `Verify` always have, and both hold a real unpublished
+                // merge. Naming it on the row is what lets `sync_abort` reclaim
+                // it; otherwise the only thing that ever removes it is the next
+                // sync's force-remove.
                 let _ = self.sync_sessions.update(
                     feature_id,
                     &SyncSessionPatch {

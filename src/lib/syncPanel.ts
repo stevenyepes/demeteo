@@ -285,16 +285,59 @@ export function describeSyncPanel({ session, drift, canSync, pending }: SyncPane
             actions: mine ? reviewActions(session) : [],
             badge: 1,
           }
-        : {
-            ...base,
-            state: 'published',
-            tone: 'emerald',
-            chipLabel: 'Published',
-            headline: 'The resolution is on origin',
-            body: `${branch} carries the merge and origin has it. Nothing here is waiting on you.`,
-            actions: [REFRESH],
-          };
+        : publishedArm(base, session, drift, canSync);
   }
+}
+
+/**
+ * A resolution origin already has, which is a sync that is over — and the one
+ * finished sync whose row never says so.
+ *
+ * `published_status` (domain/sync_session.rs) leaves a published resolution on
+ * `resolved` on purpose, so the row that reaches this arm looks nothing like
+ * the `up_to_date`, `merged` and `aborted` rows the header of this module
+ * hands to `quiet`. Answered as a dead end it took Sync away from the feature
+ * for good: the session table holds one row per feature, that row stays here
+ * forever, and the base branch goes on moving underneath it — the pane saying
+ * "nothing here is waiting on you" beside a header chip counting four behind,
+ * with `resync_refusal` having allowed the sync the whole time.
+ *
+ * So the landed fact is a sentence, not a state: `quiet` stays the only place
+ * that turns a count into copy, a tone and a press.
+ */
+function publishedArm(
+  base: PanelBase,
+  session: SyncSessionView,
+  drift: FeatureDrift | null,
+  canSync: boolean,
+): SyncPanelModel {
+  const landed = `${session.feature_branch} carries the merge and origin has it.`;
+  const chip = describeStaleness(drift);
+  const behind = drift?.divergence.behind ?? null;
+  // `behind === null` is a count that could not be taken, and it earns the
+  // press for the reason `quiet` gives it: a merge answers what the count
+  // could not. Only a measured zero settles this arm.
+  if (!canSync || chip === null || behind === 0) {
+    return {
+      ...base,
+      state: 'published',
+      tone: 'emerald',
+      chipLabel: 'Published',
+      headline: 'The resolution is on origin',
+      body: `${landed} Nothing here is waiting on you.`,
+      actions: [REFRESH],
+    };
+  }
+  return {
+    ...base,
+    state: 'published',
+    tone: chip.tone,
+    chipLabel: chip.label,
+    headline: behind === null ? 'The count could not be taken' : missingHeadline(behind),
+    body: `${landed} ${chip.title}`,
+    actions: [SYNC, REFRESH],
+    badge: behind ?? 0,
+  };
 }
 
 type PanelBase = Omit<SyncPanelModel, 'state' | 'tone' | 'chipLabel' | 'headline' | 'body'>;
@@ -360,6 +403,15 @@ const BLOCKED_COPY: Record<SyncBlockedStage, { headline: string; body: string }>
     headline: 'The merge is on the branch and origin has not seen it',
     body: 'The merge succeeded and is committed; only the push failed. Syncing again would merge nothing and leave it here — publish it instead.',
   },
+  verify: {
+    headline: 'The merge is committed and the checks failed in it',
+    // No suggestion that anything is conflicted. git merges text, so two edits
+    // that never share a line merge cleanly and can still leave a tree that
+    // does not build — nothing here has unmerged paths, and the resolver
+    // `blocked_refusal` withholds would open a worktree with nothing in it to
+    // resolve.
+    body: 'The merge is clean and committed; the project\u2019s own checks then went red in it, so it was not pushed. Fix it on the branch and publish, or publish it anyway and let CI say the same thing.',
+  },
   repo_context: {
     headline: 'This feature has no repository to sync',
     body: 'No git command was ever issued. The project\u2019s repository row could not be resolved.',
@@ -399,10 +451,12 @@ const PUBLISH_BLOCKED: SyncAction = {
 /**
  * A sync that stopped, said in the stage\u2019s own terms.
  *
- * `push` is the only stage with work at risk, and it is the only one that does
- * not offer a retry: a second sync finds the base already merged, changes
- * nothing, and leaves the commit sitting in a worktree the sync after it
- * force-removes.
+ * `push` and `verify` are the stages with work at risk, and they are the two
+ * that do not offer a retry: the merge is already committed on the branch, so a
+ * second sync finds the base merged, changes nothing, and leaves the commit
+ * sitting in a worktree the sync after it force-removes. What separates them is
+ * only *who* withheld the push — the remote, or the project\u2019s own harness —
+ * which is a difference in copy, not in what the row may be offered.
  */
 function blockedArm(
   base: PanelBase,
@@ -411,7 +465,7 @@ function blockedArm(
   mine: boolean,
 ): SyncPanelModel {
   const stage = session.blocked_stage;
-  const held = stage === 'push';
+  const held = stage === 'push' || stage === 'verify';
   const copy = stage === null ? UNNAMED_BLOCK : BLOCKED_COPY[stage];
   const retry: SyncAction[] =
     !held && canSync ? [{ ...SYNC, label: 'Retry sync', tone: 'amber' as const }] : [];
@@ -560,9 +614,17 @@ function quiet(drift: FeatureDrift | null, canSync: boolean): Quiet {
     state: 'behind',
     tone: chip.tone,
     chipLabel: chip.label,
-    headline: chip.label === '1 behind' ? '1 commit is missing from this branch' : `${behind} commits are missing from this branch`,
+    headline: missingHeadline(behind),
     body: chip.title,
     actions: [SYNC, REFRESH],
     badge: behind,
   };
+}
+
+/** Read by both arms that offer a Sync, so a count cannot be worded one way
+ *  under a fresh branch and another under a published resolution. */
+function missingHeadline(behind: number): string {
+  return behind === 1
+    ? '1 commit is missing from this branch'
+    : `${behind} commits are missing from this branch`;
 }

@@ -85,6 +85,22 @@ pub(crate) fn sync_base(
     })
 }
 
+/// What a sync of this project must prove before it publishes.
+///
+/// Beside [`sync_base`] and for the same reason: the "Sync with main" button
+/// and the workflow's own `sync` node both have to answer it, and two
+/// derivations are two chances for one project's syncs to gate on different
+/// commands — the shape `diff_base::resolve` was centralised to prevent for the
+/// base branch.
+pub(crate) fn sync_gate(
+    settings: &crate::domain::models::ProjectSettings,
+) -> crate::ports::worktree_ops::MergeGate<'_> {
+    crate::ports::worktree_ops::MergeGate {
+        prepare: settings.worktree_strategy.prepare_command.as_deref(),
+        harness: settings.worktree_strategy.test_command.as_deref(),
+    }
+}
+
 impl DagStepExecutor {
     /// Hold the in-flight entry a resolution would claim, so the refusal that
     /// serialises two of them is assertable without racing two real turns.
@@ -130,7 +146,12 @@ impl DagStepExecutor {
         // Claimed here instead, the node reached that sweep holding nothing.
         crate::domain::sync_failure::command_view(
             self.merge_executor
-                .sync_feature_with_upstream(&fid, &feature_branch, &base_branch)
+                .sync_feature_with_upstream(
+                    &fid,
+                    &feature_branch,
+                    &base_branch,
+                    sync_gate(&settings),
+                )
                 .await,
         )
     }
