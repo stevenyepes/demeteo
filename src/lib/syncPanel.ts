@@ -285,16 +285,59 @@ export function describeSyncPanel({ session, drift, canSync, pending }: SyncPane
             actions: mine ? reviewActions(session) : [],
             badge: 1,
           }
-        : {
-            ...base,
-            state: 'published',
-            tone: 'emerald',
-            chipLabel: 'Published',
-            headline: 'The resolution is on origin',
-            body: `${branch} carries the merge and origin has it. Nothing here is waiting on you.`,
-            actions: [REFRESH],
-          };
+        : publishedArm(base, session, drift, canSync);
   }
+}
+
+/**
+ * A resolution origin already has, which is a sync that is over — and the one
+ * finished sync whose row never says so.
+ *
+ * `published_status` (domain/sync_session.rs) leaves a published resolution on
+ * `resolved` on purpose, so the row that reaches this arm looks nothing like
+ * the `up_to_date`, `merged` and `aborted` rows the header of this module
+ * hands to `quiet`. Answered as a dead end it took Sync away from the feature
+ * for good: the session table holds one row per feature, that row stays here
+ * forever, and the base branch goes on moving underneath it — the pane saying
+ * "nothing here is waiting on you" beside a header chip counting four behind,
+ * with `resync_refusal` having allowed the sync the whole time.
+ *
+ * So the landed fact is a sentence, not a state: `quiet` stays the only place
+ * that turns a count into copy, a tone and a press.
+ */
+function publishedArm(
+  base: PanelBase,
+  session: SyncSessionView,
+  drift: FeatureDrift | null,
+  canSync: boolean,
+): SyncPanelModel {
+  const landed = `${session.feature_branch} carries the merge and origin has it.`;
+  const chip = describeStaleness(drift);
+  const behind = drift?.divergence.behind ?? null;
+  // `behind === null` is a count that could not be taken, and it earns the
+  // press for the reason `quiet` gives it: a merge answers what the count
+  // could not. Only a measured zero settles this arm.
+  if (!canSync || chip === null || behind === 0) {
+    return {
+      ...base,
+      state: 'published',
+      tone: 'emerald',
+      chipLabel: 'Published',
+      headline: 'The resolution is on origin',
+      body: `${landed} Nothing here is waiting on you.`,
+      actions: [REFRESH],
+    };
+  }
+  return {
+    ...base,
+    state: 'published',
+    tone: chip.tone,
+    chipLabel: chip.label,
+    headline: behind === null ? 'The count could not be taken' : missingHeadline(behind),
+    body: `${landed} ${chip.title}`,
+    actions: [SYNC, REFRESH],
+    badge: behind ?? 0,
+  };
 }
 
 type PanelBase = Omit<SyncPanelModel, 'state' | 'tone' | 'chipLabel' | 'headline' | 'body'>;
@@ -560,9 +603,17 @@ function quiet(drift: FeatureDrift | null, canSync: boolean): Quiet {
     state: 'behind',
     tone: chip.tone,
     chipLabel: chip.label,
-    headline: chip.label === '1 behind' ? '1 commit is missing from this branch' : `${behind} commits are missing from this branch`,
+    headline: missingHeadline(behind),
     body: chip.title,
     actions: [SYNC, REFRESH],
     badge: behind,
   };
+}
+
+/** Read by both arms that offer a Sync, so a count cannot be worded one way
+ *  under a fresh branch and another under a published resolution. */
+function missingHeadline(behind: number): string {
+  return behind === 1
+    ? '1 commit is missing from this branch'
+    : `${behind} commits are missing from this branch`;
 }

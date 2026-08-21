@@ -348,6 +348,58 @@ describe('describeSyncPanel', () => {
     expect(intents(model)).toEqual(['refresh']);
   });
 
+  /**
+   * The session table holds one row per feature and `published_status` leaves a
+   * published resolution on `resolved` forever, so this arm is where a feature
+   * that ever hit a conflict spends the rest of its life. Answered as a dead
+   * end it withheld Sync permanently while the header chip beside it went on
+   * counting — and `resync_refusal` allows the sync all along.
+   */
+  it('offers the sync again once the base branch has moved past a published resolution', () => {
+    const model = panel({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 }),
+      drift: drift(4),
+      canSync: true,
+    });
+
+    expect(model.state).toBe('published');
+    expect(model.chipLabel).toBe('4 behind');
+    expect(model.tone).toBe(describeStaleness(drift(4))?.tone);
+    expect(model.badge).toBe(4);
+    expect(intents(model)).toEqual(['sync', 'refresh']);
+  });
+
+  /** A count that failed is not a count of zero — the same three-state rule
+   *  `staleness.ts` opens on. A merge answers what the count could not. */
+  it('offers the sync on a published resolution whose count could not be taken', () => {
+    const model = panel({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 }),
+      drift: drift(null, null),
+      canSync: true,
+    });
+
+    expect(intents(model)).toEqual(['sync', 'refresh']);
+  });
+
+  /** A measured zero is the one reading that settles it, and a run that has
+   *  started writing to the branch again takes the press away regardless. */
+  it('settles a published resolution the base branch has not moved past', () => {
+    const even = panel({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 }),
+      drift: drift(0),
+      canSync: true,
+    });
+    const running = panel({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 }),
+      drift: drift(4),
+      canSync: false,
+    });
+
+    expect(even.tone).toBe('emerald');
+    expect(intents(even)).toEqual(['refresh']);
+    expect(intents(running)).toEqual(['refresh']);
+  });
+
   /** The pre-merge tip is unrecoverable once the merge lands, so a session
    *  that never recorded one has no honest base to diff or reset against. */
   it('offers no diff and no discard without a recorded pre-merge tip', () => {
