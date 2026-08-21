@@ -504,6 +504,10 @@ impl AgentSession for UnifiedCliSession {
         &self.session_id
     }
 
+    fn harness_session_id(&self) -> Option<String> {
+        self.captured_session_id.lock().ok()?.clone()
+    }
+
     fn prompt(&self, text: &str) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {
         self.kill_live_local();
         self.kill_live_remote();

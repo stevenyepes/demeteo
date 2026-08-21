@@ -220,6 +220,23 @@ pub enum DomainEvent {
         feedback: Option<String>,
     },
 
+    /// A pull request reached a terminal state and, with it, one or more
+    /// Tickets in a Discovery became startable (`docs/PRD_DISCOVERY.md` §6.4).
+    ///
+    /// Fired only when the set is non-empty: a merge that released nothing is
+    /// not news, and a notice that arrived on every PR transition would be
+    /// trained away. `message` is pre-phrased for the bell on the same terms
+    /// as [`Notification::message`](crate::domain::models::Notification), and
+    /// `ticket_ids` lets the open Discovery surface highlight what changed
+    /// without a re-read.
+    TicketsStartable {
+        project_id: String,
+        discovery_id: String,
+        discovery_title: String,
+        ticket_ids: Vec<String>,
+        message: String,
+    },
+
     /// A row was appended to the durable `run_events` log (P1.13). This
     /// is the live-push half of the unified event log: the local
     /// recorder appends the row, then forwards this variant so the UI

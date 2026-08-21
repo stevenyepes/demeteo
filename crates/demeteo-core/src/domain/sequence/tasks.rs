@@ -550,7 +550,7 @@ pub(crate) fn extract_task_plan(text: &str) -> Option<TaskPlan> {
 
 /// Find the (start, end) indices of the first top-level `{...}` object in
 /// `s`. `end` is exclusive (i.e. one past the matching `}`).
-fn find_top_level_object(s: &str) -> Option<(usize, usize)> {
+pub(crate) fn find_top_level_object(s: &str) -> Option<(usize, usize)> {
     let bytes = s.as_bytes();
     let mut in_str = false;
     let mut escape = false;

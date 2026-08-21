@@ -4,6 +4,7 @@ pub mod artifact_store;
 pub mod attachment_store;
 pub mod create_project_port;
 pub mod db;
+pub mod discovery;
 pub mod execution;
 pub mod memory;
 pub mod memory_llm;

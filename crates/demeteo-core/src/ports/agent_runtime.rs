@@ -594,6 +594,23 @@ pub trait AgentSession: Send + Sync {
         0
     }
 
+    /// The harness's own id for this session, once the stream has named one.
+    ///
+    /// Distinct from [`session_id`](Self::session_id), which is Demeteo's
+    /// synthetic key and always present. This is what the harness would accept
+    /// back as `--resume`, and it exists only after the harness has said it —
+    /// `None` before the first turn, and forever on a runtime that names no
+    /// session at all.
+    ///
+    /// Read-only, and deliberately not paired with a setter: a caller cannot
+    /// hand a stored id to a fresh process, because seeding one would mean
+    /// changing spawn logic. What a stored id is good for is recording that
+    /// the harness *had* a session — see
+    /// `crate::application::discovery::turn` for the one reader.
+    fn harness_session_id(&self) -> Option<String> {
+        None
+    }
+
     /// The working directory this session is bound to (the `--dir` /
     /// cwd it was spawned with). CLI agents resume against the
     /// directory the session was *created* in, not the `--dir` passed

@@ -95,6 +95,8 @@ pub fn build_core_context(
     let remote_run_mirror_repo: Arc<dyn ports::remote_run_mirror::RemoteRunMirrorPort> =
         db_adapter.clone();
     let sync_sessions_repo: Arc<dyn ports::sync_session::SyncSessionPort> = db_adapter.clone();
+    let discoveries_repo: Arc<dyn ports::discovery::DiscoveryPort> = db_adapter.clone();
+    let tickets_repo: Arc<dyn ports::discovery::TicketPort> = db_adapter.clone();
 
     // Resolve the workspace directory: user-configurable base for repo
     // storage, defaults to `app_data_dir`. Takes effect on next launch
@@ -278,6 +280,8 @@ pub fn build_core_context(
         mr_publisher.clone(),
         notifications_repo.clone(),
         notif.clone(),
+        tickets_repo.clone(),
+        discoveries_repo.clone(),
         &runtime,
     );
 
@@ -332,6 +336,8 @@ pub fn build_core_context(
         run_events: run_events_repo,
         remote_run_mirror: remote_run_mirror_repo,
         sync_sessions: sync_sessions_repo,
+        discoveries: discoveries_repo,
+        tickets: tickets_repo,
         sync_turns,
         remote_run_mirror_guard: Arc::new(tokio::sync::Mutex::new(())),
         run_view,

@@ -1,6 +1,7 @@
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{Notification, NotificationKind};
 use crate::ports::db::{FeaturePatch, FeatureRepository, NotificationRepository};
+use crate::ports::discovery::{DiscoveryPort, TicketPort};
 use crate::ports::mr_publisher::MrPublisher;
 use crate::ports::notification::{DomainEvent, NotificationPort};
 use std::sync::Arc;
@@ -23,6 +24,8 @@ pub fn start_mr_monitor(
     mr_publisher: Arc<dyn MrPublisher>,
     notifications: Arc<dyn NotificationRepository>,
     notif: Arc<dyn NotificationPort>,
+    tickets: Arc<dyn TicketPort>,
+    discoveries: Arc<dyn DiscoveryPort>,
     runtime: &tokio::runtime::Handle,
 ) {
     runtime.spawn(async move {
@@ -33,8 +36,15 @@ pub fn start_mr_monitor(
         loop {
             interval.tick().await;
             eprintln!("[MrMonitor] tick — polling open MRs");
-            if let Err(e) =
-                check_mr_states(&*features, &*mr_publisher, &*notifications, &*notif).await
+            if let Err(e) = check_mr_states(
+                &*features,
+                &*mr_publisher,
+                &*notifications,
+                &*notif,
+                &*tickets,
+                &*discoveries,
+            )
+            .await
             {
                 eprintln!("[MrMonitor] poll error: {}", e);
             }
@@ -47,6 +57,8 @@ async fn check_mr_states(
     mr_publisher: &dyn MrPublisher,
     notifications: &dyn NotificationRepository,
     notif: &dyn NotificationPort,
+    tickets: &dyn TicketPort,
+    discoveries: &dyn DiscoveryPort,
 ) -> Result<(), String> {
     let open = features.list_with_open_mr()?;
     eprintln!("[MrMonitor] found {} feature(s) with open MR", open.len());
@@ -85,10 +97,33 @@ async fn check_mr_states(
             let _ = features.update(
                 &feature.id,
                 &FeaturePatch {
-                    mr_state: Some(Some(new_state)),
+                    mr_state: Some(Some(new_state.clone())),
                     ..Default::default()
                 },
             );
+        }
+
+        // Placed here rather than inside `record_merged` because `closed`
+        // never reaches that function and releases dependents just as
+        // `merged` does (`docs/PRD_DISCOVERY.md` §6.4), and because the
+        // recompute must not inherit that function's notification-keyed
+        // guard — see `release_dependents` for which hazard that guard
+        // forces a choice between. A failure here is logged, not
+        // propagated: the poll owes the remaining features their turn.
+        if new_state == "merged" || new_state == "closed" {
+            if let Err(e) = crate::application::tickets::release::release_dependents(
+                feature,
+                tickets,
+                discoveries,
+                features,
+                notifications,
+                notif,
+            ) {
+                eprintln!(
+                    "[MrMonitor] ticket recompute failed for feature {}: {}",
+                    feature.id.0, e
+                );
+            }
         }
     }
     Ok(())
