@@ -1421,10 +1421,10 @@ pub(super) async fn share_dependency_caches(
     windows_host: bool,
 ) {
     let probed = exec
-        .run_command(machine_id, &shareable_cache_probe_cmd(repo_dir))
+        .run_program(machine_id, shareable_cache_probe(repo_dir))
         .await
         .unwrap_or_default();
-    let names = shareable_cache_names(&probed);
+    let names = crate::domain::dependency_cache::shareable_cache_paths(&probed);
     if names.is_empty() {
         return;
     }
@@ -1462,44 +1462,33 @@ fn may_link_caches(exclusions_written: bool, windows_host: bool) -> bool {
     exclusions_written && !windows_host
 }
 
-/// One round trip that prints the [`paths::DEPENDENCY_CACHE_DIRS`] entries the
-/// primary checkout both has and ignores.
+/// One round trip that asks git which directories this checkout ignores.
 ///
-/// `; true` at the end for the reason `artifacts::add_exclusions` records: the
-/// loop's exit status would otherwise be the last `if`'s, and a non-zero exit
-/// makes `run_command` discard the whole answer.
-fn shareable_cache_probe_cmd(repo_dir: &str) -> String {
-    let repo = paths::shell_escape_posix(repo_dir);
-    format!(
-        "for d in {dirs}; do \
-         if [ -e {repo}/\"$d\" ] && git -C {repo} check-ignore -q \"$d\" 2>/dev/null; then \
-         echo \"$d\"; \
-         fi; \
-         done; true",
-        dirs = paths::DEPENDENCY_CACHE_DIRS.join(" "),
-        repo = repo,
+/// `--directory` is what makes it affordable: a fully-ignored directory
+/// collapses to a single entry and git never descends into it, so a 15 GB
+/// `target/` costs the same as an empty one — measured at 3 ms on a clone that
+/// size, against one `check-ignore` round trip *per name* before, which over
+/// SSH is per name in latency too.
+///
+/// A [`ProgramRequest`](crate::ports::execution::ProgramRequest) rather than a
+/// shell string: there is nothing to interpolate, and the answer this returns
+/// is the one thing in the pipeline the repository controls, so the fewer
+/// shells it passes through the better.
+///
+/// `-z` is required, not preferred — see
+/// [`shareable_cache_paths`](crate::domain::dependency_cache::shareable_cache_paths).
+fn shareable_cache_probe(repo_dir: &str) -> crate::ports::execution::ProgramRequest {
+    git_request(
+        repo_dir,
+        [
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--directory",
+            "--exclude-standard",
+            "-z",
+        ],
     )
-}
-
-/// Read the probe's answer back as entries of [`paths::DEPENDENCY_CACHE_DIRS`]
-/// rather than as strings.
-///
-/// The names go straight into a shell command and a git exclude file, and the
-/// only thing standing between the transport's stdout and both of those is this
-/// function. Matching against the constant means an unexpected line — a shell
-/// banner, a git warning, anything a login profile prints — is dropped rather
-/// than quoted, so no output can name a path the caller did not compile in.
-fn shareable_cache_names(probe_output: &str) -> Vec<&'static str> {
-    probe_output
-        .lines()
-        .map(str::trim)
-        .filter_map(|line| {
-            paths::DEPENDENCY_CACHE_DIRS
-                .iter()
-                .find(|known| **known == line)
-                .copied()
-        })
-        .collect()
 }
 
 /// Write the shared cache names into the clone's own `.git/info/exclude`.
@@ -1512,7 +1501,7 @@ async fn record_cache_exclusions(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
     repo_dir: &str,
-    names: &[&str],
+    names: &[String],
 ) -> Result<(), String> {
     let git_dir = exec
         .run_program(
@@ -1551,14 +1540,27 @@ async fn record_cache_exclusions(
 /// nothing, and a worktree with a real installed `node_modules` and one with a
 /// symlink to one then commit exactly the same files.
 ///
-/// Names only, never a path: an entry is scoped to this clone's
-/// `.git/info/exclude`, which is not committed, and appending is what keeps a
-/// user's own entries in a repository Demeteo cloned but does not own the
-/// contents of.
-fn exclude_file_with(existing: &str, names: &[&str]) -> Option<String> {
+/// The entry is the cache's **repo-relative path**, not its basename, and the
+/// difference is what makes a nested one correct. A pattern with no `/` matches
+/// that name at any depth, so `node_modules` covers the root one and every
+/// package's; a pattern that contains one is anchored to the repository root,
+/// so `src-tauri/target` matches exactly the linked symlink and leaves a
+/// `target/` elsewhere alone. Writing the basename for a nested cache would
+/// ignore every directory of that name in the tree — including ones the project
+/// tracks.
+///
+/// Note that the project's own ignore rule is not enough on its own even when
+/// it exists: `src-tauri/.gitignore` carries `/target/`, and a *trailing-slash*
+/// pattern does not match a symlink, which is the whole reason this file is
+/// written at all.
+///
+/// The entry is scoped to this clone's `.git/info/exclude`, which is not
+/// committed, and appending is what keeps a user's own entries in a repository
+/// Demeteo cloned but does not own the contents of.
+fn exclude_file_with(existing: &str, names: &[String]) -> Option<String> {
     let missing: Vec<&str> = names
         .iter()
-        .copied()
+        .map(String::as_str)
         .filter(|name| !existing.lines().any(|line| line.trim() == *name))
         .collect();
     if missing.is_empty() {
@@ -1603,28 +1605,54 @@ fn link_dependency_caches_cmd(
     repo_dir: &str,
     wt_dir: &str,
     cache_dir: &str,
-    names: &[&str],
+    names: &[String],
 ) -> String {
-    let repo = paths::shell_escape_posix(repo_dir);
-    let wt = paths::shell_escape_posix(wt_dir);
-    let cache = paths::shell_escape_posix(cache_dir);
-    format!(
-        "mkdir -p {cache} 2>/dev/null; \
-         for d in {dirs}; do \
-         if [ ! -e {cache}/\"$d\" ]; then \
-         cp -cR {repo}/\"$d\" {cache}/\"$d\" 2>/dev/null \
-         || cp -R --reflink=auto {repo}/\"$d\" {cache}/\"$d\" 2>/dev/null \
-         || cp -R {repo}/\"$d\" {cache}/\"$d\" 2>/dev/null; \
-         fi; \
-         if [ -e {cache}/\"$d\" ] && [ ! -e {wt}/\"$d\" ]; then \
-         ln -sfn {cache}/\"$d\" {wt}/\"$d\"; \
-         fi; \
-         done; true",
-        dirs = names.join(" "),
-        repo = repo,
-        wt = wt,
-        cache = cache,
-    )
+    let mut out = String::new();
+    for name in names {
+        let source = paths::shell_escape_posix(&target_path_join(repo_dir, name));
+        let cached = target_path_join(cache_dir, name);
+        let linked = target_path_join(wt_dir, name);
+        // A nested cache needs both of its parents to exist before anything is
+        // written into them: `packages/web` is a real directory in the
+        // worktree but nothing has created it under the feature's cache root,
+        // and `cp` and `ln` each fail silently without it.
+        let cache_parent = paths::shell_escape_posix(parent_dir(&cached));
+        let link_parent = paths::shell_escape_posix(parent_dir(&linked));
+        let cached = paths::shell_escape_posix(&cached);
+        let linked = paths::shell_escape_posix(&linked);
+        out.push_str(&format!(
+            "mkdir -p {cache_parent} 2>/dev/null; \
+             if [ ! -e {cached} ]; then \
+             cp -cR {source} {cached} 2>/dev/null \
+             || cp -R --reflink=auto {source} {cached} 2>/dev/null \
+             || cp -R {source} {cached} 2>/dev/null; \
+             fi; \
+             if [ -e {cached} ] && [ ! -e {linked} ]; then \
+             mkdir -p {link_parent} 2>/dev/null; ln -sfn {cached} {linked}; \
+             fi; "
+        ));
+    }
+    // Every path is quoted individually rather than joined into a `for d in …`
+    // list. Word splitting is why: git answers with whatever the repository
+    // contains, and `weird name/target` is one entry to git and two words to a
+    // shell. The trailing `true` is `artifacts::add_exclusions`' rule — the
+    // last `if`'s status would otherwise be the command's, and a non-zero exit
+    // makes `run_command` discard the whole answer.
+    out.push_str("true");
+    out
+}
+
+/// Everything before the last `/`, or `.` when there is nothing before it.
+///
+/// Its own function because it is called on paths already joined onto a root,
+/// so the "no separator" arm is unreachable in practice and would be untested
+/// where it matters if it were spelled inline.
+fn parent_dir(path: &str) -> &str {
+    match path.rsplit_once('/') {
+        Some(("", _)) => "/",
+        Some((parent, _)) => parent,
+        None => ".",
+    }
 }
 
 #[cfg(test)]

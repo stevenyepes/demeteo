@@ -484,19 +484,33 @@ pub fn git_no_hooks(dir: &str) -> String {
 /// Anything added to this list must be classified against that rule first:
 /// **share content-addressed download caches; never share build output.**
 ///
+/// # A gate on names, not a list of places
+///
+/// These are matched against the **final segment** of whatever
+/// `git ls-files --others --ignored --directory` reports, so the list says
+/// *which* directories are caches and the project's own `.gitignore` says
+/// where they are. It used to say both — each entry was probed at
+/// `{repo}/<name>` — and that answered only for a repository whose build
+/// output sits at the root: a Tauri app keeps it at `src-tauri/target`, a JS
+/// monorepo at `packages/*/node_modules`, and both matched nothing, shared
+/// nothing and said nothing about it. See
+/// [`dependency_cache`](crate::domain::dependency_cache), which is also where
+/// the rules live for what a repository-supplied path may not contain.
+///
 /// Important: a symlink standing in for a directory is NOT recognized
 /// by git as matching a trailing-slash `.gitignore` pattern (e.g.
 /// `node_modules/` matches a real directory but not a symlink named
 /// `node_modules`), so a linked cache shows up as untracked and, left
 /// alone, an absolute host path gets committed onto the feature branch.
-/// The answer is a **slashless entry in the clone's own
-/// `.git/info/exclude`**, written by `git_ops::worktree` before any link
-/// is made — `node_modules` without the slash matches a symlink and a
-/// directory alike, so from `git add -A`'s point of view the entry is
-/// simply ignored and no pathspec is involved. Doing it there rather
-/// than at `git add` time is what keeps the answer the same on a
-/// platform that shares no caches at all: nothing is linked, nothing is
-/// excluded, and the same feature captures the same files.
+/// The answer is an entry in the clone's own `.git/info/exclude`, written
+/// by `git_ops::worktree` before any link is made. For a root-level cache
+/// that entry is the bare name, which matches a symlink and a directory
+/// alike; for a nested one it is the full relative path, which git anchors
+/// to the repository root so it cannot ignore a same-named directory the
+/// project tracks elsewhere. Doing it there rather than at `git add` time is
+/// what keeps the answer the same on a platform that shares no caches at
+/// all: nothing is linked, nothing is excluded, and the same feature
+/// captures the same files.
 ///
 /// [`DECISIONS.md`]: https://github.com/stevenyepes/demeteo/blob/master/docs/DECISIONS.md
 pub const DEPENDENCY_CACHE_DIRS: &[&str] = &[
