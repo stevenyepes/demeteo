@@ -8,6 +8,7 @@ import {
   discoveryLifecycle,
   progressSegments,
   progressText,
+  turnCountLabel,
 } from '../../lib/discoveryProgress';
 import { formatCost, formatTokens, relativeTime } from '../../lib/utils';
 import { Chip } from '../ui/Chip';
@@ -80,7 +81,7 @@ export function DiscoveryCard({
       <div className="mt-2.5 flex flex-wrap items-center gap-3 text-[11px] text-slate-400">
         <Chip size="sm" tone="cyan">{discovery.agent_kind}</Chip>
         {discovery.model && <Chip size="sm" tone="violet">{discovery.model}</Chip>}
-        <span className="text-slate-300">{turnCount(discovery.message_count)}</span>
+        <span className="text-slate-300">{turnCountLabel(discovery.message_count)}</span>
         <span className="text-slate-300">{formatCost(discovery.total_cost)}</span>
         <span className="flex items-center gap-1 text-slate-300">
           <Zap className="h-3 w-3 text-cyan-400" aria-hidden="true" />
@@ -103,12 +104,6 @@ export function DiscoveryCard({
       {detail && <p className="mt-2.5 text-xs leading-relaxed text-slate-500">{detail}</p>}
     </button>
   );
-}
-
-/** How many turns have been taken. The count is of stored messages, which is
- *  what `DiscoverySummary` carries and what the transcript renders. */
-function turnCount(messages: number): string {
-  return messages === 1 ? '1 turn' : `${messages} turns`;
 }
 
 export default DiscoveryCard;

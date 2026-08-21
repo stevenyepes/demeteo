@@ -1,13 +1,21 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Paperclip, Send } from 'lucide-react';
 
+import { getAgentModels, modelSupportsImages } from '../../lib/agentModels';
 import { addDiscoveryAttachment, removeDiscoveryAttachment } from '../../lib/discovery';
+import { noVisionNote } from '../../lib/newDiscovery';
 import type { AttachedFile } from '../../lib/attachments';
+import type { ConfigOptionValue } from '../../types';
 import { AttachmentDropzone, type DirectAttachmentPort } from '../AttachmentDropzone';
 import { FieldLabel } from '../ui/FieldLabel';
 
 interface InterviewComposerProps {
   discoveryId: string;
+  /** The interviewer's own routing, which is what decides whether an image
+   *  attached here will be read or only named. */
+  agentKind: string;
+  model: string;
+  machineId: string;
   /** What the Discovery already holds. The list is the backend's, not this
    *  component's, which is what lets the chips stand across a remount. */
   attachments: AttachedFile[];
@@ -35,9 +43,19 @@ interface InterviewComposerProps {
  * `discovery_send_turn` carries text alone: attachments belong to the
  * Discovery, so the chip row survives the turn that added it and every later
  * turn is prompted with the same set (§3.4.6, PRD §4.6).
+ *
+ * **The vision note is here as well as on the New Discovery modal.** §3.4.6
+ * gives this row only a paperclip and its chips, which left an image dropped
+ * mid-interview into a model that cannot read one degrading in silence — and
+ * §9.4's rule is that the UI does not say a thing it cannot do. The note is
+ * soft either way: the file still rides, the agent is still told its path, and
+ * only the inlining is lost.
  */
 export function InterviewComposer({
   discoveryId,
+  agentKind,
+  model,
+  machineId,
   attachments,
   awaiting,
   pending,
@@ -50,7 +68,31 @@ export function InterviewComposer({
 }: InterviewComposerProps): React.ReactElement {
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [models, setModels] = useState<ConfigOptionValue[]>([]);
   const blocked = disabled || pending;
+
+  // Probe-aware rather than name-only, as the New Discovery modal is: the
+  // backend's own `supports_images` answers where it has one, and the name
+  // heuristic is reached only for a model it does not carry.
+  useEffect(() => {
+    let cancelled = false;
+    getAgentModels(machineId, agentKind)
+      .then((list) => {
+        if (!cancelled) setModels(list ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setModels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [machineId, agentKind]);
+
+  const noVision = noVisionNote({
+    model,
+    readsImages: modelSupportsImages(models, agentKind, model),
+    attachments,
+  });
 
   const port: DirectAttachmentPort = useMemo(
     () => ({
@@ -127,6 +169,16 @@ export function InterviewComposer({
           {attachmentError && (
             <p role="alert" className="font-mono text-[11px] text-ruby-200">
               {attachmentError}
+            </p>
+          )}
+          {noVision && (
+            <p
+              data-testid="interview-no-vision"
+              className="m-0 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-200/90"
+            >
+              {noVision.model} cannot read images.{' '}
+              <span className="font-mono">{noVision.filenames.join(', ')}</span> will be attached
+              and ignored.
             </p>
           )}
         </div>

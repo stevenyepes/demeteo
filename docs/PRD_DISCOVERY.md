@@ -1,6 +1,12 @@
 # PRD — Discovery: Interactive Planning Sessions & Dependency-Gated Tickets
 
-**Status:** **Specified, not built.** Every decision below is settled; none of it exists in the tree.
+**Status:** **Built**, as of 2026-08-21 (`feat/discovery`). §3–§9 describe the
+tree. What is *not* built is §11, which was deferred deliberately, and the
+smoke test on Windows and over SSH — no `ExecutionPort` impl changed, but no
+conformance suite has run against a Discovery either.
+Implementation notes, and the decisions this doc left open, are in
+[`TASKS_DISCOVERY.md`](TASKS_DISCOVERY.md); the surface is specified in
+[`DISCOVERY_UI_SPEC.md`](DISCOVERY_UI_SPEC.md).
 **Date:** 2026-08-20
 **Author:** Steven Yepes (drafted with Claude)
 **Related docs:** [`DDD_MODEL.md`](DDD_MODEL.md), [`PRD_DAG_WORKFLOWS.md`](PRD_DAG_WORKFLOWS.md), [`EXECUTION_PARITY.md`](EXECUTION_PARITY.md), [`HARNESS_BASELINE.md`](HARNESS_BASELINE.md), [`DECISIONS.md`](DECISIONS.md), [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)

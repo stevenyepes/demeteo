@@ -183,6 +183,18 @@ body {
   background: var(--bg-well);
 }
 
+/* A card *inside* a panel. Lighter than `.glass-panel` on purpose — no blur
+   and no shadow, because a glass card nested in a glass card reads as a third
+   surface and the depth stops meaning anything. One rule rather than five call
+   sites spelling the colour, which is what `DISCOVERY_UI_SPEC.md` §6.5 asks
+   for: the ticket editor groups its twelve fields into four of these, and a
+   flat column of twelve gave the form no reading order at all. */
+.nested-card {
+  background: rgba(18, 22, 30, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+}
+
 .glass-panel-hover:hover {
   background: var(--bg-panel-hover);
   border-color: rgba(255, 255, 255, 0.08);

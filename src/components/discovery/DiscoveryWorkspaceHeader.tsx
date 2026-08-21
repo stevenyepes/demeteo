@@ -10,14 +10,19 @@ import { Metric, MetricStrip } from '../ui/MetricStrip';
 interface DiscoveryWorkspaceHeaderProps {
   discovery: Discovery;
   board: DiscoveryBoard | null;
-  /** Every bubble and question card the transcript renders. */
+  /** How many turns have been taken — stored messages, the same count Project
+   *  Home's card reads. See `turnCountLabel` for why a turn is one message and
+   *  not one rendered block. */
   turnCount: number;
   turnRunning: boolean;
   onToggleOpen: () => void;
-  /** Phase 7 owns the proposed-changes review, so the button appears only once
-   *  something can receive the click. A control that opens nothing is the
-   *  surface promising more than it carries. */
-  onDecompose?: () => void;
+  /** Raise the proposed-changes review (§5.1). The **user** decides when, and
+   *  it is offered from the first turn — the interviewer's
+   *  `nothing_left_to_settle` is advisory and never gates this button. */
+  onDecompose: () => void;
+  /** A pass is running. It streams through the interview's own events, so the
+   *  transcript is already showing the work; this only stops a second press. */
+  decomposing: boolean;
   busy: boolean;
 }
 
@@ -28,6 +33,7 @@ export function DiscoveryWorkspaceHeader({
   turnRunning,
   onToggleOpen,
   onDecompose,
+  decomposing,
   busy,
 }: DiscoveryWorkspaceHeaderProps): React.ReactElement {
   const tickets = board?.tickets ?? [];
@@ -64,17 +70,16 @@ export function DiscoveryWorkspaceHeader({
           {discovery.status === 'open' ? 'Close discovery' : 'Reopen discovery'}
         </button>
 
-        {onDecompose && (
-          <button
-            type="button"
-            onClick={onDecompose}
-            disabled={busy}
-            className="btn-primary inline-flex items-center gap-2"
-          >
-            <Code className="h-3.5 w-3.5" aria-hidden="true" />
-            Decompose
-          </button>
-        )}
+        <button
+          type="button"
+          data-testid="discovery-decompose"
+          onClick={onDecompose}
+          disabled={busy || decomposing}
+          className="btn-primary inline-flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Code className="h-3.5 w-3.5" aria-hidden="true" />
+          {decomposing ? 'Decomposing…' : 'Decompose'}
+        </button>
       </div>
     </header>
   );

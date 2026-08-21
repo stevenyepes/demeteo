@@ -338,7 +338,7 @@ Read the relevant doc before modifying that area.
 | Open & deferred questions | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) |
 | Agent CLI integration spec | [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md) |
 | Workflow DAG model, registry, canvas | [docs/PRD_DAG_WORKFLOWS.md](docs/PRD_DAG_WORKFLOWS.md) · remaining work in [docs/TASKS_DAG_WORKFLOWS.md](docs/TASKS_DAG_WORKFLOWS.md) |
-| Discovery sessions & dependency-gated tickets (specified, not built) | [docs/PRD_DISCOVERY.md](docs/PRD_DISCOVERY.md) |
+| Discovery sessions & dependency-gated tickets | [docs/PRD_DISCOVERY.md](docs/PRD_DISCOVERY.md) · surface in [docs/DISCOVERY_UI_SPEC.md](docs/DISCOVERY_UI_SPEC.md) · implementation notes in [docs/TASKS_DISCOVERY.md](docs/TASKS_DISCOVERY.md) |
 | Local/remote execution parity | [docs/EXECUTION_PARITY.md](docs/EXECUTION_PARITY.md) |
 | Windows parity plan & shell decision | [docs/WINDOWS_PARITY.md](docs/WINDOWS_PARITY.md) |
 | Reliability invariants & open backlog | [docs/RELIABILITY_PLAN.md](docs/RELIABILITY_PLAN.md) |

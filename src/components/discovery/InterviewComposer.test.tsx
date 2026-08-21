@@ -24,6 +24,9 @@ function renderComposer(props: Partial<React.ComponentProps<typeof InterviewComp
   return render(
     <InterviewComposer
       discoveryId="dsc-1"
+      agentKind="claude-code"
+      model="opus"
+      machineId="local"
       attachments={[]}
       awaiting={false}
       pending={false}

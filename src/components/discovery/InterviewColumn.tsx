@@ -15,8 +15,8 @@ import type { DiscoveryStreamStore } from './useDiscoveryStream';
 interface InterviewColumnProps {
   discovery: Discovery;
   messages: DiscoveryMessageView[];
-  /** Derived once in the workspace, because the header counts the same blocks
-   *  this column renders. */
+  /** Derived once in the workspace, which also reads the open question off
+   *  them. */
   blocks: TranscriptBlock[];
   /** Resolved machine name, or the id while it is unknown. */
   machineLabel: string;
@@ -111,6 +111,9 @@ export function InterviewColumn({
 
       <InterviewComposer
         discoveryId={discovery.id}
+        agentKind={discovery.agent_kind}
+        model={discovery.model ?? ''}
+        machineId={discovery.machine_id}
         attachments={discovery.attachments}
         awaiting={awaiting}
         pending={pending}

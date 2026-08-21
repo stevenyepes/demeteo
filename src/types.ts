@@ -1383,3 +1383,131 @@ export interface DiscoveryBoard {
   tickets: TicketView[];
   progress: TicketProgress;
 }
+
+// ── Decomposition (docs/PRD_DISCOVERY.md §5) ──────────────────────────────
+//
+// Every id in this half of the wire is **proposal-space**: what the agent
+// authored, not what a row is stored under. `discovery_apply_decomposition`
+// names the changes it accepts by those ids and mints the stored ones itself,
+// so nothing here may be treated as a `Ticket.id`.
+
+/** Mirrors `PlannedTicket` — one ticket as the decomposition wrote it, before
+ *  a workflow *name* is a workflow id. Carried out and handed straight back:
+ *  the proposal is not persisted anywhere. */
+export interface PlannedTicket {
+  id: string;
+  title: string;
+  description: string;
+  acceptance: string[];
+  files: string[];
+  test_command: string | null;
+  blocked_by: string[];
+  /** A workflow name, as the prompt listed it. The agent has no ids. */
+  workflow: string | null;
+  agent: string | null;
+  model: string | null;
+  effort: string | null;
+  /** Why this ticket is in *this* pass, addressed to the reviewer. */
+  why: string | null;
+}
+
+/** Mirrors `ChangeKind` — the modal's first three groups. `Locked` is not one
+ *  of them: a locked ticket is listed, never proposed. */
+export type ChangeKind = 'added' | 'revised' | 'removed';
+
+/** Mirrors `FieldChange`. Both sides arrive as text because the modal renders
+ *  two lines, and nine field types formatted per call site would be nine
+ *  formattings. */
+export interface FieldChange {
+  field: string;
+  was: string;
+  now: string;
+}
+
+/** Mirrors `ProposedChange` — one reviewable row, and one checkbox. */
+export interface ProposedChange {
+  id: string;
+  kind: ChangeKind;
+  /** `null` for an addition: `seq` is assigned at apply and never reissued,
+   *  so a proposal has no number to show yet. */
+  seq: number | null;
+  title: string;
+  why: string | null;
+  workflow_name: string | null;
+  agent_kind: string | null;
+  blocked_by: string[];
+  /** Empty except on a revision. */
+  fields: FieldChange[];
+}
+
+/** Mirrors `LockedTicket` — a started ticket, listed so the user can see what
+ *  the pass worked around. */
+export interface LockedTicket {
+  id: string;
+  seq: number;
+  title: string;
+  lane: TicketLane | null;
+}
+
+/** Mirrors `ImmutableChange`. */
+export type ImmutableChange = 'revised' | 'removed';
+
+/** Mirrors `ImmutableViolation` — a started ticket the pass tried to touch,
+ *  reported per ticket rather than as one sentence. */
+export interface ImmutableViolation {
+  id: string;
+  change: ImmutableChange;
+  reason: string;
+}
+
+/** Mirrors `DecomposeProposal`. */
+export interface DecomposeProposal {
+  discovery_id: string;
+  /** The discovery held no tickets before this pass — the `First pass`
+   *  eyebrow. Derived, never counted. */
+  first_pass: boolean;
+  /** The plan verbatim. `discovery_apply_decomposition` takes it back
+   *  unchanged. */
+  tickets: PlannedTicket[];
+  changes: ProposedChange[];
+  locked: LockedTicket[];
+  /** Every refusal the pass was re-asked over, oldest first — including the
+   *  ones it then fixed, which is what the validation bar reports. */
+  refused: string[];
+  /** Set when the last attempt was refused too, so nothing here can be
+   *  applied. */
+  refusal: string | null;
+  violations: ImmutableViolation[];
+  cost_usd: number;
+  tokens: number;
+}
+
+/** Mirrors `DecomposeApply`. */
+export interface DecomposeApply {
+  discovery_id: string;
+  tickets: PlannedTicket[];
+  /** The `ProposedChange.id`s left checked. A change absent from this list
+   *  leaves its stored row alone. */
+  accept: string[];
+}
+
+/**
+ * Mirrors `TicketEdit`.
+ *
+ * **Every key is required, and none of them means "leave this one alone".**
+ * Rust reads an absent key and an explicit `null` identically, so a partial
+ * payload would turn *clear the model* into *keep the model* with nothing on
+ * screen to say so. The drawer holds the whole ticket and saves it whole.
+ */
+export interface TicketEdit {
+  title: string;
+  description: string;
+  acceptance: string[];
+  files: string[];
+  blocked_by: string[];
+  test_command: string | null;
+  workflow_id: string | null;
+  agent_kind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
+}

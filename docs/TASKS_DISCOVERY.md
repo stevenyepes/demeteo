@@ -96,6 +96,8 @@ unless noted.
 - **7.2** The ticket editor: every field while unstarted, attachments in
   `launch` mode, the vision warning, force start.
 
+What it settled is recorded at the end of this file.
+
 ## Phase 8 — Verification
 
 `npm run checks`, the class gate, a `dev:tauri` smoke test, and the PRD's
@@ -174,11 +176,12 @@ merging. A card must never render an absent reason as though it had one.
 
 ---
 
-## Phase 2b — what the surface asked for and the backend cannot answer
+## Phase 2b — what the surface asked for and the backend could not answer
 
-Found by building Phase 5 against the landed backend. Each is a place where the
-PRD promises something no command carries, so the surface correctly declined to
-render a control that would discard what the user gave it.
+**Done.** Found by building Phase 5 against the landed backend: each was a place
+where the PRD promised something no command carried, so the surface declined to
+render a control that would discard what the user gave it. All three are now
+backed, and the controls are built.
 
 - **Interview attachments (§4.6).** `NewDiscovery` has no attachment field and
   `discovery_send_turn` takes only text, so there is nowhere for a file or an
@@ -212,3 +215,60 @@ pan, no wheel zoom, no drag and no minimap (§6.6), so React Flow and its elk
 layout worker would be cost with no payer. `ranksOf` from `canvas/MiniGraph.tsx`
 is exported, cycle-tolerant, and is the one piece worth taking — it gives each
 node its depth, which is the whole of the layout.
+
+## Two inconsistencies, now closed
+
+Both were opened by Phase 6 and answered in Phase 7.
+
+- **A turn is one stored message.** The Project Home card read `message_count`
+  — stored rows — while the workspace header counted transcript *blocks*, so
+  the two disagreed by exactly the number of questions asked. The decision that
+  settles it is that a question is **part of the message that asked it**, not a
+  second thing the interviewer said: the turn contract above already treats it
+  that way, and drawing it as its own card is a rendering decision rather than
+  a fact about the conversation. Counting blocks was counting the rendering.
+
+  So a turn is one thing said, by either side, and both surfaces read a count
+  of stored messages — `DiscoverySummary.message_count` on the card,
+  `DiscoveryDetail.messages.length` in the workspace — through one helper,
+  `turnCountLabel` in `src/lib/discoveryProgress.ts`. It takes a number rather
+  than a transcript, which is what stops a surface that holds only blocks from
+  reaching it. This was also the only reading both surfaces *can* reach: the
+  card has no transcript to count anything else from.
+
+- **The composer has the vision note.** `DISCOVERY_UI_SPEC.md` §3.4.6 gives the
+  composer a paperclip and a chip row and nothing else, which left an image
+  dropped mid-interview into a model that cannot read one degrading in silence
+  — the thing §9.4 exists to forbid. `noVisionNote` already existed for the New
+  Discovery modal, so the composer reuses it verbatim and resolves the
+  capability the same probe-aware way (`modelSupportsImages` over the model
+  list, falling back to the pessimistic name match). It is soft: the file still
+  rides and the agent is still told its path; only the inlining is lost.
+
+## Phase 7 — what it decided
+
+- **The proposed-changes modal does not cache the proposal.** It is not
+  persisted (§5.3 asks for a view, not a second table), so applying hands
+  `tickets` straight back and the backend re-resolves and re-diffs it against
+  the rows *as they stand then*. A ticket started while the modal is open is
+  therefore expected and is answered server-side; there is deliberately no
+  poll, no staleness check and no refetch on this side.
+- **A refused subset is drawn on the checkboxes that caused it.** A subset of a
+  valid proposal is not itself valid, and `decompose::apply` refuses it with a
+  message naming the tickets in single quotes — in proposal space, which is the
+  space the checkboxes are keyed in. `refusedChangeIds` matches them back and
+  the implicated cards go ruby. Nothing on the frontend re-implements
+  `validate_ticket_graph`: it reads the answer, it does not compute one.
+- **The editor drawer shows a locked ticket as locked.** `isTicketLocked`
+  mirrors `application::tickets::is_locked` — the feature id *or* the started
+  state — and a locked drawer renders read-only with no save button at all.
+  Taking the edit and letting the backend refuse it is the same rule enforced
+  one round trip later, with the user's typing thrown away.
+- **The briefing well is the backend's text, re-read when the row moves.** It
+  is composed by `tickets::briefing` from the stored ticket, so it is what the
+  agent *will* be told rather than a preview of an unsaved form — and §5.8's
+  bypass paragraph appears through exactly that path, the moment a force start
+  lands.
+- **One new utility, `.nested-card`.** §6.5 item 2's `rgba(18,22,30,0.55)`
+  card, named once in `src/App.css` beside `glass-panel` rather than inlined at
+  each of the four call sites.

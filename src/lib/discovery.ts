@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  DecomposeApply,
+  DecomposeProposal,
   Discovery,
   DiscoveryBoard,
   DiscoveryDetail,
@@ -8,6 +10,7 @@ import type {
   EffortLevel,
   Feature,
   Ticket,
+  TicketEdit,
 } from "../types";
 import {
   attachmentWire,
@@ -172,6 +175,50 @@ export async function getDiscoveryBoard(discoveryId: string): Promise<DiscoveryB
   return invoke<DiscoveryBoard>("discovery_board", { discoveryId });
 }
 
+/**
+ * Mirrors `discovery_decompose`. Asks the interviewer for a plan and hands
+ * back what applying it *would* change; nothing is written.
+ *
+ * The pass streams through the same three events a turn does, so the surface
+ * can show the agent working — but the proposal itself arrives on the call,
+ * because there is nothing to render until it is whole.
+ */
+export async function decomposeDiscovery(discoveryId: string): Promise<DecomposeProposal> {
+  return invoke<DecomposeProposal>("discovery_decompose", { discoveryId });
+}
+
+/**
+ * Mirrors `discovery_apply_decomposition` — land the checked changes and
+ * return the board they leave behind.
+ *
+ * `tickets` goes back exactly as {@link decomposeDiscovery} handed it over.
+ * The proposal is not persisted anywhere, so the backend re-resolves and
+ * re-diffs it against the rows *as they stand now*: a ticket started while the
+ * modal was open is refused here rather than silently rewritten, which is why
+ * nothing on this side caches around a proposal to keep it fresh.
+ */
+export async function applyDecomposition(input: DecomposeApply): Promise<DiscoveryBoard> {
+  return invoke<DiscoveryBoard>("discovery_apply_decomposition", { input });
+}
+
+/**
+ * Mirrors `ticket_update`.
+ *
+ * Takes the whole {@link TicketEdit} because every key of it is required on
+ * the wire: serde reads an absent key and an explicit `null` the same way, so
+ * a partial payload would quietly mean *keep* where the user meant *clear*.
+ *
+ * Returns the board rather than the row — an edited edge moves the standing of
+ * everything under it, so a caller patching one row locally would hold a board
+ * that disagrees with it.
+ */
+export async function updateTicket(
+  ticketId: string,
+  edit: TicketEdit,
+): Promise<DiscoveryBoard> {
+  return invoke<DiscoveryBoard>("ticket_update", { ticketId, edit });
+}
+
 /** Mirrors `ticket_briefing` — what the ticket's agent will be told, rendered
  *  before anything starts. */
 export async function getTicketBriefing(ticketId: string): Promise<string> {
@@ -195,22 +242,27 @@ export async function dropTicket(ticketId: string, reason: string): Promise<Tick
   return invoke<Ticket>("ticket_drop", { ticketId, reason });
 }
 
-/** Mirrors `ticket_add_attachment`. `bytes` carries the content when the
- *  webview has a `File` handle but no path on disk, exactly as
- *  `feature_add_attachment` does. */
-export async function addTicketAttachment(input: {
-  ticketId: string;
-  sourcePath: string;
-  mime: string | null;
-  sourceFilename: string | null;
-  bytes: number[] | null;
-}): Promise<AttachedFile> {
+/**
+ * Mirrors `ticket_add_attachment`. Staged on the Ticket and committed to the
+ * Feature the moment it starts (§9.3), so a Ticket that never starts never
+ * writes an attachment row.
+ *
+ * Takes the pick rather than the wire shape, exactly as
+ * {@link addDiscoveryAttachment} does: `attachmentWire` is where the
+ * bytes-vs-path question is answered, and a second owner answering it for
+ * itself is how the two come to disagree.
+ */
+export async function addTicketAttachment(
+  ticketId: string,
+  input: AttachmentInput,
+): Promise<AttachedFile> {
+  const wire = await attachmentWire(input);
   return invoke<AttachedFile>("ticket_add_attachment", {
-    ticketId: input.ticketId,
-    sourcePath: input.sourcePath,
-    mime: input.mime,
-    sourceFilename: input.sourceFilename,
-    bytes: input.bytes,
+    ticketId,
+    sourcePath: wire.sourcePath,
+    mime: wire.mime,
+    sourceFilename: wire.sourceFilename,
+    bytes: wire.bytes,
   });
 }
 

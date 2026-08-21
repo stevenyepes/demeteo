@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Compass, Kanban, Workflow } from 'lucide-react';
 
 import {
   EVENT_DISCOVERY_TURN_COMPLETED,
   EVENT_DISCOVERY_TURN_STATUS,
   closeDiscovery,
+  decomposeDiscovery,
+  dropTicket,
   forceStartTicket,
   getDiscovery,
   getDiscoveryBoard,
@@ -15,32 +16,27 @@ import {
   type DiscoveryTurnStatusPayload,
 } from '../../lib/discovery';
 import { buildTranscript } from '../../lib/discoveryInterview';
-import { progressSegments, progressText } from '../../lib/discoveryProgress';
 import { formatError } from '../../lib/errors';
 import { listMachines } from '../../lib/machines';
 import { indexTickets } from '../../lib/ticketPresentation';
 import { formatDuration } from '../../lib/utils';
 import { listWorkflows } from '../../lib/workflows';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
-import type { DiscoveryBoard, DiscoveryDetail, DiscoveryMessageView } from '../../types';
-import EmptyStateCard from '../EmptyStateCard';
-import { SegmentedControl } from '../ui/SegmentedControl';
-import { ColumnSubHeader } from './ColumnSubHeader';
+import type {
+  DecomposeProposal,
+  DiscoveryBoard,
+  DiscoveryDetail,
+  DiscoveryMessageView,
+  WorkflowWithSteps,
+} from '../../types';
+import { DecomposeModal } from './DecomposeModal';
 import { DiscoveryWorkspaceHeader } from './DiscoveryWorkspaceHeader';
 import { InterviewColumn } from './InterviewColumn';
-import { TicketBoard } from './TicketBoard';
-import { TicketGraph } from './TicketGraph';
+import { TicketColumn } from './TicketColumn';
+import { TicketEditorDrawer } from './TicketEditorDrawer';
 import { TicketInspector } from './TicketInspector';
-import { TicketProgressBar } from './TicketProgressBar';
 import { TurnCompleteToast } from './TurnCompleteToast';
 import { useDiscoveryStream } from './useDiscoveryStream';
-
-type TicketViewMode = 'graph' | 'board';
-
-const VIEW_OPTIONS = [
-  { value: 'graph' as const, label: 'Graph', icon: Workflow },
-  { value: 'board' as const, label: 'Board', icon: Kanban },
-];
 
 interface DiscoveryViewProps {
   discoveryId: string;
@@ -49,8 +45,6 @@ interface DiscoveryViewProps {
   discoveryTitle: string;
   /** Opens a started ticket's Feature. */
   onOpenFeature?: (featureId: string, featureTitle: string) => void;
-  /** Phase 7's proposed-changes review, when it exists. */
-  onDecompose?: () => void;
 }
 
 /**
@@ -66,7 +60,6 @@ export function DiscoveryView({
   discoveryId,
   discoveryTitle,
   onOpenFeature,
-  onDecompose,
 }: DiscoveryViewProps): React.ReactElement {
   const [detail, setDetail] = useState<DiscoveryDetail | null>(null);
   const [board, setBoard] = useState<DiscoveryBoard | null>(null);
@@ -77,11 +70,13 @@ export function DiscoveryView({
   // The turn is in flight from the click, not from the first status event —
   // otherwise a second click lands before the backend has said anything.
   const [sending, setSending] = useState(false);
-  const [mode, setMode] = useState<TicketViewMode>('graph');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ title: string; detail: string } | null>(null);
   const [machineName, setMachineName] = useState<string | null>(null);
-  const [workflowNames, setWorkflowNames] = useState<Record<string, string>>({});
+  const [workflows, setWorkflows] = useState<WorkflowWithSteps[]>([]);
+  const [proposal, setProposal] = useState<DecomposeProposal | null>(null);
+  const [decomposing, setDecomposing] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const { store, reset } = useDiscoveryStream();
 
@@ -110,9 +105,8 @@ export function DiscoveryView({
   useEffect(() => {
     let cancelled = false;
     listWorkflows()
-      .then((workflows) => {
-        if (cancelled) return;
-        setWorkflowNames(Object.fromEntries(workflows.map((w) => [w.id, w.name])));
+      .then((list) => {
+        if (!cancelled) setWorkflows(list ?? []);
       })
       .catch(() => {});
     return () => {
@@ -213,9 +207,34 @@ export function DiscoveryView({
     }
   }
 
+  /**
+   * Ask for a proposal (§5.1). The **user** decides when, and it is available
+   * from the first turn: `nothing_left_to_settle` is advisory and is never a
+   * gate, because a model that keeps finding one more question would otherwise
+   * hold the interview open.
+   *
+   * The pass streams through the interview's own events, so the transcript
+   * shows the agent working while this awaits.
+   */
+  async function decompose() {
+    setDecomposing(true);
+    setActionError(null);
+    try {
+      setProposal(await decomposeDiscovery(discoveryId));
+    } catch (cause) {
+      setActionError(formatError(cause));
+    } finally {
+      setDecomposing(false);
+      await refresh();
+    }
+  }
+
   const selected = selectedId !== null ? index.get(selectedId) : undefined;
-  const progress = board ? progressText(board.progress) : null;
-  const segments = board ? progressSegments(board.progress) : null;
+  const editing = editingId !== null ? index.get(editingId) : undefined;
+  const workflowNames = useMemo(
+    () => Object.fromEntries(workflows.map((workflow) => [workflow.id, workflow.name])),
+    [workflows],
+  );
 
   if (!detail) {
     return (
@@ -236,9 +255,9 @@ export function DiscoveryView({
       <DiscoveryWorkspaceHeader
         discovery={detail.discovery}
         board={board}
-        turnCount={blocks.length}
-        turnRunning={pending || sending}
-        busy={busy}
+        turnCount={detail.messages.length}
+        turnRunning={pending || sending || decomposing}
+        busy={busy || decomposing}
         onToggleOpen={() =>
           void runAction(() =>
             detail.discovery.status === 'open'
@@ -246,7 +265,8 @@ export function DiscoveryView({
               : reopenDiscovery(discoveryId),
           )
         }
-        onDecompose={onDecompose}
+        onDecompose={() => void decompose()}
+        decomposing={decomposing}
       />
 
       {actionError && (
@@ -270,76 +290,66 @@ export function DiscoveryView({
           onRefresh={() => void refresh()}
         />
 
-        <div className="flex min-w-0 min-h-0 flex-1 flex-col">
-          <ColumnSubHeader
-            left={
-              <SegmentedControl
-                options={VIEW_OPTIONS}
-                value={mode}
-                onChange={setMode}
-                size="sm"
-                ariaLabel="Ticket view"
-              />
-            }
-          >
-            {progress && segments && (
-              <>
-                <span className="font-mono text-[10px] text-slate-400">{progress}</span>
-                <TicketProgressBar
-                  landedPct={segments.landedPct}
-                  inFlightPct={segments.inFlightPct}
-                  title={progress}
-                  className="w-24 shrink-0"
-                />
-              </>
-            )}
-          </ColumnSubHeader>
+        <TicketColumn
+          tickets={tickets}
+          index={index}
+          progress={board?.progress ?? null}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+        />
 
-          <div className="relative min-h-0 flex-1">
-            {tickets.length === 0 ? (
-              <div className="absolute inset-0 overflow-y-auto bg-[#050608] p-6">
-                <EmptyStateCard
-                  variant="inline"
-                  icon={Compass}
-                  title="No tickets yet"
-                  description="This discovery has proposed nothing so far. Decompose the interview when the shape is settled, and the tickets it produces appear here with their edges."
-                />
-              </div>
-            ) : mode === 'graph' ? (
-              <TicketGraph
-                tickets={tickets}
-                index={index}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-              />
-            ) : (
-              <TicketBoard
-                tickets={tickets}
-                index={index}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-              />
-            )}
-          </div>
-        </div>
-
-        {selected && (
-          <TicketInspector
-            key={selected.ticket.id}
-            view={selected}
+        {editing ? (
+          <TicketEditorDrawer
+            key={editing.ticket.id}
+            view={editing}
             index={index}
-            workflowName={
-              selected.ticket.workflow_id ? (workflowNames[selected.ticket.workflow_id] ?? null) : null
-            }
+            siblings={tickets}
+            workflows={workflows}
+            machineId={detail.discovery.machine_id}
             busy={busy}
-            onStart={() => void runAction(() => startTicket(selected.ticket.id))}
+            onClose={() => setEditingId(null)}
+            onSaved={setBoard}
+            onRefresh={() => void refresh()}
+            onStart={() => void runAction(() => startTicket(editing.ticket.id))}
             onForceStart={(reason) =>
-              void runAction(() => forceStartTicket(selected.ticket.id, reason))
+              void runAction(() => forceStartTicket(editing.ticket.id, reason))
             }
-            onOpenFeature={(featureId) => onOpenFeature?.(featureId, selected.ticket.title)}
+            onDrop={(reason) => void runAction(() => dropTicket(editing.ticket.id, reason))}
           />
+        ) : (
+          selected && (
+            <TicketInspector
+              key={selected.ticket.id}
+              view={selected}
+              index={index}
+              workflowName={
+                selected.ticket.workflow_id
+                  ? (workflowNames[selected.ticket.workflow_id] ?? null)
+                  : null
+              }
+              busy={busy}
+              onStart={() => void runAction(() => startTicket(selected.ticket.id))}
+              onForceStart={(reason) =>
+                void runAction(() => forceStartTicket(selected.ticket.id, reason))
+              }
+              onEdit={() => setEditingId(selected.ticket.id)}
+              onOpenFeature={(featureId) => onOpenFeature?.(featureId, selected.ticket.title)}
+            />
+          )
         )}
       </div>
+
+      {proposal && (
+        <DecomposeModal
+          proposal={proposal}
+          index={index}
+          onClose={() => setProposal(null)}
+          onApplied={(applied) => {
+            setBoard(applied);
+            setProposal(null);
+          }}
+        />
+      )}
 
       {toast && (
         <TurnCompleteToast

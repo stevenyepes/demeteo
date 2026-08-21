@@ -25,6 +25,29 @@ export function ticketLabel(seq: number): string {
 }
 
 /**
+ * How many turns a Discovery has taken, as both surfaces say it.
+ *
+ * **A turn is one stored message** — one thing said, by either side. That is
+ * the decision `docs/TASKS_DISCOVERY.md` left open, and it is settled this way
+ * because it is the only reading both surfaces can reach: Project Home is
+ * given `DiscoverySummary.message_count`, a `COUNT(*)` over
+ * `discovery_messages`, and has no transcript to count anything else from.
+ *
+ * The rejected reading is the workspace's old one — *rendered blocks*, every
+ * bubble and question card. A question is part of the message that asked it
+ * (`docs/TASKS_DISCOVERY.md`, "The interview turn contract"): it is not a
+ * second thing the interviewer said, it is how one thing it said is drawn. So
+ * the two surfaces disagreed by exactly the number of questions asked, and the
+ * larger number was counting a rendering decision.
+ *
+ * Both call sites now pass a count of stored messages, which is why this takes
+ * a number rather than a transcript: nothing that has only blocks can call it.
+ */
+export function turnCountLabel(messages: number): string {
+  return messages === 1 ? '1 turn' : `${messages} turns`;
+}
+
+/**
  * The progress readout, computed and never stored.
  *
  * Over the counter alone rather than the ticket set, because Project Home's

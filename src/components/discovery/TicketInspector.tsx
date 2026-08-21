@@ -56,6 +56,10 @@ interface TicketInspectorProps {
   workflowName: string | null;
   onStart: () => void;
   onForceStart: (reason: string) => void;
+  /** Open the full editor (§3.6.8). Offered on every ticket: a locked one is
+   *  read there rather than refused here, which is where the reason it is
+   *  locked can actually be shown. */
+  onEdit: () => void;
   onOpenFeature: (featureId: string) => void;
   busy: boolean;
 }
@@ -75,6 +79,7 @@ export function TicketInspector({
   workflowName,
   onStart,
   onForceStart,
+  onEdit,
   onOpenFeature,
   busy,
 }: TicketInspectorProps): React.ReactElement {
@@ -249,6 +254,14 @@ export function TicketInspector({
             className="btn-primary flex-1 disabled:cursor-not-allowed disabled:opacity-35"
           >
             {action.label}
+          </button>
+          <button
+            type="button"
+            data-testid="ticket-edit"
+            onClick={onEdit}
+            className="btn-secondary shrink-0"
+          >
+            Edit
           </button>
         </div>
 

@@ -7,6 +7,7 @@ import {
   progressSegments,
   progressText,
   ticketLabel,
+  turnCountLabel,
 } from './discoveryProgress';
 import type {
   Discovery,
@@ -212,5 +213,21 @@ describe('prNumber', () => {
 describe('ticketLabel', () => {
   it('uses the stable seq, never a list index', () => {
     expect(ticketLabel(4)).toBe('DSC-4');
+  });
+});
+
+// `docs/TASKS_DISCOVERY.md` recorded the Project Home card and the workspace
+// header disagreeing about how many turns a Discovery had taken: the card read
+// stored rows, the header counted rendered transcript blocks, and a turn
+// carrying a question yields one more block than it does rows. A turn is one
+// stored message, and both surfaces now say so through this.
+describe('turnCountLabel', () => {
+  it('counts stored messages, singular at one', () => {
+    expect(turnCountLabel(1)).toBe('1 turn');
+    expect(turnCountLabel(4)).toBe('4 turns');
+  });
+
+  it('says nothing has been said yet rather than nothing at all', () => {
+    expect(turnCountLabel(0)).toBe('0 turns');
   });
 });
