@@ -14,7 +14,11 @@
 use crate::domain::ids::{DiscoveryId, ProjectId};
 use crate::domain::models::{Discovery, DiscoveryMessage};
 use crate::state::AppContext;
+use demeteo_core::application::discovery::decompose::{
+    self, proposal::DecomposeProposal, DecomposeApply,
+};
 use demeteo_core::application::discovery::{self, turn, DiscoveryDetail, NewDiscovery};
+use demeteo_core::application::tickets::DiscoveryBoard;
 use tauri::{Emitter, State};
 
 #[tauri::command]
@@ -93,4 +97,35 @@ pub async fn discovery_reclaim_idle_worktrees(
     idle_after_ms: i64,
 ) -> Result<Vec<String>, String> {
     discovery::worktree::reclaim_idle(&ctx, &ProjectId::from(project_id), idle_after_ms).await
+}
+
+/// Ask the interviewer for a plan and hand back what applying it would change
+/// (§5.2). Nothing is written; §5.3's review comes first.
+///
+/// The pass streams through the same events a turn does, so the surface can
+/// show the agent working, but the proposal comes back on the call: there is
+/// nothing to render until it is whole.
+#[tauri::command]
+pub async fn discovery_decompose(
+    ctx: State<'_, AppContext>,
+    app: tauri::AppHandle,
+    discovery_id: String,
+) -> Result<DecomposeProposal, String> {
+    decompose::run(
+        &ctx,
+        &DiscoveryId::from(discovery_id),
+        move |event, payload| {
+            let _ = app.emit(event, payload);
+        },
+    )
+    .await
+}
+
+/// Land the changes the user checked, and return the board they leave behind.
+#[tauri::command]
+pub fn discovery_apply_decomposition(
+    ctx: State<'_, AppContext>,
+    input: DecomposeApply,
+) -> Result<DiscoveryBoard, String> {
+    decompose::apply(&ctx, input)
 }

@@ -171,3 +171,29 @@ reason"* and its cards render the reason — which a closed PR does not have. So
 the lane is shared, the per-ticket note is not: an explicitly dropped ticket
 shows its drop reason, and a closed-unmerged one says its PR closed without
 merging. A card must never render an absent reason as though it had one.
+
+---
+
+## Phase 2b — what the surface asked for and the backend cannot answer
+
+Found by building Phase 5 against the landed backend. Each is a place where the
+PRD promises something no command carries, so the surface correctly declined to
+render a control that would discard what the user gave it.
+
+- **Interview attachments (§4.6).** `NewDiscovery` has no attachment field and
+  `discovery_send_turn` takes only text, so there is nowhere for a file or an
+  image to go. The PRD reuses `Feature.attachments` for this; the interview
+  needs the same. Until it exists the modal has no dropzone, and the
+  vision-capability warning has nothing to fire on.
+- **The interviewer's machine (§4.5).** `discovery::create` derives the machine
+  from the project and ignores any input, so the mock's machine select is a
+  control the backend discards. Either honour the choice or the picker stays
+  disabled — a select that silently does nothing is the worse of the two.
+- **Turn count on a card.** `discovery_list` returns bare rows, and the message
+  count exists only inside `DiscoveryDetail`. The card's `4 turns` needs the
+  count on the list row; fetching a transcript per card to render one number
+  does not.
+
+None of these block the remaining phases. All three are the same shape of bug —
+a surface that would promise more than it carries — which is why none of them
+were built around.

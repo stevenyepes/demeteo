@@ -9,10 +9,12 @@
 //!
 //! The submodules split by what they answer:
 //! [`turn`] runs one round, [`context`] decides what the interviewer is told
-//! about the project, [`question`] holds the prompt, [`worktree`] owns the
-//! checkout it reads in, and [`events`] is what the surface hears.
+//! about the project, [`question`] holds the prompt, [`decompose`] ends the
+//! interview in tickets, [`worktree`] owns the checkout it reads in, and
+//! [`events`] is what the surface hears.
 
 pub mod context;
+pub mod decompose;
 pub mod events;
 pub mod question;
 pub mod turn;

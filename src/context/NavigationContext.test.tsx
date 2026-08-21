@@ -35,6 +35,10 @@ function detailView(featureId: string, gateStepExecutionId: string | null = null
   };
 }
 
+function discoveryView(discoveryId: string, discoveryTitle: string): AppView {
+  return { kind: 'discovery', discoveryId, discoveryTitle };
+}
+
 function featureIdOf(view: AppView): string | undefined {
   return view.kind === 'detail' ? view.featureId : undefined;
 }
@@ -92,6 +96,33 @@ describe('NAVIGATE (push)', () => {
       view: detailView('feat-1', 'gate-1'),
     });
     expect(differentGate.backStack).toHaveLength(2);
+  });
+
+  // The Discovery arm carries two fields. Drop either from `shallowEqualView`
+  // and this goes green on the first half while the push it should have made
+  // silently collapses — which on screen is a click on a discovery row that
+  // leaves the previous discovery open.
+  it('collapses an identical discovery view but not a different one', () => {
+    const first = discoveryView('dsc-1', 'Runner serves more than one client');
+    const a = navigationReducer(home, { type: 'NAVIGATE', view: first });
+
+    const same = navigationReducer(a, { type: 'NAVIGATE', view: { ...first } });
+    expect(same).toBe(a);
+
+    const otherId = navigationReducer(a, {
+      type: 'NAVIGATE',
+      view: discoveryView('dsc-2', 'Runner serves more than one client'),
+    });
+    expect(otherId.backStack).toHaveLength(2);
+
+    // A retitled discovery is the same row with a new name: the header renders
+    // this title before `discovery_get` answers, so a collapse here would keep
+    // showing the old one.
+    const otherTitle = navigationReducer(a, {
+      type: 'NAVIGATE',
+      view: discoveryView('dsc-1', 'What a gate should let you edit'),
+    });
+    expect(otherTitle.backStack).toHaveLength(2);
   });
 });
 

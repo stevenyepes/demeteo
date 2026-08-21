@@ -19,6 +19,7 @@ import ProjectSettings from "./components/ProjectSettings";
 import { CodeReviewView } from "./components/review/CodeReviewView";
 import { WorkflowList } from "./components/WorkflowList";
 import { WorkflowBuilderScreen } from "./components/canvas/WorkflowBuilderScreen";
+import { DiscoveryView } from "./components/discovery/DiscoveryView";
 import { FeatureDetail } from "./components/FeatureDetail";
 import { GateView } from "./components/GateView";
 import { OverlayPortal } from "./components/ui/OverlayPortal";
@@ -449,6 +450,13 @@ function AppInner() {
             <WorkflowBuilderScreen
               workflowId={view.workflowId}
               onBack={() => navigate({ kind: 'workflows' })}
+            />
+          )}
+
+          {view.kind === 'discovery' && (
+            <DiscoveryView
+              discoveryId={view.discoveryId}
+              discoveryTitle={view.discoveryTitle}
             />
           )}
 

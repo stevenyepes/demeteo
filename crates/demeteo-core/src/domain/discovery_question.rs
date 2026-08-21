@@ -160,11 +160,10 @@ pub fn validate_question(q: &DiscoveryQuestion) -> Option<String> {
 
 /// Split an assistant turn into prose and the block it carried.
 ///
-/// Tolerant in the same three ways, and the same order, as
-/// `extract_task_plan` in `crates/demeteo-core/src/domain/sequence/tasks.rs`:
-/// a ```json fence, any fence, then the first balanced top-level object. A
-/// turn with no block, or with one that does not deserialize, is prose — the
-/// interviewer is not obliged to ask a question every turn.
+/// Tolerant about where the block sits, through
+/// [`crate::domain::json_block`]. A turn with no block, or with one that does
+/// not deserialize, is prose — the interviewer is not obliged to ask a
+/// question every turn.
 pub fn parse_interview_turn(text: &str) -> InterviewTurn {
     let Some((span, block)) = find_block(text) else {
         return InterviewTurn {
@@ -194,41 +193,16 @@ pub fn parse_interview_turn(text: &str) -> InterviewTurn {
 }
 
 /// The block and the byte span it occupied, so the prose can be cut free of
-/// it. A fenced block reports the span of the whole fence, which is what the
-/// reader would otherwise be left staring at.
+/// it.
+///
+/// The accept rule is what stops an unrelated object answering as the block:
+/// every field of an [`InterviewBlock`] is optional, so `{}` — or any JSON at
+/// all — deserializes into a default one. A block that neither asks nor
+/// signals is not a block.
 fn find_block(text: &str) -> Option<((usize, usize), InterviewBlock)> {
-    if let Ok(block) = serde_json::from_str::<InterviewBlock>(text.trim()) {
-        if block.question.is_some() || block.nothing_left_to_settle {
-            return Some(((0, text.len()), block));
-        }
-    }
-    for tag in ["```json", "```"] {
-        let mut from = 0;
-        while let Some(rel) = text[from..].find(tag) {
-            let open = from + rel;
-            let after = open + tag.len();
-            let body_start = if tag == "```" {
-                match text[after..].find('\n') {
-                    Some(nl) => after + nl + 1,
-                    None => break,
-                }
-            } else {
-                after
-            };
-            if let Some(rel_end) = text[body_start..].find("```") {
-                let body = text[body_start..body_start + rel_end].trim();
-                if let Ok(block) = serde_json::from_str::<InterviewBlock>(body) {
-                    if block.question.is_some() || block.nothing_left_to_settle {
-                        return Some(((open, body_start + rel_end + 3), block));
-                    }
-                }
-            }
-            from = after;
-        }
-    }
-    let (start, end) = crate::domain::sequence::tasks::find_top_level_object(text)?;
-    let block = serde_json::from_str::<InterviewBlock>(&text[start..end]).ok()?;
-    (block.question.is_some() || block.nothing_left_to_settle).then_some(((start, end), block))
+    crate::domain::json_block::find_json_block(text, |block: &InterviewBlock| {
+        block.question.is_some() || block.nothing_left_to_settle
+    })
 }
 
 #[cfg(test)]

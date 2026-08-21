@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
-import { Zap, ChevronRight, Settings, AlertTriangle, RotateCw, Check, GitPullRequest, Sliders, Terminal } from 'lucide-react';
-import { Feature, FeatureDrift, Repository } from '../types';
+import { Zap, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Compass, GitPullRequest, Sliders, Terminal } from 'lucide-react';
+import { Discovery, Feature, FeatureDrift, Repository } from '../types';
 import { formatError } from '../lib/errors';
 import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } from '../lib/project';
 import { bootstrapProject } from '../lib/createProjectWizard';
@@ -10,11 +10,13 @@ import { getFeatureDrift } from '../lib/featureSync';
 import { holdsOpenRequest, unmeasuredDrift } from '../lib/staleness';
 import { listMirroredRuns } from '../lib/remoteRuns';
 import { listWorkflows } from '../lib/workflows';
+import { listDiscoveries } from '../lib/discovery';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import EmptyStateCard from './EmptyStateCard';
 import { PipelineCard } from './PipelineCard';
 import { PipelineFilterBar } from './PipelineFilterBar';
 import { PipelineListSkeleton } from './PipelineListSkeleton';
+import { DiscoverySection } from './discovery/DiscoverySection';
 import { ProjectTelemetry } from './ProjectTelemetry';
 import { StartSessionButton } from './StartSessionButton';
 import { DensityToggle } from './ui/DensityToggle';
@@ -34,14 +36,14 @@ import {
 } from '../lib/attachments';
 
 /**
- * The strip's three entries, of which only two swap the body below: Code
+ * The strip's four entries, of which only three swap the body below: Code
  * Review is a route, so choosing it unmounts this component. It sits here
  * rather than in the header because every header entry is global and this
  * surface is project-scoped — and because `lib/headerLayout.ts` measures the
  * labelled nav cluster at 485px against a 1382px threshold, so a fifth entry
  * would open the 1440 default window icon-only for the first time.
  */
-type ProjectSection = 'pipelines' | 'terminal';
+type ProjectSection = 'pipelines' | 'discovery' | 'terminal';
 
 const ProjectHome = () => {
     const { navigate } = useNavigation();
@@ -60,6 +62,11 @@ const ProjectHome = () => {
     // the runner rather than on this machine. Drives the per-card transport
     // badge. Empty when nothing detached is (or was) tracked in this project.
     const [detachedIds, setDetachedIds] = useState<Set<string>>(new Set());
+    // Every Discovery in this project, open or closed. Fetched with the rest
+    // of the workspace so the tab is populated the moment it is chosen; the
+    // ticket boards behind each card are DiscoverySection's own read.
+    const [discoveries, setDiscoveries] = useState<Discovery[]>([]);
+    const [isLoadingDiscoveries, setIsLoadingDiscoveries] = useState(true);
 
     useEffect(() => {
         setActiveTab('pipelines');
@@ -196,6 +203,7 @@ const ProjectHome = () => {
     // It sits beside the strip as a link instead, because that is what it is.
     const tabs: TabDef<ProjectSection>[] = [
         { value: 'pipelines', label: 'Pipelines', icon: <Sliders className="w-3.5 h-3.5" /> },
+        { value: 'discovery', label: 'Discovery', icon: <Compass className="w-3.5 h-3.5" /> },
         ...(activeProject.compute_type === 'remote'
             ? [{ value: 'terminal' as const, label: 'Terminal', icon: <Terminal className="w-3.5 h-3.5" /> }]
             : []),
@@ -285,6 +293,8 @@ const ProjectHome = () => {
         setRepositories([]);
         setRepositoriesProjectId(null);
         setActiveRepositoryId('');
+        setDiscoveries([]);
+        setIsLoadingDiscoveries(true);
 
         // An earlier project's request may settle after this effect has been
         // replaced. Its repositories must not become the selected launch
@@ -294,12 +304,13 @@ const ProjectHome = () => {
         const fetchWorkspaceData = async () => {
             setIsLoadingFeatures(true);
 
-            const [featuresRes, reposRes, workflowsRes, mirrorsRes, settingsRes] = await Promise.allSettled([
+            const [featuresRes, reposRes, workflowsRes, mirrorsRes, settingsRes, discoveriesRes] = await Promise.allSettled([
                 fetchActiveFeatures(activeProject.id),
                 getRepositoriesForProject(activeProject.id),
                 listWorkflows(),
                 listMirroredRuns(),
                 getProposedStrategy(activeProject.id),
+                listDiscoveries(activeProject.id),
             ]);
 
             if (cancelled) return;
@@ -381,6 +392,14 @@ const ProjectHome = () => {
                 console.error("Failed to fetch project settings:", settingsRes.reason);
                 setDefaultWorkflowId(null);
             }
+
+            if (discoveriesRes.status === 'fulfilled') {
+                setDiscoveries(discoveriesRes.value ?? []);
+            } else {
+                console.error("Failed to fetch discoveries:", discoveriesRes.reason);
+                setDiscoveries([]);
+            }
+            setIsLoadingDiscoveries(false);
         };
         fetchWorkspaceData();
         return () => {
@@ -649,7 +668,23 @@ const ProjectHome = () => {
                     </button>
                 </div>
 
-                {activeTab === 'pipelines' || activeProject.compute_type !== 'remote' ? (
+                {activeTab === 'discovery' ? (
+                    <div className="flex-1 overflow-y-auto pr-1 min-h-0">
+                        <DiscoverySection
+                            projectId={activeProject.id}
+                            machineId={machineId}
+                            discoveries={discoveries}
+                            isLoading={isLoadingDiscoveries}
+                            onCreated={(discovery) => {
+                                setDiscoveries((prev) => [discovery, ...prev]);
+                                navigate({ kind: 'discovery', discoveryId: discovery.id, discoveryTitle: discovery.title });
+                            }}
+                            onOpen={(discoveryId, discoveryTitle) =>
+                                navigate({ kind: 'discovery', discoveryId, discoveryTitle })
+                            }
+                        />
+                    </div>
+                ) : activeTab === 'pipelines' || activeProject.compute_type !== 'remote' ? (
                     <div className="flex-1 overflow-y-auto space-y-8 pr-1 min-h-0">
                         {/* Inline composer — a lightweight seed for the
                             single launch surface. It captures a title +

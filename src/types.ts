@@ -1,6 +1,7 @@
 // Post-pivot types. Legacy supervisor/thread types were removed as part of
 // the R7 cleanup; see AGENT_INTEGRATION.md §1 for the surviving surface.
 
+import type { AttachedFile } from './lib/attachments';
 import type { EffortLevel } from './lib/effortLevels';
 
 /** The reasoning-effort ladder. Declared (and drift-tested) in
@@ -117,6 +118,10 @@ export type AppView =
   | { kind: 'code-review' }
   | { kind: 'workflows' }
   | { kind: 'workflow-editor'; workflowId: string | null }
+  /** One Discovery's workspace. The title rides along so the header can name
+   *  it before `discovery_get` answers, exactly as `detail` carries
+   *  `featureTitle`. */
+  | { kind: 'discovery'; discoveryId: string; discoveryTitle: string }
   | { kind: 'providers' }
   | { kind: 'settings' }
   | { kind: 'remote-inbox' }
@@ -1186,4 +1191,177 @@ export interface TerminalTabDescriptor {
 export interface TerminalPanelState {
   tabs: TerminalTabDescriptor[];
   activeTabId: string | null;
+}
+
+// ── Discovery (docs/PRD_DISCOVERY.md) ─────────────────────────────────────
+//
+// Hand-mirrored from the Rust serde shapes, which is the only mechanism this
+// repo has: `domain/models/discovery.rs`, `domain/models/ticket.rs`,
+// `domain/ticket_graph.rs`, `application/discovery/mod.rs` and
+// `application/tickets/mod.rs`. Every id newtype is `#[serde(transparent)]`,
+// so a `DiscoveryId` or `TicketId` arrives as a bare string.
+
+/** Mirrors `DiscoveryStatus`. */
+export type DiscoveryStatus = 'open' | 'closed';
+
+/** Mirrors `MessageRole`. There is no system role — what the interviewer is
+ *  told is assembled per turn, so a stored copy would describe a world that
+ *  has moved on. */
+export type MessageRole = 'user' | 'assistant';
+
+/** Mirrors `Discovery`. */
+export interface Discovery {
+  id: string;
+  project_id: string;
+  title: string;
+  status: DiscoveryStatus;
+  machine_id: string;
+  agent_kind: string;
+  model: string | null;
+  effort: EffortLevel | null;
+  resume_session_id: string | null;
+  worktree_path: string | null;
+  total_cost: number;
+  tokens: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Mirrors `QuestionOption`. */
+export interface QuestionOption {
+  id: string;
+  label: string;
+  description: string;
+}
+
+/** Mirrors `DiscoveryQuestion`. `recommended` names a `QuestionOption.id`;
+ *  `null` is a real answer, not a missing one. */
+export interface DiscoveryQuestion {
+  header: string;
+  text: string;
+  options: QuestionOption[];
+  recommended: string | null;
+}
+
+/** Mirrors `DiscoveryMessage`. `cost_usd`/`tokens` are `null` on a user turn
+ *  and on an assistant turn whose harness reported no spend — distinct from
+ *  `0`, which is a measurement. */
+export interface DiscoveryMessage {
+  id: string;
+  discovery_id: string;
+  role: MessageRole;
+  content: string;
+  cost_usd: number | null;
+  tokens: number | null;
+  created_at: number;
+}
+
+/** Mirrors `DiscoveryMessageView`, which `#[serde(flatten)]`s a
+ *  `DiscoveryMessage` and the `InterviewTurn` derived from its text — so both
+ *  halves arrive on one object. Which question is *open* is derived one level
+ *  further out, by the reader: the last one with no user message after it. */
+export interface DiscoveryMessageView extends DiscoveryMessage {
+  prose: string;
+  question: DiscoveryQuestion | null;
+  nothing_left_to_settle: boolean;
+  question_error: string | null;
+}
+
+/** Mirrors `DiscoveryDetail`. */
+export interface DiscoveryDetail {
+  discovery: Discovery;
+  messages: DiscoveryMessageView[];
+}
+
+/** Mirrors `TicketState` — the whole stored vocabulary. Everything a screen
+ *  shows about a ticket beyond these three is derived on read. */
+export type TicketState = 'unstarted' | 'started' | 'dropped';
+
+/** Mirrors `Ticket`. `attachments` stage here and are committed to the
+ *  Feature when the ticket starts, so a ticket that never starts never writes
+ *  an attachment row. */
+export interface Ticket {
+  id: string;
+  discovery_id: string;
+  /** The number a user says out loud. Assigned once and never reissued, so a
+   *  list index would rename every ticket after a deletion. */
+  seq: number;
+  title: string;
+  description: string;
+  acceptance: string[];
+  files: string[];
+  blocked_by: string[];
+  test_command: string | null;
+  workflow_id: string | null;
+  agent_kind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
+  attachments: AttachedFile[];
+  state: TicketState;
+  drop_reason: string | null;
+  force_start_reason: string | null;
+  force_started_at: number | null;
+  feature_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Mirrors `TicketLane`. A closed-unmerged ticket lands in `dropped`: it
+ *  satisfies its dependents yet nothing of it reached the base branch, so
+ *  neither `in_flight` nor `landed` would be true of it. */
+export type TicketLane = 'blocked' | 'ready' | 'in_flight' | 'landed' | 'dropped';
+
+/** Mirrors `BlockerReason`. `unknown` is a dangling edge — drift rather than
+ *  a plan — and is reported apart from `outstanding` so a surface can say
+ *  *unknown prerequisite* rather than *waiting*. */
+export type BlockerReason = 'outstanding' | 'unknown';
+
+/** Mirrors `Blocker`. */
+export interface Blocker {
+  id: string;
+  reason: BlockerReason;
+}
+
+/** Mirrors `TicketStanding`. */
+export interface TicketStanding {
+  id: string;
+  lane: TicketLane;
+  startable: boolean;
+  blockers: Blocker[];
+}
+
+/** Mirrors `TicketProgress`. `live` is every lane but `dropped` — the
+ *  denominator §9.2 specifies, since a dropped ticket is not work
+ *  outstanding. */
+export interface TicketProgress {
+  blocked: number;
+  ready: number;
+  in_flight: number;
+  landed: number;
+  dropped: number;
+  live: number;
+}
+
+/** Mirrors `TicketFeatureView` — what a started ticket's current attempt
+ *  contributes to a card. */
+export interface TicketFeatureView {
+  id: string;
+  status: string;
+  mr_state: string | null;
+  mr_url: string | null;
+}
+
+/** Mirrors `TicketView`: the row, its derived position, and the forge state
+ *  the position was derived from, which travel together so the graph and the
+ *  board cannot disagree. */
+export interface TicketView {
+  ticket: Ticket;
+  standing: TicketStanding;
+  feature: TicketFeatureView | null;
+}
+
+/** Mirrors `DiscoveryBoard`. `tickets` arrive in `Ticket.seq` order. */
+export interface DiscoveryBoard {
+  tickets: TicketView[];
+  progress: TicketProgress;
 }

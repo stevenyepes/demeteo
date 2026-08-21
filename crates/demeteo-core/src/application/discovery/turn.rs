@@ -56,7 +56,7 @@ pub(crate) fn should_reseed_and_retry(
 
 /// The outcome of a turn that never ran, or of the one ending that carries no
 /// usage by construction.
-fn nothing_spent() -> TurnOutcome {
+pub(super) fn nothing_spent() -> TurnOutcome {
     TurnOutcome {
         text: String::new(),
         produced_artifacts: Vec::new(),
@@ -67,7 +67,7 @@ fn nothing_spent() -> TurnOutcome {
     }
 }
 
-fn split(result: TurnResult) -> (TurnEnding, Option<String>, TurnOutcome) {
+pub(super) fn split(result: TurnResult) -> (TurnEnding, Option<String>, TurnOutcome) {
     match result {
         TurnResult::Success(spent) => (TurnEnding::Success, None, spent),
         TurnResult::Failed { reason, spent } => (TurnEnding::Failed, Some(reason), spent),
@@ -139,7 +139,7 @@ where
     ctx.discoveries
         .update(&discovery.id, &DiscoveryPatch::default(), now)?;
 
-    let prepared = prepare(ctx, &discovery, &user_message).await?;
+    let prepared = prepare(ctx, &discovery, Some(&user_message)).await?;
     let emit = Arc::new(emit_fn);
     emit(
         EVENT_DISCOVERY_TURN_STATUS,
@@ -152,35 +152,44 @@ where
 
 /// Everything the background turn needs, resolved while a caller is still
 /// there to be told it failed.
-struct Prepared {
-    ctx_discoveries: Arc<dyn crate::ports::discovery::DiscoveryPort>,
-    registry: Arc<crate::adapters::agent::registry::AgentRegistry>,
-    exec: Arc<dyn crate::ports::execution::ExecutionPort>,
-    pricing: Arc<dyn crate::ports::pricing::PricingTable>,
-    timeouts: crate::domain::models::AgentTimeouts,
-    discovery: Discovery,
-    agent_ctx: AgentContext,
-    machine_str: String,
-    thread_id: String,
+///
+/// Shared with [`super::decompose`], which is one more turn against the same
+/// session with a different prompt: it swaps [`Prepared::user_text`] and
+/// otherwise runs the machinery below unchanged.
+pub(super) struct Prepared {
+    pub(super) ctx_discoveries: Arc<dyn crate::ports::discovery::DiscoveryPort>,
+    pub(super) registry: Arc<crate::adapters::agent::registry::AgentRegistry>,
+    pub(super) exec: Arc<dyn crate::ports::execution::ExecutionPort>,
+    pub(super) pricing: Arc<dyn crate::ports::pricing::PricingTable>,
+    pub(super) timeouts: crate::domain::models::AgentTimeouts,
+    pub(super) discovery: Discovery,
+    pub(super) agent_ctx: AgentContext,
+    pub(super) machine_str: String,
+    pub(super) thread_id: String,
     /// Live before this turn asked for it, which is the whole of what "the
     /// harness still knows this session" can be observed to mean from here.
-    session_was_live: bool,
-    /// Everything said *before* this turn. The turn's own user message is not
-    /// in it: a re-seeded prompt renders the transcript and then the new text,
-    /// so leaving it in would ask the same question twice.
-    transcript: Vec<DiscoveryMessage>,
-    context_text: String,
-    user_text: String,
+    pub(super) session_was_live: bool,
+    /// Everything said before this turn — see [`prepare`] for what is left
+    /// out of it.
+    pub(super) transcript: Vec<DiscoveryMessage>,
+    pub(super) context_text: String,
+    pub(super) user_text: String,
     /// What the usage accumulator prices against when the harness reports no
     /// dollar figure of its own. The runtime's default stands in for a
     /// Discovery that named no model, which is what the run actually used.
-    pricing_model: Option<String>,
+    pub(super) pricing_model: Option<String>,
 }
 
-async fn prepare(
+/// Resolve everything a turn against this Discovery needs.
+///
+/// `asked` is the user message this turn is answering, and `None` for a turn
+/// nobody typed — a decompose pass. It is excluded from `transcript` because a
+/// re-seeded prompt renders the transcript and then the new text, so leaving
+/// it in would ask the same question twice.
+pub(super) async fn prepare(
     ctx: &AppContext,
     discovery: &Discovery,
-    asked: &DiscoveryMessage,
+    asked: Option<&DiscoveryMessage>,
 ) -> Result<Prepared, String> {
     let repo = super::worktree::resolve(ctx, discovery).await?;
     let worktree_path = super::worktree::ensure(ctx, discovery, &repo).await?;
@@ -189,7 +198,7 @@ async fn prepare(
         .discoveries
         .list_messages(&discovery.id)?
         .into_iter()
-        .filter(|m| m.id != asked.id)
+        .filter(|m| Some(m.id.as_str()) != asked.map(|a| a.id.as_str()))
         .collect();
 
     let thread_id = thread_id(&discovery.id);
@@ -237,7 +246,7 @@ async fn prepare(
         session_was_live,
         transcript,
         context_text,
-        user_text: asked.content.clone(),
+        user_text: asked.map(|a| a.content.clone()).unwrap_or_default(),
         pricing_model: discovery
             .model
             .clone()
@@ -344,7 +353,7 @@ where
 /// Every ending except a stop carries usage, and a discarded first attempt
 /// carries it too: the tokens were bought. It writes no message, though — the
 /// only attempt this discards is one that produced no text to write.
-fn bill(p: &Prepared, spent: &TurnOutcome) {
+pub(super) fn bill(p: &Prepared, spent: &TurnOutcome) {
     if spent.cost_usd == 0.0 && spent.tokens == 0 {
         return;
     }
@@ -375,7 +384,10 @@ fn bill(p: &Prepared, spent: &TurnOutcome) {
 /// spawn logic, which is a Gate item (AGENTS.md §6) — so within a process the
 /// resume rides on the live session that already holds it, and across
 /// processes the transcript carries the conversation instead.
-fn latch_resume_id(p: &Prepared, session: &dyn crate::ports::agent_runtime::AgentSession) {
+pub(super) fn latch_resume_id(
+    p: &Prepared,
+    session: &dyn crate::ports::agent_runtime::AgentSession,
+) {
     let Some(latched) = session.harness_session_id() else {
         return;
     };

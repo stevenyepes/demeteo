@@ -1,0 +1,209 @@
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  Discovery,
+  DiscoveryBoard,
+  DiscoveryDetail,
+  DiscoveryMessage,
+  EffortLevel,
+  Feature,
+  Ticket,
+} from "../types";
+import type { AttachedFile } from "./attachments";
+
+/**
+ * Typed IPC wrappers for Discovery and its Tickets — the commands in
+ * `src-tauri/src/commands/discovery.rs` and `src-tauri/src/commands/tickets.rs`.
+ *
+ * **Rejections are plain strings.** Every command here returns
+ * `Result<T, String>`, not the `AppError` envelope `commands/features.rs`
+ * uses, so `asAppError` matches none of them and a caller wanting to show one
+ * goes through `formatError`.
+ */
+
+/** Mirrors `discovery_list` — every Discovery in a project, open or closed. */
+export async function listDiscoveries(projectId: string): Promise<Discovery[]> {
+  return invoke<Discovery[]>("discovery_list", { projectId });
+}
+
+/** Mirrors `discovery_get` — the Discovery and its whole transcript. */
+export async function getDiscovery(discoveryId: string): Promise<DiscoveryDetail> {
+  return invoke<DiscoveryDetail>("discovery_get", { discoveryId });
+}
+
+/**
+ * Mirrors `discovery_create`. No worktree and no agent process yet — both wait
+ * for the first turn that needs them.
+ *
+ * The machine is not an argument: the repository this interview reads exists
+ * on exactly one host, so the backend takes the project's.
+ */
+export async function createDiscovery(input: {
+  projectId: string;
+  title: string;
+  agentKind: string;
+  model: string | null;
+  effort: EffortLevel | null;
+}): Promise<Discovery> {
+  return invoke<Discovery>("discovery_create", {
+    input: {
+      project_id: input.projectId,
+      title: input.title,
+      agent_kind: input.agentKind,
+      model: input.model,
+      effort: input.effort,
+    },
+  });
+}
+
+/**
+ * Mirrors `discovery_send_turn`. Returns as soon as the user's message is
+ * stored — the interviewer's half arrives over `discovery_agent_event` and
+ * ends with `discovery_turn_completed`, because leaving mid-interview is the
+ * case this feature exists for.
+ */
+export async function sendDiscoveryTurn(
+  discoveryId: string,
+  text: string,
+): Promise<DiscoveryMessage> {
+  return invoke<DiscoveryMessage>("discovery_send_turn", { discoveryId, text });
+}
+
+/** Mirrors `discovery_cancel_turn`. What the turn spent is still billed and
+ *  whatever it managed to say is still stored — both already happened. */
+export async function cancelDiscoveryTurn(discoveryId: string): Promise<void> {
+  return invoke<void>("discovery_cancel_turn", { discoveryId });
+}
+
+/** Mirrors `discovery_close`. Ends the interview and nothing else: the
+ *  transcript and the tickets stay. */
+export async function closeDiscovery(discoveryId: string): Promise<void> {
+  return invoke<void>("discovery_close", { discoveryId });
+}
+
+/** Mirrors `discovery_reopen`. */
+export async function reopenDiscovery(discoveryId: string): Promise<void> {
+  return invoke<void>("discovery_reopen", { discoveryId });
+}
+
+/** Mirrors `discovery_reclaim_idle_worktrees`. Returns the ids it reclaimed. */
+export async function reclaimIdleDiscoveryWorktrees(
+  projectId: string,
+  idleAfterMs: number,
+): Promise<string[]> {
+  return invoke<string[]>("discovery_reclaim_idle_worktrees", { projectId, idleAfterMs });
+}
+
+/** Mirrors `discovery_delete`. Refuses while any ticket has been started —
+ *  those runs own branches, worktrees and pull requests that outlive the plan. */
+export async function deleteDiscovery(discoveryId: string): Promise<void> {
+  return invoke<void>("discovery_delete", { discoveryId });
+}
+
+/** Mirrors `discovery_board` — the tickets and the lanes they derive, from
+ *  one call, so the graph and the board cannot disagree. */
+export async function getDiscoveryBoard(discoveryId: string): Promise<DiscoveryBoard> {
+  return invoke<DiscoveryBoard>("discovery_board", { discoveryId });
+}
+
+/** Mirrors `ticket_briefing` — what the ticket's agent will be told, rendered
+ *  before anything starts. */
+export async function getTicketBriefing(ticketId: string): Promise<string> {
+  return invoke<string>("ticket_briefing", { ticketId });
+}
+
+/** Mirrors `ticket_start`. */
+export async function startTicket(ticketId: string): Promise<Feature> {
+  return invoke<Feature>("ticket_start", { ticketId });
+}
+
+/** Mirrors `ticket_force_start`. The reason is not decoration: it reaches the
+ *  agent in its own prerequisite briefing, which is what stops a bypass from
+ *  becoming an unexplained one. */
+export async function forceStartTicket(ticketId: string, reason: string): Promise<Feature> {
+  return invoke<Feature>("ticket_force_start", { ticketId, reason });
+}
+
+/** Mirrors `ticket_drop`. */
+export async function dropTicket(ticketId: string, reason: string): Promise<Ticket> {
+  return invoke<Ticket>("ticket_drop", { ticketId, reason });
+}
+
+/** Mirrors `ticket_add_attachment`. `bytes` carries the content when the
+ *  webview has a `File` handle but no path on disk, exactly as
+ *  `feature_add_attachment` does. */
+export async function addTicketAttachment(input: {
+  ticketId: string;
+  sourcePath: string;
+  mime: string | null;
+  sourceFilename: string | null;
+  bytes: number[] | null;
+}): Promise<AttachedFile> {
+  return invoke<AttachedFile>("ticket_add_attachment", {
+    ticketId: input.ticketId,
+    sourcePath: input.sourcePath,
+    mime: input.mime,
+    sourceFilename: input.sourceFilename,
+    bytes: input.bytes,
+  });
+}
+
+/** Mirrors `ticket_remove_attachment`. */
+export async function removeTicketAttachment(
+  ticketId: string,
+  attachmentId: string,
+): Promise<void> {
+  return invoke<void>("ticket_remove_attachment", { ticketId, attachmentId });
+}
+
+// ── The streaming contract (`application/discovery/events.rs`) ─────────────
+
+/** Every `AgentEvent` of a turn, as it arrives. */
+export const EVENT_DISCOVERY_AGENT_EVENT = "discovery_agent_event";
+/** `running` when a turn starts, `idle` or `error` when it stops. */
+export const EVENT_DISCOVERY_TURN_STATUS = "discovery_turn_status";
+/** The completion signal — a multi-minute turn that ended silently would
+ *  force the user to sit and watch it. */
+export const EVENT_DISCOVERY_TURN_COMPLETED = "discovery_turn_completed";
+
+/**
+ * Payload of `discovery_agent_event`.
+ *
+ * `event` is the Rust `AgentEvent`, an enum serde-tagged by `kind` and wide
+ * enough that mirroring the whole of it here would be a second copy to keep in
+ * step for the sake of the one variant this surface reads. It stays `unknown`
+ * behind {@link isTextDelta}.
+ */
+export interface DiscoveryAgentEventPayload {
+  discovery_id: string;
+  event: unknown;
+}
+
+/** Mirrors `DiscoveryTurnStatus`. */
+export interface DiscoveryTurnStatusPayload {
+  discovery_id: string;
+  status: string;
+  reason: string | null;
+}
+
+/** Mirrors `DiscoveryTurnCompleted`. */
+export interface DiscoveryTurnCompletedPayload {
+  discovery_id: string;
+  title: string;
+  message_id: string | null;
+  ending: "success" | "interrupted" | "failed" | "environmental";
+  reason: string | null;
+  cost_usd: number;
+  tokens: number;
+  duration_ms: number;
+  /** Whether the turn had to carry the transcript itself, rather than resume
+   *  the harness's own copy of the session. */
+  reseeded: boolean;
+  nothing_left_to_settle: boolean;
+}
+
+/** The one `AgentEvent` variant the transcript renders while a turn streams. */
+export function isTextDelta(event: unknown): event is { kind: "text"; delta: string } {
+  if (typeof event !== "object" || event === null) return false;
+  const candidate = event as { kind?: unknown; delta?: unknown };
+  return candidate.kind === "text" && typeof candidate.delta === "string";
+}
