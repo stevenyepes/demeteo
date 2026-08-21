@@ -36,16 +36,33 @@ pub struct DiscoveryPatch {
     pub effort: Option<Option<EffortLevel>>,
     pub resume_session_id: Option<Option<String>>,
     pub worktree_path: Option<Option<String>>,
+    /// The whole manifest, as [`TicketPatch::attachments`] takes it:
+    /// `Some(vec![])` is the clear.
+    pub attachments: Option<Vec<AttachedFile>>,
     /// Folded into the stored totals rather than replacing them, so two turns
     /// that finish out of order still sum to what was spent (§8.5).
     pub add_cost: f64,
     pub add_tokens: i64,
 }
 
+/// A Discovery as a list reads it: the row, plus the one number a card needs
+/// that the row does not carry.
+///
+/// The count is answered by the same query that returns the row rather than by
+/// a transcript fetch per card: `DISCOVERY_UI_SPEC.md` §1.5.2 renders `4 turns`
+/// on every card of a project, and reading three whole interviews to render
+/// three integers is the round trip this shape exists to refuse.
+#[derive(Debug, Clone)]
+pub struct DiscoveryListRow {
+    pub discovery: Discovery,
+    /// Every message, both roles — what the surface calls a turn.
+    pub message_count: i64,
+}
+
 pub trait DiscoveryPort: Send + Sync {
     /// A project's Discoveries, most recently touched first. Closed ones are
     /// included: closing is soft and keeps everything (§8.4).
-    fn list_for_project(&self, project_id: &ProjectId) -> Result<Vec<Discovery>, String>;
+    fn list_for_project(&self, project_id: &ProjectId) -> Result<Vec<DiscoveryListRow>, String>;
     fn get(&self, id: &DiscoveryId) -> Result<Option<Discovery>, String>;
     fn create(&self, discovery: &Discovery) -> Result<(), String>;
     fn update(&self, id: &DiscoveryId, patch: &DiscoveryPatch, now: i64) -> Result<(), String>;

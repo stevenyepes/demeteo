@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{DiscoveryId, MachineId, ProjectId};
 use crate::domain::models::EffortLevel;
 
@@ -41,6 +42,11 @@ pub struct Discovery {
     /// answered by provisioning again.
     #[serde(default)]
     pub worktree_path: Option<String>,
+    /// What the user handed the interviewer (§4.6). Owned by the Discovery
+    /// rather than by a turn: the composer's chip row survives the turn that
+    /// added it, and every later turn is prompted with the same set.
+    #[serde(default)]
+    pub attachments: Vec<AttachedFile>,
     #[serde(default)]
     pub total_cost: f64,
     #[serde(default)]

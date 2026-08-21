@@ -697,6 +697,25 @@ body {
 .animate-pulse-glow-delay-1 { animation-delay: 0.15s; }
 .animate-pulse-glow-delay-2 { animation-delay: 0.30s; }
 
+/* The caret at the end of a streaming turn. A hard on/off step rather than a
+   fade: this stands in for a text cursor, and a cursor that dissolves reads as
+   the text still arriving after it has stopped. Opacity only, like
+   `pulse-glow` above, and listed in the reduced-motion block below for the
+   same reason — it never stops on its own. */
+@keyframes blink {
+  0%, 50%      { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+.stream-caret {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  vertical-align: -2px;
+  background: #a78bfa;
+  animation: blink 1s steps(1) infinite;
+}
+
 @keyframes fade-in {
   from { opacity: 0; }
   to   { opacity: 1; }
@@ -759,6 +778,7 @@ body {
   .animate-pulse,
   .animate-pulse-glow,
   .animate-pulse-glow-amber,
+  .stream-caret,
   .animate-spin,
   .animate-progress-shimmer,
   .animate-skeleton-pulse {

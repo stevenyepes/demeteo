@@ -40,7 +40,7 @@ use crate::ports::discovery::TicketPatch;
 use crate::state::AppContext;
 
 use super::events::{status_payload, Sink, TurnEnding, EVENT_DISCOVERY_TURN_STATUS};
-use super::question::{render_turn_prompt, TurnPrompt};
+
 use super::turn::{self, Prepared};
 use proposal::{Choices, DecomposeProposal, Pass, Rejected};
 
@@ -156,12 +156,7 @@ where
 
     loop {
         let was_resumed = resumed;
-        let text = render_turn_prompt(TurnPrompt {
-            reseed: !resumed,
-            context: &p.context_text,
-            transcript: &p.transcript,
-            user_text: &p.user_text,
-        });
+        let text = p.render_prompt(!resumed);
         let session = p
             .registry
             .get_or_spawn(&p.thread_id, &p.discovery.agent_kind, p.agent_ctx.clone())

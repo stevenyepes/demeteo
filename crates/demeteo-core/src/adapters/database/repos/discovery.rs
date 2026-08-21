@@ -4,18 +4,24 @@
 
 use rusqlite::params;
 
+use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{DiscoveryId, ProjectId};
 use crate::domain::models::{
     Discovery, DiscoveryMessage, DiscoveryStatus, EffortLevel, MessageRole,
 };
-use crate::ports::discovery::{DiscoveryPatch, DiscoveryPort};
+use crate::ports::discovery::{DiscoveryListRow, DiscoveryPatch, DiscoveryPort};
 
 use super::super::SqliteAdapter;
 
 const COLUMNS: &str = "id, project_id, title, status, machine_id, agent_kind, model, effort,
-     resume_session_id, worktree_path, total_cost, tokens, created_at, updated_at";
+     resume_session_id, worktree_path, attachments_json, total_cost, tokens, created_at,
+     updated_at";
 
 const MESSAGE_COLUMNS: &str = "id, discovery_id, role, content, cost_usd, tokens, created_at";
+
+fn encode_attachments(attachments: &[AttachedFile]) -> Result<String, String> {
+    serde_json::to_string(attachments).map_err(|e| e.to_string())
+}
 
 fn row_to_discovery(row: &rusqlite::Row) -> rusqlite::Result<Discovery> {
     let status: String = row.get(3)?;
@@ -33,11 +39,21 @@ fn row_to_discovery(row: &rusqlite::Row) -> rusqlite::Result<Discovery> {
         effort: effort.as_deref().and_then(EffortLevel::parse),
         resume_session_id: row.get(8)?,
         worktree_path: row.get(9)?,
-        total_cost: row.get(10)?,
-        tokens: row.get(11)?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        attachments: decode_attachments(row.get(10)?),
+        total_cost: row.get(11)?,
+        tokens: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
     })
+}
+
+/// A manifest this build cannot read is read as no attachments at all: the
+/// bytes are still on disk under the Discovery's id, and a prompt that names a
+/// file it cannot describe is worse than one that names none.
+fn decode_attachments(raw: Option<String>) -> Vec<AttachedFile> {
+    raw.as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default()
 }
 
 fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<DiscoveryMessage> {
@@ -58,16 +74,28 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<DiscoveryMessage> {
 }
 
 impl DiscoveryPort for SqliteAdapter {
-    fn list_for_project(&self, project_id: &ProjectId) -> Result<Vec<Discovery>, String> {
+    fn list_for_project(&self, project_id: &ProjectId) -> Result<Vec<DiscoveryListRow>, String> {
         let conn = self.conn.lock()?;
+        // The count is a correlated subquery rather than a `LEFT JOIN … GROUP
+        // BY` so the row mapper stays the one above, positional and shared
+        // with `get`: a grouped join would put the aggregate somewhere in the
+        // middle of the projection and give this query a second mapper to keep
+        // in step with `COLUMNS`.
         let sql = format!(
-            "SELECT {COLUMNS} FROM discoveries
-             WHERE project_id = ?1
-             ORDER BY updated_at DESC"
+            "SELECT {COLUMNS},
+                    (SELECT COUNT(*) FROM discovery_messages m WHERE m.discovery_id = d.id)
+               FROM discoveries d
+              WHERE project_id = ?1
+              ORDER BY updated_at DESC"
         );
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let iter = stmt
-            .query_map(params![project_id.0], row_to_discovery)
+            .query_map(params![project_id.0], |row| {
+                Ok(DiscoveryListRow {
+                    discovery: row_to_discovery(row)?,
+                    message_count: row.get(15)?,
+                })
+            })
             .map_err(|e| e.to_string())?;
         iter.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|e| e.to_string())
@@ -92,7 +120,7 @@ impl DiscoveryPort for SqliteAdapter {
         conn.execute(
             &format!(
                 "INSERT INTO discoveries ({COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
             ),
             params![
                 discovery.id,
@@ -105,6 +133,7 @@ impl DiscoveryPort for SqliteAdapter {
                 discovery.effort.map(EffortLevel::as_str),
                 discovery.resume_session_id,
                 discovery.worktree_path,
+                encode_attachments(&discovery.attachments)?,
                 discovery.total_cost,
                 discovery.tokens,
                 discovery.created_at,
@@ -116,6 +145,11 @@ impl DiscoveryPort for SqliteAdapter {
     }
 
     fn update(&self, id: &DiscoveryId, patch: &DiscoveryPatch, now: i64) -> Result<(), String> {
+        let attachments = patch
+            .attachments
+            .as_deref()
+            .map(encode_attachments)
+            .transpose()?;
         let conn = self.conn.lock()?;
         conn.execute(
             "UPDATE discoveries
@@ -125,9 +159,10 @@ impl DiscoveryPort for SqliteAdapter {
                     effort            = CASE WHEN ?6 THEN ?7 ELSE effort END,
                     resume_session_id = CASE WHEN ?8 THEN ?9 ELSE resume_session_id END,
                     worktree_path     = CASE WHEN ?10 THEN ?11 ELSE worktree_path END,
-                    total_cost        = total_cost + ?12,
-                    tokens            = tokens + ?13,
-                    updated_at        = ?14
+                    attachments_json  = COALESCE(?12, attachments_json),
+                    total_cost        = total_cost + ?13,
+                    tokens            = tokens + ?14,
+                    updated_at        = ?15
               WHERE id = ?1",
             params![
                 id.0,
@@ -141,6 +176,7 @@ impl DiscoveryPort for SqliteAdapter {
                 patch.resume_session_id.clone().flatten(),
                 patch.worktree_path.is_some(),
                 patch.worktree_path.clone().flatten(),
+                attachments,
                 patch.add_cost,
                 patch.add_tokens,
                 now,

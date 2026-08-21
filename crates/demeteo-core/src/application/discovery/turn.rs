@@ -14,6 +14,7 @@ use super::events::{
     EVENT_DISCOVERY_TURN_STATUS,
 };
 use crate::adapters::agent::event_stream::turn::{stream_agent_turn, TurnOutcome, TurnResult};
+use crate::domain::attachment::AttachedFile;
 use crate::domain::discovery_question::parse_interview_turn;
 use crate::domain::ids::DiscoveryId;
 use crate::domain::models::{Discovery, DiscoveryMessage, DiscoveryStatus, MessageRole};
@@ -173,11 +174,49 @@ pub(super) struct Prepared {
     /// out of it.
     pub(super) transcript: Vec<DiscoveryMessage>,
     pub(super) context_text: String,
+    /// The manifest as it stood when the turn was prepared, and the store the
+    /// bytes are read back out of.
+    pub(super) attachments: Vec<AttachedFile>,
+    pub(super) attachment_store: Arc<dyn crate::ports::attachment_store::AttachmentStore>,
+    /// The `_context` directory inside the worktree the files were copied to,
+    /// or `None` when the copy did not land — in which case the prompt names
+    /// the host-local store instead, which is a path the agent may not be able
+    /// to open but is at least a path that exists.
+    pub(super) attachment_context_dir: Option<String>,
+    pub(super) reads_images: bool,
     pub(super) user_text: String,
     /// What the usage accumulator prices against when the harness reports no
     /// dollar figure of its own. The runtime's default stands in for a
     /// Discovery that named no model, which is what the run actually used.
     pub(super) pricing_model: Option<String>,
+}
+
+impl Prepared {
+    /// The whole text one turn is sent.
+    ///
+    /// The two passes are one call because the second only means anything
+    /// after the first: [`super::question::render_turn_prompt`] writes the
+    /// `[attachment -- <name>]` placeholders, and the resolver — the same one
+    /// a step's prompt goes through — turns each into the path manifest that
+    /// makes the file openable. Rendering without resolving hands the agent a
+    /// filename and no file.
+    pub(super) fn render_prompt(&self, reseed: bool) -> String {
+        let prompt = super::question::render_turn_prompt(super::question::TurnPrompt {
+            reseed,
+            context: &self.context_text,
+            transcript: &self.transcript,
+            attachments: &self.attachments,
+            reads_images: self.reads_images,
+            user_text: &self.user_text,
+        });
+        crate::adapters::step_executor::artifacts::resolve_attached_user_attachments(
+            &prompt,
+            self.discovery.id.as_str(),
+            &self.attachments,
+            self.attachment_store.as_ref(),
+            self.attachment_context_dir.as_deref(),
+        )
+    }
 }
 
 /// Resolve everything a turn against this Discovery needs.
@@ -193,6 +232,8 @@ pub(super) async fn prepare(
 ) -> Result<Prepared, String> {
     let repo = super::worktree::resolve(ctx, discovery).await?;
     let worktree_path = super::worktree::ensure(ctx, discovery, &repo).await?;
+    let attachment_context_dir =
+        super::attachments::materialize(ctx, discovery, &worktree_path, &repo.machine_str).await;
     let context_text = super::context::render(ctx, discovery).await?;
     let transcript: Vec<DiscoveryMessage> = ctx
         .discoveries
@@ -246,6 +287,16 @@ pub(super) async fn prepare(
         session_was_live,
         transcript,
         context_text,
+        attachments: discovery.attachments.clone(),
+        attachment_store: ctx.attachments.clone(),
+        attachment_context_dir,
+        reads_images: match discovery.model.as_deref() {
+            Some(model) => crate::application::agent_probe::model_supports_images_by_name(
+                &discovery.agent_kind,
+                model,
+            ),
+            None => true,
+        },
         user_text: asked.map(|a| a.content.clone()).unwrap_or_default(),
         pricing_model: discovery
             .model
@@ -265,12 +316,7 @@ where
 
     let (ending, reason, spent) = loop {
         attempts += 1;
-        let prompt = super::question::render_turn_prompt(super::question::TurnPrompt {
-            reseed: !resumed,
-            context: &p.context_text,
-            transcript: &p.transcript,
-            user_text: &p.user_text,
-        });
+        let prompt = p.render_prompt(!resumed);
 
         let session = match p
             .registry

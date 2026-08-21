@@ -178,6 +178,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
         "INTEGER",
     )?;
 
+    // What the user handed the interviewer (V48). Nullable, and NULL reads as
+    // the empty list — see the migration's header.
+    add_column_if_missing(conn, "discoveries", "attachments_json", "TEXT")?;
+
     Ok(())
 }
 

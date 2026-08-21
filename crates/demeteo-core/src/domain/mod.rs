@@ -24,6 +24,7 @@ pub mod bootstrap;
 pub mod branch_listing;
 pub(crate) mod command_step;
 pub mod diff_base;
+pub mod discovery_host;
 pub mod discovery_question;
 pub mod ecosystem;
 pub mod expr;

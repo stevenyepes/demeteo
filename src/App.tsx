@@ -457,6 +457,9 @@ function AppInner() {
             <DiscoveryView
               discoveryId={view.discoveryId}
               discoveryTitle={view.discoveryTitle}
+              onOpenFeature={(featureId, featureTitle) =>
+                navigate({ kind: 'detail', featureId, featureTitle })
+              }
             />
           )}
 

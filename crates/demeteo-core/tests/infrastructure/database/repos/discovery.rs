@@ -5,6 +5,17 @@ use crate::adapters::database::SqliteAdapter;
 use crate::domain::ids::MachineId;
 use rusqlite::Connection;
 
+fn attached(name: &str) -> AttachedFile {
+    AttachedFile {
+        id: format!("at-{name}"),
+        name: name.to_string(),
+        mime: "text/markdown".to_string(),
+        sha256: "a".repeat(64),
+        size: 12,
+        source_filename: name.to_string(),
+    }
+}
+
 /// Seeded with the project row because foreign keys are enforced here: a
 /// Discovery cascades off `projects`.
 fn db() -> SqliteAdapter {
@@ -38,6 +49,7 @@ fn discovery() -> Discovery {
         effort: Some(EffortLevel::XHigh),
         resume_session_id: Some("sess-abc".to_string()),
         worktree_path: Some("/repos/demeteo_wt_discovery_d-1".to_string()),
+        attachments: vec![attached("spec.md")],
         total_cost: 1.25,
         tokens: 4096,
         created_at: 100,
@@ -64,6 +76,7 @@ fn a_discovery_round_trips_every_column() {
     );
     assert_eq!(read.total_cost, 1.25);
     assert_eq!(read.tokens, 4096);
+    assert_eq!(read.attachments, vec![attached("spec.md")]);
     assert_eq!(read.created_at, 100);
     assert_eq!(read.updated_at, 100);
 }
@@ -132,6 +145,75 @@ fn a_patch_distinguishes_leaving_alone_from_clearing() {
     let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
     assert_eq!(read.resume_session_id.as_deref(), Some("sess-def"));
     assert_eq!(read.effort, Some(EffortLevel::Low));
+    assert_eq!(
+        read.attachments,
+        vec![attached("spec.md")],
+        "a patch that named no manifest must not empty the one on the row"
+    );
+}
+
+/// The manifest is replaced wholesale, and the empty list is a real answer
+/// rather than "leave it alone" — removing the last chip has to reach the row,
+/// or the next turn is prompted with a file the user just took away.
+#[test]
+fn an_empty_manifest_is_a_clear_and_not_a_no_op() {
+    let db = db();
+    db.create(&discovery()).unwrap();
+
+    db.update(
+        &did(),
+        &DiscoveryPatch {
+            attachments: Some(vec![attached("spec.md"), attached("wire.png")]),
+            ..Default::default()
+        },
+        200,
+    )
+    .unwrap();
+    let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
+    assert_eq!(read.attachments.len(), 2);
+
+    db.update(
+        &did(),
+        &DiscoveryPatch {
+            attachments: Some(Vec::new()),
+            ..Default::default()
+        },
+        300,
+    )
+    .unwrap();
+    let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
+    assert!(read.attachments.is_empty());
+}
+
+/// `DISCOVERY_UI_SPEC.md` §1.5.2 renders `4 turns` on every card, and the row
+/// carries no such number — so the list query answers it, rather than the
+/// surface reading a whole transcript per card to count it.
+#[test]
+fn the_list_row_carries_the_turn_count() {
+    let db = db();
+    db.create(&discovery()).unwrap();
+    db.create(&Discovery {
+        id: DiscoveryId::from("d-2".to_string()),
+        updated_at: 500,
+        ..discovery()
+    })
+    .unwrap();
+    db.append_message(&message("m-1", MessageRole::User, 100))
+        .unwrap();
+    db.append_message(&message("m-2", MessageRole::Assistant, 200))
+        .unwrap();
+
+    let counts: Vec<(String, i64)> = db
+        .list_for_project(&ProjectId::from("p-1".to_string()))
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.discovery.id.0, row.message_count))
+        .collect();
+    assert_eq!(
+        counts,
+        vec![("d-2".to_string(), 0), ("d-1".to_string(), 2)],
+        "the count belongs to its own row, and a Discovery nobody spoke in has none"
+    );
 }
 
 /// Spend accumulates rather than being overwritten: each turn reports only its
@@ -186,7 +268,7 @@ fn a_projects_discoveries_list_most_recent_first() {
         .list_for_project(&ProjectId::from("p-1".to_string()))
         .unwrap()
         .into_iter()
-        .map(|d| d.id.0)
+        .map(|d| d.discovery.id.0)
         .collect();
     assert_eq!(ids, vec!["d-2".to_string(), "d-1".to_string()]);
 }

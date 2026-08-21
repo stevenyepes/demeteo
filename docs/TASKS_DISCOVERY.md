@@ -197,3 +197,18 @@ render a control that would discard what the user gave it.
 None of these block the remaining phases. All three are the same shape of bug —
 a surface that would promise more than it carries — which is why none of them
 were built around.
+
+## The ticket graph is its own component, not the workflow canvas
+
+Phase 6.2 above says the graph projects tickets onto `WorkflowCanvas`. Building
+against `DISCOVERY_UI_SPEC.md` §3.5 changes that: reuse would mean importing the
+run-tone vocabulary the canvas exists to paint, and §9.2 is explicit that
+done-ness here is **stated, not tinted** — a check once a prerequisite's PR
+merged, a lock while it has not. A ticket lane is not a run status, and a node
+that borrowed one would say the wrong thing in the right colour.
+
+There is also nothing left to reuse once the tones are gone: the graph has no
+pan, no wheel zoom, no drag and no minimap (§6.6), so React Flow and its elk
+layout worker would be cost with no payer. `ranksOf` from `canvas/MiniGraph.tsx`
+is exported, cycle-tolerant, and is the one piece worth taking — it gives each
+node its depth, which is the whole of the layout.

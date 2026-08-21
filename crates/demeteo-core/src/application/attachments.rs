@@ -6,7 +6,8 @@
 //! identical validation, dedup, and storage rules.
 
 use crate::domain::attachment::{
-    compute_sha256_hex, ext_for_mime, mime_for_ext, sanitize_attachment_filename, AttachedFile,
+    compute_sha256_hex, ext_for_mime, mime_for_ext, resolved_ext, sanitize_attachment_filename,
+    AttachedFile,
 };
 use crate::domain::ids::FeatureId;
 use crate::error::AppError;
@@ -187,6 +188,162 @@ pub fn commit_staged_attachments(
         out.push(attached);
     }
     Ok(out)
+}
+
+/// What staging one file on an owner did.
+///
+/// The two arms exist because idempotence-on-content has to be visible to the
+/// caller: an owner whose manifest did not change must not be written back,
+/// or every re-drop of the same screenshot bumps a row's `updated_at` and
+/// reorders the list the user is looking at.
+pub enum Staged {
+    /// These bytes were already staged. Nothing was written.
+    Unchanged(AttachedFile),
+    /// The bytes are on disk. The manifest is the caller's to persist on
+    /// whichever row owns it.
+    Added {
+        file: AttachedFile,
+        manifest: Vec<AttachedFile>,
+    },
+}
+
+/// Stage one file against something that is **not** a Feature.
+///
+/// [`AttachmentStore`] keys on a plain string with no feature dimension in it,
+/// so a Ticket (§9.3) and a Discovery (§4.6) each own their bytes under their
+/// own id. What this cannot call is [`commit_attachment_inner`], which asserts
+/// a `features` row exists — the state both of them are precisely not in.
+///
+/// `owner_label` names the owner in the one error a user can act on; nothing
+/// else branches on it.
+pub fn stage_on_owner(
+    store: &dyn AttachmentStore,
+    owner_id: &str,
+    owner_label: &str,
+    current: Vec<AttachedFile>,
+    file: StagedAttachmentInput,
+) -> Result<Staged, String> {
+    let source_path = file.source_path.as_str();
+    let source_filename = file.source_filename.as_deref();
+    let bytes = read_staged_bytes(source_path, file.bytes)?;
+
+    let sha256 = compute_sha256_hex(&bytes);
+    if let Some(existing) = current.iter().find(|a| a.sha256 == sha256) {
+        return Ok(Staged::Unchanged(existing.clone()));
+    }
+    if current.len() >= MAX_ATTACHMENTS_PER_FEATURE {
+        return Err(format!(
+            "{owner_label} already has {} attachments (max {})",
+            current.len(),
+            MAX_ATTACHMENTS_PER_FEATURE
+        ));
+    }
+
+    let src = std::path::PathBuf::from(source_path);
+    let resolved_mime = resolve_mime(file.mime.as_deref(), source_filename, &src);
+    let ext = match ext_for_mime(&resolved_mime) {
+        Some(e) => e.to_string(),
+        None => Path::new(source_filename.unwrap_or(source_path))
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_else(|| "bin".to_string()),
+    };
+    if !is_supported_attachment(&resolved_mime, &ext) {
+        return Err(format!(
+            "unsupported attachment type: mime={resolved_mime} ext={ext}"
+        ));
+    }
+
+    store.write(owner_id, &sha256, &ext, &bytes)?;
+
+    let id = format!("at-{}", crate::paths::new_id());
+    let file = AttachedFile {
+        id: id.clone(),
+        name: sanitize_attachment_filename(source_filename.unwrap_or(&sha256)),
+        mime: resolved_mime,
+        sha256,
+        size: bytes.len() as u64,
+        source_filename: source_filename.unwrap_or(&id).to_string(),
+    };
+
+    let mut manifest = current;
+    manifest.push(file.clone());
+    Ok(Staged::Added { file, manifest })
+}
+
+/// Drop one staged entry and its bytes. `None` when the owner never held it,
+/// so the caller writes nothing — which is what makes a double remove a no-op
+/// rather than a second row write.
+pub fn unstage_from_owner(
+    store: &dyn AttachmentStore,
+    owner_id: &str,
+    current: &[AttachedFile],
+    attachment_id: &str,
+) -> Option<Vec<AttachedFile>> {
+    let target = current.iter().find(|a| a.id == attachment_id)?;
+    let stored = store.lookup_path(owner_id, &target.sha256, &resolved_ext(target));
+    let _ = store.delete(&stored.to_string_lossy());
+    Some(
+        current
+            .iter()
+            .filter(|a| a.id != attachment_id)
+            .cloned()
+            .collect(),
+    )
+}
+
+/// Read an owner's staged bytes back out as a launch batch.
+///
+/// The bytes travel rather than the path because the store is keyed by owner:
+/// the Feature the launch creates has its own key, and a
+/// [`StagedAttachmentInput::source_path`] pointing into another owner's
+/// directory would make the copy depend on a layout only the store may know.
+pub fn staged_batch_for(
+    store: &dyn AttachmentStore,
+    owner_id: &str,
+    attachments: &[AttachedFile],
+) -> Result<Vec<StagedAttachmentInput>, String> {
+    attachments
+        .iter()
+        .map(|a| {
+            let stored = store.lookup_path(owner_id, &a.sha256, &resolved_ext(a));
+            let bytes = store.read(&stored.to_string_lossy())?;
+            Ok(StagedAttachmentInput {
+                source_path: String::new(),
+                mime: Some(a.mime.clone()),
+                source_filename: Some(a.source_filename.clone()),
+                bytes: Some(bytes),
+            })
+        })
+        .collect()
+}
+
+fn read_staged_bytes(source_path: &str, bytes: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
+    let bytes = match bytes {
+        Some(b) => b,
+        None => {
+            let src = std::path::PathBuf::from(source_path);
+            let meta = std::fs::metadata(&src)
+                .map_err(|e| format!("could not stat source file {source_path}: {e}"))?;
+            if !meta.is_file() {
+                return Err(format!("source path is not a regular file: {source_path}"));
+            }
+            std::fs::read(&src)
+                .map_err(|e| format!("could not read source file {source_path}: {e}"))?
+        }
+    };
+    if bytes.is_empty() {
+        return Err("attachment bytes are empty".to_string());
+    }
+    if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
+        return Err(format!(
+            "attachment too large: {} bytes (max {})",
+            bytes.len(),
+            MAX_ATTACHMENT_BYTES
+        ));
+    }
+    Ok(bytes)
 }
 
 pub fn resolve_mime(

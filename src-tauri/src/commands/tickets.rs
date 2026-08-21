@@ -9,6 +9,7 @@ use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{DiscoveryId, TicketId};
 use crate::domain::models::{Feature, Ticket};
 use crate::state::AppContext;
+use demeteo_core::application::discovery;
 use demeteo_core::application::tickets::{self, DiscoveryBoard};
 use tauri::State;
 
@@ -84,7 +85,13 @@ pub fn ticket_remove_attachment(
     tickets::attachments::unstage(&ctx, &TicketId::from(ticket_id), &attachment_id)
 }
 
+/// Delete a Discovery (§8.4). The name lives here rather than in
+/// `commands::discovery` because refusing while a ticket has been started is a
+/// Ticket rule; what it calls is the Discovery's own teardown.
 #[tauri::command]
-pub fn discovery_delete(ctx: State<'_, AppContext>, discovery_id: String) -> Result<(), String> {
-    tickets::delete_discovery(&ctx, &DiscoveryId::from(discovery_id))
+pub async fn discovery_delete(
+    ctx: State<'_, AppContext>,
+    discovery_id: String,
+) -> Result<(), String> {
+    discovery::delete(&ctx, &DiscoveryId::from(discovery_id)).await
 }

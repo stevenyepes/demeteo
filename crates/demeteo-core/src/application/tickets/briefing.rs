@@ -119,29 +119,16 @@ fn prerequisite_line(
 
 /// §9.3 routes a Ticket's attachments through the placeholder the agent
 /// already understands rather than inventing a second channel for them.
+///
+/// A Ticket that names no agent or no model is prompted as though the model
+/// reads images: the warning exists to correct an expectation, and there is
+/// no expectation to correct until the plan has said what will run this.
 fn attachment_block(ticket: &Ticket) -> Option<String> {
-    if ticket.attachments.is_empty() {
-        return None;
-    }
-    let names: Vec<String> = ticket
-        .attachments
-        .iter()
-        .map(|a| format!("[attachment -- {}]", a.name))
-        .collect();
-    let mut block = format!("Attached: {}", names.join(", "));
-
-    let has_image = ticket
-        .attachments
-        .iter()
-        .any(|a| a.mime.starts_with("image/"));
-    let blind = match (ticket.agent_kind.as_deref(), ticket.model.as_deref()) {
-        (Some(kind), Some(model)) => !model_supports_images_by_name(kind, model),
-        _ => false,
+    let reads_images = match (ticket.agent_kind.as_deref(), ticket.model.as_deref()) {
+        (Some(kind), Some(model)) => model_supports_images_by_name(kind, model),
+        _ => true,
     };
-    if has_image && blind {
-        block.push_str("\nThe image rides as a path only — this model does not read images.");
-    }
-    Some(block)
+    crate::domain::attachment::attachment_block(&ticket.attachments, reads_images)
 }
 
 /// §6.5's recorded reason, repeated to the agent.

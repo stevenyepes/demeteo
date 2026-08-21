@@ -27,6 +27,8 @@ fn a_resumed_turn_carries_neither_the_preamble_nor_the_transcript() {
         reseed: false,
         context: "WHAT ELSE IS GOING ON",
         transcript: &transcript,
+        attachments: &[],
+        reads_images: true,
         user_text: "and now?",
     });
     assert!(!rendered.contains("You are conducting a planning interview"));
@@ -45,6 +47,8 @@ fn a_reseeded_turn_carries_the_whole_transcript_and_says_it_is_the_authority() {
         reseed: true,
         context: "",
         transcript: &transcript,
+        attachments: &[],
+        reads_images: true,
         user_text: "and now?",
     });
     assert!(rendered.contains("You are conducting a planning interview"));
@@ -59,6 +63,8 @@ fn a_reseeded_first_turn_skips_the_transcript_heading_it_has_nothing_for() {
         reseed: true,
         context: "",
         transcript: &[],
+        attachments: &[],
+        reads_images: true,
         user_text: "I want the runner to serve more than one client.",
     });
     assert!(!rendered.contains("THE CONVERSATION SO FAR"));
@@ -71,7 +77,39 @@ fn the_context_block_is_rebuilt_on_a_resumed_turn_too() {
         reseed: false,
         context: "TICKETS THIS CONVERSATION HAS ALREADY PRODUCED",
         transcript: &[],
+        attachments: &[],
+        reads_images: true,
         user_text: "?",
     });
     assert!(rendered.contains("TICKETS THIS CONVERSATION HAS ALREADY PRODUCED"));
+}
+
+fn dropped(name: &str, mime: &str) -> crate::domain::attachment::AttachedFile {
+    crate::domain::attachment::AttachedFile {
+        id: format!("at-{name}"),
+        name: name.to_string(),
+        mime: mime.to_string(),
+        sha256: "b".repeat(64),
+        size: 4,
+        source_filename: name.to_string(),
+    }
+}
+
+/// §4.6's files reach a resumed turn too. The harness may hold the whole
+/// conversation and still be told about a file added since the last one — and
+/// a file removed since must stop being offered, which only a per-turn block
+/// can do.
+#[test]
+fn the_attachment_block_rides_on_every_turn_and_names_the_open_question_of_vision() {
+    let rendered = render_turn_prompt(TurnPrompt {
+        reseed: false,
+        context: "",
+        transcript: &[],
+        attachments: &[dropped("wire.png", "image/png")],
+        reads_images: false,
+        user_text: "does this fit?",
+    });
+    assert!(rendered.contains("Attached: [attachment -- wire.png]"));
+    assert!(rendered.contains("does not read images"));
+    assert!(rendered.ends_with("USER: does this fit?"));
 }

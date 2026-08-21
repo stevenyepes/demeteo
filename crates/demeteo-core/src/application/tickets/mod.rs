@@ -174,15 +174,6 @@ pub fn deletion_refusal(tickets: &[Ticket]) -> Option<String> {
     ))
 }
 
-/// Delete a Discovery, its transcript and its unstarted Tickets (§8.4).
-pub fn delete_discovery(ctx: &AppContext, discovery_id: &DiscoveryId) -> Result<(), String> {
-    let tickets = ctx.tickets.list_for_discovery(discovery_id)?;
-    if let Some(refusal) = deletion_refusal(&tickets) {
-        return Err(refusal);
-    }
-    ctx.discoveries.delete(discovery_id)
-}
-
 fn load(ctx: &AppContext, ticket_id: &TicketId) -> Result<Ticket, String> {
     ctx.tickets
         .get(ticket_id)?

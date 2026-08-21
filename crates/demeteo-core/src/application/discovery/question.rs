@@ -10,6 +10,7 @@
 //! branches on it — but it obeys the same rule about I/O: no function here
 //! reads a port, so a test can render a whole turn's prompt without one.
 
+use crate::domain::attachment::AttachedFile;
 use crate::domain::discovery_question::interview_block_shape_example;
 use crate::domain::models::{DiscoveryMessage, MessageRole};
 
@@ -92,6 +93,13 @@ pub struct TurnPrompt<'a> {
     /// Rendered by [`super::context::render`].
     pub context: &'a str,
     pub transcript: &'a [DiscoveryMessage],
+    /// What the user handed the interviewer (§4.6), named the one way an
+    /// agent already understands. The bytes are put where a `Read` can reach
+    /// them by [`super::turn::prepare`]; this only says they exist.
+    pub attachments: &'a [AttachedFile],
+    /// Whether the interviewer's model can see an image, which decides only
+    /// whether the block warns that it cannot.
+    pub reads_images: bool,
     pub user_text: &'a str,
 }
 
@@ -99,8 +107,10 @@ pub struct TurnPrompt<'a> {
 ///
 /// The context block is rebuilt every turn, resumed or not: it describes work
 /// that moves while the interview is open, so the copy the harness already has
-/// in its own history is stale by construction. The transcript is the part
-/// that is only sent when the harness cannot supply it itself.
+/// in its own history is stale by construction. The attachment block rides on
+/// the same terms — a file removed between turns must stop being offered. The
+/// transcript is the part that is only sent when the harness cannot supply it
+/// itself.
 pub fn render_turn_prompt(p: TurnPrompt<'_>) -> String {
     let mut out = String::new();
     if p.reseed {
@@ -126,6 +136,11 @@ pub fn render_turn_prompt(p: TurnPrompt<'_>) -> String {
     }
     if !p.context.trim().is_empty() {
         out.push_str(p.context.trim());
+        out.push_str("\n\n");
+    }
+    if let Some(block) = crate::domain::attachment::attachment_block(p.attachments, p.reads_images)
+    {
+        out.push_str(&block);
         out.push_str("\n\n");
     }
     out.push_str("USER: ");

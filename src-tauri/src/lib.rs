@@ -542,6 +542,8 @@ pub fn run() {
             commands::discovery::discovery_get,
             commands::discovery::discovery_create,
             commands::discovery::discovery_send_turn,
+            commands::discovery::discovery_add_attachment,
+            commands::discovery::discovery_remove_attachment,
             commands::discovery::discovery_cancel_turn,
             commands::discovery::discovery_close,
             commands::discovery::discovery_reopen,

@@ -7,25 +7,30 @@
 //! mid-interview is the case the feature is built for, so nothing here waits
 //! for a turn to finish.
 //!
-//! There is no `discovery_delete` here: `commands::tickets` owns that name.
-//! It calls the row-level delete, which does not reclaim the checkout or kill
-//! the live session — [`discovery::delete`] does both.
+//! There is no `discovery_delete` here: `commands::tickets` owns that name,
+//! because the refusal it can return is a Ticket rule (§8.4).
 
+use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{DiscoveryId, ProjectId};
 use crate::domain::models::{Discovery, DiscoveryMessage};
 use crate::state::AppContext;
+use demeteo_core::application::attachments::StagedAttachmentInput;
 use demeteo_core::application::discovery::decompose::{
     self, proposal::DecomposeProposal, DecomposeApply,
 };
-use demeteo_core::application::discovery::{self, turn, DiscoveryDetail, NewDiscovery};
+use demeteo_core::application::discovery::{
+    self, turn, DiscoveryDetail, DiscoverySummary, NewDiscovery,
+};
 use demeteo_core::application::tickets::DiscoveryBoard;
 use tauri::{Emitter, State};
 
+/// Every Discovery in a project, with the two numbers its card renders that
+/// the row does not carry.
 #[tauri::command]
 pub fn discovery_list(
     ctx: State<'_, AppContext>,
     project_id: String,
-) -> Result<Vec<Discovery>, String> {
+) -> Result<Vec<DiscoverySummary>, String> {
     discovery::list_for_project(&ctx, &project_id)
 }
 
@@ -65,6 +70,39 @@ pub async fn discovery_send_turn(
         },
     )
     .await
+}
+
+/// Stage one file on a Discovery (§4.6). `bytes` carries the content when the
+/// webview has a `File` handle but no path on disk, exactly as
+/// `feature_add_attachment` does.
+#[tauri::command]
+pub fn discovery_add_attachment(
+    ctx: State<'_, AppContext>,
+    discovery_id: String,
+    source_path: String,
+    mime: Option<String>,
+    source_filename: Option<String>,
+    bytes: Option<Vec<u8>>,
+) -> Result<AttachedFile, String> {
+    discovery::attachments::stage(
+        &ctx,
+        &DiscoveryId::from(discovery_id),
+        StagedAttachmentInput {
+            source_path,
+            mime,
+            source_filename,
+            bytes,
+        },
+    )
+}
+
+#[tauri::command]
+pub fn discovery_remove_attachment(
+    ctx: State<'_, AppContext>,
+    discovery_id: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    discovery::attachments::unstage(&ctx, &DiscoveryId::from(discovery_id), &attachment_id)
 }
 
 #[tauri::command]

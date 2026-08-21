@@ -1,77 +1,352 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Compass, Kanban, Workflow } from 'lucide-react';
 
-import { getDiscovery, getDiscoveryBoard } from '../../lib/discovery';
+import {
+  EVENT_DISCOVERY_TURN_COMPLETED,
+  EVENT_DISCOVERY_TURN_STATUS,
+  closeDiscovery,
+  forceStartTicket,
+  getDiscovery,
+  getDiscoveryBoard,
+  reopenDiscovery,
+  sendDiscoveryTurn,
+  startTicket,
+  type DiscoveryTurnCompletedPayload,
+  type DiscoveryTurnStatusPayload,
+} from '../../lib/discovery';
+import { buildTranscript } from '../../lib/discoveryInterview';
+import { progressSegments, progressText } from '../../lib/discoveryProgress';
 import { formatError } from '../../lib/errors';
-import { progressText } from '../../lib/discoveryProgress';
-import type { DiscoveryBoard, DiscoveryDetail } from '../../types';
+import { listMachines } from '../../lib/machines';
+import { indexTickets } from '../../lib/ticketPresentation';
+import { formatDuration } from '../../lib/utils';
+import { listWorkflows } from '../../lib/workflows';
+import { useTauriEvent } from '../../hooks/useTauriEvent';
+import type { DiscoveryBoard, DiscoveryDetail, DiscoveryMessageView } from '../../types';
+import EmptyStateCard from '../EmptyStateCard';
+import { SegmentedControl } from '../ui/SegmentedControl';
+import { ColumnSubHeader } from './ColumnSubHeader';
+import { DiscoveryWorkspaceHeader } from './DiscoveryWorkspaceHeader';
+import { InterviewColumn } from './InterviewColumn';
+import { TicketBoard } from './TicketBoard';
+import { TicketGraph } from './TicketGraph';
+import { TicketInspector } from './TicketInspector';
+import { TicketProgressBar } from './TicketProgressBar';
+import { TurnCompleteToast } from './TurnCompleteToast';
+import { useDiscoveryStream } from './useDiscoveryStream';
+
+type TicketViewMode = 'graph' | 'board';
+
+const VIEW_OPTIONS = [
+  { value: 'graph' as const, label: 'Graph', icon: Workflow },
+  { value: 'board' as const, label: 'Board', icon: Kanban },
+];
 
 interface DiscoveryViewProps {
   discoveryId: string;
   /** Carried on the view so the header can name the Discovery before
    *  `discovery_get` answers. */
   discoveryTitle: string;
+  /** Opens a started ticket's Feature. */
+  onOpenFeature?: (featureId: string, featureTitle: string) => void;
+  /** Phase 7's proposed-changes review, when it exists. */
+  onDecompose?: () => void;
 }
 
 /**
- * One Discovery's workspace — **a shell**. Phase 6 (`docs/TASKS_DISCOVERY.md`)
- * fills in the three columns `DISCOVERY_UI_SPEC.md` §3 specifies: the
- * interview transcript and its composer, the ticket graph, the board, and the
- * inspector. What is here is the route's landing pad and the two reads it
- * rests on, so the `AppView` arm added in Phase 5 lands somewhere real.
+ * One Discovery's workspace: the interview, the tickets it proposed, and the
+ * standing of whichever one is selected (`DISCOVERY_UI_SPEC.md` §3).
+ *
+ * **The graph and the board read one `discovery_board` call.** §9.2 makes that
+ * the whole reason the second view is safe to have — a ticket cannot be done
+ * on the board and blocked in the graph when there is only one answer between
+ * them, and nothing here recomputes a lane the backend already derived.
  */
 export function DiscoveryView({
   discoveryId,
   discoveryTitle,
+  onOpenFeature,
+  onDecompose,
 }: DiscoveryViewProps): React.ReactElement {
   const [detail, setDetail] = useState<DiscoveryDetail | null>(null);
   const [board, setBoard] = useState<DiscoveryBoard | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState(false);
+  // The turn is in flight from the click, not from the first status event —
+  // otherwise a second click lands before the backend has said anything.
+  const [sending, setSending] = useState(false);
+  const [mode, setMode] = useState<TicketViewMode>('graph');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ title: string; detail: string } | null>(null);
+  const [machineName, setMachineName] = useState<string | null>(null);
+  const [workflowNames, setWorkflowNames] = useState<Record<string, string>>({});
+
+  const { store, reset } = useDiscoveryStream();
+
+  const refresh = useCallback(async () => {
+    const [detailResult, boardResult] = await Promise.allSettled([
+      getDiscovery(discoveryId),
+      getDiscoveryBoard(discoveryId),
+    ]);
+    if (detailResult.status === 'fulfilled') {
+      setDetail(detailResult.value);
+      setError(null);
+    } else {
+      setError(formatError(detailResult.reason));
+    }
+    if (boardResult.status === 'fulfilled') setBoard(boardResult.value);
+  }, [discoveryId]);
+
+  useEffect(() => {
+    setDetail(null);
+    setBoard(null);
+    setSelectedId(null);
+    setError(null);
+    void refresh();
+  }, [refresh]);
 
   useEffect(() => {
     let cancelled = false;
-    setDetail(null);
-    setBoard(null);
-    setError(null);
-    Promise.allSettled([getDiscovery(discoveryId), getDiscoveryBoard(discoveryId)]).then(
-      ([detailRes, boardRes]) => {
+    listWorkflows()
+      .then((workflows) => {
         if (cancelled) return;
-        if (detailRes.status === 'fulfilled') setDetail(detailRes.value);
-        else setError(formatError(detailRes.reason));
-        if (boardRes.status === 'fulfilled') setBoard(boardRes.value);
-      },
-    );
+        setWorkflowNames(Object.fromEntries(workflows.map((w) => [w.id, w.name])));
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [discoveryId]);
+  }, []);
 
+  const machineId = detail?.discovery.machine_id;
+  useEffect(() => {
+    if (!machineId) return;
+    let cancelled = false;
+    listMachines()
+      .then((machines) => {
+        if (cancelled) return;
+        setMachineName(machines.find((m) => m.id === machineId)?.name ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [machineId]);
+
+  useTauriEvent<DiscoveryTurnStatusPayload>(
+    EVENT_DISCOVERY_TURN_STATUS,
+    ({ discovery_id, status, reason }) => {
+      if (discovery_id !== discoveryId) return;
+      setPending(status === 'running');
+      if (status === 'running') reset(discoveryId);
+      if (status === 'error' && reason) setActionError(reason);
+    },
+    [discoveryId, reset],
+  );
+
+  useTauriEvent<DiscoveryTurnCompletedPayload>(
+    EVENT_DISCOVERY_TURN_COMPLETED,
+    (payload) => {
+      if (payload.discovery_id !== discoveryId) return;
+      setPending(false);
+      reset(discoveryId);
+      void refresh();
+      if (payload.ending === 'success') {
+        setToast({
+          title: 'Turn complete',
+          detail: `${payload.title} · ${formatDuration(payload.duration_ms / 1000)}`,
+        });
+      } else if (payload.reason) {
+        setActionError(payload.reason);
+      }
+    },
+    [discoveryId, refresh, reset],
+  );
+
+  const tickets = useMemo(() => board?.tickets ?? [], [board]);
+  const index = useMemo(() => indexTickets(tickets), [tickets]);
+  const blocks = useMemo(
+    () => buildTranscript(detail?.messages ?? []),
+    [detail?.messages],
+  );
+
+  useEffect(() => {
+    if (selectedId !== null && index.has(selectedId)) return;
+    setSelectedId(tickets.length > 0 ? tickets[0].ticket.id : null);
+  }, [tickets, index, selectedId]);
+
+  async function send(text: string) {
+    setActionError(null);
+    setSending(true);
+    try {
+      const stored = await sendDiscoveryTurn(discoveryId, text);
+      const appended: DiscoveryMessageView = {
+        ...stored,
+        prose: stored.content,
+        question: null,
+        nothing_left_to_settle: false,
+        question_error: null,
+      };
+      setDetail((current) =>
+        current ? { ...current, messages: [...current.messages, appended] } : current,
+      );
+      setPending(true);
+    } catch (cause) {
+      setActionError(formatError(cause));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function runAction(action: () => Promise<unknown>) {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await action();
+      await refresh();
+    } catch (cause) {
+      setActionError(formatError(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selected = selectedId !== null ? index.get(selectedId) : undefined;
   const progress = board ? progressText(board) : null;
+  const segments = board ? progressSegments(board) : null;
 
-  return (
-    <div className="flex flex-1 flex-col overflow-hidden bg-[#0a0c10]">
-      <div className="flex shrink-0 items-center justify-between gap-6 border-b border-white/5 bg-[#0d0f14]/60 px-6 py-3.5">
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <p className="font-mono text-[11px] text-slate-500">Discovery</p>
-          <h1 className="truncate font-heading text-xl font-bold tracking-tight text-white">
-            {detail?.discovery.title ?? discoveryTitle}
-          </h1>
-        </div>
-        <span className="shrink-0 font-mono text-[11px] text-slate-400">
-          {board ? `${board.tickets.length} tickets` : '—'}
-        </span>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-6">
+  if (!detail) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center bg-[#0a0c10]">
         {error ? (
           <p role="alert" className="font-mono text-xs text-ruby-200">
             {error}
           </p>
         ) : (
-          <p className="font-mono text-xs text-slate-500">
-            {progress ?? 'No tickets proposed yet.'}
-          </p>
+          <p className="font-mono text-xs text-slate-500">Opening {discoveryTitle}…</p>
         )}
       </div>
+    );
+  }
+
+  return (
+    <div className="relative flex flex-1 flex-col overflow-hidden bg-[#0a0c10]">
+      <DiscoveryWorkspaceHeader
+        discovery={detail.discovery}
+        board={board}
+        turnCount={blocks.length}
+        turnRunning={pending || sending}
+        busy={busy}
+        onToggleOpen={() =>
+          void runAction(() =>
+            detail.discovery.status === 'open'
+              ? closeDiscovery(discoveryId)
+              : reopenDiscovery(discoveryId),
+          )
+        }
+        onDecompose={onDecompose}
+      />
+
+      {actionError && (
+        <p
+          role="alert"
+          className="m-0 shrink-0 border-b border-ruby-500/20 bg-ruby-500/5 px-6 py-2 font-mono text-[11px] text-ruby-200"
+        >
+          {actionError}
+        </p>
+      )}
+
+      <div className="flex min-h-0 flex-1">
+        <InterviewColumn
+          discovery={detail.discovery}
+          messages={detail.messages}
+          blocks={blocks}
+          machineLabel={machineName ?? detail.discovery.machine_id}
+          pending={pending || sending}
+          store={store}
+          onSend={(text) => void send(text)}
+        />
+
+        <div className="flex min-w-0 min-h-0 flex-1 flex-col">
+          <ColumnSubHeader
+            left={
+              <SegmentedControl
+                options={VIEW_OPTIONS}
+                value={mode}
+                onChange={setMode}
+                size="sm"
+                ariaLabel="Ticket view"
+              />
+            }
+          >
+            {progress && segments && (
+              <>
+                <span className="font-mono text-[10px] text-slate-400">{progress}</span>
+                <TicketProgressBar
+                  landedPct={segments.landedPct}
+                  inFlightPct={segments.inFlightPct}
+                  title={progress}
+                  className="w-24 shrink-0"
+                />
+              </>
+            )}
+          </ColumnSubHeader>
+
+          <div className="relative min-h-0 flex-1">
+            {tickets.length === 0 ? (
+              <div className="absolute inset-0 overflow-y-auto bg-[#050608] p-6">
+                <EmptyStateCard
+                  variant="inline"
+                  icon={Compass}
+                  title="No tickets yet"
+                  description="This discovery has proposed nothing so far. Decompose the interview when the shape is settled, and the tickets it produces appear here with their edges."
+                />
+              </div>
+            ) : mode === 'graph' ? (
+              <TicketGraph
+                tickets={tickets}
+                index={index}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+              />
+            ) : (
+              <TicketBoard
+                tickets={tickets}
+                index={index}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+              />
+            )}
+          </div>
+        </div>
+
+        {selected && (
+          <TicketInspector
+            key={selected.ticket.id}
+            view={selected}
+            index={index}
+            workflowName={
+              selected.ticket.workflow_id ? (workflowNames[selected.ticket.workflow_id] ?? null) : null
+            }
+            busy={busy}
+            onStart={() => void runAction(() => startTicket(selected.ticket.id))}
+            onForceStart={(reason) =>
+              void runAction(() => forceStartTicket(selected.ticket.id, reason))
+            }
+            onOpenFeature={(featureId) => onOpenFeature?.(featureId, selected.ticket.title)}
+          />
+        )}
+      </div>
+
+      {toast && (
+        <TurnCompleteToast
+          title={toast.title}
+          detail={toast.detail}
+          onDismiss={() => setToast(null)}
+        />
+      )}
     </div>
   );
 }
