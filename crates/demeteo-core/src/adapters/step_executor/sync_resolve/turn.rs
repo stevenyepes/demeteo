@@ -26,13 +26,17 @@ pub(super) struct ResolverAgent<'a> {
     pub cwd: &'a str,
     pub model: Option<&'a str>,
     pub effort: EffortLevel,
+    /// The ceiling for the *whole* resolution, repair rounds included — not
+    /// for one round. A round is handed what is left of it, so a resolution
+    /// that buys a repair turn costs what a resolution that did not would have
+    /// been allowed to.
     pub max_budget_usd: Option<f64>,
     pub agent_exec: &'a Arc<dyn AgentExecutionPort>,
     pub exec: &'a Arc<dyn ExecutionPort>,
 }
 
 impl ResolverAgent<'_> {
-    pub(super) fn context(&self, thread_id: &str) -> AgentContext {
+    pub(super) fn context(&self, thread_id: &str, spent_usd: f64) -> AgentContext {
         AgentContext {
             thread_id: thread_id.to_string(),
             machine_id: self.machine_str.to_string(),
@@ -65,7 +69,7 @@ impl ResolverAgent<'_> {
                 .keeps_harness_personalization(),
             tool_allowlist: None,
             max_turns: Some(RESOLVER_MAX_TURNS),
-            max_budget_usd: self.max_budget_usd,
+            max_budget_usd: self.max_budget_usd.map(|cap| (cap - spent_usd).max(0.0)),
         }
     }
 }

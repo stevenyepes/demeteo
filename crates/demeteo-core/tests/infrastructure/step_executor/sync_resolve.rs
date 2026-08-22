@@ -2305,6 +2305,58 @@ async fn a_red_gate_runs_a_repair_turn_carrying_the_compiler_output() {
     );
 }
 
+/// The repair round spends the rest of the resolution's budget, not a copy of it.
+///
+/// `max_budget_usd` is one ceiling for the resolution. Spawning a fresh session
+/// per round is what makes handing it the raw field a way to spend the cap
+/// twice, so the round is handed the remainder instead.
+#[tokio::test]
+async fn a_repair_round_is_handed_what_is_left_of_the_budget() {
+    let runtime = Arc::new(ScriptedRuntime::default());
+    let p = ports(
+        happy_path().with_queue(
+            CHECKS,
+            &[
+                Err("Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments"),
+                Ok("all checks passed"),
+            ],
+        ),
+        vec![runtime.clone()],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    run_gated(
+        &p,
+        &row(),
+        &mut cost,
+        &mut tokens,
+        MergeGate {
+            prepare: None,
+            harness: Some(CHECKS),
+        },
+    )
+    .await
+    .expect("the repaired tree lands");
+
+    let spawns = runtime.spawns();
+    assert_eq!(
+        spawns.len(),
+        2,
+        "a red gate bought a second round: {spawns:?}"
+    );
+    assert_eq!(
+        spawns[0].max_budget_usd,
+        Some(10.0),
+        "the first round is handed the whole ceiling: {spawns:?}"
+    );
+    assert_eq!(
+        spawns[1].max_budget_usd,
+        Some(8.75),
+        "and the second what the first left of it: {spawns:?}"
+    );
+}
+
 /// One repair round, not a ladder of them.
 ///
 /// Every round is a full harness run, and a resolver that could not make the

@@ -117,10 +117,12 @@ pub(crate) struct ResolveSyncContext<'a> {
     /// reasoning work, so it inherits rather than being pinned like the
     /// verifier / triage / finalize turns.
     pub effort: crate::domain::models::EffortLevel,
-    /// The per-turn dollar ceiling, resolved by whichever caller owns the
-    /// run's override chain through [`crate::domain::agent_session::budget`].
-    /// One arithmetic, two callers — a second precedence chain here is how the
-    /// button and the node would come to spend different money.
+    /// The dollar ceiling for the whole resolution, resolved by whichever
+    /// caller owns the run's override chain through
+    /// [`crate::domain::agent_session::budget`]. One arithmetic, two callers —
+    /// a second precedence chain here is how the button and the node would come
+    /// to spend different money. A repair round is handed what is left of it,
+    /// not a second copy of it.
     pub max_budget_usd: Option<f64>,
     /// The project's `sync_review_before_push`, and the feature's own status.
     ///
@@ -376,6 +378,7 @@ async fn run_resolver_turn(
 
     let mut cache = CacheTokens::default();
     let mut rounds_spent = 0u32;
+    let resolution_start_cost = *accumulated_cost;
     // What a red gate is worth is `domain::sync_session::gate_follow_up`. Held
     // as the built prompt rather than the words it was built from, so the
     // harness's output cannot outlive the loop that read it.
@@ -388,7 +391,10 @@ async fn run_resolver_turn(
         // A fresh session per round: the one before it was reaped ahead of the
         // gate, and §2's one-shot-CLI rule leaves no resume contract to lean on.
         let resolver_thread_id = format!("{}-{}", thread_id_prefix, paths::now_ms());
-        let ctx = agent.context(&resolver_thread_id);
+        let ctx = agent.context(
+            &resolver_thread_id,
+            *accumulated_cost - resolution_start_cost,
+        );
 
         let session = registry
             .get_or_spawn(&resolver_thread_id, agent_kind, ctx)
