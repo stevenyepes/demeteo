@@ -183,6 +183,18 @@ body {
   background: var(--bg-well);
 }
 
+/* A card *inside* a panel. Lighter than `.glass-panel` on purpose — no blur
+   and no shadow, because a glass card nested in a glass card reads as a third
+   surface and the depth stops meaning anything. One rule rather than five call
+   sites spelling the colour, which is what `DISCOVERY_UI_SPEC.md` §6.5 asks
+   for: the ticket editor groups its twelve fields into four of these, and a
+   flat column of twelve gave the form no reading order at all. */
+.nested-card {
+  background: rgba(18, 22, 30, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+}
+
 .glass-panel-hover:hover {
   background: var(--bg-panel-hover);
   border-color: rgba(255, 255, 255, 0.08);
@@ -397,67 +409,6 @@ body {
   background-color: transparent;
 }
 
-/* Workspace tab bar */
-.tabs-bar {
-  height: 42px;
-  background: rgba(13, 15, 20, 0.8);
-  border-bottom: 1px solid var(--border-glass);
-  display: flex;
-  align-items: flex-end;
-  padding-left: 10px;
-  overflow-x: auto;
-  gap: 4px;
-}
-
-.tab {
-  height: 34px;
-  padding: 0 16px;
-  background: rgba(18, 22, 30, 0.4);
-  border: 1px solid var(--border-glass);
-  border-bottom: none;
-  border-top-left-radius: 6px;
-  border-top-right-radius: 6px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  transition: all var(--transition-fast);
-  max-width: 180px;
-  white-space: nowrap;
-  position: relative;
-}
-
-.tab:hover {
-  background: rgba(28, 34, 46, 0.5);
-  color: var(--text-primary);
-}
-
-.tab.active {
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  border-color: var(--border-glass);
-  border-top: 2px solid var(--accent-cyan);
-}
-
-.tab-close {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  font-size: 10px;
-  color: var(--text-muted);
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-
-.tab-close:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary);
-}
-
 /* Workspace Panels Split Layout */
 .workspace-content {
   flex: 1;
@@ -563,6 +514,16 @@ body {
   color: var(--text-primary);
   align-self: flex-end;
   border-top-right-radius: 2px;
+}
+
+/* Code inside a chat bubble. The bubble already carries a violet or cyan tint,
+   so a code surface has to read against that rather than against the page —
+   `--bg-well` sits at the page's own depth and simply disappears here.
+   Declared once because inline code and fenced blocks must land on the same
+   surface. */
+.bubble-code {
+  background: rgba(5, 6, 8, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .chat-bubble-sender {
@@ -758,6 +719,36 @@ body {
 .animate-pulse-glow-delay-1 { animation-delay: 0.15s; }
 .animate-pulse-glow-delay-2 { animation-delay: 0.30s; }
 
+/* The caret at the end of a streaming turn. A hard on/off step rather than a
+   fade: this stands in for a text cursor, and a cursor that dissolves reads as
+   the text still arriving after it has stopped. Opacity only, like
+   `pulse-glow` above, and listed in the reduced-motion block below for the
+   same reason — it never stops on its own. */
+@keyframes blink {
+  0%, 50%      { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+/* The streaming caret trails the prose, so it hangs off the last block the
+ * Markdown emitted rather than sitting on a line of its own beneath it. It is
+ * a pseudo-element for that reason: a sibling span cannot get inside a <p> the
+ * renderer owns. With no text yet there is no last child and no caret, which
+ * is right — the activity strip above is already saying the turn is alive. */
+.stream-caret,
+.stream-caret-host > *:last-child::after {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  vertical-align: -2px;
+  background: #a78bfa;
+  animation: blink 1s steps(1) infinite;
+}
+
+.stream-caret-host > *:last-child::after {
+  content: '';
+  margin-left: 3px;
+}
+
 @keyframes fade-in {
   from { opacity: 0; }
   to   { opacity: 1; }
@@ -820,6 +811,8 @@ body {
   .animate-pulse,
   .animate-pulse-glow,
   .animate-pulse-glow-amber,
+  .stream-caret,
+  .stream-caret-host > *:last-child::after,
   .animate-spin,
   .animate-progress-shimmer,
   .animate-skeleton-pulse {

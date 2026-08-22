@@ -476,6 +476,43 @@ impl OpencodeCliRuntime {
                 model_listing: Some(crate::ports::agent_runtime::ModelListing::MODELS_SUBCOMMAND),
                 default_model: None,
                 effort_levels: EffortLevel::supported_for(AgentKind::Opencode),
+                // `build_opencode_args` reads no `bare_mode`: Demeteo emits no
+                // flag that would either keep or drop this harness's own setup.
+                personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
+                // `external_directory: "deny"` is checked on every file tool
+                // and, in the shell, only against the command's *head word*.
+                // Read out of the installed binary rather than upstream docs:
+                // `ShellTool.collect` populates the directory list only when
+                // that word is one of
+                //
+                //   cd chdir popd pushd push-location set-location
+                //   rm cp mv mkdir touch chmod chown cat get-content
+                //   set-content add-content copy-item move-item remove-item
+                //   new-item rename-item
+                //
+                // and `ShellTool.ask` runs the check only when the list came
+                // back non-empty. Any other head word — `sh`, `python3`,
+                // `node`, `tar`, `curl` — collects nothing, so no check fires
+                // and the command falls through to the `bash` permission,
+                // which `all_allow` sets to `allow`. `sh -c 'cat
+                // ~/elsewhere/.env'` therefore runs from inside a worktree
+                // whose file tools are fenced.
+                //
+                // Neither word on `shell` is reachable from a test: the list
+                // lives in a third-party binary, and Demeteo's wire is
+                // byte-identical for `Harness` and `HarnessPartial` — one
+                // harness reading one `deny` either way. That dimension
+                // therefore rests on the capture above, and only another
+                // capture may move it: a `DEMETEO_AGENT_TRACE` of an opencode
+                // turn told to run `sh -c 'cat <path outside --dir>'`.
+                // Refused, the arm becomes `Harness`; served, it stays.
+                // Agreeing it with the env var is the wrong correction, and
+                // the tempting one.
+                path_containment: crate::domain::models::PathContainment {
+                    reads: crate::domain::models::Enforcement::Harness,
+                    writes: crate::domain::models::Enforcement::Harness,
+                    shell: crate::domain::models::Enforcement::HarnessPartial,
+                },
                 static_env: &[],
                 // `Shell.preferred` takes `$SHELL` first and otherwise the head
                 // of `[pwsh, powershell, gitbash, COMSPEC]` (upstream

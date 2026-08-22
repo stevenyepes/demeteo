@@ -149,6 +149,8 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         "list_steps" => reads::list_steps(svc, req.params, cid)
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+        "get_sequence_state" => reads::get_sequence_state(svc, req.params, cid)
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         "get_worktree" => reads::get_worktree(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),

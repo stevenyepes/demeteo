@@ -25,6 +25,7 @@ use crate::ports::db::{
     NotificationRepository, ProjectRepository, SequenceResumeRepository, ThreadRepository,
     WorkflowRepository,
 };
+use crate::ports::discovery::{DiscoveryPort, TicketPort};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::mr_publisher::MrPublisher;
 use crate::ports::notification::NotificationPort;
@@ -34,6 +35,7 @@ use crate::ports::remote_run_mirror::RemoteRunMirrorPort;
 use crate::ports::run_events::RunEventsPort;
 use crate::ports::runner_run::RunnerRunPort;
 use crate::ports::step_executor::{GatePresenter, StepExecutor};
+use crate::ports::sync_session::SyncSessionPort;
 use crate::ports::worktree_ops::WorktreeOpsPort;
 use serde::Serialize;
 use std::sync::Arc;
@@ -46,6 +48,13 @@ use std::sync::Arc;
 /// use, keeping the dependency on each port visible at the call site
 /// (`ctx.machines`, `ctx.projects`, …) instead of hidden behind five
 /// separately named extractors.
+///
+/// `Clone` because a background task outlives the borrow the command that
+/// spawned it was given — an interview turn sets itself up after
+/// `discovery_send_turn` has already answered. Every field is a handle, so a
+/// clone is a handful of refcount bumps over the same state rather than a copy
+/// of it.
+#[derive(Clone)]
 pub struct AppContext {
     /// Machine + agent profile persistence.
     pub machines: Arc<dyn MachineRepository>,
@@ -148,6 +157,35 @@ pub struct AppContext {
     /// Tauri app populates it.
     pub remote_run_mirror: Arc<dyn RemoteRunMirrorPort>,
 
+    /// The feature's live sync, if it has one (V43). Read through
+    /// [`crate::application::sync_session::get_reconciled`] rather than
+    /// directly: the row is a claim and the working tree is the authority.
+    pub sync_sessions: Arc<dyn SyncSessionPort>,
+
+    /// Planning conversations and their transcripts (V47,
+    /// `docs/PRD_DISCOVERY.md`). The transcript this holds is the authority on
+    /// what was said; the harness's own session id is only a cached fast path.
+    pub discoveries: Arc<dyn DiscoveryPort>,
+
+    /// The Discoveries taking a turn or a decompose pass in this process
+    /// ([`crate::application::discovery::running`]). Nothing durable may hold
+    /// it, for [`SyncTurns`](crate::application::sync_turns::SyncTurns)'s
+    /// reason.
+    pub discovery_turns: Arc<crate::application::discovery::running::RunningTurns>,
+
+    /// The work a Discovery emitted. Nothing here answers whether a Ticket is
+    /// startable — that is computed on read from its edges and the forge state
+    /// of each dependency, never stored (§6.3).
+    pub tickets: Arc<dyn TicketPort>,
+
+    /// The out-of-band syncs running in this process
+    /// ([`crate::application::sync_turns`]). Half of what
+    /// [`sync_liveness`](crate::domain::sync_session::sync_liveness) needs, and
+    /// the half nothing durable can hold: a row claiming a live turn would
+    /// survive the process that made it and freeze the session its worker died
+    /// holding.
+    pub sync_turns: Arc<crate::application::sync_turns::SyncTurns>,
+
     /// Serializes local mirror dismissal with reconciliation's guarded
     /// status/hydration work. A reconciler may list a row before cleanup,
     /// but it must reclaim that row under this guard before it can apply any
@@ -182,11 +220,21 @@ pub struct AgentConfigView {
     /// Human-facing name from the runtime's declared capabilities, so the UI
     /// never has to derive a label from the kind slug.
     pub display_label: String,
+    /// What holds a turn of this harness inside the worktree it is given, on
+    /// *this machine* — the row is per-machine and the answer is too, because
+    /// codex's fence is a kernel facility that two of the three shipped
+    /// platforms have and the third has never been observed to.
+    pub path_containment: crate::domain::models::PathContainment,
 }
 
 /// A registered coding agent and the capabilities Demeteo asks of it, exposed
 /// to the frontend so the UI has a single source of truth for "which agents
 /// exist" instead of a hardcoded list per component.
+///
+/// One list for every machine, and fetched once per session. A capability
+/// whose answer depends on the host — anything a kernel is behind — cannot be
+/// stated here truthfully and belongs on [`AgentConfigView`], which is read
+/// per machine.
 #[derive(Serialize)]
 pub struct AgentCatalogEntry {
     pub kind: String,
@@ -198,4 +246,10 @@ pub struct AgentCatalogEntry {
     /// declared `AgentCapabilities`. Empty (hermes) means the agent has no
     /// per-invocation effort control at all, and the UI must not offer one.
     pub effort_levels: Vec<crate::domain::models::EffortLevel>,
+    /// What Demeteo's own spawn flags do to this harness's machine-local
+    /// personalization, straight from its declared `AgentCapabilities`. The UI
+    /// states the consequence before a run starts; the type's docs
+    /// ([`PersonalizationSupport`](crate::ports::agent_runtime::PersonalizationSupport))
+    /// carry why the answer is about Demeteo and not about the harness.
+    pub personalization: crate::ports::agent_runtime::PersonalizationSupport,
 }

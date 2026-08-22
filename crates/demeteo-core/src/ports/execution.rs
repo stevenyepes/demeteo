@@ -21,6 +21,43 @@ pub const TRANSPORT_ERROR_PREFIX: &str = "transport: ";
 /// failure; only an actual non-zero exit is a verdict.
 pub const TIMEOUT_ERROR_PREFIX: &str = "timeout: ";
 
+/// What one probe command came back with.
+///
+/// The three-way [`classify_exec_failure`](crate::domain::harness_failure::classify_exec_failure)
+/// draws, in the shape a caller that has to *answer a question about a machine*
+/// needs. It lives beside the two prefixes it reads because the prefixes are
+/// the whole of its evidence.
+///
+/// Every negative a caller acts on has to be a verdict rather than an absence.
+/// Reading an abandoned command as "git said no" is one bug repeated in every
+/// medium it reaches: a live conflict retired as abandoned, a resolved merge
+/// skipped past and then deleted with its worktree, an agent redirected to fix
+/// code that was never compiled. `Err` is not an answer, and this type is how a
+/// caller is stopped from spending it as one.
+pub(crate) enum Answer {
+    /// The command ran and answered; the payload is its stdout.
+    Said(String),
+    /// The command ran and refused. A negative result, and usable as one.
+    Refused,
+    /// The command never reached a verdict — the transport failed or the
+    /// deadline expired. Nothing may be concluded from it in either direction;
+    /// the payload is the underlying message, for a caller that has to say why
+    /// it could not answer.
+    Unreadable(String),
+}
+
+/// Run `command` and classify what came back.
+pub(crate) async fn ask(exec: &dyn ExecutionPort, machine: &str, command: &str) -> Answer {
+    use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
+    match exec.run_command(machine, command).await {
+        Ok(out) => Answer::Said(out),
+        Err(e) => match classify_exec_failure(&e) {
+            HarnessExecFailure::NonZeroExit => Answer::Refused,
+            HarnessExecFailure::Transport | HarnessExecFailure::Timeout => Answer::Unreadable(e),
+        },
+    }
+}
+
 /// A Demeteo-owned process invocation. Commands are structured argv so they
 /// never depend on shell quoting or a POSIX shell being present.
 ///

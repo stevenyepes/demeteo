@@ -34,6 +34,12 @@ const editor: AppView = {
   },
 };
 
+const discovery: AppView = {
+  kind: 'discovery',
+  discoveryId: 'dsc-test',
+  discoveryTitle: 'test discovery',
+};
+
 export const appViewVariants = {
   emptyState,
   home,
@@ -41,6 +47,7 @@ export const appViewVariants = {
   createProject,
   detail,
   editor,
+  discovery,
 } as const;
 
 export type AppViewKind = AppView['kind'];

@@ -16,8 +16,10 @@ import RemoteRunInbox from "./components/RemoteRunInbox";
 import { Plus, Globe, Box, Zap, Sliders, Settings as SettingsIcon, BookOpen, Server, Terminal as TerminalIcon } from "lucide-react";
 import ProjectHome from "./components/ProjectHome";
 import ProjectSettings from "./components/ProjectSettings";
+import { CodeReviewView } from "./components/review/CodeReviewView";
 import { WorkflowList } from "./components/WorkflowList";
 import { WorkflowBuilderScreen } from "./components/canvas/WorkflowBuilderScreen";
+import { DiscoveryView } from "./components/discovery/DiscoveryView";
 import { FeatureDetail } from "./components/FeatureDetail";
 import { GateView } from "./components/GateView";
 import { OverlayPortal } from "./components/ui/OverlayPortal";
@@ -421,6 +423,9 @@ function AppInner() {
               defaultBranch={view.editorContext.defaultBranch}
               featureTitle={view.featureTitle}
               initialFile={view.editorContext.initialFile}
+              baseRef={view.editorContext.baseRef}
+              headRef={view.editorContext.headRef}
+              initialTab={view.editorContext.initialTab}
               onBack={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle })}
             />
           )}
@@ -430,6 +435,8 @@ function AppInner() {
           {view.kind === 'create-project' && <CreateProjectWizard />}
 
           {view.kind === 'project-settings' && currentProject && <ProjectSettings />}
+
+          {view.kind === 'code-review' && currentProject && <CodeReviewView />}
 
           {view.kind === 'workflows' && (
             <WorkflowList
@@ -443,6 +450,16 @@ function AppInner() {
             <WorkflowBuilderScreen
               workflowId={view.workflowId}
               onBack={() => navigate({ kind: 'workflows' })}
+            />
+          )}
+
+          {view.kind === 'discovery' && (
+            <DiscoveryView
+              discoveryId={view.discoveryId}
+              discoveryTitle={view.discoveryTitle}
+              onOpenFeature={(featureId, featureTitle) =>
+                navigate({ kind: 'detail', featureId, featureTitle })
+              }
             />
           )}
 

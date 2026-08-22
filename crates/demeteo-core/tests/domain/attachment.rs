@@ -166,3 +166,47 @@ fn with_no_worktree_dir_the_stored_path_is_all_there_is() {
         "/store/f-1/abc123.png"
     );
 }
+
+fn named(mime: &str, name: &str) -> AttachedFile {
+    AttachedFile {
+        name: name.to_string(),
+        ..att(mime, name)
+    }
+}
+
+/// One spelling, because the resolver scans for `[attachment`. A second
+/// phrasing would be a name nothing resolves to a path.
+#[test]
+fn every_attachment_is_named_the_one_way_the_resolver_reads() {
+    let block = attachment_block(
+        &[
+            named("text/markdown", "SPEC.md"),
+            named("image/png", "wire.png"),
+        ],
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        block,
+        "Attached: [attachment -- SPEC.md], [attachment -- wire.png]"
+    );
+}
+
+/// The warning is about images specifically: a blind model still reads a
+/// markdown file perfectly well, so saying otherwise would be false.
+#[test]
+fn a_blind_model_is_warned_only_when_an_image_is_actually_attached() {
+    let with_image = attachment_block(&[named("image/png", "wire.png")], false).unwrap();
+    assert!(with_image.contains("does not read images"));
+
+    let text_only = attachment_block(&[named("text/markdown", "SPEC.md")], false).unwrap();
+    assert!(!text_only.contains("does not read images"));
+
+    let seeing = attachment_block(&[named("image/png", "wire.png")], true).unwrap();
+    assert!(!seeing.contains("does not read images"));
+}
+
+#[test]
+fn nothing_attached_renders_no_heading() {
+    assert!(attachment_block(&[], true).is_none());
+}

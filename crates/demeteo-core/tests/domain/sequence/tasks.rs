@@ -165,6 +165,61 @@ fn rejects_text_with_no_task_list() {
     assert!(extract_task_plan("I could not decompose this.").is_none());
 }
 
+/// The turn this was reported from: the prose named `{feature_id}` and a
+/// shell variable before the plan, so the first balanced object in the text
+/// was an identifier in braces. A scan that evaluated one candidate stopped
+/// there and failed the step with "could not read a task list", over a list
+/// sitting two lines below.
+#[test]
+fn braced_identifiers_in_prose_do_not_hide_the_task_list() {
+    let text = "Each session is keyed `{feature_id}-{step_id}` and the harness runs `${TEST_CMD}`.\n\
+                {\"tasks\": [{\"id\": \"a\", \"title\": \"T\", \"description\": \"D\", \"files\": []}]}";
+    let plan = extract_task_plan(text).expect("the object below the prose is the plan");
+    assert_eq!(plan.tasks.len(), 1);
+    assert_eq!(plan.tasks[0].id, "a");
+}
+
+/// The planner prompt quotes a *filled-in* example of the shape and then asks
+/// for the real one, so a turn that echoes it before answering carries two
+/// objects that both deserialize. Preferring the earlier one is not a parse
+/// failure here — it is a run of one task whose description is `...`.
+#[test]
+fn an_echoed_shape_example_does_not_win_over_the_real_plan() {
+    let example = task_list_json_shape_example(false);
+    let real = r#"{"tasks": [{"id": "real-1", "title": "T", "description": "D", "files": []}]}"#;
+    let fenced =
+        format!("As asked:\n\n```json\n{example}\n```\n\nThe plan:\n\n```json\n{real}\n```");
+    let bare = format!("As asked: {example}. And the plan itself: {real}");
+    for text in [&fenced, &bare] {
+        let plan = extract_task_plan(text).expect("a plan is there");
+        assert_eq!(plan.tasks.len(), 1, "{text}");
+        assert_eq!(plan.tasks[0].id, "real-1", "{text}");
+    }
+}
+
+/// Every candidate that deserializes is accepted, so the only thing keeping an
+/// unrelated object from answering as a plan with no tickets is that `tasks`
+/// carries no `#[serde(default)]`. The caller reports "no tickets" and "could
+/// not read a task list" completely differently, so this is the guard.
+#[test]
+fn an_object_that_is_not_a_task_list_is_unreadable_rather_than_empty() {
+    assert!(extract_task_plan(r#"Nothing doing. {"status": "ok", "tickets": []}"#).is_none());
+}
+
+/// The other side of that guard: a rework producer that deliberately wrote no
+/// tickets must still parse when its object is not the only one in the text,
+/// or a sanctioned "nothing here a ticket can fix" degrades into a read
+/// failure and the producer's reason never reaches the human.
+#[test]
+fn an_empty_list_still_parses_when_prose_precedes_it() {
+    let text = "Nothing an implementation ticket can close (`{scope}` is unrelated).\n\
+                {\"kind\": \"rework\", \"tasks\": [], \"notes\": \"the gap is in project config\"}";
+    let plan = extract_task_plan(text).expect("an empty list is a plan, not a read failure");
+    assert!(plan.tasks.is_empty());
+    assert_eq!(plan.kind, PlanKind::Rework);
+    assert_eq!(plan.notes.as_deref(), Some("the gap is in project config"));
+}
+
 fn plan_of(ids: &[&str]) -> TaskPlan {
     TaskPlan {
         tasks: ids.iter().map(|id| task(id, "t", &[])).collect(),

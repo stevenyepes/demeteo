@@ -2,6 +2,7 @@
 //! the executor while an earlier step is still in flight.
 
 use super::harness::build_test_executor;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{
     FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId,
 };
@@ -64,6 +65,9 @@ async fn test_step_retry_blocked_by_active_predecessor() {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         })
         .unwrap();
 
@@ -170,6 +174,9 @@ async fn test_gate_decide_blocked_by_active_predecessor() {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         })
         .unwrap();
 
@@ -286,6 +293,9 @@ async fn test_step_retry_unblocks_when_predecessor_is_terminal() {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         })
         .unwrap();
 
@@ -388,6 +398,9 @@ async fn test_assert_no_active_predecessors_helper() {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         })
         .unwrap();
 

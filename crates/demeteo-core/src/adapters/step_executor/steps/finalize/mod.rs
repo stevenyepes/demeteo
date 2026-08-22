@@ -99,7 +99,13 @@ impl ExecutionDriver {
                 step_start,
             );
         };
-        let default_branch = settings.worktree_strategy.default_branch.clone();
+        let base_branch = crate::domain::diff_base::resolve(
+            feature.diff_base_branch.as_deref(),
+            &feature.origin,
+            &settings.worktree_strategy.default_branch,
+        )
+        .unwrap_or_default()
+        .to_string();
         let feature_branch = self.branch_name.clone();
 
         // ── Gather. The agent has no shell, so we run the git reads for it,
@@ -117,7 +123,7 @@ impl ExecutionDriver {
             },
             context::BranchRange {
                 feature_branch: &feature_branch,
-                default_branch: &default_branch,
+                base_branch: &base_branch,
             },
             context::PriorWork {
                 artifacts: self.artifacts.as_ref(),
@@ -144,7 +150,7 @@ impl ExecutionDriver {
                     &feature.title,
                     &feature.description,
                     &feature_branch,
-                    &default_branch,
+                    &base_branch,
                     &work,
                 ),
             };
@@ -227,14 +233,17 @@ impl ExecutionDriver {
 
         let authored = authored.unwrap_or_else(|| Authored::fallback(&feature.title));
 
-        // ── Squash.
+        // Onto where the run started, not onto `base_branch` — where the two
+        // differ, and why it matters, is `FeatureOrigin::squash_base`.
         let squash = self
             .git_ops
             .squash_feature_branch(
                 self.machine_id_opt.as_deref(),
                 &repo_dir,
                 &feature_branch,
-                &default_branch,
+                &feature
+                    .origin
+                    .squash_base(&settings.worktree_strategy.default_branch),
                 &authored.commit_message(),
             )
             .await;

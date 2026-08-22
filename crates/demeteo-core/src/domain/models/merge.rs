@@ -7,10 +7,13 @@ pub struct FeatureSync {
     pub feature_id: FeatureId,
     pub feature_branch: String,
     pub default_branch: String,
-    /// pending | ok | conflict | skipped | aborted
+    /// pending | ok | conflict | blocked | skipped | aborted
     pub status: String,
     pub merge_commit_sha: Option<String>,
-    /// JSON-encoded [`ConflictReport`] when `status == "conflict"`.
+    /// JSON-encoded [`ConflictReport`] when `status == "conflict"`, and the
+    /// JSON-encoded [`UpstreamSyncFailure`] when `status == "blocked"` — the
+    /// column is the audit trail's one free-form slot and both classes need a
+    /// reason kept.
     pub conflict_report: Option<String>,
     pub resolution_attempts: i32,
     pub created_at: i64,
@@ -56,8 +59,10 @@ pub struct ConflictReport {
 /// the workflow execution continue.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UpstreamSyncOutcome {
-    /// SHA of the merge commit (empty when there was nothing to merge).
-    pub merge_commit_sha: String,
+    /// The tip the sync left the branch on, on the same terms as
+    /// [`SyncOutcome::merge_commit_sha`](crate::ports::worktree_ops::SyncOutcome::merge_commit_sha):
+    /// `None` when the read did not answer.
+    pub merge_commit_sha: Option<String>,
     /// `false` when `origin/<default>` had no new commits since the
     /// last sync.
     pub changed: bool,
@@ -65,13 +70,36 @@ pub struct UpstreamSyncOutcome {
     pub default_branch: String,
 }
 
-/// Result of a failed upstream sync — the merge left the working
-/// tree in a conflicted state.
+/// How stale a feature branch is against the base it will merge into, answered
+/// without merging anything.
+///
+/// `fetched` is part of the answer rather than an implementation detail: the
+/// counts are taken from `refs/remotes/origin/<base>`, so a query that skipped
+/// or failed its fetch is reporting how things stood at some unnamed earlier
+/// moment. A number presented as current when it is not is worse than no
+/// number, because the user acts on it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct UpstreamSyncFailure {
-    pub report: ConflictReport,
-    /// Path to the sync worktree where the conflict lives (if one was
-    /// provisioned). `None` when the sync was aborted before a working
-    /// tree was needed.
-    pub worktree_path: Option<String>,
+pub struct FeatureDrift {
+    pub divergence: crate::ports::worktree_ops::BranchDivergence,
+    /// The ref the counts were taken against.
+    pub base_ref: String,
+    pub fetched: bool,
+    pub checked_at: i64,
+}
+
+/// Result of a failed upstream sync, mirroring
+/// [`SyncFailure`](crate::ports::worktree_ops::SyncFailure) across the merge
+/// executor. In-memory only — [`ConflictReport`] is the persisted half.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum UpstreamSyncFailure {
+    Conflict {
+        report: ConflictReport,
+        /// Path to the sync worktree where the conflict lives (if one was
+        /// provisioned).
+        worktree_path: Option<String>,
+    },
+    Blocked {
+        stage: crate::domain::sync_failure::SyncBlockedStage,
+        raw_error: String,
+    },
 }

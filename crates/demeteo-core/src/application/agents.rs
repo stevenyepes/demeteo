@@ -71,6 +71,8 @@ pub async fn build_agent_context(
         exec: ctx.exec.clone(),
         permissions: crate::domain::permission::PermissionProfile::all_allow(),
         bare_mode: false,
+        keep_harness_personalization: crate::domain::turn_role::TurnRole::Interactive
+            .keeps_harness_personalization(),
         tool_allowlist: None,
         max_turns: None,
         // Interactive session: no budget guardrail.

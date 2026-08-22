@@ -65,6 +65,7 @@ vi.mock('./layoutDirection', async (importOriginal) => {
 
 import bugfix from './__fixtures__/bugfix-pipeline.v2.json';
 import cifix from './__fixtures__/ci-fix.v2.json';
+import codeReview from './__fixtures__/code-review.v2.json';
 import docsUpdate from './__fixtures__/docs-update.v2.json';
 import experiment from './__fixtures__/experiment.v2.json';
 import refactor from './__fixtures__/refactor.v2.json';
@@ -74,6 +75,7 @@ import standard from './__fixtures__/standard-feature-pipeline.v2.json';
 const STARTERS: [string, WorkflowDefinitionV2][] = [
   ['bugfix-pipeline', bugfix as unknown as WorkflowDefinitionV2],
   ['ci-fix', cifix as unknown as WorkflowDefinitionV2],
+  ['code-review', codeReview as unknown as WorkflowDefinitionV2],
   ['docs-update', docsUpdate as unknown as WorkflowDefinitionV2],
   ['experiment', experiment as unknown as WorkflowDefinitionV2],
   ['refactor', refactor as unknown as WorkflowDefinitionV2],

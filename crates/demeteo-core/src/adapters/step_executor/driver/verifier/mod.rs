@@ -452,6 +452,8 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions: crate::domain::permission::PermissionProfile::all_allow(),
             bare_mode: true,
+            keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator
+                .keeps_harness_personalization(),
             // The verifier reads artifacts/files on demand, so it keeps its
             // full toolset — but interpreting an already-run harness into
             // one verdict object should never take dozens of round trips.

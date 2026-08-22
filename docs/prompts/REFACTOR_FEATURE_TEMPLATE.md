@@ -67,9 +67,9 @@ can plausibly touch:
 - **`ExecutionPort` is one contract, satisfied identically by every transport.** Never
   branch on transport in calling code. If a refactor makes local and SSH paths diverge
   even in structure, the refactor is wrong. → `docs/EXECUTION_PARITY.md`
-- **Never bypass `PermissionPolicyPort`** when spawning agent processes, and never
-  widen the worktree fence (`external_directory: "deny"` + the chmod fence in
-  `adapters/worktree/git_ops/scope.rs`).
+- **Never bypass `PermissionPolicyPort`** when spawning agent processes, and never widen
+  either fence: the chmod fence in `adapters/worktree/git_ops/scope.rs`, or the harness's
+  own, which varies by harness and is declared by `PathContainment`.
 - **Secrets stay in the OS keyring.** Moving code must not move a secret into a log line
   or a struct that gets serialised.
 - **Never mutate a harness's own persisted config.** Per-invocation flags/env only.

@@ -1,10 +1,11 @@
 use crate::adapters::step_executor::preflight::PREFLIGHT_PROBE_TIMEOUT_S;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::application::attachments::{commit_staged_attachments, StagedAttachmentInput};
+use crate::domain::feature_origin::BranchCut;
 use crate::domain::ids::FeatureId;
 use crate::domain::step_seed::seed_step_executions;
 use crate::paths;
-use crate::ports::db::{FeaturePatch, StepExecutionPatch};
+use crate::ports::db::{FeaturePatch, FeatureRepository, StepExecutionPatch};
 use crate::ports::notification::DomainEvent;
 
 use super::super::DagStepExecutor;
@@ -107,13 +108,7 @@ impl DagStepExecutor {
         staged_attachments: Vec<StagedAttachmentInput>,
     ) -> Result<(), String> {
         let fid = feature_id.as_str();
-        // Local aliases for the phases this fn owns (the first four are
-        // emitted inside `resolve_execution_context`).
-        let (sync, branch, start) = (
-            bootstrap_phase::SYNCING_ORIGIN,
-            bootstrap_phase::CREATING_BRANCH,
-            bootstrap_phase::STARTING_PIPELINE,
-        );
+        let start = bootstrap_phase::STARTING_PIPELINE;
 
         // Phases 1-4: preparing / connecting / verifying_repo /
         // preparing_context (emitted from within the resolver).
@@ -122,44 +117,7 @@ impl DagStepExecutor {
             .await?;
 
         let git_ops = GitOpsHelper::new(self.app_settings.clone(), self.exec.clone());
-        let default_branch = ctx.settings.worktree_strategy.default_branch.clone();
-
-        // Phase 5: refresh origin BEFORE cutting the branch. Awaited (unlike
-        // the old fire-and-forget) but non-fatal — `create_feature_branch`
-        // falls back to the local default if origin can't be reached, AND
-        // the feature branch is always cut from `origin/<default>` when
-        // available, so the pipeline proceeds either way. The error string
-        // from `ensure_default_branch_updated` is already self-describing
-        // (e.g. "local master is 71 commits behind origin/master but the
-        // working tree has uncommitted changes; please `git pull` manually");
-        // we surface it verbatim so the UI bootstrap detail tells the user
-        // exactly what to do.
-        self.emit_bootstrap(fid, sync, "running", None);
-        let sync_detail = git_ops
-            .ensure_default_branch_updated(
-                ctx.machine_id_opt.as_deref(),
-                &ctx.target_dir,
-                &default_branch,
-            )
-            .await
-            .err();
-        self.emit_bootstrap(fid, sync, "completed", sync_detail);
-
-        // Phase 6: cut the feature branch (from origin/<default>, else local).
-        self.emit_bootstrap(fid, branch, "running", None);
-        if let Err(e) = git_ops
-            .create_feature_branch(
-                ctx.machine_id_opt.as_deref(),
-                &ctx.target_dir,
-                &default_branch,
-                &ctx.branch_name,
-            )
-            .await
-        {
-            self.emit_bootstrap(fid, branch, "failed", Some(e.clone()));
-            return Err(e);
-        }
-        self.emit_bootstrap(fid, branch, "completed", None);
+        self.cut_run_branch(feature_id, &git_ops, &ctx).await?;
 
         self.run_harness_preflight(fid, &ctx).await?;
         self.register_steps(feature_id, &ctx, staged_attachments)?;
@@ -183,6 +141,97 @@ impl DagStepExecutor {
             return Err(e);
         }
         self.emit_bootstrap(fid, start, "completed", None);
+        Ok(())
+    }
+
+    /// Phases 5 and 6: bring the run's start point down from origin, then
+    /// point the feature branch at it and write that name onto the row.
+    ///
+    /// Which of the two sequences runs, and whether a failed fetch is fatal,
+    /// is [`BranchCut`]'s decision rather than this function's.
+    ///
+    /// A best-effort arm's phase-5 failure is a detail, not a stop: the cut
+    /// after it still has a remote-tracking ref to use. The message
+    /// [`ensure_default_branch_updated`](GitOpsHelper::ensure_default_branch_updated)
+    /// returns is self-describing ("local master is 71 commits behind
+    /// origin/master but the working tree has uncommitted changes; please
+    /// `git pull` manually"), so it reaches the UI verbatim rather than
+    /// summarised into something less actionable.
+    ///
+    /// Recording the branch is [`record_run_branch`]'s decision, and the one
+    /// write in this bootstrap that is not best-effort.
+    async fn cut_run_branch(
+        &self,
+        feature_id: &FeatureId,
+        git_ops: &GitOpsHelper,
+        ctx: &ExecutionContext,
+    ) -> Result<(), String> {
+        let fid = feature_id.as_str();
+        let (sync, branch) = (
+            bootstrap_phase::SYNCING_ORIGIN,
+            bootstrap_phase::CREATING_BRANCH,
+        );
+        let machine = ctx.machine_id_opt.as_deref();
+        let default_branch = ctx.settings.worktree_strategy.default_branch.as_str();
+
+        self.emit_bootstrap(fid, sync, "running", None);
+        let cut = match ctx.origin.branch_cut(default_branch) {
+            Ok(cut) => cut,
+            Err(e) => {
+                self.emit_bootstrap(fid, sync, "failed", Some(e.clone()));
+                return Err(e);
+            }
+        };
+        let sync_detail = match &cut {
+            BranchCut::FromDefaultBranch => git_ops
+                .ensure_default_branch_updated(machine, &ctx.target_dir, default_branch)
+                .await
+                .err(),
+            BranchCut::FromRemoteBranch { refspec, .. } => git_ops
+                .fetch_origin_refspec(machine, &ctx.target_dir, refspec)
+                .await
+                .err(),
+            BranchCut::FromFetchedRef { refspec, .. } => {
+                if let Err(e) = git_ops
+                    .fetch_origin_refspec(machine, &ctx.target_dir, refspec)
+                    .await
+                {
+                    self.emit_bootstrap(fid, sync, "failed", Some(e.clone()));
+                    return Err(e);
+                }
+                None
+            }
+        };
+        self.emit_bootstrap(fid, sync, "completed", sync_detail);
+
+        self.emit_bootstrap(fid, branch, "running", None);
+        let cut_result = match &cut {
+            BranchCut::FromDefaultBranch => {
+                git_ops
+                    .create_feature_branch(
+                        machine,
+                        &ctx.target_dir,
+                        default_branch,
+                        &ctx.branch_name,
+                    )
+                    .await
+            }
+            BranchCut::FromRemoteBranch { start_point, .. }
+            | BranchCut::FromFetchedRef { start_point, .. } => {
+                git_ops
+                    .cut_branch_at(machine, &ctx.target_dir, start_point, &ctx.branch_name)
+                    .await
+            }
+        };
+        if let Err(e) = cut_result {
+            self.emit_bootstrap(fid, branch, "failed", Some(e.clone()));
+            return Err(e);
+        }
+        if let Err(e) = record_run_branch(self.features.as_ref(), feature_id, &ctx.branch_name) {
+            self.emit_bootstrap(fid, branch, "failed", Some(e.clone()));
+            return Err(e);
+        }
+        self.emit_bootstrap(fid, branch, "completed", None);
         Ok(())
     }
 
@@ -263,3 +312,37 @@ impl DagStepExecutor {
         Ok(())
     }
 }
+
+/// Write the branch the cut created onto the feature row.
+///
+/// The only write in the bootstrap whose failure stops the run, because it is
+/// the one every later reader of the branch depends on:
+/// [`Feature::run_branch`](crate::domain::models::Feature::run_branch) answers
+/// from this column and falls back to `{branch_prefix}{feature_id}` when it is
+/// NULL. That fallback is the pre-V41 derivation — correct only while nobody
+/// edits `branch_prefix` mid-run, and wrong outright for an origin whose
+/// branch was never derived from the feature id. Discarding the error leaves a
+/// run executing on a branch nothing recorded, and the publisher is free to
+/// push a different one.
+///
+/// A free function over the one port it writes, so the failure is reachable
+/// from a test (AGENTS.md §3).
+pub(crate) fn record_run_branch(
+    features: &dyn FeatureRepository,
+    feature_id: &FeatureId,
+    branch: &str,
+) -> Result<(), String> {
+    features
+        .update(
+            feature_id,
+            &FeaturePatch {
+                resolved_branch: Some(Some(branch.to_string())),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| format!("cut the run's branch {branch} but could not record it: {e}"))
+}
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/step_executor/impl_traits/bootstrap.rs"]
+mod tests;

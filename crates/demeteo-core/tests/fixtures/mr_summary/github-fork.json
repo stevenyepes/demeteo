@@ -1,0 +1,24 @@
+{
+  "number": 204,
+  "state": "open",
+  "title": "retry the runner install once before giving up",
+  "user": { "login": "outside-contributor" },
+  "draft": false,
+  "html_url": "https://github.com/stvcloud/demeteo/pull/204",
+  "created_at": "2026-08-09T14:02:00Z",
+  "updated_at": "2026-08-11T08:41:19Z",
+  "maintainer_can_modify": true,
+  "head": {
+    "ref": "patch-1",
+    "sha": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+    "repo": {
+      "full_name": "outside-contributor/demeteo",
+      "permissions": { "admin": false, "push": false, "pull": true }
+    }
+  },
+  "base": {
+    "ref": "master",
+    "sha": "7ac09701b2c3d4e5f60718293a4b5c6d7e8f9012",
+    "repo": { "full_name": "stvcloud/demeteo" }
+  }
+}

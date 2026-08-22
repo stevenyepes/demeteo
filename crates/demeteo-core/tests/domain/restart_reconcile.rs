@@ -137,3 +137,32 @@ fn only_a_cancelled_or_failed_feature_has_ended() {
         assert!(!feature_ended(live), "{live} is not an ended feature");
     }
 }
+
+// ── Work no run ever owned ───────────────────────────────────────────────────
+
+/// The manual sync's row escapes both passes above: it is only ever written on
+/// a feature that has already finished, which is neither `running`/`gated` nor
+/// `cancelled`/`failed`. Left to them, a killed resolver's row reads `running`
+/// for the rest of the feature's life.
+#[test]
+fn a_killed_manual_sync_is_closed_by_its_reserved_step_id() {
+    assert_eq!(
+        abandoned_out_of_band(crate::domain::step_seed::MANUAL_SYNC_STEP_ID, "running"),
+        Some("Sync interrupted by system restart".to_string())
+    );
+}
+
+/// A graph node in the same status belongs to the first pass, which also
+/// synthesises the gate row recovery prompts the user through. Answering here
+/// as well would close it twice and skip that prompt.
+#[test]
+fn a_graph_node_is_not_this_rules_to_close() {
+    assert_eq!(abandoned_out_of_band("s-implement", "running"), None);
+    for settled in ["completed", "failed", "interrupted", "pending"] {
+        assert_eq!(
+            abandoned_out_of_band(crate::domain::step_seed::MANUAL_SYNC_STEP_ID, settled),
+            None,
+            "{settled} is not work a dead process was in the middle of"
+        );
+    }
+}

@@ -2,7 +2,7 @@ use super::rpc::{json_str, remote_rpc};
 use crate::adapters::artifact_store::fs::FsArtifactStore;
 use crate::domain::artifact::{Artifact, ArtifactSource};
 use crate::domain::ids::{FeatureId, ProjectId};
-use crate::domain::models::{Feature, StepExecution};
+use crate::domain::models::{Feature, SequenceStateMirror, StepExecution};
 use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::remote_run_mirror::RemoteRunMirror;
@@ -29,9 +29,11 @@ pub(super) const NOTIFY_ON: &[&str] = &[
 /// log line, and nothing a fixture that never hits the update branch would
 /// catch. Being a free function over one value, it is assertable directly.
 ///
-/// `effort` and `commit_artifacts` are deliberately absent: both are launch
-/// inputs the desktop already holds, and mirroring them back would let the
-/// runner's copy overwrite the local pin.
+/// `effort`, `commit_artifacts`, `origin` and `diff_base_branch` are
+/// deliberately absent: all four are launch inputs the desktop already holds,
+/// and mirroring them back would let the runner's copy overwrite the local
+/// pin. `resolved_branch` is not one of them — the runner cuts the branch, so
+/// its name is an answer only the runner has.
 fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
     FeaturePatch {
         effort: None,
@@ -51,6 +53,9 @@ fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
         // the first poll's whole-`Feature` insert is not enough on its own.
         harness_baseline: Some(feature.harness_baseline.clone()),
         commit_artifacts: None,
+        origin: None,
+        diff_base_branch: None,
+        resolved_branch: Some(feature.resolved_branch.clone()),
     }
 }
 
@@ -141,8 +146,101 @@ pub(super) async fn hydrate_shadow_feature(
                 },
             )?;
         }
+
+        if step.step_kind == "sequence" {
+            hydrate_sequence_state(ctx, machine_id, run_id, &feature_id, &step, force_refresh)
+                .await;
+        }
     }
     Ok(())
+}
+
+/// C4.1/C4.2: mirror a detached run's `sequence`-step resume state — the
+/// plan cache, the landed-task checkpoint, and the per-task run rows — onto
+/// the laptop, so `RunView::sequence_state` finds real rows locally instead
+/// of reading `unplanned` forever (the bug this closes: nothing ever wrote
+/// these three tables for a runner-owned feature). Guarded by
+/// `plan_missing || force_refresh` rather than every poll, mirroring
+/// `shadow_step_artifacts_stale`'s own staleness gate just above.
+///
+/// Never fails the caller: an older runner without `get_sequence_state`
+/// (or any other RPC/decode failure) leaves the local tables untouched and
+/// `sequence_state` keeps degrading to `unplanned`, exactly as it did
+/// before this RPC existed.
+async fn hydrate_sequence_state(
+    ctx: &AppContext,
+    machine_id: &str,
+    run_id: &str,
+    feature_id: &FeatureId,
+    step: &StepExecution,
+    force_refresh: bool,
+) {
+    let node_id = step.step_id.as_str();
+    let plan_missing = ctx
+        .sequence_resume
+        .plan_cache_get(feature_id, node_id)
+        .unwrap_or(None)
+        .is_none();
+    if !plan_missing && !force_refresh {
+        return;
+    }
+
+    let value = match remote_rpc(
+        ctx,
+        machine_id,
+        "get_sequence_state",
+        serde_json::json!({ "run_id": run_id, "node_id": node_id }),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            if !error.starts_with("unknown method") {
+                eprintln!(
+                    "shadow sequence-state fetch failed for run {run_id} node {node_id}: {error}"
+                );
+            }
+            return;
+        }
+    };
+    let state: SequenceStateMirror = match serde_json::from_value(value) {
+        Ok(state) => state,
+        Err(error) => {
+            eprintln!(
+                "shadow sequence-state decode failed for run {run_id} node {node_id}: {error}"
+            );
+            return;
+        }
+    };
+    let Some(plan_json) = state.plan_json else {
+        return;
+    };
+
+    let now = crate::paths::now_ms();
+    if let Err(error) = ctx
+        .sequence_resume
+        .plan_cache_put(feature_id, node_id, &plan_json, None, now)
+    {
+        eprintln!("shadow plan cache write failed for run {run_id} node {node_id}: {error}");
+        return;
+    }
+    if let Err(error) = ctx.sequence_resume.sequence_checkpoint_set(
+        feature_id,
+        node_id,
+        &state.checkpoint.landed_task_ids,
+        state.checkpoint.anchor_sha.as_deref(),
+        state.checkpoint.produced.as_ref(),
+        now,
+    ) {
+        eprintln!("shadow checkpoint write failed for run {run_id} node {node_id}: {error}");
+        return;
+    }
+    if let Err(error) =
+        ctx.features
+            .subtask_runs_replace_for_step(feature_id, &step.id, &state.subtask_runs)
+    {
+        eprintln!("shadow subtask runs write failed for run {run_id} node {node_id}: {error}");
+    }
 }
 
 fn shadow_step_artifacts_stale(existing: Option<&StepExecution>, fresh: &StepExecution) -> bool {

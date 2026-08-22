@@ -49,10 +49,15 @@ pub(crate) struct BranchWork {
     pub prior_work: String,
 }
 
-/// The two ends of the range finalize summarises.
+/// The two ends of the range finalize summarises. `base_branch` is what the
+/// run declared itself measured against
+/// ([`diff_base::resolve`](crate::domain::diff_base::resolve)), not the
+/// project's default branch: a run based on anything else would otherwise be
+/// summarised against a range holding every commit its base is missing — the
+/// agent writing the PR title and body from a diff that is not the PR's.
 pub(crate) struct BranchRange<'a> {
     pub feature_branch: &'a str,
-    pub default_branch: &'a str,
+    pub base_branch: &'a str,
 }
 
 /// What earlier steps left behind, and where to read it from.
@@ -75,7 +80,7 @@ pub(crate) async fn gather_branch_work(
     } = site;
     let BranchRange {
         feature_branch,
-        default_branch,
+        base_branch,
     } = range;
     let safe_dir = paths::shell_escape_posix(repo_dir);
     let git = |args: String| format!("git -C {} {}", safe_dir, args);
@@ -85,22 +90,22 @@ pub(crate) async fn gather_branch_work(
             .unwrap_or_default()
     };
 
-    // Diff against the pushed default branch when we have it — that is what
+    // Diff against the pushed base branch when we have it — that is what
     // the PR itself will be diffed against.
     let base_ref = if exec
         .run_command(
             machine_str,
             &git(format!(
                 "rev-parse --verify -q refs/remotes/origin/{}",
-                paths::shell_escape_posix(default_branch)
+                paths::shell_escape_posix(base_branch)
             )),
         )
         .await
         .is_ok()
     {
-        format!("origin/{}", default_branch)
+        format!("origin/{}", base_branch)
     } else {
-        default_branch.to_string()
+        base_branch.to_string()
     };
     let safe_base = paths::shell_escape_posix(&base_ref);
     let safe_fb = paths::shell_escape_posix(feature_branch);

@@ -33,6 +33,13 @@ const WORKFLOWS = [
 interface Scenario {
   /** What `project_settings.default_workflow_id` holds on disk. */
   storedWorkflowId?: string | null;
+  /** What `project_settings.review_entrypoint` holds on disk. */
+  storedReviewEntrypoint?: string | null;
+  /** What `project_settings.sync_resolver_agent_kind` holds on disk. */
+  storedSyncResolverAgentKind?: string | null;
+  /** What `project_settings.sync_review_before_push` holds on disk. Three
+   *  values, not two: `null` is "no opinion" and resolves conditionally. */
+  storedSyncReviewBeforePush?: boolean | null;
 }
 
 function scriptIpc(scenario: Scenario) {
@@ -46,10 +53,18 @@ function scriptIpc(scenario: Scenario) {
       default_model: null,
       default_effort: null,
       default_workflow_id: scenario.storedWorkflowId ?? null,
+      review_entrypoint: scenario.storedReviewEntrypoint ?? null,
+      sync_resolver_agent_kind: scenario.storedSyncResolverAgentKind ?? null,
+      sync_resolver_model: null,
+      sync_resolver_effort: null,
+      sync_review_before_push: scenario.storedSyncReviewBeforePush ?? null,
     }),
     get_repositories_for_project: () => [],
     get_machines: () => [],
-    get_agent_configs: () => [],
+    get_agent_configs: () => [
+      { kind: 'opencode', enabled: true, available: true, install_command: '', display_label: 'Opencode' },
+      { kind: 'codex', enabled: true, available: true, install_command: '', display_label: 'Codex' },
+    ],
     get_agent_models: () => [],
     list_agents: () => [],
     set_agent_configs: () => undefined,
@@ -165,5 +180,85 @@ describe('default workflow picker', () => {
 
     await save();
     expect(savedSettings()).toHaveProperty('default_workflow_id', null);
+  });
+});
+
+// The field the user owns, on the save path that carries it. Both save call
+// sites spell the whole settings object out, so a field the form holds and the
+// literal omits is dropped without a type error anywhere.
+describe('code review entrypoint', () => {
+  const field = () => screen.getByLabelText('Code review entrypoint') as HTMLInputElement;
+
+  it('shows the stored entrypoint and persists an edit', async () => {
+    await mount({ storedReviewEntrypoint: '/code-review' });
+    await waitFor(() => expect(field()).toHaveValue('/code-review'));
+
+    await userEvent.clear(field());
+    await userEvent.type(field(), '/review --deep');
+
+    await save();
+    expect(savedSettings().review_entrypoint).toBe('/review --deep');
+  });
+
+  it('persists a cleared field as null, not an empty string', async () => {
+    await mount({ storedReviewEntrypoint: '/code-review' });
+    await waitFor(() => expect(field()).toHaveValue('/code-review'));
+
+    await userEvent.clear(field());
+
+    await save();
+    expect(savedSettings()).toHaveProperty('review_entrypoint', null);
+  });
+});
+
+// The same two-call-site trap as the entrypoint above, on a control whose
+// blank state is a third meaning: not "none" and not "the run's harness", but
+// "inherit" — which is why it must reach the DB as null rather than ''.
+describe('sync conflict resolver default', () => {
+  const harness = () => screen.getByLabelText('Harness') as HTMLSelectElement;
+
+  it('shows the stored resolver and persists a change', async () => {
+    await mount({ storedSyncResolverAgentKind: 'opencode' });
+    await waitFor(() => expect(harness()).toHaveValue('opencode'));
+
+    await userEvent.selectOptions(harness(), 'codex');
+
+    await save();
+    expect(savedSettings().sync_resolver_agent_kind).toBe('codex');
+  });
+
+  it('persists an untouched picker as null, not an empty string', async () => {
+    await mount({ storedSyncResolverAgentKind: null });
+    await waitFor(() => expect(harness()).toHaveValue(''));
+
+    await save();
+    expect(savedSettings()).toHaveProperty('sync_resolver_agent_kind', null);
+  });
+});
+
+// A tri-state through a two-state column: `false` and unset are different
+// answers, and the merge in `lib/project.ts` writes whatever this sends over
+// the stored value on every save from every tab.
+describe('review before push', () => {
+  const policy = () => screen.getByLabelText('After a resolution') as HTMLSelectElement;
+
+  it('persists an explicit opt-out as false, not as unset', async () => {
+    await mount({ storedSyncReviewBeforePush: null });
+    await waitFor(() => expect(policy()).toHaveValue(''));
+
+    await userEvent.selectOptions(policy(), 'push');
+
+    await save();
+    expect(savedSettings()).toHaveProperty('sync_review_before_push', false);
+  });
+
+  it('shows a stored opt-out and leaves no opinion as null', async () => {
+    await mount({ storedSyncReviewBeforePush: false });
+    await waitFor(() => expect(policy()).toHaveValue('push'));
+
+    await userEvent.selectOptions(policy(), '');
+
+    await save();
+    expect(savedSettings()).toHaveProperty('sync_review_before_push', null);
   });
 });

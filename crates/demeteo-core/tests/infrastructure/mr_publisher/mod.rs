@@ -1,5 +1,102 @@
 use super::*;
 
+mod comment;
+mod detail;
+mod list;
+mod target_branch;
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+/// An [`HttpClient`] that answers only what it was told to answer.
+///
+/// It `Err`s on any URL it has no entry for, which is the opposite of the
+/// permissive double AGENTS.md §7 warns about: a fake that returns `Ok("")` for
+/// everything turns "the adapter called the wrong endpoint" into a passing test
+/// asserting a default. Here a wrong URL fails loudly and names itself.
+type Reply = (u16, String, Vec<(String, String)>);
+
+pub struct FakeHttpClient {
+    replies: HashMap<String, Reply>,
+    posted: Mutex<Vec<(String, serde_json::Value)>>,
+}
+
+impl FakeHttpClient {
+    pub fn new() -> Self {
+        Self {
+            replies: HashMap::new(),
+            posted: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The body of the last POST to `url`, which is the only place a caller's
+    /// choice of target branch becomes observable: both providers read it from
+    /// the payload, and a publisher that dropped it still POSTs to this URL.
+    pub fn posted_to(&self, url: &str) -> Option<serde_json::Value> {
+        self.posted
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(u, _)| u == url)
+            .map(|(_, body)| body.clone())
+    }
+
+    /// Answer `url` with this status and body, and no headers.
+    pub fn reply(mut self, url: &str, status: u16, body: &str) -> Self {
+        self.replies
+            .insert(url.to_string(), (status, body.to_string(), Vec::new()));
+        self
+    }
+
+    pub fn reply_with_headers(
+        mut self,
+        url: &str,
+        status: u16,
+        body: &str,
+        headers: &[(&str, &str)],
+    ) -> Self {
+        let headers = headers
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        self.replies
+            .insert(url.to_string(), (status, body.to_string(), headers));
+        self
+    }
+}
+
+#[async_trait]
+impl HttpClient for FakeHttpClient {
+    async fn post_json(
+        &self,
+        url: &str,
+        _headers: &[(String, String)],
+        body: &serde_json::Value,
+    ) -> Result<HttpResponse, String> {
+        self.posted
+            .lock()
+            .unwrap()
+            .push((url.to_string(), body.clone()));
+        self.get_json(url, &[]).await
+    }
+
+    async fn get_json(
+        &self,
+        url: &str,
+        _headers: &[(String, String)],
+    ) -> Result<HttpResponse, String> {
+        match self.replies.get(url) {
+            Some((status, body, headers)) => Ok(HttpResponse {
+                status: *status,
+                body: body.clone(),
+                headers: headers.clone(),
+            }),
+            None => Err(format!("FakeHttpClient was never told how to answer {url}")),
+        }
+    }
+}
+
 #[test]
 fn urlencoded_handles_slashes() {
     assert_eq!(urlencoded("owner/repo"), "owner%2Frepo");

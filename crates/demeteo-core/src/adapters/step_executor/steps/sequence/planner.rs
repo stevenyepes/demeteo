@@ -172,6 +172,8 @@ impl ExecutionDriver {
                 true,  // allow shell for codebase exploration
             ),
             bare_mode: true,
+            keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator
+                .keeps_harness_personalization(),
             // Full toolset — the planner explores the codebase before
             // decomposing. The cap is anti-runaway only: decomposition
             // should never take 50 round trips.
@@ -247,20 +249,27 @@ impl ExecutionDriver {
                         .await;
                     return Err(StepOutcome::Cancelled);
                 }
-                crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
+                crate::adapters::agent::event_stream::TurnResult::Failed { reason, spent } => {
+                    *spend.cost += spent.cost_usd;
+                    *spend.tokens += spent.tokens;
                     self.cleanup_planner(&planner_thread_id, &planner_wt_id)
                         .await;
                     return Err(StepOutcome::Failed(format!(
                         "sequence step: planner failed: {}",
-                        descriptive
+                        reason
                     )));
                 }
-                crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
+                crate::adapters::agent::event_stream::TurnResult::Environmental {
+                    reason,
+                    spent,
+                } => {
+                    *spend.cost += spent.cost_usd;
+                    *spend.tokens += spent.tokens;
                     self.cleanup_planner(&planner_thread_id, &planner_wt_id)
                         .await;
                     return Err(StepOutcome::Environmental(format!(
                         "sequence step: planner failed: {}",
-                        descriptive
+                        reason
                     )));
                 }
                 crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {

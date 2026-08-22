@@ -18,7 +18,7 @@ pub(crate) mod step_executor;
 /// bad. Propagating it would trade one task's panic for a Stop button that can
 /// never fire again and a gate that can never be answered for the rest of the
 /// process's life — which is the worse of the two failures by a wide margin.
-fn lock_registry<T>(map: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock_registry<T>(map: &Mutex<T>) -> MutexGuard<'_, T> {
     map.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

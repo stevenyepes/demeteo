@@ -28,6 +28,7 @@ use crate::domain::models::ProviderInstance;
 use crate::paths;
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
 const ARTIFACT_PATH: &str = "artifacts/resume-report.md";
@@ -179,21 +180,14 @@ async fn run_then_forge_crash(tag: &str) -> (PathBuf, FeatureId, String, PathBuf
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            "Resume Feature",
-            "Produce a deterministic resume report.",
-            Some("stub"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: "Resume Feature".to_string(),
+            description: "Produce a deterministic resume report.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
     let status = poll_terminal(&ctx, &feature.id).await;

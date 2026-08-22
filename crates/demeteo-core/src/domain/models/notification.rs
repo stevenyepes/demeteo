@@ -34,6 +34,10 @@ pub enum NotificationKind {
     /// source. The run terminated early with remediation; the user must
     /// provision the machine, not review the code.
     EnvironmentNotReady,
+    /// A pull request reached a terminal state and released one or more
+    /// Tickets in a Discovery (`docs/PRD_DISCOVERY.md` §6.4). Written by the
+    /// MR-state monitor's ticket hook; one row per transition, not per Ticket.
+    TicketsStartable,
 }
 
 impl NotificationKind {
@@ -48,6 +52,7 @@ impl NotificationKind {
             NotificationKind::MergeConflict => "merge_conflict",
             NotificationKind::RetryBudgetExhausted => "retry_budget_exhausted",
             NotificationKind::EnvironmentNotReady => "environment_not_ready",
+            NotificationKind::TicketsStartable => "tickets_startable",
         }
     }
 }
@@ -64,6 +69,7 @@ impl FromStr for NotificationKind {
             "merge_conflict" => Ok(NotificationKind::MergeConflict),
             "retry_budget_exhausted" => Ok(NotificationKind::RetryBudgetExhausted),
             "environment_not_ready" => Ok(NotificationKind::EnvironmentNotReady),
+            "tickets_startable" => Ok(NotificationKind::TicketsStartable),
             _ => Err(()),
         }
     }

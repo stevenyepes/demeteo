@@ -105,5 +105,34 @@ export function useWorktreeRouting(input: {
     [resolveWorktreeInfo, navigate, featureId, featureTitle, reportError],
   );
 
-  return { handleOpenTerminalTab, openEditor, openEditorForPath };
+  // Open the editor's Changes tab on an explicit pair of refs. Same
+  // `resolveWorktreeInfo` as `openEditor`, so a detached run still resolves the
+  // runner's own path; declared after it for the same TDZ reason
+  // `openEditorForPath` is.
+  const openDiffRange = useCallback(
+    async ({ baseRef, headRef }: { baseRef: string; headRef: string }) => {
+      try {
+        const info = await resolveWorktreeInfo();
+        navigate({
+          kind: 'editor',
+          editorContext: {
+            machineId: info.machine_id,
+            worktreePath: info.worktree_path,
+            branch: info.branch,
+            defaultBranch: info.default_branch,
+            baseRef,
+            headRef,
+            initialTab: 'changes',
+          },
+          featureId,
+          featureTitle,
+        });
+      } catch (err) {
+        reportError(err);
+      }
+    },
+    [resolveWorktreeInfo, navigate, featureId, featureTitle, reportError],
+  );
+
+  return { handleOpenTerminalTab, openEditor, openEditorForPath, openDiffRange };
 }

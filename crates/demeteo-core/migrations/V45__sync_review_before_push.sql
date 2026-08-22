@@ -1,0 +1,38 @@
+-- A resolved sync that has not been published yet, and the project setting
+-- that decides whether one is allowed to exist.
+--
+-- Until now the resolution turn committed and pushed in one breath, so the one
+-- turn most likely to quietly drop a hunk was the only one that reached the
+-- open pull request with nobody having looked at it. Splitting the push means
+-- there is now a real state between "resolved" and "published", and the
+-- question is where to keep it.
+--
+-- `pushed_at` is a column and not a tenth `status` because publication is the
+-- one fact about a sync that the working tree cannot answer. Every other status
+-- is checked against a probe of the worktree on each read
+-- (`domain::sync_session::reconcile`), and a status arm no probe can confirm or
+-- correct would be a claim that module is obliged to pass through blind — the
+-- exact shape it exists to refuse. The status vocabulary describes the merge;
+-- this column describes the publication, and neither can answer for the other.
+--
+-- NULL means the resolution is on the branch and not on origin. That is not an
+-- error state and not a failure: it is a resolution waiting for a look. A
+-- reader must therefore never treat a `resolved` session as finished on the
+-- strength of the status alone.
+ALTER TABLE sync_sessions ADD COLUMN pushed_at INTEGER;
+
+-- Whether a resolution this project's syncs produce waits for a human before
+-- it is published.
+--
+-- NULL is unset, and unset is not false: with no opinion recorded, a
+-- resolution waits only when somebody is in a position to look at it, and
+-- publishes itself otherwise. `domain::sync_session::publish_policy` is where
+-- that resolves, and it is why this is a nullable INTEGER rather than a
+-- `NOT NULL DEFAULT 0` — a plain boolean would collapse "this project chose to
+-- publish immediately" into "this project has never said", and take the
+-- conditional away from every project that already exists.
+--
+-- The setting can only turn review *off*. Turning it on cannot park a run:
+-- nothing offers the affordance while a driver still owns the branch, so a
+-- resolution held there would sit unpublished with nobody able to publish it.
+ALTER TABLE project_settings ADD COLUMN sync_review_before_push INTEGER;

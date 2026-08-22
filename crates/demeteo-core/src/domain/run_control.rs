@@ -81,6 +81,38 @@ pub fn shadow_refusal(action: RunAction, feature_id: &str) -> String {
     )
 }
 
+/// Refuse `action` on a row that reports work no workflow node did
+/// ([`is_out_of_band`](crate::domain::step_seed::is_out_of_band)). `Some` is
+/// the refusal.
+///
+/// Retry and Replay are the two actions that make their target the *pivot* of
+/// a graph walk, and this row is not in the graph: `WorkflowGraph::closure`
+/// answers `None` for its id, so both the rewind set and the ancestor set fall
+/// back to comparing `step_index` — against `u32::MAX`. The rewind then takes
+/// only this row, which the scheduler can never dispatch because it drives off
+/// node ids, while *every* real node reads as an ancestor and any failed one
+/// with a completed attempt is restored to `completed`. The feature is then set
+/// `running` and a driver armed for it. So a finished run is rewritten as a
+/// live one and nothing re-runs the resolution the user actually asked for.
+///
+/// The refusal is at the door rather than a widened fallback because there is
+/// no graph answer to widen *to*: re-running this work is what the sync's own
+/// affordance is for, and that path knows how to find the worktree.
+pub fn out_of_band_refusal(action: RunAction, step_id: &str) -> Option<String> {
+    if !crate::domain::step_seed::is_out_of_band(step_id) {
+        return None;
+    }
+    Some(format!(
+        "Step '{}' is an out-of-band sync, not a node of this run's workflow, \
+         so there is nothing to {}. Run the sync again from the feature's sync banner.",
+        step_id,
+        match action {
+            RunAction::Replay => "replay from",
+            _ => "retry",
+        }
+    ))
+}
+
 /// Whether a step in `status` may be retried. `Some` is the refusal.
 ///
 /// A retry rewinds the step and re-arms the driver, so the statuses it accepts

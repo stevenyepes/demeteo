@@ -54,6 +54,7 @@ function shallowEqualView(a: AppView, b: AppView): boolean {
     case 'new-project':
     case 'create-project':
     case 'project-settings':
+    case 'code-review':
     case 'workflows':
     case 'providers':
     case 'settings':
@@ -74,6 +75,10 @@ function shallowEqualView(a: AppView, b: AppView): boolean {
     case 'workflow-editor':
       return b.kind === 'workflow-editor'
         && a.workflowId === (b as Extract<AppView, { kind: 'workflow-editor' }>).workflowId;
+    case 'discovery':
+      return b.kind === 'discovery'
+        && a.discoveryId === (b as Extract<AppView, { kind: 'discovery' }>).discoveryId
+        && a.discoveryTitle === (b as Extract<AppView, { kind: 'discovery' }>).discoveryTitle;
     default:
       return false;
   }

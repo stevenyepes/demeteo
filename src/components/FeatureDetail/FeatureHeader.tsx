@@ -1,6 +1,7 @@
 import { Cpu, GitBranch, GitPullRequest, RefreshCw, Terminal } from 'lucide-react';
-import type { Project, RemoteRunMirror } from '../../types';
+import type { FeatureDrift, Project, RemoteRunMirror } from '../../types';
 import { runStatusMeta, TERMINAL_STATUSES } from '../../lib/runStatus';
+import { describeStaleness, REFRESH_HINT } from '../../lib/staleness';
 import { formatCost, formatTokens } from '../../lib/utils';
 import { Chip } from '../ui/Chip';
 import { Metric, MetricStrip } from '../ui/MetricStrip';
@@ -19,9 +20,16 @@ interface FeatureHeaderProps {
   cacheReadTokens: number;
   cacheCreationTokens: number;
   stepCount: number;
-  syncing: boolean;
-  resolving: boolean;
   publishing: boolean;
+  /** What the Sync pane is holding for a human, if anything. > 0 is shown on
+   *  the button; the pane itself says what it is. */
+  syncBadge: number;
+  /** How far behind the base a sync would merge, or `null` before a reading
+   *  lands. The chip it produces is the answer to "why would I press Sync", and
+   *  an unmeasurable branch renders as unknown rather than as current. */
+  drift: FeatureDrift | null;
+  /** A fetch of the base ref is in flight, asked for from this header. */
+  driftRefreshing?: boolean;
   mrUrl: string | null;
   /** Quieter chrome for a scrolled run column; `lib/headerCollapse.ts` decides it. */
   collapsed?: boolean;
@@ -29,9 +37,18 @@ interface FeatureHeaderProps {
   onOpenTerminalTab: () => void;
   onBrowseCode: () => void;
   onCancelFeature: () => void;
-  onSync: () => void;
+  /** Select the Sync pane. This press starts nothing: every sync, resolve and
+   *  publish now lives in that one pane, so the rules for when each is offered
+   *  are spelled once, where the buttons are. */
+  onOpenSync: () => void;
   onPublish: () => void;
   onCleanup: () => void;
+  /** Fetch `origin/<base>` and count again. This is the only press in the app
+   *  that moves that ref for a finished feature — a run's bootstrap and a sync
+   *  are the only other things that fetch it, and neither happens while a
+   *  published pull request sits waiting — so without it the chip would answer
+   *  from whatever an unrelated git flow last left behind. */
+  onRefreshDrift?: () => void;
 }
 
 /**
@@ -65,19 +82,23 @@ export function FeatureHeader({
   cacheReadTokens,
   cacheCreationTokens,
   stepCount,
-  syncing,
-  resolving,
   publishing,
+  syncBadge,
+  drift,
+  driftRefreshing = false,
   mrUrl,
   collapsed = false,
   onBack,
   onOpenTerminalTab,
   onBrowseCode,
   onCancelFeature,
-  onSync,
+  onOpenSync,
   onPublish,
   onCleanup,
+  onRefreshDrift,
 }: FeatureHeaderProps) {
+  const staleness = describeStaleness(drift);
+
   return (
     <div
       data-testid="feature-header"
@@ -130,6 +151,28 @@ export function FeatureHeader({
               ? 'Remote · SSH'
               : 'Local'}
           </Chip>
+          {staleness && (
+            <button
+              type="button"
+              onClick={onRefreshDrift}
+              disabled={!onRefreshDrift || driftRefreshing}
+              data-testid="drift-refresh"
+              className="rounded-full transition disabled:cursor-default enabled:hover:brightness-125"
+              title={
+                onRefreshDrift
+                  ? `${staleness.title} ${driftRefreshing ? 'Fetching…' : REFRESH_HINT}`
+                  : staleness.title
+              }
+            >
+              <Chip
+                tone={staleness.tone}
+                dot={false}
+                icon={driftRefreshing ? <RefreshCw className="w-3 h-3 animate-spin" /> : undefined}
+              >
+                {staleness.label}
+              </Chip>
+            </button>
+          )}
         </div>
         {!collapsed && <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>}
       </div>
@@ -181,13 +224,13 @@ export function FeatureHeader({
           {(status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'awaiting_mr') && (
             <>
               <button
-                onClick={onSync}
-                disabled={syncing || resolving}
-                className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 flex items-center gap-1.5"
-                title="Merge origin/main into this feature branch (resolves conflicts with a fresh agent when needed)"
+                onClick={onOpenSync}
+                data-testid="open-sync"
+                className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
+                title="Show this branch's sync: how far behind it is, any conflict, and what to do about it"
               >
-                {syncing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
-                Sync with main
+                <GitBranch className="w-3.5 h-3.5" />
+                {syncBadge > 0 ? `Sync · ${syncBadge}` : 'Sync'}
               </button>
               {/* The finalize step opens the PR itself at the end of a run,
                   so once there is a URL the only useful action is to go

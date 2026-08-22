@@ -22,6 +22,8 @@ import {
   extractClipboardImageFiles,
   extractImageFilesFromClipboard,
   stageAttachmentMetadata,
+  stagedAttachmentInputs,
+  type LaunchStageEntry,
 } from "./attachments";
 
 // Known vector: sha256("hello world"). The Rust side must agree byte-for-byte,
@@ -45,6 +47,52 @@ describe("computeLocalSha256", () => {
 
     // Dedup keys on content, not filename — re-dropping one file must collide.
     expect(await computeLocalSha256(first)).toBe(await computeLocalSha256(second));
+  });
+});
+
+describe("stagedAttachmentInputs", () => {
+  function entry(overrides: Partial<LaunchStageEntry>): LaunchStageEntry {
+    return {
+      sha256: HELLO_WORLD_SHA,
+      name: "note.txt",
+      source_filename: "note.txt",
+      mime: "text/plain",
+      size: 11,
+      previewUrl: null,
+      file: null,
+      sourcePath: null,
+      ...overrides,
+    };
+  }
+
+  // A click-picked `File` has no path a Rust command could open, so its bytes
+  // travel with the create call; a dropped path keeps the path, and Rust reads
+  // it. Getting this backwards attaches an empty file.
+  it("ferries a browser file's bytes and leaves the path empty", async () => {
+    const file = new File(["hello world"], "note.txt", { type: "text/plain" });
+
+    const [staged] = await stagedAttachmentInputs([entry({ file })]);
+
+    expect(staged.source_path).toBe("");
+    expect(staged.bytes).toHaveLength(11);
+    expect(staged.source_filename).toBe("note.txt");
+    expect(staged.mime).toBe("text/plain");
+  });
+
+  it("sends a dropped path as a path, with no bytes", async () => {
+    const [staged] = await stagedAttachmentInputs([entry({ sourcePath: "/tmp/note.txt" })]);
+
+    expect(staged.source_path).toBe("/tmp/note.txt");
+    expect(staged.bytes).toBeNull();
+  });
+
+  it("keeps the batch in the order it was staged", async () => {
+    const staged = await stagedAttachmentInputs([
+      entry({ source_filename: "first.txt", sourcePath: "/tmp/first.txt" }),
+      entry({ source_filename: "second.txt", sourcePath: "/tmp/second.txt" }),
+    ]);
+
+    expect(staged.map((s) => s.source_filename)).toEqual(["first.txt", "second.txt"]);
   });
 });
 

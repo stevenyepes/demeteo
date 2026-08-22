@@ -3,6 +3,7 @@
 use super::*;
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{RepositoryId, StepExecutionId, WorkflowId, WorkflowVersionId};
 use crate::domain::models::{
     Feature, Project, ProjectSettings, Repository, StepAttempt, StepExecution, SubtaskRunRow,
@@ -125,6 +126,20 @@ impl FeatureRepository for RecordingFeatures {
         reject_feature_call!()
     }
     fn subtask_runs_for_step(&self, _: &StepExecutionId) -> Result<Vec<SubtaskRunRow>, String> {
+        reject_feature_call!()
+    }
+    fn subtask_runs_mirror_for_step(
+        &self,
+        _: &StepExecutionId,
+    ) -> Result<Vec<crate::domain::models::SubtaskRunMirrorRow>, String> {
+        reject_feature_call!()
+    }
+    fn subtask_runs_replace_for_step(
+        &self,
+        _: &FeatureId,
+        _: &StepExecutionId,
+        _: &[crate::domain::models::SubtaskRunMirrorRow],
+    ) -> Result<(), String> {
         reject_feature_call!()
     }
 }
@@ -342,6 +357,23 @@ impl WorktreeOpsPort for RecordingWorktrees {
     ) -> Result<(), String> {
         panic!("unexpected WorktreeOpsPort call")
     }
+    async fn fetch_origin_refspec(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &crate::domain::feature_origin::Refspec,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn cut_branch_at(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
     async fn create_feature_branch(
         &self,
         _: Option<&str>,
@@ -388,6 +420,7 @@ impl WorktreeOpsPort for RecordingWorktrees {
         _: &str,
         _: &str,
         _: &str,
+        _: crate::ports::worktree_ops::MergeGate<'_>,
     ) -> Result<SyncOutcome, SyncFailure> {
         panic!("unexpected WorktreeOpsPort call")
     }
@@ -440,6 +473,9 @@ fn cleanup_feature(mr_state: &str) -> Feature {
         step_overrides: vec![],
         attachments: vec![],
         harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
     }
 }
 

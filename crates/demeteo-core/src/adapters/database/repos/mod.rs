@@ -1,4 +1,5 @@
 pub mod app_settings;
+pub mod discovery;
 pub mod feature;
 pub mod feature_steps;
 pub mod gate;
@@ -14,6 +15,8 @@ pub mod runner_run;
 pub mod sequence_state;
 pub mod step_attempts;
 pub mod subtask_run;
+pub mod sync_session;
 pub mod thread;
+pub mod ticket;
 pub mod workflow;
 pub mod worktree_cleanup;

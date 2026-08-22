@@ -1,5 +1,6 @@
 use super::{git_request, git_request_vec, GitOpsHelper};
 use crate::domain::branch_listing::BranchOption;
+use crate::domain::feature_origin::Refspec;
 use crate::domain::models::WorktreeInfo;
 use crate::paths;
 use crate::ports::worktree_ops::{TerminalWorktreeCreated, TerminalWorktreeRequest};
@@ -367,6 +368,50 @@ impl GitOpsHelper {
             delete_worktree_residue(self.exec.as_ref(), machine_str, &area.to_string_lossy()).await;
 
         Ok(stale.len())
+    }
+
+    /// Fetch one refspec from origin. See
+    /// [`WorktreeOpsPort::fetch_origin_refspec`](crate::ports::worktree_ops::WorktreeOpsPort::fetch_origin_refspec)
+    /// for why this one is not best-effort like its neighbours.
+    pub async fn fetch_origin_refspec(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        refspec: &Refspec,
+    ) -> Result<(), String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let spec = refspec.as_str();
+        self.exec
+            .run_program(
+                machine_str,
+                // Never drop the `--`: without it git reads a refspec
+                // beginning with `-` as an option. See `Refspec`.
+                git_request(repo_dir, ["fetch", "origin", "--", spec]),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("Failed to fetch '{spec}' from origin: {e}"))
+    }
+
+    /// Point a branch at an already-resolvable start point, with no fallback.
+    /// See
+    /// [`WorktreeOpsPort::cut_branch_at`](crate::ports::worktree_ops::WorktreeOpsPort::cut_branch_at).
+    pub async fn cut_branch_at(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        start_point: &str,
+        branch_name: &str,
+    ) -> Result<(), String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        self.exec
+            .run_program(
+                machine_str,
+                git_request(repo_dir, ["branch", "-f", branch_name, start_point]),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("Failed to create branch '{branch_name}' at '{start_point}': {e}"))
     }
 
     /// Create a feature branch off the default branch in the main repo.
@@ -845,33 +890,86 @@ impl GitOpsHelper {
     }
 
     /// Resolve the commit where `branch` most recently diverged from
-    /// `default_branch` — the feature's fork point. Used to compute a
+    /// `base_branch` — the feature's fork point. Used to compute a
     /// review diff that always covers the complete feature change,
     /// independent of how many `on_failure` retries have merged work
     /// back into `branch` since (a per-attempt base SHA, recaptured as
     /// `branch`'s current tip on each retry, already includes prior
     /// attempts' merged commits and so understates the diff).
     ///
-    /// Returns `None` if either ref doesn't resolve or `git merge-base`
+    /// `refs/remotes/origin/<base_branch>` is tried before the bare name: a
+    /// run's base is often a branch this clone has never checked out, so the
+    /// bare name resolves to nothing and the whole review degrades to "orient
+    /// yourself from the log" while still reading as finished. The bare name
+    /// remains as the fallback for a repo with no origin (tests, air-gapped
+    /// clones).
+    ///
+    /// `base_branch` here is a branch name — [`diff_base::resolve`] answers
+    /// with one or with nothing — so unlike
+    /// [`squash_feature_branch`](Self::squash_feature_branch), which is handed
+    /// [`FeatureOrigin::squash_base`] and so must also accept a fully-qualified
+    /// ref, there is no `refs/` case to skip the remote candidate for.
+    ///
+    /// [`diff_base::resolve`]: crate::domain::diff_base::resolve
+    /// [`FeatureOrigin::squash_base`]: crate::domain::feature_origin::FeatureOrigin::squash_base
+    ///
+    /// Returns `None` if neither candidate resolves or `git merge-base`
     /// fails (e.g. the two branches share no history) — callers fall
     /// back to their pre-existing per-attempt base.
     pub async fn merge_base(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
-        default_branch: &str,
+        base_branch: &str,
         branch: &str,
     ) -> Option<String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        self.exec
+        let remote = format!("refs/remotes/origin/{base_branch}");
+        for candidate in [remote.as_str(), base_branch] {
+            let resolved = self
+                .exec
+                .run_program(
+                    machine_str,
+                    git_request(repo_dir, ["merge-base", candidate, branch]),
+                )
+                .await
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            if resolved.is_some() {
+                return resolved;
+            }
+        }
+        None
+    }
+
+    /// [`merge_base`](Self::merge_base) against a base this clone may never
+    /// have fetched.
+    ///
+    /// The bootstrap's
+    /// [`ensure_default_branch_updated`](Self::ensure_default_branch_updated)
+    /// fetches exactly one branch by name — the project's default — so a run
+    /// whose base is anything else has no fresh `origin/<base>` to measure
+    /// from, and on a fresh clone no `origin/<base>` at all. The fetch is
+    /// best-effort for the reason the squash's is: an unreachable origin
+    /// should degrade to whatever refs are local, not fail the review.
+    pub async fn fork_point(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        base_branch: &str,
+        branch: &str,
+    ) -> Option<String> {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let _ = self
+            .exec
             .run_program(
                 machine_str,
-                git_request(repo_dir, ["merge-base", default_branch, branch]),
+                git_request(repo_dir, ["fetch", "origin", "--", base_branch]),
             )
+            .await;
+        self.merge_base(machine_id, repo_dir, base_branch, branch)
             .await
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
     }
 }
 
@@ -1314,7 +1412,7 @@ fn validate_git_branch_name(branch: &str) -> Result<(), String> {
 /// neither is reachable from a test spelled inside this `async fn`.
 ///
 /// Best-effort throughout: a failure here costs a re-install, not the step.
-async fn share_dependency_caches(
+pub(super) async fn share_dependency_caches(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
     repo_dir: &str,
@@ -1323,10 +1421,10 @@ async fn share_dependency_caches(
     windows_host: bool,
 ) {
     let probed = exec
-        .run_command(machine_id, &shareable_cache_probe_cmd(repo_dir))
+        .run_program(machine_id, shareable_cache_probe(repo_dir))
         .await
         .unwrap_or_default();
-    let names = shareable_cache_names(&probed);
+    let names = crate::domain::dependency_cache::shareable_cache_paths(&probed);
     if names.is_empty() {
         return;
     }
@@ -1364,44 +1462,33 @@ fn may_link_caches(exclusions_written: bool, windows_host: bool) -> bool {
     exclusions_written && !windows_host
 }
 
-/// One round trip that prints the [`paths::DEPENDENCY_CACHE_DIRS`] entries the
-/// primary checkout both has and ignores.
+/// One round trip that asks git which directories this checkout ignores.
 ///
-/// `; true` at the end for the reason `artifacts::add_exclusions` records: the
-/// loop's exit status would otherwise be the last `if`'s, and a non-zero exit
-/// makes `run_command` discard the whole answer.
-fn shareable_cache_probe_cmd(repo_dir: &str) -> String {
-    let repo = paths::shell_escape_posix(repo_dir);
-    format!(
-        "for d in {dirs}; do \
-         if [ -e {repo}/\"$d\" ] && git -C {repo} check-ignore -q \"$d\" 2>/dev/null; then \
-         echo \"$d\"; \
-         fi; \
-         done; true",
-        dirs = paths::DEPENDENCY_CACHE_DIRS.join(" "),
-        repo = repo,
+/// `--directory` is what makes it affordable: a fully-ignored directory
+/// collapses to a single entry and git never descends into it, so a 15 GB
+/// `target/` costs the same as an empty one — measured at 3 ms on a clone that
+/// size, against one `check-ignore` round trip *per name* before, which over
+/// SSH is per name in latency too.
+///
+/// A [`ProgramRequest`](crate::ports::execution::ProgramRequest) rather than a
+/// shell string: there is nothing to interpolate, and the answer this returns
+/// is the one thing in the pipeline the repository controls, so the fewer
+/// shells it passes through the better.
+///
+/// `-z` is required, not preferred — see
+/// [`shareable_cache_paths`](crate::domain::dependency_cache::shareable_cache_paths).
+fn shareable_cache_probe(repo_dir: &str) -> crate::ports::execution::ProgramRequest {
+    git_request(
+        repo_dir,
+        [
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--directory",
+            "--exclude-standard",
+            "-z",
+        ],
     )
-}
-
-/// Read the probe's answer back as entries of [`paths::DEPENDENCY_CACHE_DIRS`]
-/// rather than as strings.
-///
-/// The names go straight into a shell command and a git exclude file, and the
-/// only thing standing between the transport's stdout and both of those is this
-/// function. Matching against the constant means an unexpected line — a shell
-/// banner, a git warning, anything a login profile prints — is dropped rather
-/// than quoted, so no output can name a path the caller did not compile in.
-fn shareable_cache_names(probe_output: &str) -> Vec<&'static str> {
-    probe_output
-        .lines()
-        .map(str::trim)
-        .filter_map(|line| {
-            paths::DEPENDENCY_CACHE_DIRS
-                .iter()
-                .find(|known| **known == line)
-                .copied()
-        })
-        .collect()
 }
 
 /// Write the shared cache names into the clone's own `.git/info/exclude`.
@@ -1414,7 +1501,7 @@ async fn record_cache_exclusions(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
     repo_dir: &str,
-    names: &[&str],
+    names: &[String],
 ) -> Result<(), String> {
     let git_dir = exec
         .run_program(
@@ -1453,14 +1540,27 @@ async fn record_cache_exclusions(
 /// nothing, and a worktree with a real installed `node_modules` and one with a
 /// symlink to one then commit exactly the same files.
 ///
-/// Names only, never a path: an entry is scoped to this clone's
-/// `.git/info/exclude`, which is not committed, and appending is what keeps a
-/// user's own entries in a repository Demeteo cloned but does not own the
-/// contents of.
-fn exclude_file_with(existing: &str, names: &[&str]) -> Option<String> {
+/// The entry is the cache's **repo-relative path**, not its basename, and the
+/// difference is what makes a nested one correct. A pattern with no `/` matches
+/// that name at any depth, so `node_modules` covers the root one and every
+/// package's; a pattern that contains one is anchored to the repository root,
+/// so `src-tauri/target` matches exactly the linked symlink and leaves a
+/// `target/` elsewhere alone. Writing the basename for a nested cache would
+/// ignore every directory of that name in the tree — including ones the project
+/// tracks.
+///
+/// Note that the project's own ignore rule is not enough on its own even when
+/// it exists: `src-tauri/.gitignore` carries `/target/`, and a *trailing-slash*
+/// pattern does not match a symlink, which is the whole reason this file is
+/// written at all.
+///
+/// The entry is scoped to this clone's `.git/info/exclude`, which is not
+/// committed, and appending is what keeps a user's own entries in a repository
+/// Demeteo cloned but does not own the contents of.
+fn exclude_file_with(existing: &str, names: &[String]) -> Option<String> {
     let missing: Vec<&str> = names
         .iter()
-        .copied()
+        .map(String::as_str)
         .filter(|name| !existing.lines().any(|line| line.trim() == *name))
         .collect();
     if missing.is_empty() {
@@ -1505,28 +1605,54 @@ fn link_dependency_caches_cmd(
     repo_dir: &str,
     wt_dir: &str,
     cache_dir: &str,
-    names: &[&str],
+    names: &[String],
 ) -> String {
-    let repo = paths::shell_escape_posix(repo_dir);
-    let wt = paths::shell_escape_posix(wt_dir);
-    let cache = paths::shell_escape_posix(cache_dir);
-    format!(
-        "mkdir -p {cache} 2>/dev/null; \
-         for d in {dirs}; do \
-         if [ ! -e {cache}/\"$d\" ]; then \
-         cp -cR {repo}/\"$d\" {cache}/\"$d\" 2>/dev/null \
-         || cp -R --reflink=auto {repo}/\"$d\" {cache}/\"$d\" 2>/dev/null \
-         || cp -R {repo}/\"$d\" {cache}/\"$d\" 2>/dev/null; \
-         fi; \
-         if [ -e {cache}/\"$d\" ] && [ ! -e {wt}/\"$d\" ]; then \
-         ln -sfn {cache}/\"$d\" {wt}/\"$d\"; \
-         fi; \
-         done; true",
-        dirs = names.join(" "),
-        repo = repo,
-        wt = wt,
-        cache = cache,
-    )
+    let mut out = String::new();
+    for name in names {
+        let source = paths::shell_escape_posix(&target_path_join(repo_dir, name));
+        let cached = target_path_join(cache_dir, name);
+        let linked = target_path_join(wt_dir, name);
+        // A nested cache needs both of its parents to exist before anything is
+        // written into them: `packages/web` is a real directory in the
+        // worktree but nothing has created it under the feature's cache root,
+        // and `cp` and `ln` each fail silently without it.
+        let cache_parent = paths::shell_escape_posix(parent_dir(&cached));
+        let link_parent = paths::shell_escape_posix(parent_dir(&linked));
+        let cached = paths::shell_escape_posix(&cached);
+        let linked = paths::shell_escape_posix(&linked);
+        out.push_str(&format!(
+            "mkdir -p {cache_parent} 2>/dev/null; \
+             if [ ! -e {cached} ]; then \
+             cp -cR {source} {cached} 2>/dev/null \
+             || cp -R --reflink=auto {source} {cached} 2>/dev/null \
+             || cp -R {source} {cached} 2>/dev/null; \
+             fi; \
+             if [ -e {cached} ] && [ ! -e {linked} ]; then \
+             mkdir -p {link_parent} 2>/dev/null; ln -sfn {cached} {linked}; \
+             fi; "
+        ));
+    }
+    // Every path is quoted individually rather than joined into a `for d in …`
+    // list. Word splitting is why: git answers with whatever the repository
+    // contains, and `weird name/target` is one entry to git and two words to a
+    // shell. The trailing `true` is `artifacts::add_exclusions`' rule — the
+    // last `if`'s status would otherwise be the command's, and a non-zero exit
+    // makes `run_command` discard the whole answer.
+    out.push_str("true");
+    out
+}
+
+/// Everything before the last `/`, or `.` when there is nothing before it.
+///
+/// Its own function because it is called on paths already joined onto a root,
+/// so the "no separator" arm is unreachable in practice and would be untested
+/// where it matters if it were spelled inline.
+fn parent_dir(path: &str) -> &str {
+    match path.rsplit_once('/') {
+        Some(("", _)) => "/",
+        Some((parent, _)) => parent,
+        None => ".",
+    }
 }
 
 #[cfg(test)]

@@ -189,21 +189,13 @@ async fn check_schedules(
                     w.name, w.id.0
                 );
                 if let Err(e) = executor
-                    .feature_start(
-                        None,
-                        &s.project_id.0,
-                        &w.id.0,
-                        &title,
-                        &description,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        Vec::new(),
-                        Vec::new(),
-                    )
+                    .feature_start(crate::ports::step_executor::FeatureLaunch {
+                        project_id: s.project_id.0.clone(),
+                        workflow_id: w.id.0.clone(),
+                        title,
+                        description,
+                        ..Default::default()
+                    })
                     .await
                 {
                     eprintln!("[Scheduler] Failed to auto-start workflow: {}", e);

@@ -44,6 +44,23 @@ fn session_key_distinguishes_two_efforts() {
     );
 }
 
+/// Same shape as the effort guard above: the flag is spelled into argv at
+/// spawn and the session freezes its context there, so two steps sharing a key
+/// across it would run the second on the first's answer — a review step told
+/// it kept the user's skills, executing with them stripped.
+#[test]
+fn session_key_distinguishes_a_step_that_keeps_the_harness_personalization() {
+    let bare = step();
+    let keeping = StepConfig {
+        uses_agent_skills: true,
+        ..step()
+    };
+    assert_ne!(
+        agent_session_key("f-1", &bare, Some("m"), EffortLevel::High),
+        agent_session_key("f-1", &keeping, Some("m"), EffortLevel::High),
+    );
+}
+
 /// Sanity: identical inputs → identical keys (the fingerprint is
 /// deterministic, not random).
 #[test]

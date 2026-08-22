@@ -34,6 +34,7 @@ use crate::domain::ids::{FeatureId, ProviderId};
 use crate::domain::models::ProviderInstance;
 use crate::paths;
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
 const REPO_PATH: &str = "demeteo/preflight";
@@ -238,21 +239,14 @@ async fn run_leg(
 
     let feature = ctx
         .executor
-        .feature_start(
-            None,
-            project.id.as_str(),
-            workflow_id.as_str(),
-            "Preflight Feature",
-            "Exercise the HB1 bootstrap preflight gate.",
-            Some("stub"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            vec![],
-        )
+        .feature_start(FeatureLaunch {
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: "Preflight Feature".to_string(),
+            description: "Exercise the HB1 bootstrap preflight gate.".to_string(),
+            agent_kind: Some("stub".to_string()),
+            ..Default::default()
+        })
         .await
         .expect("feature_start");
 

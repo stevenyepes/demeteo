@@ -3,6 +3,7 @@ pub mod artifact_store;
 pub mod attachment_store;
 pub mod create_project_adapter;
 pub mod database;
+pub mod git_push;
 pub mod local;
 pub mod memory_llm;
 pub mod memory_worker;

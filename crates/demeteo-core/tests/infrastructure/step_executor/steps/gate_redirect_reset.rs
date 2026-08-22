@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::adapters::database::SqliteAdapter;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{GateDecisionId, ProjectId, WorkflowId};
 use crate::domain::models::{Feature, GateDecision};
 use crate::ports::db::ProjectRepository;
@@ -78,6 +79,9 @@ fn seed_parent_rows(
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         })
         .unwrap();
     FeatureId::from("f-1".to_string())

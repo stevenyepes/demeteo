@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Machine, Project, RemoteRunMirror, RunEvent, StepExecution } from "../types";
+import type { PathContainment } from "./pathContainment";
 import type { WorkflowDefinitionV2 } from "../components/canvas/types";
 
 /** Wire shape of `feature_get_worktree` / `remote_get_worktree`. */
@@ -11,16 +12,23 @@ export interface FeatureWorktree {
 }
 
 /**
- * The three fields the rerun harness picker reads off `get_agent_configs`.
- * Deliberately narrower than the settings tab's `AgentConfigView`: only
- * `enabled && available` decides whether a harness may be offered for a
- * retry, and widening it here would tie the run surface to the settings
- * module's shape.
+ * What the rerun harness picker reads off `get_agent_configs`. Deliberately
+ * narrower than the settings tab's `AgentConfigView`: `enabled && available`
+ * decides whether a harness may be offered for a retry, and widening this any
+ * further would tie the run surface to the settings module's shape.
  */
 export interface AgentAvailability {
   kind: string;
   enabled: boolean;
   available: boolean;
+  /**
+   * What holds a turn of this harness inside the worktree it is given, *on
+   * this machine* — the one settings-row field a run surface has to carry, for
+   * the reason `lib/pathContainment.ts` records: it cannot be read off the
+   * session-wide catalog instead. Absent from a backend that predates the
+   * field.
+   */
+  path_containment?: PathContainment;
 }
 
 /** Mirrors the Rust `MrInfo` returned by `publish_mr`. */

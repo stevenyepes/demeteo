@@ -171,6 +171,33 @@ pub struct ProjectSettings {
     /// "also commit them to the PR" opt-in, not the only way to see them.
     #[serde(default)]
     pub commit_artifacts: bool,
+    /// The command a reviewing step should start from, as the user wrote it.
+    /// Bound to `{{review_entrypoint}}` and carried into the prompt untouched —
+    /// [`review_entrypoint`](crate::domain::review_entrypoint) holds why it is
+    /// never wrapped, and why `None` and `""` are the same answer. See
+    /// migration V42.
+    #[serde(default)]
+    pub review_entrypoint: Option<String>,
+    /// The harness a conflict-resolution turn should run under, outranking the
+    /// run's own launch pin for that turn alone.
+    /// [`sync_resolver`](crate::domain::sync_resolver) holds why a role gets a
+    /// tier above the run, and what `None` falls through to. See migration V44.
+    #[serde(default)]
+    pub sync_resolver_agent_kind: Option<String>,
+    /// The model for that turn, inherited independently of the harness.
+    #[serde(default)]
+    pub sync_resolver_model: Option<String>,
+    /// The reasoning effort for that turn. Clamped per harness at spawn, so a
+    /// level the chosen harness does not offer is never emitted.
+    #[serde(default)]
+    pub sync_resolver_effort: Option<EffortLevel>,
+    /// Whether a resolved sync waits for a human before it is published.
+    /// `None` is "no opinion", which is not `false` —
+    /// [`publish_policy`](crate::domain::sync_session::publish_policy) holds
+    /// what it resolves to and why the setting can only turn review off. See
+    /// migration V45.
+    #[serde(default)]
+    pub sync_review_before_push: Option<bool>,
 }
 
 fn default_artifact_subdir() -> String {

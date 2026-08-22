@@ -1,6 +1,7 @@
 // Post-pivot types. Legacy supervisor/thread types were removed as part of
 // the R7 cleanup; see AGENT_INTEGRATION.md §1 for the surviving surface.
 
+import type { AttachedFile } from './lib/attachments';
 import type { EffortLevel } from './lib/effortLevels';
 
 /** The reasoning-effort ladder. Declared (and drift-tested) in
@@ -63,6 +64,16 @@ export interface EditorContext {
   branch: string;
   defaultBranch: string;
   initialFile?: string;
+  /** The pair the Changes tab diffs, when the caller has a narrower one in mind
+   *  than "this branch against its base". A sync resolution is reviewed as
+   *  `head_before..merge_commit_sha`: the first-parent form reads correctly and
+   *  goes silently wrong the moment the resolver adds a follow-up commit, and
+   *  nothing afterwards can recover the real base. Omitted = the branch pair,
+   *  as before. */
+  baseRef?: string;
+  headRef?: string;
+  /** Which sidebar tab opens. Omitted = 'files'. */
+  initialTab?: 'files' | 'changes';
 }
 
 export interface WorkflowSummary {
@@ -104,8 +115,13 @@ export type AppView =
   | { kind: 'new-project' }
   | { kind: 'create-project' }
   | { kind: 'project-settings' }
+  | { kind: 'code-review' }
   | { kind: 'workflows' }
   | { kind: 'workflow-editor'; workflowId: string | null }
+  /** One Discovery's workspace. The title rides along so the header can name
+   *  it before `discovery_get` answers, exactly as `detail` carries
+   *  `featureTitle`. */
+  | { kind: 'discovery'; discoveryId: string; discoveryTitle: string }
   | { kind: 'providers' }
   | { kind: 'settings' }
   | { kind: 'remote-inbox' }
@@ -589,7 +605,31 @@ export interface Feature {
    * not "everything was green" — see {@link HarnessBaseline}.
    */
   harness_baseline?: HarnessBaseline | null;
+  /** Where this run's branch was cut from (`features.origin_json`, V41).
+   *  Absent on every row written before V41, which cut from the default
+   *  branch. */
+  origin?: FeatureOrigin | null;
+  /** The branch the run is measured against. `null` = the project's default
+   *  branch. Not interchangeable with {@link Feature.origin}: a run started
+   *  from a pull-request head reviews against the branch it merges into, not
+   *  against the snapshot it began at. */
+  diff_base_branch?: string | null;
+  /** The branch the run actually works on, written down at cut time.
+   *  `null` on pre-V41 rows, which re-derive `{branch_prefix}{id}`. */
+  resolved_branch?: string | null;
 }
+
+/** Mirrors the Rust `FeatureOrigin` (`domain/feature_origin.rs`), which serde
+ *  tags internally on `kind` with snake_case arm names. Declared twice with no
+ *  codegen between them, so the discriminants here are the wire contract.
+ *
+ *  `ref` carries a `fetch_spec` the Rust side re-validates into a `Refspec` on
+ *  the way in — TypeScript can state the shape but not the constraint, so
+ *  nothing here may treat an accepted string as a safe one. */
+export type FeatureOrigin =
+  | { kind: 'default_branch' }
+  | { kind: 'branch'; base: string }
+  | { kind: 'ref'; fetch_spec: string; label: string };
 
 /** Which producer measured one gate — mirrors the Rust `BaselineProducer`.
  *  Recorded per gate, not per record, because a partial re-measurement merges
@@ -707,11 +747,55 @@ export interface EnvironmentNotReadyEvent {
   reason: string;
 }
 
+/**
+ * Where a sync stopped short of a merge verdict. Mirrors
+ * `crate::domain::sync_failure::SyncBlockedStage`; every spelling here is the
+ * wire form, pinned variant by variant on the Rust side by
+ * `the_serialized_shape_is_the_wire_contract`. A stage this union does not
+ * carry is silent on arrival — the banner's per-stage sentence resolves to
+ * `undefined`, which React renders as nothing.
+ */
+export type SyncBlockedStage =
+  | 'fetch'
+  | 'base_ref_missing'
+  | 'worktree_provision'
+  | 'merge'
+  | 'push'
+  | 'verify'
+  | 'repo_context'
+  | 'held_resolution'
+  | 'turn_in_flight';
+
+/**
+ * How far a feature branch has drifted from the base a sync would merge.
+ *
+ * Both counts are nullable because "we could not measure it" and "there is
+ * nothing to merge" are different facts, and only the second one means the
+ * branch is current. Rendering a null as `0` is how a branch nobody could look
+ * at ends up labelled up to date.
+ */
+export interface BranchDivergence {
+  behind: number | null;
+  ahead: number | null;
+}
+
+/** Return shape for `feature_drift`. */
+export interface FeatureDrift {
+  divergence: BranchDivergence;
+  /** The ref the counts were taken against, e.g. `origin/main`. */
+  base_ref: string;
+  /** `false` when the fetch was skipped or failed, so the counts are as of
+   *  whenever that ref last moved rather than as of now. */
+  fetched: boolean;
+  checked_at: number;
+}
+
 /** Return shape for `feature_sync` and `feature_resolve_sync_conflicts`. */
 export type SyncOutcomeView =
   | {
       status: 'ok';
-      merge_commit_sha: string;
+      /** `null` when the tip the merge left could not be read. */
+      merge_commit_sha: string | null;
       changed: boolean;
     }
   | {
@@ -720,9 +804,13 @@ export type SyncOutcomeView =
       raw_error: string;
     }
   | {
+      status: 'blocked';
+      stage: SyncBlockedStage;
+      raw_error: string;
+    }
+  | {
       status: 'resolved';
       merge_commit_sha: string;
-      revalidated_step_id: string | null;
     }
   | {
       status: 'resolution_failed';
@@ -730,10 +818,85 @@ export type SyncOutcomeView =
       conflict_files: ConflictFile[];
     };
 
+/**
+ * Who would resolve a conflict on this feature if the banner's picker is left
+ * alone, as `feature_sync_resolver` answers it. Read rather than derived: the
+ * chain behind it puts the project's conflict-resolver setting above the
+ * harness the run was launched with, so the feature's own row is the wrong
+ * answer for any project that has set one.
+ */
+export interface SyncResolverView {
+  agent_kind: string;
+  model: string | null;
+  effort: EffortLevel;
+}
+
 export interface ConflictFile {
   path: string;
   /** "both-modified" | "added-by-them" | "added-by-us" | "deleted-by-them" | "deleted-by-us". */
   kind: string;
+}
+
+/**
+ * The state a feature's sync is in. Mirrors
+ * `crate::domain::sync_session::SyncSessionStatus`; every spelling here is the
+ * wire form.
+ */
+export type SyncSessionState =
+  | 'syncing'
+  | 'up_to_date'
+  | 'merged'
+  | 'blocked'
+  | 'conflicted'
+  | 'resolving'
+  | 'resolved'
+  | 'resolution_failed'
+  | 'aborted';
+
+/**
+ * One feature's live sync, as `sync_session_get` answers it — reconciled
+ * against the working tree on the way out, so a `conflicted` session here is
+ * one git still agrees with.
+ */
+export interface SyncSessionView {
+  feature_id: string;
+  machine_id: string;
+  repo_dir: string;
+  feature_branch: string;
+  base_branch: string;
+  status: SyncSessionState;
+  worktree_path: string | null;
+  /** The feature branch's tip before the merge — the base a review diff of the
+   *  resolution has to be computed from. */
+  head_before: string | null;
+  merge_commit_sha: string | null;
+  conflict_files: ConflictFile[];
+  /** git's own stderr, verbatim. */
+  raw_error: string | null;
+  /** Where a `blocked` sync stopped (migration V46), or `null` on any other
+   *  status and on a row written before that migration. `'push'` is the one
+   *  stage that has already committed the merge onto the feature branch, so it
+   *  is the one a retry would strand — read it, never guess it from
+   *  `raw_error`. */
+  blocked_stage: SyncBlockedStage | null;
+  /** When the resolution reached origin, or `null` while it is only on the
+   *  branch. `status === 'resolved'` with a `null` here is a resolution waiting
+   *  for a look, not a finished sync — no probe of the working tree can answer
+   *  this, which is why it is a field and not a tenth `status`. Migration
+   *  V45. */
+  pushed_at: number | null;
+  attempts: number;
+  created_at: number;
+  updated_at: number;
+  /** Whether this sync is the user's to abort or re-resolve, rather than one a
+   *  live run is already driving. Computed by
+   *  `domain::sync_session::user_may_intervene` — a `resolving` session, or any
+   *  session on a feature whose run is still going, belongs to that turn: abort
+   *  would delete the worktree an agent is writing in and resolve would put a
+   *  second agent in the same tree. Never re-derive this from `status` here; the
+   *  window where the row still reads `conflicted` while the step owns it is
+   *  exactly what the backend flag closes. */
+  user_may_intervene: boolean;
 }
 
 export interface Repository {
@@ -903,6 +1066,27 @@ export interface ProjectSettingsData {
   default_max_budget_usd?: number | null;
   artifact_subdir?: string;
   commit_artifacts?: boolean;
+  /** The command a reviewing step starts from, as the user wrote it. Carried
+   *  into the prompt verbatim — Demeteo neither validates it against a harness
+   *  nor wraps it in review vocabulary of its own. `null`/absent (and the empty
+   *  string, which a cleared input writes) = the project names none, and the
+   *  step is left to review in its own way. Migration V42. */
+  review_entrypoint?: string | null;
+  /** The harness a merge-conflict resolution runs under, outranking the run's
+   *  own launch pin for that turn alone. `null`/absent = no opinion, which
+   *  falls through to the run and then to `default_agent_kind`. Migration
+   *  V44. */
+  sync_resolver_agent_kind?: string | null;
+  /** The model for that turn, inherited independently of the harness. */
+  sync_resolver_model?: string | null;
+  /** The reasoning effort for that turn, clamped per harness at spawn. */
+  sync_resolver_effort?: EffortLevel | null;
+  /** Whether a resolved sync waits for a human before it is published.
+   *  `null`/absent = no opinion, which holds only when somebody is in a
+   *  position to look at it and publishes otherwise. `false` opts out. It
+   *  cannot impose review on a run that still owns its branch — see
+   *  `domain::sync_session::publish_policy`. Migration V45. */
+  sync_review_before_push?: boolean | null;
 }
 
 export interface SessionInfo {
@@ -1008,4 +1192,346 @@ export interface TerminalTabDescriptor {
 export interface TerminalPanelState {
   tabs: TerminalTabDescriptor[];
   activeTabId: string | null;
+}
+
+// ── Discovery (docs/PRD_DISCOVERY.md) ─────────────────────────────────────
+//
+// Hand-mirrored from the Rust serde shapes, which is the only mechanism this
+// repo has: `domain/models/discovery.rs`, `domain/models/ticket.rs`,
+// `domain/ticket_graph.rs`, `application/discovery/mod.rs` and
+// `application/tickets/mod.rs`. Every id newtype is `#[serde(transparent)]`,
+// so a `DiscoveryId` or `TicketId` arrives as a bare string.
+
+/** Mirrors `DiscoveryStatus`. */
+export type DiscoveryStatus = 'open' | 'closed';
+
+/** Mirrors `MessageRole`. There is no system role — what the interviewer is
+ *  told is assembled per turn, so a stored copy would describe a world that
+ *  has moved on. */
+export type MessageRole = 'user' | 'assistant';
+
+/** Mirrors `Discovery`. */
+export interface Discovery {
+  id: string;
+  project_id: string;
+  title: string;
+  status: DiscoveryStatus;
+  machine_id: string;
+  agent_kind: string;
+  model: string | null;
+  effort: EffortLevel | null;
+  resume_session_id: string | null;
+  worktree_path: string | null;
+  /** What the user handed the interviewer. Owned by the Discovery rather than
+   *  by a turn, so the composer's chip row survives the turn that added it and
+   *  every later turn is prompted with the same set. */
+  attachments: AttachedFile[];
+  total_cost: number;
+  tokens: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * Mirrors `DiscoverySummary`, which `#[serde(flatten)]`s the `Discovery` — so
+ * the row's own fields arrive alongside the two the card needs and the row
+ * does not carry.
+ *
+ * `progress` is the counter `discovery_board` derives, from the same pass over
+ * the same rows: a second, SQL-shaped opinion would disagree with the card the
+ * user then opens.
+ */
+export interface DiscoverySummary extends Discovery {
+  message_count: number;
+  progress: TicketProgress;
+}
+
+/** Mirrors `QuestionOption`. */
+export interface QuestionOption {
+  id: string;
+  label: string;
+  description: string;
+}
+
+/** Mirrors `DiscoveryQuestion`. `recommended` names a `QuestionOption.id`;
+ *  `null` is a real answer, not a missing one. */
+export interface DiscoveryQuestion {
+  header: string;
+  text: string;
+  options: QuestionOption[];
+  recommended: string | null;
+}
+
+/** Mirrors `DiscoveryMessage`. `cost_usd`/`tokens` are `null` on a user turn
+ *  and on an assistant turn whose harness reported no spend — distinct from
+ *  `0`, which is a measurement. */
+export interface DiscoveryMessage {
+  id: string;
+  discovery_id: string;
+  role: MessageRole;
+  content: string;
+  cost_usd: number | null;
+  tokens: number | null;
+  /** What the turn did, collected while it streamed. `null` on a user message
+   *  and on any turn stored before V49 — absent, never "it touched nothing". */
+  activity: TurnActivity | null;
+  created_at: number;
+}
+
+/** Mirrors `TurnActivity` (V49). `commands` is a bounded sample of what `ran`
+ *  counts, stored as the agent issued them; the name a reader sees is derived
+ *  from it by `lib/discoveryActivity.ts`, so the live turn and the settled one
+ *  cannot name the same command differently. */
+export interface TurnActivity {
+  reads: number;
+  edits: number;
+  writes: number;
+  ran: number;
+  commands: readonly string[];
+}
+
+/** Mirrors `DiscoveryMessageView`, which `#[serde(flatten)]`s a
+ *  `DiscoveryMessage` and the `InterviewTurn` derived from its text — so both
+ *  halves arrive on one object. Which question is *open* is derived one level
+ *  further out, by the reader: the last one with no user message after it. */
+export interface DiscoveryMessageView extends DiscoveryMessage {
+  prose: string;
+  question: DiscoveryQuestion | null;
+  nothing_left_to_settle: boolean;
+  question_error: string | null;
+}
+
+/** Mirrors `DiscoveryDetail`. */
+export interface DiscoveryDetail {
+  discovery: Discovery;
+  messages: DiscoveryMessageView[];
+  /** The decompose pass waiting to be reviewed, or `null`. Stored against the
+   *  Discovery, so a pass the user navigated away from is still theirs when
+   *  they come back — including after a restart. */
+  pending_proposal: DecomposeProposal | null;
+  /** A turn or a pass is running *right now*. Known only within the process
+   *  that started it, so `false` after a restart is the truth rather than a
+   *  gap: nothing survived it to still be running. */
+  turn_running: boolean;
+}
+
+/** Mirrors `TicketState` — the whole stored vocabulary. Everything a screen
+ *  shows about a ticket beyond these three is derived on read. */
+export type TicketState = 'unstarted' | 'started' | 'dropped';
+
+/** Mirrors `Ticket`. `attachments` stage here and are committed to the
+ *  Feature when the ticket starts, so a ticket that never starts never writes
+ *  an attachment row. */
+export interface Ticket {
+  id: string;
+  discovery_id: string;
+  /** The number a user says out loud. Assigned once and never reissued, so a
+   *  list index would rename every ticket after a deletion. */
+  seq: number;
+  title: string;
+  description: string;
+  acceptance: string[];
+  files: string[];
+  blocked_by: string[];
+  test_command: string | null;
+  workflow_id: string | null;
+  agent_kind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
+  attachments: AttachedFile[];
+  state: TicketState;
+  drop_reason: string | null;
+  force_start_reason: string | null;
+  force_started_at: number | null;
+  feature_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Mirrors `TicketLane`. A closed-unmerged ticket lands in `dropped`: it
+ *  satisfies its dependents yet nothing of it reached the base branch, so
+ *  neither `in_flight` nor `landed` would be true of it. */
+export type TicketLane = 'blocked' | 'ready' | 'in_flight' | 'landed' | 'dropped';
+
+/** Mirrors `BlockerReason`. `unknown` is a dangling edge — drift rather than
+ *  a plan — and is reported apart from `outstanding` so a surface can say
+ *  *unknown prerequisite* rather than *waiting*. */
+export type BlockerReason = 'outstanding' | 'unknown';
+
+/** Mirrors `Blocker`. */
+export interface Blocker {
+  id: string;
+  reason: BlockerReason;
+}
+
+/** Mirrors `TicketStanding`. */
+export interface TicketStanding {
+  id: string;
+  lane: TicketLane;
+  startable: boolean;
+  blockers: Blocker[];
+}
+
+/** Mirrors `TicketProgress`. `live` is every lane but `dropped` — the
+ *  denominator §9.2 specifies, since a dropped ticket is not work
+ *  outstanding. */
+export interface TicketProgress {
+  blocked: number;
+  ready: number;
+  in_flight: number;
+  landed: number;
+  dropped: number;
+  live: number;
+}
+
+/** Mirrors `TicketFeatureView` — what a started ticket's current attempt
+ *  contributes to a card. */
+export interface TicketFeatureView {
+  id: string;
+  status: string;
+  mr_state: string | null;
+  mr_url: string | null;
+}
+
+/** Mirrors `TicketView`: the row, its derived position, and the forge state
+ *  the position was derived from, which travel together so the graph and the
+ *  board cannot disagree. */
+export interface TicketView {
+  ticket: Ticket;
+  standing: TicketStanding;
+  feature: TicketFeatureView | null;
+}
+
+/** Mirrors `DiscoveryBoard`. `tickets` arrive in `Ticket.seq` order. */
+export interface DiscoveryBoard {
+  tickets: TicketView[];
+  progress: TicketProgress;
+}
+
+// ── Decomposition (docs/PRD_DISCOVERY.md §5) ──────────────────────────────
+//
+// Every id in this half of the wire is **proposal-space**: what the agent
+// authored, not what a row is stored under. `discovery_apply_decomposition`
+// names the changes it accepts by those ids and mints the stored ones itself,
+// so nothing here may be treated as a `Ticket.id`.
+
+/** Mirrors `PlannedTicket` — one ticket as the decomposition wrote it, before
+ *  a workflow *name* is a workflow id. Carried out and handed straight back:
+ *  the proposal is not persisted anywhere. */
+export interface PlannedTicket {
+  id: string;
+  title: string;
+  description: string;
+  acceptance: string[];
+  files: string[];
+  test_command: string | null;
+  blocked_by: string[];
+  /** A workflow name, as the prompt listed it. The agent has no ids. */
+  workflow: string | null;
+  agent: string | null;
+  model: string | null;
+  effort: string | null;
+  /** Why this ticket is in *this* pass, addressed to the reviewer. */
+  why: string | null;
+}
+
+/** Mirrors `ChangeKind` — the modal's first three groups. `Locked` is not one
+ *  of them: a locked ticket is listed, never proposed. */
+export type ChangeKind = 'added' | 'revised' | 'removed';
+
+/** Mirrors `FieldChange`. Both sides arrive as text because the modal renders
+ *  two lines, and nine field types formatted per call site would be nine
+ *  formattings. */
+export interface FieldChange {
+  field: string;
+  was: string;
+  now: string;
+}
+
+/** Mirrors `ProposedChange` — one reviewable row, and one checkbox. */
+export interface ProposedChange {
+  id: string;
+  kind: ChangeKind;
+  /** `null` for an addition: `seq` is assigned at apply and never reissued,
+   *  so a proposal has no number to show yet. */
+  seq: number | null;
+  title: string;
+  why: string | null;
+  workflow_name: string | null;
+  agent_kind: string | null;
+  blocked_by: string[];
+  /** Empty except on a revision. */
+  fields: FieldChange[];
+}
+
+/** Mirrors `LockedTicket` — a started ticket, listed so the user can see what
+ *  the pass worked around. */
+export interface LockedTicket {
+  id: string;
+  seq: number;
+  title: string;
+  lane: TicketLane | null;
+}
+
+/** Mirrors `ImmutableChange`. */
+export type ImmutableChange = 'revised' | 'removed';
+
+/** Mirrors `ImmutableViolation` — a started ticket the pass tried to touch,
+ *  reported per ticket rather than as one sentence. */
+export interface ImmutableViolation {
+  id: string;
+  change: ImmutableChange;
+  reason: string;
+}
+
+/** Mirrors `DecomposeProposal`. */
+export interface DecomposeProposal {
+  discovery_id: string;
+  /** The discovery held no tickets before this pass — the `First pass`
+   *  eyebrow. Derived, never counted. */
+  first_pass: boolean;
+  /** The plan verbatim. `discovery_apply_decomposition` takes it back
+   *  unchanged. */
+  tickets: PlannedTicket[];
+  changes: ProposedChange[];
+  locked: LockedTicket[];
+  /** Every refusal the pass was re-asked over, oldest first — including the
+   *  ones it then fixed, which is what the validation bar reports. */
+  refused: string[];
+  /** Set when the last attempt was refused too, so nothing here can be
+   *  applied. */
+  refusal: string | null;
+  violations: ImmutableViolation[];
+  cost_usd: number;
+  tokens: number;
+}
+
+/** Mirrors `DecomposeApply`. */
+export interface DecomposeApply {
+  discovery_id: string;
+  tickets: PlannedTicket[];
+  /** The `ProposedChange.id`s left checked. A change absent from this list
+   *  leaves its stored row alone. */
+  accept: string[];
+}
+
+/**
+ * Mirrors `TicketEdit`.
+ *
+ * **Every key is required, and none of them means "leave this one alone".**
+ * Rust reads an absent key and an explicit `null` identically, so a partial
+ * payload would turn *clear the model* into *keep the model* with nothing on
+ * screen to say so. The drawer holds the whole ticket and saves it whole.
+ */
+export interface TicketEdit {
+  title: string;
+  description: string;
+  acceptance: string[];
+  files: string[];
+  blocked_by: string[];
+  test_command: string | null;
+  workflow_id: string | null;
+  agent_kind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
 }

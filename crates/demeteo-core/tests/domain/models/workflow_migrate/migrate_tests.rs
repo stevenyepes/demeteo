@@ -1,6 +1,6 @@
 //! v1 → v2 migration coverage (task P1.2).
 //!
-//! The seven bundled starters are the fixture set — the same files the
+//! The bundled starters are the fixture set — the same files the
 //! P0.2 baseline harness executes, loaded from `src-tauri/workflows/`.
 
 use super::*;
@@ -8,9 +8,10 @@ use crate::domain::ids::StepId;
 use crate::domain::models::workflow_v2::{JoinSemantics, RetryStrategy};
 use std::path::Path;
 
-const STARTERS: [&str; 7] = [
+const STARTERS: [&str; 8] = [
     "bugfix-pipeline",
     "ci-fix",
+    "code-review",
     "docs-update",
     "experiment",
     "refactor",
@@ -32,7 +33,7 @@ fn steps_of(doc: &serde_json::Value) -> Vec<StepConfig> {
 }
 
 #[test]
-fn all_seven_starters_migrate_without_error() {
+fn every_starter_migrates_without_error() {
     for name in STARTERS {
         let doc = load_starter(name);
         let def = migrate_definition(&doc)

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { asAppError } from "./errors";
-import type { AppError, EffortLevel, Feature, WorktreeStrategy } from "../types";
+import type { AppError, EffortLevel, Feature, FeatureOrigin, WorktreeStrategy } from "../types";
 
 // ── Wire types ──────────────────────────────────────────────────────────
 //
@@ -192,6 +192,12 @@ export interface StartFeatureInput {
    *  attachments, so this is always `[]` (sent as `null` to match the
    *  backend's `Option<Vec<_>>`). */
   stagedAttachments?: unknown[] | null;
+  /** Where the run's branch is cut from, and what its diff is measured
+   *  against (migration V41). Both are **omitted** from the invoke payload
+   *  when unset rather than sent as `null`, so a launch that names neither is
+   *  the payload that shipped before the origin picker existed. */
+  origin?: FeatureOrigin;
+  diffBaseBranch?: string;
 }
 
 /** Launch a feature against the chosen project + workflow. Wraps
@@ -210,6 +216,8 @@ export async function startFeature(input: StartFeatureInput): Promise<Feature> {
     maxBudgetUsd: input.maxBudgetUsd ?? null,
     stepOverrides: input.stepOverrides ?? null,
     stagedAttachments: input.stagedAttachments ?? null,
+    ...(input.origin ? { origin: input.origin } : {}),
+    ...(input.diffBaseBranch ? { diffBaseBranch: input.diffBaseBranch } : {}),
   });
 }
 

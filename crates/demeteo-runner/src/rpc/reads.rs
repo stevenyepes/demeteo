@@ -1,6 +1,6 @@
 use crate::services::RunnerServices;
 use demeteo_core::domain::ids::{FeatureId, ThreadId};
-use demeteo_core::domain::models::{Feature, Message, StepExecution};
+use demeteo_core::domain::models::{Feature, Message, SequenceStateMirror, StepExecution};
 use demeteo_core::ports::run_events::RunEvent;
 use demeteo_core::ports::runner_run::RunnerRun;
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,12 @@ struct StreamEventsParams {
     run_id: String,
     #[serde(default)]
     from_offset: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SequenceStateParams {
+    run_id: String,
+    node_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,6 +145,42 @@ pub(super) fn list_steps(
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
     let fid = feature_id_for_run(svc, &params.run_id, client_id)?;
     svc.ctx.features.steps_for_feature(&fid)
+}
+
+/// The runner's own resume state for one `sequence` node — plan cache,
+/// checkpoint, and per-task run rows — so the laptop can mirror a detached
+/// run's task list (`hydrate_shadow_feature`) the same way C4.2 already
+/// mirrors `Feature`/`StepExecution`. Returned together, in one call, so
+/// the laptop's write is never torn across polls: it either gets this
+/// node's whole resume state or none of it (root cause of "task list not
+/// shown in the implement step for detached runs" — no RPC or write path
+/// existed for these three tables at all).
+pub(super) fn get_sequence_state(
+    svc: &Arc<RunnerServices>,
+    params: serde_json::Value,
+    client_id: &str,
+) -> Result<SequenceStateMirror, String> {
+    let params: SequenceStateParams =
+        serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    let fid = feature_id_for_run(svc, &params.run_id, client_id)?;
+    let plan_json = svc
+        .ctx
+        .sequence_resume
+        .plan_cache_get(&fid, &params.node_id)?;
+    let checkpoint = svc
+        .ctx
+        .sequence_resume
+        .sequence_checkpoint_get(&fid, &params.node_id)?;
+    let steps = svc.ctx.features.steps_for_feature(&fid)?;
+    let subtask_runs = match steps.iter().find(|s| s.step_id.as_str() == params.node_id) {
+        Some(step) => svc.ctx.features.subtask_runs_mirror_for_step(&step.id)?,
+        None => Vec::new(),
+    };
+    Ok(SequenceStateMirror {
+        plan_json,
+        checkpoint,
+        subtask_runs,
+    })
 }
 
 /// Variant A of the detached-run "Browse Code" fix: the runner's own

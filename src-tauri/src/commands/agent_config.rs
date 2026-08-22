@@ -1,5 +1,7 @@
 use crate::domain::ids::MachineId;
-use crate::domain::models::{AgentConfig, AgentKind, Availability, WorkingMemoryEntry};
+use crate::domain::models::{
+    AgentConfig, AgentKind, Availability, PathContainment, Platform, WorkingMemoryEntry,
+};
 use crate::error::AppError;
 use crate::state::{AgentCatalogEntry, AgentConfigView, AppContext};
 use tauri::State;
@@ -51,7 +53,31 @@ pub async fn get_agent_configs(
     // `is_supported` above.
     configured = AgentConfig::seed_missing(configured, &known);
 
-    Ok(agent_config_views(&ctx.registry, configured, &known))
+    Ok(agent_config_rows(&ctx.registry, configured, &known, &*ctx.exec, &machine_id).await)
+}
+
+/// The half of [`get_agent_configs`] that reads a port, split out so it is
+/// reachable from a test that owns the port's answers — the one port being the
+/// execution port, asked for the platform of the machine the rows describe.
+///
+/// That question is the whole of this function and the reason it is not inlined
+/// above. The rows are read on a laptop deciding what a turn on *another* host
+/// is held to, and `PathContainment::for_agent` keys codex's answer on a kernel
+/// facility, so answering from the desktop's own OS would be a claim about the
+/// wrong machine — invisible on a fleet of one, and wrong in both directions on
+/// any other. `None` — an unreachable machine, or a transport that declines to
+/// say — is the honest input, and is answered with the weakest claim rather
+/// than the local one.
+async fn agent_config_rows(
+    registry: &demeteo_core::adapters::agent::registry::AgentRegistry,
+    configured: Vec<AgentConfig>,
+    known: &[(&str, Availability)],
+    exec: &dyn demeteo_core::ports::execution::ExecutionPort,
+    machine_id: &str,
+) -> Vec<AgentConfigView> {
+    let platform =
+        demeteo_core::ports::agent_runtime::resolve_agent_platform(exec, machine_id).await;
+    agent_config_views(registry, configured, known, platform)
 }
 
 /// The pure half of [`get_agent_configs`] — configs plus probe results in,
@@ -60,11 +86,13 @@ pub async fn get_agent_configs(
 ///
 /// A kind in `configured` with no entry in `known` is a stored config for an
 /// agent this build no longer registers. It still gets a row, so a user can
-/// see and clear it, but nothing claims it is available.
+/// see and clear it, but nothing claims it is available — nor that anything
+/// fences it, there being no adapter left to have declared one.
 fn agent_config_views(
     registry: &demeteo_core::adapters::agent::registry::AgentRegistry,
     configured: Vec<AgentConfig>,
     known: &[(&str, Availability)],
+    platform: Option<Platform>,
 ) -> Vec<AgentConfigView> {
     configured
         .into_iter()
@@ -82,12 +110,16 @@ fn agent_config_views(
                 .as_ref()
                 .map(|r| r.capabilities().display_label.to_string())
                 .unwrap_or_else(|| cfg.kind.clone());
+            let path_containment = AgentKind::parse(&cfg.kind)
+                .map(|k| PathContainment::for_agent(k, platform))
+                .unwrap_or(PathContainment::UNFENCED);
             AgentConfigView {
                 kind: cfg.kind,
                 enabled: cfg.enabled,
                 available,
                 install_command,
                 display_label,
+                path_containment,
             }
         })
         .collect()
@@ -125,6 +157,7 @@ fn agent_catalog(
                 // can never offer a level the agent would silently ignore.
                 // Empty for hermes, which has no per-invocation effort control.
                 effort_levels: caps.effort_levels.to_vec(),
+                personalization: caps.personalization,
             }
         })
         .collect()

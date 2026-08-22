@@ -42,6 +42,7 @@
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::spend::RunningSpend;
 use crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files;
+use crate::adapters::step_executor::steps::pending_commit::{self, PendingCommit};
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::models::StepExecution;
 use crate::paths;
@@ -69,6 +70,34 @@ pub(crate) enum ConflictPassError {
     Cancelled,
     Failed(String),
     Environmental(String),
+}
+
+/// How the resolution turn ended, when it did not end well.
+///
+/// Held rather than returned, because the tree has not been read yet and the
+/// tree is what decides. Kept as two arms rather than one string because the
+/// classes route differently once the tree *does* refuse: an environmental stop
+/// must not feed a rework loop
+/// ([`is_process_level_error`](crate::adapters::agent::cli_runtime)), and a
+/// class folded into prose is a class the next reader has to parse back out.
+enum TurnStop {
+    Reported(String),
+    Environmental(String),
+}
+
+impl TurnStop {
+    /// This stop, as the explanation of a tree that is still conflicted.
+    fn refuse(self, tree_refusal: &str) -> ConflictPassError {
+        use crate::domain::sync_session::resolution_refusal;
+        match self {
+            Self::Reported(stop) => {
+                ConflictPassError::Failed(resolution_refusal(Some(&stop), tree_refusal))
+            }
+            Self::Environmental(stop) => {
+                ConflictPassError::Environmental(resolution_refusal(Some(&stop), tree_refusal))
+            }
+        }
+    }
 }
 
 impl ExecutionDriver {
@@ -112,15 +141,27 @@ impl ExecutionDriver {
             .map(|f| format!("- {} ({})", f.path, f.kind))
             .collect::<Vec<_>>()
             .join("\n");
+        // The verification sentence names the project's own command for the
+        // reason `sync_resolve::build_resolver_prompt` spells out: "make sure
+        // all code builds and passes tests" leaves the agent to find the
+        // command first, and every guess is a turn against a budget.
+        let verification = match self.base_ctx.get("test_command").trim() {
+            "" => String::new(),
+            cmd => format!(
+                " Then verify with this project's own command, exactly as written: `{}` — \
+                 do not go looking for another one if it does not work here.",
+                cmd
+            ),
+        };
         let prompt = format!(
             "We encountered a merge conflict while merging the latest changes from the feature \
              branch '{}' into your workspace.\n\
              Please resolve the conflicts in the following files:\n\
              {}\n\n\
              Ensure you edit these files to remove conflict markers (<<<<<<<, =======, >>>>>>>) \
-             and integrate the changes correctly. Make sure all code builds and passes tests. \
+             and integrate the changes correctly.{} \
              Once done, let me know.",
-            self.branch_name, files_list
+            self.branch_name, files_list, verification
         );
 
         let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
@@ -158,23 +199,48 @@ impl ExecutionDriver {
         )
         .await;
 
-        let billing = match turn_res {
+        // Only a stop short-circuits. Git's index is what says whether the
+        // conflicts are gone, and an agent's exit status is not a reading of it
+        // — the same rule stated in full on
+        // `domain::sync_session::resolution_refusal`. A turn that hit its dollar
+        // ceiling one edit after finishing the work was answered here with a
+        // discarded implementation and a step failure.
+        let (billing, turn_stop) = match turn_res {
             crate::adapters::agent::event_stream::TurnResult::Interrupted => {
                 return Err(ConflictPassError::Cancelled)
             }
-            crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
-                return Err(ConflictPassError::Failed(descriptive))
+            crate::adapters::agent::event_stream::TurnResult::Failed { reason, spent } => {
+                *accumulated_cost += spent.cost_usd;
+                *accumulated_tokens += spent.tokens;
+                (
+                    ConflictPassBilling {
+                        cache_read_input_tokens: spent.cache_read_input_tokens,
+                        cache_creation_input_tokens: spent.cache_creation_input_tokens,
+                    },
+                    Some(TurnStop::Reported(reason)),
+                )
             }
-            crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
-                return Err(ConflictPassError::Environmental(descriptive))
+            crate::adapters::agent::event_stream::TurnResult::Environmental { reason, spent } => {
+                *accumulated_cost += spent.cost_usd;
+                *accumulated_tokens += spent.tokens;
+                (
+                    ConflictPassBilling {
+                        cache_read_input_tokens: spent.cache_read_input_tokens,
+                        cache_creation_input_tokens: spent.cache_creation_input_tokens,
+                    },
+                    Some(TurnStop::Environmental(reason)),
+                )
             }
             crate::adapters::agent::event_stream::TurnResult::Success(outcome) => {
                 *accumulated_cost += outcome.cost_usd;
                 *accumulated_tokens += outcome.tokens;
-                ConflictPassBilling {
-                    cache_read_input_tokens: outcome.cache_read_input_tokens,
-                    cache_creation_input_tokens: outcome.cache_creation_input_tokens,
-                }
+                (
+                    ConflictPassBilling {
+                        cache_read_input_tokens: outcome.cache_read_input_tokens,
+                        cache_creation_input_tokens: outcome.cache_creation_input_tokens,
+                    },
+                    None,
+                )
             }
         };
 
@@ -184,76 +250,51 @@ impl ExecutionDriver {
 
         let still_unmerged = list_unmerged_files(&*self.exec, machine_str, wt_path).await;
         if !still_unmerged.is_empty() {
-            return Err(ConflictPassError::Failed(format!(
+            let tree_refusal = format!(
                 "agent failed to resolve merge conflicts in: {:?}",
                 still_unmerged.iter().map(|f| &f.path).collect::<Vec<_>>()
-            )));
+            );
+            return Err(match turn_stop {
+                Some(stop) => stop.refuse(&tree_refusal),
+                None => ConflictPassError::Failed(tree_refusal),
+            });
         }
 
-        // Commit the resolution — but only if the agent has not already done
-        // it for us, which is common: told to fix conflict markers, an agent
-        // very often stages and commits on its own. That consumes `MERGE_HEAD`
-        // and leaves a clean tree, so an unconditional `git commit -am` exits
-        // non-zero with "nothing to commit" and we would fail the step —
-        // rolling back a merge that in fact succeeded.
-        //
-        // A clean tree with the conflicts gone *is* the success condition, so
-        // treat "nothing to commit" as done rather than as an error.
-        if worktree_has_pending_commit(&*self.exec, machine_str, wt_path).await {
-            self.exec
-                .run_command(
-                    machine_str,
-                    &format!(
-                        "{} commit -am {}",
-                        paths::git_no_hooks(wt_path),
-                        paths::shell_escape_posix(&format!(
-                            "chore: resolve merge conflicts with {}",
-                            self.branch_name
-                        )),
-                    ),
-                )
-                .await
-                .map_err(|e| {
-                    ConflictPassError::Failed(format!(
-                        "failed to commit the merge-conflict resolution: {}",
-                        e
-                    ))
-                })?;
+        // `-am` rather than the sync resolver's `add -A` + `-m`: nothing is
+        // staged above, and this worktree outlives the pass — the step goes on
+        // working in it — so an untracked file lying in it is not part of the
+        // resolution. See `steps::pending_commit` for why the guard is here.
+        match pending_commit::probe(&*self.exec, machine_str, wt_path).await {
+            PendingCommit::Nothing => {}
+            PendingCommit::Unreadable(why) => {
+                return Err(ConflictPassError::Failed(format!(
+                "could not tell whether the merge-conflict resolution still needs committing: {}",
+                why
+            )))
+            }
+            PendingCommit::Pending => {
+                self.exec
+                    .run_command(
+                        machine_str,
+                        &format!(
+                            "{} commit -am {}",
+                            paths::git_no_hooks(wt_path),
+                            paths::shell_escape_posix(&format!(
+                                "chore: resolve merge conflicts with {}",
+                                self.branch_name
+                            )),
+                        ),
+                    )
+                    .await
+                    .map_err(|e| {
+                        ConflictPassError::Failed(format!(
+                            "failed to commit the merge-conflict resolution: {}",
+                            e
+                        ))
+                    })?;
+            }
         }
 
         Ok(ConflictPass::Resolved(billing))
     }
 }
-
-/// Is there anything for `git commit` to record in `wt_path` — either an
-/// in-progress merge to conclude, or modified tracked files?
-///
-/// `git status --porcelain` is empty exactly when the tree is clean, and
-/// `MERGE_HEAD` exists exactly while a merge is awaiting its commit. An
-/// agent that resolved *and committed* leaves neither.
-async fn worktree_has_pending_commit(
-    exec: &dyn crate::ports::execution::ExecutionPort,
-    machine_str: &str,
-    wt_path: &str,
-) -> bool {
-    let safe = paths::shell_escape_posix(wt_path);
-    let merge_in_progress = exec
-        .run_command(
-            machine_str,
-            &format!("git -C {} rev-parse --verify --quiet MERGE_HEAD", safe),
-        )
-        .await
-        .map(|out| !out.trim().is_empty())
-        .unwrap_or(false);
-    if merge_in_progress {
-        return true;
-    }
-    exec.run_command(machine_str, &format!("git -C {} status --porcelain", safe))
-        .await
-        .map(|out| !out.trim().is_empty())
-        .unwrap_or(false)
-}
-
-#[cfg(test)]
-#[path = "../../../../tests/infrastructure/step_executor/steps/pending_commit.rs"]
-mod pending_commit_tests;

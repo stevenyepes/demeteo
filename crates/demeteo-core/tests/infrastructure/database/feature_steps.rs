@@ -1,6 +1,7 @@
 use rusqlite::Connection;
 
 use super::super::super::SqliteAdapter;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, StepId};
 use crate::domain::models::Project;
 use crate::domain::models::{Feature, StepExecution};
@@ -56,6 +57,9 @@ fn make_feature(adapter: &SqliteAdapter, id: &str, project_id: &str) -> FeatureI
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         },
     )
     .unwrap();

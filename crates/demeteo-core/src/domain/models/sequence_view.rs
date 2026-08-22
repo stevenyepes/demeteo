@@ -84,6 +84,46 @@ pub struct SubtaskRunRow {
     pub error_message: Option<String>,
 }
 
+/// Full-fidelity `subtask_runs` row for mirroring a detached run's per-task
+/// telemetry onto the laptop in one write (the `get_sequence_state` runner
+/// RPC and
+/// [`FeatureRepository::subtask_runs_replace_for_step`](crate::ports::db::FeatureRepository::subtask_runs_replace_for_step)).
+/// Unlike [`SubtaskRunRow`], which the drill-down reads, this carries every
+/// column `subtask_run_start`/`subtask_run_finish` populate — the mirror
+/// write replaces the whole row set for a step in one shot, so it needs
+/// each row whole rather than the read-projected subset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubtaskRunMirrorRow {
+    pub id: String,
+    pub subtask_id: String,
+    pub agent_id: Option<String>,
+    pub worktree_path: String,
+    pub branch: String,
+    /// `pending | running | completed | failed | skipped | interrupted`.
+    pub status: String,
+    pub cost_usd: f64,
+    pub tokens: i64,
+    pub error_message: Option<String>,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+}
+
+/// Wire shape of the runner's `get_sequence_state` RPC (C4.1): one
+/// `sequence` node's whole resume state, bundled into a single response so
+/// the laptop's mirror write (`hydrate_shadow_feature`) is never torn
+/// across polls — it either gets this node's whole state or none of it.
+/// Shared by `demeteo-runner` (produces it) and `demeteo-core`
+/// (`hydrate_shadow_feature` consumes it) rather than duplicated, the same
+/// way [`Feature`](crate::domain::models::Feature) and
+/// [`StepExecution`](crate::domain::models::StepExecution) back the other
+/// C4 read RPCs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SequenceStateMirror {
+    pub plan_json: Option<String>,
+    pub checkpoint: SequenceCheckpoint,
+    pub subtask_runs: Vec<SubtaskRunMirrorRow>,
+}
+
 /// One task in a sequence node, merged from its plan entry and (if it has run)
 /// its `subtask_runs` row, with the landed flag from the checkpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]

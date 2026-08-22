@@ -245,6 +245,13 @@ fn pi_breadcrumb(v: &serde_json::Value) -> String {
 /// `network: Deny` is unenforceable beyond removing `bash`. Nothing here
 /// pretends otherwise. The artifacts-vs-source path shape is enforced for
 /// every agent by the chmod fence in `adapters/worktree/git_ops/scope.rs`.
+///
+/// That gap is load-bearing for pipeline steps now, in a way it was not: an
+/// extension tool that reaches the network is not a built-in and cannot be
+/// named here, and `--no-extensions` is no longer emitted for a step with
+/// `uses_agent_skills`. The hazard is written up beside that gate in
+/// `build_pi_args`; do not close it by extending this list, which cannot see
+/// an extension's tools.
 pub(crate) fn excluded_tools_for(p: &PermissionProfile) -> Vec<&'static str> {
     let mut out = Vec::new();
     if !p.read_fs.is_allow() {
@@ -285,9 +292,17 @@ fn pi_tool_name(name: &str) -> Option<&'static str> {
 /// ```text
 /// --mode json           the JSONL stream this adapter parses. Non-interactive
 ///                       on its own, so no `-p` alongside it.
-/// -na                   ignore `~/.pi/agent/trust.json`. A fleet run must not
-///                       depend on which projects the user happened to trust
-///                       interactively, and Demeteo never writes that file.
+/// -na                   pin pi's project-trust decision to untrusted. pi gates
+///                       every project-scoped resource on that one decision, so
+///                       this is the whole of what keeps `<worktree>/.pi/` —
+///                       `settings.json`, extensions, skills, prompts, themes,
+///                       `SYSTEM.md` — and any ancestor `.agents/skills` out of
+///                       the turn. It resolves *ahead of* `~/.pi/agent/trust.json`
+///                       rather than merely ignoring it, which is the part that
+///                       matters: a trust entry covers every path beneath it, so
+///                       a worktree under a directory the user trusted once
+///                       would otherwise load with no prompt. A fleet run must
+///                       not depend on that, and Demeteo never writes the file.
 /// --session <id>        continue the captured session so the static prefix
 ///                       (system prompt + tool defs) hits the provider prompt
 ///                       cache instead of starting cold.
@@ -303,8 +318,14 @@ fn pi_tool_name(name: &str) -> Option<&'static str> {
 ///                       step's permission profile.
 /// -xt <denied>          compiled from the profile by `excluded_tools_for`.
 /// --no-extensions --no-skills --no-prompt-templates --no-themes
-///                       bare mode only: a byte-identical static prefix across
-///                       worktrees, for prompt-cache reuse.
+///                       bare mode, unless the step asked to keep the
+///                       harness's own setup (`keep_harness_personalization`).
+///                       Emitting them buys a byte-identical static prefix
+///                       across worktrees, and so prompt-cache reuse; a step
+///                       that keeps its personalization spends that to run on
+///                       the skills and prompt templates the user wrote.
+///                       These four are the whole of what `bare_mode` does
+///                       here, so a keeping step's pi turn carries none of it.
 /// <prompt>              trailing positional — stdin races pi's own init.
 /// ```
 ///
@@ -361,7 +382,29 @@ fn build_pi_args(
         args.push("-xt".to_string());
         args.push(excluded.join(","));
     }
-    if ctx.bare_mode {
+    // What a keeping step gives up here is not only cache reuse. Every
+    // `StepCapability` denies `network` (`domain/permission.rs`), and
+    // `excluded_tools_for` can only deny pi's *built-ins* by name — it says so
+    // itself, and it deliberately lets a user's extension tools through. Until
+    // this commit `--no-extensions` was emitted for every capability-scoped
+    // step, so there were no extension tools to let through and the flag was
+    // the de-facto enforcement of `network: Deny` on pi.
+    //
+    // pi does resolve both from the worktree — `<cwd>/.pi/extensions`,
+    // `<cwd>/.pi/skills`, and `.agents/skills` in *any* ancestor — and it
+    // `jiti.import()`s an extension, so loading one is arbitrary code
+    // execution by the reviewed repository, which is attacker-influenced on a
+    // fork PR. What holds that off a keeping step is `-na`, not this branch:
+    // measured against pi 0.83.0, a worktree extension runs under `--approve`
+    // or an inherited trust entry and does not run under `-na`. Keep any new
+    // pi invocation carrying it.
+    //
+    // What stays exposed is the user's own `~/.pi/agent/{extensions,skills}`,
+    // which pi loads with no trust gate at all — that being the point of
+    // `uses_agent_skills`. It is also why the `network: Deny` gap above is
+    // real rather than theoretical for a keeping step: an extension tool is
+    // not a built-in, so `-xt` cannot name it.
+    if ctx.bare_mode && !ctx.keep_harness_personalization {
         args.push("--no-extensions".to_string());
         args.push("--no-skills".to_string());
         args.push("--no-prompt-templates".to_string());
@@ -408,13 +451,28 @@ pub fn runtime() -> UnifiedCliRuntime {
         effort_env: crate::adapters::agent::cli_runtime::no_effort_env,
         display_label: "Pi",
         model_listing: Some(ModelListing {
-            args: "--list-models",
+            // `-na` for the reason `build_pi_args` opens with it. This probe
+            // runs in whatever cwd the host process holds rather than a
+            // worktree, so it is the weaker case — but reading a model table
+            // is no reason to execute a project's extensions, and the flag
+            // leaves the six-column output byte-identical.
+            args: "--list-models -na",
             parse: parse_pi_model_table,
         }),
         // pi follows the user's own `defaultProvider` / `defaultModel`, so
         // there is no statically-knowable model to seed the cost fallback.
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Pi),
+        // `build_pi_args` answers `bare_mode` with `--no-skills
+        // --no-extensions --no-prompt-templates --no-themes`, so a
+        // capability-scoped step runs on nothing the user taught this harness
+        // unless it asked to keep it (`keep_harness_personalization`).
+        personalization: crate::ports::agent_runtime::PersonalizationSupport::Suppressed,
+        // The only lever `build_pi_args` has over what a turn reaches is
+        // `-xt`, which denies built-ins by *name* (`excluded_tools_for`) and
+        // has no spelling for a directory. Nothing else pi exposes takes a
+        // path, so there is no fence to declare.
+        path_containment: crate::domain::models::PathContainment::UNFENCED,
         // Headless hygiene, plus one behavioural pin: `long` retention buys the
         // extended provider prompt cache (1h Anthropic, 24h OpenAI), which is
         // what makes cross-step `--session` continuation actually pay off.

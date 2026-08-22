@@ -7,6 +7,7 @@ use crate::adapters::agent::registry::AgentRegistry;
 use crate::adapters::database::SqliteAdapter;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::adapters::step_executor::DagStepExecutor;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{
     FeatureId, GateDecisionId, ProjectId, StepExecutionId, StepId, WorkflowId,
 };
@@ -37,6 +38,7 @@ async fn test_executor_instantiation_and_cancel() {
     let attachments: Arc<dyn crate::ports::attachment_store::AttachmentStore> =
         Arc::new(crate::adapters::attachment_store::fs::FsAttachmentStore::new(temp_dir.clone()));
 
+    let sync_turns = Arc::new(crate::application::sync_turns::SyncTurns::default());
     let merge_executor: Arc<dyn crate::ports::merge::MergeExecutor> = {
         // The git_ops helper needs an `AppSettingsRepository`; the
         // adapter also implements that port so we can hand a
@@ -46,6 +48,9 @@ async fn test_executor_instantiation_and_cancel() {
             crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
         Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
             db.clone(),
+            db.clone(),
+            db.clone(),
+            sync_turns.clone(),
             git_ops,
             exec.clone(),
             temp_dir.clone(),
@@ -80,6 +85,7 @@ async fn test_executor_instantiation_and_cancel() {
         temp_dir.clone(),
         pricing,
         db.clone(), // remote-run mirror — SqliteAdapter implements the port
+        sync_turns,
     );
 
     let cancel_res = executor.feature_cancel("f-nonexistent").await;
@@ -110,6 +116,7 @@ async fn test_executor_gate_decide() {
     let attachments: Arc<dyn crate::ports::attachment_store::AttachmentStore> =
         Arc::new(crate::adapters::attachment_store::fs::FsAttachmentStore::new(temp_dir.clone()));
 
+    let sync_turns = Arc::new(crate::application::sync_turns::SyncTurns::default());
     let merge_executor: Arc<dyn crate::ports::merge::MergeExecutor> = {
         // The git_ops helper needs an `AppSettingsRepository`; the
         // adapter also implements that port so we can hand a
@@ -119,6 +126,9 @@ async fn test_executor_gate_decide() {
             crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
         Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
             db.clone(),
+            db.clone(),
+            db.clone(),
+            sync_turns.clone(),
             git_ops,
             exec.clone(),
             temp_dir.clone(),
@@ -153,6 +163,7 @@ async fn test_executor_gate_decide() {
         temp_dir.clone(),
         pricing,
         db.clone(), // remote-run mirror — SqliteAdapter implements the port
+        sync_turns,
     );
 
     let waiter = crate::adapters::step_executor::gate_waiter::GateWaiter::new();
@@ -207,6 +218,9 @@ async fn test_executor_gate_decide() {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         })
         .unwrap();
 
@@ -304,11 +318,15 @@ async fn test_gate_decide_recovers_after_driver_death() {
     let attachments: Arc<dyn crate::ports::attachment_store::AttachmentStore> =
         Arc::new(crate::adapters::attachment_store::fs::FsAttachmentStore::new(temp_dir.clone()));
 
+    let sync_turns = Arc::new(crate::application::sync_turns::SyncTurns::default());
     let merge_executor: Arc<dyn crate::ports::merge::MergeExecutor> = {
         let git_ops =
             crate::adapters::worktree::git_ops::GitOpsHelper::new(db.clone(), exec.clone());
         Arc::new(crate::adapters::merge::SqliteMergeExecutor::new(
             db.clone(),
+            db.clone(),
+            db.clone(),
+            sync_turns.clone(),
             git_ops,
             exec.clone(),
             temp_dir.clone(),
@@ -343,6 +361,7 @@ async fn test_gate_decide_recovers_after_driver_death() {
         temp_dir.clone(),
         pricing,
         db.clone(), // remote-run mirror — SqliteAdapter implements the port
+        sync_turns,
     );
 
     let now = paths::now_ms();
@@ -390,6 +409,9 @@ async fn test_gate_decide_recovers_after_driver_death() {
             step_overrides: Vec::new(),
             attachments: Vec::new(),
             harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
         })
         .unwrap();
 

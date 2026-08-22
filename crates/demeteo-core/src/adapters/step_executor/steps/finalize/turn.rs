@@ -79,6 +79,8 @@ impl ExecutionDriver {
             exec: self.exec.clone(),
             permissions,
             bare_mode: true,
+            keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator
+                .keeps_harness_personalization(),
             // The diff and commit log are inlined in the prompt; read tools
             // stay available for the truncated-diff case, but the denied
             // tools (Bash/Edit/Write/Web) lose their *definitions* too —
@@ -135,7 +137,11 @@ impl ExecutionDriver {
 
         match turn_res {
             TurnResult::Interrupted => FinalizeTurn::Cancelled,
-            TurnResult::Failed(why) | TurnResult::Environmental(why) => FinalizeTurn::Broken(why),
+            TurnResult::Failed { reason, spent } | TurnResult::Environmental { reason, spent } => {
+                *spend.cost += spent.cost_usd;
+                *spend.tokens += spent.tokens;
+                FinalizeTurn::Broken(reason)
+            }
             TurnResult::Success(outcome) => {
                 *spend.cost += outcome.cost_usd;
                 *spend.tokens += outcome.tokens;

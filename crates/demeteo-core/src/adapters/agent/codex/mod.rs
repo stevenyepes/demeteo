@@ -385,6 +385,30 @@ pub fn runtime() -> UnifiedCliRuntime {
         // don't seed a cost fallback that could misprice an overridden model.
         default_model: None,
         effort_levels: EffortLevel::supported_for(AgentKind::Codex),
+        // `build_codex_args` reads no `bare_mode`: Demeteo emits no flag that
+        // would either keep or drop this harness's own setup.
+        personalization: crate::ports::agent_runtime::PersonalizationSupport::Native,
+        // `workspace-write` is a *write* fence and nothing else: the kernel
+        // refuses a write outside the writable roots and refuses no read at
+        // all, so the turn reads the whole filesystem — the user's other
+        // checkouts, `~/.ssh`, any credential file the process can open. The
+        // `network_access=true` line above is what makes that consequential
+        // rather than academic, and `PermissionProfile::all_allow` sets it.
+        //
+        // The writable roots are wider than the cwd too — `$TMPDIR` and `/tmp`
+        // are writable by default — so even the write half is not a cwd fence.
+        // Demeteo's own artifact-scope chmod is what holds inside the worktree.
+        //
+        // `shell` matches `writes` because the sandbox is process-wide: a
+        // command the agent runs is refused on exactly the paths a file tool
+        // is. Declared for POSIX; `PathContainment::for_agent` keys the
+        // Windows answer, and `SandboxSupport::for_agent` carries why it is
+        // open.
+        path_containment: crate::domain::models::PathContainment {
+            reads: crate::domain::models::Enforcement::None,
+            writes: crate::domain::models::Enforcement::Os,
+            shell: crate::domain::models::Enforcement::Os,
+        },
         static_env: &[],
         // `default_user_shell_from_path` returns PowerShell under `cfg!(windows)`
         // before consulting the user's shell at all, so this is the one

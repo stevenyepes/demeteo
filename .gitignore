@@ -44,3 +44,6 @@ ds-bundle/
 .design-sync/.cache/
 .design-sync/learnings/
 .design-sync/node_modules
+
+# Design canvas scratch — the durable capture is docs/DISCOVERY_UI_SPEC.md
+ui-mocks/

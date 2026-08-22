@@ -185,9 +185,14 @@ impl RunView {
     ///
     /// Returns [`SequenceState::unplanned`] for a node that hasn't resolved a
     /// plan yet or for a non-sequence node (neither writes a plan-cache row),
-    /// so the caller needs no node-type branch. Runner-owned features only
-    /// populate this once their sequence state is mirrored locally; until then
-    /// it reads unplanned, same as a not-yet-run node.
+    /// so the caller needs no node-type branch. For a runner-owned feature,
+    /// `hydrate_shadow_feature`
+    /// (`application::remote_runs::reconcile::hydrate_shadow_feature`) calls
+    /// the runner's `get_sequence_state` RPC on every poll and mirrors its
+    /// plan cache, checkpoint, and subtask runs into these same local
+    /// tables — so this method never branches on transport, and reads
+    /// unplanned only until that first poll lands, same as a not-yet-run
+    /// node.
     pub fn sequence_state(
         &self,
         feature_id: &FeatureId,
@@ -250,8 +255,11 @@ impl RunView {
     }
 }
 
+#[path = "../../tests/application/run_view.rs"]
+mod tests;
+
 #[cfg(test)]
-mod tests {
+mod run_events_tests {
     use std::sync::Mutex;
 
     use crate::ports::run_events::{RunEvent, RunEventsPort};

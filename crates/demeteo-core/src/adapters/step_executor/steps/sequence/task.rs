@@ -64,6 +64,13 @@ impl ExecutionDriver {
 
         let prompt = self.build_task_prompt(step, target, wt, run).await;
 
+        // A task turn is the step's own work, so the step's answer applies —
+        // the only turn of this stage's three for which that is true.
+        let target = RunTarget {
+            keep_harness_personalization: crate::domain::turn_role::TurnRole::Step(step_conf)
+                .keeps_harness_personalization(),
+            ..target
+        };
         let session = self
             .spawn_sequence_session(target, wt.path, run.thread_id, &task.title)
             .await
@@ -112,16 +119,20 @@ impl ExecutionDriver {
                 produced_artifacts = outcome.produced_artifacts;
                 None
             }
-            crate::adapters::agent::event_stream::TurnResult::Failed(descriptive) => {
+            crate::adapters::agent::event_stream::TurnResult::Failed { reason, spent } => {
+                *spend.cost += spent.cost_usd;
+                *spend.tokens += spent.tokens;
                 Some(SequenceError::Failed(format!(
                     "sequence task '{}': agent error: {}",
-                    task.id, descriptive
+                    task.id, reason
                 )))
             }
-            crate::adapters::agent::event_stream::TurnResult::Environmental(descriptive) => {
+            crate::adapters::agent::event_stream::TurnResult::Environmental { reason, spent } => {
+                *spend.cost += spent.cost_usd;
+                *spend.tokens += spent.tokens;
                 Some(SequenceError::Environmental(format!(
                     "sequence task '{}': agent error: {}",
-                    task.id, descriptive
+                    task.id, reason
                 )))
             }
             crate::adapters::agent::event_stream::TurnResult::Interrupted => {

@@ -79,6 +79,11 @@ pub enum AppView {
     CreateProject,
     /// Project-scoped settings editor.
     ProjectSettings,
+    /// Open pull requests for the current project. Project-scoped like
+    /// `ProjectSettings` and carries no payload for the same reason: the
+    /// project is `ProjectContext.currentProjectId`, so a view holding its
+    /// own copy could disagree with the rail the user is looking at.
+    CodeReview,
     /// Workflow gallery / list.
     Workflows,
     /// Workflow editor. `workflow_id == None` ⇒ new (unsaved) workflow.
@@ -105,6 +110,7 @@ impl AppView {
             AppView::NewProject => "new-project",
             AppView::CreateProject => "create-project",
             AppView::ProjectSettings => "project-settings",
+            AppView::CodeReview => "code-review",
             AppView::Workflows => "workflows",
             AppView::WorkflowEditor { .. } => "workflow-editor",
             AppView::Providers => "providers",

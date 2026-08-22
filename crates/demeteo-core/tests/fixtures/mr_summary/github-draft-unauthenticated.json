@@ -1,0 +1,20 @@
+{
+  "number": 77,
+  "state": "open",
+  "title": "sketch the review lane",
+  "user": { "login": "stevenyepes" },
+  "draft": true,
+  "html_url": "https://github.com/stvcloud/demeteo/pull/77",
+  "created_at": "2026-07-20T11:00:03Z",
+  "updated_at": "2026-07-28T19:24:55Z",
+  "head": {
+    "ref": "wip/review-lane",
+    "sha": "0f1e2d3c4b5a69788796a5b4c3d2e1f009182736",
+    "repo": { "full_name": "stvcloud/demeteo" }
+  },
+  "base": {
+    "ref": "master",
+    "sha": "34fe13a5b6c7d8e9f0a1b2c3d4e5f60718293a4b",
+    "repo": { "full_name": "stvcloud/demeteo" }
+  }
+}

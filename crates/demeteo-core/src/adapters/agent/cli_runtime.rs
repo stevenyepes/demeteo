@@ -97,6 +97,10 @@ pub struct UnifiedCliRuntime {
     /// no effort control. Surfaced through `capabilities()` to drive the UI
     /// picker.
     pub effort_levels: &'static [EffortLevel],
+    /// What [`AgentContext::bare_mode`] does to this harness's own
+    /// personalization. Declared beside the argv builder because
+    /// [`build_args`](Self::build_args) is the only evidence for it.
+    pub personalization: crate::ports::agent_runtime::PersonalizationSupport,
     /// Fixed environment injected into every spawn of this agent, before the
     /// per-context env (so a caller-provided value wins). For headless CLI
     /// children this is hygiene, not configuration — e.g. claude-code's
@@ -104,6 +108,10 @@ pub struct UnifiedCliRuntime {
     /// spawn latency and background network on fleet machines. `&[]` for
     /// agents with nothing to pin.
     pub static_env: &'static [(&'static str, &'static str)],
+    /// What holds a turn of this agent inside its worktree, for a POSIX
+    /// target. Declared beside the argv and env builders because they are the
+    /// whole evidence for it.
+    pub path_containment: crate::domain::models::PathContainment,
     /// The interpreter this CLI runs agent-authored commands under on Windows.
     /// Declared beside the argv builder because that is the code that knows
     /// how this harness invokes anything at all.
@@ -129,6 +137,8 @@ impl AgentRuntime for UnifiedCliRuntime {
             model_listing: self.model_listing,
             default_model: self.default_model,
             effort_levels: self.effort_levels,
+            personalization: self.personalization,
+            path_containment: self.path_containment,
             windows_agent_shell: self.windows_agent_shell,
         }
     }
@@ -492,6 +502,10 @@ impl UnifiedCliSession {
 impl AgentSession for UnifiedCliSession {
     fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    fn harness_session_id(&self) -> Option<String> {
+        self.captured_session_id.lock().ok()?.clone()
     }
 
     fn prompt(&self, text: &str) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {

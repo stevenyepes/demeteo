@@ -1,8 +1,8 @@
-import React from 'react';
 import { AlertCircle, RefreshCw, RotateCcw, ShieldCheck, XCircle } from 'lucide-react';
 
-import { TONE_TEXT } from '../../../lib/runStatus';
+import { isOutOfBandStep } from '../../../lib/featureSync';
 import type { StepAttempt } from '../../../types';
+import { ActionRow } from '../../ui/ActionRow';
 import { RerunOptions } from '../../FeatureDetail/RerunOptions';
 import type { HarnessOverrides } from '../../FeatureDetail/useHarnessOverrides';
 import type { NodeConfigV2, NodeRunStatus } from '../types';
@@ -43,7 +43,12 @@ export function ActionsTab({
   onDecideGate?: () => void;
 }) {
   const status = run?.status ?? 'pending';
-  const isFailed = status === 'failed' || status === 'interrupted';
+  // Retry and Replay walk the graph from this node, and an out-of-band sync is
+  // in no graph — the backend refuses both
+  // (`domain::run_control::out_of_band_refusal`), so offering them is a button
+  // whose only outcome is an error toast.
+  const graphless = isOutOfBandStep(node.id);
+  const isFailed = (status === 'failed' || status === 'interrupted') && !graphless;
   const isRunning = status === 'running' || status === 'verifying';
   const isGateWaiting = node.type === 'gate' && status === 'awaiting_gate';
   const guarded = blockedBy !== null;
@@ -55,7 +60,13 @@ export function ActionsTab({
   // "which rule will apply" hint (P2.4), read straight from the attempt row.
   const lastFailed = [...attempts].reverse().find((a) => a.error_class);
 
-  if (!hasActions) {
+  const anyAction =
+    (onDecideGate && isGateWaiting) ||
+    (onRetry && isFailed) ||
+    (onReplay && !graphless) ||
+    (onStop && isRunning);
+
+  if (!hasActions || !anyAction) {
     return (
       <div className="flex h-full items-center justify-center px-8 text-center text-xs font-bold uppercase tracking-wider text-slate-600">
         No actions available for this node yet.
@@ -103,7 +114,7 @@ export function ActionsTab({
         </>
       )}
 
-      {onReplay && (
+      {onReplay && !graphless && (
         <ActionRow
           icon={<RotateCcw className="h-4 w-4" />}
           tone="cyan"
@@ -131,57 +142,6 @@ export function ActionsTab({
           <span>{guardMsg}</span>
         </div>
       )}
-    </div>
-  );
-}
-
-const ACTION_TONE: Record<string, string> = {
-  ruby: 'border-rose-500/20 bg-rose-950/10',
-  cyan: 'border-cyan-500/20 bg-cyan-950/10',
-  amber: 'border-amber-500/20 bg-amber-950/10',
-};
-const ACTION_BTN: Record<string, string> = {
-  ruby: 'bg-rose-600 hover:bg-rose-500 text-white',
-  cyan: 'bg-cyan-600 hover:bg-cyan-500 text-white',
-  amber: 'bg-amber-500 hover:bg-amber-600 text-black',
-};
-
-function ActionRow({
-  icon,
-  tone,
-  title,
-  desc,
-  buttonLabel,
-  onClick,
-  disabled,
-  disabledReason,
-}: {
-  icon: React.ReactNode;
-  tone: 'ruby' | 'cyan' | 'amber';
-  title: string;
-  desc: string;
-  buttonLabel: string;
-  onClick: () => void;
-  disabled?: boolean;
-  disabledReason?: string;
-}) {
-  return (
-    <div className={`flex items-center gap-3 rounded-xl border p-3.5 ${ACTION_TONE[tone]}`}>
-      <div className={`shrink-0 ${TONE_TEXT[tone as keyof typeof TONE_TEXT] ?? 'text-slate-400'}`}>
-        {icon}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="text-xs font-bold uppercase tracking-wider text-slate-200">{title}</div>
-        <div className="mt-0.5 text-[11px] leading-relaxed text-slate-400">{desc}</div>
-      </div>
-      <button
-        onClick={onClick}
-        disabled={disabled}
-        title={disabled ? disabledReason : undefined}
-        className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:bg-slate-700/40 disabled:text-slate-500 ${ACTION_BTN[tone]}`}
-      >
-        {buttonLabel}
-      </button>
     </div>
   );
 }

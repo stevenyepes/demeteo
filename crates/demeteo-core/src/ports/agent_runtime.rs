@@ -11,7 +11,9 @@ use thiserror::Error;
 use tokio_stream::Stream;
 
 use crate::domain::agent_event::AgentEvent;
-use crate::domain::models::{Availability, EffortLevel, Platform, SessionInfo, WindowsAgentShell};
+use crate::domain::models::{
+    Availability, EffortLevel, PathContainment, Platform, SessionInfo, WindowsAgentShell,
+};
 use crate::domain::permission::PermissionProfile;
 use crate::ports::agent_execution::AgentExecutionPort;
 
@@ -69,10 +71,22 @@ pub struct AgentContext {
     /// `--disallowedTools`). Defaults to `all_allow` for interactive /
     /// probe sessions that aren't capability-scoped pipeline steps.
     pub permissions: PermissionProfile,
-    /// Strip the machine-local personalization an agent would otherwise
-    /// load — hooks, skills, extensions, themes, dynamic system-prompt
-    /// sections — so the static prefix is byte-identical across worktrees
-    /// and machines, which is what makes the provider prompt cache hit.
+    /// Pin the static system-prompt prefix so it is byte-identical across
+    /// worktrees and machines, which is what makes the provider prompt cache
+    /// hit.
+    ///
+    /// What it costs is per-adapter, and each `build_args` is the whole
+    /// evidence for it: claude-code drops machine-local `settings.local.json`
+    /// and every MCP server the repository commits; pi additionally switches
+    /// off the setup the user taught it, unless
+    /// [`keep_harness_personalization`](Self::keep_harness_personalization)
+    /// says otherwise; codex, hermes and opencode read it not at all.
+    ///
+    /// It is therefore **not** the personalization switch. A step that wants
+    /// the user's own skills asks for them through that field and never by
+    /// dropping this one, which for claude-code would also re-enable the
+    /// reviewed repository's MCP servers — arbitrary processes with network
+    /// access, inside a capability whose profile denies the network.
     ///
     /// A property of the *step*, not of the agent: `true` for every
     /// capability-scoped pipeline step, `false` for the interactive
@@ -81,6 +95,35 @@ pub struct AgentContext {
     /// adapter that grows those flags later is then silently left out of
     /// them, with nothing failing to say so.
     pub bare_mode: bool,
+    /// Keep the setup the user taught this harness — its own skills,
+    /// extensions, prompt templates and themes — inside a step that is
+    /// otherwise [`bare_mode`](Self::bare_mode).
+    ///
+    /// Narrower than `bare_mode` *as a rule*, but say what it costs per
+    /// harness rather than as a general guarantee — the two differ sharply:
+    ///
+    /// - **pi** is the only harness this field reaches, and pi's entire
+    ///   `bare_mode` block is those four switches. Setting this therefore
+    ///   switches off 100% of what `bare_mode` does to a pi turn. It leaves no
+    ///   MCP or settings-source isolation standing because pi never had any —
+    ///   what it costs is the byte-identical static prefix, and so the prompt
+    ///   cache. Whether pi resolves skills and extensions from the *worktree*
+    ///   as well as `~/.pi` is not established in this tree; until it is, a
+    ///   step setting this on pi must be assumed to load whatever the reviewed
+    ///   repository ships. See `build_pi_args`.
+    /// - **claude-code** ignores it: its skills already load under
+    ///   `--setting-sources user,project`, and `--strict-mcp-config` and
+    ///   `--exclude-dynamic-system-prompt-sections` are emitted either way.
+    ///   That isolation is `bare_mode`'s, not this field's, and is the reason
+    ///   a step must never ask for personalization by dropping `bare_mode`.
+    /// - **codex, hermes, opencode** read neither flag.
+    ///
+    /// Every construction site *should* answer it through
+    /// [`TurnRole`](crate::domain::turn_role::TurnRole), which holds it closed
+    /// for Demeteo's own role turns whatever the workflow asked for — but it is
+    /// a bare `bool` and nothing stops a new site passing `true` directly, so
+    /// read that as the convention it is rather than an enforced invariant.
+    pub keep_harness_personalization: bool,
     /// Restrict which built-in tools are even *defined* for the session
     /// (claude-code: `--tools a,b`; `Some(vec![])` → `--tools ""`, no
     /// tools at all). Distinct from [`permissions`](Self::permissions),
@@ -121,7 +164,9 @@ pub struct AgentContext {
 /// The policy is *complete* (every gated tool has an explicit value) and
 /// only ever uses `allow` / `deny` — never `ask` — so opencode runs fully
 /// non-interactively with no permission prompts. `external_directory` is
-/// always `deny` (scopes the agent to its worktree); `read` is always
+/// always `deny`, which is a rule handed to a harness rather than a fence on
+/// the turn: what it buys, per harness and per class of access, is declared by
+/// [`PathContainment`] and nothing here may be read as more. `read` is always
 /// `allow` (file reads, grep/glob/list are separate read tools, *not* the
 /// shell, so denying `bash` never blocks codebase inspection).
 pub fn opencode_permission_json(p: &PermissionProfile) -> String {
@@ -323,6 +368,43 @@ pub fn models_one_per_line(output: &str) -> Vec<String> {
         .collect()
 }
 
+/// What Demeteo's own spawn flags do to the machine-local personalization a
+/// harness would otherwise load — the user's skills, commands, prompt
+/// templates, themes and settings files.
+///
+/// The subject is Demeteo's argv, never the harness's feature set. Which
+/// review capability a given harness ships, and what it is called there, is
+/// another product's vocabulary: it changes on their release schedule, nothing
+/// here fails when it does, and the stale claim reads as authoritative
+/// forever. What [`AgentContext::bare_mode`] strips is ours to know, and each
+/// adapter's `build_args` is the whole evidence for its value.
+///
+/// A *declared* value: it answers for a step that does not set
+/// [`AgentContext::keep_harness_personalization`]. A step that sets it has no
+/// such flag emitted on any harness, so [`Suppressed`](Self::Suppressed) then
+/// reads [`Loaded`](Self::Loaded). What moves it is the step, not the harness,
+/// so that resolution happens once for every surface in
+/// `src/lib/agentCatalog.ts` rather than here.
+///
+/// Declared beside [`AgentCapabilities::effort_levels`] for that field's own
+/// reason: the frontend states the consequence to the user without keeping a
+/// per-agent list of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PersonalizationSupport {
+    /// Under `bare_mode` the user's own setup is still loaded.
+    Loaded,
+    /// Under `bare_mode` the harness is told to switch it off, so a
+    /// capability-scoped step runs without it. The one value that costs the
+    /// user something they would otherwise have had.
+    Suppressed,
+    /// The adapter reads no `bare_mode` at all: whatever the harness loads
+    /// unprompted on that machine is what the step gets. Distinct from
+    /// [`Loaded`](Self::Loaded), which is a switch Demeteo holds and chose not
+    /// to throw.
+    Native,
+}
+
 /// The capabilities Demeteo asks of a coding agent, declared once per runtime
 /// instead of being inferred from `match kind { ... }` string lists scattered
 /// across the executor, the model probe, and the UI.
@@ -363,6 +445,24 @@ pub struct AgentCapabilities {
     /// declared in Rust, never read back off the wire.
     #[serde(skip_deserializing)]
     pub effort_levels: &'static [EffortLevel],
+    /// What this harness's personalization does under
+    /// [`AgentContext::bare_mode`], which every capability-scoped step sets.
+    /// Read the adapter's `build_args` before changing a value here; the type's
+    /// own docs carry why it is a claim about Demeteo and not about the harness.
+    pub personalization: PersonalizationSupport,
+    /// What holds a capability-scoped turn of this harness inside its
+    /// worktree, on a POSIX host.
+    ///
+    /// Declared beside the argv and env builders that are the whole of the
+    /// claim, which is what makes it the evidence: the conformance suite reads
+    /// it against those builders' output, and against
+    /// [`PathContainment::for_agent`]'s POSIX arm. No surface reads it — what a
+    /// user is told comes from that function, keyed on the platform of the
+    /// machine the turn will run on, because a fence backed by a kernel
+    /// facility is not the same claim on a kernel that has never been observed
+    /// to carry it. The type's own docs carry why the answer is about Demeteo
+    /// and not about the harness.
+    pub path_containment: PathContainment,
     /// The interpreter this harness runs agent-authored commands under on
     /// Windows, which decides what the platform block may promise about
     /// command syntax. Read through
@@ -492,6 +592,23 @@ pub trait AgentSession: Send + Sync {
     /// that as "no data, skip check."
     fn cumulative_tokens(&self) -> u64 {
         0
+    }
+
+    /// The harness's own id for this session, once the stream has named one.
+    ///
+    /// Distinct from [`session_id`](Self::session_id), which is Demeteo's
+    /// synthetic key and always present. This is what the harness would accept
+    /// back as `--resume`, and it exists only after the harness has said it —
+    /// `None` before the first turn, and forever on a runtime that names no
+    /// session at all.
+    ///
+    /// Read-only, and deliberately not paired with a setter: a caller cannot
+    /// hand a stored id to a fresh process, because seeding one would mean
+    /// changing spawn logic. What a stored id is good for is recording that
+    /// the harness *had* a session — see
+    /// `crate::application::discovery::turn` for the one reader.
+    fn harness_session_id(&self) -> Option<String> {
+        None
     }
 
     /// The working directory this session is bound to (the `--dir` /

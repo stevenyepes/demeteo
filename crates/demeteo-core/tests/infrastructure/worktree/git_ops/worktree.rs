@@ -1983,9 +1983,9 @@ async fn head_sha_reports_nothing_for_a_directory_that_is_not_a_repo() {
 
 use super::{
     created_terminal_worktree_path, delete_worktree_residue, exclude_file_with,
-    link_dependency_caches_cmd, reclaim_worktree_path, restore_write_access_cmd,
-    share_dependency_caches, shareable_cache_names, shareable_cache_probe_cmd, target_path_join,
-    worktree_dir, worktree_dir_on,
+    link_dependency_caches_cmd, parent_dir, reclaim_worktree_path, restore_write_access_cmd,
+    share_dependency_caches, shareable_cache_probe, target_path_join, worktree_dir,
+    worktree_dir_on,
 };
 use crate::domain::models::Platform;
 use crate::ports::execution::{ProgramRequest, SftpEntry};
@@ -2348,34 +2348,108 @@ fn the_segment_is_pinned_across_builds() {
     );
 }
 
-/// The probe's answer reaches a shell command and a git exclude file, so it is
-/// read back as entries of the compiled-in list rather than as strings. A login
-/// banner, a git warning, or anything else on that stream names nothing.
+/// `-z` and `--directory` are the two flags this cannot be built without: the
+/// first because git C-quotes non-ASCII paths otherwise, the second because it
+/// is what stops git walking into a 15 GB `target/` to list every file in it.
 #[test]
-fn the_cache_probe_answer_is_matched_against_the_known_names() {
-    let answer = "node_modules\n  target  \nWelcome to Ubuntu\n../../etc\n";
-    assert_eq!(
-        shareable_cache_names(answer),
-        vec!["node_modules", "target"]
-    );
-    assert!(shareable_cache_names("").is_empty());
+fn the_cache_probe_asks_git_rather_than_guessing_at_a_layout() {
+    let request = shareable_cache_probe("/repo");
+    assert_eq!(request.executable, "git");
+    for flag in ["ls-files", "--others", "--ignored", "--directory", "-z"] {
+        assert!(
+            request.args.iter().any(|a| a == flag),
+            "{flag} is load-bearing: {:?}",
+            request.args
+        );
+    }
+    // No `check-ignore` and no per-name loop: one round trip answers for every
+    // cache at every depth, which over SSH is the difference that matters.
+    assert!(!request.args.iter().any(|a| a == "check-ignore"));
 }
 
-/// `run_command` treats any non-zero exit as `Err` and would discard the whole
-/// answer, and the loop's exit status is its last `if`'s.
-#[test]
-fn the_cache_probe_cannot_exit_non_zero_on_its_last_test() {
-    assert!(shareable_cache_probe_cmd("/repo").ends_with("; true"));
-}
-
-/// Only the names the probe cleared are linked — the gate is not re-spelled in
-/// the linking command, so the two cannot disagree about `vendor/`.
+/// Only what the gate cleared is linked — the filter is not re-spelled in the
+/// linking command, so the two cannot disagree about `dist/`.
 #[test]
 fn only_the_probed_names_are_linked() {
-    let cmd = link_dependency_caches_cmd("/repo", "/wt", "/cache", &["node_modules"]);
-    assert!(cmd.contains("for d in node_modules;"));
+    let cmd = link_dependency_caches_cmd("/repo", "/wt", "/cache", &["node_modules".to_string()]);
+    assert!(cmd.contains("/repo/node_modules"));
+    assert!(cmd.contains("/cache/node_modules"));
+    assert!(cmd.contains("/wt/node_modules"));
     assert!(!cmd.contains("vendor"));
     assert!(!cmd.contains("check-ignore"));
+    assert!(cmd.ends_with("true"));
+}
+
+/// A nested cache is seeded and linked at its own relative path, so two caches
+/// with the same basename cannot land on one entry in the feature's cache root.
+#[test]
+fn a_nested_cache_keeps_its_path_under_the_cache_root() {
+    let cmd = link_dependency_caches_cmd(
+        "/repo",
+        "/wt",
+        "/cache",
+        &[
+            "node_modules".to_string(),
+            "packages/web/node_modules".to_string(),
+        ],
+    );
+    assert!(cmd.contains("/cache/packages/web/node_modules"));
+    assert!(
+        cmd.contains("mkdir -p /cache/packages/web"),
+        "nothing has created the parent under the cache root: {cmd}"
+    );
+    assert!(cmd.contains("mkdir -p /wt/packages/web"));
+}
+
+/// git answers with whatever the repository contains, and a shell splits
+/// `weird name/target` into two words. Every path is quoted on its own for
+/// exactly this reason — a `for d in …` list cannot survive it.
+#[test]
+fn a_path_a_repository_chose_is_quoted_rather_than_split_or_run() {
+    let cmd = link_dependency_caches_cmd(
+        "/repo",
+        "/wt",
+        "/cache",
+        &[
+            "weird name/target".to_string(),
+            "sneaky$(id)/vendor".to_string(),
+        ],
+    );
+    assert!(cmd.contains("'/repo/weird name/target'"));
+    assert!(cmd.contains("'/cache/sneaky$(id)/vendor'"));
+
+    // The property, rather than a sample of it: with every single-quoted span
+    // removed, nothing the repository chose may remain. A `contains` check on
+    // the unquoted form cannot say this — the quoted form contains it too.
+    let mut outside = String::new();
+    let mut quoted = false;
+    for ch in cmd.chars() {
+        match ch {
+            '\'' => quoted = !quoted,
+            c if !quoted => outside.push(c),
+            _ => {}
+        }
+    }
+    assert!(!quoted, "every quote is closed: {cmd}");
+    for repo_chosen in ["weird name", "sneaky", "$(", "vendor", "target"] {
+        assert!(
+            !outside.contains(repo_chosen),
+            "{repo_chosen:?} reached the shell unquoted: {outside}"
+        );
+    }
+}
+
+/// The parent of a path already joined onto a root. `.` and `/` are the two
+/// arms a joined path never reaches, and both would `mkdir` somewhere real.
+#[test]
+fn a_parent_is_the_directory_above_and_never_the_root_by_accident() {
+    assert_eq!(
+        parent_dir("/cache/packages/web/node_modules"),
+        "/cache/packages/web"
+    );
+    assert_eq!(parent_dir("/cache/target"), "/cache");
+    assert_eq!(parent_dir("/target"), "/");
+    assert_eq!(parent_dir("target"), ".");
 }
 
 /// The exclude file belongs to a repository Demeteo cloned but whose contents
@@ -2383,28 +2457,31 @@ fn only_the_probed_names_are_linked() {
 #[test]
 fn exclusions_are_appended_and_never_repeated() {
     let existing = "# my own\n*.log\n";
-    let first = exclude_file_with(existing, &["node_modules", "target"])
-        .expect("two new names are appended");
+    let names = ["node_modules".to_string(), "src-tauri/target".to_string()];
+    let first = exclude_file_with(existing, &names).expect("two new names are appended");
     assert!(
         first.starts_with(existing),
         "the user's lines survive: {first}"
     );
     assert!(first.contains("\nnode_modules\n"));
-    assert!(first.ends_with("target\n"));
+    // The nested one is written as its anchored path, never as `target`, which
+    // would ignore every directory of that name in the tree.
+    assert!(first.ends_with("src-tauri/target\n"));
 
     assert_eq!(
-        exclude_file_with(&first, &["node_modules", "target"]),
+        exclude_file_with(&first, &names),
         None,
         "a second provisioning of the same repository writes nothing"
     );
-    assert!(exclude_file_with(&first, &["venv"]).is_some());
+    assert!(exclude_file_with(&first, &["venv".to_string()]).is_some());
 }
 
 /// An exclude file whose last line has no newline must not have the next entry
 /// welded onto it.
 #[test]
 fn an_unterminated_exclude_file_still_gets_a_separate_line() {
-    let updated = exclude_file_with("*.log", &["target"]).expect("a new name is appended");
+    let updated =
+        exclude_file_with("*.log", &["target".to_string()]).expect("a new name is appended");
     assert!(
         updated.lines().any(|line| line == "*.log"),
         "the unterminated line stays whole: {updated:?}"
@@ -2526,6 +2603,12 @@ impl ExecutionPort for CacheShareExec {
     }
     async fn run_program(&self, _m: &str, request: ProgramRequest) -> Result<String, String> {
         let line = format!("{} {}", request.executable, request.args.join(" "));
+        if line.contains("ls-files") {
+            self.note("probe".to_string());
+            // NUL-delimited, as `-z` answers, and nested — the shape the
+            // per-name probe could never return.
+            return Ok("node_modules/\0src-tauri/target/\0".to_string());
+        }
         self.note(line.clone());
         if line.contains("--absolute-git-dir") {
             return Ok("/repo/.git\n".to_string());
@@ -2533,10 +2616,6 @@ impl ExecutionPort for CacheShareExec {
         Err(format!("unscripted run_program: {line}"))
     }
     async fn run_command(&self, _m: &str, cmd: &str) -> Result<String, String> {
-        if cmd.contains("check-ignore") {
-            self.note("probe".to_string());
-            return Ok("node_modules\n".to_string());
-        }
         if cmd.contains("ln -sfn") {
             self.note("link".to_string());
             return Ok(String::new());
@@ -2666,4 +2745,115 @@ fn baseline_suffix(repo: &str) -> String {
         .expect("a worktree directory has a name")
         .to_string_lossy()
         .into_owned()
+}
+
+/// Refuses every call and records the git command lines it refused.
+///
+/// A double that answered `Ok("")` would let the fork-point resolution look
+/// successful while asking git for nothing at all — the whole failure this
+/// suite is about is a review that reads as finished. Refusing also drives
+/// `merge_base` through its entire candidate list in one call.
+#[derive(Default)]
+struct RefusingExec {
+    seen: Mutex<Vec<String>>,
+}
+
+impl RefusingExec {
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ExecutionPort for RefusingExec {
+    async fn test_connection(&self, _m: &str) -> Result<(), String> {
+        Err("unscripted test_connection".into())
+    }
+    async fn run_program(&self, _m: &str, request: ProgramRequest) -> Result<String, String> {
+        self.seen.lock().unwrap().push(format!(
+            "{} {}",
+            request.executable,
+            request.args.join(" ")
+        ));
+        Err("refused".into())
+    }
+    async fn run_command(&self, _m: &str, cmd: &str) -> Result<String, String> {
+        self.seen.lock().unwrap().push(format!("sh: {cmd}"));
+        Err("refused".into())
+    }
+    async fn remove_dir_all(&self, _m: &str, _p: &str) -> Result<(), String> {
+        Err("unscripted remove_dir_all".into())
+    }
+    async fn get_metadata(&self, _m: &str, _p: &str) -> Result<SftpEntry, String> {
+        Err("unscripted get_metadata".into())
+    }
+    async fn read_file(&self, _m: &str, _p: &str) -> Result<String, String> {
+        Err("unscripted read_file".into())
+    }
+    async fn write_file(&self, _m: &str, _p: &str, _c: &str) -> Result<(), String> {
+        Err("unscripted write_file".into())
+    }
+    async fn write_file_bytes(&self, _m: &str, _p: &str, _c: &[u8]) -> Result<(), String> {
+        Err("unscripted write_file_bytes".into())
+    }
+    async fn list_dir(&self, _m: &str, _p: &str) -> Result<Vec<SftpEntry>, String> {
+        Err("unscripted list_dir".into())
+    }
+    async fn setup_worktree(&self, _m: &str, _r: &str, _b: &str, _s: &str) -> Result<(), String> {
+        Err("unscripted setup_worktree".into())
+    }
+    async fn resolve_home(&self, _m: &str) -> Result<String, String> {
+        Err("unscripted resolve_home".into())
+    }
+    async fn resolve_user(&self, _m: &str) -> Result<String, String> {
+        Err("unscripted resolve_user".into())
+    }
+    async fn resolve_platform(&self, _m: &str) -> Result<Platform, String> {
+        Err("unscripted resolve_platform".into())
+    }
+    async fn control_rpc(
+        &self,
+        _m: &str,
+        _method: &str,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        Err("unscripted control_rpc".into())
+    }
+    fn spawn_interactive(
+        &self,
+        _m: &str,
+        _b: &str,
+        _a: &[String],
+        _c: &str,
+        _e: &std::collections::HashMap<String, String>,
+    ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+        Err("unscripted spawn_interactive".into())
+    }
+}
+
+/// The bootstrap fetches one branch by name — the project's default — so a run
+/// measured against anything else has no `origin/<base>` to merge-base with
+/// until the review fetches it itself, and on a fresh clone no such ref at all.
+/// The candidate order after it is `squash_feature_branch`'s: the pushed ref
+/// first, the bare name only as the no-origin fallback.
+#[tokio::test]
+async fn the_fork_point_fetches_its_base_before_asking_for_a_merge_base() {
+    let conn = Connection::open_in_memory().unwrap();
+    let db = Arc::new(SqliteAdapter::new(conn).unwrap()) as Arc<dyn AppSettingsRepository>;
+    let exec = Arc::new(RefusingExec::default());
+    let helper = GitOpsHelper::new(db, exec.clone() as Arc<dyn ExecutionPort>);
+
+    let resolved = helper
+        .fork_point(None, "/repo", "release/2.1", "feature/f-1")
+        .await;
+
+    assert_eq!(resolved, None, "every candidate was refused");
+    assert_eq!(
+        exec.seen(),
+        vec![
+            "git -C /repo fetch origin -- release/2.1".to_string(),
+            "git -C /repo merge-base refs/remotes/origin/release/2.1 feature/f-1".to_string(),
+            "git -C /repo merge-base release/2.1 feature/f-1".to_string(),
+        ]
+    );
 }

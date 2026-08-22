@@ -153,6 +153,8 @@ id_newtype!(ProviderId);
 id_newtype!(RepositoryId);
 id_newtype!(AgentProfileId);
 id_newtype!(MessageId);
+id_newtype!(DiscoveryId);
+id_newtype!(TicketId);
 id_newtype!(WorkflowVersionId);
 id_newtype!(InterceptId);
 

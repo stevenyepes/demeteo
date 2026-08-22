@@ -18,6 +18,7 @@ use demeteo_core::domain::models::{
 };
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
+use demeteo_core::ports::db::FeatureRepository;
 use demeteo_core::state::AppContext;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -156,11 +157,16 @@ async fn pre_clone_with_askpass(
 /// for a run that already has a `feature_id`, or it would create a second
 /// project from scratch instead of resuming the first. Use
 /// [`resume_or_run`] to pick the right path.
+///
+/// The origin is resolved before any of that, because
+/// [`RunSpec::origin_to_honour`] can refuse and a refused run must leave no
+/// project, no clone and no feature behind.
 pub async fn execute_run(
     svc: &RunnerServices,
     run_id: &str,
     spec: &RunSpec,
 ) -> Result<RunOutcome, String> {
+    let origin = spec.origin_to_honour()?;
     emit(&svc.ctx, run_id, "submitted", &spec.title);
 
     // M4.2/§6.2: nothing that touches `origin` happens without an
@@ -256,21 +262,17 @@ pub async fn execute_run(
         None,
     );
 
-    // Persist the settings the run will execute under. Two inputs merge
-    // here (MC-D4 / P0.5): the bootstrap-*detected* worktree strategy (it
-    // read the true `default_branch` from `origin/HEAD` on this clone —
-    // ground truth) and, when the launching client sent them, that
-    // client's own project settings (harnesses, prepare/test commands,
-    // extra writable paths, lifecycle, …). The client wins on every
-    // tunable; the detected `default_branch` wins over the client's stale
-    // copy. Without persisting *something*, `get_settings` returns None at
-    // feature_start and `fetch_default_settings` would supply
-    // `default_branch = "main"`, so `create_feature_branch` would run
-    // `git branch -f <feature> main` and fail on a `master`-default repo.
-    // `None` client settings reproduce the pre-multi-client behavior
-    // exactly (detected strategy + engine defaults).
-    let settings =
-        merge_project_settings(strategy, spec.project_settings.clone(), project.id.clone());
+    // Persist the settings the run will execute under. Without persisting
+    // *something*, `get_settings` returns None at feature_start and
+    // `fetch_default_settings` would supply `default_branch = "main"`, so
+    // `create_feature_branch` would run `git branch -f <feature> main` and
+    // fail on a `master`-default repo.
+    let settings = merge_project_settings(
+        strategy,
+        spec.project_settings.clone(),
+        project.id.clone(),
+        origin.base_branch(spec.diff_base_branch.as_deref()),
+    );
     svc.ctx
         .projects
         .save_settings(settings)
@@ -303,24 +305,26 @@ pub async fn execute_run(
     let feature = svc
         .ctx
         .executor
-        .feature_start(
+        .feature_start(demeteo_core::ports::step_executor::FeatureLaunch {
             // Reuse the laptop-chosen id (if the submitting app is new
             // enough to send one) so the eager shadow Feature on the
             // laptop and this runner-owned row are the same feature.
-            spec.feature_id.clone(),
-            project.id.as_str(),
-            workflow_id.as_str(),
-            &spec.title,
-            &spec.description,
-            spec.agent_kind.as_deref(),
-            spec.model.as_deref(),
-            spec.effort,
-            spec.commit_artifacts,
-            spec.loop_iterations,
-            spec.max_budget_usd,
-            spec.step_overrides.clone(),
-            staged,
-        )
+            feature_id: spec.feature_id.clone(),
+            project_id: project.id.0.clone(),
+            workflow_id: workflow_id.0.clone(),
+            title: spec.title.clone(),
+            description: spec.description.clone(),
+            agent_kind: spec.agent_kind.clone(),
+            model: spec.model.clone(),
+            effort: spec.effort,
+            commit_artifacts: spec.commit_artifacts,
+            loop_iterations: spec.loop_iterations,
+            max_budget_usd: spec.max_budget_usd,
+            step_overrides: spec.step_overrides.clone(),
+            staged_attachments: staged,
+            origin,
+            diff_base_branch: spec.diff_base_branch.clone(),
+        })
         .await
         .map_err(|e| format!("feature_start failed: {}", e))?;
     eprintln!("[demeteo-runner] feature {} started", feature.id.as_str());
@@ -352,42 +356,67 @@ pub async fn execute_run(
 }
 
 /// MC-D4 merge (P0.5): compose the `ProjectSettings` row the runner
-/// persists for a run's own project from the two sources of truth. The
+/// persists for a run's own project from the three sources of truth. The
 /// launching client's settings win on **every tunable** (`branch_prefix`,
 /// `test_command`, `build_command`, `coverage_command`, `conventions_file`,
 /// `pr_template`, `harnesses`, `prepare_command`, `extra_writable_paths`,
 /// `conflict_policy`, `feature_lifecycle`, `default_*`, `artifact_subdir`,
-/// `commit_artifacts`). The bootstrap-*detected* `default_branch` wins over
-/// the client's, because it was read from `origin/HEAD` on the *actual*
-/// clone — ground truth for this checkout — falling back to the client's
-/// value, then `"main"`. `project_id` is always the run's own project (the
-/// client's is meaningless on the runner). `None` client settings
-/// reproduce the pre-multi-client behavior exactly: detected strategy +
-/// engine defaults. Pure over its inputs so the merge is unit-testable.
+/// `commit_artifacts`). `project_id` is always the run's own project (the
+/// client's is meaningless on the runner). `None` client settings reproduce
+/// the pre-multi-client behavior exactly: detected strategy + engine
+/// defaults. Pure over its inputs so the merge is unit-testable.
+///
+/// `default_branch` is the field with three claimants, and the order is
+/// `run_base`, then `detected`, then the client's, then `"main"`:
+///
+/// - `run_base` — this run's declared base
+///   ([`demeteo_core::domain::feature_origin::FeatureOrigin::base_branch`]) —
+///   wins outright. On the runner `default_branch` is not a project-wide
+///   fact: the project row exists for this one run, and every reader of the
+///   field is asking a question about *it*. The origin answers most of them
+///   from the `Feature` row, but this is what they fall back to and what the
+///   MR publisher reads outright for its target branch — so a run based on
+///   `release/2.0` under a row saying `master` opens its PR against `master`
+///   and hands its reviewer a diff holding every commit `master` is missing.
+/// - `detected` wins next, because it was read from `origin/HEAD` on the
+///   *actual* clone. That is ground truth about the checkout, and it is the
+///   right answer exactly while nobody has chosen otherwise: it beats a
+///   client's stale copy of a project default, and it must not beat a base
+///   the launching client picked deliberately.
+///
+/// A blank at any tier falls through to the next, so the row never carries
+/// an empty branch name.
 fn merge_project_settings(
     detected: WorktreeStrategy,
     client: Option<ProjectSettings>,
     project_id: ProjectId,
+    run_base: Option<&str>,
 ) -> ProjectSettings {
-    match client {
+    let detected_branch = detected.default_branch.clone();
+    let client_branch = client
+        .as_ref()
+        .map(|client| client.worktree_strategy.default_branch.clone())
+        .unwrap_or_default();
+    let mut settings = match client {
         None => {
             let mut settings = fetch_default_settings();
-            settings.project_id = project_id;
             settings.worktree_strategy = detected;
             settings
         }
-        Some(mut settings) => {
-            settings.project_id = project_id;
-            // Detected `default_branch` is ground truth for this clone;
-            // every other strategy tunable stays the client's.
-            if !detected.default_branch.trim().is_empty() {
-                settings.worktree_strategy.default_branch = detected.default_branch;
-            } else if settings.worktree_strategy.default_branch.trim().is_empty() {
-                settings.worktree_strategy.default_branch = "main".to_string();
-            }
-            settings
-        }
-    }
+        Some(settings) => settings,
+    };
+    settings.project_id = project_id;
+    settings.worktree_strategy.default_branch = [
+        run_base.unwrap_or_default(),
+        detected_branch.as_str(),
+        client_branch.as_str(),
+    ]
+    .into_iter()
+    .map(str::trim)
+    .find(|branch| !branch.is_empty())
+    .unwrap_or("main")
+    .to_string();
+    settings
 }
 
 /// Dispatch to [`execute_run`] (nothing created yet) or
@@ -801,6 +830,29 @@ async fn await_terminal_and_push_inner(
     })
 }
 
+/// The branch the terminal push sends to `origin`: the one the run's own row
+/// records ([`Feature::run_branch`]), not one rebuilt here from
+/// `branch_prefix` and the feature id.
+///
+/// The rebuild is only ever right by coincidence — it reproduces what the
+/// bootstrap cut for as long as nobody edits `branch_prefix` mid-run, and it
+/// is the branch nobody cut for any origin whose name does not come from the
+/// feature id at all. Pushing a branch that does not exist fails loudly; the
+/// worse shape is pushing one that does and belongs to a different run.
+fn branch_to_push(
+    features: &dyn FeatureRepository,
+    feature_id: &FeatureId,
+    branch_prefix: &str,
+) -> Result<String, String> {
+    let feature = features.get(feature_id)?.ok_or_else(|| {
+        format!(
+            "feature {} disappeared before the push",
+            feature_id.as_str()
+        )
+    })?;
+    Ok(feature.run_branch(branch_prefix))
+}
+
 /// Push the completed feature's branch to `origin` (R3: results ride
 /// git) via per-run askpass (M4.3) — no PAT embedded in the URL or
 /// command line.
@@ -825,11 +877,11 @@ async fn push_feature_branch(
     let target_dir =
         paths::repo_target_dir_local(&svc.ctx.workspace_dir, project_id.as_str(), &repo.repo_path);
     let target_dir_str = target_dir.to_string_lossy().to_string();
-    let branch = format!(
-        "{}{}",
-        settings.worktree_strategy.branch_prefix,
-        feature_id.as_str()
-    );
+    let branch = branch_to_push(
+        svc.ctx.features.as_ref(),
+        feature_id,
+        &settings.worktree_strategy.branch_prefix,
+    )?;
 
     git_askpass::run_git(
         &svc.askpass_path,

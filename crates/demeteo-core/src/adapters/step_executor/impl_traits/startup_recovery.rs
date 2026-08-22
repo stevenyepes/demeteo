@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::domain::models::GateDecision;
 use crate::domain::restart_reconcile::{
-    feature_ended, interrupted_by_restart, orphaned_by_feature_end,
+    abandoned_out_of_band, interrupted_by_restart, orphaned_by_feature_end,
 };
 use crate::paths;
 use crate::ports::db::{FeaturePatch, StepExecutionPatch};
@@ -118,7 +118,9 @@ impl DagStepExecutor {
             }
         }
 
-        // Second pass: orphaned-pending reconciliation.
+        // Second pass: rows no run will ever move again. Unlike the first it
+        // reads every feature, because the out-of-band sync row is only ever
+        // found under one that has already finished.
         for p in &projects {
             if let Ok(all_features) = self.features.get_active(&p.id) {
                 for f in all_features {
@@ -127,12 +129,10 @@ impl DagStepExecutor {
                         // rows mid-hydration — not orphans of a local crash.
                         continue;
                     }
-                    if !feature_ended(&f.status) {
-                        continue;
-                    }
                     if let Ok(steps) = self.features.steps_for_feature(&f.id) {
                         for s in &steps {
                             let Some(message) = orphaned_by_feature_end(&f.status, &s.status)
+                                .or_else(|| abandoned_out_of_band(&s.step_id.0, &s.status))
                             else {
                                 continue;
                             };

@@ -23,17 +23,54 @@ pub struct TurnOutcome {
     pub cache_creation_input_tokens: u64,
 }
 
+/// How a turn ended, and what it spent getting there.
+///
+/// `spent` rides on the failing arms for the reason the harnesses go out of
+/// their way to put usage on an error result at all (`claude_code`'s
+/// `parse_claude_result_event`): a turn that tripped its turn cap, its dollar
+/// ceiling, or an API error mid-flight has already bought every token it read
+/// and wrote. Dropping it does not make the money unspent — it makes the
+/// feature's total, and the ceiling the next turn is measured against, wrong by
+/// exactly the amount that was hardest to see.
+///
+/// [`Interrupted`](Self::Interrupted) is the one ending that carries nothing,
+/// deliberately: a stop is the user declining the turn, and
+/// `a_stop_that_arrives_mid_turn_ends_it_before_the_turn_is_billed` is what
+/// separates it from a turn that ran and then failed.
 #[derive(Debug, Clone)]
 pub enum TurnResult {
     Success(TurnOutcome),
     Interrupted,
     /// The agent itself reported an error (CLI error event). Retrying the
     /// work with feedback may help.
-    Failed(String),
+    ///
+    /// Not a verdict about the *tree*: a consumer that can verify its own
+    /// outcome against the filesystem must do that before treating this as a
+    /// failure ([`AgentEvent::ends_turn`](crate::domain::agent_event::AgentEvent::ends_turn)).
+    Failed {
+        reason: String,
+        spent: TurnOutcome,
+    },
     /// The orchestrator killed or lost the turn for environmental reasons
     /// — silence timeout, wall-clock cap, spawn failure, process crash.
     /// The implementation is not at fault; callers must not route this
     /// into an on_failure re-implementation loop.
+    Environmental {
+        reason: String,
+        spent: TurnOutcome,
+    },
+}
+
+/// A turn that ended badly, before the spend it ended with is known.
+///
+/// The loop learns *why* a turn stopped several statements before it can total
+/// what the turn cost, and the two have to arrive at the caller together. This
+/// carries the first half across that gap; nothing outside this function ever
+/// holds one.
+enum FailedEnding {
+    /// The agent's own report — [`TurnResult::Failed`].
+    Reported(String),
+    /// The box, not the work — [`TurnResult::Environmental`].
     Environmental(String),
 }
 
@@ -64,7 +101,7 @@ where
     let mut text_buffer = String::new();
     let mut produced_artifacts = Vec::new();
     let mut acc = UsageAccumulator::new(model);
-    let mut run_failed: Option<TurnResult> = None;
+    let mut run_failed: Option<FailedEnding> = None;
     let mut run_cancelled = false;
     // Tool calls the agent has issued but not yet resolved. While any are
     // in flight the wire is legitimately silent — a `cargo build` or a big
@@ -137,9 +174,9 @@ where
                         let environmental =
                             crate::adapters::agent::cli_runtime::is_process_level_error(code);
                         run_failed = Some(if environmental {
-                            TurnResult::Environmental(descriptive)
+                            FailedEnding::Environmental(descriptive)
                         } else {
-                            TurnResult::Failed(descriptive)
+                            FailedEnding::Reported(descriptive)
                         });
                         break;
                     }
@@ -158,7 +195,7 @@ where
                 if hb.as_ref().is_some_and(|h| h.last_activity_ago_ms() > timeouts.fast_timeout_s * 1000) {
                     let msg = format!("Agent blocked: no output for {}s (stdout and stderr both silent)", timeouts.fast_timeout_s);
                     let descriptive = crate::adapters::step_executor::steps::agent::format_agent_error_message(&msg, machine_str, exec).await;
-                    run_failed = Some(TurnResult::Environmental(descriptive));
+                    run_failed = Some(FailedEnding::Environmental(descriptive));
                     break;
                 }
                 fast_sleep.as_mut().reset(
@@ -182,12 +219,12 @@ where
                 }
                 let msg = format!("Agent response timed out (no output for {}s)", timeouts.normal_timeout_s);
                 let descriptive = crate::adapters::step_executor::steps::agent::format_agent_error_message(&msg, machine_str, exec).await;
-                run_failed = Some(TurnResult::Environmental(descriptive));
+                run_failed = Some(FailedEnding::Environmental(descriptive));
                 break;
             }
             _ = &mut wall_sleep => {
                 let elapsed = start_instant.elapsed().as_secs();
-                run_failed = Some(TurnResult::Environmental(format!(
+                run_failed = Some(FailedEnding::Environmental(format!(
                     "Agent step exceeded wall clock cap ({}s / {}s elapsed)",
                     timeouts.wall_cap_s, elapsed,
                 )));
@@ -214,10 +251,11 @@ where
     if run_cancelled {
         return TurnResult::Interrupted;
     }
-    if let Some(err) = run_failed {
-        return err;
-    }
 
+    // Totalled before the ending is read, not after: every arm below reports
+    // the same spend, and an early return over this block is what billed a
+    // tripped turn cap — and every other failed turn in the app — to nothing.
+    //
     // Resolve cost: prefer agent-supplied cost_usd; fall back to pricing
     // table when the model is known. Idempotent.
     acc.finalize_arc(&pricing);
@@ -249,14 +287,20 @@ where
         );
     }
 
-    TurnResult::Success(TurnOutcome {
+    let spent = TurnOutcome {
         text,
         produced_artifacts,
         cost_usd: acc.cost_usd(),
         tokens: acc.tokens(),
         cache_read_input_tokens: acc.cache_read_input_tokens(),
         cache_creation_input_tokens: acc.cache_creation_input_tokens(),
-    })
+    };
+
+    match run_failed {
+        Some(FailedEnding::Reported(reason)) => TurnResult::Failed { reason, spent },
+        Some(FailedEnding::Environmental(reason)) => TurnResult::Environmental { reason, spent },
+        None => TurnResult::Success(spent),
+    }
 }
 
 #[cfg(test)]

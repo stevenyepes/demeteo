@@ -4,6 +4,7 @@
 //! provisioning worktrees, checking repository state, and syncing with upstream.
 
 use crate::domain::branch_listing::BranchOption;
+use crate::domain::feature_origin::Refspec;
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -183,26 +184,110 @@ pub struct TerminalWorktreeCreated {
     pub base_ref: String,
 }
 
+/// How far a feature branch has drifted from the base it will merge into.
+///
+/// Both counts are `Option` because the three ways a `rev-list` can answer
+/// nothing — zero commits, an unresolvable ref, a dead transport — are three
+/// different facts and only the first one means "up to date". Collapsing them
+/// is how a branch nobody could measure renders as current, which is the one
+/// answer a staleness signal must never invent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchDivergence {
+    /// Commits `origin/<base>` has that the feature branch does not.
+    pub behind: Option<u64>,
+    /// Commits the feature branch has that `origin/<base>` does not.
+    pub ahead: Option<u64>,
+}
+
+impl BranchDivergence {
+    /// Neither side was measured. Spelled out so a construction site reads as
+    /// the assertion it is rather than as two fields somebody forgot to fill.
+    pub const fn unknown() -> Self {
+        Self {
+            behind: None,
+            ahead: None,
+        }
+    }
+}
+
 /// Result of a successful feature branch sync.
 #[derive(Debug, Clone)]
 pub struct SyncOutcome {
-    /// SHA of the merge commit (empty when there was nothing to merge).
-    pub merge_commit_sha: String,
+    /// The tip the sync left the branch on — the merge commit, or the tip it
+    /// found when there was nothing to merge. `None` when `rev-parse` did not
+    /// answer, which is not a commit named `""` and may not be stored as one.
+    pub merge_commit_sha: Option<String>,
     /// `false` when `origin/<default>` didn't exist or had no new
     /// commits since the last sync.
     pub changed: bool,
+    /// The feature branch's tip before the merge. Reported rather than
+    /// re-derived, because `merge_commit^` stops being it the moment anything
+    /// commits on top — and by then nothing can recover it. `None` when the
+    /// read failed: a base that was never measured is not the same as one that
+    /// resolved to nothing, and only the first may be stored as unknown.
+    pub head_before: Option<String>,
 }
 
-/// Result of a failed sync — the merge left the working tree in a
-/// conflicted state. The caller is expected to spawn a resolution
-/// agent or hand the files back to the user.
+/// Why a feature-branch sync did not land. Which variant it is cannot be
+/// inferred from the payload — see [`crate::domain::sync_failure`].
 #[derive(Debug, Clone)]
-pub struct SyncFailure {
-    pub files: Vec<crate::domain::models::ConflictFile>,
-    pub raw_error: String,
-    /// Path to the sync worktree where the conflicted state lives.
-    /// `None` when the sync was aborted before a worktree was created.
-    pub worktree_path: Option<String>,
+pub enum SyncFailure {
+    /// The merge ran and left unmerged paths. `worktree_path` is where the
+    /// conflicted index lives, and the resolution agent must run there;
+    /// `None` when the probe for it failed.
+    Conflict {
+        files: Vec<crate::domain::models::ConflictFile>,
+        raw_error: String,
+        worktree_path: Option<String>,
+        /// The feature branch's tip before the merge, on the same terms as
+        /// [`SyncOutcome::head_before`] — a resolution commits on top of the
+        /// merge, so this is the only base a review diff can use. `None` when
+        /// the read for it failed, which is not the same as a branch with no
+        /// tip and may not be flattened into one.
+        head_before: Option<String>,
+    },
+    /// No merge was attempted, or one was and never reached a verdict, or its
+    /// result could not be published. Nothing is known to be conflicted, so
+    /// there is nothing for an agent to do.
+    Blocked {
+        stage: crate::domain::sync_failure::SyncBlockedStage,
+        raw_error: String,
+        /// A worktree this attempt provisioned and did not clean up, when there
+        /// is one. `Push` and `Merge` both leave one: the cleanup in
+        /// `sync_feature_with_upstream` runs only on success, and the push
+        /// failure returns before reaching it. Carrying it is what lets the
+        /// session name the tree, and `sync_abort` reclaim it — otherwise the
+        /// only thing that ever removes it is the next sync's force-remove.
+        worktree_path: Option<String>,
+        /// As [`SyncFailure::Conflict::head_before`]. Known at every stage after
+        /// the refs are read, and a `Push` failure leaves a real merge commit
+        /// sitting on top of it.
+        head_before: Option<String>,
+        /// The merge this attempt committed before it was blocked — `Push` and
+        /// nothing else, because it is the only stage reached after the merge
+        /// succeeded. Without it the session names a merge it cannot identify,
+        /// and publishing one has no sha to confirm against origin afterwards,
+        /// which is the only evidence a push may be recorded on.
+        merge_commit_sha: Option<String>,
+    },
+}
+
+/// Told where a sync's merge is about to run, the moment there is an answer.
+///
+/// The session row is opened before the fetch, because a sync cut short is the
+/// case it exists for — and until this existed it named no tree, so the
+/// interrupted sync was the one state nothing could probe, `reconcile` passed
+/// through untouched and every intervention refused. The path is known here
+/// and nowhere else until the whole call returns, which for an interrupted sync
+/// is never.
+pub trait SyncWorktreeObserver: Send + Sync {
+    fn provisioned(&self, worktree_path: &str);
+}
+
+/// For a caller with no row to keep — the port's own trait method, and the
+/// tests that drive git directly.
+impl SyncWorktreeObserver for () {
+    fn provisioned(&self, _worktree_path: &str) {}
 }
 
 /// Result of collapsing a feature branch's commits into one.
@@ -227,6 +312,32 @@ pub struct CommitMessageRejected {
     /// The hook's own output (e.g. commitlint's rule list) — fed back to
     /// the agent so it can repair the message.
     pub hook_output: String,
+}
+
+/// What a project asks of a tree a clean merge produced, before that merge is
+/// allowed to reach origin.
+///
+/// The two commands travel together and are meaningless apart — a harness run
+/// without the prepare that installs what it imports reports a red build about
+/// a missing dependency — so they arrive as one value rather than two
+/// parameters a call site could supply half of.
+///
+/// The default is the empty gate, which is not "everything passed": it is a
+/// project that named no command, and nothing is run or withheld for it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MergeGate<'a> {
+    /// `WorktreeStrategy::prepare_command`, or `None`.
+    pub prepare: Option<&'a str>,
+    /// `WorktreeStrategy::test_command`, or `None`.
+    pub harness: Option<&'a str>,
+}
+
+impl MergeGate<'_> {
+    /// Whether this gate has anything to say, which is what decides whether a
+    /// sync pays for a worktree equipped to answer it.
+    pub fn is_empty(&self) -> bool {
+        self.harness.is_none()
+    }
 }
 
 #[async_trait]
@@ -370,6 +481,37 @@ pub trait WorktreeOpsPort: Send + Sync {
         branch_name: &str,
     ) -> Result<(), String>;
 
+    /// Bring exactly one refspec down from origin, reporting whether it
+    /// arrived.
+    ///
+    /// Whether that report stops the run is
+    /// [`BranchCut`](crate::domain::feature_origin::BranchCut)'s decision and
+    /// not this method's, which is why it reports rather than tolerates.
+    ///
+    /// The refspec is passed after `--`; see [`Refspec`] for what that is
+    /// holding shut.
+    async fn fetch_origin_refspec(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        refspec: &Refspec,
+    ) -> Result<(), String>;
+
+    /// Point `branch_name` at `start_point`, which must already resolve.
+    ///
+    /// The counterpart to
+    /// [`create_feature_branch`](Self::create_feature_branch) for a run whose
+    /// origin named its own start point. There is no fallback ref to try:
+    /// falling back is how a run started somewhere the user chose silently
+    /// becomes a run started from the default branch.
+    async fn cut_branch_at(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        start_point: &str,
+        branch_name: &str,
+    ) -> Result<(), String>;
+
     /// Provision a subtask worktree.
     async fn provision_subtask_worktree(
         &self,
@@ -406,12 +548,22 @@ pub trait WorktreeOpsPort: Send + Sync {
     ) -> Result<(), String>;
 
     /// Sync feature branch with upstream default branch.
+    ///
+    /// Reports no worktree: a caller holding a session row wants
+    /// [`SyncWorktreeObserver`] and reaches `GitOpsHelper` directly for it.
+    ///
+    /// `gate` is what the merged tree must prove before it reaches origin
+    /// ([`MergeGate`]). It is a parameter rather than a field the adapter reads
+    /// because the commands belong to the *project*, which this port has no
+    /// row for — and because a second path that quietly skipped it would be a
+    /// sync that pushes on different terms than the one beside it.
     async fn sync_feature_with_upstream(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_branch: &str,
+        gate: MergeGate<'_>,
     ) -> Result<SyncOutcome, SyncFailure>;
 
     /// Run the repo's own `commit-msg` hook against a proposed message,
@@ -428,14 +580,18 @@ pub trait WorktreeOpsPort: Send + Sync {
         message: &str,
     ) -> Result<(), CommitMessageRejected>;
 
-    /// Collapse every commit the feature branch adds on top of the default
-    /// branch into a single commit carrying `message`.
+    /// Collapse every commit the feature branch adds on top of `base_ref`
+    /// into a single commit carrying `message`.
+    ///
+    /// `base_ref` is where the run started, which is the project's default
+    /// branch only for a run that started there — see
+    /// [`FeatureOrigin::squash_base`](crate::domain::feature_origin::FeatureOrigin::squash_base).
     async fn squash_feature_branch(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         feature_branch: &str,
-        default_branch: &str,
+        base_ref: &str,
         message: &str,
     ) -> Result<SquashOutcome, String>;
 

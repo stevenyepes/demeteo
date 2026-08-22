@@ -484,19 +484,33 @@ pub fn git_no_hooks(dir: &str) -> String {
 /// Anything added to this list must be classified against that rule first:
 /// **share content-addressed download caches; never share build output.**
 ///
+/// # A gate on names, not a list of places
+///
+/// These are matched against the **final segment** of whatever
+/// `git ls-files --others --ignored --directory` reports, so the list says
+/// *which* directories are caches and the project's own `.gitignore` says
+/// where they are. It used to say both — each entry was probed at
+/// `{repo}/<name>` — and that answered only for a repository whose build
+/// output sits at the root: a Tauri app keeps it at `src-tauri/target`, a JS
+/// monorepo at `packages/*/node_modules`, and both matched nothing, shared
+/// nothing and said nothing about it. See
+/// [`dependency_cache`](crate::domain::dependency_cache), which is also where
+/// the rules live for what a repository-supplied path may not contain.
+///
 /// Important: a symlink standing in for a directory is NOT recognized
 /// by git as matching a trailing-slash `.gitignore` pattern (e.g.
 /// `node_modules/` matches a real directory but not a symlink named
 /// `node_modules`), so a linked cache shows up as untracked and, left
 /// alone, an absolute host path gets committed onto the feature branch.
-/// The answer is a **slashless entry in the clone's own
-/// `.git/info/exclude`**, written by `git_ops::worktree` before any link
-/// is made — `node_modules` without the slash matches a symlink and a
-/// directory alike, so from `git add -A`'s point of view the entry is
-/// simply ignored and no pathspec is involved. Doing it there rather
-/// than at `git add` time is what keeps the answer the same on a
-/// platform that shares no caches at all: nothing is linked, nothing is
-/// excluded, and the same feature captures the same files.
+/// The answer is an entry in the clone's own `.git/info/exclude`, written
+/// by `git_ops::worktree` before any link is made. For a root-level cache
+/// that entry is the bare name, which matches a symlink and a directory
+/// alike; for a nested one it is the full relative path, which git anchors
+/// to the repository root so it cannot ignore a same-named directory the
+/// project tracks elsewhere. Doing it there rather than at `git add` time is
+/// what keeps the answer the same on a platform that shares no caches at
+/// all: nothing is linked, nothing is excluded, and the same feature
+/// captures the same files.
 ///
 /// [`DECISIONS.md`]: https://github.com/stevenyepes/demeteo/blob/master/docs/DECISIONS.md
 pub const DEPENDENCY_CACHE_DIRS: &[&str] = &[
@@ -531,6 +545,42 @@ pub fn feature_cache_dir(repo_dir: &str, feature_branch: &str) -> String {
         })
         .collect();
     format!("{}_cache_{}", repo_dir, slug)
+}
+
+/// The throwaway worktree one feature's upstream sync merges in:
+/// `{repo_dir}_wt_sync_{slug}`.
+///
+/// A sibling of the clone on the same terms as [`feature_cache_dir`] and the
+/// step worktrees, and a suffix rather than a join for the reason
+/// `git_ops::worktree` records: nothing here descends into a directory, so
+/// there is no separator to get wrong on any platform, and the suffix keeps
+/// every worktree out of the repo it was cut from.
+///
+/// `windows_host` per the [`windows_host_target`] convention. On a
+/// Windows-local target the branch is folded to a [`short_path_segment`],
+/// because `CreateProcessW` rejects a working directory past `MAX_PATH`
+/// whatever `core.longpaths` says and a branch name is unbounded — the same
+/// limit `worktree_dir`'s `shorten` flag exists for. Off Windows the branch
+/// stays readable, through the character whitelist rather than a bare
+/// `replace('/', "_")`: a branch may carry anything a ref allows, and a `:` or
+/// a `*` reaching a path is a directory some filesystem refuses to create.
+///
+/// Provisioning, the stale-worktree scan that keys on the `_wt_sync` infix,
+/// and the teardown all read this one spelling; a second one would leave a
+/// live worktree nothing can name.
+pub fn sync_worktree_dir(repo_dir: &str, feature_branch: &str, windows_host: bool) -> String {
+    let slug: String = if windows_host {
+        short_path_segment(feature_branch)
+    } else {
+        feature_branch
+            .chars()
+            .map(|c| match c {
+                'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => c,
+                _ => '-',
+            })
+            .collect()
+    };
+    format!("{}_wt_sync_{}", repo_dir, slug)
 }
 
 /// Current wall-clock time in milliseconds since the UNIX epoch.

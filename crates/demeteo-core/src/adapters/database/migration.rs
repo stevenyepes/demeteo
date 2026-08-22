@@ -148,6 +148,49 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // Nullable, and NULL means *absent*, never "everything was green".
     add_column_if_missing(conn, "features", "harness_baseline_json", "TEXT")?;
 
+    // Where the run started, what its diff is measured against, and what its
+    // branch is called (V41). All three nullable, and all three degrade to
+    // the pre-V41 behaviour — see the migration's header.
+    add_column_if_missing(conn, "features", "origin_json", "TEXT")?;
+    add_column_if_missing(conn, "features", "diff_base_branch", "TEXT")?;
+    add_column_if_missing(conn, "features", "resolved_branch", "TEXT")?;
+
+    // The project's review entrypoint (V42). Nullable, and NULL reads the same
+    // as the empty string — see the migration's header.
+    add_column_if_missing(conn, "project_settings", "review_entrypoint", "TEXT")?;
+
+    // The harness/model/effort a project wants its merge conflicts resolved
+    // with (V44). All three nullable, and all three inherit — see the
+    // migration's header.
+    add_column_if_missing(conn, "project_settings", "sync_resolver_agent_kind", "TEXT")?;
+    add_column_if_missing(conn, "project_settings", "sync_resolver_model", "TEXT")?;
+    add_column_if_missing(conn, "project_settings", "sync_resolver_effort", "TEXT")?;
+
+    // Whether a resolution has reached origin, and whether this project wants
+    // one held for review first (V45). Both nullable, and on both NULL is
+    // "not yet" / "no opinion" rather than a negative — see the migration's
+    // header.
+    add_column_if_missing(conn, "sync_sessions", "pushed_at", "INTEGER")?;
+    add_column_if_missing(
+        conn,
+        "project_settings",
+        "sync_review_before_push",
+        "INTEGER",
+    )?;
+
+    // What the user handed the interviewer (V48). Nullable, and NULL reads as
+    // the empty list — see the migration's header.
+    add_column_if_missing(conn, "discoveries", "attachments_json", "TEXT")?;
+
+    // What an interview turn did, beside what it cost (V49). Nullable, and
+    // NULL reads as *absent* rather than as a turn that touched nothing — see
+    // the migration's header.
+    add_column_if_missing(conn, "discovery_messages", "activity_json", "TEXT")?;
+
+    // The decompose pass nobody has reviewed yet (V50). Nullable, and NULL is
+    // the resting state — see the migration's header.
+    add_column_if_missing(conn, "discoveries", "pending_proposal_json", "TEXT")?;
+
     Ok(())
 }
 

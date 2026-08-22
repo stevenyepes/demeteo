@@ -125,7 +125,7 @@ The layer that talks to coding agents.
   - Agent sessions are scoped to a step execution — no global session reuse.
   - The planner is just an agent session with a planning prompt; no special planner port.
   - `AgentEvent` is an internal contract (consumed by `StepExecutor`), not a UI contract. The UI sees step transitions, not agent transcripts. Variants: `Text`, `ToolCall`, `ToolCallUpdate`, `Plan`, `Usage` (input / output / cache_read / cache_creation / cost_usd), `Error`, `TurnComplete`, `ModeChanged`, `ConfigChanged`, `ArtifactProduced`.
-  - `PermissionProfile` is *complete* and only uses `allow` / `deny`, never `ask`. `external_directory: "deny"` (opencode only) is the worktree scope fence; the OS-level chmod fence plus `--disallowedTools` enforce path-shape on agents that don't speak `external_directory`.
+  - `PermissionProfile` is *complete* and only uses `allow` / `deny`, never `ask`. It is not a path fence: `--disallowedTools` denies tools by name, and the chmod fence scopes writes within the worktree — neither can spell "inside this directory, not outside it". What each harness is held to, per class of access, is declared by `PathContainment` (`domain/models/sandbox.rs`).
   - `ACTIONError` (the typed envelope for agent-originated actions) has three variants: `Network`, `NotFound`, `Internal`.
   - Install commands (current; subject to drift — see `README.md` for upstream-status notes):
     - `opencode` → `curl -fsSL https://opencode.ai/install | bash`

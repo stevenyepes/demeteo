@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
 import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/plugin-dialog';
-import type { AppView, MrState, SyncOutcomeView } from '../../types';
+import type { AppView, MrState } from '../../types';
 import { formatError } from '../../lib/errors';
 import { useErrorBus } from '../../lib/errorBus';
-import { getFeature, syncFeature, resolveSyncConflicts, fetchMrState } from '../../lib/featureSync';
+import { fetchMrState, getFeature } from '../../lib/featureSync';
 import { cleanupFeature, publishMr } from '../../lib/featureDetail';
 
 /**
- * Everything the feature does with its branch once the run is over: sync it
- * with main, resolve the conflicts that produced, publish the PR/MR, track
- * its state, and apply the project's lifecycle policy.
+ * The feature's pull request: publish it, track its state, and apply the
+ * project's lifecycle policy.
+ *
+ * The branch's own state — sync, conflict, resolution — left here for
+ * `useSyncSession`, which reads the durable row instead of remembering.
  */
 export function useFeatureMr(input: {
   featureId: string;
@@ -21,58 +23,8 @@ export function useFeatureMr(input: {
   const { featureId, projectId, status, reload, navigate } = input;
   const { reportError } = useErrorBus();
   const [publishing, setPublishing] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [resolving, setResolving] = useState(false);
-  const [syncBanner, setSyncBanner] = useState<SyncOutcomeView | null>(null);
   const [mrState, setMrState] = useState<MrState | null>(null);
   const [mrUrl, setMrUrl] = useState<string | null>(null);
-
-  /**
-   * Sync the feature branch with `origin/<default_branch>`. On a
-   * clean merge, the operation is invisible (or shows a small
-   * "synced" toast). On conflict, the conflict files are surfaced
-   * inline so the user can either resolve them themselves or click
-   * the "Resolve with agent" button.
-   */
-  const handleSync = async () => {
-    setSyncing(true);
-    try {
-      const outcome = await syncFeature(featureId, null);
-      setSyncBanner(outcome);
-      reload();
-    } catch (err) {
-      await messageDialog(formatError(err), { title: 'Sync failed', kind: 'error' });
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  /**
-   * Spawn a fresh agent to resolve the conflicts surfaced by
-   * `handleSync`. The agent edits the conflict files in a temporary
-   * worktree, commits the resolution, and the worktree is merged
-   * back into the feature branch. The optional re-validate step
-   * is replayed so the workflow's validation re-runs.
-   */
-  const handleResolveConflicts = async (
-    conflictFiles: string[],
-    revalidateStepExecutionId?: string | null,
-  ) => {
-    setResolving(true);
-    try {
-      const outcome = await resolveSyncConflicts(
-        featureId,
-        conflictFiles,
-        revalidateStepExecutionId,
-      );
-      setSyncBanner(outcome);
-      reload();
-    } catch (err) {
-      await messageDialog(formatError(err), { title: 'Resolution failed', kind: 'error' });
-    } finally {
-      setResolving(false);
-    }
-  };
 
   /**
    * Refresh the MR state from the provider. The badge updates
@@ -175,14 +127,8 @@ export function useFeatureMr(input: {
 
   return {
     publishing,
-    syncing,
-    resolving,
-    syncBanner,
-    setSyncBanner,
     mrState,
     mrUrl,
-    handleSync,
-    handleResolveConflicts,
     refreshMrState,
     handlePublishClick,
     handleCleanup,

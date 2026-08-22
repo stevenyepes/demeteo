@@ -1,0 +1,23 @@
+-- The decompose pass a user has not reviewed yet (docs/PRD_DISCOVERY.md §5.3).
+--
+-- A pass is a billed agent turn, and until this column existed its result
+-- lived only in the component that asked for it: navigating away between the
+-- press and the answer folded the spend onto the Discovery and discarded the
+-- plan, so the user paid for a proposal nobody ever saw.
+--
+-- What is stored is the payload the review surface renders, verbatim, and
+-- nothing reads inside it here — the shape belongs to
+-- `application::discovery::decompose::proposal` and this column is a place to
+-- put it between two visits. `apply` still re-resolves and re-diffs the plan
+-- against the ticket rows as they stand at that moment (§5.3), which is what
+-- makes a stored proposal safe to keep: it is a view awaiting review, never an
+-- answer anything acts on.
+--
+-- At most one, replaced by the next pass and cleared by applying or discarding
+-- it. A history of superseded proposals would be a table of plans that were
+-- never the user's intent — the transcript is what records how the thinking
+-- moved.
+--
+-- Nullable with no default: NULL is the resting state, and every V47 row has
+-- nothing waiting for review without a backfill.
+ALTER TABLE discoveries ADD COLUMN pending_proposal_json TEXT;

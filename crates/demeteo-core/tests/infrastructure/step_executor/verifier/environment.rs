@@ -9,6 +9,7 @@
 // Three doubles, all of which refuse anything they were not told to answer.
 
 use super::*;
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, StepId, WorkflowId};
 use crate::domain::models::{Feature, Notification, NotificationKind};
 use std::sync::Mutex;
@@ -63,6 +64,9 @@ fn feature() -> Feature {
         step_overrides: Vec::new(),
         attachments: Vec::new(),
         harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
     }
 }
 
@@ -177,6 +181,20 @@ impl FeatureRepository for FeaturesDouble {
         _id: &StepExecutionId,
     ) -> Result<Vec<crate::domain::models::SubtaskRunRow>, String> {
         panic!("unscripted subtask_runs_for_step")
+    }
+    fn subtask_runs_mirror_for_step(
+        &self,
+        _id: &StepExecutionId,
+    ) -> Result<Vec<crate::domain::models::SubtaskRunMirrorRow>, String> {
+        panic!("unscripted subtask_runs_mirror_for_step")
+    }
+    fn subtask_runs_replace_for_step(
+        &self,
+        _feature_id: &FeatureId,
+        _id: &StepExecutionId,
+        _rows: &[crate::domain::models::SubtaskRunMirrorRow],
+    ) -> Result<(), String> {
+        panic!("unscripted subtask_runs_replace_for_step")
     }
 }
 

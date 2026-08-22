@@ -5,9 +5,13 @@ use crate::domain::models::StepConfig;
 use crate::adapters::database::SqliteAdapter;
 use crate::domain::ids::{WorkflowId, WorkflowVersionId};
 use crate::domain::models::{Workflow, WorkflowVersion};
+use crate::domain::workflow_starters::{plan_seed, SeedAction, StarterDefinition};
 use crate::ports::db::WorkflowRepository;
 use rusqlite::Connection;
 use std::sync::Arc;
+
+const CODE_REVIEW: &str = include_str!("../../workflows/code-review.json");
+const ADDRESS_REVIEW: &str = include_str!("../../workflows/address-review.json");
 
 /// Every embedded starter workflow must deserialize into `StepConfig`
 /// (guards the V13 `model`/`verifier` JSON edits against typos).
@@ -16,17 +20,25 @@ fn parse(json: &str) -> Vec<StepConfig> {
     serde_json::from_value(v["steps"].clone()).expect("steps deserialize into StepConfig")
 }
 
+/// Every prompt a starter ships, lowercased, for the vocabulary assertions
+/// below to read as one body of text.
+fn prompt_text(json: &str) -> String {
+    let prompts = parse(json)
+        .iter()
+        .filter_map(|s| s.prompt_template.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    assert!(!prompts.is_empty(), "read no prompt text at all");
+    prompts
+}
+
+/// Reads `super::STARTER_FILES` — the list seeding actually walks — so a
+/// starter that stops being registered fails here rather than shipping as a
+/// file nobody loads.
 #[test]
 fn all_starters_deserialize() {
-    for json in [
-        include_str!("../../workflows/standard-feature-pipeline.json"),
-        include_str!("../../workflows/bugfix-pipeline.json"),
-        include_str!("../../workflows/docs-update.json"),
-        include_str!("../../workflows/refactor.json"),
-        include_str!("../../workflows/experiment.json"),
-        include_str!("../../workflows/ci-fix.json"),
-        include_str!("../../workflows/simple-task.json"),
-    ] {
+    for json in super::STARTER_FILES {
         let steps = parse(json);
         assert!(!steps.is_empty());
     }
@@ -53,6 +65,171 @@ fn looping_starters_have_verifier_and_redirect() {
             "expected a validate step with on_failure + verifier"
         );
     }
+}
+
+/// The review starter ships no method of its own — no rubric, no severity
+/// scale, no criteria. A review's depth is meant to come from the agent's own
+/// review skill and from what the project wrote down about itself, and a
+/// prompt that grew a rubric would run exactly as well as one that did not, so
+/// nothing but this assertion holds the decision in place.
+#[test]
+fn the_review_starter_imposes_no_method_of_its_own() {
+    let prompts = prompt_text(CODE_REVIEW);
+
+    for phrase in [
+        "critical",
+        "major",
+        "minor",
+        "blocker",
+        "check for",
+        "look for",
+        "ensure that",
+        "verify that",
+    ] {
+        assert!(
+            !prompts.contains(phrase),
+            "the review prompt says '{phrase}' — Demeteo is imposing a review method"
+        );
+    }
+}
+
+/// `finalize` squashes the branch and hands it to the publisher, so a review
+/// workflow that has one can ship the work it was asked to judge. Its absence
+/// is the enforcement: a flag would be something a later edit could set back.
+#[test]
+fn the_review_starter_has_no_step_that_publishes() {
+    let steps = parse(CODE_REVIEW);
+    assert!(
+        steps.iter().all(|s| s.kind != "finalize"),
+        "a review must never commit, push or open a PR"
+    );
+}
+
+/// The fix starter is the one place Demeteo *may* direct the work — it is
+/// implementing, not judging — so the review starter's guard narrows here to
+/// the vocabulary of judgement rather than the vocabulary of instruction. A
+/// prompt that grades the findings it was handed is running the review a
+/// second time, against a rubric this project never agreed to, and the
+/// reviewer's own words are what the pull request will be read beside.
+#[test]
+fn the_fix_starter_directs_the_work_without_re_reviewing_it() {
+    let prompts = prompt_text(ADDRESS_REVIEW);
+
+    for phrase in [
+        "critical",
+        "major",
+        "minor",
+        "blocker",
+        "severity",
+        "code smell",
+        "check for",
+        "look for",
+    ] {
+        assert!(
+            !prompts.contains(phrase),
+            "the fix prompt says '{phrase}' — it is reviewing, not addressing a review"
+        );
+    }
+}
+
+/// The counterpart of [`the_review_starter_has_no_step_that_publishes`]: a run
+/// that ends in commits has to put them somewhere a human can merge, and
+/// `finalize` is what squashes the branch and hands it to the publisher.
+/// Without it the work ends in a worktree nobody is told about.
+#[test]
+fn the_fix_starter_ends_in_a_pull_request() {
+    let steps = parse(ADDRESS_REVIEW);
+    assert!(
+        steps.iter().any(|s| s.kind == "finalize"),
+        "a fix run must end somewhere its commits can be merged from"
+    );
+
+    // Parsing the file proves nothing about the user ever seeing it: seeding
+    // and `workflow_revert_to_default` both walk `STARTER_FILES`, so the
+    // registration is the line that ships the workflow.
+    assert!(
+        crate::domain::workflow_starters::find(
+            super::STARTER_FILES,
+            &WorkflowId::from("wf-starter-address-review".to_string())
+        )
+        .is_some(),
+        "the fix starter parses but is not registered, so nothing seeds it"
+    );
+}
+
+/// `s-address` ships a `{{retry_feedback_section}}` block and the budget that
+/// would fill it. Both are inert unless some step redirects back to it —
+/// `legacy_policy_for_step` reads `max_iterations` only off a step whose
+/// `on_failure` names a target — so the prompt would describe a retry cycle
+/// that cannot happen.
+#[test]
+fn the_fix_starter_can_actually_retry_the_step_whose_prompt_says_it_will() {
+    let steps = parse(ADDRESS_REVIEW);
+    let address = steps
+        .iter()
+        .find(|s| s.id.0 == "s-address")
+        .expect("the fix starter has an address step");
+    assert!(
+        address
+            .prompt_template
+            .as_deref()
+            .is_some_and(|p| p.contains("{{retry_feedback_section}}")),
+        "this test exists for that block; drop the test with it"
+    );
+
+    let redirect = steps
+        .iter()
+        .find(|s| s.on_failure.as_ref().is_some_and(|t| t.0 == "s-address"))
+        .expect("nothing sends the run back to s-address, so its retry block is dead text");
+    assert!(
+        redirect.verifier.is_some(),
+        "a redirect with no verifier never fires: nothing judges the step's own claim that it passed"
+    );
+    assert!(
+        redirect.max_iterations.is_some(),
+        "the redirect carries the budget, so it is the step that needs one"
+    );
+}
+
+/// The only publishing starter in the pack with neither a gate nor a verifier
+/// would open a pull request in the user's name on the agent's own say-so.
+#[test]
+fn the_fix_starter_checks_the_work_before_publishing_it() {
+    let steps = parse(ADDRESS_REVIEW);
+    let finalize = steps
+        .iter()
+        .position(|s| s.kind == "finalize")
+        .expect("the fix starter finalizes");
+    assert!(
+        steps[..finalize]
+            .iter()
+            .any(|s| s.kind == "gate" || s.verifier.is_some()),
+        "nothing judges the run before it opens a pull request"
+    );
+}
+
+/// Seeding appends a version whenever the bundle stops matching storage, so a
+/// starter whose JSON does not survive the round trip through `StepConfig`
+/// mints a new version on every launch, forever.
+#[test]
+fn the_review_starter_seeds_once_and_then_stands_still() {
+    let starter = StarterDefinition::parse(CODE_REVIEW).expect("the shipped starter is JSON");
+    assert_eq!(plan_seed(&starter, None, None), SeedAction::Create);
+
+    let workflows = repo();
+    super::seed_starter_workflows(&workflows);
+    let stored = workflows
+        .get(&starter.id)
+        .expect("read the seeded workflow")
+        .expect("the review starter is seeded");
+    let latest = workflows
+        .latest_version(&starter.id)
+        .expect("read the seeded version");
+
+    assert_eq!(
+        plan_seed(&starter, Some(&stored), latest.as_ref()),
+        SeedAction::Skip
+    );
 }
 
 // ── Version history: restore + per-version graph (P3.4) ──────────────────
