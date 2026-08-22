@@ -533,12 +533,10 @@ async fn run_resolver_turn(
     // build the gate is about to run is waste.
     let _ = registry.kill(&resolver_thread_id).await;
 
-    // Before `git add -A`, not after. A gate run afterwards stages its own
-    // build output through the same `-A`, which `pending_commit::probe` then
-    // reads as work an agent left uncommitted; and a red gate would leave a
-    // staged index, so the next attempt's marker check would iterate an empty
-    // unmerged list and pass vacuously. The tree on disk is the same either
-    // way — unmerged *index* entries are not file contents.
+    // Before `git add -A`, not after: a red gate leaves a staged index, and the
+    // next attempt's marker check would then iterate an empty unmerged list and
+    // pass vacuously. The tree on disk is the same either way — unmerged *index*
+    // entries are not file contents.
     match crate::adapters::worktree::git_ops::sync_verify::run_merge_gate(
         &**exec,
         machine_str,
@@ -556,12 +554,27 @@ async fn run_resolver_turn(
             return Err(ResolveSyncError::Cancelled(CANCELLED_REASON.to_string()))
         }
         GateVerdict::Failed { command, error } => {
-            if let Some(refusal) =
-                crate::domain::sync_session::resolution_verification_refusal(&command, Err(&error))
-            {
-                return Err(ResolveSyncError::Failed(resolution_refusal(
-                    turn_stop, &refusal,
-                )));
+            match crate::domain::sync_session::resolution_verification_refusal(
+                &command,
+                Err(&error),
+            ) {
+                Some(refusal) => {
+                    return Err(ResolveSyncError::Failed(resolution_refusal(
+                        turn_stop, &refusal,
+                    )))
+                }
+                // The one path on which the gate fails open. Nothing was learned
+                // about the tree, so refusing would be a lie — but an unverified
+                // resolution landing is the incident this gate exists to prevent,
+                // and without this line its only trace is a wall clock sitting at
+                // the deadline.
+                None => tracing::warn!(
+                    machine = %machine_str,
+                    worktree = %resolved_cwd,
+                    command = %command,
+                    error = %error,
+                    "sync gate reached no verdict: the resolution lands unverified",
+                ),
             }
         }
     }

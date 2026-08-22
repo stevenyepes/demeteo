@@ -1477,10 +1477,9 @@ async fn a_resolution_the_projects_checks_reddened_is_not_committed_or_pushed() 
 
 /// Before `git add -A`, not after.
 ///
-/// A gate that runs afterwards stages its own build output through the same
-/// `-A`, and `pending_commit::probe` then reads it as work an agent left
-/// uncommitted — the bug that module exists to prevent, re-entered from the
-/// other side. Nothing else here pins the order.
+/// A gate that runs afterwards has already staged the index by the time it goes
+/// red, so the next attempt's marker check iterates an empty unmerged list and
+/// passes over a tree nobody resolved. Nothing else here pins the order.
 #[tokio::test]
 async fn the_checks_run_before_anything_is_staged() {
     let p = ports(
