@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 
-import { foldTurnEvent, openTurn, NO_TURN, type LiveTurn } from '../../lib/discoveryActivity';
+import {
+  foldTurnEvent,
+  openTurn,
+  NO_TURN,
+  type LiveTurn,
+  type TurnPhase,
+} from '../../lib/discoveryActivity';
 import { EVENT_DISCOVERY_AGENT_EVENT, type DiscoveryAgentEventPayload } from '../../lib/discovery';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 
@@ -31,10 +37,11 @@ const noop = () => {};
 
 export function useDiscoveryStream(): {
   store: DiscoveryStreamStore;
-  /** Open a turn and stamp its start. Idempotent: the click that sends and
-   *  the `running` status that follows it are the same turn, and restamping
-   *  would restart the clock the user is already watching. */
-  begin: (discoveryId: string) => void;
+  /** Open a turn in `phase`, stamping its start the first time. Idempotent on
+   *  the stamp: the click that sends, the `setting_up` status behind it and the
+   *  `running` status after are one turn, and restamping would restart the
+   *  clock the user is already watching. The phase moves on each of them. */
+  begin: (discoveryId: string, phase: TurnPhase) => void;
   /** Drop a discovery's turn — its stored message is the transcript now. */
   end: (discoveryId: string) => void;
 } {
@@ -69,7 +76,7 @@ export function useDiscoveryStream(): {
       // An event before `begin` means the turn was started somewhere this
       // surface did not see — a decomposition pass, or a reload mid-turn. It
       // still has a start, and now is the closest one that is true.
-      const prev = turns.current.get(discovery_id) ?? openTurn(Date.now());
+      const prev = turns.current.get(discovery_id) ?? openTurn(Date.now(), 'working');
       const next = foldTurnEvent(prev, event);
       if (next === prev && turns.current.has(discovery_id)) return;
       turns.current.set(discovery_id, next);
@@ -78,9 +85,13 @@ export function useDiscoveryStream(): {
   );
 
   const begin = useCallback(
-    (discoveryId: string) => {
-      if (turns.current.has(discoveryId)) return;
-      turns.current.set(discoveryId, openTurn(Date.now()));
+    (discoveryId: string, phase: TurnPhase) => {
+      const open = turns.current.get(discoveryId);
+      if (open?.phase === phase) return;
+      turns.current.set(
+        discoveryId,
+        open === undefined ? openTurn(Date.now(), phase) : { ...open, phase },
+      );
       wake(discoveryId);
     },
     [wake],

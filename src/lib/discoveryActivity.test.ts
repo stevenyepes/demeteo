@@ -14,6 +14,7 @@ import {
   foldTurnEvent,
   formatActivitySummary,
   openTurn,
+  phaseOfStatus,
   truncateMiddle,
   type LiveTurn,
 } from './discoveryActivity';
@@ -41,7 +42,7 @@ function toolCallUpdate(id: string, status: string) {
   };
 }
 
-function fold(events: unknown[], from: LiveTurn = openTurn(1_000)): LiveTurn {
+function fold(events: unknown[], from: LiveTurn = openTurn(1_000, 'working')): LiveTurn {
   return events.reduce<LiveTurn>((turn, event) => foldTurnEvent(turn, event), from);
 }
 
@@ -258,5 +259,18 @@ describe('what the activity line shows', () => {
     expect(describeTool({ id: 't', kind: 'write', target: '', done: false, failed: false })).toBe(
       'Writing',
     );
+  });
+});
+
+describe('the phase a status event puts a turn in', () => {
+  it('keeps a turn live while it is being set up', () => {
+    expect(phaseOfStatus('setting_up')).toBe('setting_up');
+    expect(phaseOfStatus('running')).toBe('working');
+  });
+
+  it('ends it on the two that end it, and on anything it cannot read', () => {
+    expect(phaseOfStatus('idle')).toBeNull();
+    expect(phaseOfStatus('error')).toBeNull();
+    expect(phaseOfStatus('')).toBeNull();
   });
 });

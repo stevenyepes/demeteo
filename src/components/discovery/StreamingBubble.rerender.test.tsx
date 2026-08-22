@@ -21,7 +21,7 @@ vi.mock('react-markdown', () => ({
 }));
 
 function fakeStream() {
-  let turn: LiveTurn = openTurn(Date.now());
+  let turn: LiveTurn = openTurn(Date.now(), 'working');
   const listeners = new Set<() => void>();
   const store: DiscoveryStreamStore = {
     subscribe: (_id, onChange) => {

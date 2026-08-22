@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Compass } from 'lucide-react';
 
 import { getDiscoveryBoard, summaryOfNew } from '../../lib/discovery';
+import { phaseOfStatus } from '../../lib/discoveryActivity';
 import type { DiscoveryBoard, DiscoverySummary } from '../../types';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import EmptyStateCard from '../EmptyStateCard';
@@ -77,7 +78,7 @@ export function DiscoverySection({
     ({ discovery_id, status }) => {
       setRunningTurns((prev) => {
         const next = new Set(prev);
-        if (status === 'running') next.add(discovery_id);
+        if (phaseOfStatus(status) !== null) next.add(discovery_id);
         else next.delete(discovery_id);
         return next;
       });

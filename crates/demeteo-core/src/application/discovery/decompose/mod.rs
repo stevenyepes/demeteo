@@ -44,7 +44,10 @@ use crate::domain::ticket_plan::{
 use crate::ports::discovery::TicketPatch;
 use crate::state::AppContext;
 
-use super::events::{status_payload, Sink, TurnEnding, EVENT_DISCOVERY_TURN_STATUS};
+use super::events::{
+    status_payload, Sink, TurnEnding, EVENT_DISCOVERY_TURN_STATUS, STATUS_ERROR, STATUS_IDLE,
+    STATUS_RUNNING,
+};
 
 use super::turn::{self, Prepared};
 use proposal::{Choices, DecomposeProposal, Pass, Rejected};
@@ -90,26 +93,27 @@ where
     let rows = ctx.tickets.list_for_discovery(discovery_id)?;
     let choices = Choices::read(ctx)?;
 
-    let mut prepared = turn::prepare(ctx, &discovery, None).await?;
+    let emit = Arc::new(emit_fn);
+    let (mut prepared, running) = turn::begin(ctx, &discovery, None, emit.as_ref()).await?;
     prepared.user_text = prompt::decompose_request(&rows, &choices);
 
-    let emit = Arc::new(emit_fn);
     emit(
         EVENT_DISCOVERY_TURN_STATUS,
-        status_payload(&discovery, "running", None),
+        status_payload(&discovery, STATUS_RUNNING, None),
     );
-    let asked = {
-        // Held across the whole pass, and dropped before the last status event
-        // rather than after it: a surface refreshing on `idle` must not read a
-        // pass that has just ended as one still running.
-        let _running = ctx.discovery_turns.claim(discovery_id.as_str());
-        ask(&mut prepared, &emit, &rows, &choices).await
-    };
+    let asked = ask(&mut prepared, &emit, &rows, &choices).await;
+    // Before the last status event rather than after it: a surface refreshing
+    // on `idle` must not read a pass that has just ended as one still running.
+    drop(running);
     emit(
         EVENT_DISCOVERY_TURN_STATUS,
         status_payload(
             &discovery,
-            if asked.is_ok() { "idle" } else { "error" },
+            if asked.is_ok() {
+                STATUS_IDLE
+            } else {
+                STATUS_ERROR
+            },
             asked.as_ref().err().cloned(),
         ),
     );

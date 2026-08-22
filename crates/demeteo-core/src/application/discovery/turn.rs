@@ -11,8 +11,9 @@ use std::sync::Arc;
 
 use super::events::{
     status_payload, DiscoveryTurnCompleted, Sink, TurnEnding, EVENT_DISCOVERY_TURN_COMPLETED,
-    EVENT_DISCOVERY_TURN_STATUS,
+    EVENT_DISCOVERY_TURN_STATUS, STATUS_ERROR, STATUS_IDLE, STATUS_RUNNING, STATUS_SETTING_UP,
 };
+use super::running::{RunningTurn, RunningTurns};
 use crate::adapters::agent::event_stream::turn::{stream_agent_turn, TurnOutcome, TurnResult};
 use crate::domain::attachment::AttachedFile;
 use crate::domain::discovery_question::parse_interview_turn;
@@ -143,15 +144,76 @@ where
     ctx.discoveries
         .update(&discovery.id, &DiscoveryPatch::default(), now)?;
 
-    let prepared = prepare(ctx, &discovery, Some(&user_message)).await?;
     let emit = Arc::new(emit_fn);
+    let (prepared, running) = begin(ctx, &discovery, Some(&user_message), emit.as_ref()).await?;
     emit(
         EVENT_DISCOVERY_TURN_STATUS,
-        status_payload(&discovery, "running", None),
+        status_payload(&discovery, STATUS_RUNNING, None),
     );
 
-    tokio::spawn(run(prepared, emit));
+    tokio::spawn(run(prepared, running, emit));
     Ok(user_message)
+}
+
+/// Claim the turn and say it is setting up, then set it up.
+///
+/// The one way to reach [`prepare`], which is private for that reason.
+pub(super) async fn begin<F>(
+    ctx: &AppContext,
+    discovery: &Discovery,
+    asked: Option<&DiscoveryMessage>,
+    emit: &F,
+) -> Result<(Prepared, RunningTurn), String>
+where
+    F: Fn(&str, serde_json::Value),
+{
+    announced(
+        emit,
+        discovery,
+        ctx.discovery_turns.clone(),
+        prepare(ctx, discovery, asked),
+    )
+    .await
+}
+
+/// Announce a turn, then let `preparing` run — in that order, which is the
+/// whole of what this exists for.
+///
+/// Setting a turn up is not free and on a Discovery whose worktree was
+/// reclaimed while it was idle (§4.6) it is minutes: awaiting it before saying
+/// anything is a press of Decompose with nothing behind it. `preparing` is
+/// built by the caller and first polled *here*, so the emit cannot be moved
+/// after it without deleting this function.
+///
+/// The claim covers the same span for the same reason. A workspace reopened
+/// mid-setup is told what is happening by [`super::running::RunningTurns`] and
+/// by nothing else — no event it missed is replayed to it. It is released
+/// before the failure event and never after, which is [`run`]'s rule.
+pub(super) async fn announced<F, T>(
+    emit: &F,
+    discovery: &Discovery,
+    turns: Arc<RunningTurns>,
+    preparing: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<(T, RunningTurn), String>
+where
+    F: Fn(&str, serde_json::Value),
+{
+    let claim = turns.claim(discovery.id.as_str());
+    emit(
+        EVENT_DISCOVERY_TURN_STATUS,
+        status_payload(discovery, STATUS_SETTING_UP, None),
+    );
+    match preparing.await {
+        Ok(prepared) => Ok((prepared, claim)),
+        Err(reason) => {
+            drop(claim);
+            emit(
+                EVENT_DISCOVERY_TURN_STATUS,
+                status_payload(discovery, STATUS_ERROR, Some(reason.clone())),
+            );
+            Err(reason)
+        }
+    }
 }
 
 /// Everything the background turn needs, resolved while a caller is still
@@ -162,10 +224,6 @@ where
 /// otherwise runs the machinery below unchanged.
 pub(super) struct Prepared {
     pub(super) ctx_discoveries: Arc<dyn crate::ports::discovery::DiscoveryPort>,
-    /// Where the spawned turn says it is running. It is claimed inside
-    /// [`run`] rather than here because preparing is not running, and a
-    /// caller that failed to prepare never took a turn at all.
-    pub(super) running: Arc<super::running::RunningTurns>,
     pub(super) registry: Arc<crate::adapters::agent::registry::AgentRegistry>,
     pub(super) exec: Arc<dyn crate::ports::execution::ExecutionPort>,
     pub(super) pricing: Arc<dyn crate::ports::pricing::PricingTable>,
@@ -232,7 +290,7 @@ impl Prepared {
 /// nobody typed — a decompose pass. It is excluded from `transcript` because a
 /// re-seeded prompt renders the transcript and then the new text, so leaving
 /// it in would ask the same question twice.
-pub(super) async fn prepare(
+async fn prepare(
     ctx: &AppContext,
     discovery: &Discovery,
     asked: Option<&DiscoveryMessage>,
@@ -264,7 +322,6 @@ pub(super) async fn prepare(
 
     Ok(Prepared {
         ctx_discoveries: ctx.discoveries.clone(),
-        running: ctx.discovery_turns.clone(),
         registry: ctx.registry.clone(),
         exec: ctx.exec.clone(),
         pricing: ctx.pricing.clone(),
@@ -314,12 +371,11 @@ pub(super) async fn prepare(
     })
 }
 
-async fn run<F>(p: Prepared, emit: Arc<F>)
+async fn run<F>(p: Prepared, running: RunningTurn, emit: Arc<F>)
 where
     F: Fn(&str, serde_json::Value) + Send + Sync + 'static,
 {
     let started = std::time::Instant::now();
-    let running = p.running.claim(p.discovery.id.as_str());
     let mut resumed = p.session_was_live;
     let mut attempts = 0;
 
@@ -406,9 +462,9 @@ where
         status_payload(
             &p.discovery,
             if ending == TurnEnding::Success {
-                "idle"
+                STATUS_IDLE
             } else {
-                "error"
+                STATUS_ERROR
             },
             reason,
         ),

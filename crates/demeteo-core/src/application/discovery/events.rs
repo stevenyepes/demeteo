@@ -13,8 +13,26 @@ use crate::domain::models::Discovery;
 
 /// Every `AgentEvent` of a turn, as it arrives.
 pub const EVENT_DISCOVERY_AGENT_EVENT: &str = "discovery_agent_event";
-/// `running` when a turn starts, `idle` or `error` when it stops.
+/// A turn's phase, in the order they arrive: [`STATUS_SETTING_UP`],
+/// [`STATUS_RUNNING`], then [`STATUS_IDLE`] or [`STATUS_ERROR`].
 pub const EVENT_DISCOVERY_TURN_STATUS: &str = "discovery_turn_status";
+
+/// The turn has been claimed and is being resolved: which repository on which
+/// host, a worktree if this Discovery no longer has one (§4.6), the
+/// attachments, the transcript, and what the harness reports about itself.
+///
+/// A phase of its own rather than an early [`STATUS_RUNNING`], because the
+/// surface renders that one as the agent thinking — which through a
+/// re-provision is a claim about a process that has not been started yet. What
+/// it may honestly say here is in `docs/DISCOVERY_UI_SPEC.md` §3.4.3.
+pub const STATUS_SETTING_UP: &str = "setting_up";
+/// The agent has the turn.
+pub const STATUS_RUNNING: &str = "running";
+/// Nothing is running. The one a surface refreshes on, which is why every
+/// claim is released before it is sent.
+pub const STATUS_IDLE: &str = "idle";
+/// Nothing is running, and `reason` says what stopped it.
+pub const STATUS_ERROR: &str = "error";
 /// The completion signal §4.3 asks for. Leaving mid-interview is the case the
 /// feature exists for, so a multi-minute turn that ends silently forces the
 /// user to sit and watch.

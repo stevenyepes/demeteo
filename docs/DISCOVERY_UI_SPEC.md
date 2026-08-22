@@ -500,6 +500,14 @@ same summary the settled meta line renders. The mock's `Reading …` is that
 strip rather than mock prose — a reasoning turn emits no text for minutes, so
 the indicator has to stand without one.
 
+**The wait starts before the agent does.** A turn is claimed and announced
+(`setting_up`) before it is resolved, so the placeholder is up from the press
+rather than from the first agent event — the gap it covers is a worktree
+re-provision after an idle reclaim (§4.6), which is minutes on a large repo and
+was the whole of what a pressed Decompose used to show. What the strip may say
+there is bounded by what the phase knows: setup provisions a worktree only when
+there is none, so the copy names the turn and never the worktree.
+
 The seeded transcript, verbatim (use as fixtures):
 
 - **You:** "I want the runner to serve more than one desktop client.

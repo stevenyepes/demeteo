@@ -21,6 +21,30 @@ import { appendCapped } from './streamBuffer';
 
 export type ActivityKind = 'read' | 'edit' | 'write' | 'run_bash';
 
+/**
+ * How far along a live turn is, as far as this surface can tell.
+ *
+ * `setting_up` is `STATUS_SETTING_UP` from `application/discovery/events.rs`:
+ * the turn is claimed and is being resolved, and no agent has it yet.
+ * `working` is everything after that *and* the turn this surface found already
+ * running when it opened, which reports as a bool and says no more than that.
+ */
+export type TurnPhase = 'setting_up' | 'working';
+
+/**
+ * The phase a `discovery_turn_status` value puts the turn in, or `null` for
+ * the two that end it.
+ *
+ * The one place the wire's status values are read, so a surface cannot decide
+ * that `setting_up` means the composer is free again — which is worse than the
+ * silence it replaced, because the event actively clears what the click set.
+ */
+export function phaseOfStatus(status: string): TurnPhase | null {
+  if (status === 'setting_up') return 'setting_up';
+  if (status === 'running') return 'working';
+  return null;
+}
+
 /** One tool call, as the bubble names it. */
 export interface ToolActivity {
   /** The agent's own `tool_call_id`; `tool_call_update` addresses it. */
@@ -34,6 +58,7 @@ export interface ToolActivity {
 export interface LiveTurn {
   /** Milliseconds since the epoch. `0` before a turn has been opened. */
   startedAt: number;
+  phase: TurnPhase;
   text: string;
   /** The most recent call still outstanding — an agent may have several. */
   current: ToolActivity | null;
@@ -84,6 +109,7 @@ export const EMPTY_ACTIVITY: TurnActivity = Object.freeze({
  */
 export const NO_TURN: LiveTurn = Object.freeze({
   startedAt: 0,
+  phase: 'working',
   text: '',
   current: null,
   alsoRunning: 0,
@@ -91,8 +117,8 @@ export const NO_TURN: LiveTurn = Object.freeze({
   activity: EMPTY_ACTIVITY,
 });
 
-export function openTurn(startedAt: number): LiveTurn {
-  return { ...NO_TURN, startedAt };
+export function openTurn(startedAt: number, phase: TurnPhase): LiveTurn {
+  return { ...NO_TURN, startedAt, phase };
 }
 
 /**

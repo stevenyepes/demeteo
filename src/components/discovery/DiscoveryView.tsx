@@ -16,6 +16,7 @@ import {
   type DiscoveryTurnCompletedPayload,
   type DiscoveryTurnStatusPayload,
 } from '../../lib/discovery';
+import { phaseOfStatus } from '../../lib/discoveryActivity';
 import { buildTranscript } from '../../lib/discoveryInterview';
 import { formatError } from '../../lib/errors';
 import { listMachines } from '../../lib/machines';
@@ -160,17 +161,20 @@ export function DiscoveryView({
     if (!detail.turn_running) return;
     awaitingAdopted.current = true;
     setPending(true);
-    begin(discoveryId);
+    // `working`, because `turn_running` is a bool: a turn found part-way
+    // through reports that it is running and never which phase it is in.
+    begin(discoveryId, 'working');
   }, [detail, discoveryId, begin]);
 
   useTauriEvent<DiscoveryTurnStatusPayload>(
     EVENT_DISCOVERY_TURN_STATUS,
     ({ discovery_id, status, reason }) => {
       if (discovery_id !== discoveryId) return;
-      setPending(status === 'running');
-      if (status === 'running') begin(discoveryId);
+      const phase = phaseOfStatus(status);
+      setPending(phase !== null);
+      if (phase !== null) begin(discoveryId, phase);
       if (status === 'error' && reason) setActionError(reason);
-      if (status !== 'running' && awaitingAdopted.current) {
+      if (phase === null && awaitingAdopted.current) {
         awaitingAdopted.current = false;
         end(discoveryId);
         void refresh();
@@ -216,10 +220,11 @@ export function DiscoveryView({
 
   async function send(text: string) {
     setActionError(null);
-    // From the click, not from the `running` status a round trip later: the
-    // bubble mounts on `sending` and would otherwise count from zero once the
-    // backend answered.
-    begin(discoveryId);
+    // From the click, not from the status a round trip later: the bubble
+    // mounts on `sending` and would otherwise count from zero once the backend
+    // answered. Setting up is what the backend does first, and on a Discovery
+    // whose worktree was reclaimed it is the longest part of the turn.
+    begin(discoveryId, 'setting_up');
     setSending(true);
     try {
       const stored = await sendDiscoveryTurn(discoveryId, text);

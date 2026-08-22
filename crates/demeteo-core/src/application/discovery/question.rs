@@ -95,7 +95,7 @@ pub struct TurnPrompt<'a> {
     pub transcript: &'a [DiscoveryMessage],
     /// What the user handed the interviewer (§4.6), named the one way an
     /// agent already understands. The bytes are put where a `Read` can reach
-    /// them by [`super::turn::prepare`]; this only says they exist.
+    /// them while [`super::turn`] sets the turn up; this only says they exist.
     pub attachments: &'a [AttachedFile],
     /// Whether the interviewer's model can see an image, which decides only
     /// whether the block warns that it cannot.

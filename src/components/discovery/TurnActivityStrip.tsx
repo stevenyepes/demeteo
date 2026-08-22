@@ -30,6 +30,16 @@ const ICONS: Record<ActivityKind, LucideIcon> = {
  * spend minutes alive without emitting a single event. An elapsed clock that
  * only appears once something arrives would be absent for exactly the wait it
  * was added to explain.
+ *
+ * The phase is consulted last, after the call in flight and the prose: an
+ * event is evidence that the agent has the turn, while a phase is only what
+ * the backend last said it was doing.
+ *
+ * `Preparing the turn` rather than naming a worktree, which is the expensive
+ * part and the one the user is actually waiting on: setup provisions one only
+ * when the idle sweep has taken it (`PRD_DISCOVERY.md` §4.6), so on a warm
+ * Discovery it touches no git at all and a strip promising otherwise would be
+ * wrong in the common case.
  */
 export function TurnActivityStrip({
   turn,
@@ -40,7 +50,9 @@ export function TurnActivityStrip({
     ? describeTool(turn.current)
     : turn.text.length > 0
       ? 'Answering'
-      : 'Thinking';
+      : turn.phase === 'setting_up'
+        ? 'Preparing the turn'
+        : 'Thinking';
   const summary = formatActivitySummary(turn.activity);
 
   return (

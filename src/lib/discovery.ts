@@ -294,7 +294,9 @@ export async function removeTicketAttachment(
 
 /** Every `AgentEvent` of a turn, as it arrives. */
 export const EVENT_DISCOVERY_AGENT_EVENT = "discovery_agent_event";
-/** `running` when a turn starts, `idle` or `error` when it stops. */
+/** A turn's phase: `setting_up`, then `running`, then `idle` or `error`.
+ *  Read through `phaseOfStatus` in `lib/discoveryActivity.ts` — which of them
+ *  leave a turn live is a decision, not a string comparison. */
 export const EVENT_DISCOVERY_TURN_STATUS = "discovery_turn_status";
 /** The completion signal — a multi-minute turn that ended silently would
  *  force the user to sit and watch it. */
