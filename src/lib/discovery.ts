@@ -99,9 +99,13 @@ export async function createDiscovery(input: {
 
 /**
  * Mirrors `discovery_send_turn`. Returns as soon as the user's message is
- * stored — the interviewer's half arrives over `discovery_agent_event` and
- * ends with `discovery_turn_completed`, because leaving mid-interview is the
- * case this feature exists for.
+ * stored — before the turn is set up — and the interviewer's half arrives over
+ * `discovery_agent_event`, ending with `discovery_turn_completed`, because
+ * leaving mid-interview is the case this feature exists for.
+ *
+ * A rejection therefore means the turn was never accepted, which includes a
+ * refusal because one is already running; a setup that failed reaches the
+ * surface as a `discovery_turn_status` of `error` instead.
  */
 export async function sendDiscoveryTurn(
   discoveryId: string,
@@ -139,7 +143,11 @@ export async function removeDiscoveryAttachment(
 }
 
 /** Mirrors `discovery_cancel_turn`. What the turn spent is still billed and
- *  whatever it managed to say is still stored — both already happened. */
+ *  whatever it managed to say is still stored — both already happened.
+ *
+ *  Nothing calls this while a turn reads `setting_up`: there is no agent
+ *  session to cancel yet, so it would succeed and do nothing. See
+ *  `application/discovery/mod.rs`. */
 export async function cancelDiscoveryTurn(discoveryId: string): Promise<void> {
   return invoke<void>("discovery_cancel_turn", { discoveryId });
 }

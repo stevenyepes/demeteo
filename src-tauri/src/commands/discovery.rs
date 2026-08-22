@@ -53,7 +53,10 @@ pub fn discovery_create(
 /// Send the user's turn and start the interviewer's.
 ///
 /// The returned message is the user's own, already persisted, so the
-/// transcript can render it without waiting for the answer.
+/// transcript can render it without waiting for the answer. `Err` therefore
+/// means the turn was never accepted — a closed Discovery, empty text, or one
+/// already taking a turn. A failure to *set the turn up* arrives as an error
+/// status event instead; [`turn::send`] says why.
 #[tauri::command]
 pub async fn discovery_send_turn(
     ctx: State<'_, AppContext>,

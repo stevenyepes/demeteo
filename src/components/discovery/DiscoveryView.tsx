@@ -70,8 +70,12 @@ export function DiscoveryView({
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState(false);
-  // The turn is in flight from the click, not from the first status event —
-  // otherwise a second click lands before the backend has said anything.
+  // The turn is in flight from the click until the backend says which phase it
+  // is in — not until `discovery_send_turn` answers, which it does as soon as
+  // the message is stored and before the turn is set up. Clearing this on the
+  // resolved promise instead would free the composer for the whole of setup,
+  // which on a reclaimed worktree is minutes, and a second turn kills the
+  // first agent's child.
   const [sending, setSending] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ title: string; detail: string } | null>(null);
@@ -172,6 +176,7 @@ export function DiscoveryView({
       if (discovery_id !== discoveryId) return;
       const phase = phaseOfStatus(status);
       setPending(phase !== null);
+      setSending(false);
       if (phase !== null) begin(discoveryId, phase);
       if (status === 'error' && reason) setActionError(reason);
       if (phase === null && awaitingAdopted.current) {
@@ -238,11 +243,13 @@ export function DiscoveryView({
       setDetail((current) =>
         current ? { ...current, messages: [...current.messages, appended] } : current,
       );
-      setPending(true);
     } catch (cause) {
-      setActionError(formatError(cause));
-    } finally {
+      // Nothing was accepted — a closed discovery, empty text, or a turn
+      // already under way — so the optimistic turn is dropped rather than left
+      // in the store, where the next `begin` would inherit its clock.
       setSending(false);
+      end(discoveryId);
+      setActionError(formatError(cause));
     }
   }
 

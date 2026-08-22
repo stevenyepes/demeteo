@@ -49,6 +49,7 @@ use super::events::{
     STATUS_RUNNING,
 };
 
+use super::running::ALREADY_RUNNING;
 use super::turn::{self, Prepared};
 use proposal::{Choices, DecomposeProposal, Pass, Rejected};
 
@@ -90,11 +91,19 @@ where
     if discovery.status != DiscoveryStatus::Open {
         return Err("This discovery is closed. Reopen it to decompose it again.".into());
     }
+    // A pass and an interview turn are one claim, so pressing Decompose during
+    // a turn is refused here and a turn during a pass is refused in
+    // `super::turn::send` — the same refusal in both directions.
+    let claim = ctx
+        .discovery_turns
+        .clone()
+        .try_claim(discovery_id.as_str())
+        .ok_or_else(|| ALREADY_RUNNING.to_string())?;
     let rows = ctx.tickets.list_for_discovery(discovery_id)?;
     let choices = Choices::read(ctx)?;
 
     let emit = Arc::new(emit_fn);
-    let (mut prepared, running) = turn::begin(ctx, &discovery, None, emit.as_ref()).await?;
+    let (mut prepared, running) = turn::begin(ctx, &discovery, None, claim, emit.as_ref()).await?;
     prepared.user_text = prompt::decompose_request(&rows, &choices);
 
     emit(

@@ -48,6 +48,13 @@ use std::sync::Arc;
 /// use, keeping the dependency on each port visible at the call site
 /// (`ctx.machines`, `ctx.projects`, …) instead of hidden behind five
 /// separately named extractors.
+///
+/// `Clone` because a background task outlives the borrow the command that
+/// spawned it was given — an interview turn sets itself up after
+/// `discovery_send_turn` has already answered. Every field is a handle, so a
+/// clone is a handful of refcount bumps over the same state rather than a copy
+/// of it.
+#[derive(Clone)]
 pub struct AppContext {
     /// Machine + agent profile persistence.
     pub machines: Arc<dyn MachineRepository>,

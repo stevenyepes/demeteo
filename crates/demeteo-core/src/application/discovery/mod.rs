@@ -282,6 +282,15 @@ pub async fn delete(ctx: &AppContext, id: &DiscoveryId) -> Result<(), String> {
 /// The same shape as `commands::agent_lifecycle::agent_cancel`: the child is
 /// killed and the stream ends on its own. What it spent is still billed and
 /// whatever it managed to say is still stored, because both already happened.
+///
+/// **A turn that is still setting up cannot be stopped.** What this cancels is
+/// an agent session, and through [`turn::announced`]'s span there is none —
+/// the worktree is being provisioned and no child exists to kill. The call
+/// succeeds and nothing happens, which is why no surface offers a stop while
+/// the status is `setting_up`: an affordance that silently declines is worse
+/// than none. Serving it would mean cancelling the setup future itself, which
+/// is a different mechanism (an abort handle held beside the claim) and is not
+/// built.
 pub async fn cancel_turn(ctx: &AppContext, id: &DiscoveryId) -> Result<(), String> {
     if let Some(session) = ctx.registry.session_handle_any(&turn::thread_id(id)).await {
         session.cancel()?;

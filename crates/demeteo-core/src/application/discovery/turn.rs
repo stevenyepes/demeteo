@@ -13,7 +13,7 @@ use super::events::{
     status_payload, DiscoveryTurnCompleted, Sink, TurnEnding, EVENT_DISCOVERY_TURN_COMPLETED,
     EVENT_DISCOVERY_TURN_STATUS, STATUS_ERROR, STATUS_IDLE, STATUS_RUNNING, STATUS_SETTING_UP,
 };
-use super::running::{RunningTurn, RunningTurns};
+use super::running::{RunningTurn, ALREADY_RUNNING};
 use crate::adapters::agent::event_stream::turn::{stream_agent_turn, TurnOutcome, TurnResult};
 use crate::domain::attachment::AttachedFile;
 use crate::domain::discovery_question::parse_interview_turn;
@@ -104,11 +104,16 @@ pub(crate) fn thread_id(id: &DiscoveryId) -> String {
     format!("discovery-{}", id.as_str())
 }
 
-/// Record the user's turn, then run the interviewer's in the background.
+/// Record the user's turn, then set it up and run it in the background.
 ///
-/// Returns as soon as the user's message is persisted, so the surface can
-/// render it while the answer streams. Everything after that reaches the
-/// frontend through the three events above.
+/// Returns as soon as the user's message is persisted — **setting the turn up
+/// is not awaited here**. On a Discovery whose worktree was reclaimed by the
+/// idle sweep (§4.6) that takes minutes, and the bubble the user just typed
+/// would not render until it finished. What that costs is the caller's `Err`
+/// for a setup failure: spawned, it reaches the surface as a [`STATUS_ERROR`]
+/// status carrying the same reason. Everything the *caller* can act on —
+/// a closed Discovery, empty text, a Discovery already taking a turn — is
+/// decided before the spawn and still rejects the command.
 pub async fn send<F>(
     ctx: &AppContext,
     discovery_id: &DiscoveryId,
@@ -128,6 +133,13 @@ where
     if text.trim().is_empty() {
         return Err("A turn needs something to say.".into());
     }
+    // Before the message is stored, not after: a turn this Discovery is
+    // refused must leave no bubble behind to answer.
+    let claim = ctx
+        .discovery_turns
+        .clone()
+        .try_claim(discovery.id.as_str())
+        .ok_or_else(|| ALREADY_RUNNING.to_string())?;
 
     let now = crate::paths::now_ms();
     let user_message = DiscoveryMessage {
@@ -144,36 +156,54 @@ where
     ctx.discoveries
         .update(&discovery.id, &DiscoveryPatch::default(), now)?;
 
-    let emit = Arc::new(emit_fn);
-    let (prepared, running) = begin(ctx, &discovery, Some(&user_message), emit.as_ref()).await?;
+    tokio::spawn(set_up_and_run(
+        ctx.clone(),
+        discovery,
+        user_message.clone(),
+        claim,
+        Arc::new(emit_fn),
+    ));
+    Ok(user_message)
+}
+
+/// The half of a turn that no longer has a caller to report to.
+///
+/// A failure here has already been said on the wire by [`announced`], so
+/// there is nothing left to return and nothing to log twice.
+async fn set_up_and_run<F>(
+    ctx: AppContext,
+    discovery: Discovery,
+    asked: DiscoveryMessage,
+    claim: RunningTurn,
+    emit: Arc<F>,
+) where
+    F: Fn(&str, serde_json::Value) + Send + Sync + 'static,
+{
+    let Ok((prepared, running)) = begin(&ctx, &discovery, Some(&asked), claim, emit.as_ref()).await
+    else {
+        return;
+    };
     emit(
         EVENT_DISCOVERY_TURN_STATUS,
         status_payload(&discovery, STATUS_RUNNING, None),
     );
-
-    tokio::spawn(run(prepared, running, emit));
-    Ok(user_message)
+    run(prepared, running, emit).await;
 }
 
-/// Claim the turn and say it is setting up, then set it up.
+/// Say the turn is setting up, then set it up.
 ///
 /// The one way to reach [`prepare`], which is private for that reason.
 pub(super) async fn begin<F>(
     ctx: &AppContext,
     discovery: &Discovery,
     asked: Option<&DiscoveryMessage>,
+    claim: RunningTurn,
     emit: &F,
 ) -> Result<(Prepared, RunningTurn), String>
 where
     F: Fn(&str, serde_json::Value),
 {
-    announced(
-        emit,
-        discovery,
-        ctx.discovery_turns.clone(),
-        prepare(ctx, discovery, asked),
-    )
-    .await
+    announced(emit, discovery, claim, prepare(ctx, discovery, asked)).await
 }
 
 /// Announce a turn, then let `preparing` run — in that order, which is the
@@ -185,20 +215,25 @@ where
 /// built by the caller and first polled *here*, so the emit cannot be moved
 /// after it without deleting this function.
 ///
-/// The claim covers the same span for the same reason. A workspace reopened
-/// mid-setup is told what is happening by [`super::running::RunningTurns`] and
-/// by nothing else — no event it missed is replayed to it. It is released
+/// The claim is taken by the caller and only carried through, because it
+/// starts before this does — refusing a second turn is a decision made while a
+/// caller is still there to be told. A workspace reopened mid-setup is
+/// told what is happening by [`super::running::RunningTurns`] and by nothing
+/// else, since no event it missed is replayed to it. The claim is released
 /// before the failure event and never after, which is [`run`]'s rule.
+///
+/// **A turn cannot be cancelled while it is setting up.**
+/// [`super::cancel_turn`] carries why, and it is the whole of what is done
+/// about it.
 pub(super) async fn announced<F, T>(
     emit: &F,
     discovery: &Discovery,
-    turns: Arc<RunningTurns>,
+    claim: RunningTurn,
     preparing: impl std::future::Future<Output = Result<T, String>>,
 ) -> Result<(T, RunningTurn), String>
 where
     F: Fn(&str, serde_json::Value),
 {
-    let claim = turns.claim(discovery.id.as_str());
     emit(
         EVENT_DISCOVERY_TURN_STATUS,
         status_payload(discovery, STATUS_SETTING_UP, None),
