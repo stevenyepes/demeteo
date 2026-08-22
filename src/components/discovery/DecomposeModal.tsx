@@ -37,12 +37,13 @@ interface DecomposeModalProps {
  * The proposed-changes review (`DISCOVERY_UI_SPEC.md` §4): a diff to accept in
  * parts, not a wizard.
  *
- * **The proposal is not persisted, and nothing here pretends otherwise.**
+ * **Nothing here caches, polls or checks the proposal for staleness.**
  * Applying hands `tickets` straight back and the backend re-resolves and
  * re-diffs it against the rows as they stand at that moment — so a ticket
  * started while this was open is refused server-side rather than silently
- * rewritten, and there is deliberately no cache, no poll and no staleness
- * check on this side.
+ * rewritten. That is also what makes the stored proposal behind this modal
+ * safe to keep between visits: it is a view awaiting review, never an answer.
+ * Closing keeps it; only Discard forgets it.
  *
  * **A subset of a valid proposal is not itself valid.** Declining a new ticket
  * that another accepted one is `blocked_by` leaves an edge pointing at

@@ -39,6 +39,15 @@ pub struct DiscoveryPatch {
     /// The whole manifest, as [`TicketPatch::attachments`] takes it:
     /// `Some(vec![])` is the clear.
     pub attachments: Option<Vec<AttachedFile>>,
+    /// The decompose pass awaiting review (V50), serialized. `Some(None)` is
+    /// the clear — applying it, or discarding it.
+    ///
+    /// Opaque text rather than a type, because its shape is
+    /// `application::discovery::decompose::proposal`'s and a port that named
+    /// it would be a persistence contract pinned to a rendering payload. The
+    /// row is a place to keep it between two visits; nothing in the adapter
+    /// reads inside it.
+    pub pending_proposal: Option<Option<String>>,
     /// Folded into the stored totals rather than replacing them, so two turns
     /// that finish out of order still sum to what was spent (§8.5).
     pub add_cost: f64,
@@ -73,6 +82,11 @@ pub trait DiscoveryPort: Send + Sync {
     /// The whole transcript in the order it was said — the authority a turn
     /// re-seeds from when the harness no longer knows the session.
     fn list_messages(&self, id: &DiscoveryId) -> Result<Vec<DiscoveryMessage>, String>;
+    /// The pass awaiting review, as [`DiscoveryPatch::pending_proposal`] left
+    /// it. Read on its own rather than on the row: a proposal is the size of a
+    /// plan, and every list of Discoveries would otherwise carry one per card
+    /// to render a chip.
+    fn pending_proposal(&self, id: &DiscoveryId) -> Result<Option<String>, String>;
 }
 
 /// The fields one transition may change on a [`Ticket`].

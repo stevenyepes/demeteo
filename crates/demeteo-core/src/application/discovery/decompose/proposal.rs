@@ -371,7 +371,7 @@ fn edges(values: &[String]) -> Vec<String> {
 }
 
 /// Which of the modal's three groups a change belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeKind {
     Added,
@@ -380,7 +380,7 @@ pub enum ChangeKind {
 }
 
 /// One row of the review modal, and one checkbox.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProposedChange {
     /// Proposal-space, which is what `accept` names and what every other id in
     /// this payload is. For an addition it is the id the agent authored, not
@@ -399,7 +399,7 @@ pub struct ProposedChange {
     pub fields: Vec<FieldChange>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockedTicket {
     pub id: String,
     pub seq: i64,
@@ -410,7 +410,7 @@ pub struct LockedTicket {
 }
 
 /// What one decompose pass produced, and everything the modal draws.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecomposeProposal {
     pub discovery_id: String,
     /// The discovery held no tickets before this pass — the `First pass`

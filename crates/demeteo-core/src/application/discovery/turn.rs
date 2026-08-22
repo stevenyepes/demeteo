@@ -162,6 +162,10 @@ where
 /// otherwise runs the machinery below unchanged.
 pub(super) struct Prepared {
     pub(super) ctx_discoveries: Arc<dyn crate::ports::discovery::DiscoveryPort>,
+    /// Where the spawned turn says it is running. It is claimed inside
+    /// [`run`] rather than here because preparing is not running, and a
+    /// caller that failed to prepare never took a turn at all.
+    pub(super) running: Arc<super::running::RunningTurns>,
     pub(super) registry: Arc<crate::adapters::agent::registry::AgentRegistry>,
     pub(super) exec: Arc<dyn crate::ports::execution::ExecutionPort>,
     pub(super) pricing: Arc<dyn crate::ports::pricing::PricingTable>,
@@ -260,6 +264,7 @@ pub(super) async fn prepare(
 
     Ok(Prepared {
         ctx_discoveries: ctx.discoveries.clone(),
+        running: ctx.discovery_turns.clone(),
         registry: ctx.registry.clone(),
         exec: ctx.exec.clone(),
         pricing: ctx.pricing.clone(),
@@ -314,6 +319,7 @@ where
     F: Fn(&str, serde_json::Value) + Send + Sync + 'static,
 {
     let started = std::time::Instant::now();
+    let running = p.running.claim(p.discovery.id.as_str());
     let mut resumed = p.session_was_live;
     let mut attempts = 0;
 
@@ -374,6 +380,11 @@ where
     let parsed = parse_interview_turn(&spent.text);
     let message_id = persist_assistant(&p, &spent, &parsed.prose, activity);
 
+    // Before the events and after the message is stored, in that order: a
+    // surface that refreshes on completion reads `turn_running`, and a claim
+    // outliving the event it answers would leave it waiting for a turn that
+    // has already said everything it had to say.
+    drop(running);
     emit(
         EVENT_DISCOVERY_TURN_COMPLETED,
         serde_json::to_value(DiscoveryTurnCompleted {

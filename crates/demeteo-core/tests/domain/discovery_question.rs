@@ -86,8 +86,10 @@ fn the_advisory_signal_rides_without_a_question() {
     assert_eq!(turn.prose, "That is the whole shape.");
 }
 
+/// A refused block is still cut: the reason reaches the reader as a sentence,
+/// and the JSON that caused it was addressed to Demeteo.
 #[test]
-fn a_refused_question_leaves_the_block_where_the_reader_can_see_it() {
+fn a_refused_question_is_reported_rather_than_rendered() {
     let mut q = question();
     q.recommended = Some("nonexistent".to_string());
     let text = format!(
@@ -100,8 +102,63 @@ fn a_refused_question_leaves_the_block_where_the_reader_can_see_it() {
     );
     let turn = parse_interview_turn(&text);
     assert!(turn.question.is_none());
+    assert!(turn.question_error.unwrap().contains("nonexistent"));
+    assert_eq!(turn.prose, "Prose.");
+}
+
+/// The turn this was found on: its prose named `{feature_id}` and globbed
+/// `{feature_branch}{SUBTASK_INFIX}*`, so the first balanced object in it was
+/// an identifier in braces. The search stopped there and the real block was
+/// rendered at the user as raw JSON.
+#[test]
+fn braces_in_the_prose_do_not_hide_the_block_below_them() {
+    let text = format!(
+        "A subtask id is `{{feature_id}}-step-{{step_id}}`, and the sweep globs \
+         `{{feature_branch}}{{SUBTASK_INFIX}}*`.\n\n{}",
+        serde_json::to_string(&InterviewBlock {
+            question: Some(question()),
+            nothing_left_to_settle: false,
+        })
+        .unwrap()
+    );
+    let turn = parse_interview_turn(&text);
+    assert_eq!(
+        turn.question.as_ref().map(|q| q.header.as_str()),
+        Some("Identity")
+    );
+    assert!(turn.prose.contains("{feature_id}"));
+    assert!(!turn.prose.contains("keypair"));
+}
+
+/// A block that never deserializes is the case the accept rule cannot see —
+/// it is not a candidate at all — and the fallback used to be rendering it.
+#[test]
+fn a_block_that_will_not_parse_is_reported_rather_than_rendered() {
+    let text = "Two things it leaves open.\n{\"question\": {\"header\": \"Rework collision\"}}";
+    let turn = parse_interview_turn(text);
+    assert_eq!(turn.prose, "Two things it leaves open.");
+    assert!(turn.question.is_none());
     assert!(turn.question_error.is_some());
-    assert!(turn.prose.contains("nonexistent"));
+}
+
+/// A turn cut off mid-block: the tail never closes, so nothing balanced-brace
+/// can find it, and it is the shape most likely to be truncated JSON.
+#[test]
+fn a_truncated_block_is_reported_rather_than_rendered() {
+    let text = "Two things it leaves open.\n{\"question\": {\"header\": \"Rework";
+    let turn = parse_interview_turn(text);
+    assert_eq!(turn.prose, "Two things it leaves open.");
+    assert!(turn.question_error.is_some());
+}
+
+/// The other half of that rule: a turn signing off with an identifier in
+/// braces is prose, and accusing it of a malformed question would be the
+/// false positive this is measured by.
+#[test]
+fn prose_ending_in_braces_is_not_read_as_a_failed_block() {
+    let turn = parse_interview_turn("The branch is `{feature_branch}`");
+    assert_eq!(turn.prose, "The branch is `{feature_branch}`");
+    assert!(turn.question_error.is_none());
 }
 
 #[test]

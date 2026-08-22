@@ -187,6 +187,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // the migration's header.
     add_column_if_missing(conn, "discovery_messages", "activity_json", "TEXT")?;
 
+    // The decompose pass nobody has reviewed yet (V50). Nullable, and NULL is
+    // the resting state — see the migration's header.
+    add_column_if_missing(conn, "discoveries", "pending_proposal_json", "TEXT")?;
+
     Ok(())
 }
 

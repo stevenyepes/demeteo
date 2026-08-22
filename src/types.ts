@@ -1304,6 +1304,14 @@ export interface DiscoveryMessageView extends DiscoveryMessage {
 export interface DiscoveryDetail {
   discovery: Discovery;
   messages: DiscoveryMessageView[];
+  /** The decompose pass waiting to be reviewed, or `null`. Stored against the
+   *  Discovery, so a pass the user navigated away from is still theirs when
+   *  they come back — including after a restart. */
+  pending_proposal: DecomposeProposal | null;
+  /** A turn or a pass is running *right now*. Known only within the process
+   *  that started it, so `false` after a restart is the truth rather than a
+   *  gap: nothing survived it to still be running. */
+  turn_running: boolean;
 }
 
 /** Mirrors `TicketState` — the whole stored vocabulary. Everything a screen

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { InterviewTranscript } from './InterviewTranscript';
 import { NO_TURN } from '../../lib/discoveryActivity';
-import type { TranscriptBlock } from '../../lib/discoveryInterview';
+import type { TranscriptBlock, TranscriptBubble } from '../../lib/discoveryInterview';
 import type { DiscoveryStreamStore } from './useDiscoveryStream';
 
 afterEach(cleanup);
@@ -16,7 +16,7 @@ const STORE: DiscoveryStreamStore = {
   read: () => NO_TURN,
 };
 
-function bubble(role: 'user' | 'assistant', text: string): TranscriptBlock {
+function bubble(role: 'user' | 'assistant', text: string): TranscriptBubble {
   return {
     kind: 'bubble',
     key: `${role}-1`,
@@ -56,6 +56,22 @@ describe('an interviewer turn', () => {
     expect(bubbleEl.querySelector('em')?.textContent).toBe('topology');
     expect(bubbleEl.querySelectorAll('li')).toHaveLength(2);
     expect(bubbleEl.textContent).not.toContain('`');
+  });
+});
+
+describe('a turn whose question was refused', () => {
+  it('says why instead of rendering the block that caused it', () => {
+    renderTranscript([
+      {
+        ...bubble('assistant', 'Two things it leaves open.'),
+        questionError: 'the question has no `text`',
+      },
+    ]);
+
+    expect(screen.getByTestId('transcript-question-error').textContent).toContain(
+      'the question has no `text`',
+    );
+    expect(screen.getByTestId('transcript-assistant').textContent).not.toContain('"question"');
   });
 });
 

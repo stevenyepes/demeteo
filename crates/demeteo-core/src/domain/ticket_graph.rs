@@ -17,7 +17,7 @@
 //! §9.2 gives: one computation cannot disagree with itself, and two of them
 //! eventually would.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// A ticket's stored state — the entire vocabulary, which §11 pins at three.
@@ -98,7 +98,7 @@ pub struct Blocker {
 }
 
 /// The board lanes of §9.2, derived from the same pass as readiness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TicketLane {
     Blocked,
@@ -442,14 +442,14 @@ fn cycle_reason<B>(proposed: &[ProposedTicket<B>]) -> Option<String> {
 }
 
 /// How a proposal would have changed a ticket it is not allowed to touch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImmutableChange {
     Revised,
     Removed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImmutableViolation {
     pub id: String,
     pub change: ImmutableChange,

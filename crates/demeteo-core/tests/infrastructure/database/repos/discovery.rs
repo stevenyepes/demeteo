@@ -152,6 +152,47 @@ fn a_patch_distinguishes_leaving_alone_from_clearing() {
     );
 }
 
+/// A pass survives the surface that asked for it (V50) — the whole point of
+/// the column — and the write is the same three-state patch every nullable
+/// column here takes.
+#[test]
+fn the_pass_awaiting_review_outlives_the_view_that_asked_for_it() {
+    let db = db();
+    db.create(&discovery()).unwrap();
+    assert_eq!(db.pending_proposal(&did()).unwrap(), None);
+
+    db.update(
+        &did(),
+        &DiscoveryPatch {
+            pending_proposal: Some(Some("{\"tickets\":[]}".to_string())),
+            ..Default::default()
+        },
+        200,
+    )
+    .unwrap();
+    assert_eq!(
+        db.pending_proposal(&did()).unwrap().as_deref(),
+        Some("{\"tickets\":[]}")
+    );
+
+    db.update(&did(), &DiscoveryPatch::default(), 300).unwrap();
+    assert!(
+        db.pending_proposal(&did()).unwrap().is_some(),
+        "a patch that named no proposal must not discard the one waiting"
+    );
+
+    db.update(
+        &did(),
+        &DiscoveryPatch {
+            pending_proposal: Some(None),
+            ..Default::default()
+        },
+        400,
+    )
+    .unwrap();
+    assert_eq!(db.pending_proposal(&did()).unwrap(), None);
+}
+
 /// The manifest is replaced wholesale, and the empty list is a real answer
 /// rather than "leave it alone" — removing the last chip has to reach the row,
 /// or the next turn is prompted with a file the user just took away.

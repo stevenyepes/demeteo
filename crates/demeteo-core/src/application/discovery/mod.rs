@@ -11,14 +11,16 @@
 //! [`turn`] runs one round, [`context`] decides what the interviewer is told
 //! about the project, [`attachments`] holds what the user handed it,
 //! [`question`] holds the prompt, [`decompose`] ends the interview in tickets,
-//! [`worktree`] owns the checkout it reads in, and [`events`] is what the
-//! surface hears.
+//! [`worktree`] owns the checkout it reads in, [`running`] is how a surface
+//! that heard none of it learns a turn is under way, and [`events`] is what
+//! the surface hears.
 
 pub mod attachments;
 pub mod context;
 pub mod decompose;
 pub mod events;
 pub mod question;
+pub mod running;
 pub mod turn;
 pub mod worktree;
 
@@ -79,6 +81,16 @@ pub struct DiscoveryMessageView {
 pub struct DiscoveryDetail {
     pub discovery: Discovery,
     pub messages: Vec<DiscoveryMessageView>,
+    /// The decompose pass waiting to be reviewed (§5.3), if one is. Answered
+    /// here because the workspace is where it is reviewed, and a user who
+    /// navigated away between pressing Decompose and the pass finishing has no
+    /// other way back to what they paid for.
+    pub pending_proposal: Option<decompose::proposal::DecomposeProposal>,
+    /// A turn or a pass is under way *right now*, from
+    /// [`running::RunningTurns`] — which is the only thing that knows, and
+    /// only within this process. `false` after a restart is therefore true:
+    /// nothing survived it to still be running.
+    pub turn_running: bool,
 }
 
 /// One Discovery as Project Home's list reads it (`DISCOVERY_UI_SPEC.md`
@@ -137,6 +149,8 @@ pub fn get(ctx: &AppContext, id: &DiscoveryId) -> Result<DiscoveryDetail, String
     Ok(DiscoveryDetail {
         discovery,
         messages,
+        pending_proposal: decompose::pending(ctx, id)?,
+        turn_running: ctx.discovery_turns.running(id),
     })
 }
 

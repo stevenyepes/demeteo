@@ -160,6 +160,12 @@ pub struct AppContext {
     /// what was said; the harness's own session id is only a cached fast path.
     pub discoveries: Arc<dyn DiscoveryPort>,
 
+    /// The Discoveries taking a turn or a decompose pass in this process
+    /// ([`crate::application::discovery::running`]). Nothing durable may hold
+    /// it, for [`SyncTurns`](crate::application::sync_turns::SyncTurns)'s
+    /// reason.
+    pub discovery_turns: Arc<crate::application::discovery::running::RunningTurns>,
+
     /// The work a Discovery emitted. Nothing here answers whether a Ticket is
     /// startable — that is computed on read from its edges and the forge state
     /// of each dependency, never stored (§6.3).

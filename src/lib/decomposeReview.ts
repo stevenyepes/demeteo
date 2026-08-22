@@ -148,6 +148,25 @@ export function validationState(proposal: DecomposeProposal): ValidationState {
   };
 }
 
+/**
+ * What the workspace says about a pass nobody has reviewed yet.
+ *
+ * Reads the same two fields {@link validationState} does and reaches the same
+ * verdict in one line, because the two must never disagree: a notice promising
+ * changes over a pass whose plan was refused would be offering something the
+ * modal then declines to apply.
+ */
+export function pendingProposalNote(proposal: DecomposeProposal): string {
+  if (validationState(proposal).fatal) {
+    return 'A decompose pass finished without a plan that could be used. Nothing here can be applied.';
+  }
+  const n = proposal.changes.length;
+  if (n === 0) return 'A decompose pass finished with nothing to change.';
+  return n === 1
+    ? 'A decompose pass is waiting for review: 1 proposed change.'
+    : `A decompose pass is waiting for review: ${n} proposed changes.`;
+}
+
 /** A started ticket the pass tried to touch, attached to the locked card it
  *  names rather than to a sentence of its own (§4.9). */
 export function violationFor(

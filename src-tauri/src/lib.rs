@@ -549,6 +549,7 @@ pub fn run() {
             commands::discovery::discovery_reopen,
             commands::discovery::discovery_reclaim_idle_worktrees,
             commands::discovery::discovery_decompose,
+            commands::discovery::discovery_discard_proposal,
             commands::discovery::discovery_apply_decomposition,
             commands::tickets::discovery_board,
             commands::tickets::discovery_delete,

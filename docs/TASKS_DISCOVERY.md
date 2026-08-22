@@ -247,12 +247,19 @@ Both were opened by Phase 6 and answered in Phase 7.
 
 ## Phase 7 — what it decided
 
-- **The proposed-changes modal does not cache the proposal.** It is not
-  persisted (§5.3 asks for a view, not a second table), so applying hands
+- **The proposed-changes modal does not cache the proposal.** Applying hands
   `tickets` straight back and the backend re-resolves and re-diffs it against
   the rows *as they stand then*. A ticket started while the modal is open is
   therefore expected and is answered server-side; there is deliberately no
   poll, no staleness check and no refetch on this side.
+
+  The proposal itself *is* stored, against the Discovery (V50), which the
+  re-resolution above is what makes safe — a kept proposal is a view awaiting
+  review and never an answer. Phase 3 kept it in component state, so
+  navigating away between pressing Decompose and the pass finishing folded the
+  spend onto the Discovery and dropped the plan. It is cleared by applying it,
+  by discarding it, and by the next pass replacing it; a proposal that comes
+  back after being dismissed is its own bug.
 - **A refused subset is drawn on the checkboxes that caused it.** A subset of a
   valid proposal is not itself valid, and `decompose::apply` refuses it with a
   message naming the tickets in single quotes — in proposal space, which is the

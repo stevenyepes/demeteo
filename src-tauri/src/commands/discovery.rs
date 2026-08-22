@@ -159,6 +159,18 @@ pub async fn discovery_decompose(
     .await
 }
 
+/// Forget the pass waiting for review without applying any of it.
+///
+/// Explicit, and not what closing the review does: a proposal is billed work,
+/// so leaving the modal keeps it and this is the press that says otherwise.
+#[tauri::command]
+pub fn discovery_discard_proposal(
+    ctx: State<'_, AppContext>,
+    discovery_id: String,
+) -> Result<(), String> {
+    decompose::discard(&ctx, &DiscoveryId::from(discovery_id))
+}
+
 /// Land the changes the user checked, and return the board they leave behind.
 #[tauri::command]
 pub fn discovery_apply_decomposition(

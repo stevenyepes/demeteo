@@ -83,8 +83,11 @@ export function InterviewTranscript({
               <p className="mt-1.5 mb-0 px-1 font-mono text-[10px] text-slate-600">{block.meta}</p>
             )}
             {block.questionError && (
-              <p className="mt-1.5 mb-0 px-1 font-mono text-[10px] text-amber-200/90">
-                Its question block would not parse, so nothing was offered to pick from.
+              <p
+                data-testid="transcript-question-error"
+                className="mt-1.5 mb-0 px-1 font-mono text-[10px] text-amber-200/90"
+              >
+                Nothing was offered to pick from: {block.questionError}
               </p>
             )}
             {block.reseeded && (

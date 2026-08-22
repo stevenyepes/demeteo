@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyLabel,
+  pendingProposalNote,
   groupChanges,
   initialAccepted,
   lockedCount,
@@ -188,5 +189,28 @@ describe('an immutable violation', () => {
 
     expect(violationFor(locked, violations)?.reason).toBe('it has a feature');
     expect(violationFor({ ...locked, id: 't2' }, violations)).toBeNull();
+  });
+});
+
+// A pass is stored against the Discovery, so the workspace can be opened onto
+// one nobody has reviewed. What the notice says has to agree with what the
+// modal behind it will then allow.
+describe('the notice over a pass awaiting review', () => {
+  it('counts the changes it is offering', () => {
+    expect(pendingProposalNote(proposal({ changes: CHANGES }))).toContain('4 proposed changes');
+    expect(pendingProposalNote(proposal({ changes: [CHANGES[0]] }))).toContain('1 proposed change');
+  });
+
+  it('promises nothing over a pass whose plan was refused', () => {
+    const note = pendingProposalNote(
+      proposal({ changes: CHANGES, refusal: 'it kept re-authoring the same cycle' }),
+    );
+
+    expect(note).not.toContain('proposed changes');
+    expect(note).toContain('Nothing here can be applied');
+  });
+
+  it('says a pass that changed nothing changed nothing', () => {
+    expect(pendingProposalNote(proposal())).toContain('nothing to change');
   });
 });

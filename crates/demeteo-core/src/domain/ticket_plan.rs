@@ -185,7 +185,7 @@ pub struct TicketBody {
 
 /// One field a revision would change, in the terms the review modal renders:
 /// the old value struck through above the new one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldChange {
     /// The field's name as a user reads it, not as the struct spells it.
     pub field: String,

@@ -266,3 +266,43 @@ fn the_prompt_shows_the_stored_ids_and_which_are_fixed() {
     assert!(fixed.contains("`t-1`"), "{fixed}");
     assert!(!fixed.contains("`t-2`"), "{fixed}");
 }
+
+/// The pass is stored as this payload and read back as this payload (V50), so
+/// every part of it has to survive the round trip — a field that serializes
+/// and will not deserialize would read as no proposal at all, silently, on the
+/// visit after the one that paid for it.
+#[test]
+fn a_proposal_survives_being_written_down_and_read_back() {
+    let rows = vec![row("keep", 1), row("drop-me", 2)];
+    let mut added = as_written(&row("new", 3));
+    added.id = "new".to_string();
+    added.why = Some("the interview settled it".to_string());
+    let plan = TicketPlan {
+        tickets: vec![as_written(&rows[0]), added],
+    };
+    let pass =
+        Pass::resolve(plan, rows.clone(), &choices()).unwrap_or_else(|e| panic!("{}", e.message()));
+    let written = DecomposeProposal {
+        discovery_id: "d-1".to_string(),
+        first_pass: false,
+        tickets: pass.plan.tickets.clone(),
+        changes: pass.changes(&choices()),
+        locked: proposal::locked(&rows, &HashMap::new()),
+        refused: vec!["a cycle, answered".to_string()],
+        refusal: None,
+        violations: Vec::new(),
+        cost_usd: 0.5,
+        tokens: 1234,
+    };
+
+    let read: DecomposeProposal =
+        serde_json::from_str(&serde_json::to_string(&written).unwrap()).unwrap();
+
+    assert_eq!(read.discovery_id, "d-1");
+    assert_eq!(read.tickets.len(), written.tickets.len());
+    assert_eq!(read.changes.len(), written.changes.len());
+    assert_eq!(read.changes[0].kind, written.changes[0].kind);
+    assert_eq!(read.changes[0].id, written.changes[0].id);
+    assert_eq!(read.refused, written.refused);
+    assert_eq!(read.tokens, 1234);
+}

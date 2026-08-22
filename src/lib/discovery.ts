@@ -182,9 +182,24 @@ export async function getDiscoveryBoard(discoveryId: string): Promise<DiscoveryB
  * The pass streams through the same three events a turn does, so the surface
  * can show the agent working — but the proposal itself arrives on the call,
  * because there is nothing to render until it is whole.
+ *
+ * It also arrives on `DiscoveryDetail.pending_proposal`, which is what makes
+ * this promise safe to lose: the pass is billed and takes minutes, and the
+ * view that awaits it can be navigated away from long before it answers.
  */
 export async function decomposeDiscovery(discoveryId: string): Promise<DecomposeProposal> {
   return invoke<DecomposeProposal>("discovery_decompose", { discoveryId });
+}
+
+/**
+ * Mirrors `discovery_discard_proposal` — forget the pass awaiting review.
+ *
+ * Closing the review does not do this. A proposal is billed work, so leaving
+ * it keeps it where the workspace can offer it again; this is the press that
+ * says otherwise.
+ */
+export async function discardProposal(discoveryId: string): Promise<void> {
+  return invoke<void>("discovery_discard_proposal", { discoveryId });
 }
 
 /**
@@ -192,10 +207,11 @@ export async function decomposeDiscovery(discoveryId: string): Promise<Decompose
  * return the board they leave behind.
  *
  * `tickets` goes back exactly as {@link decomposeDiscovery} handed it over.
- * The proposal is not persisted anywhere, so the backend re-resolves and
- * re-diffs it against the rows *as they stand now*: a ticket started while the
- * modal was open is refused here rather than silently rewritten, which is why
- * nothing on this side caches around a proposal to keep it fresh.
+ * The stored proposal is a view awaiting review and never an answer: the
+ * backend re-resolves and re-diffs it against the rows *as they stand now*, so
+ * a ticket started since the pass ran is refused here rather than silently
+ * rewritten — which is why nothing on this side polls or refetches to keep a
+ * proposal fresh. Applying clears what was stored.
  */
 export async function applyDecomposition(input: DecomposeApply): Promise<DiscoveryBoard> {
   return invoke<DiscoveryBoard>("discovery_apply_decomposition", { input });

@@ -12,9 +12,14 @@
 //! [`super::turn`]'s machinery whole rather than growing a second copy of it:
 //! the same prompt assembly, the same re-seed decision, the same spend fold.
 //! What it does not reuse is the message log — a proposal is not something the
-//! conversation said, and persisting it would put a question the user never
+//! conversation said, and putting it there would feed a question the user never
 //! answered into the transcript every later turn re-seeds from. What the next
 //! pass needs of it is the *tickets*, which `super::context` already renders.
+//!
+//! It *is* stored, though, on the Discovery's own row and outside the
+//! transcript (V50): a pass is billed, it takes minutes, and the surface that
+//! asked for it is a view the user is free to leave. [`store`] and what clears
+//! it carry the rules.
 //!
 //! Deciding to decompose is the **user's** (§5.1). The interviewer's
 //! `nothing_left_to_settle` is advisory and nothing here reads it: a model that
@@ -93,7 +98,13 @@ where
         EVENT_DISCOVERY_TURN_STATUS,
         status_payload(&discovery, "running", None),
     );
-    let asked = ask(&mut prepared, &emit, &rows, &choices).await;
+    let asked = {
+        // Held across the whole pass, and dropped before the last status event
+        // rather than after it: a surface refreshing on `idle` must not read a
+        // pass that has just ended as one still running.
+        let _running = ctx.discovery_turns.claim(discovery_id.as_str());
+        ask(&mut prepared, &emit, &rows, &choices).await
+    };
     emit(
         EVENT_DISCOVERY_TURN_STATUS,
         status_payload(
@@ -104,7 +115,7 @@ where
     );
     let asked = asked?;
 
-    Ok(DecomposeProposal {
+    let proposal = DecomposeProposal {
         discovery_id: discovery_id.as_str().to_string(),
         first_pass: rows.is_empty(),
         tickets: asked
@@ -123,7 +134,69 @@ where
         violations: asked.violations,
         cost_usd: asked.cost_usd,
         tokens: asked.tokens,
-    })
+    };
+    // A pass that cannot be written down is still the pass the caller asked
+    // for. Failing here would throw away a billed plan to report a write.
+    if let Err(e) = store(ctx, discovery_id, Some(&proposal)) {
+        tracing::warn!(discovery = %discovery_id.as_str(), error = %e, "discovery: the pass could not be kept for review");
+    }
+    Ok(proposal)
+}
+
+/// Keep the pass where the next visit to this Discovery can find it, or clear
+/// what was there (§5.3).
+///
+/// **At most one, and the last one wins.** A second pass answers the same
+/// question the first did with everything since taken into account, so keeping
+/// the earlier one would offer the user a choice between a plan and a stale
+/// plan. Applying it clears it, because it is no longer proposed; discarding
+/// it clears it for the reason a dismissed thing must stay dismissed — a
+/// proposal that comes back every time the workspace opens is its own bug.
+///
+/// A refused pass is stored like any other. It cost the same, its refusals are
+/// what the user has to read to decide whether to re-ask, and dropping it
+/// would leave the surface saying nothing about a press that plainly did
+/// something.
+pub fn store(
+    ctx: &AppContext,
+    discovery_id: &DiscoveryId,
+    proposal: Option<&DecomposeProposal>,
+) -> Result<(), String> {
+    let encoded = proposal
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    ctx.discoveries.update(
+        discovery_id,
+        &crate::ports::discovery::DiscoveryPatch {
+            pending_proposal: Some(encoded),
+            ..Default::default()
+        },
+        crate::paths::now_ms(),
+    )
+}
+
+/// The pass this Discovery is waiting on a decision about, if any.
+///
+/// A stored proposal a newer build wrote — or an older one — reads as nothing
+/// pending rather than as an error: re-running the pass is one press, and
+/// refusing to open the workspace over a payload nobody has reviewed yet would
+/// cost more than the pass did.
+pub fn pending(
+    ctx: &AppContext,
+    discovery_id: &DiscoveryId,
+) -> Result<Option<DecomposeProposal>, String> {
+    Ok(ctx
+        .discoveries
+        .pending_proposal(discovery_id)?
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok()))
+}
+
+/// Drop the pass without applying any of it — the "Keep talking" that means it
+/// for good.
+pub fn discard(ctx: &AppContext, discovery_id: &DiscoveryId) -> Result<(), String> {
+    store(ctx, discovery_id, None)
 }
 
 /// What the ask loop accumulated, whether or not it ended with a usable plan.
@@ -277,6 +350,7 @@ pub fn apply(
         ));
     }
     write(ctx, &discovery_id, &application)?;
+    store(ctx, &discovery_id, None)?;
     crate::application::tickets::board(ctx, &discovery_id)
 }
 

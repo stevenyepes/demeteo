@@ -76,15 +76,18 @@ pub struct InterviewBlock {
 /// as a card.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InterviewTurn {
-    /// The turn text with the block cut out of it, when there was a usable
-    /// one to cut.
+    /// The turn text with the block cut out of it — whether or not that block
+    /// turned out to be usable.
     pub prose: String,
     pub question: Option<DiscoveryQuestion>,
     pub nothing_left_to_settle: bool,
-    /// Why a block that parsed was refused.
+    /// Why the turn asked nothing the surface could offer.
     ///
-    /// The block stays in [`prose`](Self::prose) when this is set, so the turn
-    /// renders as what the agent actually said rather than as nothing.
+    /// Set both by a block that parsed and was refused and by one that never
+    /// parsed at all — the two are one event to a reader, who in either case
+    /// was asked something they cannot answer. The block itself is cut out of
+    /// [`prose`](Self::prose) either way: it is addressed to Demeteo, and a
+    /// turn that renders its own JSON at the user has failed twice.
     #[serde(default)]
     pub question_error: Option<String>,
 }
@@ -161,35 +164,40 @@ pub fn validate_question(q: &DiscoveryQuestion) -> Option<String> {
 /// Split an assistant turn into prose and the block it carried.
 ///
 /// Tolerant about where the block sits, through
-/// [`crate::domain::json_block`]. A turn with no block, or with one that does
-/// not deserialize, is prose — the interviewer is not obliged to ask a
-/// question every turn.
+/// [`crate::domain::json_block`]. A turn with no block is prose — the
+/// interviewer is not obliged to ask a question every turn.
+///
+/// A turn that *tried* to carry one and failed is not prose, though, which is
+/// the difference [`refused_tail`] makes: the raw object would otherwise be
+/// rendered at the reader as though the interviewer had said it.
 pub fn parse_interview_turn(text: &str) -> InterviewTurn {
-    let Some((span, block)) = find_block(text) else {
+    if let Some((span, block)) = find_block(text) {
+        let error = block.question.as_ref().and_then(validate_question);
         return InterviewTurn {
+            prose: without(text, span),
+            question: error.is_none().then_some(block.question).flatten(),
+            nothing_left_to_settle: block.nothing_left_to_settle,
+            question_error: error,
+        };
+    }
+    match refused_tail(text) {
+        Some((span, question_error)) => InterviewTurn {
+            prose: without(text, span),
+            question_error,
+            ..Default::default()
+        },
+        None => InterviewTurn {
             prose: text.trim().to_string(),
             ..Default::default()
-        };
-    };
-    let error = block.question.as_ref().and_then(validate_question);
-    let prose = if error.is_some() {
-        text.trim().to_string()
-    } else {
-        let mut kept = String::with_capacity(text.len());
-        kept.push_str(&text[..span.0]);
-        kept.push_str(&text[span.1..]);
-        kept.trim().to_string()
-    };
-    InterviewTurn {
-        prose,
-        question: if error.is_some() {
-            None
-        } else {
-            block.question
         },
-        nothing_left_to_settle: block.nothing_left_to_settle,
-        question_error: error,
     }
+}
+
+fn without(text: &str, span: (usize, usize)) -> String {
+    let mut kept = String::with_capacity(text.len());
+    kept.push_str(&text[..span.0]);
+    kept.push_str(&text[span.1..]);
+    kept.trim().to_string()
 }
 
 /// The block and the byte span it occupied, so the prose can be cut free of
@@ -203,6 +211,36 @@ fn find_block(text: &str) -> Option<((usize, usize), InterviewBlock)> {
     crate::domain::json_block::find_json_block(text, |block: &InterviewBlock| {
         block.question.is_some() || block.nothing_left_to_settle
     })
+}
+
+/// The keys that make a trailing object this turn's own block rather than
+/// something the interviewer quoted. Both, because a turn may signal without
+/// asking.
+const DECLARED_KEYS: [&str; 2] = ["\"question\"", "\"nothing_left_to_settle\""];
+
+/// A block the turn ended on that [`find_block`] would not take: the span to
+/// cut, and what to tell the user about it.
+///
+/// The two ways to get here are a block that does not deserialize — a missing
+/// `options`, a turn truncated mid-object — and one that deserializes into
+/// nothing declared, which is `{"question": null}` and little else. Only the
+/// first is worth a sentence; the second asked nothing and there is nothing to
+/// report about it, but it is still JSON and still gets cut.
+///
+/// Naming one of [`DECLARED_KEYS`] is what makes this safe to run on every
+/// turn with no block. Prose ends in a brace-wrapped identifier often enough
+/// that position alone would accuse the interviewer of a malformed question
+/// every time it signed off with `{feature_id}`.
+fn refused_tail(text: &str) -> Option<((usize, usize), Option<String>)> {
+    let (start, end) = crate::domain::json_block::trailing_object(text)?;
+    let tail = &text[start..end];
+    if !DECLARED_KEYS.iter().any(|key| tail.contains(key)) {
+        return None;
+    }
+    let reason = serde_json::from_str::<InterviewBlock>(tail)
+        .err()
+        .map(|e| format!("the block it ended on could not be read as a question ({e})"));
+    Some(((start, end), reason))
 }
 
 #[cfg(test)]

@@ -170,9 +170,10 @@ impl DiscoveryPort for SqliteAdapter {
                     resume_session_id = CASE WHEN ?8 THEN ?9 ELSE resume_session_id END,
                     worktree_path     = CASE WHEN ?10 THEN ?11 ELSE worktree_path END,
                     attachments_json  = COALESCE(?12, attachments_json),
-                    total_cost        = total_cost + ?13,
-                    tokens            = tokens + ?14,
-                    updated_at        = ?15
+                    pending_proposal_json = CASE WHEN ?13 THEN ?14 ELSE pending_proposal_json END,
+                    total_cost        = total_cost + ?15,
+                    tokens            = tokens + ?16,
+                    updated_at        = ?17
               WHERE id = ?1",
             params![
                 id.0,
@@ -187,6 +188,8 @@ impl DiscoveryPort for SqliteAdapter {
                 patch.worktree_path.is_some(),
                 patch.worktree_path.clone().flatten(),
                 attachments,
+                patch.pending_proposal.is_some(),
+                patch.pending_proposal.clone().flatten(),
                 patch.add_cost,
                 patch.add_tokens,
                 now,
@@ -226,6 +229,19 @@ impl DiscoveryPort for SqliteAdapter {
         )
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    fn pending_proposal(&self, id: &DiscoveryId) -> Result<Option<String>, String> {
+        let conn = self.conn.lock()?;
+        conn.query_row(
+            "SELECT pending_proposal_json FROM discoveries WHERE id = ?1",
+            params![id.0],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e.to_string()),
+        })
     }
 
     fn list_messages(&self, id: &DiscoveryId) -> Result<Vec<DiscoveryMessage>, String> {

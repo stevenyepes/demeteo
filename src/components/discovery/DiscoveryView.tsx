@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   EVENT_DISCOVERY_TURN_COMPLETED,
   EVENT_DISCOVERY_TURN_STATUS,
   closeDiscovery,
   decomposeDiscovery,
+  discardProposal,
   dropTicket,
   forceStartTicket,
   getDiscovery,
@@ -32,6 +33,7 @@ import type {
 import { DecomposeModal } from './DecomposeModal';
 import { DiscoveryWorkspaceHeader } from './DiscoveryWorkspaceHeader';
 import { InterviewColumn } from './InterviewColumn';
+import { PendingProposalNotice } from './PendingProposalNotice';
 import { TicketColumn } from './TicketColumn';
 import { TicketEditorDrawer } from './TicketEditorDrawer';
 import { TicketInspector } from './TicketInspector';
@@ -81,6 +83,14 @@ export function DiscoveryView({
   const [proposal, setProposal] = useState<DecomposeProposal | null>(null);
   const [decomposing, setDecomposing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // A turn this view found already running rather than one it started. Both
+  // refs answer questions no event can: the first, whether this discovery's
+  // backend answer has been read yet; the second, whether the end of that turn
+  // is this view's to go and fetch, since the completion it would otherwise
+  // learn from was reported to a component that is gone.
+  const adopted = useRef<string | null>(null);
+  const awaitingAdopted = useRef(false);
 
   const { store, begin, end } = useDiscoveryStream();
 
@@ -133,6 +143,26 @@ export function DiscoveryView({
     };
   }, [machineId]);
 
+  /**
+   * Whether a turn or a pass was already under way when this view opened
+   * (`turn_running`). Read once per discovery, and only at the open: after
+   * that the events are the authority, and a second read racing a turn that
+   * has just ended would leave the composer waiting on nothing.
+   *
+   * A pass adopted this way reports its end on the status event alone — the
+   * completion event belongs to turns, and the promise `decompose` returns was
+   * handed to a component that has since unmounted — so this view has to go
+   * and fetch what the pass produced itself.
+   */
+  useEffect(() => {
+    if (!detail || adopted.current === discoveryId) return;
+    adopted.current = discoveryId;
+    if (!detail.turn_running) return;
+    awaitingAdopted.current = true;
+    setPending(true);
+    begin(discoveryId);
+  }, [detail, discoveryId, begin]);
+
   useTauriEvent<DiscoveryTurnStatusPayload>(
     EVENT_DISCOVERY_TURN_STATUS,
     ({ discovery_id, status, reason }) => {
@@ -140,8 +170,13 @@ export function DiscoveryView({
       setPending(status === 'running');
       if (status === 'running') begin(discoveryId);
       if (status === 'error' && reason) setActionError(reason);
+      if (status !== 'running' && awaitingAdopted.current) {
+        awaitingAdopted.current = false;
+        end(discoveryId);
+        void refresh();
+      }
     },
-    [discoveryId, begin],
+    [discoveryId, begin, end, refresh],
   );
 
   useTauriEvent<DiscoveryTurnCompletedPayload>(
@@ -241,6 +276,8 @@ export function DiscoveryView({
     }
   }
 
+  const pendingProposal = detail?.pending_proposal ?? null;
+
   const selected = selectedId !== null ? index.get(selectedId) : undefined;
   const editing = editingId !== null ? index.get(editingId) : undefined;
   const workflowNames = useMemo(
@@ -288,6 +325,15 @@ export function DiscoveryView({
         >
           {actionError}
         </p>
+      )}
+
+      {pendingProposal && proposal === null && (
+        <PendingProposalNotice
+          proposal={pendingProposal}
+          busy={busy || decomposing}
+          onReview={() => setProposal(pendingProposal)}
+          onDiscard={() => void runAction(() => discardProposal(discoveryId))}
+        />
       )}
 
       <div className="flex min-h-0 flex-1">
@@ -359,6 +405,7 @@ export function DiscoveryView({
           onApplied={(applied) => {
             setBoard(applied);
             setProposal(null);
+            void refresh();
           }}
         />
       )}

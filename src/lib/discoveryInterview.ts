@@ -26,7 +26,9 @@ export interface TranscriptBubble {
   /** What the turn did and what it cost, beneath the bubble. `null` when
    *  neither was recorded — distinct from `0`, which is a measurement. */
   meta: string | null;
-  /** The turn carried a question block that would not parse. */
+  /** Why the turn asked nothing that could be offered — a block that would
+   *  not parse, or one that parsed and was refused. Rendered beneath the
+   *  bubble, because the block it came from is not. */
   questionError: string | null;
   /** The harness had forgotten the session, so this turn carried the whole
    *  transcript in its prompt. Rare, and only ever known from the completion
@@ -87,7 +89,11 @@ export function buildTranscript(
         kind: 'bubble',
         key: message.id,
         role: 'assistant',
-        text: prose.length > 0 ? prose : message.content,
+        // The prose, never the stored turn: what separates them is the block,
+        // which was addressed to Demeteo. A turn whose block would not parse
+        // has prose and a `questionError`, and falling back to `content`
+        // there is how the raw JSON reached the reader.
+        text: prose,
         meta: turnMeta(message),
         questionError: message.question_error,
         reseeded: reseeded.has(message.id),
