@@ -803,7 +803,7 @@ fn a_refused_tree_carries_the_turns_ending_after_it() {
 fn a_red_harness_names_the_command_and_its_output() {
     let refusal = resolution_verification_refusal(
         "npm run checks:code",
-        Err("Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments"),
+        "Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments",
     )
     .expect("a resolution whose checks went red is not a resolution");
 
@@ -822,15 +822,119 @@ fn a_red_harness_names_the_command_and_its_output() {
 /// a dropped ssh channel would start failing resolutions that are fine.
 #[test]
 fn checks_that_never_ran_do_not_refuse_a_resolution() {
-    assert_eq!(resolution_verification_refusal("cargo test", Ok(())), None);
     for err in [
         format!("{TRANSPORT_ERROR_PREFIX}Connection appears dead"),
         format!("{TIMEOUT_ERROR_PREFIX}exceeded 1800s"),
     ] {
         assert_eq!(
-            resolution_verification_refusal("cargo test", Err(err.as_str())),
+            resolution_verification_refusal("cargo test", err.as_str()),
             None,
             "{err:?} says nothing about the tree, so it may not withhold the resolution"
         );
     }
+}
+
+/// The first red buys the resolver its own words back; the second goes to the
+/// user.
+///
+/// The refusal is addressed to a human, and the caller's retry ladder is not
+/// one: it rebuilds the resolution prompt from the tree, so an attempt handed
+/// nothing about the compile error opens over a marker-free worktree with
+/// nothing named to fix. Pinning the count from outside is what stops a third
+/// turn — each is a full harness run — and what stops the repair from being
+/// dropped back to a refusal.
+#[test]
+fn a_red_gate_is_worth_one_repair_then_a_refusal() {
+    let red =
+        "Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments";
+
+    let first = gate_follow_up("npm run checks:code", red, 0);
+    assert!(
+        matches!(&first, GateFollowUp::Repair { excerpt } if excerpt.contains("E0061")),
+        "the agent has to be handed what the harness said, not a summary of it: {first:?}"
+    );
+    assert!(
+        matches!(
+            gate_follow_up("npm run checks:code", red, RESOLVER_REPAIR_ROUNDS),
+            GateFollowUp::Refuse(_)
+        ),
+        "and a resolver that could not fix it with the output in front of it \
+         will not on a third read"
+    );
+}
+
+/// A build that never ran buys nothing at all — not a repair turn either.
+///
+/// Sending an agent to fix a dropped ssh channel is the same mistake as
+/// refusing a resolution over one, one turn earlier and at agent prices.
+#[test]
+fn checks_that_never_ran_buy_no_repair_turn() {
+    for err in [
+        format!("{TRANSPORT_ERROR_PREFIX}Connection appears dead"),
+        format!("{TIMEOUT_ERROR_PREFIX}exceeded 1800s"),
+    ] {
+        assert_eq!(
+            gate_follow_up("cargo test", err.as_str(), 0),
+            GateFollowUp::LandUnverified,
+            "{err:?}"
+        );
+    }
+}
+
+/// A megabyte of `cargo` output is cut at both ends and at line boundaries.
+///
+/// The cause is at the top and the count is at the bottom, and the whole of it
+/// reaches SQLite and a context window otherwise.
+#[test]
+fn a_long_gate_output_is_cut_head_and_tail() {
+    let mut error = String::from("error[E0061]: this function takes 3 arguments\n");
+    while error.len() < 1_000_000 {
+        error.push_str("   ↳ note: a line of consequences with a multi-byte arrow in it\n");
+    }
+    error.push_str("error: could not compile `demeteo-core` (lib) due to 1 error\n");
+
+    let excerpt = gate_output_excerpt(&error);
+
+    assert!(
+        excerpt.contains("error[E0061]"),
+        "the cause leads: {excerpt:.200}"
+    );
+    assert!(
+        excerpt.contains("could not compile `demeteo-core`"),
+        "and the count survives the middle"
+    );
+    assert!(excerpt.len() < 15_000, "{} bytes", excerpt.len());
+    assert!(
+        excerpt.contains("bytes elided"),
+        "a reader who cannot tell it was cut cannot go looking for the rest"
+    );
+    let whole: std::collections::HashSet<&str> = error.lines().collect();
+    for line in excerpt.lines() {
+        assert!(
+            whole.contains(line) || line.contains("bytes elided"),
+            "half a diagnostic reads as a different diagnostic: {line:?}"
+        );
+    }
+}
+
+/// Short output passes through byte-identical: nothing is cut that fits.
+#[test]
+fn output_that_fits_is_not_touched() {
+    let error = "error[E0061]: this function takes 3 arguments\nerror: could not compile\n";
+
+    assert_eq!(gate_output_excerpt(error), error);
+}
+
+/// A cut that lands mid-character would panic on the slice, and the one input
+/// with no line boundary to retreat to is the one that finds it.
+#[test]
+fn a_single_enormous_line_is_still_cut_on_a_character() {
+    // The leading byte is what puts both cuts mid-character: every offset in
+    // the repeat is then off the 3-byte grid.
+    let error = format!("x{}", "├".repeat(500_000));
+
+    let excerpt = gate_output_excerpt(&error);
+
+    assert!(excerpt.contains("bytes elided"), "it was cut");
+    assert!(excerpt.starts_with('x') && excerpt.ends_with('├'));
 }
