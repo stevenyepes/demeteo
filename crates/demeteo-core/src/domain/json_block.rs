@@ -8,17 +8,16 @@
 //! declared block wants the same three, in the same order, so there is one of
 //! them. `extract_task_plan` in
 //! `crates/demeteo-core/src/domain/sequence/tasks.rs` is the precedent this
-//! generalises and predates it; it is left where it is because the sequence
-//! step reads its result on every run, and folding it in would mean
-//! re-proving that path for no behaviour anyone asked to change.
+//! generalises and predates it; it kept a single-candidate scan of its own
+//! until the shape below turned up on the sequence step too — a planner turn
+//! naming a brace-wrapped identifier before emitting its task list — and it
+//! now reads through [`find_json_block`] like every other caller.
 //!
 //! The span comes back with the value because a turn that is prose *plus* a
 //! block has to be renderable as the prose alone, and only the search knows
 //! where the block was.
 
 use serde::de::DeserializeOwned;
-
-use crate::domain::sequence::tasks::find_top_level_object;
 
 /// The **last** block that both deserializes into `T` and satisfies `accept`,
 /// with the byte span it occupied.
@@ -32,12 +31,16 @@ use crate::domain::sequence::tasks::find_top_level_object;
 /// a balanced object as the first candidate in the turn, and a search that
 /// ended there never reached the block the turn was actually carrying.
 ///
-/// Last rather than first, because both prompts that ask for a block put it at
-/// the very end and say nothing follows it (`interview_block_shape_example`
-/// and `ticket_plan_json_shape_example` are quoted into exactly such
-/// instructions). A turn holding two acceptable candidates is therefore one
-/// that discussed the shape before declaring it, and the declaration is the
-/// one at the bottom. Preferring the first would take the illustration.
+/// Last rather than first, because every prompt that asks for a block quotes a
+/// filled-in example of the shape before asking for the real thing.
+/// `interview_block_shape_example` and `ticket_plan_json_shape_example` are
+/// quoted into instructions that put the block at the very end and say nothing
+/// follows it; `task_list_json_shape_example` is quoted into the planner's as a
+/// complete one-task plan. A turn holding two acceptable candidates is
+/// therefore one that discussed the shape before declaring it, and the
+/// declaration is the one at the bottom. Preferring the first takes the
+/// illustration — which for the task list is not a parse failure but a run: the
+/// example deserializes into a plan of one task whose description is `...`.
 ///
 /// A fenced candidate reports the span of the whole fence, not of its body:
 /// the fence markers are what a reader would otherwise be left staring at.
@@ -118,6 +121,55 @@ pub(crate) fn trailing_object(text: &str) -> Option<(usize, usize)> {
         Some((start, end)) if end == ends_at => Some((start, end)),
         _ => unterminated_object(text, after_last).map(|start| (start, ends_at)),
     }
+}
+
+/// The (start, end) indices of the first top-level `{...}` object in `s`, `end`
+/// exclusive (one past the matching `}`).
+fn find_top_level_object(s: &str) -> Option<(usize, usize)> {
+    let bytes = s.as_bytes();
+    let mut in_str = false;
+    let mut escape = false;
+    let mut depth: i32 = 0;
+    let mut start: Option<usize> = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' {
+                escape = true;
+                continue;
+            }
+            if b == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            b'}' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+                if depth == 0 {
+                    if let Some(st) = start {
+                        if st < i {
+                            return Some((st, i + 1));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Every balanced top-level object in `text`, left to right, none of them
