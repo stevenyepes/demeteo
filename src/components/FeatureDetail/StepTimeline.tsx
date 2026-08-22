@@ -2,10 +2,14 @@ import { useRef, type MutableRefObject } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { RemoteRunMirror, StepExecution } from '../../types';
 import { densityClasses, type Density } from '../../lib/density';
+import type { RunEventAssignments } from '../../lib/runEventAssignments';
 import { StepCard } from './StepCard';
+
+const EMPTY_ASSIGNMENTS: RunEventAssignments = {};
 
 interface StepTimelineProps {
   steps: StepExecution[];
+  assignments?: RunEventAssignments;
   remoteRun: RemoteRunMirror | null;
   remoteMachineName: string | null;
   hasBootstrapPhases: boolean;
@@ -43,6 +47,7 @@ interface StepTimelineProps {
  */
 export function StepTimeline({
   steps,
+  assignments = EMPTY_ASSIGNMENTS,
   remoteRun,
   remoteMachineName,
   hasBootstrapPhases,
@@ -93,19 +98,24 @@ export function StepTimeline({
         </div>
       )}
       <ul aria-label="Run steps" className={classes.list}>
-        {steps.map((step, idx) => (
-          <StepCard
-            key={step.id}
-            step={step}
-            index={idx}
-            isActiveGate={gateStepExecutionId === step.id}
-            isSelected={selectedStepId === step.id}
-            cardRef={cardRefFor(step.id)}
-            density={classes}
-            onSelect={onSelect}
-            onDecideGate={onDecideGate}
-          />
-        ))}
+        {steps.map((step, idx) => {
+          const assignment = assignments[step.id];
+          return (
+            <StepCard
+              key={step.id}
+              step={step}
+              index={idx}
+              isActiveGate={gateStepExecutionId === step.id}
+              isSelected={selectedStepId === step.id}
+              cardRef={cardRefFor(step.id)}
+              density={classes}
+              agentKind={assignment?.agentKind}
+              effort={assignment?.effort}
+              onSelect={onSelect}
+              onDecideGate={onDecideGate}
+            />
+          );
+        })}
       </ul>
     </div>
   );

@@ -20,6 +20,7 @@ import {
   TONE_CHIP,
   type RunStatusTone,
 } from '../../../lib/runStatus';
+import { assignmentEffortLabel } from '../../../lib/runEventAssignments';
 import { formatCost, formatDuration } from '../../../lib/utils';
 import type { WorkflowFlowNode } from '../flowGraph';
 
@@ -125,6 +126,12 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
   const isFailed = run?.status === 'failed' || run?.status === 'interrupted';
   const isDone = run?.status === 'completed';
   const showChips = isDone || isFailed;
+  const agentKind =
+    typeof run?.agentKind === 'string' && run.agentKind.trim().length > 0
+      ? run.agentKind
+      : null;
+  const effortLabel =
+    agentKind && run?.effort !== undefined ? assignmentEffortLabel(run.effort) : null;
 
   return (
     <div
@@ -203,6 +210,37 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
           </div>
         </div>
       </div>
+
+      {agentKind && effortLabel && (
+        <div
+          role="group"
+          aria-label={`Actual assignment for ${data.title}`}
+          className="flex min-w-0 items-center gap-1 pl-11 text-[9px] font-mono"
+        >
+          <span
+            role="group"
+            aria-label={`Agent: ${agentKind}`}
+            title={`Agent: ${agentKind}`}
+            className="flex min-w-0 max-w-[132px] items-center gap-1 rounded border border-cyan-500/20 bg-cyan-500/10 px-1 py-0.5 text-cyan-300/90"
+          >
+            <span className="shrink-0 text-slate-400" aria-hidden>
+              Agent
+            </span>
+            <span className="truncate">{agentKind}</span>
+          </span>
+          <span
+            role="group"
+            aria-label={`Effective effort: ${effortLabel}`}
+            title={`Effective effort: ${effortLabel}`}
+            className="flex min-w-0 items-center gap-1 rounded border border-slate-600/40 bg-slate-700/20 px-1 py-0.5 text-slate-300"
+          >
+            <span className="shrink-0 text-slate-400" aria-hidden>
+              Effort
+            </span>
+            <span className="truncate">{effortLabel}</span>
+          </span>
+        </div>
+      )}
 
       {showChips && (
         <div className="flex items-center gap-2 pl-11 text-[10px] font-mono">

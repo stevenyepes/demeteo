@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Machine, Project, RemoteRunMirror, StepExecution } from "../types";
+import type { Machine, Project, RemoteRunMirror, RunEvent, StepExecution } from "../types";
 import type { PathContainment } from "./pathContainment";
 import type { WorkflowDefinitionV2 } from "../components/canvas/types";
 
@@ -53,6 +53,14 @@ export interface CleanupResult {
 /** The persisted step rows for a feature's run, in `step_index` order. */
 export async function listStepsForRun(featureId: string): Promise<StepExecution[]> {
   return invoke<StepExecution[]>("step_list_for_run", { featureId });
+}
+
+/** Durable local run events whose offsets are greater than `fromOffset`. */
+export async function listRunEventsSince(
+  featureId: string,
+  fromOffset: number,
+): Promise<RunEvent[]> {
+  return invoke<RunEvent[]>("run_events_since", { featureId, fromOffset });
 }
 
 /** Every registered remote machine — used here only to resolve a display name. */

@@ -22,6 +22,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { RunStatusTone } from '../../lib/runStatus';
+import type { EffortLevel } from '../../lib/effortLevels';
 
 export interface PositionV2 {
   x: number;
@@ -100,6 +101,10 @@ export interface NodeRunStatus {
   errorClass?: string | null;
   /** The `step_executions.id` — the click target for gate/panel wiring. */
   stepExecutionId?: string | null;
+  /** Present only when a valid launch event names the actual agent. */
+  agentKind?: string | null;
+  /** `null` means the launch injected no effort; absence means no launch evidence. */
+  effort?: EffortLevel | null;
 }
 
 /** Display metadata for a node type: card icon, label, and accent tone drawn

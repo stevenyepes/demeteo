@@ -1,99 +1,169 @@
-import { useMemo, useState } from 'react';
-import { useTauriEvent } from './useTauriEvent';
-import type { RunEvent, StepExecution } from '../types';
+import { useEffect, useMemo, useState } from 'react';
 import type { NodeRunStatus } from '../components/canvas/types';
+import { listRunEventsSince } from '../lib/featureDetail';
+import {
+  reconcileRunEventAssignments,
+  type RunEventAssignments,
+} from '../lib/runEventAssignments';
+import type { RunEvent, StepExecution } from '../types';
+import { useTauriEvent } from './useTauriEvent';
 
-/**
- * The single run-event consumer both run-mode surfaces share (P2.2): the
- * workflow **canvas** overlay and the **timeline** read node status from the
- * same place, so they can never disagree about what a run is doing.
- *
- * Two inputs, one shape out:
- *  - `steps` (the feature's `step_executions` snapshot, reloaded by
- *    `FeatureDetail` on every `step_progress`/`feature_status_changed` event)
- *    is the authoritative status/cost/duration source. Using it — rather than
- *    replaying `run_event` deltas from zero — means the overlay is correct on
- *    first mount and after a full reload, with no gap-recovery bookkeeping.
- *  - the unified `run_events` stream (P1.13) supplies the one thing a step row
- *    can't: the **failure class** (`retry_decision`), lifted per node so a
- *    failed card can name *why* it failed. The raw feed is also returned for
- *    the panel's Overview tab (P2.3) and the remote path (P2.6).
- *
- * Node ids are the migrated v2 node ids, which equal the v1 `step_id` the
- * migration preserves — so `statusByNode[node.id]` resolves directly.
- */
-
-/** Cap the retained raw feed — a long run can emit thousands of rows and the
- *  panel only needs a recent window. */
 const MAX_EVENTS = 500;
 
-export interface RunEventsState {
-  /** node id (== `step_id`) → live run state for the canvas overlay. */
-  statusByNode: Record<string, NodeRunStatus>;
-  /** Raw append-only run-event feed (P1.13), oldest→newest, bounded. */
+interface RetryDecision {
+  errorClass: string;
+  offset: number;
+}
+
+interface FeatureRunEventState {
+  featureId: string;
   events: RunEvent[];
+  seenOffsets: Set<number>;
+  assignments: RunEventAssignments;
+  retryDecisions: Record<string, RetryDecision>;
+}
+
+export interface RunEventsState {
+  statusByNode: Record<string, NodeRunStatus>;
+  events: RunEvent[];
+  assignments: RunEventAssignments;
+}
+
+function emptyState(featureId: string): FeatureRunEventState {
+  return {
+    featureId,
+    events: [],
+    seenOffsets: new Set(),
+    assignments: {},
+    retryDecisions: {},
+  };
+}
+
+function retryDecision(event: RunEvent): { stepId: string; errorClass: string } | null {
+  if (event.kind !== 'retry_decision' || !event.payload_json) return null;
+
+  try {
+    const payload: unknown = JSON.parse(event.payload_json);
+    if (typeof payload !== 'object' || payload === null) return null;
+    const candidate = payload as Record<string, unknown>;
+    if (typeof candidate.step_id !== 'string' || typeof candidate.error_class !== 'string') {
+      return null;
+    }
+    return { stepId: candidate.step_id, errorClass: candidate.error_class };
+  } catch {
+    return null;
+  }
+}
+
+function mergeEvents(
+  state: FeatureRunEventState,
+  incoming: readonly RunEvent[],
+): FeatureRunEventState {
+  const seenOffsets = new Set(state.seenOffsets);
+  const accepted: RunEvent[] = [];
+
+  for (const event of incoming) {
+    if (event.run_id !== state.featureId || seenOffsets.has(event.offset)) continue;
+    seenOffsets.add(event.offset);
+    accepted.push(event);
+  }
+
+  if (accepted.length === 0) return state;
+
+  const retryDecisions = { ...state.retryDecisions };
+  for (const event of accepted) {
+    const decision = retryDecision(event);
+    if (!decision) continue;
+    const existing = retryDecisions[decision.stepId];
+    if (!existing || existing.offset < event.offset) {
+      retryDecisions[decision.stepId] = {
+        errorClass: decision.errorClass,
+        offset: event.offset,
+      };
+    }
+  }
+
+  const events = [...state.events, ...accepted].sort((a, b) => a.offset - b.offset);
+
+  return {
+    ...state,
+    events: events.length > MAX_EVENTS ? events.slice(events.length - MAX_EVENTS) : events,
+    seenOffsets,
+    assignments: reconcileRunEventAssignments(state.assignments, accepted),
+    retryDecisions,
+  };
 }
 
 export function useRunEvents(
   featureId: string,
   steps: StepExecution[],
 ): RunEventsState {
-  const [events, setEvents] = useState<RunEvent[]>([]);
-  // Failure class per node id: the `step_executions` row records that a step
-  // failed, not which class it was — that lives only in the `retry_decision`
-  // run-event (P1.10). Accumulated here across reloads within this run's view.
-  const [errorClassByNode, setErrorClassByNode] = useState<Record<string, string>>({});
+  const [state, setState] = useState<FeatureRunEventState>(() => emptyState(featureId));
+
+  useEffect(() => {
+    let active = true;
+    setState((current) =>
+      current.featureId === featureId ? current : emptyState(featureId),
+    );
+
+    void listRunEventsSince(featureId, 0)
+      .then((history) => {
+        if (!active) return;
+        setState((current) => {
+          const scoped = current.featureId === featureId ? current : emptyState(featureId);
+          return mergeEvents(scoped, history);
+        });
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+    };
+  }, [featureId]);
 
   useTauriEvent<RunEvent>(
     'run_event',
-    (evt) => {
-      // Local runs key the log by feature id (a local run has no runner run
-      // row — the feature id *is* its run id, per P1.13). Drop other runs.
-      if (evt.run_id !== featureId) return;
-
-      setEvents((prev) => {
-        const next = [...prev, evt];
-        return next.length > MAX_EVENTS ? next.slice(next.length - MAX_EVENTS) : next;
+    (event) => {
+      if (event.run_id !== featureId) return;
+      setState((current) => {
+        const scoped = current.featureId === featureId ? current : emptyState(featureId);
+        return mergeEvents(scoped, [event]);
       });
-
-      if (evt.kind === 'retry_decision' && evt.payload_json) {
-        try {
-          const p = JSON.parse(evt.payload_json);
-          if (typeof p?.step_id === 'string' && typeof p?.error_class === 'string') {
-            setErrorClassByNode((prev) =>
-              prev[p.step_id] === p.error_class
-                ? prev
-                : { ...prev, [p.step_id]: p.error_class },
-            );
-          }
-        } catch {
-          /* malformed payload — skip */
-        }
-      }
     },
     [featureId],
   );
 
+  const scopedState = state.featureId === featureId ? state : emptyState(featureId);
   const statusByNode = useMemo(() => {
     const map: Record<string, NodeRunStatus> = {};
     const seenUpdated: Record<string, number> = {};
-    for (const s of steps) {
-      // One node id can back several executions (replay/retry produce new
-      // rows); keep the most recently updated so the overlay tracks the live
-      // attempt rather than a stale one.
-      if (s.step_id in seenUpdated && seenUpdated[s.step_id] >= s.updated_at) continue;
-      seenUpdated[s.step_id] = s.updated_at;
-      map[s.step_id] = {
-        status: s.status,
-        costUsd: s.cost_usd ?? null,
-        wallClockSecs: s.wall_clock_secs ?? null,
-        tokens: s.tokens ?? null,
-        errorClass: errorClassByNode[s.step_id] ?? null,
-        stepExecutionId: s.id,
+    for (const step of steps) {
+      if (
+        step.step_id in seenUpdated &&
+        seenUpdated[step.step_id] >= step.updated_at
+      ) {
+        continue;
+      }
+      seenUpdated[step.step_id] = step.updated_at;
+      const assignment = scopedState.assignments[step.id];
+      map[step.step_id] = {
+        status: step.status,
+        costUsd: step.cost_usd ?? null,
+        wallClockSecs: step.wall_clock_secs ?? null,
+        tokens: step.tokens ?? null,
+        errorClass: scopedState.retryDecisions[step.step_id]?.errorClass ?? null,
+        stepExecutionId: step.id,
+        ...(assignment
+          ? { agentKind: assignment.agentKind, effort: assignment.effort }
+          : {}),
       };
     }
     return map;
-  }, [steps, errorClassByNode]);
+  }, [steps, scopedState.assignments, scopedState.retryDecisions]);
 
-  return { statusByNode, events };
+  return {
+    statusByNode,
+    events: scopedState.events,
+    assignments: scopedState.assignments,
+  };
 }
