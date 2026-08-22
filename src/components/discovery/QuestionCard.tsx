@@ -31,6 +31,15 @@ interface QuestionCardProps {
  * The number keycaps are wired. §6.6 records that the mock draws `1`/`2`/`3`
  * and handles none of them, which is the shape of a promise a surface does not
  * carry.
+ *
+ * **Nothing here is Markdown, unlike the prose bubbles either side of it.**
+ * The turn's prose is written as Markdown and the question block is not: the
+ * prompt asks for prose in the turn and plain short strings in the JSON, and
+ * every seeded fixture in §3.4.4 spells its labels and descriptions without a
+ * mark. Parsing them anyway would style text nothing asked to be styled, and
+ * an option's label is the accessible name of a `<button>` — turning that into
+ * a subtree buys formatting nobody authored at the cost of the one thing the
+ * keycap contract needs it to be, which is a single atom.
  */
 export function QuestionCard({
   question,

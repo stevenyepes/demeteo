@@ -1,6 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 
 import { useElapsed } from '../../hooks/useElapsed';
+import { useThrottledValue } from '../../hooks/useThrottledValue';
+import { AgentMarkdown } from './AgentMarkdown';
 import { TurnActivityStrip } from './TurnActivityStrip';
 import { useStreamedTurn, type DiscoveryStreamStore } from './useDiscoveryStream';
 
@@ -37,6 +39,22 @@ export function StreamingBubble({
   scroller,
 }: StreamingBubbleProps): React.ReactElement {
   const turn = useStreamedTurn(store, discoveryId);
+  // The turn's Markdown is re-parsed four times a second, not once per frame.
+  //
+  // This component wakes on a coalesced animation frame for the whole length
+  // of a turn, over text that is longer every wake, so parsing what has
+  // arrived so far is work that grows with the turn: at frame rate a
+  // two-minute turn pays for it some seven thousand times. The alternative
+  // considered was leaving the partial turn as plain text and parsing once at
+  // settle — cheaper still, but it makes the user read raw backticks and
+  // asterisks for the entire turn, which is the bug this fixes, and then
+  // reflows the whole bubble under them at the end.
+  //
+  // What is accepted instead: a bounded parse budget of roughly four parses a
+  // second, and up to 250 ms between a delta landing and the prose showing it.
+  // The activity strip and the caret above still tick every frame, so the
+  // bubble never looks stalled while the text waits.
+  const shownText = useThrottledValue(turn.text, 250);
   // A turn already running when this mounted has no start this surface saw;
   // the mount is the earliest instant it can honestly count from.
   const mountedAt = useRef(Date.now());
@@ -45,11 +63,11 @@ export function StreamingBubble({
   useEffect(() => {
     const element = scroller.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [turn.text, scroller]);
+  }, [turn.text, shownText, scroller]);
 
   return (
     <div className="flex flex-col items-start" data-testid="streaming-bubble">
-      <div className="chat-bubble agent whitespace-pre-wrap">
+      <div className="chat-bubble agent min-w-0">
         <div className="chat-bubble-sender">
           <span
             aria-hidden="true"
@@ -58,8 +76,9 @@ export function StreamingBubble({
           Interviewer
         </div>
         <TurnActivityStrip turn={turn} elapsedMs={elapsed} />
-        {turn.text}
-        <span aria-hidden="true" className="stream-caret" />
+        <div className="stream-caret-host min-w-0">
+          <AgentMarkdown text={shownText} />
+        </div>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 
 import type { TranscriptBlock } from '../../lib/discoveryInterview';
 import type { QuestionOption } from '../../types';
+import { AgentMarkdown } from './AgentMarkdown';
 import { QuestionCard } from './QuestionCard';
 import { StreamingBubble } from './StreamingBubble';
 import type { DiscoveryStreamStore } from './useDiscoveryStream';
@@ -60,6 +61,9 @@ export function InterviewTranscript({
         }
 
         const agent = block.role === 'assistant';
+        // Only the agent's half is Markdown. What the user typed is prose they
+        // wrote by hand, so parsing it would eat their asterisks and
+        // underscores and silently rewrite what they said they said.
         return (
           <div
             key={block.key}
@@ -67,13 +71,13 @@ export function InterviewTranscript({
             data-testid={`transcript-${block.role}`}
           >
             <div
-              className={`chat-bubble ${agent ? 'agent' : 'user'} whitespace-pre-wrap`}
+              className={`chat-bubble min-w-0 ${agent ? 'agent' : 'user whitespace-pre-wrap'}`}
             >
               <div className="chat-bubble-sender">
                 <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
                 {agent ? 'Interviewer' : 'You'}
               </div>
-              {block.text}
+              {agent ? <AgentMarkdown text={block.text} /> : block.text}
             </div>
             {block.meta && (
               <p className="mt-1.5 mb-0 px-1 font-mono text-[10px] text-slate-600">{block.meta}</p>

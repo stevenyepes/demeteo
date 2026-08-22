@@ -516,6 +516,16 @@ body {
   border-top-right-radius: 2px;
 }
 
+/* Code inside a chat bubble. The bubble already carries a violet or cyan tint,
+   so a code surface has to read against that rather than against the page —
+   `--bg-well` sits at the page's own depth and simply disappears here.
+   Declared once because inline code and fenced blocks must land on the same
+   surface. */
+.bubble-code {
+  background: rgba(5, 6, 8, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .chat-bubble-sender {
   font-size: 0.75rem;
   font-weight: 600;
@@ -719,13 +729,24 @@ body {
   50.01%, 100% { opacity: 0; }
 }
 
-.stream-caret {
+/* The streaming caret trails the prose, so it hangs off the last block the
+ * Markdown emitted rather than sitting on a line of its own beneath it. It is
+ * a pseudo-element for that reason: a sibling span cannot get inside a <p> the
+ * renderer owns. With no text yet there is no last child and no caret, which
+ * is right — the activity strip above is already saying the turn is alive. */
+.stream-caret,
+.stream-caret-host > *:last-child::after {
   display: inline-block;
   width: 7px;
   height: 13px;
   vertical-align: -2px;
   background: #a78bfa;
   animation: blink 1s steps(1) infinite;
+}
+
+.stream-caret-host > *:last-child::after {
+  content: '';
+  margin-left: 3px;
 }
 
 @keyframes fade-in {
@@ -791,6 +812,7 @@ body {
   .animate-pulse-glow,
   .animate-pulse-glow-amber,
   .stream-caret,
+  .stream-caret-host > *:last-child::after,
   .animate-spin,
   .animate-progress-shimmer,
   .animate-skeleton-pulse {
