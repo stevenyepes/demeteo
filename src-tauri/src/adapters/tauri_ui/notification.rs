@@ -75,6 +75,9 @@ fn os_notification_for(event: &DomainEvent) -> Option<(String, String)> {
         // A terminal agent blocked on an approval prompt is a needs-a-decision
         // event: fire the gated OS notification so the user hears about it while
         // demeteo is backgrounded/unfocused (TERMINAL_ACTIVITY §3 item 4).
+        DomainEvent::TicketsStartable { message, .. } => {
+            Some(("Ticket ready to start".to_string(), message.clone()))
+        }
         DomainEvent::TerminalAwaitingApproval { label, .. } => Some((
             "Agent needs a decision".to_string(),
             match label {
@@ -201,6 +204,10 @@ impl NotificationPort for TauriNotificationAdapter {
             ),
             DomainEvent::GateDecided { .. } => (
                 "gate_decided",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::TicketsStartable { .. } => (
+                "tickets_startable",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
             // The unified-event-log live push (P1.13): re-emit the bare

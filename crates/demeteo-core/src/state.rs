@@ -25,6 +25,7 @@ use crate::ports::db::{
     NotificationRepository, ProjectRepository, SequenceResumeRepository, ThreadRepository,
     WorkflowRepository,
 };
+use crate::ports::discovery::{DiscoveryPort, TicketPort};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::mr_publisher::MrPublisher;
 use crate::ports::notification::NotificationPort;
@@ -47,6 +48,13 @@ use std::sync::Arc;
 /// use, keeping the dependency on each port visible at the call site
 /// (`ctx.machines`, `ctx.projects`, …) instead of hidden behind five
 /// separately named extractors.
+///
+/// `Clone` because a background task outlives the borrow the command that
+/// spawned it was given — an interview turn sets itself up after
+/// `discovery_send_turn` has already answered. Every field is a handle, so a
+/// clone is a handful of refcount bumps over the same state rather than a copy
+/// of it.
+#[derive(Clone)]
 pub struct AppContext {
     /// Machine + agent profile persistence.
     pub machines: Arc<dyn MachineRepository>,
@@ -153,6 +161,22 @@ pub struct AppContext {
     /// [`crate::application::sync_session::get_reconciled`] rather than
     /// directly: the row is a claim and the working tree is the authority.
     pub sync_sessions: Arc<dyn SyncSessionPort>,
+
+    /// Planning conversations and their transcripts (V47,
+    /// `docs/PRD_DISCOVERY.md`). The transcript this holds is the authority on
+    /// what was said; the harness's own session id is only a cached fast path.
+    pub discoveries: Arc<dyn DiscoveryPort>,
+
+    /// The Discoveries taking a turn or a decompose pass in this process
+    /// ([`crate::application::discovery::running`]). Nothing durable may hold
+    /// it, for [`SyncTurns`](crate::application::sync_turns::SyncTurns)'s
+    /// reason.
+    pub discovery_turns: Arc<crate::application::discovery::running::RunningTurns>,
+
+    /// The work a Discovery emitted. Nothing here answers whether a Ticket is
+    /// startable — that is computed on read from its edges and the forge state
+    /// of each dependency, never stored (§6.3).
+    pub tickets: Arc<dyn TicketPort>,
 
     /// The out-of-band syncs running in this process
     /// ([`crate::application::sync_turns`]). Half of what

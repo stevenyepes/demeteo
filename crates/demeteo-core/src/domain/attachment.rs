@@ -134,6 +134,31 @@ pub fn worktree_display_path(
     }
 }
 
+/// How a prompt names the files it was given.
+///
+/// `[attachment -- <name>]` is the one spelling, because it is the one the
+/// step executor's resolver scans for; a second phrasing of the same idea
+/// would be a name nothing resolves. `reads_images` is the caller's answer
+/// about the model it is prompting, not one derived here — a Ticket takes it
+/// from its own agent and model, a Discovery from the interviewer's.
+///
+/// `None` when there is nothing attached, so a caller never renders a heading
+/// over an empty list.
+pub fn attachment_block(attachments: &[AttachedFile], reads_images: bool) -> Option<String> {
+    if attachments.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = attachments
+        .iter()
+        .map(|a| format!("[attachment -- {}]", a.name))
+        .collect();
+    let mut block = format!("Attached: {}", names.join(", "));
+    if !reads_images && attachments.iter().any(|a| a.mime.starts_with("image/")) {
+        block.push_str("\nThe image rides as a path only — this model does not read images.");
+    }
+    Some(block)
+}
+
 /// Lowercase extension → IANA mime guess.
 pub fn mime_for_ext(ext: &str) -> Option<&'static str> {
     let e = ext.to_ascii_lowercase();

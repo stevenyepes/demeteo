@@ -102,34 +102,50 @@ export async function addAttachment(
   featureId: string,
   input: AttachmentInput,
 ): Promise<AttachedFile> {
-  const sourceFilename =
-    input.kind === "file"
-      ? input.file.name
-      : (input.sourceFilename ?? pathBasename(input.sourcePath));
-  const mime = input.kind === "file" ? (input.file.type || undefined) : input.mime;
-
-  if (input.kind === "file") {
-    // The browser gave us a File but no usable absolute path (the
-    // common case in Tauri 2 — `file.path` is stripped). Read the
-    // bytes and ferry them through IPC. Drag-and-drop still goes via
-    // `input.kind === "path"` and keeps the path branch.
-    const bytes = new Uint8Array(await input.file.arrayBuffer());
-    return invoke<AttachedFile>("feature_add_attachment", {
-      featureId,
-      sourcePath: "",
-      mime: mime ?? null,
-      sourceFilename: sourceFilename ?? null,
-      bytes: Array.from(bytes),
-    });
-  }
-
+  const wire = await attachmentWire(input);
   return invoke<AttachedFile>("feature_add_attachment", {
     featureId,
-    sourcePath: input.sourcePath,
-    mime: mime ?? null,
-    sourceFilename: sourceFilename ?? null,
-    bytes: null,
+    sourcePath: wire.sourcePath,
+    mime: wire.mime,
+    sourceFilename: wire.sourceFilename,
+    bytes: wire.bytes,
   });
+}
+
+/** The four arguments every `*_add_attachment` command takes, whichever way
+ *  the file was picked. Shared so a second owner (a Ticket, a Discovery)
+ *  cannot decide the bytes-vs-path question differently from a Feature. */
+export interface AttachmentWire {
+  sourcePath: string;
+  mime: string | null;
+  sourceFilename: string | null;
+  bytes: number[] | null;
+}
+
+/**
+ * Normalise a pick into that shape.
+ *
+ * The browser gives a `File` but no usable absolute path (the common case in
+ * Tauri 2 — `file.path` is stripped), so its bytes are read here and ferried
+ * through IPC. Drag-and-drop yields a path and keeps the path branch, where
+ * the Rust command reads the bytes itself.
+ */
+export async function attachmentWire(input: AttachmentInput): Promise<AttachmentWire> {
+  if (input.kind === "file") {
+    const bytes = new Uint8Array(await input.file.arrayBuffer());
+    return {
+      sourcePath: "",
+      mime: input.file.type || null,
+      sourceFilename: input.file.name,
+      bytes: Array.from(bytes),
+    };
+  }
+  return {
+    sourcePath: input.sourcePath,
+    mime: input.mime ?? null,
+    sourceFilename: input.sourceFilename ?? pathBasename(input.sourcePath),
+    bytes: null,
+  };
 }
 
 /**
@@ -421,6 +437,37 @@ export async function stageBrowserFilesForLaunch(
   }
 
   return next;
+}
+
+/**
+ * One file collected before the aggregate that will own it exists — the wire
+ * shape `start_feature`, `remote_submit_run` and `discovery_create` all take.
+ */
+export interface StagedAttachmentInput {
+  source_path: string;
+  mime: string | null;
+  source_filename: string | null;
+  bytes: number[] | null;
+}
+
+/**
+ * Convert a staged batch into that shape.
+ *
+ * The whole batch travels with the create call rather than as a follow-up per
+ * file, which is what stops the agent's first turn from racing the attachments
+ * it is supposed to have been given.
+ */
+export async function stagedAttachmentInputs(
+  entries: readonly LaunchStageEntry[],
+): Promise<StagedAttachmentInput[]> {
+  return Promise.all(
+    entries.map(async (entry) => ({
+      source_path: entry.sourcePath ?? "",
+      mime: entry.mime ?? null,
+      source_filename: entry.source_filename ?? null,
+      bytes: entry.file ? Array.from(new Uint8Array(await entry.file.arrayBuffer())) : null,
+    })),
+  );
 }
 
 /**

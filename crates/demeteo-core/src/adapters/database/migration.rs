@@ -178,6 +178,19 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
         "INTEGER",
     )?;
 
+    // What the user handed the interviewer (V48). Nullable, and NULL reads as
+    // the empty list — see the migration's header.
+    add_column_if_missing(conn, "discoveries", "attachments_json", "TEXT")?;
+
+    // What an interview turn did, beside what it cost (V49). Nullable, and
+    // NULL reads as *absent* rather than as a turn that touched nothing — see
+    // the migration's header.
+    add_column_if_missing(conn, "discovery_messages", "activity_json", "TEXT")?;
+
+    // The decompose pass nobody has reviewed yet (V50). Nullable, and NULL is
+    // the resting state — see the migration's header.
+    add_column_if_missing(conn, "discoveries", "pending_proposal_json", "TEXT")?;
+
     Ok(())
 }
 
