@@ -88,7 +88,7 @@ fn an_edge_that_closes_a_cycle_is_refused_and_names_both_by_number() {
 #[test]
 fn an_edge_out_of_the_discovery_is_refused() {
     let one = row(1, &[]);
-    let refusal = refusal(&one, &[one.clone()], &edit(&["t-99"]))
+    let refusal = refusal(&one, std::slice::from_ref(&one), &edit(&["t-99"]))
         .expect("an edge outside the discovery is not an edge");
     assert!(refusal.contains("t-99"), "{refusal}");
 }
@@ -96,7 +96,7 @@ fn an_edge_out_of_the_discovery_is_refused() {
 #[test]
 fn a_ticket_may_not_wait_on_itself() {
     let one = row(1, &[]);
-    assert!(refusal(&one, &[one.clone()], &edit(&["t-1"])).is_some());
+    assert!(refusal(&one, std::slice::from_ref(&one), &edit(&["t-1"])).is_some());
 }
 
 /// The title is the run's name and the plan's only handle on the ticket.
@@ -105,7 +105,7 @@ fn an_emptied_title_is_refused() {
     let one = row(1, &[]);
     let mut blanked = edit(&[]);
     blanked.title = "   ".to_string();
-    assert!(refusal(&one, &[one.clone()], &blanked).is_some());
+    assert!(refusal(&one, std::slice::from_ref(&one), &blanked).is_some());
 }
 
 /// What a form leaves behind: half-typed rows, and selects the user set back
