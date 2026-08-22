@@ -170,3 +170,57 @@ async fn the_gate_runs_in_the_merge_worktree_under_the_harness_shell() {
     assert_eq!(seen.cwd.as_deref(), Some(WT));
     assert!(seen.login_shell && seen.interactive);
 }
+
+/// Stop has to reach a build already running, and the only thing that stops one
+/// is dropping the future the adapter kills the process group on.
+///
+/// The double is scripted with nothing, so a gate that ran the harness anyway
+/// comes back `Failed` with "unscripted command" rather than reading as a pass.
+#[tokio::test]
+async fn a_stop_mid_gate_is_not_a_red_build() {
+    let exec = ScriptedExec::new(&[]);
+    let (_tx, rx) = tokio::sync::watch::channel(true);
+
+    assert_eq!(
+        run_merge_gate(
+            &exec,
+            "local",
+            gate(Some("npm ci"), Some("npm run checks:code")),
+            opts(),
+            Some(rx),
+        )
+        .await,
+        GateVerdict::Stopped,
+    );
+    assert!(
+        exec.commands().is_empty(),
+        "a stopped gate runs nothing: {:?}",
+        exec.commands()
+    );
+}
+
+/// The cancel race is wrapped around *both* commands, and prepare is the one a
+/// rewrite can drop silently: nothing downstream of it reports that it ran.
+#[tokio::test]
+async fn the_prepare_command_still_runs_under_the_cancel_race() {
+    let exec = ScriptedExec::new(&[
+        ("npm ci", Ok("added 900 packages")),
+        ("npm run checks:code", Ok("all checks passed")),
+    ]);
+
+    assert_eq!(
+        run_merge_gate(
+            &exec,
+            "local",
+            gate(Some("npm ci"), Some("npm run checks:code")),
+            opts(),
+            None,
+        )
+        .await,
+        GateVerdict::Clear,
+    );
+    assert_eq!(
+        exec.commands(),
+        vec!["npm ci".to_string(), "npm run checks:code".to_string()],
+    );
+}

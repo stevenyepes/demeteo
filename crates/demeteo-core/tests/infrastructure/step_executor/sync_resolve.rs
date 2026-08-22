@@ -21,6 +21,7 @@ use crate::ports::agent_runtime::{
 };
 use crate::ports::notification::{DomainEvent, NotificationPort};
 use crate::ports::sync_session::{SyncSession, SyncSessionPort};
+use crate::ports::worktree_ops::MergeGate;
 use rusqlite::Connection;
 use std::pin::Pin;
 use std::time::Instant;
@@ -57,6 +58,12 @@ const PRUNE: &str = "git -C /repos/demeteo worktree prune";
 /// The teardown's confirmation read: only an observed-gone tree lets the row
 /// stop naming the worktree.
 const GIT_DIR: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse --git-dir";
+/// What the base side did to the tree while this branch was away. Not a
+/// conflict list: these are the paths git merged without asking.
+const BASE_MOVES: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 diff --name-status -M \
+                          --diff-filter=ADR HEAD...MERGE_HEAD";
+/// The project's own checks, as `ProjectSettings.test_command` holds them.
+const CHECKS: &str = "npm run checks:code";
 
 /// A path inside the sync worktree as `ensure_conflict_markers_removed` builds
 /// it, which is not the same string on every host.
@@ -115,6 +122,11 @@ enum StopAt {
 /// script.
 struct ScriptedSession {
     events: Vec<AgentEvent>,
+    /// What the turn actually asked for. Nothing downstream reports the prompt,
+    /// so without this recorder every claim about what the resolver was told is
+    /// only reachable through `build_resolver_prompt` — which is the half that
+    /// cannot see whether the turn passed it anything.
+    prompts: Arc<std::sync::Mutex<Vec<String>>>,
     linger: Option<std::time::Duration>,
     stop: Option<(StopAt, watch::Sender<bool>)>,
     /// Trips when the registry reaps this session. The resolver's thread id is
@@ -127,7 +139,8 @@ impl AgentSession for ScriptedSession {
     fn session_id(&self) -> &str {
         "scripted"
     }
-    fn prompt(&self, _: &str) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {
+    fn prompt(&self, prompt: &str) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {
+        self.prompts.lock().unwrap().push(prompt.to_string());
         if let Some((StopAt::Prompt, tx)) = &self.stop {
             let _ = tx.send(true);
         }
@@ -192,6 +205,7 @@ struct ScriptedRuntime {
     /// off — and the whole of what the tree-is-the-authority tests turn on.
     ends_with_error: bool,
     killed: Arc<std::sync::atomic::AtomicBool>,
+    prompts: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 /// What a tripped `--max-turns` reaches the turn loop as: a non-recoverable
@@ -222,6 +236,9 @@ impl ScriptedRuntime {
     }
     fn session_reaped(&self) -> bool {
         self.killed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn prompts(&self) -> Vec<String> {
+        self.prompts.lock().unwrap().clone()
     }
     /// `TurnComplete` is what ends the turn, so the stop-at-close fixture omits
     /// it: the stream's own end is then the last thing that happens before the
@@ -297,12 +314,14 @@ impl AgentRuntime for ScriptedRuntime {
         let linger = self.linger;
         let stop = self.stop.clone();
         let killed = self.killed.clone();
+        let prompts = self.prompts.clone();
         Box::pin(async move {
             let session: Arc<dyn AgentSession> = Arc::new(ScriptedSession {
                 events,
                 linger,
                 stop,
                 killed,
+                prompts,
             });
             Ok(session)
         })
@@ -446,7 +465,30 @@ async fn run(
     cost: &mut f64,
     tokens: &mut i64,
 ) -> Result<ResolvedSync, ResolveSyncError> {
-    run_with(p, step_exec, cancel, cost, tokens, None, "running").await
+    run_with(
+        p,
+        step_exec,
+        cancel,
+        cost,
+        tokens,
+        None,
+        "running",
+        MergeGate::default(),
+    )
+    .await
+}
+
+/// The same turn, for a project that named checks. Every assertion about the
+/// gate is about *this* argument, so a fixture that could not vary it would
+/// leave the gate asserted against the empty one it defaults to.
+async fn run_gated(
+    p: &Ports,
+    step_exec: &StepExecution,
+    cost: &mut f64,
+    tokens: &mut i64,
+    gate: MergeGate<'_>,
+) -> Result<ResolvedSync, ResolveSyncError> {
+    run_with(p, step_exec, None, cost, tokens, None, "running", gate).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -458,6 +500,7 @@ async fn run_with(
     tokens: &mut i64,
     review_before_push: Option<bool>,
     feature_status: &str,
+    gate: MergeGate<'_>,
 ) -> Result<ResolvedSync, ResolveSyncError> {
     resolve_sync_conflicts(ResolveSyncContext {
         exec: &p.exec,
@@ -474,7 +517,7 @@ async fn run_with(
         feature_branch: "feature/f-1",
         base_branch: "master",
         conflict_files: &["src/lib.rs".to_string()],
-        test_command: None,
+        gate,
         step_exec,
         thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
         agent_kind: "opencode",
@@ -500,9 +543,18 @@ async fn run_with(
 /// and a clean second one need the queue, and the queue is worth spending on
 /// the assertions that need it rather than on every test here.
 fn happy_path() -> ScriptedExec {
-    ScriptedExec::new(&[
+    happy_path_with(&[])
+}
+
+/// The same script, plus whatever else a test needs answered beside it — which
+/// is only ever the project's own checks. Extending it rather than writing a
+/// second copy is what keeps a gated turn asserted against the *ungated* git
+/// sequence.
+fn happy_path_with(extra: &[(&str, Result<&str, &str>)]) -> ScriptedExec {
+    let mut script = vec![
         (PORCELAIN, Ok("")),
         (MERGE_HEAD, Ok("b1b2b3b\n")),
+        (BASE_MOVES, Ok("")),
         (ADD_ALL, Ok("")),
         (
             COMMIT,
@@ -514,8 +566,9 @@ fn happy_path() -> ScriptedExec {
         (PRUNE, Ok("")),
         // The teardown's confirmation: the tree really is gone.
         (GIT_DIR, Err("fatal: not a git repository")),
-    ])
-    .with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, Ok(""))])
+    ];
+    script.extend_from_slice(extra);
+    ScriptedExec::new(&script).with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, Ok(""))])
 }
 
 /// The turn that ends before it starts, and the row that has to say so.
@@ -1017,9 +1070,18 @@ async fn a_resolution_somebody_can_look_at_stops_at_the_commit() {
     open_conflicted(&p.db);
     let (mut cost, mut tokens) = (0.0, 0);
 
-    let resolved = run_with(&p, &row(), None, &mut cost, &mut tokens, None, "completed")
-        .await
-        .expect("holding the push is not a failure");
+    let resolved = run_with(
+        &p,
+        &row(),
+        None,
+        &mut cost,
+        &mut tokens,
+        None,
+        "completed",
+        MergeGate::default(),
+    )
+    .await
+    .expect("holding the push is not a failure");
 
     assert!(!resolved.published);
     assert_eq!(resolved.merge_commit_sha, "c0ffeec");
@@ -1062,6 +1124,7 @@ async fn a_project_that_opted_out_of_review_publishes_with_somebody_watching() {
         &mut tokens,
         Some(false),
         "completed",
+        MergeGate::default(),
     )
     .await
     .expect("opting out is not a failure");
@@ -1094,6 +1157,7 @@ async fn a_run_that_still_owns_its_branch_publishes_however_the_project_asked() 
             &mut tokens,
             Some(true),
             feature_status,
+            MergeGate::default(),
         )
         .await
         .expect("a run's own sync node resolves and publishes");
@@ -1171,9 +1235,18 @@ async fn a_follow_up_commit_does_not_move_the_diffs_base() {
     open_conflicted(&p.db);
     let (mut cost, mut tokens) = (0.0, 0);
 
-    let resolved = run_with(&p, &row(), None, &mut cost, &mut tokens, None, "completed")
-        .await
-        .expect("an agent that committed for itself still resolved the merge");
+    let resolved = run_with(
+        &p,
+        &row(),
+        None,
+        &mut cost,
+        &mut tokens,
+        None,
+        "completed",
+        MergeGate::default(),
+    )
+    .await
+    .expect("an agent that committed for itself still resolved the merge");
 
     let session = stored_session(&p.db);
     assert_eq!(resolved.merge_commit_sha, "f0110up");
@@ -1277,8 +1350,13 @@ async fn a_tree_still_conflicted_reports_the_turns_ending_beside_it() {
 #[test]
 fn the_prompt_names_the_projects_own_test_command() {
     let files = vec!["src/lib.rs".to_string()];
-    let prompt =
-        build_resolver_prompt("feature/f-1", "master", &files, Some("npm run checks:code"));
+    let prompt = build_resolver_prompt(
+        "feature/f-1",
+        "master",
+        &files,
+        Some("npm run checks:code"),
+        &[],
+    );
 
     assert!(
         prompt.contains("`npm run checks:code`"),
@@ -1287,6 +1365,36 @@ fn the_prompt_names_the_projects_own_test_command() {
     assert!(
         prompt.contains("Do NOT go looking for another command"),
         "naming it is only half — the other half is not hunting for a second: {prompt}"
+    );
+    assert!(
+        prompt.contains("Demeteo runs that same command itself before it commits anything"),
+        "the agent has to know the gate is not advisory: {prompt}"
+    );
+}
+
+/// The scope clause is the merge's damage, not git's conflict list.
+///
+/// The two halves are one decision and neither survives alone. A blanket "do
+/// not modify any other file" is what a resolver obeyed while leaving a caller
+/// of a signature the other side had changed, and the merge commit it pushed
+/// reddened every check on the pull request. An unbounded licence in its place
+/// buys that back at the price of a refactor nobody merged.
+#[test]
+fn the_prompts_scope_is_what_the_merge_broke() {
+    let files = vec!["src/lib.rs".to_string()];
+    let prompt = build_resolver_prompt("feature/f-1", "master", &files, None, &[]);
+
+    assert!(
+        prompt.contains("only where the merge itself broke it"),
+        "a file git merged silently and broke is in scope: {prompt}"
+    );
+    assert!(
+        !prompt.contains("Do NOT modify any other file"),
+        "a blanket ban is what put a tree that does not build on origin: {prompt}"
+    );
+    assert!(
+        prompt.contains("Do not refactor, reformat, or fix anything the merge did not break"),
+        "and in scope is not the same as open season: {prompt}"
     );
 }
 
@@ -1297,7 +1405,7 @@ fn the_prompt_names_the_projects_own_test_command() {
 #[test]
 fn the_prompt_asks_for_no_verification_when_the_project_names_no_command() {
     let files = vec!["src/lib.rs".to_string()];
-    let prompt = build_resolver_prompt("feature/f-1", "master", &files, None);
+    let prompt = build_resolver_prompt("feature/f-1", "master", &files, None, &[]);
 
     assert!(
         !prompt.contains("verify"),
@@ -1306,5 +1414,359 @@ fn the_prompt_asks_for_no_verification_when_the_project_names_no_command() {
     assert!(
         prompt.contains("Do NOT stage or commit"),
         "the rest of the contract is unchanged: {prompt}"
+    );
+}
+
+/// The incident, in miniature: a resolver that reported success over a tree
+/// that does not build.
+///
+/// `ADD_ALL` is deliberately unscripted, so a turn that skipped the gate dies
+/// on the strict double instead of quietly committing — which is what makes
+/// this fail against a *missing* gate as well as a green one.
+#[tokio::test]
+async fn a_resolution_the_projects_checks_reddened_is_not_committed_or_pushed() {
+    let p = ports(
+        ScriptedExec::new(&[
+            (PORCELAIN, Ok("")),
+            (MERGE_HEAD, Ok("b1b2b3b\n")),
+            (
+                CHECKS,
+                Err("Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments"),
+            ),
+        ]),
+        vec![Arc::new(ScriptedRuntime::default())],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let outcome = run_gated(
+        &p,
+        &row(),
+        &mut cost,
+        &mut tokens,
+        MergeGate {
+            prepare: None,
+            harness: Some(CHECKS),
+        },
+    )
+    .await;
+
+    let Err(ResolveSyncError::Failed(reason)) = outcome else {
+        panic!("a tree that does not build is not a resolved conflict: {outcome:?}");
+    };
+    assert!(
+        reason.contains(CHECKS) && reason.contains("E0061"),
+        "the refusal has to carry the command and what it said, or the user \
+         cannot act on it: {reason}"
+    );
+    assert_eq!(stored_status(&p.db), SyncSessionStatus::ResolutionFailed);
+    assert!(
+        !p.scripted
+            .calls()
+            .iter()
+            .any(|c| c == ADD_ALL || c == COMMIT),
+        "a red tree may not be staged or committed: {:?}",
+        p.scripted.calls()
+    );
+    assert!(
+        p.scripted.programs().is_empty(),
+        "and it may certainly not reach origin: {:?}",
+        p.scripted.programs()
+    );
+}
+
+/// Before `git add -A`, not after.
+///
+/// A gate that runs afterwards stages its own build output through the same
+/// `-A`, and `pending_commit::probe` then reads it as work an agent left
+/// uncommitted — the bug that module exists to prevent, re-entered from the
+/// other side. Nothing else here pins the order.
+#[tokio::test]
+async fn the_checks_run_before_anything_is_staged() {
+    let p = ports(
+        happy_path_with(&[(CHECKS, Ok("all checks passed"))]),
+        vec![Arc::new(ScriptedRuntime::default())],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    run_gated(
+        &p,
+        &row(),
+        &mut cost,
+        &mut tokens,
+        MergeGate {
+            prepare: None,
+            harness: Some(CHECKS),
+        },
+    )
+    .await
+    .expect("a green gate lets the resolution through");
+
+    let calls = p.scripted.calls();
+    let checks = calls.iter().position(|c| c == CHECKS);
+    let staged = calls.iter().position(|c| c == ADD_ALL);
+    assert!(
+        matches!((checks, staged), (Some(c), Some(s)) if c < s),
+        "{calls:?}"
+    );
+}
+
+/// A build that never ran is not a red build, so the resolution lands.
+///
+/// The ordering half is where the teeth are: the outcome alone would pass
+/// against a turn that never ran the gate at all.
+#[tokio::test]
+async fn checks_the_transport_cut_short_still_land_the_resolution() {
+    let dead = transport_dead();
+    let p = ports(
+        happy_path_with(&[(CHECKS, Err(dead.as_str()))]),
+        vec![Arc::new(ScriptedRuntime::default())],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let resolved = run_gated(
+        &p,
+        &row(),
+        &mut cost,
+        &mut tokens,
+        MergeGate {
+            prepare: None,
+            harness: Some(CHECKS),
+        },
+    )
+    .await
+    .expect("a dropped connection says nothing about the tree");
+
+    assert!(resolved.published);
+    let calls = p.scripted.calls();
+    assert!(
+        calls.contains(&CHECKS.to_string()),
+        "the gate has to have run for this to be about the gate: {calls:?}"
+    );
+}
+
+/// Where the checks run and how long they may take.
+///
+/// Every other command in this turn goes through the bare `run_command`, whose
+/// `ShellOptions` carry no deadline at all — copying that idiom here would hang
+/// a resolution forever on a wedged build.
+#[tokio::test]
+async fn the_checks_run_in_the_worktree_under_the_projects_deadline() {
+    let p = ports(
+        happy_path_with(&[(CHECKS, Ok(""))]),
+        vec![Arc::new(ScriptedRuntime::default())],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    run_gated(
+        &p,
+        &row(),
+        &mut cost,
+        &mut tokens,
+        MergeGate {
+            prepare: None,
+            harness: Some(CHECKS),
+        },
+    )
+    .await
+    .expect("a green gate lets the resolution through");
+
+    let seen = p
+        .scripted
+        .options()
+        .into_iter()
+        .zip(p.scripted.commands())
+        .find(|(_, cmd)| cmd == CHECKS)
+        .map(|(opts, _)| opts)
+        .expect("the checks were run");
+    assert_eq!(
+        seen.cwd.as_deref(),
+        Some(WT),
+        "the merge is in the worktree"
+    );
+    assert!(
+        seen.login_shell && seen.interactive,
+        "a user-authored command needs the shell its toolchain shims live in"
+    );
+    assert_eq!(
+        seen.timeout,
+        Some(std::time::Duration::from_secs(1800)),
+        "the run's own wall cap, not a second knob and not no cap at all"
+    );
+}
+
+/// The no-regression half: a project that named no checks resolves exactly as
+/// it did before the gate existed, and runs nothing extra to do it.
+#[tokio::test]
+async fn a_project_that_names_no_checks_resolves_exactly_as_it_did() {
+    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime::default())]);
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("an absent gate withholds nothing");
+
+    assert_eq!(
+        p.scripted.commands(),
+        vec![
+            PORCELAIN.to_string(),
+            MERGE_HEAD.to_string(),
+            BASE_MOVES.to_string(),
+            ADD_ALL.to_string(),
+            PORCELAIN.to_string(),
+            MERGE_HEAD.to_string(),
+            COMMIT.to_string(),
+            HEAD.to_string(),
+            CONTAINS.to_string(),
+            DISCARD.to_string(),
+            PRUNE.to_string(),
+            GIT_DIR.to_string(),
+        ],
+        "an empty gate runs no command of its own"
+    );
+}
+
+/// The file that broke the pull request, named in the prompt that would have
+/// prevented it.
+///
+/// `crates/demeteo-core/tests/application/run_view.rs` existed on master alone,
+/// so git merged it silently, so it was in no conflict list — and it called a
+/// constructor the branch had given a fourth parameter. A resolver reading only
+/// the conflicted paths could not have known it was there.
+#[test]
+fn the_prompt_names_what_the_base_side_moved() {
+    let files = vec!["crates/demeteo-core/src/application/run_view.rs".to_string()];
+    let moves = vec!["A\tcrates/demeteo-core/tests/application/run_view.rs".to_string()];
+
+    let prompt = build_resolver_prompt("feature/f-1", "master", &files, None, &moves);
+
+    assert!(
+        prompt.contains("A\tcrates/demeteo-core/tests/application/run_view.rs"),
+        "the moved file has to be in the prompt verbatim: {prompt}"
+    );
+    assert!(
+        prompt.contains("Git merged them without asking"),
+        "and the resolver has to be told why a silent merge is the dangerous half: {prompt}"
+    );
+}
+
+/// A merge that moved hundreds of files is where the hint would drown the
+/// conflict it was meant to aim at, so past the cap it hands over the command
+/// instead of the list.
+#[test]
+fn a_long_list_of_base_side_moves_is_capped_and_says_where_the_rest_is() {
+    let files = vec!["src/lib.rs".to_string()];
+    let moves: Vec<String> = (0..200).map(|i| format!("A\tsrc/gen/f{}.rs", i)).collect();
+
+    let prompt = build_resolver_prompt("feature/f-1", "master", &files, None, &moves);
+
+    assert!(prompt.contains("A\tsrc/gen/f39.rs"), "{prompt}");
+    assert!(
+        !prompt.contains("A\tsrc/gen/f40.rs"),
+        "the 41st entry is past the cap: {prompt}"
+    );
+    assert!(
+        prompt.contains("…and 160 more"),
+        "the tail has to be counted, not dropped: {prompt}"
+    );
+    assert!(
+        prompt.contains("git diff --name-status -M --diff-filter=ADR HEAD...MERGE_HEAD"),
+        "and reachable in one call: {prompt}"
+    );
+}
+
+/// The incident's own arithmetic: the entry that mattered was the 69th of 252,
+/// and a cap that took git's first forty would have dropped it.
+///
+/// Path order is not relevance order, and this is the whole of what the
+/// ordering buys — a hint that is capped where the answer is not is a hint that
+/// reads as reassurance.
+#[test]
+fn a_move_naming_a_conflicted_file_leads_however_long_the_list_is() {
+    let files = vec!["crates/demeteo-core/src/application/run_view.rs".to_string()];
+    let moved = "A\tcrates/demeteo-core/tests/application/run_view.rs";
+    let mut moves: Vec<String> = (0..68).map(|i| format!("A\tsrc/gen/a{}.rs", i)).collect();
+    moves.push(moved.to_string());
+    moves.extend((0..183).map(|i| format!("A\tsrc/gen/z{}.rs", i)));
+
+    let prompt = build_resolver_prompt("feature/f-1", "master", &files, None, &moves);
+
+    assert!(
+        prompt.contains(moved),
+        "the file that broke the build is the one entry that may not be capped away: {prompt}"
+    );
+    assert!(
+        prompt.contains("…and 212 more"),
+        "and the rest is still bounded: {prompt}"
+    );
+}
+
+/// A merge with nothing to say about itself says nothing.
+#[test]
+fn a_merge_that_moved_nothing_adds_no_section() {
+    let files = vec!["src/lib.rs".to_string()];
+
+    let prompt = build_resolver_prompt("feature/f-1", "master", &files, None, &[]);
+
+    assert!(
+        !prompt.contains("also added, moved or deleted"),
+        "an empty list is not a section: {prompt}"
+    );
+}
+
+/// The read reaches the prompt, spelled the way git answers it.
+///
+/// The two halves are only wired together here: the pure function cannot see
+/// whether the turn passed it anything, and the command string is invisible to
+/// every other assertion in this file.
+#[tokio::test]
+async fn the_resolver_is_told_what_the_merge_moved_under_it() {
+    let runtime = Arc::new(ScriptedRuntime::default());
+    let p = ports(
+        happy_path_with(&[(
+            BASE_MOVES,
+            Ok("A\tcrates/demeteo-core/tests/application/run_view.rs\n"),
+        )]),
+        vec![runtime.clone()],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("a hint withholds nothing");
+
+    let prompts = runtime.prompts();
+    assert!(
+        prompts[0].contains("A\tcrates/demeteo-core/tests/application/run_view.rs"),
+        "the merge's own damage has to reach the agent: {prompts:?}"
+    );
+}
+
+/// A hint is not a gate: an unreadable answer costs the section, not the turn.
+#[tokio::test]
+async fn an_unreadable_base_diff_still_resolves_and_says_nothing_about_it() {
+    let dead = transport_dead();
+    let runtime = Arc::new(ScriptedRuntime::default());
+    let p = ports(
+        happy_path_with(&[(BASE_MOVES, Err(dead.as_str()))]),
+        vec![runtime.clone()],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let resolved = run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("a hint nobody could read is not a failed resolution");
+
+    assert!(resolved.published);
+    let prompts = runtime.prompts();
+    assert!(
+        !prompts[0].contains("also added, moved or deleted"),
+        "an answer nobody got may not be rendered as an empty one: {prompts:?}"
     );
 }

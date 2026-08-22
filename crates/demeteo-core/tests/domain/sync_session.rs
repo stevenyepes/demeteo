@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::domain::sync_failure::SyncBlockedStage;
+use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
 
 fn probe(worktree_exists: bool, merge_in_progress: bool, dirty: bool) -> SyncWorkspaceProbe {
     SyncWorkspaceProbe {
@@ -794,4 +795,42 @@ fn a_refused_tree_carries_the_turns_ending_after_it() {
         reason.contains("turn cap (--max-turns)"),
         "and the ending follows as the explanation: {reason}"
     );
+}
+
+/// The user has to be able to reproduce the red, and the row cannot hold it:
+/// what the checks printed exists nowhere else once the sync worktree is gone.
+#[test]
+fn a_red_harness_names_the_command_and_its_output() {
+    let refusal = resolution_verification_refusal(
+        "npm run checks:code",
+        Err("Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments"),
+    )
+    .expect("a resolution whose checks went red is not a resolution");
+
+    assert!(
+        refusal.contains("npm run checks:code"),
+        "the refusal has to name the command, or it cannot be re-run: {refusal}"
+    );
+    assert!(
+        refusal.contains("E0061"),
+        "and carry what it said: {refusal}"
+    );
+}
+
+/// A build that never ran is not a red build. Dropping the delegation to
+/// `verify_failure_stage` inverts exactly this arm, and it inverts it silently:
+/// a dropped ssh channel would start failing resolutions that are fine.
+#[test]
+fn checks_that_never_ran_do_not_refuse_a_resolution() {
+    assert_eq!(resolution_verification_refusal("cargo test", Ok(())), None);
+    for err in [
+        format!("{TRANSPORT_ERROR_PREFIX}Connection appears dead"),
+        format!("{TIMEOUT_ERROR_PREFIX}exceeded 1800s"),
+    ] {
+        assert_eq!(
+            resolution_verification_refusal("cargo test", Err(err.as_str())),
+            None,
+            "{err:?} says nothing about the tree, so it may not withhold the resolution"
+        );
+    }
 }

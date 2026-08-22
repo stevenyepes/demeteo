@@ -433,6 +433,28 @@ pub fn resolution_refusal(turn_stop: Option<&str>, tree_refusal: &str) -> String
     }
 }
 
+/// Whether the tree the resolver left may be committed and published.
+///
+/// The sibling of [`resolution_refusal`], one input over: that one folds the
+/// *turn's* ending into the tree's verdict, this one folds the *harness's*.
+/// `outcome` is what running `command` in the resolved worktree came back
+/// with, and `None` means nothing withholds the resolution — which covers two
+/// situations on purpose: the harness passed, or nobody is in a position to
+/// say it did not.
+///
+/// The draw between those is
+/// [`verify_failure_stage`](crate::domain::sync_failure::verify_failure_stage)'s
+/// — the clean half's too — and is not restated here.
+pub fn resolution_verification_refusal(command: &str, outcome: Result<(), &str>) -> Option<String> {
+    let err = outcome.err()?;
+    crate::domain::sync_failure::verify_failure_stage(err)?;
+    Some(format!(
+        "The conflicts were resolved but the project's checks failed in the merged \
+         tree, so it was not committed.\n\n$ {}\n{}",
+        command, err
+    ))
+}
+
 /// Whether anything is still running this feature's sync, as an observation
 /// rather than something inferred from the row.
 ///

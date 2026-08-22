@@ -26,6 +26,7 @@ use crate::adapters::step_executor::step_status::CacheTokens;
 use crate::adapters::step_executor::steps::list_unmerged::try_list_unmerged_files;
 use crate::adapters::step_executor::steps::pending_commit::{self, PendingCommit};
 use crate::adapters::step_executor::sync_worktree::discard_sync_worktree;
+use crate::adapters::worktree::git_ops::sync_verify::GateVerdict;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::ids::FeatureId;
@@ -77,14 +78,15 @@ pub(crate) struct ResolveSyncContext<'a> {
     pub feature_branch: &'a str,
     pub base_branch: &'a str,
     pub conflict_files: &'a [String],
-    /// The project's own `test_command`, or `None` when it has none.
+    /// What this project asks of a resolved tree before it is committed, and
+    /// the command the prompt names.
     ///
-    /// Passed rather than left to the agent to discover, because Demeteo
-    /// already knows it and the agent does not: asked to "run the project's
-    /// build / test suite" with nothing named, one resolver spent four turns
-    /// resolving the conflict and the remaining twenty guessing at cargo test
-    /// targets before its turn cap ended it.
-    pub test_command: Option<&'a str>,
+    /// The same gate a clean merge is held to, derived once by
+    /// [`sync_gate`](crate::adapters::step_executor::sync::sync_gate). Why it
+    /// has to be the same one is
+    /// [`verify_failure_stage`](crate::domain::sync_failure::verify_failure_stage)'s
+    /// to say.
+    pub gate: crate::ports::worktree_ops::MergeGate<'a>,
     /// The persisted row this turn reports through.
     ///
     /// `AgentStream` is keyed to its execution id and `StepProgress` to its
@@ -347,7 +349,7 @@ async fn run_resolver_turn(
         feature_branch,
         base_branch,
         conflict_files,
-        test_command,
+        gate,
         step_exec,
         thread_id_prefix,
         agent_kind,
@@ -427,7 +429,14 @@ async fn run_resolver_turn(
         .await
         .map_err(|e| ResolveSyncError::Failed(format!("Failed to spawn resolver agent: {}", e)))?;
 
-    let prompt = build_resolver_prompt(feature_branch, base_branch, conflict_files, test_command);
+    let base_moves = base_side_moves(&**exec, machine_str, resolved_cwd).await;
+    let prompt = build_resolver_prompt(
+        feature_branch,
+        base_branch,
+        conflict_files,
+        gate.harness,
+        &base_moves,
+    );
 
     let timeouts = crate::application::timeouts::resolve_effective(app_settings.as_ref());
     let base_cost = *accumulated_cost;
@@ -519,6 +528,44 @@ async fn run_resolver_turn(
         )));
     }
 
+    // Reaped here rather than on each exit below: the turn is over, and holding
+    // a live process — over SSH, its channel too — across the multi-minute
+    // build the gate is about to run is waste.
+    let _ = registry.kill(&resolver_thread_id).await;
+
+    // Before `git add -A`, not after. A gate run afterwards stages its own
+    // build output through the same `-A`, which `pending_commit::probe` then
+    // reads as work an agent left uncommitted; and a red gate would leave a
+    // staged index, so the next attempt's marker check would iterate an empty
+    // unmerged list and pass vacuously. The tree on disk is the same either
+    // way — unmerged *index* entries are not file contents.
+    match crate::adapters::worktree::git_ops::sync_verify::run_merge_gate(
+        &**exec,
+        machine_str,
+        gate,
+        crate::adapters::step_executor::harness_shell::harness_shell_options(
+            app_settings.as_ref(),
+            resolved_cwd,
+        ),
+        cancel.clone(),
+    )
+    .await
+    {
+        GateVerdict::Clear => {}
+        GateVerdict::Stopped => {
+            return Err(ResolveSyncError::Cancelled(CANCELLED_REASON.to_string()))
+        }
+        GateVerdict::Failed { command, error } => {
+            if let Some(refusal) =
+                crate::domain::sync_session::resolution_verification_refusal(&command, Err(&error))
+            {
+                return Err(ResolveSyncError::Failed(resolution_refusal(
+                    turn_stop, &refusal,
+                )));
+            }
+        }
+    }
+
     // `-A`, not the conflicted paths the merge reported. The sync worktree is a
     // throwaway checkout that exists only for this resolution, and it is deleted
     // the moment the resolution lands — so a file the agent had to add, or a
@@ -534,7 +581,6 @@ async fn run_resolver_turn(
         )
         .await
     {
-        let _ = registry.kill(&resolver_thread_id).await;
         return Err(ResolveSyncError::Failed(format!(
             "Failed to stage conflict resolution: {}",
             e
@@ -546,7 +592,6 @@ async fn run_resolver_turn(
     let still_unmerged = match try_list_unmerged_files(&**exec, machine_str, resolved_cwd).await {
         Ok(files) => files,
         Err(why) => {
-            let _ = registry.kill(&resolver_thread_id).await;
             return Err(ResolveSyncError::Failed(format!(
                 "Could not read {} back to confirm the resolution: {}",
                 resolved_cwd, why
@@ -554,7 +599,6 @@ async fn run_resolver_turn(
         }
     };
     if !still_unmerged.is_empty() {
-        let _ = registry.kill(&resolver_thread_id).await;
         return Err(ResolveSyncError::Failed(resolution_refusal(
             turn_stop,
             "Resolver did not resolve every conflicted file.",
@@ -574,7 +618,6 @@ async fn run_resolver_turn(
         )
         .await
     {
-        let _ = registry.kill(&resolver_thread_id).await;
         return Err(ResolveSyncError::Failed(format!(
             "The repository's commit-msg hook rejected the sync-resolution commit: {}",
             rejection.hook_output
@@ -594,7 +637,6 @@ async fn run_resolver_turn(
         // the session `Resolved` — and the teardown then force-removes the
         // worktree the agent's work is sitting in, unpublished.
         PendingCommit::Unreadable(why) => {
-            let _ = registry.kill(&resolver_thread_id).await;
             return Err(ResolveSyncError::Failed(format!(
                 "Could not tell whether the resolution still needs committing, so it was left in {}: {}",
                 resolved_cwd, why
@@ -612,7 +654,6 @@ async fn run_resolver_turn(
                 )
                 .await;
             if let Err(e) = commit_resolved {
-                let _ = registry.kill(&resolver_thread_id).await;
                 return Err(ResolveSyncError::Failed(format!(
                     "Failed to commit resolution: {}",
                     e
@@ -638,7 +679,6 @@ async fn run_resolver_turn(
     {
         Answer::Said(out) => out.trim().to_string(),
         Answer::Refused | Answer::Unreadable(_) => {
-            let _ = registry.kill(&resolver_thread_id).await;
             return Err(ResolveSyncError::Failed(format!(
                 "The resolution was committed in {} but its commit could not be read back, so it was not published.",
                 resolved_cwd
@@ -679,7 +719,6 @@ async fn run_resolver_turn(
             )
             .await
         {
-            let _ = registry.kill(&resolver_thread_id).await;
             return Err(ResolveSyncError::Failed(format!(
                 "Resolution committed locally but push to origin/{} failed: {}. Publish it from the sync banner once the push can go through.",
                 feature_branch,
@@ -700,8 +739,6 @@ async fn run_resolver_turn(
     } else {
         false
     };
-
-    let _ = registry.kill(&resolver_thread_id).await;
 
     Ok(ResolvedSync {
         merge_commit_sha: head_sha,
@@ -746,10 +783,87 @@ fn has_conflict_marker(content: &str) -> bool {
     })
 }
 
-/// Build the constrained prompt for the conflict-resolution agent.
-/// The agent is told exactly which files to edit and explicitly
-/// forbidden from touching anything else — keeps the cost low and
-/// the resolution deterministic.
+/// What `origin/<base>` added, moved or deleted since this branch left it.
+///
+/// The conflicted paths are the files git could not merge; these are the files
+/// it merged *without asking*, and that is the pair the resolution has to be
+/// correct over. A test the base side moved out from under a signature this
+/// branch was changing carries no marker and appears in no conflict list, and
+/// that is exactly what ended one resolution as a tree that does not build.
+///
+/// Best-effort by construction: an unreadable answer leaves the prompt without
+/// the section rather than failing a turn over a hint. The gate in
+/// [`run_resolver_turn`] is what refuses to publish when the aim was off, so
+/// neither half is asked to carry the failure alone.
+async fn base_side_moves(
+    exec: &dyn ExecutionPort,
+    machine_str: &str,
+    worktree: &str,
+) -> Vec<String> {
+    match ask(
+        exec,
+        machine_str,
+        &format!(
+            "git -C {} diff --name-status -M --diff-filter=ADR HEAD...MERGE_HEAD",
+            paths::shell_escape_posix(worktree)
+        ),
+    )
+    .await
+    {
+        Answer::Said(out) => out
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect(),
+        Answer::Refused | Answer::Unreadable(_) => Vec::new(),
+    }
+}
+
+/// The base side's moves, the ones most likely to matter first.
+///
+/// Git answers in path order, and path order is not relevance order. On the
+/// merge that occasioned this the file that broke the build —
+/// `tests/application/run_view.rs`, moved out from under a signature the branch
+/// was changing — was the 69th of 252 entries, so a path-ordered cap would have
+/// dropped exactly what the section exists to surface. Sharing a filename with
+/// a file the resolver is already editing is the one relationship a path alone
+/// can carry, so those lead and the rest follow in git's own order.
+fn aimed_first<'a>(conflict_files: &[String], base_moves: &'a [String]) -> Vec<&'a str> {
+    fn file_name(path: &str) -> &str {
+        path.rsplit('/').next().unwrap_or(path)
+    }
+    let conflicted: std::collections::HashSet<&str> =
+        conflict_files.iter().map(|f| file_name(f)).collect();
+    let aims_at_a_conflict = |line: &str| {
+        line.split_whitespace()
+            .any(|field| conflicted.contains(file_name(field)))
+    };
+    let (aimed, rest): (Vec<&str>, Vec<&str>) = base_moves
+        .iter()
+        .map(String::as_str)
+        .partition(|line| aims_at_a_conflict(line));
+    aimed.into_iter().chain(rest).collect()
+}
+
+/// How many base-side moves the prompt is willing to spend context on before it
+/// hands the resolver the command instead. A hint that drowns the conflict it
+/// was meant to aim at is worse than no hint, and the tail is reachable in one
+/// call by an agent that has a reason to want it.
+const RESOLVER_BASE_MOVE_CAP: usize = 40;
+
+/// Build the prompt for the conflict-resolution agent.
+///
+/// The scope clause is bounded by what the merge broke, not by what git could
+/// not merge. Git reports the files it failed to reconcile *textually*, and
+/// that list is not the set a resolution has to be correct over: a file only
+/// one side touched merges silently and can still call a signature the other
+/// side changed. A resolver told to touch nothing else did exactly as asked,
+/// and the merge commit it produced turned every check on the pull request
+/// red. So the bound is the merge's own damage — the same bound the `git add
+/// -A` in [`run_resolver_turn`] already stages to — and it stays a bound
+/// rather than an opening because an agent invited to fix whatever it finds
+/// returns a refactor nobody merged.
 ///
 /// The verification line is the one that has to be exact. "Run the project's
 /// build / test suite" reads as a complete instruction and is not one: the
@@ -763,17 +877,46 @@ fn build_resolver_prompt(
     base_branch: &str,
     conflict_files: &[String],
     test_command: Option<&str>,
+    base_moves: &[String],
 ) -> String {
     let files_list = conflict_files
         .iter()
         .map(|f| format!("- {}", f))
         .collect::<Vec<_>>()
         .join("\n");
+    let merged_silently = if base_moves.is_empty() {
+        String::new()
+    } else {
+        let mut lines = aimed_first(conflict_files, base_moves)
+            .into_iter()
+            .take(RESOLVER_BASE_MOVE_CAP)
+            .map(|m| format!("- {}", m))
+            .collect::<Vec<_>>();
+        let rest = base_moves.len().saturating_sub(RESOLVER_BASE_MOVE_CAP);
+        if rest > 0 {
+            lines.push(format!(
+                "- …and {} more. Run `git diff --name-status -M --diff-filter=ADR \
+                 HEAD...MERGE_HEAD` for the full list.",
+                rest
+            ));
+        }
+        format!(
+            "origin/{base} also added, moved or deleted these files since this branch \
+             left it. Git merged them without asking, so they carry no markers — and \
+             they are where a resolution that only fixes the listed files goes wrong:\n\
+             {moves}\n\n",
+            base = base_branch,
+            moves = lines.join("\n"),
+        )
+    };
     let verification = match test_command.map(str::trim).filter(|c| !c.is_empty()) {
         Some(cmd) => format!(
             "- When done, verify with this project's own command, exactly as written: `{}`.\n\
              - Do NOT go looking for another command if that one does not work here — \
-             say so in your summary and stop.\n",
+             say so in your summary and stop.\n\
+             - Demeteo runs that same command itself before it commits anything. A tree \
+             that does not build is not a resolved conflict, so fix what it reports here \
+             rather than leaving it.\n",
             cmd
         ),
         None => String::new(),
@@ -782,17 +925,21 @@ fn build_resolver_prompt(
         "We just merged origin/{base} into {feature}. A merge conflict was detected.\n\
          Please resolve the conflicts in the following files:\n\
          {files}\n\n\
+         {merged_silently}\
          For each file:\n\
          - Read the conflict markers (<<<<<<<, =======, >>>>>>>).\n\
          - Integrate the changes from both sides correctly.\n\
          - Remove all conflict markers.\n\
-         - Do NOT modify any other file or any other part of the listed files.\n\
+         - Fix a file outside this list only where the merge itself broke it — a \
+         caller of a signature one side changed, a test the other side moved. Do \
+         not refactor, reformat, or fix anything the merge did not break.\n\
          {verification}\
          - Do NOT stage or commit — Demeteo validates, stages, and commits the resolution.\n\
          - Report back with a one-line summary when you're done.",
         base = base_branch,
         feature = feature_branch,
         files = files_list,
+        merged_silently = merged_silently,
         verification = verification,
     )
 }
