@@ -83,6 +83,14 @@ export function InterviewTranscript({
                 Its question block would not parse, so nothing was offered to pick from.
               </p>
             )}
+            {block.reseeded && (
+              <p
+                data-testid="transcript-reseeded"
+                className="mt-1.5 mb-0 px-1 font-mono text-[10px] text-amber-200/90"
+              >
+                The harness had forgotten this session, so the turn carried the whole transcript.
+              </p>
+            )}
           </div>
         );
       })}

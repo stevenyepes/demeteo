@@ -1271,7 +1271,22 @@ export interface DiscoveryMessage {
   content: string;
   cost_usd: number | null;
   tokens: number | null;
+  /** What the turn did, collected while it streamed. `null` on a user message
+   *  and on any turn stored before V49 — absent, never "it touched nothing". */
+  activity: TurnActivity | null;
   created_at: number;
+}
+
+/** Mirrors `TurnActivity` (V49). `commands` is a bounded sample of what `ran`
+ *  counts, stored as the agent issued them; the name a reader sees is derived
+ *  from it by `lib/discoveryActivity.ts`, so the live turn and the settled one
+ *  cannot name the same command differently. */
+export interface TurnActivity {
+  reads: number;
+  edits: number;
+  writes: number;
+  ran: number;
+  commands: readonly string[];
 }
 
 /** Mirrors `DiscoveryMessageView`, which `#[serde(flatten)]`s a

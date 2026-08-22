@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::action::ActionKind;
+use crate::domain::agent_event::AgentEvent;
 use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{DiscoveryId, MachineId, ProjectId};
 use crate::domain::models::EffortLevel;
@@ -102,7 +104,93 @@ pub struct DiscoveryMessage {
     pub cost_usd: Option<f64>,
     #[serde(default)]
     pub tokens: Option<i64>,
+    /// What the turn *did*, for the meta line under a settled bubble
+    /// (`docs/DISCOVERY_UI_SPEC.md` §3.4.3). `None` on a user message and on
+    /// any assistant turn stored before the column existed — which is why the
+    /// renderer must be able to say nothing rather than say zero.
+    #[serde(default)]
+    pub activity: Option<TurnActivity>,
     pub created_at: i64,
+}
+
+/// What one turn did, small enough to live on the message row.
+///
+/// Counts and a bounded sample of commands, never a ledger: the live surface
+/// keeps the full sequence for as long as the turn is on screen, and the point
+/// of persisting anything is that a bubble the user scrolls back to reads the
+/// same as it did while it streamed. A per-tool-call table would answer
+/// questions nothing asks and would grow without bound on a turn that greps in
+/// a loop.
+///
+/// The commands are stored as the agent issued them, first line only. Turning
+/// one into the name a human reads (`git log`) is a rendering decision and is
+/// made once, on the surface, so the live turn and the settled one cannot
+/// disagree about it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnActivity {
+    #[serde(default)]
+    pub reads: u32,
+    #[serde(default)]
+    pub edits: u32,
+    #[serde(default)]
+    pub writes: u32,
+    /// Every command the turn ran, including the ones past [`TurnActivity::MAX_COMMANDS`]
+    /// that `commands` does not name — so a surface can say how much it is not showing.
+    #[serde(default)]
+    pub ran: u32,
+    #[serde(default)]
+    pub commands: Vec<String>,
+}
+
+impl TurnActivity {
+    /// How many distinct commands are kept. Six fits the meta line; past that
+    /// the count carries the rest.
+    pub const MAX_COMMANDS: usize = 6;
+    /// Enough for a command plus its flags. A `run_bash` target can be a whole
+    /// script — the parser hands over the literal `command` input — and the
+    /// row is not where that belongs.
+    pub const MAX_COMMAND_CHARS: usize = 120;
+
+    /// Fold one streamed event in. Everything that is not a tool call is
+    /// ignored, including a call's later status: a command that failed was
+    /// still run, and a turn that reports six reads of which one errored is
+    /// describing the same work.
+    pub fn observe(&mut self, event: &AgentEvent) {
+        let AgentEvent::ToolCall { action, target, .. } = event else {
+            return;
+        };
+        match action {
+            ActionKind::Read => self.reads += 1,
+            ActionKind::Edit => self.edits += 1,
+            ActionKind::Write => self.writes += 1,
+            ActionKind::RunBash => {
+                self.ran += 1;
+                self.remember_command(target);
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.reads == 0 && self.edits == 0 && self.writes == 0 && self.ran == 0
+    }
+
+    fn remember_command(&mut self, target: &str) {
+        if self.commands.len() >= Self::MAX_COMMANDS {
+            return;
+        }
+        let sample: String = target
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .chars()
+            .take(Self::MAX_COMMAND_CHARS)
+            .collect();
+        if sample.is_empty() || self.commands.iter().any(|c| c == &sample) {
+            return;
+        }
+        self.commands.push(sample);
+    }
 }
 
 /// Who said it.
@@ -137,3 +225,7 @@ impl MessageRole {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/domain/models/discovery.rs"]
+mod tests;

@@ -1,4 +1,5 @@
 import type { DiscoveryMessageView, DiscoveryQuestion } from '../types';
+import { formatActivitySummary } from './discoveryActivity';
 import { formatCost, formatTokens } from './utils';
 
 /**
@@ -22,11 +23,16 @@ export interface TranscriptBubble {
   key: string;
   role: 'user' | 'assistant';
   text: string;
-  /** Spend beneath the bubble, `null` when the harness reported none —
-   *  distinct from `0`, which is a measurement. */
+  /** What the turn did and what it cost, beneath the bubble. `null` when
+   *  neither was recorded — distinct from `0`, which is a measurement. */
   meta: string | null;
   /** The turn carried a question block that would not parse. */
   questionError: string | null;
+  /** The harness had forgotten the session, so this turn carried the whole
+   *  transcript in its prompt. Rare, and only ever known from the completion
+   *  event — a turn read back from the database reports `false` because
+   *  nothing stored it, not because it was resumed. */
+  reseeded: boolean;
 }
 
 /** What settled a question: an option the user picked, or their own words. */
@@ -46,7 +52,19 @@ export interface TranscriptQuestion {
 
 export type TranscriptBlock = TranscriptBubble | TranscriptQuestion;
 
-export function buildTranscript(messages: DiscoveryMessageView[]): TranscriptBlock[] {
+const NONE: ReadonlySet<string> = new Set();
+
+/**
+ * `reseeded` names the assistant messages whose turn had to carry the
+ * transcript itself. It is a parameter rather than a field on the message
+ * because nothing persists it: the caller holds what it heard on
+ * `discovery_turn_completed` for as long as the workspace is open, and a turn
+ * from an earlier session simply says nothing on the subject.
+ */
+export function buildTranscript(
+  messages: DiscoveryMessageView[],
+  reseeded: ReadonlySet<string> = NONE,
+): TranscriptBlock[] {
   const blocks: TranscriptBlock[] = [];
 
   messages.forEach((message, index) => {
@@ -58,6 +76,7 @@ export function buildTranscript(messages: DiscoveryMessageView[]): TranscriptBlo
         text: message.content,
         meta: null,
         questionError: null,
+        reseeded: false,
       });
       return;
     }
@@ -69,8 +88,9 @@ export function buildTranscript(messages: DiscoveryMessageView[]): TranscriptBlo
         key: message.id,
         role: 'assistant',
         text: prose.length > 0 ? prose : message.content,
-        meta: spendMeta(message),
+        meta: turnMeta(message),
         questionError: message.question_error,
+        reseeded: reseeded.has(message.id),
       });
     }
 
@@ -136,8 +156,19 @@ function answerAfter(
   return null;
 }
 
-function spendMeta(message: DiscoveryMessageView): string | null {
+/**
+ * What the turn did and what it cost (`DISCOVERY_UI_SPEC.md` §3.4.3), rendered
+ * by the same formatter the live bubble uses, so a bubble does not change what
+ * it says the moment it settles.
+ *
+ * Every part is omitted rather than zeroed when it was never recorded: a turn
+ * stored before the activity column existed reads as a turn nothing is known
+ * about, not as one that touched no files.
+ */
+function turnMeta(message: DiscoveryMessageView): string | null {
   const parts: string[] = [];
+  const activity = formatActivitySummary(message.activity ?? null);
+  if (activity !== null) parts.push(activity);
   if (message.tokens !== null) parts.push(`${formatTokens(message.tokens)} tokens`);
   if (message.cost_usd !== null) parts.push(formatCost(message.cost_usd));
   return parts.length > 0 ? parts.join(' · ') : null;

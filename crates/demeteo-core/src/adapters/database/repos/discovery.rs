@@ -7,7 +7,7 @@ use rusqlite::params;
 use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{DiscoveryId, ProjectId};
 use crate::domain::models::{
-    Discovery, DiscoveryMessage, DiscoveryStatus, EffortLevel, MessageRole,
+    Discovery, DiscoveryMessage, DiscoveryStatus, EffortLevel, MessageRole, TurnActivity,
 };
 use crate::ports::discovery::{DiscoveryListRow, DiscoveryPatch, DiscoveryPort};
 
@@ -17,7 +17,8 @@ const COLUMNS: &str = "id, project_id, title, status, machine_id, agent_kind, mo
      resume_session_id, worktree_path, attachments_json, total_cost, tokens, created_at,
      updated_at";
 
-const MESSAGE_COLUMNS: &str = "id, discovery_id, role, content, cost_usd, tokens, created_at";
+const MESSAGE_COLUMNS: &str =
+    "id, discovery_id, role, content, cost_usd, tokens, activity_json, created_at";
 
 fn encode_attachments(attachments: &[AttachedFile]) -> Result<String, String> {
     serde_json::to_string(attachments).map_err(|e| e.to_string())
@@ -69,8 +70,17 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<DiscoveryMessage> {
         content: row.get(3)?,
         cost_usd: row.get(4)?,
         tokens: row.get(5)?,
-        created_at: row.get(6)?,
+        activity: decode_activity(row.get(6)?),
+        created_at: row.get(7)?,
     })
+}
+
+/// A summary this build cannot read is read as no summary at all — the same
+/// terms as [`decode_attachments`], and for the same reason: the meta line can
+/// say nothing, and must never say zero.
+fn decode_activity(raw: Option<String>) -> Option<TurnActivity> {
+    raw.as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
 }
 
 impl DiscoveryPort for SqliteAdapter {
@@ -198,7 +208,7 @@ impl DiscoveryPort for SqliteAdapter {
         conn.execute(
             &format!(
                 "INSERT OR REPLACE INTO discovery_messages ({MESSAGE_COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
             ),
             params![
                 message.id,
@@ -207,6 +217,10 @@ impl DiscoveryPort for SqliteAdapter {
                 message.content,
                 message.cost_usd,
                 message.tokens,
+                message
+                    .activity
+                    .as_ref()
+                    .and_then(|a| serde_json::to_string(a).ok()),
                 message.created_at,
             ],
         )

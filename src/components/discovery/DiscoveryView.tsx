@@ -72,13 +72,17 @@ export function DiscoveryView({
   const [sending, setSending] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ title: string; detail: string } | null>(null);
+  // Which settled turns had to carry the transcript themselves. Only the
+  // completion event knows, and nothing stores it, so this is what the
+  // workspace heard while it was open and never a claim about older turns.
+  const [reseeded, setReseeded] = useState<ReadonlySet<string>>(() => new Set());
   const [machineName, setMachineName] = useState<string | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowWithSteps[]>([]);
   const [proposal, setProposal] = useState<DecomposeProposal | null>(null);
   const [decomposing, setDecomposing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const { store, reset } = useDiscoveryStream();
+  const { store, begin, end } = useDiscoveryStream();
 
   const refresh = useCallback(async () => {
     const [detailResult, boardResult] = await Promise.allSettled([
@@ -134,10 +138,10 @@ export function DiscoveryView({
     ({ discovery_id, status, reason }) => {
       if (discovery_id !== discoveryId) return;
       setPending(status === 'running');
-      if (status === 'running') reset(discoveryId);
+      if (status === 'running') begin(discoveryId);
       if (status === 'error' && reason) setActionError(reason);
     },
-    [discoveryId, reset],
+    [discoveryId, begin],
   );
 
   useTauriEvent<DiscoveryTurnCompletedPayload>(
@@ -145,7 +149,11 @@ export function DiscoveryView({
     (payload) => {
       if (payload.discovery_id !== discoveryId) return;
       setPending(false);
-      reset(discoveryId);
+      end(discoveryId);
+      if (payload.reseeded && payload.message_id !== null) {
+        const id = payload.message_id;
+        setReseeded((current) => new Set(current).add(id));
+      }
       void refresh();
       if (payload.ending === 'success') {
         setToast({
@@ -156,14 +164,14 @@ export function DiscoveryView({
         setActionError(payload.reason);
       }
     },
-    [discoveryId, refresh, reset],
+    [discoveryId, refresh, end],
   );
 
   const tickets = useMemo(() => board?.tickets ?? [], [board]);
   const index = useMemo(() => indexTickets(tickets), [tickets]);
   const blocks = useMemo(
-    () => buildTranscript(detail?.messages ?? []),
-    [detail?.messages],
+    () => buildTranscript(detail?.messages ?? [], reseeded),
+    [detail?.messages, reseeded],
   );
 
   useEffect(() => {
@@ -173,6 +181,10 @@ export function DiscoveryView({
 
   async function send(text: string) {
     setActionError(null);
+    // From the click, not from the `running` status a round trip later: the
+    // bubble mounts on `sending` and would otherwise count from zero once the
+    // backend answered.
+    begin(discoveryId);
     setSending(true);
     try {
       const stored = await sendDiscoveryTurn(discoveryId, text);

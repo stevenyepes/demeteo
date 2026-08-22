@@ -486,8 +486,19 @@ font-size:10px; color:#475569`, Fira Code — e.g.
 vertical-align:-2px; animation: blink 1s steps(1) infinite` where
 `@keyframes blink { 0%,50% {opacity:1} 50.01%,100% {opacity:0} }`.
 Mock streaming text: **`Reading crates/demeteo-runner/src/auth.rs`**.
-Meta beneath, verbatim:
-**`streaming · one-shot turn, resumed from the stored transcript`**
+
+**As built, the mock's meta line beneath is not carried over.** It read
+`streaming · one-shot turn, resumed from the stored transcript`, and as a
+constant it claimed a resume on every turn including the first, where there was
+no session to resume. What actually happened is known only when the turn ends
+(`DiscoveryTurnCompleted.reseeded`) and is rare, so it is reported there, on the
+settled bubble, and nothing is claimed while the turn streams.
+
+In its place the streaming bubble carries an activity strip *inside* it: the
+call in flight in human words with its icon, a ticking elapsed time, and the
+same summary the settled meta line renders. The mock's `Reading …` is that
+strip rather than mock prose — a reasoning turn emits no text for minutes, so
+the indicator has to stand without one.
 
 The seeded transcript, verbatim (use as fixtures):
 

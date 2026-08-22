@@ -37,6 +37,7 @@ function assistant(
     content: prose,
     cost_usd: null,
     tokens: null,
+    activity: null,
     created_at: 0,
     prose,
     question,
@@ -53,6 +54,7 @@ function user(id: string, content: string): DiscoveryMessageView {
     content,
     cost_usd: null,
     tokens: null,
+    activity: null,
     created_at: 0,
     prose: content,
     question: null,
@@ -127,5 +129,55 @@ describe('nothingLeftToSettle', () => {
         assistant('m3', 'Then here is a question.', QUESTION, false),
       ]),
     ).toBe(false);
+  });
+});
+
+// The meta line under a settled bubble is the only record a user gets of what
+// a turn did once it stops streaming. It has to omit what was never measured
+// rather than report it as zero, and it must never claim a re-seed happened.
+describe('the meta line under a settled turn', () => {
+  function spent(message: DiscoveryMessageView): DiscoveryMessageView {
+    return { ...message, cost_usd: 0.31, tokens: 12400 };
+  }
+
+  function bubble(blocks: ReturnType<typeof buildTranscript>, key: string) {
+    const block = blocks.find((b) => b.kind === 'bubble' && b.key === key);
+    if (block === undefined || block.kind !== 'bubble') throw new Error(`no bubble ${key}`);
+    return block;
+  }
+
+  it('says what the turn did beside what it cost', () => {
+    const turn = {
+      ...spent(assistant('m1', 'Here is what I found.')),
+      activity: { reads: 6, edits: 0, writes: 0, ran: 2, commands: ['git log -20', 'rg auth'] },
+    };
+    expect(bubble(buildTranscript([turn]), 'm1').meta).toBe(
+      '6 reads · ran 2 commands (git log, rg) · 12.4k tokens · $0.310',
+    );
+  });
+
+  it('omits the activity entirely for a turn stored before it was collected', () => {
+    const turn = spent(assistant('m1', 'Here is what I found.'));
+    expect(turn.activity).toBeNull();
+    expect(bubble(buildTranscript([turn]), 'm1').meta).toBe('12.4k tokens · $0.310');
+  });
+
+  it('says nothing at all about a turn nothing was recorded for', () => {
+    expect(bubble(buildTranscript([assistant('m1', 'Hello.')]), 'm1').meta).toBeNull();
+  });
+
+  it('reports a re-seed only for the turn that was told of one', () => {
+    const blocks = buildTranscript(
+      [assistant('m1', 'First.'), user('m2', 'Go on.'), assistant('m3', 'Second.')],
+      new Set(['m3']),
+    );
+    expect(bubble(blocks, 'm1').reseeded).toBe(false);
+    expect(bubble(blocks, 'm2').reseeded).toBe(false);
+    expect(bubble(blocks, 'm3').reseeded).toBe(true);
+  });
+
+  it('claims no re-seed when nothing said one happened', () => {
+    const blocks = buildTranscript([assistant('m1', 'First.')]);
+    expect(bubble(blocks, 'm1').reseeded).toBe(false);
   });
 });

@@ -273,6 +273,16 @@ fn a_projects_discoveries_list_most_recent_first() {
     assert_eq!(ids, vec!["d-2".to_string(), "d-1".to_string()]);
 }
 
+fn assistant_activity() -> TurnActivity {
+    TurnActivity {
+        reads: 6,
+        edits: 0,
+        writes: 0,
+        ran: 9,
+        commands: vec!["git log --oneline".to_string(), "rg discovery".to_string()],
+    }
+}
+
 fn message(id: &str, role: MessageRole, at: i64) -> DiscoveryMessage {
     DiscoveryMessage {
         id: id.to_string(),
@@ -286,6 +296,10 @@ fn message(id: &str, role: MessageRole, at: i64) -> DiscoveryMessage {
         tokens: match role {
             MessageRole::User => None,
             MessageRole::Assistant => Some(2048),
+        },
+        activity: match role {
+            MessageRole::User => None,
+            MessageRole::Assistant => Some(assistant_activity()),
         },
         created_at: at,
     }
@@ -311,11 +325,31 @@ fn the_transcript_round_trips_in_order() {
     assert_eq!(log[0].content, "body of m-1");
     assert_eq!(log[0].cost_usd, None);
     assert_eq!(log[0].tokens, None);
+    assert_eq!(log[0].activity, None);
     assert_eq!(log[1].id, "m-2");
     assert_eq!(log[1].role, MessageRole::Assistant);
     assert_eq!(log[1].content, "body of m-2");
     assert_eq!(log[1].cost_usd, Some(0.75));
     assert_eq!(log[1].tokens, Some(2048));
+    assert_eq!(log[1].activity, Some(assistant_activity()));
+}
+
+/// A message written before V49 has no summary, and the row reads back saying
+/// so — never as a turn measured to have touched nothing.
+#[test]
+fn a_message_stored_before_the_column_reads_as_no_activity() {
+    let db = db();
+    db.create(&discovery()).unwrap();
+    db.append_message(&message("m-1", MessageRole::Assistant, 100))
+        .unwrap();
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute("UPDATE discovery_messages SET activity_json = NULL", [])
+            .unwrap();
+    }
+
+    let log = db.list_messages(&did()).unwrap();
+    assert_eq!(log[0].activity, None);
 }
 
 /// A status this build cannot name degrades to closed rather than panicking or

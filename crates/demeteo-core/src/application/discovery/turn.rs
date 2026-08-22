@@ -17,7 +17,9 @@ use crate::adapters::agent::event_stream::turn::{stream_agent_turn, TurnOutcome,
 use crate::domain::attachment::AttachedFile;
 use crate::domain::discovery_question::parse_interview_turn;
 use crate::domain::ids::DiscoveryId;
-use crate::domain::models::{Discovery, DiscoveryMessage, DiscoveryStatus, MessageRole};
+use crate::domain::models::{
+    Discovery, DiscoveryMessage, DiscoveryStatus, MessageRole, TurnActivity,
+};
 use crate::domain::permission::{Access, PermissionProfile};
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::discovery::DiscoveryPatch;
@@ -134,6 +136,7 @@ where
         content: text.clone(),
         cost_usd: None,
         tokens: None,
+        activity: None,
         created_at: now,
     };
     ctx.discoveries.append_message(&user_message)?;
@@ -314,7 +317,7 @@ where
     let mut resumed = p.session_was_live;
     let mut attempts = 0;
 
-    let (ending, reason, spent) = loop {
+    let (ending, reason, spent, activity) = loop {
         attempts += 1;
         let prompt = p.render_prompt(!resumed);
 
@@ -329,11 +332,15 @@ where
                     TurnEnding::Environmental,
                     Some(format!("Could not start {}: {e}", p.discovery.agent_kind)),
                     nothing_spent(),
+                    TurnActivity::default(),
                 );
             }
         };
 
         let sink = Sink::new(emit.clone(), p.discovery.id.as_str().to_string());
+        // Per attempt, not per turn: a discarded re-seed attempt's reads are
+        // not what the surviving turn did.
+        let mut activity = TurnActivity::default();
         let result = stream_agent_turn(
             session.as_ref(),
             &prompt,
@@ -343,7 +350,10 @@ where
             p.exec.as_ref(),
             p.pricing_model.clone(),
             p.pricing.clone(),
-            |event| sink.push(event),
+            |event| {
+                activity.observe(event);
+                sink.push(event);
+            },
         )
         .await;
         sink.flush();
@@ -358,11 +368,11 @@ where
             resumed = false;
             continue;
         }
-        break (ending, reason, spent);
+        break (ending, reason, spent, activity);
     };
 
     let parsed = parse_interview_turn(&spent.text);
-    let message_id = persist_assistant(&p, &spent, &parsed.prose);
+    let message_id = persist_assistant(&p, &spent, &parsed.prose, activity);
 
     emit(
         EVENT_DISCOVERY_TURN_COMPLETED,
@@ -456,7 +466,15 @@ pub(super) fn latch_resume_id(
 /// the transcript is what a re-seeded turn replays, so trimming it would hand
 /// the harness a record of a question it never asked. `prose` decides only
 /// whether there was anything to keep.
-fn persist_assistant(p: &Prepared, spent: &TurnOutcome, prose: &str) -> Option<String> {
+///
+/// `activity` is not replayed to the harness and never enters a prompt — it
+/// exists so the settled bubble reads the same as the live one did.
+fn persist_assistant(
+    p: &Prepared,
+    spent: &TurnOutcome,
+    prose: &str,
+    activity: TurnActivity,
+) -> Option<String> {
     if prose.trim().is_empty() && spent.text.trim().is_empty() {
         return None;
     }
@@ -467,6 +485,10 @@ fn persist_assistant(p: &Prepared, spent: &TurnOutcome, prose: &str) -> Option<S
         content: spent.text.clone(),
         cost_usd: Some(spent.cost_usd),
         tokens: Some(spent.tokens),
+        // A turn that used no tool stores nothing rather than a row of
+        // zeroes: the meta line has to be able to say nothing, and a zeroed
+        // summary is indistinguishable from one collected before V49.
+        activity: (!activity.is_empty()).then_some(activity),
         created_at: crate::paths::now_ms(),
     };
     match p.ctx_discoveries.append_message(&message) {

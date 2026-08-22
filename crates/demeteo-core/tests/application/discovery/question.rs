@@ -11,6 +11,7 @@ fn said(role: MessageRole, content: &str) -> DiscoveryMessage {
         content: content.to_string(),
         cost_usd: None,
         tokens: None,
+        activity: None,
         created_at: 0,
     }
 }

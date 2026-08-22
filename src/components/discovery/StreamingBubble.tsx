@@ -1,5 +1,7 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 
+import { useElapsed } from '../../hooks/useElapsed';
+import { TurnActivityStrip } from './TurnActivityStrip';
 import { useStreamedTurn, type DiscoveryStreamStore } from './useDiscoveryStream';
 
 interface StreamingBubbleProps {
@@ -13,22 +15,37 @@ interface StreamingBubbleProps {
  * The partial turn, and **the only subscriber to the stream**.
  *
  * It is mounted solely while a turn runs, which is what keeps the frame-rate
- * wake off the transcript and off the ticket graph one column over —
- * `FeatureDetail/StepInspector.tsx` records the same constraint for the run
- * surface, where a subscription one level up re-rendered every card in the
- * list on every chunk.
+ * wake — and the one-second elapsed tick — off the transcript and off the
+ * ticket graph one column over. `FeatureDetail/StepInspector.tsx` records the
+ * same constraint for the run surface, where a subscription one level up
+ * re-rendered every card in the list on every chunk.
+ *
+ * **There is no state in which this renders an empty bubble.** A turn that has
+ * said nothing and called nothing is the common case for a reasoning model,
+ * and the strip above the prose is what stands in for it.
+ *
+ * Nothing is claimed beneath the bubble. The line that used to sit there said
+ * the turn had been resumed from the stored transcript, on every turn
+ * including the first, where no session existed to resume — and a re-seed is
+ * a rare event a turn only learns about when it ends
+ * (`DiscoveryTurnCompleted.reseeded`), which is where the transcript now
+ * reports it.
  */
 export function StreamingBubble({
   store,
   discoveryId,
   scroller,
 }: StreamingBubbleProps): React.ReactElement {
-  const text = useStreamedTurn(store, discoveryId);
+  const turn = useStreamedTurn(store, discoveryId);
+  // A turn already running when this mounted has no start this surface saw;
+  // the mount is the earliest instant it can honestly count from.
+  const mountedAt = useRef(Date.now());
+  const elapsed = useElapsed(turn.startedAt === 0 ? mountedAt.current : turn.startedAt);
 
   useEffect(() => {
     const element = scroller.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [text, scroller]);
+  }, [turn.text, scroller]);
 
   return (
     <div className="flex flex-col items-start" data-testid="streaming-bubble">
@@ -40,12 +57,10 @@ export function StreamingBubble({
           />
           Interviewer
         </div>
-        {text}
+        <TurnActivityStrip turn={turn} elapsedMs={elapsed} />
+        {turn.text}
         <span aria-hidden="true" className="stream-caret" />
       </div>
-      <p className="mt-1.5 mb-0 px-1 font-mono text-[10px] text-slate-600">
-        streaming · one-shot turn, resumed from the stored transcript
-      </p>
     </div>
   );
 }

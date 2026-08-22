@@ -1,0 +1,19 @@
+-- What an interview turn did, beside what it cost (docs/DISCOVERY_UI_SPEC.md
+-- §3.4.3).
+--
+-- The live bubble already shows the turn reading and running as it happens,
+-- off the `ToolCall` events on the wire; those events are not stored anywhere,
+-- so a bubble the user scrolls back to an hour later could only ever have
+-- shown the tokens and the dollars. This column is the difference between the
+-- two, and it is deliberately a summary rather than a ledger: counts plus a
+-- bounded sample of commands, which is everything the meta line renders and
+-- nothing more.
+--
+-- A JSON column on the message row, as `discoveries.attachments_json` (V48)
+-- is, and for the same reason — it is only ever read as a whole, for one
+-- message.
+--
+-- Nullable with no default: NULL reads as *absent*, never as a turn that did
+-- nothing. Every V47 message predates the collector, so a zeroed default
+-- would have every stored turn claiming it touched no files.
+ALTER TABLE discovery_messages ADD COLUMN activity_json TEXT;

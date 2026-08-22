@@ -205,6 +205,7 @@ describe('the turn count, across both surfaces', () => {
       content: 'Two clients, one runner.',
       cost_usd: null,
       tokens: null,
+      activity: null,
       created_at: 0,
       prose: 'Two clients, one runner.',
       question: null,
@@ -218,6 +219,7 @@ describe('the turn count, across both surfaces', () => {
       content: 'How should a client prove who it is?',
       cost_usd: 0.1,
       tokens: 100,
+      activity: null,
       created_at: 1,
       prose: 'Before anything else:',
       // The turn that makes the two counts diverge: prose *and* a question

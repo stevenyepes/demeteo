@@ -289,8 +289,8 @@ export const EVENT_DISCOVERY_TURN_COMPLETED = "discovery_turn_completed";
  *
  * `event` is the Rust `AgentEvent`, an enum serde-tagged by `kind` and wide
  * enough that mirroring the whole of it here would be a second copy to keep in
- * step for the sake of the one variant this surface reads. It stays `unknown`
- * behind {@link isTextDelta}.
+ * step for the sake of the three variants this surface reads. It stays
+ * `unknown` behind the guards in `lib/discoveryActivity.ts`.
  */
 export interface DiscoveryAgentEventPayload {
   discovery_id: string;
@@ -320,9 +320,3 @@ export interface DiscoveryTurnCompletedPayload {
   nothing_left_to_settle: boolean;
 }
 
-/** The one `AgentEvent` variant the transcript renders while a turn streams. */
-export function isTextDelta(event: unknown): event is { kind: "text"; delta: string } {
-  if (typeof event !== "object" || event === null) return false;
-  const candidate = event as { kind?: unknown; delta?: unknown };
-  return candidate.kind === "text" && typeof candidate.delta === "string";
-}
