@@ -143,9 +143,11 @@ that is first-class rather than a fallback. The PRD describes only prose turns,
 so this is the gap between them, closed here.
 
 A turn's output is prose **plus an optional question block**, extracted from the
-turn text with the tolerant extractor the sequence step already uses for its
-task list (`extract_task_plan`, `domain/sequence/tasks.rs`) — bare JSON, a
-fenced block, or the first balanced object. This buys the §5.2 property for
+turn text with the same tolerant scanner the sequence step reads its task list
+through (`find_json_block`, `domain/json_block.rs`) — bare JSON, a fenced
+block, or a balanced object in the prose, taking the **last** candidate that
+both parses and is accepted. Last rather than first because a turn carrying two
+is one that illustrated the shape before declaring it. This buys the §5.2 property for
 free: the shape is validated while the agent is still in context, so a
 malformed question is a re-ask rather than a render of nothing.
 

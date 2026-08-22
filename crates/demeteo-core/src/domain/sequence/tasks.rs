@@ -505,96 +505,20 @@ pub(crate) fn apply_landed_checkpoint(mut plan: TaskPlan, landed_ids: &[String])
 /// path (where `text` is the literal contents of `artifacts/task-list.json`,
 /// which *should* be bare JSON but which an agent may still have wrapped in
 /// a fence or preceded with prose) and the legacy planner path (where `text`
-/// is a whole agent turn). Tries, in order: a ```json fence, any fence, then
-/// the first balanced top-level `{...}`. Returns the first object that
-/// deserializes as a [`TaskPlan`].
+/// is a whole agent turn). Which shapes are searched, and which candidate
+/// wins when a turn carries more than one, is
+/// [`find_json_block`](crate::domain::json_block::find_json_block)'s.
+///
+/// Every candidate that deserializes is accepted, and that is load-bearing:
+/// `tasks` carries no `#[serde(default)]`, so an object that is not a task
+/// list cannot parse as one, while a list that is genuinely empty parses and
+/// has to keep doing so. `load_task_list_artifact`
+/// (`adapters/step_executor/steps/sequence/plan.rs`) tells "the producer
+/// wrote no tickets, and here is its stated reason" apart from "nothing here
+/// was readable", and a predicate judging a plan by its contents would hand
+/// it the second answer for the first situation.
 pub(crate) fn extract_task_plan(text: &str) -> Option<TaskPlan> {
-    // 0) The happy path for a task-list artifact: the whole thing is JSON.
-    if let Ok(d) = serde_json::from_str::<TaskPlan>(text.trim()) {
-        return Some(d);
-    }
-    // 1) ```json ... ``` fence
-    if let Some(start) = text.find("```json") {
-        let after = &text[start + 7..];
-        if let Some(end) = after.find("```") {
-            let body = after[..end].trim();
-            if let Ok(d) = serde_json::from_str::<TaskPlan>(body) {
-                return Some(d);
-            }
-        }
-    }
-    // 2) Generic ``` ... ``` fence (any language tag)
-    if let Some(start) = text.find("```") {
-        let after = &text[start + 3..];
-        // skip optional language tag on the same line
-        let after = if let Some(nl) = after.find('\n') {
-            &after[nl + 1..]
-        } else {
-            after
-        };
-        if let Some(end) = after.find("```") {
-            let body = after[..end].trim();
-            if let Ok(d) = serde_json::from_str::<TaskPlan>(body) {
-                return Some(d);
-            }
-        }
-    }
-    // 3) Top-level JSON object (find balanced braces)
-    if let Some((start, end)) = find_top_level_object(text) {
-        if let Ok(d) = serde_json::from_str::<TaskPlan>(&text[start..end]) {
-            return Some(d);
-        }
-    }
-    None
-}
-
-/// Find the (start, end) indices of the first top-level `{...}` object in
-/// `s`. `end` is exclusive (i.e. one past the matching `}`).
-pub(crate) fn find_top_level_object(s: &str) -> Option<(usize, usize)> {
-    let bytes = s.as_bytes();
-    let mut in_str = false;
-    let mut escape = false;
-    let mut depth: i32 = 0;
-    let mut start: Option<usize> = None;
-    for (i, &b) in bytes.iter().enumerate() {
-        if escape {
-            escape = false;
-            continue;
-        }
-        if in_str {
-            if b == b'\\' {
-                escape = true;
-                continue;
-            }
-            if b == b'"' {
-                in_str = false;
-            }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b'{' => {
-                if depth == 0 {
-                    start = Some(i);
-                }
-                depth += 1;
-            }
-            b'}' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
-                if depth == 0 {
-                    if let Some(st) = start {
-                        if st < i {
-                            return Some((st, i + 1));
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+    crate::domain::json_block::find_json_block(text, |_: &TaskPlan| true).map(|(_, plan)| plan)
 }
 
 /// Commitlint's header limits, as `@commitlint/config-conventional` sets
