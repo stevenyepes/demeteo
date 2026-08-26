@@ -4,13 +4,14 @@ use super::*;
 use crate::domain::models::ConflictReport;
 use crate::ports::execution::{TIMEOUT_ERROR_PREFIX, TRANSPORT_ERROR_PREFIX};
 
-const EVERY_STAGE: [SyncBlockedStage; 9] = [
+const EVERY_STAGE: [SyncBlockedStage; 10] = [
     SyncBlockedStage::Fetch,
     SyncBlockedStage::BaseRefMissing,
     SyncBlockedStage::WorktreeProvision,
     SyncBlockedStage::Merge,
     SyncBlockedStage::Push,
     SyncBlockedStage::Verify,
+    SyncBlockedStage::FeatureDiverged,
     SyncBlockedStage::RepoContext,
     SyncBlockedStage::HeldResolution,
     SyncBlockedStage::TurnInFlight,
@@ -142,6 +143,7 @@ fn the_serialized_shape_is_the_wire_contract() {
             SyncBlockedStage::Merge => "merge",
             SyncBlockedStage::Push => "push",
             SyncBlockedStage::Verify => "verify",
+            SyncBlockedStage::FeatureDiverged => "feature_diverged",
             SyncBlockedStage::RepoContext => "repo_context",
             SyncBlockedStage::HeldResolution => "held_resolution",
             SyncBlockedStage::TurnInFlight => "turn_in_flight",
@@ -152,6 +154,12 @@ fn the_serialized_shape_is_the_wire_contract() {
                 raw_error: "nope".to_string(),
             }),
             format!(r#"{{"status":"blocked","stage":"{wire}","raw_error":"nope"}}"#)
+        );
+        assert_eq!(
+            stage.as_str(),
+            wire,
+            "the column and the payload are read back into the one TS union, so a \
+             stage cannot be spelled one way by serde and another by the column"
         );
     }
 
@@ -181,4 +189,20 @@ fn a_merge_that_never_answered_is_not_a_conflict() {
         None,
         "a non-zero exit is the only shape that reached a verdict"
     );
+}
+
+/// The other direction of the same spelling. `parse` answers `None` for
+/// anything it does not know, which is what makes a row from a newer build
+/// harmless — and what makes a stage this build *writes* and cannot read back
+/// indistinguishable from one, all the way to the pane's unnamed-block copy.
+#[test]
+fn every_stage_round_trips_through_the_column() {
+    for stage in EVERY_STAGE {
+        assert_eq!(
+            SyncBlockedStage::parse(stage.as_str()),
+            Some(stage),
+            "{stage:?} is written as `{}` and read back as nothing",
+            stage.as_str()
+        );
+    }
 }

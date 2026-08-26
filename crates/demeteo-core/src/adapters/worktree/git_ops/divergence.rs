@@ -1,4 +1,5 @@
 use super::git_request;
+use crate::domain::upstream_feature::FeatureUpstream;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::worktree_ops::BranchDivergence;
 
@@ -45,6 +46,42 @@ async fn count_range(
     .trim()
     .parse::<u64>()
     .ok()
+}
+
+/// Where `origin/<feature_branch>` stands relative to the local branch of the
+/// same name, or `None` when origin carries no such branch.
+///
+/// `None` is the first sync of every feature and says nothing is wrong: the
+/// branch was cut here and has never been pushed, so there is no upstream half
+/// to reconcile. It is deliberately not distinguished from an unreadable
+/// `rev-parse` — both leave the caller with no upstream to compare against, and
+/// the sync that follows behaves the same way in either case.
+///
+/// The counts are read against `refs/heads/<feature>` rather than `HEAD`: this
+/// runs before any worktree exists, and the shared checkout may be on anything.
+pub(crate) async fn feature_upstream(
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
+    repo_dir: &str,
+    feature_branch: &str,
+) -> Option<FeatureUpstream> {
+    let tracking = format!("origin/{feature_branch}");
+    exec.run_program(
+        machine_id,
+        git_request(repo_dir, ["rev-parse", "--verify", &tracking]),
+    )
+    .await
+    .ok()?;
+    Some(crate::domain::upstream_feature::reconcile(
+        count_divergence(
+            exec,
+            machine_id,
+            repo_dir,
+            &format!("refs/heads/{feature_branch}"),
+            &tracking,
+        )
+        .await,
+    ))
 }
 
 /// Bring `refs/remotes/origin/<base_branch>` up to date, answering whether it

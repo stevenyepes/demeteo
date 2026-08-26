@@ -57,6 +57,11 @@ pub enum SyncBlockedStage {
     /// so there is no `MERGE_HEAD`, no conflicted path, and nothing for the
     /// conflict resolver to open.
     Verify,
+    /// `origin/<feature>` and the local feature branch each carry commits the
+    /// other does not, so there was no state to merge the base *into*
+    /// ([`crate::domain::upstream_feature`]). The one stage that stops the sync
+    /// over the feature branch rather than over the base.
+    FeatureDiverged,
     /// The feature's project repository row could not be resolved, so no git
     /// command was ever issued.
     RepoContext,
@@ -84,6 +89,7 @@ impl SyncBlockedStage {
             Self::Merge => "merge",
             Self::Push => "push",
             Self::Verify => "verify",
+            Self::FeatureDiverged => "feature_diverged",
             Self::RepoContext => "repo_context",
             Self::HeldResolution => "held_resolution",
             Self::TurnInFlight => "turn_in_flight",
@@ -101,6 +107,7 @@ impl SyncBlockedStage {
             "merge" => Some(Self::Merge),
             "push" => Some(Self::Push),
             "verify" => Some(Self::Verify),
+            "feature_diverged" => Some(Self::FeatureDiverged),
             "repo_context" => Some(Self::RepoContext),
             "held_resolution" => Some(Self::HeldResolution),
             "turn_in_flight" => Some(Self::TurnInFlight),

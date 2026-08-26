@@ -1,5 +1,6 @@
 use super::{git_request, GitOpsHelper};
 use crate::domain::sync_failure::SyncBlockedStage;
+use crate::domain::upstream_feature::FeatureUpstream;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::worktree_ops::MergeGate;
 use crate::ports::worktree_ops::{SyncFailure, SyncOutcome, SyncWorktreeObserver};
@@ -250,6 +251,14 @@ impl GitOpsHelper {
     /// the only moment a caller keeping a durable row can learn it: every
     /// failure between here and the verdict returns without one, and an
     /// interrupted sync returns nothing at all.
+    ///
+    /// Both branches are refreshed from origin first, not only the base: the
+    /// local feature ref is fast-forwarded onto `origin/<feature>` where one
+    /// exists, and a divergence between them is refused rather than merged
+    /// ([`crate::domain::upstream_feature`] carries what the merge writes
+    /// without that). `head_before` is therefore the tip *after* that
+    /// fast-forward — the base of what this sync itself did, which is the only
+    /// range a review of it may use ([`SyncOutcome::head_before`]).
     pub async fn sync_feature_with_upstream(
         &self,
         machine_id: Option<&str>,
@@ -290,6 +299,22 @@ impl GitOpsHelper {
             });
         }
 
+        // The other half of the refresh, and the one that decides whether the
+        // branch being merged *into* is the whole branch
+        // ([`crate::domain::upstream_feature`]). Best-effort where the base
+        // fetch is fatal: a branch that has never been pushed is the first sync
+        // of every feature, and git answers that with the same non-zero exit as
+        // a real failure, so blocking on it would block every feature's first
+        // sync. What survives the swallow is the ref probe below, which reads
+        // whatever this did or did not update.
+        let _ = self
+            .exec
+            .run_program(
+                machine_str,
+                git_request(repo_dir, ["fetch", "origin", "--", feature_branch]),
+            )
+            .await;
+
         // 2. Verify `origin/<base>` exists locally. After a
         //    successful fetch this is guaranteed for any branch the
         //    remote actually has; if the run's base doesn't match a
@@ -319,7 +344,7 @@ impl GitOpsHelper {
 
         // 3. Refs-only ops (no checkout needed). Use `refs/heads/<feature>`
         //    directly instead of `HEAD` to avoid touching the shared checkout.
-        let head_before = self
+        let mut head_before = self
             .exec
             .run_program(machine_str, git_request(repo_dir, ["rev-parse", &feat_ref]))
             .await
@@ -346,6 +371,30 @@ impl GitOpsHelper {
             });
         }
 
+        // Reconcile the feature branch with its own upstream, so the base is
+        // merged into everything that branch holds rather than into whatever
+        // Demeteo last left in this clone.
+        let upstream =
+            super::divergence::feature_upstream(&*self.exec, machine_str, repo_dir, feature_branch)
+                .await;
+        if let Some(FeatureUpstream::Diverged { ahead, behind }) = upstream {
+            // Refused before a worktree exists, because a divergence is the one
+            // stage with nothing at risk in a tree: no merge was attempted, so
+            // there is nothing for the user to look at and nothing to reclaim.
+            return Err(SyncFailure::Blocked {
+                stage: SyncBlockedStage::FeatureDiverged,
+                raw_error: crate::domain::upstream_feature::diverged_refusal(
+                    feature_branch,
+                    base_branch,
+                    ahead,
+                    behind,
+                ),
+                worktree_path: None,
+                head_before,
+                merge_commit_sha: None,
+            });
+        }
+
         // Do the merge in a temporary worktree (not the main repo) so
         // concurrent features cannot race on the shared checkout.
         let wt_path = self
@@ -359,6 +408,53 @@ impl GitOpsHelper {
                 merge_commit_sha: None,
             })?;
         observer.provisioned(&wt_path);
+
+        // The fast-forward runs here, in the checkout, rather than as a
+        // `update-ref refs/heads/<feature>` in the clone: `provision_sync_worktree`
+        // answers `repo_dir` itself when the feature branch is already checked
+        // out there, and moving that ref out from under a checked-out tree
+        // leaves the index and the working tree describing a commit that is no
+        // longer HEAD. `git merge --ff-only` moves all three together wherever
+        // it runs, and refuses out loud when no fast-forward exists — which is
+        // the same divergence the counts above look for, read a second time
+        // from git itself and reached even when `rev-list` could not answer.
+        if upstream == Some(FeatureUpstream::FastForward) {
+            let feat_tracking = format!("origin/{}", feature_branch);
+            if let Err(e) = self
+                .exec
+                .run_program(
+                    machine_str,
+                    git_request(&wt_path, ["merge", "--ff-only", &feat_tracking]),
+                )
+                .await
+            {
+                return Err(SyncFailure::Blocked {
+                    stage: SyncBlockedStage::FeatureDiverged,
+                    raw_error: crate::domain::upstream_feature::unmergeable_refusal(
+                        feature_branch,
+                        base_branch,
+                        &e,
+                    ),
+                    worktree_path: Some(wt_path.clone()),
+                    head_before,
+                    merge_commit_sha: None,
+                });
+            }
+            // The tip read before the fast-forward is no longer a base this
+            // sync may be reviewed or undone against: `head_before..merge` would
+            // put origin's own commits inside the diff of what this sync did,
+            // and the `reset --hard head_before` behind Discard would rewind the
+            // branch past them. An unread tip is therefore `None` and not the
+            // stale value — a sync that offers no review is recoverable, one
+            // that offers the wrong one is acted on.
+            head_before = self
+                .exec
+                .run_program(machine_str, git_request(&wt_path, ["rev-parse", "HEAD"]))
+                .await
+                .ok()
+                .map(|s| s.trim().to_string());
+        }
+
         let merge_out = self
             .exec
             .run_program(
