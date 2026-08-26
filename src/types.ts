@@ -762,6 +762,7 @@ export type SyncBlockedStage =
   | 'merge'
   | 'push'
   | 'verify'
+  | 'feature_diverged'
   | 'repo_context'
   | 'held_resolution'
   | 'turn_in_flight';

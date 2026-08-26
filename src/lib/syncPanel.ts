@@ -68,6 +68,10 @@ export interface SyncPanelModel {
   body: string;
   /** git's own words, for a `<pre>`. */
   detail: string | null;
+  /** What wrote `detail`. A `verify` block stores the project's check harness
+   *  output, not git's, and the section over it said "What git said" — over a
+   *  transcript naming a command the user recognises as their own. */
+  detailTitle: string;
   conflictFiles: ConflictFile[];
   /** The harness picker belongs to a state that can actually spawn a resolver. */
   showResolver: boolean;
@@ -201,6 +205,7 @@ export function describeSyncPanel({ session, drift, canSync, pending }: SyncPane
   const base: PanelBase = {
     live: false,
     detail: null,
+    detailTitle: 'What git said',
     conflictFiles: [],
     showResolver: false,
     showTelemetry: false,
@@ -412,6 +417,14 @@ const BLOCKED_COPY: Record<SyncBlockedStage, { headline: string; body: string }>
     // resolve.
     body: 'The merge is clean and committed; the project\u2019s own checks then went red in it, so it was not pushed. Fix it on the branch and publish, or publish it anyway and let CI say the same thing.',
   },
+  feature_diverged: {
+    headline: 'This branch and origin have both moved',
+    // Says nothing about retrying. A retry counts the same two histories and
+    // refuses again, and the one move that clears it is a person deciding
+    // which of them the branch is — so the sentence has to be the git
+    // operation, not the button above it.
+    body: 'Origin has commits on this branch that this checkout does not, and this checkout has commits origin does not. Nothing was merged: the base would have gone onto a branch that is missing origin\u2019s work. Push or reset the branch to reconcile the two, then sync.',
+  },
   repo_context: {
     headline: 'This feature has no repository to sync',
     body: 'No git command was ever issued. The project\u2019s repository row could not be resolved.',
@@ -484,6 +497,7 @@ function blockedArm(
     headline: copy.headline,
     body: copy.body,
     detail: session.raw_error,
+    detailTitle: stage === 'verify' ? 'What the checks said' : base.detailTitle,
     actions: [...publish, ...retry, REFRESH, ...(mine ? [ABANDON] : [])],
     badge: 1,
   };

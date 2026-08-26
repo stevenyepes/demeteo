@@ -109,6 +109,25 @@ describe('describeSyncPanel', () => {
     expect(model.showResolver).toBe(false);
   });
 
+  /** The section over `detail` names git, and a `verify` block stores the
+   *  project's check harness saying so in its own words — a heading calling
+   *  that git's is the pane telling the user the wrong thing ran. */
+  it('names the harness, not git, over a transcript the harness wrote', () => {
+    const checks = panel({
+      session: session({ status: 'blocked', blocked_stage: 'verify' }),
+      drift: null,
+      canSync: true,
+    });
+    const push = panel({
+      session: session({ status: 'blocked', blocked_stage: 'push' }),
+      drift: null,
+      canSync: true,
+    });
+
+    expect(checks.detailTitle).not.toMatch(/git/i);
+    expect(push.detailTitle).toMatch(/git/i);
+  });
+
   /** The stage is on the row since V46, and the two ends of it want opposite
    *  things said. A `push` failure has already committed the merge onto the
    *  feature branch, so the reassurance the other stages carry is false for it
