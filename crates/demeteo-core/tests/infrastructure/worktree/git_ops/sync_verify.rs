@@ -39,15 +39,13 @@ async fn a_red_harness_withholds_the_push_and_says_which_command_went_red() {
     .await
     .expect("a harness that answered red withholds the push");
 
-    assert!(
-        refusal.contains("npm run checks:code"),
-        "the refusal has to name the command that failed, or the user cannot \
-         reproduce it: {refusal}"
-    );
-    assert!(
-        refusal.contains("E0063"),
-        "git's and the harness's own words are the half the session row cannot \
-         reconstruct: {refusal}"
+    assert_eq!(
+        refusal,
+        "The merge is committed on this branch and the project's checks failed in it, so it \
+         was not pushed.\n\n$ npm run checks:code\nCommand failed (exit code: Some(101)): \
+         error[E0063]: missing fields",
+        "the command that failed and what it said are what the user reproduces from, and \
+         nothing else holds them once the sync worktree is gone"
     );
 }
 
@@ -98,16 +96,42 @@ async fn a_harness_nobody_could_run_does_not_withhold_a_committed_merge() {
 /// The false red this gate would otherwise manufacture on every JS project: a
 /// sync worktree whose install failed reports a missing-module build error that
 /// is about the worktree, not about the merge.
+///
+/// A verdict of its own rather than the one a green harness answers, because
+/// the conflicted half decides more from it than "push" — it decides what to
+/// promise the resolver about a command that will not run.
 #[tokio::test]
-async fn a_failed_prepare_skips_the_gate_rather_than_blaming_the_merge() {
-    let exec = ScriptedExec::new(&[
+async fn a_failed_prepare_is_unprepared_not_a_pass() {
+    let script = [
         ("npm ci", Err("npm ERR! network ETIMEDOUT")),
         (
             "npm run checks:code",
             Err("Cannot find module 'react' — this must not be reached"),
         ),
-    ]);
+    ];
+    let exec = ScriptedExec::new(&script);
 
+    assert_eq!(
+        run_merge_gate(
+            &exec,
+            "local",
+            gate(Some("npm ci"), Some("npm run checks:code")),
+            opts(),
+            None,
+        )
+        .await,
+        GateVerdict::Unprepared {
+            error: "npm ERR! network ETIMEDOUT".to_string()
+        },
+    );
+    assert_eq!(
+        exec.commands(),
+        vec!["npm ci".to_string()],
+        "the harness must not run after a failed prepare: its verdict would be \
+         about the missing install"
+    );
+
+    let exec = ScriptedExec::new(&script);
     assert_eq!(
         merge_gate_refusal(
             &exec,
@@ -120,12 +144,51 @@ async fn a_failed_prepare_skips_the_gate_rather_than_blaming_the_merge() {
         "a worktree that could not be prepared cannot answer the question, and \
          'your merge is broken' is the wrong answer to that"
     );
-    assert_eq!(
-        exec.commands(),
-        vec!["npm ci".to_string()],
-        "the harness must not run after a failed prepare: its verdict would be \
-         about the missing install"
-    );
+}
+
+/// Three things reached one word, and a caller that *creates* a merge commit
+/// on the strength of it needs them apart: only one of them is a tree anybody
+/// looked at.
+#[tokio::test]
+async fn the_three_ways_nothing_withholds_a_push_are_three_verdicts() {
+    let cases = [
+        (
+            "no harness",
+            gate(Some("npm ci"), None),
+            [].as_slice(),
+            GateVerdict::NotGated,
+        ),
+        (
+            "green harness",
+            gate(None, Some("cargo test")),
+            [("cargo test", Ok("ok"))].as_slice(),
+            GateVerdict::Passed,
+        ),
+        (
+            "failed prepare",
+            gate(Some("npm ci"), Some("cargo test")),
+            [("npm ci", Err("ETIMEDOUT"))].as_slice(),
+            GateVerdict::Unprepared {
+                error: "ETIMEDOUT".to_string(),
+            },
+        ),
+    ];
+
+    for (what, g, script, expected) in cases {
+        let exec = ScriptedExec::new(script);
+        assert_eq!(
+            run_merge_gate(&exec, "local", g, opts(), None).await,
+            expected,
+            "{what}"
+        );
+
+        let exec = ScriptedExec::new(script);
+        assert_eq!(
+            merge_gate_refusal(&exec, "local", g, opts()).await,
+            None,
+            "{what} withholds nothing from a merge already on the branch"
+        );
+    }
 }
 
 #[tokio::test]
@@ -169,4 +232,72 @@ async fn the_gate_runs_in_the_merge_worktree_under_the_harness_shell() {
         .expect("the harness was invoked");
     assert_eq!(seen.cwd.as_deref(), Some(WT));
     assert!(seen.login_shell && seen.interactive);
+}
+
+/// Stop has to reach a build already running, and the only thing that stops one
+/// is dropping the future the adapter kills the process group on.
+///
+/// The double is scripted with nothing, so a gate that ran the harness anyway
+/// comes back `Failed` with "unscripted command" rather than reading as a pass.
+#[tokio::test]
+async fn a_stop_mid_gate_is_not_a_red_build() {
+    let exec = ScriptedExec::new(&[]);
+    let (_tx, rx) = tokio::sync::watch::channel(true);
+
+    assert_eq!(
+        run_merge_gate(
+            &exec,
+            "local",
+            gate(Some("npm ci"), Some("npm run checks:code")),
+            opts(),
+            Some(rx),
+        )
+        .await,
+        GateVerdict::Stopped,
+    );
+    assert!(
+        exec.commands().is_empty(),
+        "a stopped gate runs nothing: {:?}",
+        exec.commands()
+    );
+
+    let (_tx, rx) = tokio::sync::watch::channel(true);
+    assert_eq!(
+        run_gate_prepare(
+            &exec,
+            "local",
+            gate(Some("npm ci"), Some("npm run checks:code")),
+            opts(),
+            Some(rx),
+        )
+        .await,
+        GatePrepare::Stopped,
+        "the half the conflicted caller runs on its own answers it too"
+    );
+}
+
+/// The cancel race is wrapped around *both* commands, and prepare is the one a
+/// rewrite can drop silently: nothing downstream of it reports that it ran.
+#[tokio::test]
+async fn the_prepare_command_still_runs_under_the_cancel_race() {
+    let exec = ScriptedExec::new(&[
+        ("npm ci", Ok("added 900 packages")),
+        ("npm run checks:code", Ok("all checks passed")),
+    ]);
+
+    assert_eq!(
+        run_merge_gate(
+            &exec,
+            "local",
+            gate(Some("npm ci"), Some("npm run checks:code")),
+            opts(),
+            None,
+        )
+        .await,
+        GateVerdict::Passed,
+    );
+    assert_eq!(
+        exec.commands(),
+        vec!["npm ci".to_string(), "npm run checks:code".to_string()],
+    );
 }

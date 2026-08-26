@@ -215,7 +215,7 @@ impl ExecutionDriver {
                 feature_branch,
                 base_branch,
                 conflict_files: &conflict_paths,
-                test_command: settings.worktree_strategy.test_command.as_deref(),
+                gate: crate::adapters::step_executor::sync::sync_gate(settings),
                 step_exec,
                 thread_id_prefix: "sync-step-resolver",
                 agent_kind: &chosen.agent_kind,

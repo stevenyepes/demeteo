@@ -142,7 +142,7 @@ impl ExecutionDriver {
             .collect::<Vec<_>>()
             .join("\n");
         // The verification sentence names the project's own command for the
-        // reason `sync_resolve::build_resolver_prompt` spells out: "make sure
+        // reason `sync_resolve::prompt::build_resolver_prompt` spells out: "make sure
         // all code builds and passes tests" leaves the agent to find the
         // command first, and every guess is a turn against a budget.
         let verification = match self.base_ctx.get("test_command").trim() {

@@ -48,8 +48,32 @@ pub(crate) enum Answer {
 
 /// Run `command` and classify what came back.
 pub(crate) async fn ask(exec: &dyn ExecutionPort, machine: &str, command: &str) -> Answer {
+    classify(exec.run_command(machine, command).await)
+}
+
+/// [`ask`], with a deadline — an expired one is [`Answer::Unreadable`] like any
+/// other non-verdict.
+///
+/// [`ask`] has no timeout at all, which is only safe for a probe whose caller
+/// is holding nothing open: over SSH an unbounded read waits as long as the
+/// transport stays silent. A probe issued while a step holds an agent process,
+/// a lock or a channel takes this one instead.
+pub(crate) async fn ask_within(
+    exec: &dyn ExecutionPort,
+    machine: &str,
+    command: &str,
+    within: std::time::Duration,
+) -> Answer {
+    let opts = ShellOptions {
+        timeout: Some(within),
+        ..ShellOptions::default()
+    };
+    classify(exec.run_command_with(machine, command, opts).await)
+}
+
+fn classify(result: Result<String, String>) -> Answer {
     use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
-    match exec.run_command(machine, command).await {
+    match result {
         Ok(out) => Answer::Said(out),
         Err(e) => match classify_exec_failure(&e) {
             HarnessExecFailure::NonZeroExit => Answer::Refused,

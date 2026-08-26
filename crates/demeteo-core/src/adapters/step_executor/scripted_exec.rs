@@ -33,6 +33,10 @@ pub(crate) struct ScriptedExec {
     files: HashMap<String, Result<String, String>>,
     programs: HashMap<String, Result<String, String>>,
     dirs: HashSet<String>,
+    /// Watches to trip as a command is issued, which is the one shape a
+    /// scripted *answer* cannot produce: a stop that arrives while a command
+    /// is already in flight.
+    stops: HashMap<String, tokio::sync::watch::Sender<bool>>,
     seen: Mutex<Vec<(String, ShellOptions)>>,
     seen_programs: Mutex<Vec<String>>,
     /// Both of the above, interleaved in the order they actually happened.
@@ -80,6 +84,7 @@ impl ScriptedExec {
             files: HashMap::new(),
             programs: HashMap::new(),
             dirs: HashSet::new(),
+            stops: HashMap::new(),
             seen: Mutex::new(Vec::new()),
             seen_programs: Mutex::new(Vec::new()),
             seen_all: Mutex::new(Vec::new()),
@@ -107,6 +112,17 @@ impl ScriptedExec {
     /// argv. An unscripted program still errors.
     pub(crate) fn with_programs(mut self, programs: &[(&str, Result<&str, &str>)]) -> Self {
         self.programs = script(programs);
+        self
+    }
+
+    /// Send `true` on `tx` when `cmd` is issued, before answering it.
+    ///
+    /// The yield below is load-bearing rather than tidiness:
+    /// [`run_harness_command`](crate::adapters::step_executor::harness_shell::run_harness_command)
+    /// races the run future against the watch, and a future that is `Ready` on
+    /// its first poll is never raced at all.
+    pub(crate) fn with_stop_on(mut self, cmd: &str, tx: tokio::sync::watch::Sender<bool>) -> Self {
+        self.stops.insert(cmd.to_string(), tx);
         self
     }
 
@@ -141,6 +157,7 @@ impl ScriptedExec {
             files: self.files,
             programs: self.programs,
             dirs: self.dirs,
+            stops: self.stops,
             seen: self.seen,
             seen_programs: self.seen_programs,
             seen_all: self.seen_all,
@@ -202,6 +219,10 @@ impl ExecutionPort for ScriptedExec {
     ) -> Result<String, String> {
         self.seen.lock().unwrap().push((cmd.to_string(), o));
         self.seen_all.lock().unwrap().push(cmd.to_string());
+        if let Some(tx) = self.stops.get(cmd) {
+            let _ = tx.send(true);
+            tokio::task::yield_now().await;
+        }
         if let Some(queue) = self.queued.lock().unwrap().get_mut(cmd) {
             return queue
                 .pop()
