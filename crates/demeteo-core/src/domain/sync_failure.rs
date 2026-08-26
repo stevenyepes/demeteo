@@ -129,21 +129,27 @@ pub fn merge_failure_stage(err: &str) -> Option<SyncBlockedStage> {
     }
 }
 
-/// Whether a red harness over a cleanly merged tree withholds the push, and at
-/// which stage.
+/// Whether a red harness over a merged tree withholds it, and at which stage.
+///
+/// Both halves of a sync ask this one function, and it is one function on
+/// purpose: a clean merge and a resolved conflict reach the same pull request,
+/// so a project whose two halves gated on different terms would be answering
+/// one question twice. Only what each half withholds differs — the clean half
+/// a push from a merge already committed, the conflicted half the commit
+/// itself — and that belongs to the callers, not here.
 ///
 /// [`merge_failure_stage`]'s question, asked one stage later and answered by
 /// the same rule: only a non-zero exit is a verdict. A harness the transport
 /// cut short or the deadline abandoned never ran, and a build that never ran
-/// is not a red build — so it may not withhold a merge that is already
-/// committed on the branch. The two mistakes are not the same size. Pushing an
-/// unverified merge leaves the pull request exactly where a sync without this
-/// gate would have left it; withholding one on a dropped connection strands a
-/// real merge locally and tells the user their branch is broken on the strength
-/// of nothing.
+/// is not a red build. The two mistakes are not the same size. Letting an
+/// unverified merge through leaves the pull request exactly where a sync
+/// without this gate would have left it; withholding one on a dropped
+/// connection strands a real merge locally and tells the user their branch is
+/// broken on the strength of nothing.
 ///
-/// `None` therefore means "push it", for both of the reasons a caller can have:
-/// the harness passed, or nobody is in a position to say it did not.
+/// `None` therefore means "let it through", for both of the reasons a caller
+/// can have: the harness passed, or nobody is in a position to say it did
+/// not.
 pub fn verify_failure_stage(err: &str) -> Option<SyncBlockedStage> {
     use crate::domain::harness_failure::HarnessExecFailure;
 

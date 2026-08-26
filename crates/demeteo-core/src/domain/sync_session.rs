@@ -433,6 +433,114 @@ pub fn resolution_refusal(turn_stop: Option<&str>, tree_refusal: &str) -> String
     }
 }
 
+/// Why the tree the resolver left may not be committed, given what running
+/// `command` in it said.
+///
+/// The sibling of [`resolution_refusal`], one input over: that one folds the
+/// *turn's* ending into the tree's verdict, this one folds the *harness's*.
+/// `None` where
+/// [`verify_failure_stage`](crate::domain::sync_failure::verify_failure_stage)
+/// finds no verdict about the tree in `error`.
+pub fn resolution_verification_refusal(command: &str, error: &str) -> Option<String> {
+    crate::domain::sync_failure::verify_failure_stage(error)?;
+    Some(format!(
+        "The conflicts were resolved but the project's checks failed in the merged \
+         tree, so it was not committed.\n\n$ {}\n{}",
+        command,
+        gate_output_excerpt(error)
+    ))
+}
+
+/// How many turns a red gate is worth before the resolution is refused.
+///
+/// One: a resolver that could not make the tree build with the compiler's own
+/// output in front of it will not on a third read, and every round is another
+/// full harness run.
+pub const RESOLVER_REPAIR_ROUNDS: u32 = 1;
+
+/// What a red gate earns.
+#[derive(Debug, PartialEq)]
+pub enum GateFollowUp {
+    /// Another turn, carrying the harness's own words. Already bounded by
+    /// [`gate_output_excerpt`].
+    Repair { excerpt: String },
+    /// The refusal the user reads. No further turn will improve it.
+    Refuse(String),
+    /// Nothing was learned about the tree, so nothing withholds the
+    /// resolution.
+    LandUnverified,
+}
+
+/// What to do about checks that came back red, `rounds_spent` repairs in.
+///
+/// [`resolution_verification_refusal`] is addressed to a human, and the
+/// caller's retry ladder cannot act on it: every attempt rebuilds its
+/// resolution prompt from the tree, carrying no trace of what the checks said,
+/// so the next one no-ops and the ladder burns to its budget at one harness
+/// run each. So the words are spent on the agent first, in the tree they are
+/// still about, and only a second red goes to the user.
+pub fn gate_follow_up(command: &str, error: &str, rounds_spent: u32) -> GateFollowUp {
+    let Some(refusal) = resolution_verification_refusal(command, error) else {
+        return GateFollowUp::LandUnverified;
+    };
+    if rounds_spent < RESOLVER_REPAIR_ROUNDS {
+        GateFollowUp::Repair {
+            excerpt: gate_output_excerpt(error),
+        }
+    } else {
+        GateFollowUp::Refuse(refusal)
+    }
+}
+
+const GATE_OUTPUT_HEAD_BYTES: usize = 12_000;
+const GATE_OUTPUT_TAIL_BYTES: usize = 2_000;
+
+/// The first errors and the last summary line, which is the whole of what a
+/// reader — human or agent — acts on.
+///
+/// A `cargo` or `tsc` run answers in megabytes. Every byte of it reaches
+/// SQLite through
+/// [`SyncSessionPatch::from_resolution`](crate::ports::sync_session::SyncSessionPatch::from_resolution)
+/// and, on a repair round, a context window. Head-weighted because the first
+/// errors are the cause and the rest are consequences; the tail survives
+/// because the last line of a cargo/npm/pytest run is the count. Cut on line
+/// boundaries, since half a diagnostic reads as a different diagnostic.
+pub fn gate_output_excerpt(error: &str) -> String {
+    fn boundary_at_or_below(s: &str, mut i: usize) -> usize {
+        while i > 0 && !s.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
+    }
+    fn boundary_at_or_above(s: &str, mut i: usize) -> usize {
+        while i < s.len() && !s.is_char_boundary(i) {
+            i += 1;
+        }
+        i
+    }
+
+    if error.len() <= GATE_OUTPUT_HEAD_BYTES + GATE_OUTPUT_TAIL_BYTES {
+        return error.to_string();
+    }
+    let bytes = error.as_bytes();
+    let head_end = bytes[..GATE_OUTPUT_HEAD_BYTES]
+        .iter()
+        .rposition(|b| *b == b'\n')
+        .unwrap_or_else(|| boundary_at_or_below(error, GATE_OUTPUT_HEAD_BYTES));
+    let from = error.len() - GATE_OUTPUT_TAIL_BYTES;
+    let tail_start = bytes[from..]
+        .iter()
+        .position(|b| *b == b'\n')
+        .map(|at| from + at + 1)
+        .unwrap_or_else(|| boundary_at_or_above(error, from));
+    format!(
+        "{}\n… {} bytes elided — re-run the command in the sync worktree for the rest …\n{}",
+        &error[..head_end],
+        tail_start - head_end,
+        &error[tail_start..],
+    )
+}
+
 /// Whether anything is still running this feature's sync, as an observation
 /// rather than something inferred from the row.
 ///

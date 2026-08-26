@@ -153,6 +153,20 @@ async function ready() {
   await waitFor(() => expect(screen.getByTestId('lint-status')).toBeInTheDocument());
 }
 
+/** Fire a ⌘-shortcut at the builder's `document`-level key listener.
+ *
+ *  The listener is registered by an effect, so it trails the commit a
+ *  `findBy`/`waitFor` just observed by one scheduler task, and RTL's settle
+ *  window (`setTimeout(0)`) is not ordered against React's (`MessageChannel`)
+ *  — under load it loses. Firing straight after an `await` then reaches the
+ *  *previous* render's closure: with an error finding already on screen and
+ *  Save already disabled, ⌘S saved anyway. Drain effects, then fire.
+ */
+async function shortcut(target: Document | HTMLElement, init: KeyboardEventInit) {
+  await act(async () => {});
+  fireEvent.keyDown(target, init);
+}
+
 beforeAll(() => {
   // React Flow needs a handful of browser APIs jsdom lacks — same set the
   // P2.1 canvas test stubs.
@@ -315,8 +329,9 @@ describe('save gating', () => {
     expect(screen.getByRole('button', { name: /^Save$/ })).toBeDisabled();
 
     // The shortcut bypasses the disabled button, so it must refuse loudly.
-    fireEvent.keyDown(document, { key: 's', metaKey: true });
-    await waitFor(() => expect(warn).toHaveBeenCalled());
+    // The refusal is synchronous — `save` reports before its first `await`.
+    await shortcut(document, { key: 's', metaKey: true });
+    expect(warn).toHaveBeenCalled();
     expect(onSave).not.toHaveBeenCalled();
     expect(warn.mock.calls.some((c) => String(c[0]).includes('Cannot save'))).toBe(true);
     warn.mockRestore();
@@ -354,11 +369,11 @@ describe('undo / redo', () => {
     fireEvent.click(screen.getByRole('option', { name: /Sync/ }));
     await waitFor(() => expect(nodeCount()).toBe(DEF.nodes.length + 1));
 
-    fireEvent.keyDown(document, { key: 'z', metaKey: true });
+    await shortcut(document, { key: 'z', metaKey: true });
     await waitFor(() => expect(nodeCount()).toBe(DEF.nodes.length));
     expect(screen.queryByTestId('dirty-indicator')).not.toBeInTheDocument();
 
-    fireEvent.keyDown(document, { key: 'z', metaKey: true, shiftKey: true });
+    await shortcut(document, { key: 'z', metaKey: true, shiftKey: true });
     await waitFor(() => expect(nodeCount()).toBe(DEF.nodes.length + 1));
   });
 
@@ -368,7 +383,7 @@ describe('undo / redo', () => {
     fireEvent.click(screen.getByRole('option', { name: /Sync/ }));
     await waitFor(() => expect(nodeCount()).toBe(DEF.nodes.length + 1));
 
-    fireEvent.keyDown(screen.getByLabelText('Workflow name'), { key: 'z', metaKey: true });
+    await shortcut(screen.getByLabelText('Workflow name'), { key: 'z', metaKey: true });
     // The graph edit is untouched: the browser's own undo owns that keystroke.
     expect(nodeCount()).toBe(DEF.nodes.length + 1);
   });
