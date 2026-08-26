@@ -117,6 +117,29 @@ describe('SyncPanel', () => {
     expect(screen.queryByRole('combobox', { name: /harness/i })).toBeNull();
   });
 
+  /** A sync blocked at `verify` stores the project's entire check run, and the
+   *  pane used to render the first screen of it — warnings, not the verdict. */
+  it('keeps the verdict on screen when the harness wrote thousands of lines', () => {
+    const verdict = 'error: could not compile `demeteo-core` (lib) due to 4 previous errors';
+    mount({
+      session: session({
+        status: 'blocked',
+        blocked_stage: 'verify',
+        merge_commit_sha: 'c0ffeec2222',
+        raw_error: [
+          '$ npm run checks:code',
+          ...Array.from({ length: 2000 }, (_, i) => `Found ${i + 1} warnings.`),
+          verdict,
+        ].join('\n'),
+      }),
+    });
+
+    const shown = screen.getByTestId('sync-raw-error').textContent ?? '';
+    expect(shown).toContain('$ npm run checks:code');
+    expect(shown).toContain(verdict);
+    expect(screen.getByTestId('sync-raw-error-toggle')).toBeInTheDocument();
+  });
+
   it('lists the unmerged paths, git’s words and the resolver on a conflict', () => {
     mount();
 

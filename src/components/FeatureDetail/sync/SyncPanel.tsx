@@ -22,6 +22,7 @@ import { ActionRow } from '../../ui/ActionRow';
 import { SyncResolverOptions } from '../SyncResolverOptions';
 import type { SyncResolverSelection } from '../useSyncResolverOverrides';
 import { ConflictFileList } from './ConflictFileList';
+import { SyncRawOutput } from './SyncRawOutput';
 
 /**
  * Everything one feature branch's sync is doing, in one pane.
@@ -137,13 +138,8 @@ export function SyncPanel({
         ) : null}
 
         {model.detail && (
-          <Section title="What git said">
-            <pre
-              data-testid="sync-raw-error"
-              className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-white/5 bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-slate-300"
-            >
-              {model.detail}
-            </pre>
+          <Section title={model.detailTitle}>
+            <SyncRawOutput text={model.detail} />
           </Section>
         )}
 
