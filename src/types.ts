@@ -762,6 +762,7 @@ export type SyncBlockedStage =
   | 'merge'
   | 'push'
   | 'verify'
+  | 'feature_diverged'
   | 'repo_context'
   | 'held_resolution'
   | 'turn_in_flight';
@@ -788,6 +789,31 @@ export interface FeatureDrift {
    *  whenever that ref last moved rather than as of now. */
   fetched: boolean;
   checked_at: number;
+}
+
+/**
+ * What may be done about a feature branch that has diverged from
+ * `origin/<feature>` — the question the two counts cannot answer, because two
+ * commits ahead of a branch that already carries their changes and two commits
+ * ahead of one that does not are the same pair of numbers.
+ *
+ * The wire form of `domain::upstream_feature::DivergenceMove`, read off `git
+ * cherry`. `refuse` is the non-answer — a partial rewrite, or a read that could
+ * not be made — and it is a value rather than an absence because "we looked and
+ * cannot say" is the fact that withholds the reset.
+ */
+export type DivergenceMove = 'merge_origin' | 'reset_onto_origin' | 'refuse';
+
+/** The half of `DivergenceMove` that names something a person can press. */
+export type DivergenceReconcile = Exclude<DivergenceMove, 'refuse'>;
+
+/** Return shape for `feature_divergence`. */
+export interface FeatureDivergence {
+  /** Commits this checkout has that `origin/<feature>` does not. */
+  ahead: number;
+  /** Commits `origin/<feature>` has that this checkout does not. */
+  behind: number;
+  next_move: DivergenceMove;
 }
 
 /** Return shape for `feature_sync` and `feature_resolve_sync_conflicts`. */

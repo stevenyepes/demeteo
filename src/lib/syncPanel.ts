@@ -19,7 +19,14 @@
  * chip and this pane would come to disagree about the same branch.
  */
 
-import type { ConflictFile, FeatureDrift, SyncBlockedStage, SyncSessionView } from '../types';
+import type {
+  ConflictFile,
+  DivergenceMove,
+  FeatureDivergence,
+  FeatureDrift,
+  SyncBlockedStage,
+  SyncSessionView,
+} from '../types';
 import type { RunStatusTone } from './runStatus';
 import { describeStaleness } from './staleness';
 
@@ -36,6 +43,12 @@ export type SyncPanelState =
   | 'published'
   | 'resolution_failed';
 
+/**
+ * The two reconciles are two intents and not one carrying a move, because the
+ * intent is what a row is keyed, labelled and disabled by and what `pending`
+ * names: one value shared by both presses puts "Merging…" on the button that
+ * resets.
+ */
 export type SyncIntent =
   | 'sync'
   | 'resolve'
@@ -44,7 +57,9 @@ export type SyncIntent =
   | 'publish'
   | 'discard'
   | 'refresh'
-  | 'watch';
+  | 'watch'
+  | 'reconcile'
+  | 'reset_onto_origin';
 
 /** Tones an action row may take. A subset of `RunStatusTone`: `slate` is what
  *  an inert row looks like, and nothing offering a press is inert. */
@@ -68,6 +83,10 @@ export interface SyncPanelModel {
   body: string;
   /** git's own words, for a `<pre>`. */
   detail: string | null;
+  /** What wrote `detail`. A `verify` block stores the project's check harness
+   *  output, not git's, and the section over it said "What git said" — over a
+   *  transcript naming a command the user recognises as their own. */
+  detailTitle: string;
   conflictFiles: ConflictFile[];
   /** The harness picker belongs to a state that can actually spawn a resolver. */
   showResolver: boolean;
@@ -84,6 +103,16 @@ export interface SyncPanelModel {
 export interface SyncPanelInput {
   session: SyncSessionView | null;
   drift: FeatureDrift | null;
+  /**
+   * What the branch and `origin/<feature>` each hold that the other does not,
+   * for a sync that stopped on the divergence, or `null`.
+   *
+   * The second input that is not the row, and for the same reason as `pending`
+   * (`DivergenceMove` in `src/types.ts`). It is read rather than parsed out of
+   * `raw_error` — both refusals are one `blocked_stage`, and telling them apart
+   * by their English is a pane deciding a git question from prose.
+   */
+  divergence: FeatureDivergence | null;
   /** Whether a sync may be started at all: a run still committing to this
    *  branch would be merging into its own working tree. */
   canSync: boolean;
@@ -197,10 +226,17 @@ const WATCH: SyncAction = {
  * the row still reads `conflicted` while a step owns it is exactly what it
  * closes.
  */
-export function describeSyncPanel({ session, drift, canSync, pending }: SyncPanelInput): SyncPanelModel {
+export function describeSyncPanel({
+  session,
+  drift,
+  divergence,
+  canSync,
+  pending,
+}: SyncPanelInput): SyncPanelModel {
   const base: PanelBase = {
     live: false,
     detail: null,
+    detailTitle: 'What git said',
     conflictFiles: [],
     showResolver: false,
     showTelemetry: false,
@@ -231,7 +267,7 @@ export function describeSyncPanel({ session, drift, canSync, pending }: SyncPane
       return syncingArm(base, baseBranch, branch);
 
     case 'blocked':
-      return blockedArm(base, session, canSync, mine);
+      return blockedArm(base, session, divergence, canSync, mine);
 
     case 'conflicted':
       return {
@@ -412,6 +448,16 @@ const BLOCKED_COPY: Record<SyncBlockedStage, { headline: string; body: string }>
     // resolve.
     body: 'The merge is clean and committed; the project\u2019s own checks then went red in it, so it was not pushed. Fix it on the branch and publish, or publish it anyway and let CI say the same thing.',
   },
+  feature_diverged: {
+    headline: 'This branch and origin have both moved',
+    // The divergence `git cherry` could not settle: a partial rewrite, or a
+    // read that failed. It offers no retry — that counts the same two
+    // histories and refuses again — and no merge either, though a merge is
+    // what the classified divergences get: where the two sides are only half
+    // the same work, which history the branch is meant to be is a person's
+    // answer. `divergedCopy` has the two that were read.
+    body: 'Origin has commits on this branch that this checkout does not, and this checkout has commits origin does not. Nothing was merged: the base would have gone onto a branch that is missing origin\u2019s work. Push or reset the branch to reconcile the two, then sync.',
+  },
   repo_context: {
     headline: 'This feature has no repository to sync',
     body: 'No git command was ever issued. The project\u2019s repository row could not be resolved.',
@@ -461,14 +507,25 @@ const PUBLISH_BLOCKED: SyncAction = {
 function blockedArm(
   base: PanelBase,
   session: SyncSessionView,
+  divergence: FeatureDivergence | null,
   canSync: boolean,
   mine: boolean,
 ): SyncPanelModel {
   const stage = session.blocked_stage;
   const held = stage === 'push' || stage === 'verify';
-  const copy = stage === null ? UNNAMED_BLOCK : BLOCKED_COPY[stage];
+  const measured = measuredDivergence(stage, divergence);
+  const copy = measured === null ? blockedCopy(stage) : divergedCopy(measured);
+  const reconcile: SyncAction[] =
+    measured !== null && canSync && mine
+      ? reconcileActions(session.feature_branch, measured.next_move)
+      : [];
+  // No retry beside a reconcile: it is the one press that re-measures the same
+  // two histories and stops on the same sentence, and first in the list it
+  // reads as the recommended one.
   const retry: SyncAction[] =
-    !held && canSync ? [{ ...SYNC, label: 'Retry sync', tone: 'amber' as const }] : [];
+    !held && canSync && reconcile.length === 0
+      ? [{ ...SYNC, label: 'Retry sync', tone: 'amber' as const }]
+      : [];
   // A sha this row does not carry is the whole of what stands between Publish
   // and a press that cannot succeed: `publish` refuses without one, and the
   // confirmation it would otherwise run is `git merge-base --is-ancestor <sha>`,
@@ -484,9 +541,82 @@ function blockedArm(
     headline: copy.headline,
     body: copy.body,
     detail: session.raw_error,
-    actions: [...publish, ...retry, REFRESH, ...(mine ? [ABANDON] : [])],
+    detailTitle: stage === 'verify' ? 'What the checks said' : base.detailTitle,
+    actions: [...publish, ...reconcile, ...retry, REFRESH, ...(mine ? [ABANDON] : [])],
     badge: 1,
   };
+}
+
+function blockedCopy(stage: SyncBlockedStage | null): { headline: string; body: string } {
+  return stage === null ? UNNAMED_BLOCK : BLOCKED_COPY[stage];
+}
+
+/**
+ * The divergence this row is allowed to be read against, or `null`.
+ *
+ * Two guards, each closing a way the pane would speak for a measurement it does
+ * not have: a reading only ever describes the stage that stopped on it, and a
+ * `refuse` is `git cherry` saying it cannot tell — the same non-answer as no
+ * reading at all, and the arm that offers nothing.
+ */
+function measuredDivergence(
+  stage: SyncBlockedStage | null,
+  divergence: FeatureDivergence | null,
+): FeatureDivergence | null {
+  if (stage !== 'feature_diverged' || divergence === null) return null;
+  return divergence.next_move === 'refuse' ? null : divergence;
+}
+
+/**
+ * A divergence that was classified, which is a different thing to say than the
+ * refusal above it: both are the same `blocked_stage`, and what separates them
+ * is that `git cherry` could tell whether origin's side is other work or this
+ * checkout's own work rewritten.
+ */
+function divergedCopy(divergence: FeatureDivergence): { headline: string; body: string } {
+  const { ahead, behind } = divergence;
+  if (divergence.next_move === 'reset_onto_origin') {
+    return {
+      headline: 'Origin rewrote this branch',
+      body: `Origin has ${commits(behind)} this checkout does not, and every one of this checkout’s ${commits(ahead)} is already in them under a different sha — what a rebase, a squash or an amend somewhere else looks like from here. Nothing was merged. Resetting onto origin drops no changes, only the local commits that carry them; merging origin in keeps both histories.`,
+    };
+  }
+  return {
+    headline: 'Origin has work on this branch that this checkout has never had',
+    body: `Origin has ${commits(behind)} this checkout does not, and this checkout has ${commits(ahead)} origin does not — different work on each side, none of it the same change twice. Nothing was merged. Merging origin in loses neither side; sync again after it to bring the base branch in.`,
+  };
+}
+
+/**
+ * The presses a classified divergence earns, which is the merge always and the
+ * reset only where the rewrite was actually read.
+ *
+ * That asymmetry is the whole point of measuring: a merge cannot drop either
+ * side, so it needs no evidence about the other one, while the reset abandons
+ * the local commits and is offered only where `git cherry` proved origin
+ * already carries every change they make. Proving content is as far as it goes
+ * — whether those commits were meant to survive is not in the history — which
+ * is why the reset is ruby and a press rather than something a sync does.
+ */
+function reconcileActions(branch: string, move: DivergenceMove): SyncAction[] {
+  const merge: SyncAction = {
+    intent: 'reconcile',
+    label: 'Merge origin into this branch',
+    tone: 'violet',
+    title: `Merge origin/${branch} into ${branch}`,
+    desc: 'Writes a merge that keeps both sides. Nothing is dropped on either — sync again afterwards to bring the base branch in.',
+  };
+  if (move !== 'reset_onto_origin') return [merge];
+  return [
+    merge,
+    {
+      intent: 'reset_onto_origin',
+      label: 'Reset onto origin',
+      tone: 'ruby',
+      title: `Move ${branch} to origin/${branch}`,
+      desc: 'Moves the branch onto origin and abandons the local commits. Origin already carries their changes; what goes is the commits themselves.',
+    },
+  ];
 }
 
 /**
@@ -627,4 +757,8 @@ function missingHeadline(behind: number): string {
   return behind === 1
     ? '1 commit is missing from this branch'
     : `${behind} commits are missing from this branch`;
+}
+
+function commits(count: number): string {
+  return count === 1 ? '1 commit' : `${count} commits`;
 }

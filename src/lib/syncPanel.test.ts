@@ -16,7 +16,13 @@ import {
   type SyncPanelInput,
 } from './syncPanel';
 import { describeStaleness } from './staleness';
-import type { FeatureDrift, SyncSessionState, SyncSessionView } from '../types';
+import type {
+  DivergenceMove,
+  FeatureDivergence,
+  FeatureDrift,
+  SyncSessionState,
+  SyncSessionView,
+} from '../types';
 
 const session = (over: Partial<SyncSessionView> = {}): SyncSessionView => ({
   feature_id: 'f-1',
@@ -49,10 +55,31 @@ const drift = (behind: number | null, ahead: number | null = 2): FeatureDrift =>
   checked_at: 0,
 });
 
-/** `pending` defaults to "no call outstanding", which is the state every arm
- *  below is about; the two that read it say so. */
-const panel = (input: Omit<SyncPanelInput, 'pending'> & { pending?: SyncIntent | null }) =>
-  describeSyncPanel({ pending: null, ...input });
+/** A branch that stopped on a divergence, which is one `blocked_stage` for
+ *  both of the things that can be true of it. */
+const divergedSession = (over: Partial<SyncSessionView> = {}): SyncSessionView =>
+  session({
+    status: 'blocked',
+    blocked_stage: 'feature_diverged',
+    conflict_files: [],
+    raw_error: "'feature/f-1' has diverged from origin",
+    ...over,
+  });
+
+const measured = (
+  next_move: DivergenceMove,
+  counts: { ahead?: number; behind?: number } = {},
+): FeatureDivergence => ({ ahead: counts.ahead ?? 2, behind: counts.behind ?? 3, next_move });
+
+/** `pending` defaults to "no call outstanding" and `divergence` to a branch
+ *  nobody measured, which are the states every arm below is about; the ones
+ *  that read either say so. */
+const panel = (
+  input: Omit<SyncPanelInput, 'pending' | 'divergence'> & {
+    pending?: SyncIntent | null;
+    divergence?: FeatureDivergence | null;
+  },
+) => describeSyncPanel({ pending: null, divergence: null, ...input });
 
 const intents = (model: ReturnType<typeof describeSyncPanel>) =>
   model.actions.map((action) => action.intent);
@@ -107,6 +134,25 @@ describe('describeSyncPanel', () => {
     expect(intents(model)).toContain('sync');
     expect(intents(model)).not.toContain('resolve');
     expect(model.showResolver).toBe(false);
+  });
+
+  /** The section over `detail` names git, and a `verify` block stores the
+   *  project's check harness saying so in its own words — a heading calling
+   *  that git's is the pane telling the user the wrong thing ran. */
+  it('names the harness, not git, over a transcript the harness wrote', () => {
+    const checks = panel({
+      session: session({ status: 'blocked', blocked_stage: 'verify' }),
+      drift: null,
+      canSync: true,
+    });
+    const push = panel({
+      session: session({ status: 'blocked', blocked_stage: 'push' }),
+      drift: null,
+      canSync: true,
+    });
+
+    expect(checks.detailTitle).not.toMatch(/git/i);
+    expect(push.detailTitle).toMatch(/git/i);
   });
 
   /** The stage is on the row since V46, and the two ends of it want opposite
@@ -419,6 +465,105 @@ describe('describeSyncPanel', () => {
     expect(intents(model)).toEqual(['publish']);
   });
 
+  /**
+   * The two refusals are one `blocked_stage` and differ only in their prose, so
+   * what the pane offers is read from a measurement rather than sniffed out of
+   * git's English. This is the arm `git cherry` settled as a rewrite: origin
+   * carries every change the local commits make, so the reset drops no changes
+   * — and only the commits, which is a loss a person has to accept.
+   */
+  it('offers both moves on a branch origin rewrote, the destructive one in ruby', () => {
+    const model = panel({
+      session: divergedSession(),
+      drift: null,
+      divergence: measured('reset_onto_origin', { ahead: 2, behind: 3 }),
+      canSync: true,
+    });
+
+    expect(model.state).toBe('blocked');
+    expect(intents(model)).toEqual(['reconcile', 'reset_onto_origin', 'refresh', 'abort']);
+    expect(model.actions.find((action) => action.intent === 'reconcile')?.tone).toBe('violet');
+    expect(model.actions.find((action) => action.intent === 'reset_onto_origin')?.tone).toBe('ruby');
+    expect(model.headline).toMatch(/rewrote/i);
+    expect(model.body).toContain('3 commits');
+    expect(model.body).toContain('2 commits');
+  });
+
+  /** Disjoint work has no reset to offer: nothing has proved origin carries
+   *  these commits' changes, and the merge is the move that can lose neither
+   *  side. The counts are said in the pane's own words, not git's. */
+  it('offers only the merge where the two sides are different work', () => {
+    const model = panel({
+      session: divergedSession(),
+      drift: null,
+      divergence: measured('merge_origin', { ahead: 1, behind: 1 }),
+      canSync: true,
+    });
+
+    expect(intents(model)).toEqual(['reconcile', 'refresh', 'abort']);
+    expect(model.headline).toMatch(/never had/i);
+    expect(model.body).toContain('1 commit this checkout does not');
+    expect(model.body).not.toMatch(/1 commits/);
+  });
+
+  /** `refuse` is `git cherry` saying it cannot tell — a partial rewrite, or a
+   *  read that failed — and an absent measurement is the same non-answer. Both
+   *  keep the refusal that hands the decision back, retry included. */
+  it('keeps the standing refusal for a divergence nothing could classify', () => {
+    for (const divergence of [null, measured('refuse')]) {
+      const model = panel({
+        session: divergedSession(),
+        drift: null,
+        divergence,
+        canSync: true,
+      });
+
+      const said = `${divergence?.next_move ?? 'unread'}`;
+      expect(intents(model), said).toEqual(['sync', 'refresh', 'abort']);
+      expect(model.headline, said).toBe('This branch and origin have both moved');
+    }
+  });
+
+  /** A reading describes the two refs and nothing else, so it may only answer
+   *  the stage that stopped on them: a fetch that failed says nothing about
+   *  what this branch may do about origin. */
+  it('reconciles nothing on a block that is not the divergence', () => {
+    const model = panel({
+      session: session({ status: 'blocked', blocked_stage: 'fetch' }),
+      drift: null,
+      divergence: measured('reset_onto_origin'),
+      canSync: true,
+    });
+
+    expect(intents(model)).toEqual(['sync', 'refresh', 'abort']);
+    expect(model.headline).toMatch(/fetch/i);
+  });
+
+  /** Both presses move the branch, so both obey what the rest of the pane obeys
+   *  — the backend's ownership flag, and a run that is still committing here.
+   *  What was measured is a fact about the branch either way, so the copy
+   *  stays. */
+  it('offers no reconcile on a divergence that is not the user’s to move', () => {
+    const theirs = panel({
+      session: divergedSession({ user_may_intervene: false }),
+      drift: null,
+      divergence: measured('reset_onto_origin'),
+      canSync: true,
+    });
+    const running = panel({
+      session: divergedSession(),
+      drift: null,
+      divergence: measured('reset_onto_origin'),
+      canSync: false,
+    });
+
+    for (const model of [theirs, running]) {
+      expect(intents(model)).not.toContain('reconcile');
+      expect(intents(model)).not.toContain('reset_onto_origin');
+      expect(model.headline).toMatch(/rewrote/i);
+    }
+  });
+
   describe('a sync something else is driving', () => {
     const owned: SyncSessionState[] = ['conflicted', 'resolving', 'resolved', 'resolution_failed'];
 
@@ -445,7 +590,7 @@ describe('syncIntentMovesBranch', () => {
   /** The drift read is suspended while one of these is in flight. `refresh`
    *  *is* the read, and suspending on it superseded the fetch that press had
    *  just paid for, landing the cached count instead. */
-  it.each<SyncIntent>(['sync', 'resolve', 'abort', 'publish', 'discard'])(
+  it.each<SyncIntent>(['sync', 'resolve', 'abort', 'publish', 'discard', 'reconcile', 'reset_onto_origin'])(
     'suspends the count while %s is in flight',
     (intent) => {
       expect(syncIntentMovesBranch(intent)).toBe(true);
@@ -467,7 +612,16 @@ describe('isReadOnlySyncIntent', () => {
     expect(isReadOnlySyncIntent(intent)).toBe(true);
   });
 
-  it.each<SyncIntent>(['sync', 'resolve', 'abort', 'publish', 'discard', 'refresh'])(
+  it.each<SyncIntent>([
+    'sync',
+    'resolve',
+    'abort',
+    'publish',
+    'discard',
+    'refresh',
+    'reconcile',
+    'reset_onto_origin',
+  ])(
     'holds %s back while another call is out',
     (intent) => {
       expect(isReadOnlySyncIntent(intent)).toBe(false);

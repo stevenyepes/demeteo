@@ -1,8 +1,10 @@
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::models::{
-    EffortLevel, Feature, FeatureDrift, GateDecision, SequenceState, StepAttempt, StepExecution,
+    EffortLevel, Feature, FeatureDivergence, FeatureDrift, GateDecision, SequenceState,
+    StepAttempt, StepExecution,
 };
 use crate::domain::sync_resolver::SyncResolverChoice;
+use crate::domain::upstream_feature::DivergenceReconcile;
 use crate::error::AppError;
 use crate::ports::run_events::RunEvent;
 use crate::ports::step_executor::{FeatureLaunch, SyncOutcomeView, SyncResolverView};
@@ -395,6 +397,48 @@ pub async fn sync_discard(
     )
     .await
     .map_err(AppError::from)
+}
+
+/// Reconcile a feature branch that has diverged from `origin/<feature>`, the
+/// way the caller chose, and sync it.
+///
+/// The press behind a sync blocked at `feature_diverged`: `merge_origin` keeps
+/// both histories, `reset_onto_origin` abandons the local commits for origin's.
+/// Which of them is on offer is [`feature_divergence`]'s answer and not this
+/// call's — but the choice is re-measured against git before it is acted on, so
+/// a reset pressed on a pane that was rendered before someone else pushed is
+/// refused rather than performed.
+///
+/// Answers with the sync session, like the other presses on this pane: a
+/// reconcile that conflicts is an ordinary conflicted session, and what the
+/// user does next is read off the row either way.
+#[tauri::command]
+pub async fn sync_reconcile(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+    reconcile: DivergenceReconcile,
+) -> Result<Option<SyncSessionView>, AppError> {
+    ctx.executor
+        .feature_reconcile(&feature_id, reconcile)
+        .await
+        .map_err(AppError::from)
+}
+
+/// What the feature branch and `origin/<feature>` each hold that the other does
+/// not, and which reconcile that leaves open — `null` when they do not
+/// disagree.
+///
+/// A read of the two refs, not of the sync session
+/// ([`demeteo_core::domain::upstream_feature`]).
+#[tauri::command]
+pub async fn feature_divergence(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<Option<FeatureDivergence>, AppError> {
+    ctx.executor
+        .feature_divergence(&feature_id)
+        .await
+        .map_err(AppError::from)
 }
 
 /// Who a resolution would run under if the banner's picker is left alone.

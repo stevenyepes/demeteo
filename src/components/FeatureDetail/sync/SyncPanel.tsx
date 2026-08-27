@@ -6,6 +6,7 @@ import {
   GitMerge,
   RefreshCw,
   Radio,
+  RotateCcw,
   Trash2,
   Upload,
   XCircle,
@@ -22,6 +23,7 @@ import { ActionRow } from '../../ui/ActionRow';
 import { SyncResolverOptions } from '../SyncResolverOptions';
 import type { SyncResolverSelection } from '../useSyncResolverOverrides';
 import { ConflictFileList } from './ConflictFileList';
+import { SyncRawOutput } from './SyncRawOutput';
 
 /**
  * Everything one feature branch's sync is doing, in one pane.
@@ -68,6 +70,8 @@ const ACTION_ICON: Record<SyncIntent, ReactNode> = {
   discard: <Trash2 className="h-4 w-4" />,
   refresh: <RefreshCw className="h-4 w-4" />,
   watch: <Radio className="h-4 w-4" />,
+  reconcile: <GitMerge className="h-4 w-4" />,
+  reset_onto_origin: <RotateCcw className="h-4 w-4" />,
 };
 
 const PENDING_LABEL: Record<SyncIntent, string> = {
@@ -79,6 +83,8 @@ const PENDING_LABEL: Record<SyncIntent, string> = {
   discard: 'Discarding…',
   refresh: 'Counting…',
   watch: 'Opening…',
+  reconcile: 'Merging…',
+  reset_onto_origin: 'Resetting…',
 };
 
 export function SyncPanel({
@@ -137,13 +143,8 @@ export function SyncPanel({
         ) : null}
 
         {model.detail && (
-          <Section title="What git said">
-            <pre
-              data-testid="sync-raw-error"
-              className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-white/5 bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-slate-300"
-            >
-              {model.detail}
-            </pre>
+          <Section title={model.detailTitle}>
+            <SyncRawOutput text={model.detail} />
           </Section>
         )}
 

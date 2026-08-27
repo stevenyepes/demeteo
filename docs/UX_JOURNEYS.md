@@ -119,10 +119,22 @@ The application functions within a single unified shell (no multi-window popouts
 *Handling overlapping changes smartly.*
 - **Trigger:** A subtask merge back into `feature/<slug>` fails, or `feature_sync` against `origin/<default>` leaves conflicts.
 - **System Flow:** A conflicting *step* merge costs one automatic agent turn in the step's own worktree (`steps/conflict_pass`); only if that fails does the step fail. A conflicting *sync* surfaces the file list to the user, who triggers `feature_resolve_sync_conflicts` ("Resolve with agent") — it spawns a resolution agent, commits the fix, and replays the validation step. (The "Conflict Resolution Policy" project setting is currently decorative — nothing reads it; see decision 20's history.)
-- **UI State:** Conflict UX lives inside the existing `GateView` (no dedicated Monaco 3-way merge component ships in v1) — the file list is shown, the user can retry, abort, or hand-roll a manual edit via the in-app terminal.
+- **UI State:** No dedicated Monaco 3-way merge component ships in v1. A conflicting *step* merge is shown in `GateView`; a conflicting *sync* is shown in the Sync pane, whose arms Journey 10 walks. Either way the file list is shown and the user can retry, abort, or hand-roll a manual edit via the in-app terminal.
 - **Actions:** Approve (re-run after manual edit), Retry (re-spawn the auto-agent), Abort feature.
 
-### Journey 10: Workflow Authoring
+### Journey 10: Syncing a Feature Branch With Its Base
+*Bringing the base branch in, when the branch itself has also moved elsewhere.*
+- **Trigger:** "Sync" in the Sync pane (`sync/SyncPanel.tsx`, decided in `src/lib/syncPanel.ts`), or a workflow `sync` node reaching its turn.
+- **UI State:** the pane's own arms — `behind` → `syncing` → one of `up_to_date`, `conflicted`, `resolving`, `awaiting_review`, `blocked`. Every arm is read from the durable sync session row, so a navigation, a remount or a restart resumes where the user left off.
+- **System Flow:** both branches refresh from origin, not just the base. Where `origin/<feature>` holds commits this checkout does not, the branch is reconciled *before* the base is merged — level or ahead proceeds, behind fast-forwards, and a divergence is classified by patch equivalence (`git cherry`) instead of being refused on sight. Whatever the path, the project's own checks run in the merged tree and a red one withholds the push.
+- **Divergence, disjoint work:** origin's commits are work this checkout has never had. They are merged in, the base merge follows, and the pane finishes in `up_to_date` — the user is told a reconcile happened while it runs and needs to decide nothing, because nothing was at risk.
+- **Divergence, disjoint work, conflicted:** the pane goes `conflicted` naming *this branch's own* other side rather than the base, since the incoming commits are someone else's work on the same branch. From there it is Journey 9's path — resolve with an agent or by hand, review, publish. The base merge has not run at that point, so the pane comes back with the drift count intact and the ordinary Sync press finishes it.
+- **Divergence, origin rewrote this branch:** every local commit's patch is already upstream (a rebase, a squash, an amend elsewhere). The pane says so with the counts and offers two presses — reset onto origin, which loses no work, and merge origin in, which keeps both histories. The reset is human-only: patch equivalence proves content, never intent.
+- **Divergence, mixed or unmeasurable:** `blocked` at `feature_diverged` with git's own counts and no affordance, because only a person knows which history the branch is meant to be.
+- **Unattended runs:** a `sync` node takes the disjoint arm on its own and routes conflicts to the project's configured resolver; the two arms that would pick a history stop the step or park at a gate instead.
+- **Actions:** Sync · Reconcile (merge origin in) · Reset onto origin · Resolve with agent · Abort · Review · Publish · Discard — each offered only to a session no other turn is driving.
+
+### Journey 11: Workflow Authoring
 *Creating the templates that agents follow.*
 - **UI State:** `WorkflowCanvas` design mode. (Replaced the form-first `WorkflowEditor`, which was deleted — Decision 19 is superseded; see `DECISIONS.md` §2.)
 - **Content:** Visual DAG builder — palette driven by the node-type registry, connect-time validation, schema-driven config panel, live lint surface, dirty guard, undo/redo, templates and v2 import/export, read-only Monaco source tab (Decision 42).
@@ -139,7 +151,8 @@ Based on the journeys above, designers must deliver the following discrete scree
 4. **Project Home:** The main dashboard featuring the "Start a Feature" slim modal, active run status, and repository list.
 5. **Feature Detail (Orchestration View):** The step timeline showing step progress, cost/duration telemetry, subtask fan-outs, and the predecessor-running guard banner.
 6. **Gate View:** Full-screen takeover showing the planner's summary, diffs, and Approve/Redirect buttons (with predecessor-running guard).
-7. **Conflict UX (inside Gate View):** Conflict file list with retry / abort affordances. A dedicated Monaco 3-way merge editor is not in v1.
-8. **Workflow Editor:** The form-based UI for creating/editing workflow steps with version history.
-9. **Settings & Preferences:** Global settings (theme, memory agent, pricing tables) and Provider instances setup.
-10. **Machines & Agent Profiles:** Per-host agent configuration for legacy shell / custom-http agent kinds (ollama, openai, cli, custom_http).
+7. **Conflict UX:** Conflict file list with retry / abort affordances — inside Gate View for a step merge, inside the Sync pane for a sync. A dedicated Monaco 3-way merge editor is not in v1.
+8. **Sync Pane:** The drift count, the reconcile and divergence states of Journey 10, and the resolve / review / publish affordances that follow a conflicted sync.
+9. **Workflow Editor:** The form-based UI for creating/editing workflow steps with version history.
+10. **Settings & Preferences:** Global settings (theme, memory agent, pricing tables) and Provider instances setup.
+11. **Machines & Agent Profiles:** Per-host agent configuration for legacy shell / custom-http agent kinds (ollama, openai, cli, custom_http).

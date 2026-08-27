@@ -355,6 +355,107 @@ async fn a_sync_may_not_start_over_a_merge_that_never_reached_origin() {
     assert_eq!(after.merge_commit_sha.as_deref(), Some("c0ffeec"));
 }
 
+/// The press behind a sync that stopped on a divergence, over the branch only a
+/// person may settle: origin rewrote it, and the reset is taken because the
+/// caller asked for it and the measurement still says it drops nothing.
+///
+/// What this asserts past the git argv is the shape of the answer. A reconcile
+/// ends in a session row like every other sync, and the row is what the pane
+/// renders next — so the call has to hand back the row it just wrote, not the
+/// outcome the sync returned.
+#[tokio::test]
+async fn a_pressed_reset_reconciles_and_answers_with_the_session() {
+    let repo = repo_dir_of();
+    let wt = crate::paths::sync_worktree_dir(
+        &repo,
+        "feature/f-1",
+        crate::paths::targets_windows_host(crate::domain::ids::LOCAL_MACHINE),
+    );
+    let ok = |s: &str| Ok(s.to_string());
+    let mut run = full_run(&repo, &wt);
+    run.extend([
+        (format!("git -C {repo} fetch origin -- feature/f-1"), ok("")),
+        (
+            format!("git -C {repo} rev-parse --verify origin/feature/f-1"),
+            ok("beef2"),
+        ),
+        (
+            format!("git -C {repo} rev-list --count refs/heads/feature/f-1..origin/feature/f-1"),
+            ok("1"),
+        ),
+        (
+            format!("git -C {repo} rev-list --count origin/feature/f-1..refs/heads/feature/f-1"),
+            ok("2"),
+        ),
+        (
+            format!("git -C {repo} cherry origin/feature/f-1 refs/heads/feature/f-1"),
+            ok("- 1a2b3c\n- 4d5e6f"),
+        ),
+        (
+            format!("git -C {wt} reset --keep origin/feature/f-1"),
+            ok(""),
+        ),
+    ]);
+    let fx = executor_with_repo(&scripted(&run));
+
+    let view = fx
+        .executor
+        .reconcile_feature_with_origin(
+            &fid(),
+            "feature/f-1",
+            "master",
+            MergeGate::default(),
+            crate::domain::upstream_feature::DivergenceReconcile::ResetOntoOrigin,
+        )
+        .await
+        .expect("a reset the measurement supports is not a refusal")
+        .expect("a reconcile that ran opened a session");
+
+    assert_eq!(
+        view.session.head_before.as_deref(),
+        Some("d00dd00"),
+        "the row has to carry the reconciled tip and not the ref this sync found: a \
+         Discard against the latter rewinds the branch past origin's own commits"
+    );
+    assert!(
+        fx.exec
+            .programs()
+            .contains(&format!("git -C {wt} reset --keep origin/feature/f-1")),
+        "the press has to reach git: {:?}",
+        fx.exec.programs()
+    );
+}
+
+/// The two refusals that stop before the session is opened, over a call whose
+/// answer *is* the session. Handing back the row there would answer the press
+/// with whatever the last sync left on it — a blocked divergence, most often,
+/// which is the row the user pressed the button on.
+#[tokio::test]
+async fn a_reconcile_refused_before_the_row_exists_says_so_itself() {
+    let fx = executor_with_repo(&[]);
+    let held = fx.turns.claim("f-1", None).expect("the registry is empty");
+
+    let refusal = fx
+        .executor
+        .reconcile_feature_with_origin(
+            &fid(),
+            "feature/f-1",
+            "master",
+            MergeGate::default(),
+            crate::domain::upstream_feature::DivergenceReconcile::MergeOrigin,
+        )
+        .await
+        .expect_err("the slot is taken, and no row was written to answer with");
+    assert!(refusal.contains("already running"), "{refusal}");
+    assert!(
+        fx.exec.programs().is_empty(),
+        "no git may run against a tree another turn owns: {:?}",
+        fx.exec.programs()
+    );
+
+    drop(held);
+}
+
 /// The mutual exclusion the workflow's own `sync` node did not have.
 ///
 /// `provision_sync_worktree` sweeps every `_wt_sync` worktree checked out on

@@ -75,6 +75,7 @@ pub mod text;
 pub mod ticket_graph;
 pub mod ticket_plan;
 pub mod turn_role;
+pub mod upstream_feature;
 pub mod usage;
 pub mod verifier;
 pub mod workflow_graph;
