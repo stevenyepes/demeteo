@@ -136,7 +136,10 @@ npm run dev:tauri   # no console errors
 
 ### Opening the PR
 
-- Keep the title short (under 70 characters) and use the description for context
+- **Write the title as a conventional commit subject** — a squash merge lands it verbatim as the
+  commit on `master`, where the release bump is inferred from it, and the `Lint Commits` workflow
+  checks it on every PR. GitHub appends ` (#N)`, which counts against the 72-character subject
+  limit, so keep it under about 64 characters and use the description for context
 - Reference any related issue with `Closes #N`
 - If your change touches a Gate-policy area (migrations, Tauri capabilities, agent spawn logic, worktree merge), say so explicitly in the PR description
 - Every PR runs the [`PR Checks` workflow](.github/workflows/pr-checks.yml) — the same `scripts/checks.sh` as `npm run checks` above, so any failure you see inline on the PR reproduces locally.
