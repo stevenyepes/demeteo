@@ -58,6 +58,9 @@ const PRUNE: &str = "git -C /repos/demeteo worktree prune";
 /// The teardown's confirmation read: only an observed-gone tree lets the row
 /// stop naming the worktree.
 const GIT_DIR: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse --git-dir";
+/// Which tracking branch the open merge is pulling in, as the tree answers it.
+const POINTS_AT: &str =
+    "git -C /repos/demeteo_wt_sync_feature-f-1 branch --remotes --points-at MERGE_HEAD";
 /// What the base side did to the tree while this branch was away. Not a
 /// conflict list: these are the paths git merged without asking.
 const BASE_MOVES: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 diff --name-status -M \
@@ -555,6 +558,7 @@ fn happy_path_with(extra: &[(&str, Result<&str, &str>)]) -> ScriptedExec {
     let mut script = vec![
         (PORCELAIN, Ok("")),
         (MERGE_HEAD, Ok("b1b2b3b\n")),
+        (POINTS_AT, Ok("  origin/master\n")),
         (BASE_MOVES, Ok("")),
         (ADD_ALL, Ok("")),
         (
@@ -1353,7 +1357,7 @@ fn the_prompt_names_the_projects_own_test_command() {
     let files = vec!["src/lib.rs".to_string()];
     let prompt = build_resolver_prompt(
         "feature/f-1",
-        "master",
+        IncomingSide::Base("master"),
         &files,
         Verification::Gated {
             command: "npm run checks:code",
@@ -1388,7 +1392,7 @@ fn the_verification_promise_is_about_the_refusal_not_the_run() {
     let files = vec!["src/lib.rs".to_string()];
     let prompt = build_resolver_prompt(
         "feature/f-1",
-        "master",
+        IncomingSide::Base("master"),
         &files,
         Verification::Gated {
             command: "npm run checks:code",
@@ -1420,7 +1424,7 @@ fn an_unprepared_worktree_is_told_so_and_not_told_to_verify() {
     let files = vec!["src/lib.rs".to_string()];
     let prompt = build_resolver_prompt(
         "feature/f-1",
-        "master",
+        IncomingSide::Base("master"),
         &files,
         Verification::Unprepared {
             prepare: "npm ci",
@@ -1454,7 +1458,13 @@ fn an_unprepared_worktree_is_told_so_and_not_told_to_verify() {
 #[test]
 fn the_prompts_scope_is_what_the_merge_broke() {
     let files = vec!["src/lib.rs".to_string()];
-    let prompt = build_resolver_prompt("feature/f-1", "master", &files, Verification::Ungated, &[]);
+    let prompt = build_resolver_prompt(
+        "feature/f-1",
+        IncomingSide::Base("master"),
+        &files,
+        Verification::Ungated,
+        &[],
+    );
 
     assert!(
         prompt.contains("only where the merge itself broke it"),
@@ -1477,7 +1487,13 @@ fn the_prompts_scope_is_what_the_merge_broke() {
 #[test]
 fn the_prompt_asks_for_no_verification_when_the_project_names_no_command() {
     let files = vec!["src/lib.rs".to_string()];
-    let prompt = build_resolver_prompt("feature/f-1", "master", &files, Verification::Ungated, &[]);
+    let prompt = build_resolver_prompt(
+        "feature/f-1",
+        IncomingSide::Base("master"),
+        &files,
+        Verification::Ungated,
+        &[],
+    );
 
     assert!(
         !prompt.contains("verify"),
@@ -1877,6 +1893,7 @@ async fn a_project_that_names_no_checks_resolves_exactly_as_it_did() {
         vec![
             PORCELAIN.to_string(),
             MERGE_HEAD.to_string(),
+            POINTS_AT.to_string(),
             BASE_MOVES.to_string(),
             ADD_ALL.to_string(),
             PORCELAIN.to_string(),
@@ -1906,7 +1923,7 @@ fn the_prompt_names_what_the_base_side_moved() {
 
     let prompt = build_resolver_prompt(
         "feature/f-1",
-        "master",
+        IncomingSide::Base("master"),
         &files,
         Verification::Ungated,
         &moves,
@@ -1932,7 +1949,7 @@ fn a_long_list_of_base_side_moves_is_capped_and_says_where_the_rest_is() {
 
     let prompt = build_resolver_prompt(
         "feature/f-1",
-        "master",
+        IncomingSide::Base("master"),
         &files,
         Verification::Ungated,
         &moves,
@@ -1969,7 +1986,7 @@ fn a_move_naming_a_conflicted_file_leads_however_long_the_list_is() {
 
     let prompt = build_resolver_prompt(
         "feature/f-1",
-        "master",
+        IncomingSide::Base("master"),
         &files,
         Verification::Ungated,
         &moves,
@@ -1998,7 +2015,7 @@ fn the_hint_says_the_files_it_leaves_out() {
 
     let prompt = build_resolver_prompt(
         "feature/f-1",
-        "master",
+        IncomingSide::Base("master"),
         &files,
         Verification::Ungated,
         &moves,
@@ -2089,7 +2106,13 @@ fn a_path_with_a_space_is_one_path() {
 fn a_merge_that_moved_nothing_adds_no_section() {
     let files = vec!["src/lib.rs".to_string()];
 
-    let prompt = build_resolver_prompt("feature/f-1", "master", &files, Verification::Ungated, &[]);
+    let prompt = build_resolver_prompt(
+        "feature/f-1",
+        IncomingSide::Base("master"),
+        &files,
+        Verification::Ungated,
+        &[],
+    );
 
     assert!(
         !prompt.contains("also added, moved or deleted"),
@@ -2209,6 +2232,178 @@ async fn an_unreadable_base_diff_still_resolves_and_says_nothing_about_it() {
     assert!(
         !prompts[0].contains("also added, moved or deleted"),
         "an answer nobody got may not be rendered as an empty one: {prompts:?}"
+    );
+}
+
+/// Which branch a merge is pulling in, over everything `git branch
+/// --remotes --points-at` can answer.
+///
+/// The empty and unparseable rows are the point of the table: a divergence
+/// reconcile merges `origin/<feature>` and an ordinary sync merges
+/// `origin/<base>`, so an answer that establishes neither may not be rounded to
+/// the common one — the prompt built on it would tell the resolver whose
+/// commits it is about, wrongly.
+#[test]
+fn the_incoming_side_is_whichever_tracking_tip_merge_head_sits_on() {
+    let cases: &[(&str, IncomingSide)] = &[
+        ("  origin/master\n", IncomingSide::Base("master")),
+        (
+            "  origin/feature/f-1\n",
+            IncomingSide::OwnBranch("feature/f-1"),
+        ),
+        // Both tips on one commit is a base merge with nothing to conflict
+        // over, so the branch that is only ever merged by a reconcile wins.
+        (
+            "  origin/master\n  origin/feature/f-1\n",
+            IncomingSide::OwnBranch("feature/f-1"),
+        ),
+        ("", IncomingSide::Unknown),
+        ("  origin/HEAD -> origin/master\n", IncomingSide::Unknown),
+        (
+            "fatal: malformed object name MERGE_HEAD",
+            IncomingSide::Unknown,
+        ),
+        ("  origin/feature/f-10\n", IncomingSide::Unknown),
+        ("  upstream/master\n", IncomingSide::Unknown),
+    ];
+
+    for (points_at, want) in cases {
+        assert_eq!(
+            tracking_tip_at_merge_head(points_at, "master", "feature/f-1"),
+            *want,
+            "{points_at:?}"
+        );
+    }
+}
+
+/// A reconcile is told the other side is this same branch, not upstream.
+///
+/// "We just merged origin/master into feature/f-1" is what the prompt said
+/// whatever was merged, and after a divergence reconcile it is false: the
+/// incoming commits are a colleague's work on the user's own branch, and a
+/// resolver that reads them as upstream's has a rule for which side to defer
+/// to.
+#[test]
+fn a_reconcile_tells_the_resolver_whose_commits_the_other_side_carries() {
+    let files = vec!["src/lib.rs".to_string()];
+
+    let prompt = build_resolver_prompt(
+        "feature/f-1",
+        IncomingSide::OwnBranch("feature/f-1"),
+        &files,
+        Verification::Ungated,
+        &["A\tsrc/added.rs".to_string()],
+    );
+
+    assert!(
+        prompt.contains("We just merged origin/feature/f-1 into feature/f-1"),
+        "the branch actually merged is the one to name: {prompt}"
+    );
+    assert!(
+        prompt.contains("this same branch as origin holds it")
+            && prompt.contains("not a change from upstream"),
+        "and what that makes the other side: {prompt}"
+    );
+    assert!(
+        !prompt.contains("origin/master"),
+        "a branch this merge never touched may not appear at all: {prompt}"
+    );
+}
+
+/// An unread incoming side names no branch rather than the likely one.
+///
+/// The section still earns its place — the moved files are read from
+/// `MERGE_HEAD` and are true whichever branch that is — but a name is the one
+/// part of it that cannot be guessed.
+#[test]
+fn an_unnamed_incoming_side_names_no_branch_at_all() {
+    let files = vec!["src/lib.rs".to_string()];
+
+    let prompt = build_resolver_prompt(
+        "feature/f-1",
+        IncomingSide::Unknown,
+        &files,
+        Verification::Ungated,
+        &["A\tsrc/added.rs".to_string()],
+    );
+
+    assert!(
+        !prompt.contains("origin/"),
+        "nothing was established, so nothing is claimed: {prompt}"
+    );
+    assert!(
+        prompt.contains("A\tsrc/added.rs") && prompt.contains("Git merged them without asking"),
+        "the moves are read from MERGE_HEAD and hold either way: {prompt}"
+    );
+}
+
+/// The tree is what names the incoming side, not the row.
+///
+/// The session row this turn runs against says `base_branch: master`, and the
+/// merge open in the worktree is `origin/feature/f-1`. Only the probe can tell
+/// them apart, so a prompt built from the row alone reads as correct here and
+/// is not.
+#[tokio::test]
+async fn a_reconcile_in_the_tree_outranks_the_rows_base_branch() {
+    let runtime = Arc::new(ScriptedRuntime::default());
+    let p = ports(
+        happy_path_with(&[(POINTS_AT, Ok("  origin/feature/f-1\n"))]),
+        vec![runtime.clone()],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("a reconcile resolves like any other merge");
+
+    let prompts = runtime.prompts();
+    assert!(
+        prompts[0].contains("We just merged origin/feature/f-1 into feature/f-1"),
+        "{prompts:?}"
+    );
+    assert!(
+        !prompts[0].contains("origin/master"),
+        "the row's base branch is not the incoming side here: {prompts:?}"
+    );
+}
+
+/// A probe nobody could read costs the name, not the turn — and it is read
+/// under the same deadline as the move hint, for the same reason: an agent is
+/// already alive while it runs.
+#[tokio::test]
+async fn an_unreadable_incoming_side_still_resolves_and_names_no_branch() {
+    let dead = transport_dead();
+    let runtime = Arc::new(ScriptedRuntime::default());
+    let p = ports(
+        happy_path_with(&[(POINTS_AT, Err(dead.as_str()))]),
+        vec![runtime.clone()],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let resolved = run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("a probe nobody could read is not a failed resolution");
+
+    assert!(resolved.published);
+    let prompts = runtime.prompts();
+    assert!(
+        !prompts[0].contains("origin/"),
+        "an answer nobody got may not be rendered as the likely one: {prompts:?}"
+    );
+    let seen = p
+        .scripted
+        .options()
+        .into_iter()
+        .zip(p.scripted.commands())
+        .find(|(_, cmd)| cmd == POINTS_AT)
+        .map(|(opts, _)| opts)
+        .expect("the probe was issued");
+    assert_eq!(
+        seen.timeout,
+        Some(std::time::Duration::from_secs(300)),
+        "the run's own silence threshold, not no deadline at all"
     );
 }
 

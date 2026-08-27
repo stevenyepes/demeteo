@@ -341,6 +341,19 @@ impl StepExecutor for StubExecutor {
     ) -> Result<demeteo_core::domain::models::FeatureDrift, String> {
         Err("this stub counts nothing".into())
     }
+    async fn feature_reconcile(
+        &self,
+        _feature_id: &str,
+        _reconcile: demeteo_core::domain::upstream_feature::DivergenceReconcile,
+    ) -> Result<Option<demeteo_core::ports::sync_session::SyncSessionView>, String> {
+        Err("this stub reconciles nothing".into())
+    }
+    async fn feature_divergence(
+        &self,
+        _feature_id: &str,
+    ) -> Result<Option<demeteo_core::domain::models::FeatureDivergence>, String> {
+        Err("this stub measures nothing".into())
+    }
     async fn feature_resolve_sync_conflicts(
         &self,
         _feature_id: &str,
