@@ -15,6 +15,24 @@
 //! behave exactly as before. The `on_failure` redirect is what makes
 //! the re-validate loop work — it points at the step that should be
 //! replayed after a successful resolution.
+//!
+//! Nothing here decides what a divergence between the feature branch and
+//! `origin/<feature>` is worth doing about — the sync answers that for itself
+//! ([`divergence_move`](crate::domain::upstream_feature::divergence_move)),
+//! which is what a caller with nobody watching it needs. The asymmetry that
+//! leaves is stated here because here is where it would be edited away: the
+//! merge that keeps both histories runs unattended and its conflicts route
+//! through 4 like any other, while a branch origin rewrote stops at 5 and is
+//! meant to stay stopped. The press that settles that one
+//! ([`MergeExecutor::reconcile_feature_with_origin`](crate::ports::merge::MergeExecutor::reconcile_feature_with_origin))
+//! is two frames away and would unblock this node in one argument; sending
+//! [`DivergenceReconcile::ResetOntoOrigin`](crate::domain::upstream_feature::DivergenceReconcile::ResetOntoOrigin)
+//! from a workflow is the wrong edit. Patch equivalence proves that no change
+//! would be lost, never that losing the commits was the point, and a step has
+//! nobody to ask — the same trade
+//! [`verify_failure_stage`](crate::domain::sync_failure::verify_failure_stage)
+//! makes one stage later, where a green tree pushes on its own and only a
+//! person publishes a red one.
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::spend::RunningSpend;
@@ -39,6 +57,10 @@ struct SyncConflict<'a> {
     worktree_path: Option<&'a str>,
     feature_branch: &'a str,
     base_branch: &'a str,
+    /// [`SyncStepNext::Resolve::resolves_the_base_merge`], carried this far
+    /// because it decides what the node reports rather than how the resolution
+    /// runs — the turn itself is the same one either way.
+    resolves_the_base_merge: bool,
 }
 
 impl ExecutionDriver {
@@ -120,6 +142,7 @@ impl ExecutionDriver {
                 SyncStepNext::Resolve {
                     files,
                     worktree_path,
+                    resolves_the_base_merge,
                 } => {
                     self.resolve_sync_conflicts_in_step(
                         step_exec,
@@ -131,6 +154,7 @@ impl ExecutionDriver {
                             worktree_path,
                             feature_branch: &feature_branch,
                             base_branch: &base_branch,
+                            resolves_the_base_merge,
                         },
                         spend,
                     )
@@ -185,6 +209,7 @@ impl ExecutionDriver {
             worktree_path,
             feature_branch,
             base_branch,
+            resolves_the_base_merge,
         } = conflict;
         let RunningSpend {
             cost,
@@ -238,10 +263,48 @@ impl ExecutionDriver {
         let wall = start.elapsed().as_secs();
         match outcome {
             Ok(resolved) => {
+                // The reconcile's conflict stops the sync one merge early, so
+                // the resolution that just landed put `origin/<feature>` on the
+                // branch and nothing else. Running the base merge here is what
+                // the pane gets from a second press of Sync, which a workflow
+                // has nobody to make.
+                if !resolves_the_base_merge {
+                    if let Err(failure) = self
+                        .merge_executor
+                        .sync_feature_with_upstream(
+                            &self.f_id,
+                            feature_branch,
+                            base_branch,
+                            crate::adapters::step_executor::sync::sync_gate(settings),
+                        )
+                        .await
+                    {
+                        let reason =
+                            crate::domain::sync_failure::base_merge_refusal(base_branch, &failure);
+                        update_step_status(
+                            self.status_writers(),
+                            step_exec,
+                            StepTransition::failed(
+                                *cost,
+                                Some(*tokens),
+                                start.elapsed().as_secs(),
+                                reason.clone(),
+                                resolved.cache,
+                            ),
+                        );
+                        return StepOutcome::Failed(reason);
+                    }
+                }
                 update_step_status(
                     self.status_writers(),
                     step_exec,
-                    StepTransition::completed(*cost, *tokens, wall, None, resolved.cache),
+                    StepTransition::completed(
+                        *cost,
+                        *tokens,
+                        start.elapsed().as_secs(),
+                        None,
+                        resolved.cache,
+                    ),
                 );
 
                 let target = step_conf

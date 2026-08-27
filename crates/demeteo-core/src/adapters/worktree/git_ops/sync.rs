@@ -1,9 +1,25 @@
 use super::{git_request, GitOpsHelper};
 use crate::domain::sync_failure::SyncBlockedStage;
-use crate::domain::upstream_feature::FeatureUpstream;
+use crate::domain::upstream_feature::{DivergedBranch, DivergenceReconcile, FeatureUpstream};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::worktree_ops::MergeGate;
 use crate::ports::worktree_ops::{SyncFailure, SyncOutcome, SyncWorktreeObserver};
+
+/// One sync of a feature branch: where it runs, which branches, what the
+/// merged tree must prove, and what a person already decided about a
+/// divergence.
+///
+/// A parameter object because the alternative is one more positional argument
+/// on a call that already takes seven, three of them adjacent strings.
+pub struct SyncRequest<'a> {
+    pub machine_id: Option<&'a str>,
+    pub repo_dir: &'a str,
+    pub feature_branch: &'a str,
+    pub base_branch: &'a str,
+    pub gate: MergeGate<'a>,
+    /// `None` is a sync that classifies the divergence for itself.
+    pub reconcile: Option<DivergenceReconcile>,
+}
 
 impl GitOpsHelper {
     /// Fetch the latest state of `default_branch` from `origin` and update
@@ -254,11 +270,15 @@ impl GitOpsHelper {
     ///
     /// Both branches are refreshed from origin first, not only the base: the
     /// local feature ref is fast-forwarded onto `origin/<feature>` where one
-    /// exists, and a divergence between them is refused rather than merged
-    /// ([`crate::domain::upstream_feature`] carries what the merge writes
-    /// without that). `head_before` is therefore the tip *after* that
-    /// fast-forward — the base of what this sync itself did, which is the only
-    /// range a review of it may use ([`SyncOutcome::head_before`]).
+    /// exists, and a divergence between them is reconciled or refused on what
+    /// patch equivalence says ([`crate::domain::upstream_feature`] carries what
+    /// the merge writes without that). `head_before` is therefore the tip
+    /// *after* that reconcile — the base of what this sync itself did, which is
+    /// the only range a review of it may use ([`SyncOutcome::head_before`]).
+    ///
+    /// This is the sync that answers the divergence for itself, which is every
+    /// caller that has no human in it. [`Self::sync_feature_reconciling`] is
+    /// the same sync with that answer supplied.
     pub async fn sync_feature_with_upstream(
         &self,
         machine_id: Option<&str>,
@@ -268,6 +288,43 @@ impl GitOpsHelper {
         gate: MergeGate<'_>,
         observer: &dyn SyncWorktreeObserver,
     ) -> Result<SyncOutcome, SyncFailure> {
+        self.sync_feature_reconciling(
+            SyncRequest {
+                machine_id,
+                repo_dir,
+                feature_branch,
+                base_branch,
+                gate,
+                reconcile: None,
+            },
+            observer,
+        )
+        .await
+    }
+
+    /// [`Self::sync_feature_with_upstream`], with the divergence already
+    /// answered by whoever pressed the button.
+    ///
+    /// `reconcile` is weighed rather than obeyed
+    /// ([`divergence_move`](crate::domain::upstream_feature::divergence_move)):
+    /// a merge is taken whatever the branch now looks like, and a reset only
+    /// while the reading that made it safe still holds. Everything after the
+    /// reconcile — the base merge, the gate, the push — is the ordinary sync,
+    /// so a reconcile that conflicts is an ordinary conflicted session and the
+    /// resolver reaches it the ordinary way.
+    pub async fn sync_feature_reconciling(
+        &self,
+        req: SyncRequest<'_>,
+        observer: &dyn SyncWorktreeObserver,
+    ) -> Result<SyncOutcome, SyncFailure> {
+        let SyncRequest {
+            machine_id,
+            repo_dir,
+            feature_branch,
+            base_branch,
+            gate,
+            reconcile,
+        } = req;
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let tracking = format!("origin/{}", base_branch);
         let feat_ref = format!("refs/heads/{}", feature_branch);
@@ -377,22 +434,43 @@ impl GitOpsHelper {
         let upstream =
             super::divergence::feature_upstream(&*self.exec, machine_str, repo_dir, feature_branch)
                 .await;
+        let mut reconcile_with_origin = None;
         if let Some(FeatureUpstream::Diverged { ahead, behind }) = upstream {
-            // Refused before a worktree exists, because a divergence is the one
-            // stage with nothing at risk in a tree: no merge was attempted, so
-            // there is nothing for the user to look at and nothing to reclaim.
-            return Err(SyncFailure::Blocked {
-                stage: SyncBlockedStage::FeatureDiverged,
-                raw_error: crate::domain::upstream_feature::diverged_refusal(
-                    feature_branch,
-                    base_branch,
+            // The counts say the two sides disagree; only patch equivalence
+            // says which disagreement this is, and the answers are different
+            // moves ([`crate::domain::upstream_feature`]).
+            let cherry = super::divergence::patch_equivalence(
+                &*self.exec,
+                machine_str,
+                repo_dir,
+                feature_branch,
+            )
+            .await;
+            match crate::domain::upstream_feature::divergence_move(
+                DivergedBranch {
+                    feature: feature_branch,
+                    base: base_branch,
                     ahead,
                     behind,
-                ),
-                worktree_path: None,
-                head_before,
-                merge_commit_sha: None,
-            });
+                },
+                reconcile,
+                cherry.as_deref(),
+            ) {
+                Ok(move_) => reconcile_with_origin = Some(move_),
+                // Stopped before a worktree exists, because a divergence nobody
+                // may act on has nothing at risk in a tree: no merge was
+                // attempted, so there is nothing for the user to look at and
+                // nothing to reclaim.
+                Err(raw_error) => {
+                    return Err(SyncFailure::Blocked {
+                        stage: SyncBlockedStage::FeatureDiverged,
+                        raw_error,
+                        worktree_path: None,
+                        head_before,
+                        merge_commit_sha: None,
+                    });
+                }
+            }
         }
 
         // Do the merge in a temporary worktree (not the main repo) so
@@ -440,19 +518,63 @@ impl GitOpsHelper {
                     merge_commit_sha: None,
                 });
             }
-            // The tip read before the fast-forward is no longer a base this
-            // sync may be reviewed or undone against: `head_before..merge` would
-            // put origin's own commits inside the diff of what this sync did,
-            // and the `reset --hard head_before` behind Discard would rewind the
-            // branch past them. An unread tip is therefore `None` and not the
-            // stale value — a sync that offers no review is recoverable, one
-            // that offers the wrong one is acted on.
-            head_before = self
-                .exec
-                .run_program(machine_str, git_request(&wt_path, ["rev-parse", "HEAD"]))
-                .await
-                .ok()
-                .map(|s| s.trim().to_string());
+            head_before = reconciled_tip(&*self.exec, machine_str, &wt_path).await;
+        }
+
+        // The other reconcile, over a divergence the counts alone could not
+        // settle: either a merge, over commits neither side has ever had, or
+        // the reset a person pressed over a branch origin rewrote. Both run in
+        // the checkout, for the reason the fast-forward above gives.
+        let mut reconciled = false;
+        if let Some(move_) = reconcile_with_origin {
+            let feat_tracking = format!("origin/{}", feature_branch);
+            let message = format!("chore(sync): reconcile {} with origin", feature_branch);
+            // `--keep` and not `--hard`: `provision_sync_worktree` answers
+            // `repo_dir` itself when the feature branch is checked out there,
+            // so the tree this discards can be the user's own. `--keep` moves
+            // the branch and refuses out loud over an edit it would destroy,
+            // which is the same shape as the `--ff-only` above.
+            let attempt = match move_ {
+                DivergenceReconcile::ResetOntoOrigin => {
+                    git_request(&wt_path, ["reset", "--keep", &feat_tracking])
+                }
+                DivergenceReconcile::MergeOrigin => {
+                    git_request(&wt_path, ["merge", &feat_tracking, "-m", &message])
+                }
+            };
+            if let Err(raw) = self.exec.run_program(machine_str, attempt).await {
+                return Err(
+                    match crate::domain::sync_failure::reconcile_failure_stage(move_, &raw) {
+                        Some(stage) => SyncFailure::Blocked {
+                            stage,
+                            raw_error: raw,
+                            worktree_path: Some(wt_path.clone()),
+                            head_before,
+                            merge_commit_sha: None,
+                        },
+                        None => SyncFailure::Conflict {
+                            files: parse_unmerged_files(&*self.exec, machine_str, &wt_path).await,
+                            raw_error: raw,
+                            worktree_path: Some(wt_path.clone()),
+                            head_before,
+                            resolves_the_base_merge: false,
+                        },
+                    },
+                );
+            }
+            let tip = reconciled_tip(&*self.exec, machine_str, &wt_path).await;
+            // An unread tip on either side reads as moved, for the reason the
+            // base merge's own `changed` gives below. The two are separate
+            // because `head_before` is deliberately the *post*-reconcile tip —
+            // the review diff and Discard are both about the commit this sync
+            // wrote — which leaves a reconcile that committed and a base merge
+            // that had nothing to do indistinguishable from a sync that did
+            // nothing at all.
+            reconciled = match (head_before.as_deref(), tip.as_deref()) {
+                (Some(before), Some(after)) => before != after,
+                _ => true,
+            };
+            head_before = tip;
         }
 
         let merge_out = self
@@ -492,10 +614,11 @@ impl GitOpsHelper {
                 // and `git merge-base --is-ancestor '' …` then refuses forever,
                 // so the user is told their push did not land about one that
                 // did.
-                let changed = match (head_before.as_deref(), head_after.as_deref()) {
-                    (Some(before), Some(after)) => before != after,
-                    _ => true,
-                };
+                let changed = reconciled
+                    || match (head_before.as_deref(), head_after.as_deref()) {
+                        (Some(before), Some(after)) => before != after,
+                        _ => true,
+                    };
 
                 if changed {
                     // Between the commit and the push, because those are the
@@ -582,6 +705,7 @@ impl GitOpsHelper {
                         raw_error: raw,
                         worktree_path: Some(wt_path.clone()),
                         head_before: head_before.clone(),
+                        resolves_the_base_merge: true,
                     })
                 }
             },
@@ -707,6 +831,26 @@ impl GitOpsHelper {
 
         Ok(wt_path)
     }
+}
+
+/// The feature branch's tip after a reconcile with `origin/<feature>`, read in
+/// the worktree that performed it.
+///
+/// The tip read *before* a reconcile is no longer a base the sync may be
+/// reviewed or undone against: `head_before..merge` would put origin's own
+/// commits inside the diff of what this sync did, and the `reset --hard
+/// head_before` behind Discard would rewind the branch past them. An unread tip
+/// is therefore `None` and not the stale value — a sync that offers no review
+/// is recoverable, one that offers the wrong one is acted on.
+async fn reconciled_tip(
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
+    wt_path: &str,
+) -> Option<String> {
+    exec.run_program(machine_id, git_request(wt_path, ["rev-parse", "HEAD"]))
+        .await
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 /// Ask `repo_dir` which files a merge left unresolved.

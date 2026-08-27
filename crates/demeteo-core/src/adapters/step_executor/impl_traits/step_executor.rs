@@ -242,6 +242,21 @@ impl StepExecutor for DagStepExecutor {
         self.feature_drift_impl(feature_id, refresh).await
     }
 
+    async fn feature_reconcile(
+        &self,
+        feature_id: &str,
+        reconcile: crate::domain::upstream_feature::DivergenceReconcile,
+    ) -> Result<Option<crate::ports::sync_session::SyncSessionView>, String> {
+        self.feature_reconcile_impl(feature_id, reconcile).await
+    }
+
+    async fn feature_divergence(
+        &self,
+        feature_id: &str,
+    ) -> Result<Option<crate::domain::models::FeatureDivergence>, String> {
+        self.feature_divergence_impl(feature_id).await
+    }
+
     async fn feature_resolve_sync_conflicts(
         &self,
         feature_id: &str,

@@ -3,7 +3,7 @@
 **Status:** **Built through Phase 3** (2026-07-26). Phase 4 remains — see [`TASKS_DAG_WORKFLOWS.md`](TASKS_DAG_WORKFLOWS.md).
 **Date:** 2026-07-23
 **Author:** Steven Yepes (drafted with Claude)
-**Supersedes / revises:** Decision 19 (form-first authoring) — already recorded in `DECISIONS.md` §2; parts of USER_STORIES Story 8 "Workflow Authoring"; UX_JOURNEYS Journey 6/10.
+**Supersedes / revises:** Decision 19 (form-first authoring) — already recorded in `DECISIONS.md` §2; parts of USER_STORIES Story 8 "Workflow Authoring"; UX_JOURNEYS Journey 6/11.
 **Related docs:** `DDD_MODEL.md`, `RELIABILITY_PLAN.md`, `EXECUTION_PARITY.md`, `DECISIONS.md`, `OPEN_QUESTIONS.md`, `docs-site/workflows.md`, `docs/ux-audit/findings.md`
 
 > **How to read this doc now.** Sections 5 and 6 are the **specification of the

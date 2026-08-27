@@ -84,6 +84,71 @@ pub(crate) async fn feature_upstream(
     ))
 }
 
+/// The raw `git cherry origin/<feature_branch> refs/heads/<feature_branch>`
+/// output, for
+/// [`classify_divergence`](crate::domain::upstream_feature::classify_divergence)
+/// to read a [`DivergenceMove`](crate::domain::upstream_feature::DivergenceMove)
+/// off.
+///
+/// Local refs only, exactly like [`count_divergence`]: a divergence is only
+/// worth classifying once the counts have been taken, and those are taken
+/// after the fetch that made `origin/<feature>` current. Fetching again here
+/// would put a second network failure between a measured divergence and the
+/// one read that can tell a rewritten branch from disjoint work.
+///
+/// `None` is every way the answer did not arrive — a `git` that could not run,
+/// a ref that does not resolve, a transport that dropped — and it is the same
+/// `None` the domain refuses on. Flattening it to an empty string would make
+/// a failed command read as a branch with nothing on it, and the arm that
+/// answer lands on resets the user's ref.
+pub(crate) async fn patch_equivalence(
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
+    repo_dir: &str,
+    feature_branch: &str,
+) -> Option<String> {
+    let tracking = format!("origin/{feature_branch}");
+    let feature_ref = format!("refs/heads/{feature_branch}");
+    exec.run_program(
+        machine_id,
+        git_request(repo_dir, ["cherry", &tracking, &feature_ref]),
+    )
+    .await
+    .ok()
+}
+
+/// What the branch and `origin/<feature_branch>` each hold that the other does
+/// not, and what may be done about it — or `None` when they do not disagree.
+///
+/// The read behind the pane's offer, and it deliberately re-measures rather
+/// than reading the counts a blocked sync recorded
+/// ([`crate::domain::upstream_feature`]). Local refs only, like everything
+/// else here — the sync's own fetch is what makes `origin/<feature>` current,
+/// and a read that fetched would answer a different question than the one the
+/// sync will act on.
+///
+/// `None` for a branch with no upstream, for one that is level or merely ahead,
+/// and for a read that did not answer. They differ, but not in what is on
+/// offer: there is nothing to reconcile in any of them.
+pub(crate) async fn measured_divergence(
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
+    repo_dir: &str,
+    feature_branch: &str,
+) -> Option<crate::domain::models::FeatureDivergence> {
+    let FeatureUpstream::Diverged { ahead, behind } =
+        feature_upstream(exec, machine_id, repo_dir, feature_branch).await?
+    else {
+        return None;
+    };
+    let cherry = patch_equivalence(exec, machine_id, repo_dir, feature_branch).await;
+    Some(crate::domain::models::FeatureDivergence {
+        ahead,
+        behind,
+        next_move: crate::domain::upstream_feature::classify_divergence(cherry.as_deref(), ahead),
+    })
+}
+
 /// Bring `refs/remotes/origin/<base_branch>` up to date, answering whether it
 /// worked.
 ///

@@ -49,6 +49,10 @@ export function useSyncActions(input: {
         case 'discard':
           void sync.discard();
           return;
+        case 'reconcile':
+        case 'reset_onto_origin':
+          void sync.reconcile(intent);
+          return;
         case 'refresh':
           void sync.refresh();
           refreshDrift();

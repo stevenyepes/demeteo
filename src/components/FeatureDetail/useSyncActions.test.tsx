@@ -77,9 +77,11 @@ function mount(over: { session?: SyncSessionView | null; resolver?: SyncResolver
     publish: vi.fn(async () => {}),
     discard: vi.fn(async () => {}),
     refresh: vi.fn(async () => {}),
+    reconcile: vi.fn(async () => {}),
   };
   const sync: SyncSession = {
     session: over.session === undefined ? session() : over.session,
+    divergence: null,
     pending: null,
     ...calls,
   };
@@ -182,6 +184,21 @@ describe('useSyncActions', () => {
     expect(calls.refresh).toHaveBeenCalledTimes(1);
     expect(refreshDrift).toHaveBeenCalledTimes(1);
   });
+
+  /** Two presses, one call, and which of them it was is the argument: the merge
+   *  and the reset are different git operations behind one reconcile, and a
+   *  shared intent would send the reset's move for the merge's row. */
+  it.each(['reconcile', 'reset_onto_origin'] as const)(
+    'sends %s to the reconcile as the move it names',
+    (intent) => {
+      const { act, calls } = mount();
+
+      act(intent);
+
+      expect(calls.reconcile).toHaveBeenCalledWith(intent);
+      expect(calls.startSync).not.toHaveBeenCalled();
+    },
+  );
 
   it('sends the watch to the resolver stream and to no backend call', () => {
     const { act, calls, showResolverStream } = mount();

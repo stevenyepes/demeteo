@@ -126,6 +126,29 @@ pub trait StepExecutor: Send + Sync {
         refresh: bool,
     ) -> Result<crate::domain::models::FeatureDrift, String>;
 
+    /// Put the feature branch back on top of `origin/<feature>` the way the
+    /// caller chose, and sync it — what a sync blocked on a divergence offers.
+    ///
+    /// The answer is the sync session, because that is what the pane renders
+    /// next whichever way this ended: a reconcile can conflict, and a
+    /// conflicted reconcile is an ordinary conflicted session with a resolver
+    /// on offer. `Err` is only for the refusals that never reached a row.
+    async fn feature_reconcile(
+        &self,
+        feature_id: &str,
+        reconcile: crate::domain::upstream_feature::DivergenceReconcile,
+    ) -> Result<Option<crate::ports::sync_session::SyncSessionView>, String>;
+
+    /// What the feature branch and `origin/<feature>` each hold that the other
+    /// does not, and which move that leaves open — `None` when they agree.
+    ///
+    /// The read that decides which of the two reconciles a pane may offer,
+    /// which the counts cannot ([`crate::domain::upstream_feature`]).
+    async fn feature_divergence(
+        &self,
+        feature_id: &str,
+    ) -> Result<Option<crate::domain::models::FeatureDivergence>, String>;
+
     /// Spawn a fresh agent session to resolve the merge conflicts left
     /// over from `feature_sync`. The agent runs in a temporary
     /// worktree on the conflicted feature branch, edits the conflict

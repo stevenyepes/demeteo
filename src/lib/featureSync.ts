@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  DivergenceReconcile,
   EffortLevel,
   Feature,
+  FeatureDivergence,
   FeatureDrift,
   SyncOutcomeView,
   SyncResolverView,
@@ -128,6 +130,42 @@ export async function discardSyncResolution(
   featureId: string,
 ): Promise<SyncSessionView | null> {
   return invoke<SyncSessionView | null>("sync_discard", { featureId });
+}
+
+/**
+ * What the feature branch and `origin/<feature>` each hold that the other does
+ * not, and which of git's moves that leaves open.
+ *
+ * Measured with `git cherry` and classified by the same domain function the
+ * sync itself runs, so the pane offers what a sync would do rather than a
+ * second opinion about it. It is a read of the two refs and not of the session
+ * row; `DivergenceMove` in `src/types.ts` carries why.
+ *
+ * A branch that has not diverged answers `null`. So does a read that could not
+ * be made: `refuse` and `null` reach the same arm, which is the one that offers
+ * nothing.
+ */
+export async function getFeatureDivergence(
+  featureId: string,
+): Promise<FeatureDivergence | null> {
+  return invoke<FeatureDivergence | null>("feature_divergence", { featureId });
+}
+
+/**
+ * Put the feature branch back on top of `origin/<feature>`, the way the caller
+ * chose: `merge_origin` writes a merge that keeps both sides, `reset_onto_origin`
+ * moves the local ref onto origin's and abandons the local commits.
+ *
+ * The reset is the one that can lose something — the commits, never their
+ * changes — so it is offered only where patch equivalence was actually read,
+ * and the backend re-measures before it acts rather than trusting this call to
+ * have been right when it was rendered.
+ */
+export async function reconcileSyncDivergence(
+  featureId: string,
+  reconcile: DivergenceReconcile,
+): Promise<SyncSessionView | null> {
+  return invoke<SyncSessionView | null>("sync_reconcile", { featureId, reconcile });
 }
 
 /**

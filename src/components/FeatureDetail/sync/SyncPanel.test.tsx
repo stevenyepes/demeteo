@@ -12,7 +12,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { describeSyncPanel, type SyncIntent } from '../../../lib/syncPanel';
-import type { FeatureDrift, SyncSessionView } from '../../../types';
+import type { FeatureDivergence, FeatureDrift, SyncSessionView } from '../../../types';
 import type { HarnessOverrides } from '../useHarnessOverrides';
 import type { SyncResolverSelection } from '../useSyncResolverOverrides';
 import { SyncPanel } from './SyncPanel';
@@ -69,6 +69,7 @@ function mount(
   over: {
     session?: SyncSessionView | null;
     drift?: FeatureDrift | null;
+    divergence?: FeatureDivergence | null;
     pending?: SyncIntent | null;
     onAction?: (intent: string) => void;
   } = {},
@@ -76,7 +77,13 @@ function mount(
   const sessionRow = over.session === undefined ? session() : over.session;
   const drift = over.drift ?? null;
   const pending = over.pending ?? null;
-  const model = describeSyncPanel({ session: sessionRow, drift, canSync: true, pending });
+  const model = describeSyncPanel({
+    session: sessionRow,
+    drift,
+    divergence: over.divergence ?? null,
+    canSync: true,
+    pending,
+  });
   const result = render(
     <SyncPanel
       model={model}
@@ -201,6 +208,47 @@ describe('SyncPanel', () => {
     for (const gone of ['Review diff', 'Publish', 'Discard merge', 'Abort sync']) {
       expect(buttons()).not.toContain(gone);
     }
+  });
+
+  /** The rewrite is the one divergence with two honest answers, and the pane
+   *  has to make the destructive one look like one. */
+  it('offers both reconciles for a branch origin rewrote', () => {
+    mount({
+      session: session({
+        status: 'blocked',
+        blocked_stage: 'feature_diverged',
+        conflict_files: [],
+        raw_error: "'feature/f-1' has diverged from origin",
+      }),
+      divergence: { ahead: 2, behind: 3, next_move: 'reset_onto_origin' },
+    });
+
+    expect(pane()).toHaveAttribute('data-sync-state', 'blocked');
+    expect(buttons()).toEqual(
+      expect.arrayContaining(['Merge origin into this branch', 'Reset onto origin']),
+    );
+    const reset = screen
+      .getAllByTestId('action-row')
+      .find((row) => row.textContent?.includes('Reset onto origin'));
+    expect(reset).toHaveAttribute('data-tone', 'ruby');
+  });
+
+  /** A divergence nobody could classify offers the retry and nothing that picks
+   *  a history: which one the branch is meant to be is the user's answer, and
+   *  the pane has no reading that narrows it. */
+  it('offers no reconcile where the divergence was never classified', () => {
+    mount({
+      session: session({
+        status: 'blocked',
+        blocked_stage: 'feature_diverged',
+        conflict_files: [],
+        raw_error: "'feature/f-1' has diverged from origin",
+      }),
+    });
+
+    expect(buttons()).not.toContain('Merge origin into this branch');
+    expect(buttons()).not.toContain('Reset onto origin');
+    expect(buttons()).toContain('Retry sync');
   });
 
   it('hands the pressed intent back untranslated', async () => {

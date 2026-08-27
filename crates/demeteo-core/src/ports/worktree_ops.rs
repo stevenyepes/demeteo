@@ -245,6 +245,17 @@ pub enum SyncFailure {
         /// the read for it failed, which is not the same as a branch with no
         /// tip and may not be flattened into one.
         head_before: Option<String>,
+        /// Whether a resolution of this conflict leaves `origin/<base>` in the
+        /// branch.
+        ///
+        /// `false` for the reconcile that runs first: it merges
+        /// `origin/<feature>`, and a sync that stops there has not reached the
+        /// base merge at all
+        /// ([`crate::domain::upstream_feature`]). Both conflicts leave the same
+        /// shape of tree and the same resolver work, so nothing downstream can
+        /// tell them apart — and a caller that reports "resolved" as "synced"
+        /// would be filing a branch that never received its base.
+        resolves_the_base_merge: bool,
     },
     /// No merge was attempted, or one was and never reached a verdict, or its
     /// result could not be published. Nothing is known to be conflicted, so
