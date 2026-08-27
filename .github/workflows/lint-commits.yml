@@ -6,13 +6,20 @@ on:
     paths-ignore:
       - '.release/**'
       - 'package-lock.json'
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    branches: [master]
 
 concurrency:
   group: lint-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   lint:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # Only check commits added since the last successful run on the same ref.
     # fetch-depth: 50 grandfathers older non-conventional commits.
@@ -34,3 +41,39 @@ jobs:
           # Don't fail the action while legacy commits are still in master;
           # emit a warning until history is clean.
           failOnWarnings: false
+
+  # The subject a squash merge writes is the *pull request title* — the repo is
+  # set to COMMIT_OR_PR_TITLE, so a PR of more than one commit lands under its
+  # title and none of its own subjects. Nothing checked that until it was on
+  # master, where the job above reads it once and the only way to answer it is
+  # to rewrite a branch that is already tagged and released. So the title is
+  # linted here, before it can become a commit, as the exact string it will
+  # become: commitlint measures `subject-max-length` against the ` (#N)` too.
+  #
+  # A single-commit PR takes that commit's subject instead, which the
+  # `commit-msg` hook and the push job both already cover — this is the
+  # stricter of the two readings on purpose, because which one applies changes
+  # with the next push to the branch.
+  title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install commitlint
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Lint the pull request title
+        # Through the environment, never `${{ }}` inside the script: a title is
+        # attacker-controlled text on a fork PR, and interpolation would run it.
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: printf '%s (#%s)' "$TITLE" "$NUMBER" | npx commitlint --config .commitlintrc.json
