@@ -3,7 +3,9 @@
 //!
 //! Both questions are answered from text — a remote URL, git's stderr — and
 //! neither needs a port, which is the whole reason they live here rather than
-//! inside the `async fn` that pushes.
+//! inside the `async fn` that pushes. [`unattended_env`] is the third: it is
+//! the push's answer to "nobody is here to type a password", and every other
+//! `git` Demeteo runs turned out to need the same one.
 
 /// The host an HTTPS remote must authenticate against, or `None` when the push
 /// carries its own credential and Demeteo must not supply one.
@@ -70,6 +72,32 @@ pub fn is_credential_failure(stderr: &str) -> bool {
         "Permission denied (publickey)",
     ];
     SIGNATURES.iter().any(|sig| stderr.contains(sig))
+}
+
+/// The environment that stops `git` asking a human anything.
+///
+/// Neither push-specific nor remote-specific, which is why it is here and not
+/// beside one invocation: any `git` that touches `origin` can reach a
+/// credential exchange, and none of Demeteo's has somewhere to ask. A run is
+/// unattended by construction, and the desktop's git child has no tty either.
+/// The cost of omitting it is not a slower command but a process that blocks
+/// until something kills it.
+///
+/// Three keys because `GIT_TERMINAL_PROMPT=0` closes only git's *own* prompt.
+/// Per `gitcredentials(7)` git consults credential **helpers** first, and a
+/// default Git for Windows install writes `credential.helper = manager` into
+/// the system config — GCM then answers with a **GUI** dialog that no terminal
+/// setting suppresses. `GCM_INTERACTIVE` and `GCM_GUI_PROMPT` are what it reads
+/// instead.
+pub fn unattended_env() -> std::collections::BTreeMap<String, String> {
+    [
+        ("GIT_TERMINAL_PROMPT", "0"),
+        ("GCM_INTERACTIVE", "false"),
+        ("GCM_GUI_PROMPT", "0"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect()
 }
 
 #[cfg(test)]

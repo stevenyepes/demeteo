@@ -7,14 +7,21 @@ import type { FeatureDrift } from '../../types';
 /**
  * How far this feature's branch has fallen behind the base a sync would merge.
  *
- * Read without a fetch on mount and after every sync, which costs two local
- * `git` calls and answers as of the last time anything moved `origin/<base>`.
- * `refresh()` pays the network round trip, and the chip in `FeatureHeader` is
- * the press that spends it — nothing else in the app fetches that ref outside a
- * run's bootstrap and a sync, so a finished feature with an open pull request
- * has no other way for its count to move at all. The `fetched` flag travels
- * with the number so the chip can say which of the two it is showing rather
- * than implying the expensive one.
+ * The read fetches `origin/<base>` first — on mount and after every sync — so
+ * it costs a network round trip on opening a finished run. That is the price of
+ * the pane's one load-bearing sentence. Nothing else in the app moves that ref
+ * for a finished feature, so a count taken off the local one is the *last*
+ * fetch's answer to a question the base branch has had every minute since to
+ * change: that is how "Nothing to merge" came to sit beside a pull request the
+ * forge had already marked conflicted. The project view still counts without
+ * fetching and says so — it renders a queue, and a round trip per row is a cost
+ * that signal is not worth.
+ *
+ * So `fetched` means something narrower here than it does there: a `false` on
+ * this hook's reading is a fetch that did not land, not a caller that declined
+ * to pay for one, and `lib/syncPanel.ts` reads it as exactly that.
+ * `refresh()` is the same read again, and stays because a merge landing
+ * elsewhere is not something this remounts for.
  *
  * A read that fails resolves to an unmeasured drift rather than to nothing:
  * the whole point of the signal is that "we could not count it" is a different
@@ -60,7 +67,7 @@ export function useFeatureDrift(input: {
       setRefreshing(false);
       return;
     }
-    read(false);
+    read(true);
   }, [enabled, read]);
 
   const refresh = useCallback(() => read(true), [read]);

@@ -1,7 +1,18 @@
+use std::time::Duration;
+
 use super::git_request;
 use crate::domain::upstream_feature::FeatureUpstream;
-use crate::ports::execution::ExecutionPort;
+use crate::ports::execution::{ExecutionPort, ProgramRequest};
 use crate::ports::worktree_ops::BranchDivergence;
+
+/// Ceiling on the fetch behind a drift reading.
+///
+/// The reading is taken on every open of a finished run's detail, so this is
+/// the one `git` in the tree a user waits on with nothing to press. The
+/// unattended environment already denies the credential prompt that is the
+/// usual way a fetch never returns; this bounds the rest — a host that accepts
+/// the connection and then says nothing.
+const BASE_FETCH_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Count how `feature_ref` and `tracking` have diverged, from local refs only.
 ///
@@ -154,19 +165,28 @@ pub(crate) async fn measured_divergence(
 ///
 /// A `bool` rather than a `Result` because the only caller must carry on
 /// either way: an unreachable origin leaves the previous ref in place, which is
-/// still a real answer as long as nothing presents it as a current one.
+/// still a real answer as long as nothing presents it as a current one. That
+/// `false` is load-bearing all the way to the Sync pane, which reads it as the
+/// difference between a zero it verified and one it inherited
+/// (`src/lib/syncPanel.ts`).
 pub(crate) async fn refresh_base_ref(
     exec: &dyn ExecutionPort,
     machine_id: &str,
     repo_dir: &str,
     base_branch: &str,
 ) -> bool {
-    exec.run_program(
-        machine_id,
-        git_request(repo_dir, ["fetch", "origin", "--", base_branch]),
-    )
-    .await
-    .is_ok()
+    exec.run_program(machine_id, base_fetch_request(repo_dir, base_branch))
+        .await
+        .is_ok()
+}
+
+/// The one `git` a user waits on with nothing to press, built where its
+/// deadline can be read without a transport.
+fn base_fetch_request(repo_dir: &str, base_branch: &str) -> ProgramRequest {
+    ProgramRequest {
+        timeout: Some(BASE_FETCH_TIMEOUT),
+        ..git_request(repo_dir, ["fetch", "origin", "--", base_branch])
+    }
 }
 
 #[cfg(test)]

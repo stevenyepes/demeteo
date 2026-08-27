@@ -182,17 +182,12 @@ pub(crate) fn push_request(
     }
     args.extend(["origin".to_string(), branch.to_string()]);
 
-    // `GIT_TERMINAL_PROMPT=0` rides every push, credentialed or not: a push
-    // that stops to ask is unanswerable in all of them, and the difference
-    // between blocking until a wall-clock cap and failing in words a caller
-    // can diagnose is the whole of what the user sees.
-    let mut env: std::collections::BTreeMap<String, String> = [
-        ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),
-        ("GCM_INTERACTIVE".to_string(), "false".to_string()),
-        ("GCM_GUI_PROMPT".to_string(), "0".to_string()),
-    ]
-    .into_iter()
-    .collect();
+    // [`crate::domain::git_push::unattended_env`] rides every push,
+    // credentialed or not: a push that stops to ask is unanswerable in all of
+    // them, and the difference between blocking until a wall-clock cap and
+    // failing in words a caller can diagnose is the whole of what the user
+    // sees.
+    let mut env = crate::domain::git_push::unattended_env();
     if let Some(cred) = credential {
         env.insert(PAT_ENV_VAR.to_string(), cred.pat.clone());
         env.insert(USER_ENV_VAR.to_string(), cred.user.to_string());

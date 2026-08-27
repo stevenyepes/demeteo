@@ -352,8 +352,8 @@ function publishedArm(
   const behind = drift?.divergence.behind ?? null;
   // `behind === null` is a count that could not be taken, and it earns the
   // press for the reason `quiet` gives it: a merge answers what the count
-  // could not. Only a measured zero settles this arm.
-  if (!canSync || chip === null || behind === 0) {
+  // could not. Only a verified zero settles this arm.
+  if (!canSync || chip === null || (behind === 0 && drift?.fetched === true)) {
     return {
       ...base,
       state: 'published',
@@ -363,6 +363,10 @@ function publishedArm(
       body: `${landed} Nothing here is waiting on you.`,
       actions: [REFRESH],
     };
+  }
+  if (behind === 0) {
+    const arm = unverifiedArm(drift?.base_ref);
+    return { ...base, ...arm, body: `${landed} ${arm.body}` };
   }
   return {
     ...base,
@@ -730,15 +734,17 @@ function quiet(drift: FeatureDrift | null, canSync: boolean): Quiet {
     };
   }
   if (behind === 0) {
-    return {
-      state: 'up_to_date',
-      tone: chip.tone,
-      chipLabel: chip.label,
-      headline: 'Nothing to merge',
-      body: chip.title,
-      actions: [REFRESH],
-      badge: 0,
-    };
+    return drift?.fetched === true
+      ? {
+          state: 'up_to_date',
+          tone: chip.tone,
+          chipLabel: chip.label,
+          headline: 'Nothing to merge',
+          body: chip.title,
+          actions: [REFRESH],
+          badge: 0,
+        }
+      : unverifiedArm(drift?.base_ref);
   }
   return {
     state: 'behind',
@@ -748,6 +754,38 @@ function quiet(drift: FeatureDrift | null, canSync: boolean): Quiet {
     body: chip.title,
     actions: [SYNC, REFRESH],
     badge: behind,
+  };
+}
+
+/**
+ * A zero this reading inherited rather than verified.
+ *
+ * `useFeatureDrift` asks the pane's read to fetch, so a `fetched: false` here
+ * is a fetch that did not land — origin unreachable, credentials gone, a
+ * machine that is not answering. The zero under it is the *previous* fetch's
+ * answer, and settling on it is how the pane said "Nothing to merge" beside a
+ * pull request the forge had already marked conflicted: the count was true when
+ * it was taken and nothing since had moved it.
+ *
+ * So the press stays, for the same reason the unmeasured count keeps it. The
+ * sync fetches before it merges and treats a fetch it cannot make as a blocked
+ * sync with git's own words — which is a better answer than a stale zero, in
+ * every case including the one where the branch really was level.
+ *
+ * Deliberately not `describeStaleness`'s chip: that chip is also rendered over
+ * the project view's rows, which never fetch and are honest to call cached.
+ * Here a cached reading means something went wrong.
+ */
+function unverifiedArm(baseRef: string | undefined): Quiet {
+  const base = baseRef || 'the base branch';
+  return {
+    state: 'unknown',
+    tone: 'slate',
+    chipLabel: 'Not verified',
+    headline: `${base} could not be re-read`,
+    body: `This branch was level with ${base} the last time origin answered, and origin did not answer this time — so nothing here has seen the base branch since. Syncing is still offered: it fetches before it merges, and says what it could not reach.`,
+    actions: [SYNC, REFRESH],
+    badge: 0,
   };
 }
 
