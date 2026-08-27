@@ -87,6 +87,24 @@ pub struct FeatureDrift {
     pub checked_at: i64,
 }
 
+/// A feature branch and `origin/<feature>` each holding commits the other does
+/// not, with the one reading that says what may be done about it.
+///
+/// The counts are here for the sentence the pane writes, not for the decision —
+/// `next_move` is measured
+/// ([`classify_divergence`](crate::domain::upstream_feature::classify_divergence))
+/// rather than derived from them ([`crate::domain::upstream_feature`]), and a
+/// surface that offers the destructive press off the counts alone is offering it
+/// in the case it must not.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeatureDivergence {
+    /// Commits this checkout has that `origin/<feature>` does not.
+    pub ahead: u64,
+    /// Commits `origin/<feature>` has that this checkout does not.
+    pub behind: u64,
+    pub next_move: crate::domain::upstream_feature::DivergenceMove,
+}
+
 /// Result of a failed upstream sync, mirroring
 /// [`SyncFailure`](crate::ports::worktree_ops::SyncFailure) across the merge
 /// executor. In-memory only — [`ConflictReport`] is the persisted half.
@@ -97,6 +115,9 @@ pub enum UpstreamSyncFailure {
         /// Path to the sync worktree where the conflict lives (if one was
         /// provisioned).
         worktree_path: Option<String>,
+        /// As
+        /// [`SyncFailure::Conflict::resolves_the_base_merge`](crate::ports::worktree_ops::SyncFailure).
+        resolves_the_base_merge: bool,
     },
     Blocked {
         stage: crate::domain::sync_failure::SyncBlockedStage,

@@ -88,7 +88,13 @@ function Pane() {
   });
   return (
     <SyncPanel
-      model={describeSyncPanel({ session: SESSION, drift: null, canSync: true, pending: null })}
+      model={describeSyncPanel({
+        session: SESSION,
+        drift: null,
+        divergence: null,
+        canSync: true,
+        pending: null,
+      })}
       session={SESSION}
       drift={null}
       resolverStep={null}

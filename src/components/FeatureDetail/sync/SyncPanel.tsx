@@ -6,6 +6,7 @@ import {
   GitMerge,
   RefreshCw,
   Radio,
+  RotateCcw,
   Trash2,
   Upload,
   XCircle,
@@ -69,6 +70,8 @@ const ACTION_ICON: Record<SyncIntent, ReactNode> = {
   discard: <Trash2 className="h-4 w-4" />,
   refresh: <RefreshCw className="h-4 w-4" />,
   watch: <Radio className="h-4 w-4" />,
+  reconcile: <GitMerge className="h-4 w-4" />,
+  reset_onto_origin: <RotateCcw className="h-4 w-4" />,
 };
 
 const PENDING_LABEL: Record<SyncIntent, string> = {
@@ -80,6 +83,8 @@ const PENDING_LABEL: Record<SyncIntent, string> = {
   discard: 'Discarding…',
   refresh: 'Counting…',
   watch: 'Opening…',
+  reconcile: 'Merging…',
+  reset_onto_origin: 'Resetting…',
 };
 
 export function SyncPanel({

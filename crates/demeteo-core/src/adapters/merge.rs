@@ -32,6 +32,7 @@ use crate::domain::models::{
 };
 use crate::domain::sync_failure::SyncBlockedStage;
 use crate::domain::sync_session::SyncSessionStatus;
+use crate::domain::upstream_feature::DivergenceReconcile;
 use crate::paths;
 use crate::ports::db::{FeatureRepository, MergeAuditRepository};
 use crate::ports::execution::ExecutionPort;
@@ -214,14 +215,17 @@ impl SqliteMergeExecutor {
     }
 }
 
-#[async_trait]
-impl MergeExecutor for SqliteMergeExecutor {
-    async fn sync_feature_with_upstream(
+impl SqliteMergeExecutor {
+    /// Every sync of a feature branch, whether or not a person answered the
+    /// divergence first: one session row, one audit row, one turn slot.
+    #[allow(clippy::result_large_err)]
+    async fn run_sync(
         &self,
         feature_id: &FeatureId,
         feature_branch: &str,
         default_branch: &str,
         gate: crate::ports::worktree_ops::MergeGate<'_>,
+        reconcile: Option<DivergenceReconcile>,
     ) -> Result<UpstreamSyncOutcome, UpstreamSyncFailure> {
         // Before anything is resolved or fetched, because the row this would
         // overwrite is the only copy of a resolution nobody has read yet
@@ -318,12 +322,15 @@ impl MergeExecutor for SqliteMergeExecutor {
         let observer = RecordWorktree::new(&self.sync_sessions, feature_id);
         match self
             .git_ops
-            .sync_feature_with_upstream(
-                machine_id_opt.as_deref(),
-                &repo_dir,
-                feature_branch,
-                default_branch,
-                gate,
+            .sync_feature_reconciling(
+                crate::adapters::worktree::git_ops::sync::SyncRequest {
+                    machine_id: machine_id_opt.as_deref(),
+                    repo_dir: &repo_dir,
+                    feature_branch,
+                    base_branch: default_branch,
+                    gate,
+                    reconcile,
+                },
                 &observer,
             )
             .await
@@ -377,6 +384,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                 raw_error,
                 worktree_path,
                 head_before,
+                resolves_the_base_merge,
             }) => {
                 let now = paths::now_ms();
                 let _ = self.sync_sessions.update(
@@ -393,7 +401,18 @@ impl MergeExecutor for SqliteMergeExecutor {
                     now,
                 );
                 let report = ConflictReport {
-                    source_branch: format!("origin/{}", default_branch),
+                    // The branch that actually came in. A reconcile stops
+                    // before the base merge and merges `origin/<feature>`, so
+                    // naming the base here would put another person's work on
+                    // the user's own branch under upstream's name.
+                    source_branch: format!(
+                        "origin/{}",
+                        if resolves_the_base_merge {
+                            default_branch
+                        } else {
+                            feature_branch
+                        }
+                    ),
                     target_branch: feature_branch.to_string(),
                     files,
                     raw_error,
@@ -413,6 +432,7 @@ impl MergeExecutor for SqliteMergeExecutor {
                 Err(UpstreamSyncFailure::Conflict {
                     report,
                     worktree_path,
+                    resolves_the_base_merge,
                 })
             }
             Err(SyncFailure::Blocked {
@@ -460,6 +480,64 @@ impl MergeExecutor for SqliteMergeExecutor {
                 Err(failure)
             }
         }
+    }
+}
+
+#[async_trait]
+impl MergeExecutor for SqliteMergeExecutor {
+    async fn sync_feature_with_upstream(
+        &self,
+        feature_id: &FeatureId,
+        feature_branch: &str,
+        default_branch: &str,
+        gate: crate::ports::worktree_ops::MergeGate<'_>,
+    ) -> Result<UpstreamSyncOutcome, UpstreamSyncFailure> {
+        self.run_sync(feature_id, feature_branch, default_branch, gate, None)
+            .await
+    }
+
+    async fn reconcile_feature_with_origin(
+        &self,
+        feature_id: &FeatureId,
+        feature_branch: &str,
+        base_branch: &str,
+        gate: crate::ports::worktree_ops::MergeGate<'_>,
+        reconcile: DivergenceReconcile,
+    ) -> Result<Option<crate::ports::sync_session::SyncSessionView>, String> {
+        if let Err(UpstreamSyncFailure::Blocked { stage, raw_error }) = self
+            .run_sync(
+                feature_id,
+                feature_branch,
+                base_branch,
+                gate,
+                Some(reconcile),
+            )
+            .await
+        {
+            if stage.precedes_the_session() {
+                return Err(raw_error);
+            }
+        }
+        crate::application::sync_session::get_reconciled_view(self.sync_ports(), feature_id).await
+    }
+
+    async fn feature_divergence(
+        &self,
+        feature_id: &FeatureId,
+        feature_branch: &str,
+    ) -> Result<Option<crate::domain::models::FeatureDivergence>, String> {
+        let (machine_id_opt, repo_dir) = self.repo_target(feature_id).await?;
+        Ok(
+            crate::adapters::worktree::git_ops::divergence::measured_divergence(
+                &*self.exec,
+                machine_id_opt
+                    .as_deref()
+                    .unwrap_or(crate::domain::ids::LOCAL_MACHINE),
+                &repo_dir,
+                feature_branch,
+            )
+            .await,
+        )
     }
 
     async fn feature_drift(

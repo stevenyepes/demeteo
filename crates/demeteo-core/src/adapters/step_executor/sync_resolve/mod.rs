@@ -54,10 +54,10 @@ use self::land::{land, Landing};
 use self::preflight::has_conflict_marker;
 use self::preflight::{ensure_conflict_markers_removed, preflight, PreflightRefusal};
 #[cfg(test)]
-use self::prompt::aimed_first;
+use self::prompt::{aimed_first, tracking_tip_at_merge_head, IncomingSide};
 use self::prompt::{
-    base_side_moves, build_repair_prompt, build_resolver_prompt, prepared_verification,
-    Verification,
+    base_side_moves, build_repair_prompt, build_resolver_prompt, incoming_side,
+    prepared_verification, Verification,
 };
 use self::turn::ResolverAgent;
 
@@ -408,16 +408,20 @@ async fn run_resolver_turn(
             None => {
                 // `fast_timeout_s` is the user's own "how long may something
                 // be silent"; the wall cap would bound this at half an hour.
-                let base_moves = base_side_moves(
+                let within = std::time::Duration::from_secs(timeouts.fast_timeout_s);
+                let incoming = incoming_side(
                     &**exec,
                     machine_str,
                     resolved_cwd,
-                    std::time::Duration::from_secs(timeouts.fast_timeout_s),
+                    base_branch,
+                    feature_branch,
+                    within,
                 )
                 .await;
+                let base_moves = base_side_moves(&**exec, machine_str, resolved_cwd, within).await;
                 build_resolver_prompt(
                     feature_branch,
-                    base_branch,
+                    incoming,
                     conflict_files,
                     verification,
                     &base_moves,

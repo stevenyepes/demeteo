@@ -126,16 +126,7 @@ impl DagStepExecutor {
         &self,
         feature_id: &str,
     ) -> Result<SyncOutcomeView, String> {
-        let fid = FeatureId::from(feature_id.to_string());
-        let feature = self
-            .features
-            .get(&fid)?
-            .ok_or_else(|| format!("Feature not found: {}", feature_id))?;
-
-        let settings = self
-            .projects
-            .get_settings(&feature.project_id)?
-            .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
+        let (fid, feature, settings) = self.sync_context(feature_id)?;
         let base_branch = sync_base(&feature, &settings)?;
         let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
@@ -156,16 +147,68 @@ impl DagStepExecutor {
         )
     }
 
-    /// Tauri entry point for the staleness signal on the run header.
+    /// Tauri entry point for the two presses a sync blocked on a divergence
+    /// offers.
     ///
-    /// The same two lines `feature_sync_impl` resolves its branches with, and
-    /// deliberately so: a drift chip counted against a base the sync would not
-    /// have merged is a number about a branch nobody is going to touch.
-    pub(crate) async fn feature_drift_impl(
+    /// The same three lines `feature_sync_impl` resolves its branches with,
+    /// because this *is* that sync: the reconcile runs in the same worktree,
+    /// ahead of the same base merge, under the same gate. Nothing here judges
+    /// whether the press is still a safe one — that is re-measured against git
+    /// where the move is made
+    /// ([`divergence_move`](crate::domain::upstream_feature::divergence_move)),
+    /// which is the only place the answer cannot already be stale.
+    pub(crate) async fn feature_reconcile_impl(
         &self,
         feature_id: &str,
-        refresh: bool,
-    ) -> Result<crate::domain::models::FeatureDrift, String> {
+        reconcile: crate::domain::upstream_feature::DivergenceReconcile,
+    ) -> Result<Option<crate::ports::sync_session::SyncSessionView>, String> {
+        let (fid, feature, settings) = self.sync_context(feature_id)?;
+        let base_branch = sync_base(&feature, &settings)?;
+        let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
+
+        self.merge_executor
+            .reconcile_feature_with_origin(
+                &fid,
+                &feature_branch,
+                &base_branch,
+                sync_gate(&settings),
+                reconcile,
+            )
+            .await
+    }
+
+    /// Tauri entry point for the read behind those presses.
+    ///
+    /// No base branch: a divergence is a statement about the feature branch and
+    /// its own upstream, so a run whose base cannot be resolved still gets a
+    /// true answer about the half this question is over.
+    pub(crate) async fn feature_divergence_impl(
+        &self,
+        feature_id: &str,
+    ) -> Result<Option<crate::domain::models::FeatureDivergence>, String> {
+        let (fid, feature, settings) = self.sync_context(feature_id)?;
+        self.merge_executor
+            .feature_divergence(
+                &fid,
+                &feature.run_branch(&settings.worktree_strategy.branch_prefix),
+            )
+            .await
+    }
+
+    /// The feature row and the project settings every sync-shaped command
+    /// resolves its branches from, with the project default standing in for a
+    /// project that has none.
+    fn sync_context(
+        &self,
+        feature_id: &str,
+    ) -> Result<
+        (
+            FeatureId,
+            crate::domain::models::Feature,
+            crate::domain::models::ProjectSettings,
+        ),
+        String,
+    > {
         let fid = FeatureId::from(feature_id.to_string());
         let feature = self
             .features
@@ -175,6 +218,20 @@ impl DagStepExecutor {
             .projects
             .get_settings(&feature.project_id)?
             .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
+        Ok((fid, feature, settings))
+    }
+
+    /// Tauri entry point for the staleness signal on the run header.
+    ///
+    /// The same three lines `feature_sync_impl` resolves its branches with, and
+    /// deliberately so: a drift chip counted against a base the sync would not
+    /// have merged is a number about a branch nobody is going to touch.
+    pub(crate) async fn feature_drift_impl(
+        &self,
+        feature_id: &str,
+        refresh: bool,
+    ) -> Result<crate::domain::models::FeatureDrift, String> {
+        let (fid, feature, settings) = self.sync_context(feature_id)?;
         let base_branch = sync_base(&feature, &settings)?;
         let feature_branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
 
@@ -190,15 +247,7 @@ impl DagStepExecutor {
         &self,
         feature_id: &str,
     ) -> Result<crate::ports::step_executor::SyncResolverView, String> {
-        let fid = FeatureId::from(feature_id.to_string());
-        let feature = self
-            .features
-            .get(&fid)?
-            .ok_or_else(|| format!("Feature not found: {}", feature_id))?;
-        let settings = self
-            .projects
-            .get_settings(&feature.project_id)?
-            .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
+        let (_, feature, settings) = self.sync_context(feature_id)?;
         Ok(crate::domain::sync_resolver::resolve_stored(
             &SyncResolverChoice::default(),
             &feature,

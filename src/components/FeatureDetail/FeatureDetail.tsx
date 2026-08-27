@@ -167,10 +167,11 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       describeSyncPanel({
         session: sync.session,
         drift,
+        divergence: sync.divergence,
         canSync: TERMINAL_STATUSES.includes(run.status),
         pending: sync.pending,
       }),
-    [sync.session, drift, run.status, sync.pending],
+    [sync.session, sync.divergence, drift, run.status, sync.pending],
   );
   const syncResolver = useSyncResolverOverrides({
     featureId,

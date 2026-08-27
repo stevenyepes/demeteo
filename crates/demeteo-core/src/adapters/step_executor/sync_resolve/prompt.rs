@@ -1,14 +1,15 @@
 //! What the resolver is told, and what the words are drawn from.
 //!
-//! Pure but for one best-effort read of the base side's own moves, so every
-//! decision here is reachable from a test with no double at all.
+//! Pure but for two best-effort reads of the worktree — which branch the merge
+//! is pulling in, and what that side moved — so every decision here is
+//! reachable from a test with no double at all.
 
 use crate::adapters::worktree::git_ops::sync_verify::{run_gate_prepare, GatePrepare};
 use crate::paths;
 use crate::ports::execution::{ask_within, Answer, ExecutionPort, ShellOptions};
 use crate::ports::worktree_ops::MergeGate;
 
-/// What `origin/<base>` added, moved or deleted since this branch left it.
+/// What the incoming side of the open merge added, moved or deleted.
 ///
 /// The files git merged *without asking* — the other half of the pair
 /// [`build_resolver_prompt`] has to be correct over.
@@ -45,6 +46,91 @@ pub(super) async fn base_side_moves(
             .map(str::to_string)
             .collect(),
         Answer::Refused | Answer::Unreadable(_) => Vec::new(),
+    }
+}
+
+/// Which branch the open merge is pulling in.
+///
+/// A sync merges `origin/<base>`; a reconcile of a diverged branch merges
+/// `origin/<feature>` — the same branch, as origin holds it. Named the wrong
+/// one, the resolver reads the incoming commits as upstream's, and the side it
+/// defers to is another person's work on the user's own branch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum IncomingSide<'a> {
+    Base(&'a str),
+    OwnBranch(&'a str),
+    /// MERGE_HEAD sits at neither tracking tip, or nothing could be read. The
+    /// prompt then names no branch at all rather than the likely one: a name
+    /// that is wrong is the failure this type exists to prevent, and it costs
+    /// the resolver a hint rather than misdirecting it.
+    Unknown,
+}
+
+impl IncomingSide<'_> {
+    /// How the prompt names this side mid-sentence.
+    fn name(&self) -> String {
+        match self {
+            Self::Base(branch) | Self::OwnBranch(branch) => format!("origin/{}", branch),
+            Self::Unknown => "the other side of this merge".to_string(),
+        }
+    }
+}
+
+/// Which branch MERGE_HEAD is the tip of, asked of the worktree rather than of
+/// the sync row — the working tree is the authority
+/// ([`crate::application::sync_session`]), and the row's `base_branch` is not
+/// the incoming side of a reconcile.
+///
+/// Best-effort on the same terms as [`base_side_moves`], and `within` for the
+/// same reason: it is issued with the resolver already spawned.
+pub(super) async fn incoming_side<'a>(
+    exec: &dyn ExecutionPort,
+    machine_str: &str,
+    worktree: &str,
+    base_branch: &'a str,
+    feature_branch: &'a str,
+    within: std::time::Duration,
+) -> IncomingSide<'a> {
+    match ask_within(
+        exec,
+        machine_str,
+        &format!(
+            "git -C {} branch --remotes --points-at MERGE_HEAD",
+            paths::shell_escape_posix(worktree)
+        ),
+        within,
+    )
+    .await
+    {
+        Answer::Said(out) => tracking_tip_at_merge_head(&out, base_branch, feature_branch),
+        Answer::Refused | Answer::Unreadable(_) => IncomingSide::Unknown,
+    }
+}
+
+/// Read `git branch --remotes --points-at MERGE_HEAD` against the two tips it
+/// could be.
+///
+/// The feature's own tip is tested first: `origin/<feature>` is merged only by
+/// a reconcile, and where both tips name one commit the base merge this would
+/// otherwise be had nothing to conflict over. Any other answer — a tip that
+/// moved under the merge, `origin/HEAD`, an empty list — is
+/// [`IncomingSide::Unknown`], because a tracking ref this cannot account for
+/// is not evidence for either branch.
+pub(super) fn tracking_tip_at_merge_head<'a>(
+    points_at: &str,
+    base_branch: &'a str,
+    feature_branch: &'a str,
+) -> IncomingSide<'a> {
+    let named = |branch: &str| {
+        let want = format!("origin/{}", branch);
+        points_at.lines().any(|line| line.trim() == want)
+    };
+    if named(feature_branch) {
+        IncomingSide::OwnBranch(feature_branch)
+    } else if named(base_branch) {
+        IncomingSide::Base(base_branch)
+    } else {
+        IncomingSide::Unknown
     }
 }
 
@@ -192,7 +278,7 @@ pub(super) async fn prepared_verification<'a>(
 /// instruction is more expensive than a missing one.
 pub(super) fn build_resolver_prompt(
     feature_branch: &str,
-    base_branch: &str,
+    incoming: IncomingSide<'_>,
     conflict_files: &[String],
     verification: Verification<'_>,
     base_moves: &[String],
@@ -218,14 +304,27 @@ pub(super) fn build_resolver_prompt(
                 rest
             ));
         }
+        let opener = match incoming {
+            IncomingSide::Base(_) => format!(
+                "{} also added, moved or deleted these files since this branch left it.",
+                incoming.name()
+            ),
+            IncomingSide::OwnBranch(_) => format!(
+                "{} added, moved or deleted these files too.",
+                incoming.name()
+            ),
+            IncomingSide::Unknown => {
+                "The other side of this merge also added, moved or deleted these files.".to_string()
+            }
+        };
         format!(
-            "origin/{base} also added, moved or deleted these files since this branch \
-             left it. Git merged them without asking, so they carry no markers — and \
+            "{opener} Git merged them without asking, so they carry no markers — and \
              they are where a resolution that only fixes the listed files goes wrong:\n\
              {moves}\n\
-             Files origin/{base} only *modified* are not in that list and merged just as \
+             Files {side} only *modified* are not in that list and merged just as \
              silently — `git diff --name-status -M HEAD...MERGE_HEAD` has those.\n\n",
-            base = base_branch,
+            opener = opener,
+            side = incoming.name(),
             moves = lines.join("\n"),
         )
     };
@@ -250,8 +349,21 @@ pub(super) fn build_resolver_prompt(
             cmd = command.trim()
         ),
     };
+    let (opening, own_branch_note) = match incoming {
+        IncomingSide::Base(_) => (incoming.name(), String::new()),
+        IncomingSide::OwnBranch(branch) => (
+            incoming.name(),
+            format!(
+                "origin/{branch} is this same branch as origin holds it: those commits are \
+                 someone else's work on it, not a change from upstream.\n",
+                branch = branch
+            ),
+        ),
+        IncomingSide::Unknown => ("another branch".to_string(), String::new()),
+    };
     format!(
-        "We just merged origin/{base} into {feature}. A merge conflict was detected.\n\
+        "We just merged {opening} into {feature}. A merge conflict was detected.\n\
+         {note}\
          Please resolve the conflicts in the following files:\n\
          {files}\n\n\
          {merged_silently}\
@@ -265,7 +377,8 @@ pub(super) fn build_resolver_prompt(
          {checks}\
          - Do NOT stage or commit — Demeteo validates, stages, and commits the resolution.\n\
          - Report back with a one-line summary when you're done.",
-        base = base_branch,
+        opening = opening,
+        note = own_branch_note,
         feature = feature_branch,
         files = files_list,
         merged_silently = merged_silently,

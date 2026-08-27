@@ -35,6 +35,7 @@ fn conflict(files: Vec<ConflictFile>) -> UpstreamSyncFailure {
             worktree_path: Some("/w/sync-f-1".to_string()),
         },
         worktree_path: Some("/w/sync-f-1".to_string()),
+        resolves_the_base_merge: true,
     }
 }
 
@@ -120,6 +121,7 @@ fn a_conflict_carries_its_worktree_to_the_resolver() {
                 kind: "both-modified".to_string(),
             }],
             worktree_path: Some("/w/sync-f-1"),
+            resolves_the_base_merge: true,
         }
     );
 }
@@ -204,5 +206,116 @@ fn every_stage_round_trips_through_the_column() {
             "{stage:?} is written as `{}` and read back as nothing",
             stage.as_str()
         );
+    }
+}
+
+/// The reconcile runs before the base merge, so its conflict is one the sync
+/// has to be pressed through twice — and the flag is what tells the unattended
+/// node that a resolution of it is not a sync.
+#[test]
+fn a_reconcile_conflict_does_not_report_the_base_as_merged() {
+    let files = vec![ConflictFile {
+        path: "README.md".to_string(),
+        kind: "both-modified".to_string(),
+    }];
+    let mut failure = conflict(files);
+    if let UpstreamSyncFailure::Conflict {
+        resolves_the_base_merge,
+        ..
+    } = &mut failure
+    {
+        *resolves_the_base_merge = false;
+    }
+    match step_next(&failure) {
+        SyncStepNext::Resolve {
+            resolves_the_base_merge,
+            ..
+        } => assert!(!resolves_the_base_merge),
+        other => panic!("a conflict routed to {other:?}"),
+    }
+}
+
+/// A base merge that did not land after a resolved reconcile leaves the one
+/// state no other verdict describes, and the node's words for it have to name
+/// both halves — the branch was reconciled and it was not synced.
+#[test]
+fn the_base_merge_after_a_reconcile_says_which_half_landed() {
+    let reason = base_merge_refusal(
+        "main",
+        &conflict(vec![ConflictFile {
+            path: "README.md".to_string(),
+            kind: "both-modified".to_string(),
+        }]),
+    );
+    assert!(reason.contains("'main' was not merged"), "{reason}");
+    assert!(reason.contains("README.md"), "{reason}");
+
+    assert_eq!(
+        base_merge_refusal("main", &blocked(SyncBlockedStage::Fetch)),
+        "git: could not read from remote repository",
+        "a block already carries git's own words"
+    );
+}
+
+/// A press answered with the previous sync's row is a press that reads as
+/// having done something. Every stage returned before `sync_sessions.open()`
+/// has to say so, and the held-resolution refusal is returned before even the
+/// turn slot is claimed.
+#[test]
+fn every_refusal_raised_before_the_row_exists_says_so() {
+    for stage in [
+        SyncBlockedStage::RepoContext,
+        SyncBlockedStage::TurnInFlight,
+        SyncBlockedStage::HeldResolution,
+    ] {
+        assert!(
+            stage.precedes_the_session(),
+            "{stage:?} is raised before the session row is opened"
+        );
+    }
+    for stage in EVERY_STAGE.into_iter().filter(|s| {
+        !matches!(
+            s,
+            SyncBlockedStage::RepoContext
+                | SyncBlockedStage::TurnInFlight
+                | SyncBlockedStage::HeldResolution
+        )
+    }) {
+        assert!(
+            !stage.precedes_the_session(),
+            "{stage:?} has a row of its own and must be read off it"
+        );
+    }
+}
+
+/// A reset has no second side, so nothing it leaves is unmerged: `None` here
+/// is the answer that sends a resolver into a tree with no `MERGE_HEAD`.
+#[test]
+fn a_reset_that_git_refused_is_never_a_conflict() {
+    use crate::domain::upstream_feature::DivergenceReconcile;
+
+    let unmerged = "error: Entry 'README.md' not uptodate. Cannot merge.";
+    assert_eq!(
+        reconcile_failure_stage(DivergenceReconcile::ResetOntoOrigin, unmerged),
+        Some(SyncBlockedStage::FeatureDiverged)
+    );
+    assert_eq!(
+        reconcile_failure_stage(DivergenceReconcile::MergeOrigin, unmerged),
+        None,
+        "a merge that left unmerged paths is the resolver's"
+    );
+
+    for prefix in [TRANSPORT_ERROR_PREFIX, TIMEOUT_ERROR_PREFIX] {
+        let cut_short = format!("{prefix}connection closed");
+        for move_ in [
+            DivergenceReconcile::ResetOntoOrigin,
+            DivergenceReconcile::MergeOrigin,
+        ] {
+            assert_eq!(
+                reconcile_failure_stage(move_, &cut_short),
+                Some(SyncBlockedStage::Merge),
+                "{move_:?} over {prefix:?} never reached a verdict"
+            );
+        }
     }
 }

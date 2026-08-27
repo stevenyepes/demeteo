@@ -5,17 +5,27 @@ import { useErrorBus } from '../../lib/errorBus';
 import {
   abortSync,
   discardSyncResolution,
+  getFeatureDivergence,
   getSyncSession,
   publishSyncResolution,
+  reconcileSyncDivergence,
   resolveSyncConflicts,
   syncFeature,
   type SyncResolverChoice,
 } from '../../lib/featureSync';
 import type { SyncIntent } from '../../lib/syncPanel';
-import type { SyncSessionView } from '../../types';
+import type { DivergenceReconcile, FeatureDivergence, SyncSessionView } from '../../types';
+
+/** The two presses a divergence leaves open, named as the pane names them so
+ *  `pending` labels the row that was actually pressed. */
+type ReconcileIntent = Extract<SyncIntent, 'reconcile' | 'reset_onto_origin'>;
 
 export interface SyncSession {
   session: SyncSessionView | null;
+  /** What may be done about a sync that stopped on a divergence, measured
+   *  against the two refs rather than remembered from the row. `null` on every
+   *  other row, and on a branch nothing could read. */
+  divergence: FeatureDivergence | null;
   /** Which action is in flight, or `null`. One value rather than a flag per
    *  intent: no two of these can overlap, and separate booleans let a render
    *  show two things happening at once. */
@@ -26,6 +36,7 @@ export interface SyncSession {
   abort: () => Promise<void>;
   publish: () => Promise<void>;
   discard: () => Promise<void>;
+  reconcile: (intent: ReconcileIntent) => Promise<void>;
 }
 
 /**
@@ -53,6 +64,7 @@ export function useSyncSession(input: {
   const { featureId, status, reload } = input;
   const { reportError } = useErrorBus();
   const [session, setSession] = useState<SyncSessionView | null>(null);
+  const [divergence, setDivergence] = useState<FeatureDivergence | null>(null);
   const [pending, setPending] = useState<SyncIntent | null>(null);
 
   const read = useCallback(async () => {
@@ -77,6 +89,33 @@ export function useSyncSession(input: {
       cancelled = true;
     };
   }, [featureId, status, reportError]);
+
+  /**
+   * The divergence, re-read on every row this hook lands, so a reconcile that
+   * changed the answer does not leave the presses for the answer before it.
+   *
+   * A read that fails lands `null`, and `null` is rendered as the refusal that
+   * offers nothing — the same reading the backend gives a `git cherry` it could
+   * not run. It does not reach the error bus: nobody asked for this
+   * measurement, and the pane already says what its absence means.
+   */
+  useEffect(() => {
+    if (!stoppedOnDivergence(session)) {
+      setDivergence(null);
+      return;
+    }
+    let cancelled = false;
+    getFeatureDivergence(featureId)
+      .then((answer) => {
+        if (!cancelled) setDivergence(answer);
+      })
+      .catch(() => {
+        if (!cancelled) setDivergence(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [featureId, session]);
 
   const run = useCallback(
     async (intent: SyncIntent, call: () => Promise<unknown>, reloadRun: boolean) => {
@@ -132,5 +171,45 @@ export function useSyncSession(input: {
     await run('discard', () => discardSyncResolution(featureId), true);
   }, [run, featureId, session?.feature_branch]);
 
-  return { session, pending, refresh, startSync, resolve, abort, publish, discard };
+  /**
+   * The reset is confirmed and the merge is not, which is the line the backend
+   * draws too: a merge can drop neither side, and the reset abandons commits
+   * whose *changes* origin already carries — the commits themselves are what
+   * the press gives up, and nothing in the history says whether they were meant
+   * to survive.
+   */
+  const reconcile = useCallback(
+    async (intent: ReconcileIntent) => {
+      const branch = session?.feature_branch ?? 'the branch';
+      if (intent === 'reset_onto_origin') {
+        const ok = await confirmDialog(
+          `Move ${branch} onto origin/${branch} and abandon the local commits? Origin already carries their changes; the commits themselves go.`,
+          { title: 'Reset onto origin?', kind: 'warning', okLabel: 'Reset', cancelLabel: 'Keep' },
+        );
+        if (!ok) return;
+      }
+      const move: DivergenceReconcile =
+        intent === 'reconcile' ? 'merge_origin' : 'reset_onto_origin';
+      await run(intent, () => reconcileSyncDivergence(featureId, move), true);
+    },
+    [run, featureId, session?.feature_branch],
+  );
+
+  return {
+    session,
+    divergence,
+    pending,
+    refresh,
+    startSync,
+    resolve,
+    abort,
+    publish,
+    discard,
+    reconcile,
+  };
+}
+
+/** The one row a divergence reading is about. */
+function stoppedOnDivergence(session: SyncSessionView | null): boolean {
+  return session?.status === 'blocked' && session.blocked_stage === 'feature_diverged';
 }

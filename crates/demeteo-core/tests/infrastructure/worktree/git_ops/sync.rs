@@ -614,11 +614,12 @@ async fn test_sync_fast_forwards_the_feature_branch_from_origin_first() {
     let _ = std::fs::remove_dir_all(&remote_dir);
 }
 
-/// The other half: two histories, and no fast-forward between them. Demeteo
-/// merging them would be Demeteo deciding what the branch is, and either side
-/// it dropped would go missing exactly as silently as the incident above.
+/// The other half: two histories, and no fast-forward between them. Neither
+/// side's commits are in the other's patches, so the merge that reconciles
+/// them can drop neither — which is the whole of why this one is Demeteo's to
+/// make and the counts alone could not authorise it.
 #[tokio::test]
-async fn test_sync_refuses_a_feature_branch_that_diverged_from_origin() {
+async fn test_sync_merges_a_feature_branch_that_diverged_from_origin() {
     let (local_dir, remote_dir, helper) = make_two_repos("sync_diverged_feature").await;
     let local = local_dir.to_string_lossy().to_string();
     let remote = remote_dir.to_string_lossy().to_string();
@@ -662,6 +663,7 @@ async fn test_sync_refuses_a_feature_branch_that_diverged_from_origin() {
     let _ = exec
         .run_command("local", &format!("git -C \"{remote}\" commit -m hand-fix"))
         .await;
+    let hand_fix = rev_parse(&exec, &remote, "feature/f-1").await;
     let _ = exec
         .run_command("local", &format!("git -C \"{remote}\" checkout main"))
         .await;
@@ -688,7 +690,7 @@ async fn test_sync_refuses_a_feature_branch_that_diverged_from_origin() {
         )
         .await;
 
-    match helper
+    let outcome = match helper
         .sync_feature_with_upstream(
             None,
             &local,
@@ -699,34 +701,43 @@ async fn test_sync_refuses_a_feature_branch_that_diverged_from_origin() {
         )
         .await
     {
-        Ok(o) => panic!(
-            "a branch that diverged from its own upstream cannot be synced; got \
-             changed={} merge_commit_sha={:?}",
-            o.changed, o.merge_commit_sha
-        ),
-        Err(SyncFailure::Conflict { raw_error, .. }) => panic!(
-            "nothing was merged, so nothing can be conflicted, and the resolver \
-             would open a tree with no MERGE_HEAD in it: {raw_error}"
-        ),
+        Ok(outcome) => outcome,
         Err(SyncFailure::Blocked {
-            stage,
-            raw_error,
-            worktree_path,
-            ..
-        }) => {
-            assert_eq!(stage, SyncBlockedStage::FeatureDiverged);
-            assert!(raw_error.contains("feature/f-1"), "{raw_error}");
-            assert_eq!(
-                worktree_path, None,
-                "no merge was attempted, so there is no tree to offer"
-            );
+            stage, raw_error, ..
+        }) => panic!("disjoint work is not a refusal, and this stopped at {stage:?}: {raw_error}"),
+        Err(SyncFailure::Conflict { files, .. }) => {
+            panic!("the two sides touch no file in common: {files:?}")
         }
-    }
+    };
 
-    assert_eq!(
-        rev_parse(&exec, &local, "feature/f-1").await,
-        tip_before,
-        "the refusal must leave the branch exactly where it found it"
+    assert!(
+        outcome.changed,
+        "a branch that gained origin's commit and the base's has changed"
+    );
+    assert_ne!(
+        outcome.head_before.as_deref(),
+        Some(tip_before.as_str()),
+        "head_before is the reconciled tip, not the one read before it: a review diff \
+         from the pre-reconcile tip shows origin's own commits as this sync's work"
+    );
+    for (file, content) in [("more.txt", "more agent work"), ("fix.txt", "hand fix")] {
+        assert_eq!(
+            exec.run_command("local", &format!("git -C \"{local}\" show HEAD:{file}"))
+                .await
+                .unwrap_or_default()
+                .trim(),
+            content,
+            "the reconcile has to keep both sides; {file} is missing from the merged branch"
+        );
+    }
+    assert!(
+        exec.run_command(
+            "local",
+            &format!("git -C \"{local}\" merge-base --is-ancestor {hand_fix} HEAD"),
+        )
+        .await
+        .is_ok(),
+        "origin's commit has to be *in* the history, not merely re-added by it"
     );
 
     let _ = std::fs::remove_dir_all(&local_dir);
@@ -1039,6 +1050,7 @@ mod stage_at_each_call {
 mod feature_upstream {
     use super::stage_at_each_call::*;
     use super::*;
+    use crate::domain::upstream_feature::DivergenceReconcile;
     use crate::ports::worktree_ops::SyncOutcome;
 
     fn ahead_count() -> String {
@@ -1128,6 +1140,414 @@ mod feature_upstream {
         assert!(
             ff_at < merge_at && ff_at.is_some(),
             "fast-forward at {ff_at:?}, base merge at {merge_at:?}: {programs:?}"
+        );
+    }
+
+    fn cherry() -> String {
+        format!("git -C {REPO} cherry origin/{BRANCH} refs/heads/{BRANCH}")
+    }
+
+    fn reconcile() -> String {
+        format!(
+            "git -C {} merge origin/{BRANCH} -m chore(sync): reconcile {BRANCH} with origin",
+            wt()
+        )
+    }
+
+    /// A divergence whose two sides are disjoint is the one Demeteo settles
+    /// itself, and it settles it before the base merge: run after, the base
+    /// would have been merged into a branch still missing origin's commits,
+    /// which is the whole failure this module exists over.
+    #[tokio::test]
+    async fn disjoint_work_is_merged_in_rather_than_refused() {
+        let (programs, result) = sync_over(&run_with(&[
+            (fetch_feature(), Ok("")),
+            (feature_tracking_probe(), Ok("beef2")),
+            (behind_count(), Ok("1")),
+            (ahead_count(), Ok("2")),
+            (cherry(), Ok("+ 1a2b3c\n+ 4d5e6f")),
+            (reconcile(), Ok("")),
+        ]))
+        .await;
+
+        let outcome = result.expect("a divergence that loses nothing is not a refusal");
+        assert_eq!(
+            outcome.head_before.as_deref(),
+            Some("d00d"),
+            "head_before must be re-read after the reconcile: the tip before it is a base \
+             that puts origin's own commits in this sync's diff, and Discard resets to it"
+        );
+        let reconciled_at = programs.iter().position(|p| *p == reconcile());
+        let merge_at = programs.iter().position(|p| *p == merge());
+        assert!(
+            reconciled_at.is_some() && reconciled_at < merge_at,
+            "reconcile at {reconciled_at:?}, base merge at {merge_at:?}: {programs:?}"
+        );
+    }
+
+    /// The push after a reconcile is the ordinary one. The branch now contains
+    /// `origin/<feature>`, so it fast-forwards — and a force here would be the
+    /// one command able to delete the very commits the reconcile was for.
+    #[tokio::test]
+    async fn the_push_after_a_reconcile_is_not_forced() {
+        let (programs, result) = sync_over(&run_with(&[
+            (fetch_feature(), Ok("")),
+            (feature_tracking_probe(), Ok("beef2")),
+            (behind_count(), Ok("1")),
+            (ahead_count(), Ok("2")),
+            (cherry(), Ok("+ 1a2b3c")),
+            (reconcile(), Ok("")),
+            // Unread on both sides of the base merge, which is the reading that
+            // publishes: a tip nobody could name cannot say the branch stayed
+            // put, and withholding the push over it leaves a real merge the
+            // open pull request never sees.
+            (
+                format!("git -C {} rev-parse HEAD", wt()),
+                Err("fatal: bad revision"),
+            ),
+        ]))
+        .await;
+
+        result.expect("a reconciled branch pushes like any other");
+        assert!(
+            programs.contains(&push()),
+            "the reconciled branch has to reach origin, and by the argv the MR \
+             publisher's force flag is not on: {programs:?}"
+        );
+    }
+
+    /// A reconcile writes a commit of its own, and whether the base merge then
+    /// had anything to add is a separate question. `head_before` is
+    /// deliberately re-read *after* the reconcile — the review diff and Discard
+    /// are both about the commit this sync wrote — so the tips the base merge
+    /// is measured between are equal here, and reading that as "nothing
+    /// happened" would file a brand-new unpushed, ungated merge as `UpToDate`.
+    #[tokio::test]
+    async fn a_base_merge_with_nothing_to_do_does_not_unpublish_the_reconcile() {
+        let (programs, result) = sync_over(&run_with(&[
+            (fetch_feature(), Ok("")),
+            (feature_tracking_probe(), Ok("beef2")),
+            (behind_count(), Ok("1")),
+            (ahead_count(), Ok("2")),
+            (cherry(), Ok("+ 1a2b3c")),
+            (reconcile(), Ok("")),
+            (merge(), Ok("Already up to date.")),
+        ]))
+        .await;
+
+        let outcome = result.expect("a clean reconcile over an unmoved base is not a failure");
+        assert!(
+            outcome.changed,
+            "the reconcile committed and nothing else did: {programs:?}"
+        );
+        assert!(
+            programs.contains(&push()),
+            "a merge commit no clone but this one holds has to reach origin: {programs:?}"
+        );
+    }
+
+    /// A conflicted reconcile is the base merge's own conflict path: a tree
+    /// with unmerged paths in it, offered to the resolver. What it is *not* is
+    /// a block — nothing downstream can tell which side the resolver is being
+    /// pointed at, and a divergence filed as blocked strands the tree.
+    ///
+    /// It is also not a synced branch. The base merge has not run, so the flag
+    /// that says a resolution of this leaves `origin/<base>` in the branch is
+    /// the only thing standing between the unattended `sync` node and a run
+    /// that carries on over a stale base.
+    #[tokio::test]
+    async fn a_reconcile_that_conflicts_is_a_conflict() {
+        let (programs, result) = sync_over(&run_with(&[
+            (fetch_feature(), Ok("")),
+            (feature_tracking_probe(), Ok("beef2")),
+            (behind_count(), Ok("1")),
+            (ahead_count(), Ok("2")),
+            (cherry(), Ok("+ 1a2b3c")),
+            (
+                reconcile(),
+                Err("CONFLICT (content): Merge conflict in README.md"),
+            ),
+        ]))
+        .await;
+
+        match result.expect_err("a conflicted reconcile has not synced anything") {
+            SyncFailure::Conflict {
+                files,
+                raw_error,
+                worktree_path,
+                resolves_the_base_merge,
+                ..
+            } => {
+                assert_eq!(files.len(), 1, "{files:?}");
+                assert_eq!(files[0].path, "README.md");
+                assert!(raw_error.contains("Merge conflict"), "{raw_error}");
+                assert_eq!(worktree_path.as_deref(), Some(wt().as_str()));
+                assert!(
+                    !resolves_the_base_merge,
+                    "resolving this leaves origin/main out of the branch"
+                );
+            }
+            SyncFailure::Blocked {
+                stage, raw_error, ..
+            } => panic!("a reconcile that reached a verdict was filed as {stage:?}: {raw_error}"),
+        }
+        assert!(
+            !programs.contains(&merge()),
+            "the base must not be merged over an unresolved reconcile: {programs:?}"
+        );
+    }
+
+    /// Patch equivalence answers what the counts cannot, so the refusal it
+    /// produces has to say so — the pane offers the reset off this text's own
+    /// arm, and today's wording names no move Demeteo has measured.
+    #[tokio::test]
+    async fn a_branch_origin_rewrote_says_what_was_measured() {
+        let (programs, result) = sync_over(&run_with(&[
+            (fetch_feature(), Ok("")),
+            (feature_tracking_probe(), Ok("beef2")),
+            (behind_count(), Ok("3")),
+            (ahead_count(), Ok("2")),
+            (cherry(), Ok("- 1a2b3c\n- 4d5e6f")),
+        ]))
+        .await;
+
+        match result.expect_err("a reset is a press, never a move the sync makes") {
+            SyncFailure::Blocked {
+                stage, raw_error, ..
+            } => {
+                assert_eq!(stage, SyncBlockedStage::FeatureDiverged);
+                assert!(
+                    raw_error.contains("2 commit(s) origin does not")
+                        && raw_error.contains("3 commit(s) this checkout does not"),
+                    "both counts have to survive into the copy: {raw_error}"
+                );
+                assert!(
+                    raw_error.contains("drop no changes"),
+                    "the offer stands on the equivalence, so the text has to carry it: \
+                     {raw_error}"
+                );
+            }
+            SyncFailure::Conflict { raw_error, .. } => {
+                panic!("nothing was merged, so nothing can be conflicted: {raw_error}")
+            }
+        }
+        assert!(
+            !programs.contains(&worktree_add()) && !programs.contains(&reconcile()),
+            "a branch only the user may reconcile is stopped before a tree exists: {programs:?}"
+        );
+    }
+
+    /// Mixed and unreadable are the two answers that settle nothing, and both
+    /// keep the original refusal word for word: the user is the only one who
+    /// knows which history was meant.
+    #[tokio::test]
+    async fn a_divergence_cherry_cannot_settle_keeps_the_old_refusal() {
+        for answer in [Ok("+ 1a2b3c\n- 4d5e6f"), Err("fatal: bad revision")] {
+            let (programs, result) = sync_over(&run_with(&[
+                (fetch_feature(), Ok("")),
+                (feature_tracking_probe(), Ok("beef2")),
+                (behind_count(), Ok("1")),
+                (ahead_count(), Ok("2")),
+                (cherry(), answer),
+            ]))
+            .await;
+
+            match result.expect_err("an unsettled divergence has nothing safe to merge into") {
+                SyncFailure::Blocked {
+                    stage, raw_error, ..
+                } => {
+                    assert_eq!(stage, SyncBlockedStage::FeatureDiverged);
+                    assert!(
+                        raw_error.contains("Reconcile the branch yourself"),
+                        "over {answer:?}: {raw_error}"
+                    );
+                }
+                SyncFailure::Conflict { raw_error, .. } => {
+                    panic!("nothing was merged, so nothing can be conflicted: {raw_error}")
+                }
+            }
+            assert!(
+                !programs.contains(&worktree_add()),
+                "over {answer:?}: {programs:?}"
+            );
+        }
+    }
+
+    fn reset_onto_origin() -> String {
+        format!("git -C {} reset --keep origin/{BRANCH}", wt())
+    }
+
+    async fn reconcile_over(
+        run: &[(String, Result<String, String>)],
+        pressed: DivergenceReconcile,
+    ) -> (Vec<String>, Result<SyncOutcome, SyncFailure>) {
+        let (exec, helper) = helper_over(run);
+        let result = helper
+            .sync_feature_reconciling(
+                crate::adapters::worktree::git_ops::sync::SyncRequest {
+                    machine_id: None,
+                    repo_dir: REPO,
+                    feature_branch: BRANCH,
+                    base_branch: BASE,
+                    gate: MergeGate::default(),
+                    reconcile: Some(pressed),
+                },
+                &(),
+            )
+            .await;
+        (exec.programs(), result)
+    }
+
+    /// The press the sync will not make for itself. Every local commit's patch
+    /// is already on origin, so moving the ref there drops no change — and the
+    /// sync then carries on into the base merge from the reconciled tip, which
+    /// is the whole point of the press being part of a sync rather than a
+    /// button that only moves a ref.
+    #[tokio::test]
+    async fn a_pressed_reset_moves_the_branch_onto_origin() {
+        let (programs, result) = reconcile_over(
+            &run_with(&[
+                (fetch_feature(), Ok("")),
+                (feature_tracking_probe(), Ok("beef2")),
+                (behind_count(), Ok("3")),
+                (ahead_count(), Ok("2")),
+                (cherry(), Ok("- 1a2b3c\n- 4d5e6f")),
+                (reset_onto_origin(), Ok("")),
+            ]),
+            DivergenceReconcile::ResetOntoOrigin,
+        )
+        .await;
+
+        let outcome = result.expect("a reset the measurement still supports is not a refusal");
+        assert_eq!(
+            outcome.head_before.as_deref(),
+            Some("d00d"),
+            "head_before must be re-read after the reset, on the same terms the merge \
+             reconcile re-reads it: the tip before it is no longer on the branch"
+        );
+        let reset_at = programs.iter().position(|p| *p == reset_onto_origin());
+        let merge_at = programs.iter().position(|p| *p == merge());
+        assert!(
+            reset_at.is_some() && reset_at < merge_at,
+            "reset at {reset_at:?}, base merge at {merge_at:?}: {programs:?}"
+        );
+        assert!(
+            !programs.contains(&reconcile()),
+            "the press picked one of the two moves, not both: {programs:?}"
+        );
+    }
+
+    /// The other press on the same branch. A merge over a rewritten history
+    /// duplicates content and keeps every sha, which is a thing only the person
+    /// holding the branch can want — so the measurement does not withhold it.
+    #[tokio::test]
+    async fn a_pressed_merge_is_taken_over_a_branch_origin_rewrote() {
+        let (programs, result) = reconcile_over(
+            &run_with(&[
+                (fetch_feature(), Ok("")),
+                (feature_tracking_probe(), Ok("beef2")),
+                (behind_count(), Ok("3")),
+                (ahead_count(), Ok("2")),
+                (cherry(), Ok("- 1a2b3c\n- 4d5e6f")),
+                (reconcile(), Ok("")),
+            ]),
+            DivergenceReconcile::MergeOrigin,
+        )
+        .await;
+
+        result.expect("a merge keeps both sides under every reading of the branch");
+        assert!(
+            programs.contains(&reconcile()) && !programs.contains(&reset_onto_origin()),
+            "the merge was pressed and the reset must not have run: {programs:?}"
+        );
+    }
+
+    /// The race the re-measurement exists for: the pane offered the reset while
+    /// origin carried every local change, and by the time the button arrived it
+    /// did not. Acting on the press as sent would discard the commit that made
+    /// the difference.
+    #[tokio::test]
+    async fn a_reset_pressed_over_a_branch_that_has_moved_since_is_refused() {
+        for answer in [
+            Ok("+ 1a2b3c"),
+            Ok("- 1a2b3c\n+ 4d5e6f"),
+            Err("fatal: bad revision"),
+        ] {
+            let (programs, result) = reconcile_over(
+                &run_with(&[
+                    (fetch_feature(), Ok("")),
+                    (feature_tracking_probe(), Ok("beef2")),
+                    (behind_count(), Ok("3")),
+                    (ahead_count(), Ok("2")),
+                    (cherry(), answer),
+                ]),
+                DivergenceReconcile::ResetOntoOrigin,
+            )
+            .await;
+
+            match result.expect_err("a reset that would drop work is not performed") {
+                SyncFailure::Blocked {
+                    stage, raw_error, ..
+                } => {
+                    assert_eq!(stage, SyncBlockedStage::FeatureDiverged);
+                    assert!(
+                        raw_error.contains("Nothing was changed"),
+                        "over {answer:?}, the user is looking at the button they pressed: \
+                         {raw_error}"
+                    );
+                }
+                SyncFailure::Conflict { raw_error, .. } => {
+                    panic!("nothing was merged, so nothing can be conflicted: {raw_error}")
+                }
+            }
+            assert!(
+                !programs.contains(&reset_onto_origin()) && !programs.contains(&worktree_add()),
+                "over {answer:?}: {programs:?}"
+            );
+        }
+    }
+
+    /// A reset git itself refuses — `--keep` stops over an edit it would
+    /// destroy, which is the case where the sync worktree *is* the user's own
+    /// checkout. There is no second side in a reset, so there is nothing
+    /// unmerged: filed as a conflict, this would offer a resolver a tree with
+    /// no conflict in it and strand the sync there.
+    #[tokio::test]
+    async fn a_reset_git_refuses_is_a_block_and_never_a_conflict() {
+        let (programs, result) = reconcile_over(
+            &run_with(&[
+                (fetch_feature(), Ok("")),
+                (feature_tracking_probe(), Ok("beef2")),
+                (behind_count(), Ok("3")),
+                (ahead_count(), Ok("2")),
+                (cherry(), Ok("- 1a2b3c\n- 4d5e6f")),
+                (
+                    reset_onto_origin(),
+                    Err("error: Entry 'README.md' not uptodate. Cannot merge."),
+                ),
+            ]),
+            DivergenceReconcile::ResetOntoOrigin,
+        )
+        .await;
+
+        match result.expect_err("a reset that did not happen has not synced anything") {
+            SyncFailure::Blocked {
+                stage,
+                raw_error,
+                worktree_path,
+                ..
+            } => {
+                assert_eq!(stage, SyncBlockedStage::FeatureDiverged);
+                assert!(raw_error.contains("not uptodate"), "{raw_error}");
+                assert_eq!(worktree_path.as_deref(), Some(wt().as_str()));
+            }
+            SyncFailure::Conflict { files, .. } => {
+                panic!("a reset leaves nothing unmerged, and this reported {files:?}")
+            }
+        }
+        assert!(
+            !programs.contains(&merge()),
+            "the base must not be merged over a reconcile that did not happen: {programs:?}"
         );
     }
 

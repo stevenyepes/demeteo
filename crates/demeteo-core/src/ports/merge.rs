@@ -16,7 +16,10 @@
 //! **All methods are async.** Tauri v2 supports async commands natively.
 
 use crate::domain::ids::FeatureId;
-use crate::domain::models::{FeatureDrift, UpstreamSyncFailure, UpstreamSyncOutcome};
+use crate::domain::models::{
+    FeatureDivergence, FeatureDrift, UpstreamSyncFailure, UpstreamSyncOutcome,
+};
+use crate::domain::upstream_feature::DivergenceReconcile;
 use async_trait::async_trait;
 
 #[async_trait]
@@ -57,6 +60,44 @@ pub trait MergeExecutor: Send + Sync {
         base_branch: &str,
         gate: crate::ports::worktree_ops::MergeGate<'_>,
     ) -> Result<UpstreamSyncOutcome, UpstreamSyncFailure>;
+
+    /// Reconcile the feature branch with `origin/<feature>` the way a person
+    /// chose, and then sync it — the press behind a sync that stopped on a
+    /// divergence it may not settle alone.
+    ///
+    /// The same call as
+    /// [`sync_feature_with_upstream`](Self::sync_feature_with_upstream) with the
+    /// divergence answered, so a reconcile that conflicts is an ordinary
+    /// conflicted session and everything downstream of it is unchanged. That is
+    /// also why the answer is the session and not an outcome: the verdict the
+    /// user acts on next is the row, and a reconcile has more ways to end than
+    /// the press has arms.
+    ///
+    /// `Err` is reserved for the two stages that stop before the row exists
+    /// ([`SyncBlockedStage::precedes_the_session`](crate::domain::sync_failure::SyncBlockedStage::precedes_the_session));
+    /// answering with the row there would hand back the *previous* sync's
+    /// verdict as this press's result.
+    async fn reconcile_feature_with_origin(
+        &self,
+        feature_id: &FeatureId,
+        feature_branch: &str,
+        base_branch: &str,
+        gate: crate::ports::worktree_ops::MergeGate<'_>,
+        reconcile: DivergenceReconcile,
+    ) -> Result<Option<crate::ports::sync_session::SyncSessionView>, String>;
+
+    /// What this branch and `origin/<feature>` each hold that the other does
+    /// not, and which of git's moves that leaves open — `None` when they do not
+    /// disagree, or when the refs could not be read.
+    ///
+    /// A read, for a pane that has to decide which presses to offer *before*
+    /// anyone makes one. It re-measures rather than reading the counts the
+    /// blocked row recorded ([`crate::domain::upstream_feature`]).
+    async fn feature_divergence(
+        &self,
+        feature_id: &FeatureId,
+        feature_branch: &str,
+    ) -> Result<Option<FeatureDivergence>, String>;
 
     /// How far this feature's branch has drifted from the base it will merge
     /// into, having merged nothing.
