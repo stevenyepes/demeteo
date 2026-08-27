@@ -14,9 +14,11 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { SyncSessionView } from '../../types';
+import type { FeatureDivergence, SyncSessionView } from '../../types';
 
 const getSyncSession = vi.fn<(featureId: string) => Promise<SyncSessionView | null>>();
+const getFeatureDivergence = vi.fn<(featureId: string) => Promise<FeatureDivergence | null>>();
+const reconcileSyncDivergence = vi.fn();
 const syncFeature = vi.fn();
 const abortSync = vi.fn();
 const resolveSyncConflicts = vi.fn();
@@ -25,6 +27,9 @@ const discardSyncResolution = vi.fn();
 
 vi.mock('../../lib/featureSync', () => ({
   getSyncSession: (featureId: string) => getSyncSession(featureId),
+  getFeatureDivergence: (featureId: string) => getFeatureDivergence(featureId),
+  reconcileSyncDivergence: (featureId: string, move: string) =>
+    reconcileSyncDivergence(featureId, move),
   syncFeature: (featureId: string) => syncFeature(featureId),
   abortSync: (featureId: string) => abortSync(featureId),
   publishSyncResolution: (featureId: string) => publishSyncResolution(featureId),
@@ -155,6 +160,70 @@ describe('useSyncSession', () => {
     await result.current.discard();
 
     expect(discardSyncResolution).not.toHaveBeenCalled();
+  });
+
+  /** The row says a divergence stopped the sync; what may be done about it is a
+   *  property of two refs that both go on moving, so it is measured rather than
+   *  remembered. */
+  it('measures the divergence for a sync that stopped on one', async () => {
+    const diverged = session({ status: 'blocked', blocked_stage: 'feature_diverged' });
+    getSyncSession.mockResolvedValue(diverged);
+    getFeatureDivergence.mockResolvedValue({ ahead: 2, behind: 3, next_move: 'reset_onto_origin' });
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.divergence?.next_move).toBe('reset_onto_origin'));
+    expect(getFeatureDivergence).toHaveBeenCalledWith('f-1');
+  });
+
+  it('measures nothing for a row that did not stop on a divergence', async () => {
+    getSyncSession.mockResolvedValue(session());
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.session).not.toBeNull());
+    expect(getFeatureDivergence).not.toHaveBeenCalled();
+    expect(result.current.divergence).toBeNull();
+  });
+
+  /** A measurement that could not be made is the same non-answer as a `git
+   *  cherry` nobody could read, and the pane renders it as the refusal that
+   *  offers no press — so it lands `null` rather than an error nobody asked
+   *  for. */
+  it('lands nothing when the divergence could not be read', async () => {
+    getSyncSession.mockResolvedValue(session({ status: 'blocked', blocked_stage: 'feature_diverged' }));
+    getFeatureDivergence.mockRejectedValue(new Error('fatal: bad revision'));
+    const { result } = mount();
+
+    await waitFor(() => expect(getFeatureDivergence).toHaveBeenCalled());
+    expect(result.current.divergence).toBeNull();
+  });
+
+  /** The reset abandons commits. A confirm the user declined must leave the
+   *  branch exactly where it was — the same rule the discard obeys. */
+  it('writes nothing when the reset confirmation is declined', async () => {
+    getSyncSession.mockResolvedValue(session({ status: 'blocked', blocked_stage: 'feature_diverged' }));
+    getFeatureDivergence.mockResolvedValue({ ahead: 2, behind: 3, next_move: 'reset_onto_origin' });
+    vi.mocked(confirmDialog).mockResolvedValueOnce(false);
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.session).not.toBeNull());
+    await result.current.reconcile('reset_onto_origin');
+
+    expect(reconcileSyncDivergence).not.toHaveBeenCalled();
+  });
+
+  /** The merge is the move that can drop neither side, so it asks nothing —
+   *  and the intent the pane pressed decides the move on the wire. */
+  it('merges origin in without asking, and names the move it sends', async () => {
+    getSyncSession.mockResolvedValue(session({ status: 'blocked', blocked_stage: 'feature_diverged' }));
+    getFeatureDivergence.mockResolvedValue({ ahead: 2, behind: 3, next_move: 'merge_origin' });
+    reconcileSyncDivergence.mockResolvedValue(undefined);
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.session).not.toBeNull());
+    await result.current.reconcile('reconcile');
+
+    expect(confirmDialog).not.toHaveBeenCalled();
+    expect(reconcileSyncDivergence).toHaveBeenCalledWith('f-1', 'merge_origin');
   });
 
   it('reloads the run after a sync, so the timeline sees the merge', async () => {

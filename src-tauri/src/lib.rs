@@ -499,6 +499,8 @@ pub fn run() {
             commands::features::sync_abort,
             commands::features::sync_publish,
             commands::features::sync_discard,
+            commands::features::sync_reconcile,
+            commands::features::feature_divergence,
             commands::features::feature_get_worktree,
             commands::git::git_changed_files,
             commands::git::git_file_at_ref,
