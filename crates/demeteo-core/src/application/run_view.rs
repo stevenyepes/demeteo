@@ -255,64 +255,6 @@ impl RunView {
     }
 }
 
+#[cfg(test)]
 #[path = "../../tests/application/run_view.rs"]
 mod tests;
-
-#[cfg(test)]
-mod run_events_tests {
-    use std::sync::Mutex;
-
-    use crate::ports::run_events::{RunEvent, RunEventsPort};
-
-    struct RecordingRunEvents {
-        list_call: Mutex<Option<(String, i64)>>,
-        result: Vec<RunEvent>,
-    }
-
-    impl RunEventsPort for RecordingRunEvents {
-        fn append(
-            &self,
-            _run_id: &str,
-            _kind: &str,
-            _payload_json: Option<&str>,
-            _now: i64,
-        ) -> Result<i64, String> {
-            Err("unexpected append".to_owned())
-        }
-
-        fn list_since(&self, run_id: &str, from_offset: i64) -> Result<Vec<RunEvent>, String> {
-            *self.list_call.lock().map_err(|error| error.to_string())? =
-                Some((run_id.to_owned(), from_offset));
-            Ok(self.result.clone())
-        }
-    }
-
-    #[test]
-    fn run_events_read_preserves_feature_id_cursor_and_port_result() {
-        let expected = [13, 21]
-            .into_iter()
-            .map(|offset| RunEvent {
-                offset,
-                run_id: "feature-1".to_owned(),
-                kind: "agent_spawned".to_owned(),
-                payload_json: None,
-                created_at: 1,
-            })
-            .collect::<Vec<_>>();
-        let port = RecordingRunEvents {
-            list_call: Mutex::new(None),
-            result: expected.clone(),
-        };
-
-        let actual = super::list_run_events_since(&port, "feature-1", 8).expect("list run events");
-
-        assert_eq!(
-            actual.iter().map(|event| event.offset).collect::<Vec<_>>(),
-            vec![13, 21]
-        );
-        assert_eq!(
-            *port.list_call.lock().expect("recorded list call"),
-            Some(("feature-1".to_owned(), 8))
-        );
-    }
-}
