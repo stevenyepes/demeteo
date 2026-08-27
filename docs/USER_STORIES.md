@@ -120,7 +120,7 @@
 ## Story 8: Workflow Authoring
 **Description:** As a user, I want to create and edit workflow templates to define custom execution steps, conditions, and agent assignments.
 **References:**
-- **UX Journey:** [Journey 10](UX_JOURNEYS.md#journey-10-workflow-authoring)
+- **UX Journey:** [Journey 11](UX_JOURNEYS.md#journey-11-workflow-authoring)
 - **Architecture:** [docs/ARCHITECTURE.md](ARCHITECTURE.md) (`WorkflowRepository`)
 - **DDD Domain:** [docs/DDD_MODEL.md](DDD_MODEL.md) (Workflow Catalog)
 - **UI Areas:** `WorkflowList`, `WorkflowCanvas` design mode (`src/components/canvas/`)
