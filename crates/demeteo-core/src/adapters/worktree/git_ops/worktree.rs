@@ -46,7 +46,7 @@ impl GitOpsHelper {
     /// Unlike subtask provisioning, this path never removes an existing
     /// worktree, resets a branch, or falls back to an existing branch. `git
     /// worktree add -b` creates the requested branch at the start point
-    /// [`GitOpsHelper::terminal_start_point`] resolved; an existing requested
+    /// [`GitOpsHelper::refreshed_start_point`] resolved; an existing requested
     /// branch is rejected rather than reused. The caller owns both names, so a
     /// collision is an error the user must resolve rather than stale pipeline
     /// state to reclaim.
@@ -62,8 +62,9 @@ impl GitOpsHelper {
         let destination = terminal_worktree_dir(repo_dir, project_root, &request.worktree_name)?;
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let base_ref = self
-            .terminal_start_point(machine_str, repo_dir, request.base_branch.as_deref())
-            .await?;
+            .refreshed_start_point(machine_str, repo_dir, request.base_branch.as_deref())
+            .await
+            .map_err(|e| format!("create_terminal_worktree: {e}"))?;
         let start_point = request.base_branch.as_ref().map(|_| base_ref.as_str());
         let command = terminal_worktree_create_cmd(
             repo_dir,
@@ -102,8 +103,8 @@ impl GitOpsHelper {
         })
     }
 
-    /// Resolve what `git worktree add -b` should branch from, refreshing it
-    /// from origin first.
+    /// Resolve what a new worktree should start from, refreshing it from
+    /// origin first.
     ///
     /// `None` answers `HEAD` without touching the network — the caller then
     /// omits the start point entirely and Git uses the primary checkout's HEAD,
@@ -116,7 +117,16 @@ impl GitOpsHelper {
     /// which of the two it got. A base that resolves neither way is an error —
     /// silently falling through to HEAD is how a session starts on a branch
     /// nobody chose.
-    pub(super) async fn terminal_start_point(
+    ///
+    /// **The local branch is the fallback, never the answer.** A clone Demeteo
+    /// only ever fetches into has a local `<base>` frozen at the commit it was
+    /// cloned at, so reading a repository through it shows a tree that may be
+    /// hundreds of commits behind what the user is looking at — and every
+    /// conclusion drawn from it is confidently wrong about the present.
+    ///
+    /// Errors are unprefixed; each caller names itself, because the two that
+    /// exist report through different surfaces.
+    pub async fn refreshed_start_point(
         &self,
         machine_str: &str,
         repo_dir: &str,
@@ -125,9 +135,8 @@ impl GitOpsHelper {
         let Some(base) = base_branch else {
             return Ok("HEAD".to_string());
         };
-        validate_git_branch_name(base).map_err(|_| {
-            format!("create_terminal_worktree: base branch '{base}' is not a safe Git branch name")
-        })?;
+        validate_git_branch_name(base)
+            .map_err(|_| format!("base branch '{base}' is not a safe Git branch name"))?;
         let _ = self
             .exec
             .run_program(
@@ -157,7 +166,7 @@ impl GitOpsHelper {
         }
 
         Err(format!(
-            "create_terminal_worktree: base branch '{base}' exists neither on origin nor locally"
+            "base branch '{base}' exists neither on origin nor locally"
         ))
     }
 
@@ -223,7 +232,7 @@ impl GitOpsHelper {
     /// — Git answers in its own terms, `fatal: cannot change to '<dir>'`, which
     /// reads as a damaged repository rather than one that was never cloned and
     /// names nothing the user can act on. Choosing a base branch makes it worse:
-    /// [`GitOpsHelper::terminal_start_point`] probes first and blames the base
+    /// [`GitOpsHelper::refreshed_start_point`] probes first and blames the base
     /// for a directory that is not there.
     ///
     /// Probed only after a failure, so the extra round trip never lands on a
@@ -1219,7 +1228,7 @@ fn has_path_component(path: &str, name: &str) -> bool {
 /// causing another pathname resolution of that parent.
 ///
 /// `start_point` is the committish the new branch is cut at, already resolved
-/// by [`GitOpsHelper::terminal_start_point`]. `None` omits it so Git falls back
+/// by [`GitOpsHelper::refreshed_start_point`]. `None` omits it so Git falls back
 /// to the primary checkout's HEAD.
 ///
 /// `interlude` is shell run after the destination parent has been entered and

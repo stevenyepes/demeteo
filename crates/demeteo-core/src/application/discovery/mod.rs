@@ -199,8 +199,39 @@ pub fn create(ctx: &AppContext, new: NewDiscovery) -> Result<Discovery, String> 
         updated_at: now,
     };
     ctx.discoveries.create(&discovery)?;
+    ctx.discoveries.append_message(&seed_message(&discovery))?;
     attachments::stage_batch(ctx, &discovery.id, new.staged_attachments)?;
     load(ctx, &discovery.id)
+}
+
+/// The idea the Discovery was opened on, stored as the first thing said in the
+/// interview.
+///
+/// **A title that is not a message is a title the interviewer is never told.**
+/// [`question::render_turn_prompt`] carries the transcript and the text of the
+/// turn being taken and reads no other field of the row; the one other place
+/// the title travels is [`crate::ports::agent_runtime::AgentContext::title`],
+/// which reaches opencode's `--title` and pi's `--name` and is dropped
+/// entirely by every other harness. So without this the first turn opens on
+/// whatever the user typed *second*, and the interviewer spends it asking what
+/// the interview is about.
+///
+/// A message rather than a block of its own in the prompt: the first turn has
+/// no live session, so it always re-seeds and the transcript is already what
+/// carries what was said. A second home for the idea is a second thing that
+/// can disagree with it. `docs/DISCOVERY_UI_SPEC.md` §3.4.3 draws it as the
+/// opening bubble on the same reading.
+fn seed_message(discovery: &Discovery) -> DiscoveryMessage {
+    DiscoveryMessage {
+        id: crate::shared::ids::new_id(),
+        discovery_id: discovery.id.clone(),
+        role: MessageRole::User,
+        content: discovery.title.clone(),
+        cost_usd: None,
+        tokens: None,
+        activity: None,
+        created_at: discovery.created_at,
+    }
 }
 
 /// Refuse a machine nothing is configured for.
@@ -303,3 +334,7 @@ pub(super) fn load(ctx: &AppContext, id: &DiscoveryId) -> Result<Discovery, Stri
         .get(id)?
         .ok_or_else(|| format!("Discovery not found: {}", id.as_str()))
 }
+
+#[cfg(test)]
+#[path = "../../../tests/application/discovery/mod.rs"]
+mod tests;
