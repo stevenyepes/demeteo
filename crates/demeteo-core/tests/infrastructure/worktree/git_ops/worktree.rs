@@ -2857,3 +2857,57 @@ async fn the_fork_point_fetches_its_base_before_asking_for_a_merge_base() {
         ]
     );
 }
+
+/// The clone Demeteo reads a project in is one it only ever fetches into, so
+/// its local `main` sits wherever it was left — for a project whose runs all
+/// happen elsewhere, at the commit it was cloned at. A tree cut from that
+/// branch is a tree of the past, and nothing about it says so.
+#[tokio::test]
+async fn test_refreshed_start_point_prefers_origin_over_a_stale_local_branch() {
+    let (local_dir, _remote_dir, helper, _remote) =
+        two_repos_with_origin_ahead("refreshed_start_point", "advance").await;
+    let local = local_dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+
+    let start = helper
+        .refreshed_start_point("local", &local, Some("main"))
+        .await
+        .expect("origin resolves the base branch");
+    assert_eq!(start, "origin/main");
+
+    let wt = helper
+        .provision_detached_worktree(None, &local, &start, "discovery-stale", None)
+        .await
+        .expect("a detached tree is provisioned at the fetched ref");
+    assert_eq!(
+        std::fs::read_to_string(std::path::Path::new(&wt).join("README.md")).unwrap(),
+        "origin advanced"
+    );
+
+    // The half that makes the assertion above mean something: the local branch
+    // is *still* behind, so cutting from it would have handed back the old tree.
+    assert_ne!(
+        rev_parse(&exec, &local, "main").await,
+        rev_parse(&exec, &local, "origin/main").await,
+    );
+}
+
+/// Origin is where the answer comes from, but not where it has to come from: a
+/// repository with no remote at all still interviews, against the ref it has.
+#[tokio::test]
+async fn test_refreshed_start_point_falls_back_to_the_local_branch() {
+    let (dir, helper) = make_repo("refreshed_start_point_local").await;
+    let repo = dir.to_string_lossy().to_string();
+
+    let start = helper
+        .refreshed_start_point("local", &repo, Some("main"))
+        .await
+        .expect("a repository with no origin still names its own branch");
+    assert_eq!(start, "main");
+
+    assert!(helper
+        .refreshed_start_point("local", &repo, Some("nonexistent"))
+        .await
+        .expect_err("a base that resolves neither way is an error")
+        .contains("neither on origin nor locally"));
+}

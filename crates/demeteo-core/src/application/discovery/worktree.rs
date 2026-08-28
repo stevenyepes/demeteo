@@ -8,10 +8,11 @@
 //! a checkout of a commit, recreated on the next turn without the user seeing
 //! it happen.
 //!
-//! What it leaves behind while it exists is one local branch. §4.7 asks for
-//! nothing in the repository, and this is the whole of the exception: `git
-//! worktree add` needs a ref to attach the tree to, the branch is never
-//! pushed, and [`reclaim`] deletes it with the tree.
+//! It leaves nothing behind in the repository at all, which is what §4.7 asks
+//! for: the tree is detached, so there is no branch to name, to push, or to
+//! merge anything into — an interview that writes nothing needs no ref of its
+//! own, and a tree with no branch cannot be committed onto by an agent that
+//! tries anyway.
 
 use std::path::PathBuf;
 
@@ -126,6 +127,16 @@ async fn repo_dir_on(
 /// A path that has gone missing and a Discovery that never had one are the
 /// same case: nothing in the tree is authoritative, so neither is worth
 /// telling apart from the other.
+///
+/// **Provisioned from `origin/<default>` rather than the local branch of that
+/// name.** Demeteo's clone is one it only ever fetches into, so its local
+/// default branch sits at whatever commit the last run left it on — for a
+/// project whose runs all happen elsewhere, that is where it was cloned. An
+/// interviewer reading that tree answers questions about a repository the user
+/// has not had for months, and it answers them with the same confidence as
+/// about the present, which is the failure mode: it does not read as stale, it
+/// reads as wrong. [`GitOpsHelper::refreshed_start_point`] fetches first and
+/// falls back to the local ref only when origin cannot be reached.
 pub async fn ensure(
     ctx: &AppContext,
     discovery: &Discovery,
@@ -137,23 +148,35 @@ pub async fn ensure(
         }
     }
 
-    let path = ctx
-        .worktree_ops
-        .provision_subtask_worktree(
+    let git = GitOpsHelper::new(ctx.app_settings.clone(), ctx.exec.clone());
+    let start_point = git
+        .refreshed_start_point(
+            &repo.machine_str,
+            &repo.repo_dir,
+            Some(&repo.default_branch),
+        )
+        .await
+        .map_err(|e| format!("The interview could not find a commit to read: {e}"))?;
+
+    let path = git
+        .provision_detached_worktree(
             repo.machine_id.as_deref(),
             &repo.repo_dir,
-            &repo.default_branch,
+            &start_point,
             &subtask_id(discovery),
+            Some(&crate::paths::feature_cache_dir(
+                &repo.repo_dir,
+                &repo.default_branch,
+            )),
         )
         .await?;
 
-    GitOpsHelper::new(ctx.app_settings.clone(), ctx.exec.clone())
-        .apply_artifact_scope(
-            repo.machine_id.as_deref(),
-            &path,
-            &[PathBuf::from(NONE_WRITABLE)],
-        )
-        .await?;
+    git.apply_artifact_scope(
+        repo.machine_id.as_deref(),
+        &path,
+        &[PathBuf::from(NONE_WRITABLE)],
+    )
+    .await?;
 
     ctx.discoveries.update(
         &discovery.id,
@@ -166,11 +189,16 @@ pub async fn ensure(
     Ok(path)
 }
 
-/// Give the tree and its branch back, and forget the path.
+/// Give the tree back, and forget the path.
 ///
 /// The path is cleared even when teardown reported a failure: a stored path
 /// whose tree is half-removed is what makes the *next* turn fail too, and
 /// [`ensure`] treats a missing one as nothing to explain.
+///
+/// `cleanup_subtask_worktree` rather than the detached counterpart, though
+/// [`ensure`] provisions no branch: the two remove the path identically and
+/// this one's trailing `branch -D` is best-effort, so it also takes a
+/// `<default>_subtask_discovery-<id>` left by a tree that did have one.
 pub async fn reclaim(ctx: &AppContext, discovery: &Discovery) -> Result<(), String> {
     if discovery
         .worktree_path

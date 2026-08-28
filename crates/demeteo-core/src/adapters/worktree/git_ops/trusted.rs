@@ -59,12 +59,13 @@ impl TrustedWorktreePort for GitOpsHelper {
                 .ok_or_else(|| "trusted worktree: repository path has no basename".to_string())?
                 .to_os_string();
             let base_ref = self
-                .terminal_start_point(
+                .refreshed_start_point(
                     "local",
                     request.target.repository_dir(),
                     terminal.base_branch.as_deref(),
                 )
-                .await?;
+                .await
+                .map_err(|e| format!("trusted worktree: {e}"))?;
             let git_dir = self
                 .exec
                 .run_program(
