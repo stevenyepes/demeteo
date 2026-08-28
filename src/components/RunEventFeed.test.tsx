@@ -21,6 +21,64 @@ const evt = (over: Partial<RunEvent>): RunEvent => ({
 afterEach(cleanup);
 
 describe('describeEvent', () => {
+  it('renders an agent spawn with the canonical effective-effort label', () => {
+    const d = describeEvent(
+      'agent_spawned',
+      JSON.stringify({
+        step_execution_id: 'execution-1',
+        agent_kind: 'codex',
+        effort: 'xhigh',
+      }),
+    );
+
+    expect(d.label).toBe('Agent spawned');
+    expect(d.detail).toBe('Agent codex · Effective effort Extra high');
+  });
+
+  it('renders an explicit null effort without substituting a default', () => {
+    const d = describeEvent(
+      'agent_spawned',
+      JSON.stringify({
+        step_execution_id: 'execution-1',
+        agent_kind: 'hermes',
+        effort: null,
+      }),
+    );
+
+    expect(d.detail).toBe('Agent hermes · Effective effort No injected effort');
+  });
+
+  it('accepts unknown fields on an otherwise valid agent spawn', () => {
+    const d = describeEvent(
+      'agent_spawned',
+      JSON.stringify({
+        step_execution_id: 'execution-1',
+        agent_kind: 'opencode',
+        effort: 'medium',
+        added_by_a_newer_runner: true,
+      }),
+    );
+
+    expect(d.detail).toBe('Agent opencode · Effective effort Medium');
+  });
+
+  it.each([
+    ['malformed JSON', '{'],
+    [
+      'version-skewed effort',
+      JSON.stringify({
+        step_execution_id: 'execution-1',
+        agent_kind: 'future-agent',
+        effort: 'ultra',
+      }),
+    ],
+  ])('falls back safely for a %s agent spawn payload', (_case, payloadJson) => {
+    const d = describeEvent('agent_spawned', payloadJson);
+
+    expect(d.label).toBe('Agent spawned');
+    expect(d.detail).toBe(payloadJson === '{' ? '{' : JSON.stringify(JSON.parse(payloadJson)));
+  });
+
   it('renders a step_progress row with status, tokens and cost', () => {
     const d = describeEvent(
       'step_progress',

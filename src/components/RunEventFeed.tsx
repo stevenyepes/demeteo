@@ -9,6 +9,10 @@
  * identical rows. Height and scroll are the caller's.
  */
 import React from 'react';
+import {
+  assignmentEffortLabel,
+  parseRunEventAssignment,
+} from '../lib/runEventAssignments';
 import type { RunEvent } from '../types';
 
 /** Best-effort human-readable rendering of a `RunEvent.payload_json` — most
@@ -49,6 +53,7 @@ const EVENT_KIND_LABEL: Record<string, string> = {
   gate_required: 'Gate reached',
   gate_decided: 'Gate decided',
   step_output: 'Output',
+  agent_spawned: 'Agent spawned',
 };
 
 type EventTone = 'default' | 'success' | 'warn' | 'error';
@@ -111,6 +116,7 @@ interface RunEventPayload {
 export function describeEvent(
   kind: string,
   payloadJson: string | null,
+  offset = 0,
 ): { label: string; detail: string; tone: EventTone } {
   const fallbackLabel = EVENT_KIND_LABEL[kind] ?? kind;
   let p: RunEventPayload | null = null;
@@ -123,6 +129,15 @@ export function describeEvent(
   }
 
   switch (kind) {
+    case 'agent_spawned': {
+      const assignment = parseRunEventAssignment({ kind, payload_json: payloadJson, offset });
+      if (!assignment) break;
+      return {
+        label: fallbackLabel,
+        detail: `Agent ${assignment.agentKind} · Effective effort ${assignmentEffortLabel(assignment.effort)}`,
+        tone: 'default',
+      };
+    }
     case 'step_progress': {
       if (!p || typeof p !== 'object') break;
       const status = String(p.status ?? '');
@@ -195,7 +210,7 @@ export const RunEventFeed: React.FC<{
   return (
     <>
       {events.map((e) => {
-        const { label, detail, tone } = describeEvent(e.kind, e.payload_json);
+        const { label, detail, tone } = describeEvent(e.kind, e.payload_json, e.offset);
         return (
           <div key={e.offset} className="flex items-start gap-2">
             <span className="shrink-0 text-slate-600">

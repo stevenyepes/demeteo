@@ -28,6 +28,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 import { loadAgentCatalog } from '../../lib/agentCatalog';
 import { DEFAULT_DENSITY } from '../../lib/density';
+import type { RunEventAssignments } from '../../lib/runEventAssignments';
 import type { StepExecution } from '../../types';
 
 const handlers: Record<string, Array<(e: { payload: unknown }) => void>> = {};
@@ -78,6 +79,21 @@ const STEPS: StepExecution[] = [
 
 const IDLE_IDS = ['se-1', 'se-2', 'se-4', 'se-5'] as const;
 
+const INITIAL_ASSIGNMENTS: RunEventAssignments = {
+  'se-1': {
+    stepExecutionId: 'se-1',
+    agentKind: 'opencode',
+    effort: 'medium',
+    offset: 1,
+  },
+  [STREAMING_ID]: {
+    stepExecutionId: STREAMING_ID,
+    agentKind: 'claude-code',
+    effort: 'high',
+    offset: 2,
+  },
+};
+
 const noop = () => {};
 
 /**
@@ -93,21 +109,40 @@ function Harness() {
   useAgentStream(FEATURE_ID);
   const stepCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [assignments, setAssignments] = useState(INITIAL_ASSIGNMENTS);
   const onSelect = useCallback((id: string) => setSelectedStepId(id), []);
 
   return (
-    <StepTimeline
-      steps={STEPS}
-      remoteRun={null}
-      remoteMachineName={null}
-      hasBootstrapPhases={false}
-      gateStepExecutionId={null}
-      stepCardRefs={stepCardRefs}
-      selectedStepId={selectedStepId}
-      density={DEFAULT_DENSITY}
-      onSelect={onSelect}
-      onDecideGate={noop}
-    />
+    <>
+      <button
+        type="button"
+        onClick={() =>
+          setAssignments((current) => ({
+            ...current,
+            [STREAMING_ID]: {
+              ...current[STREAMING_ID],
+              effort: 'xhigh',
+              offset: 3,
+            },
+          }))
+        }
+      >
+        Update assignment
+      </button>
+      <StepTimeline
+        steps={STEPS}
+        assignments={assignments}
+        remoteRun={null}
+        remoteMachineName={null}
+        hasBootstrapPhases={false}
+        gateStepExecutionId={null}
+        stepCardRefs={stepCardRefs}
+        selectedStepId={selectedStepId}
+        density={DEFAULT_DENSITY}
+        onSelect={onSelect}
+        onDecideGate={noop}
+      />
+    </>
   );
 }
 
@@ -200,5 +235,35 @@ describe('StepTimeline selection', () => {
     expect(rows().map((r) => r.getAttribute('aria-current'))).toEqual(
       STEPS.map((_, i) => (i === 3 ? 'step' : null)),
     );
+  });
+});
+
+describe('StepTimeline assignments', () => {
+  it('re-renders only the card whose assignment changed', async () => {
+    const { container, getByRole } = render(<Harness />);
+    await waitFor(() => expect(handlers.agent_stream?.length).toBeGreaterThan(0));
+
+    const assignmentLabel = (id: string) =>
+      container
+        .querySelector(`[data-step-id="${id}"]`)
+        ?.querySelector('[aria-label^="Actual assignment:"]')
+        ?.getAttribute('aria-label');
+    expect(assignmentLabel('se-1')).toBe(
+      'Actual assignment: Agent: opencode; Effective effort: Medium',
+    );
+    expect(assignmentLabel(STREAMING_ID)).toBe(
+      'Actual assignment: Agent: claude-code; Effective effort: High',
+    );
+    expect(assignmentLabel('se-2')).toBeUndefined();
+
+    const before = { ...cardRenders };
+    await userEvent.click(getByRole('button', { name: 'Update assignment' }));
+
+    expect(assignmentLabel(STREAMING_ID)).toBe(
+      'Actual assignment: Agent: claude-code; Effective effort: Extra high',
+    );
+    for (const [id, renders] of Object.entries(cardRenders)) {
+      expect(renders - (before[id] ?? 0)).toBe(id === STREAMING_ID ? 1 : 0);
+    }
   });
 });

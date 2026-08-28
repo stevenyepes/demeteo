@@ -148,8 +148,8 @@ pub struct AppContext {
     /// but nothing ever writes to it there).
     pub runner_runs: Arc<dyn RunnerRunPort>,
 
-    /// Append-only per-run event log (M3.3), read by the `stream_events`
-    /// RPC. Also unused by the Tauri app.
+    /// Append-only per-run event log (M3.3), written for local and runner
+    /// executions and read by the Tauri app and the `stream_events` RPC.
     pub run_events: Arc<dyn RunEventsPort>,
 
     /// Laptop-side mirror of remote runs (M6.1/M6.2), keyed by

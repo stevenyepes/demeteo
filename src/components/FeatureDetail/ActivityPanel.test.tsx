@@ -115,12 +115,13 @@ describe('ActivityPanel — the feed', () => {
     expect(streamRemoteEvents).toHaveBeenLastCalledWith('m-1', 'r-1', 12);
   });
 
-  it('says a local run backfills nothing, rather than "waiting"', () => {
+  it('describes an empty durable local history without a since-opened claim', () => {
     render(
       <ActivityPanel events={[]} remote={null} terminal={false} open onOpenChange={() => {}} />,
     );
 
-    expect(screen.getByText(/Nothing since this run was opened/)).toBeInTheDocument();
+    expect(screen.getByText('No activity has been recorded for this run.')).toBeInTheDocument();
+    expect(screen.queryByText(/since .*opened/i)).not.toBeInTheDocument();
     expect(streamRemoteEvents).not.toHaveBeenCalled();
   });
 });

@@ -6,6 +6,7 @@ use crate::domain::models::{
 use crate::domain::sync_resolver::SyncResolverChoice;
 use crate::domain::upstream_feature::DivergenceReconcile;
 use crate::error::AppError;
+use crate::ports::run_events::RunEvent;
 use crate::ports::step_executor::{FeatureLaunch, SyncOutcomeView, SyncResolverView};
 use crate::ports::sync_session::SyncSessionView;
 use crate::state::AppContext;
@@ -172,6 +173,17 @@ pub async fn step_list_for_run(
 ) -> Result<Vec<StepExecution>, AppError> {
     ctx.run_view
         .steps(&FeatureId::from(feature_id))
+        .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn run_events_since(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+    from_offset: i64,
+) -> Result<Vec<RunEvent>, AppError> {
+    ctx.run_view
+        .run_events_since(&FeatureId::from(feature_id), from_offset)
         .map_err(AppError::from)
 }
 

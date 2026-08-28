@@ -2,6 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import type { RemoteRunMirror, RunEvent } from '../../types';
 import { TERMINAL_STATUSES } from '../../lib/runStatus';
 import { listMachines, remoteRefreshRun, remoteRunForFeature } from '../../lib/featureDetail';
+import {
+  reconcileRunEventAssignments,
+  type RunEventAssignments,
+} from '../../lib/runEventAssignments';
 
 type BootstrapPhasePayload = { phase: string; label?: string; status?: string; detail?: string | null };
 
@@ -15,6 +19,17 @@ function isBootstrapPhasePayload(value: unknown): value is BootstrapPhasePayload
 
 const POLL_BASE_MS = 3_000;
 const POLL_CEILING_MS = 48_000;
+const EMPTY_ASSIGNMENTS: RunEventAssignments = {};
+
+interface RemoteEventState {
+  runKey: string;
+  events: RunEvent[];
+  assignments: RunEventAssignments;
+}
+
+function emptyEventState(runKey: string): RemoteEventState {
+  return { runKey, events: [], assignments: EMPTY_ASSIGNMENTS };
+}
 
 /**
  * How long to wait before the next tick given the run of failures behind it.
@@ -61,7 +76,16 @@ export function useRemoteRun(input: {
   // so their unified feed comes from the `remote_stream_events` poll that the
   // Activity strip already tails; we capture the same batch here (P2.6) so the
   // node panel's Overview raw feed works for both transports from one shape.
-  const [remoteRunEvents, setRemoteRunEvents] = useState<RunEvent[]>([]);
+  const remoteRunKey = `${featureId}:${remoteRun?.machine_id ?? ''}:${remoteRun?.run_id ?? ''}`;
+  const [remoteEventState, setRemoteEventState] = useState<RemoteEventState>(() =>
+    emptyEventState(remoteRunKey),
+  );
+  const remoteRunEvents =
+    remoteEventState.runKey === remoteRunKey ? remoteEventState.events : [];
+  const remoteRunAssignments =
+    remoteEventState.runKey === remoteRunKey
+      ? remoteEventState.assignments
+      : EMPTY_ASSIGNMENTS;
 
   useEffect(() => {
     let cancelled = false;
@@ -188,18 +212,30 @@ export function useRemoteRun(input: {
           /* malformed payload — skip */
         }
       }
-      // Retain the raw feed, de-duped by offset (the poll can re-deliver a
-      // batch across a reconnect) and capped to a recent window.
-      setRemoteRunEvents((prev) => {
-        const seen = new Set(prev.map((e) => e.offset));
+      setRemoteEventState((current) => {
+        const scoped =
+          current.runKey === remoteRunKey ? current : emptyEventState(remoteRunKey);
+        const assignments = reconcileRunEventAssignments(scoped.assignments, evts);
+        const seen = new Set(scoped.events.map((e) => e.offset));
         const fresh = evts.filter((e) => !seen.has(e.offset));
-        if (fresh.length === 0) return prev;
-        const next = [...prev, ...fresh];
-        return next.length > 500 ? next.slice(next.length - 500) : next;
+        if (fresh.length === 0 && assignments === scoped.assignments) return scoped;
+        const next = [...scoped.events, ...fresh];
+        return {
+          runKey: remoteRunKey,
+          events: next.length > 500 ? next.slice(next.length - 500) : next,
+          assignments,
+        };
       });
     },
-    [upsertBootstrapPhase],
+    [remoteRunKey, upsertBootstrapPhase],
   );
 
-  return { remoteRun, remoteMachineName, remoteRunEvents, refreshRemoteRun, handleRunEvents };
+  return {
+    remoteRun,
+    remoteMachineName,
+    remoteRunEvents,
+    remoteRunAssignments,
+    refreshRemoteRun,
+    handleRunEvents,
+  };
 }

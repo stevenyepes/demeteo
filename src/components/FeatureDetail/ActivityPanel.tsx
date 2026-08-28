@@ -165,10 +165,7 @@ export function ActivityPanel({
           emptyHint={
             remote
               ? 'Waiting for events…'
-              : // The local feed is the Tauri push, which starts when this view
-                // mounts and is never backfilled — an empty list here means
-                // "nothing since you opened it", not "nothing happened".
-                'Nothing since this run was opened — events appear as they are emitted.'
+              : 'No activity has been recorded for this run.'
           }
         />
       )}
