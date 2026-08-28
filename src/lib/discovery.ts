@@ -46,15 +46,14 @@ export async function listDiscoveries(projectId: string): Promise<DiscoverySumma
  * it without a second round trip.
  *
  * Both numbers are facts about a Discovery that has just opened rather than
- * placeholders: nothing has been proposed, and exactly one thing has been said
- * — the seed the interview opens on, which `discovery::create` stores as the
- * first message so the interviewer is told what the interview is about. A `0`
- * here is the same count read one turn behind the backend's.
+ * placeholders: no turn has been taken, and nothing has been proposed. The
+ * name it was filed under is not a turn — `discovery::create` writes no
+ * message, so the transcript is empty until the user says something.
  */
 export function summaryOfNew(discovery: Discovery): DiscoverySummary {
   return {
     ...discovery,
-    message_count: 1,
+    message_count: 0,
     progress: { blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 0, live: 0 },
   };
 }

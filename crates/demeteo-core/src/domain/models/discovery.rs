@@ -57,6 +57,41 @@ pub struct Discovery {
     pub updated_at: i64,
 }
 
+/// The longest a [`Discovery::title`] runs.
+///
+/// The title is a **name**, not the opening move: it labels the row in Project
+/// Home's list and the workspace header, and no prompt reads it. Nothing about
+/// a free textarea said so, and a user with an idea in hand types the idea into
+/// it — then opens an interview that has never been told any of it, because the
+/// interviewer is prompted from the transcript and the transcript starts empty.
+///
+/// A cap is what makes the field state its own purpose: a box that refuses a
+/// paragraph is a box asking for a name, before anyone reads the label. Eighty
+/// is a long name and a short sentence, which is the line it has to sit on.
+pub const TITLE_MAX_CHARS: usize = 80;
+
+/// A title as it may be stored, or why it may not be.
+///
+/// Trims first and measures after, so trailing whitespace never costs a user
+/// the last word of a name that fits. Measured in `chars` rather than bytes —
+/// the cap is about what the list can show, and a byte count would refuse a
+/// shorter name for being written in a language with wider code points.
+pub fn validate_title(raw: &str) -> Result<String, String> {
+    let title = raw.trim();
+    if title.is_empty() {
+        return Err("A discovery needs a name.".into());
+    }
+    let length = title.chars().count();
+    if length > TITLE_MAX_CHARS {
+        return Err(format!(
+            "A discovery's name is a label for the list, and this one is {length} characters — \
+             keep it under {TITLE_MAX_CHARS}. Say the idea itself in the interview: the first \
+             thing you send is what the interviewer is asked about."
+        ));
+    }
+    Ok(title.to_string())
+}
+
 /// Whether the interview is still being conducted.
 ///
 /// Two states, and neither destroys anything: decomposition is not terminal,

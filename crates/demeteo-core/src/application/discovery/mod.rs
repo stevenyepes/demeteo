@@ -155,17 +155,17 @@ pub fn get(ctx: &AppContext, id: &DiscoveryId) -> Result<DiscoveryDetail, String
 }
 
 /// Open a Discovery. No worktree and no agent process yet — both wait for the
-/// first turn that needs them (§4.6).
+/// first turn that needs them (§4.6), and **no message**: the title names the
+/// row, it does not open the conversation, so the transcript starts empty and
+/// the interviewer is asked about the first thing the user actually sends.
+/// [`crate::domain::models::TITLE_MAX_CHARS`] is what keeps the two apart.
 ///
 /// The chosen machine is checked here rather than at the first turn: it is the
 /// last moment the user is still looking at the picker they set it with, and
 /// `worktree::resolve` reaches it three screens later with nothing to say
 /// except that a checkout was not found.
 pub fn create(ctx: &AppContext, new: NewDiscovery) -> Result<Discovery, String> {
-    let title = new.title.trim();
-    if title.is_empty() {
-        return Err("A discovery needs a title.".into());
-    }
+    let title = crate::domain::models::validate_title(&new.title)?;
     let project_id = ProjectId::from(new.project_id);
     let project = ctx
         .projects
@@ -184,7 +184,7 @@ pub fn create(ctx: &AppContext, new: NewDiscovery) -> Result<Discovery, String> 
     let discovery = Discovery {
         id: DiscoveryId::from(crate::shared::ids::new_id()),
         project_id,
-        title: title.to_string(),
+        title,
         status: DiscoveryStatus::Open,
         machine_id,
         agent_kind: new.agent_kind,
@@ -199,39 +199,8 @@ pub fn create(ctx: &AppContext, new: NewDiscovery) -> Result<Discovery, String> 
         updated_at: now,
     };
     ctx.discoveries.create(&discovery)?;
-    ctx.discoveries.append_message(&seed_message(&discovery))?;
     attachments::stage_batch(ctx, &discovery.id, new.staged_attachments)?;
     load(ctx, &discovery.id)
-}
-
-/// The idea the Discovery was opened on, stored as the first thing said in the
-/// interview.
-///
-/// **A title that is not a message is a title the interviewer is never told.**
-/// [`question::render_turn_prompt`] carries the transcript and the text of the
-/// turn being taken and reads no other field of the row; the one other place
-/// the title travels is [`crate::ports::agent_runtime::AgentContext::title`],
-/// which reaches opencode's `--title` and pi's `--name` and is dropped
-/// entirely by every other harness. So without this the first turn opens on
-/// whatever the user typed *second*, and the interviewer spends it asking what
-/// the interview is about.
-///
-/// A message rather than a block of its own in the prompt: the first turn has
-/// no live session, so it always re-seeds and the transcript is already what
-/// carries what was said. A second home for the idea is a second thing that
-/// can disagree with it. `docs/DISCOVERY_UI_SPEC.md` §3.4.3 draws it as the
-/// opening bubble on the same reading.
-fn seed_message(discovery: &Discovery) -> DiscoveryMessage {
-    DiscoveryMessage {
-        id: crate::shared::ids::new_id(),
-        discovery_id: discovery.id.clone(),
-        role: MessageRole::User,
-        content: discovery.title.clone(),
-        cost_usd: None,
-        tokens: None,
-        activity: None,
-        created_at: discovery.created_at,
-    }
 }
 
 /// Refuse a machine nothing is configured for.

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { interviewerMachineOptions, noVisionNote } from './newDiscovery';
+import {
+  interviewerMachineOptions,
+  nameFieldState,
+  noVisionNote,
+  TITLE_MAX_CHARS,
+} from './newDiscovery';
 import type { Machine } from '../types';
 
 function machine(id: string, name: string): Machine {
@@ -83,5 +88,42 @@ describe('noVisionNote', () => {
       model: '(unset)',
       filenames: ['runner-topology.png'],
     });
+  });
+});
+
+describe('nameFieldState', () => {
+  it('says nothing under a name that is nowhere near the cap', () => {
+    expect(nameFieldState('Ask-the-repo chat').showCounter).toBe(false);
+  });
+
+  it('counts down once the name is long enough to be cut off', () => {
+    const near = 'n'.repeat(TITLE_MAX_CHARS - 4);
+    expect(nameFieldState(near)).toEqual({
+      remaining: 4,
+      showCounter: true,
+      overLimit: false,
+    });
+  });
+
+  it('refuses a seed that arrived past the cap without a keystroke', () => {
+    const pasted = 'n'.repeat(TITLE_MAX_CHARS + 12);
+    expect(nameFieldState(pasted)).toEqual({
+      remaining: -12,
+      showCounter: true,
+      overLimit: true,
+    });
+  });
+
+  it('measures the trimmed name, so trailing space never costs a word', () => {
+    const atCap = 'n'.repeat(TITLE_MAX_CHARS);
+    expect(nameFieldState(`  ${atCap}  `).overLimit).toBe(false);
+  });
+
+  // `String.length` counts UTF-16 units, so an astral character is two of them
+  // and a name of them reads as twice its length to anything counting that way.
+  it('measures characters, not the units they happen to take', () => {
+    const name = '\u{1f9e0}'.repeat(TITLE_MAX_CHARS / 2 + 5);
+    expect(name.length).toBeGreaterThan(TITLE_MAX_CHARS);
+    expect(nameFieldState(name).overLimit).toBe(false);
   });
 });
