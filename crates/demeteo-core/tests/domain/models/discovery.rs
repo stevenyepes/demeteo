@@ -124,3 +124,35 @@ fn a_message_stored_without_activity_reads_as_none() {
     let message: DiscoveryMessage = serde_json::from_value(stored).expect("deserializable");
     assert!(message.activity.is_none());
 }
+
+#[test]
+fn a_name_is_trimmed_before_it_is_measured() {
+    let at_cap = "n".repeat(TITLE_MAX_CHARS);
+    let padded = format!("  {at_cap}\n");
+    assert_eq!(validate_title(&padded).unwrap(), at_cap);
+}
+
+#[test]
+fn a_name_one_character_past_the_cap_is_refused() {
+    assert!(validate_title(&"n".repeat(TITLE_MAX_CHARS)).is_ok());
+    let refusal = validate_title(&"n".repeat(TITLE_MAX_CHARS + 1))
+        .expect_err("one character past the cap is past the cap");
+    assert!(
+        refusal.contains(&(TITLE_MAX_CHARS + 1).to_string()),
+        "{refusal}"
+    );
+}
+
+/// The cap counts what the list has to show, not how the name is encoded — a
+/// byte count refuses a shorter name for being written in another script.
+#[test]
+fn a_name_is_measured_in_characters_not_bytes() {
+    let name = "決定".repeat(TITLE_MAX_CHARS / 2);
+    assert!(name.len() > TITLE_MAX_CHARS);
+    assert!(validate_title(&name).is_ok());
+}
+
+#[test]
+fn a_name_of_only_whitespace_is_no_name() {
+    assert!(validate_title("   \n ").is_err());
+}

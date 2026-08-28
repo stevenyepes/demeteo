@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Compass } from 'lucide-react';
 
 import { getDiscoveryBoard, summaryOfNew } from '../../lib/discovery';
+import { TITLE_MAX_CHARS } from '../../lib/newDiscovery';
 import { phaseOfStatus } from '../../lib/discoveryActivity';
 import type { DiscoveryBoard, DiscoverySummary } from '../../types';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
@@ -105,8 +106,9 @@ export function DiscoverySection({
                   openModal();
                 }
               }}
-              placeholder="Think something through with an agent before it becomes work..."
-              aria-label="Start a discovery"
+              maxLength={TITLE_MAX_CHARS}
+              placeholder="Name something you want to think through..."
+              aria-label="Name a discovery"
               data-testid="discovery-composer"
               className="w-full border-none bg-transparent p-2 text-sm text-white placeholder-slate-500 focus:outline-none"
             />

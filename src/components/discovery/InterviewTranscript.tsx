@@ -40,6 +40,22 @@ export function InterviewTranscript({
       data-testid="interview-transcript"
       className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4"
     >
+      {blocks.length === 0 && !pending && (
+        <div
+          data-testid="interview-empty"
+          className="m-auto max-w-[380px] text-center text-[13px] leading-relaxed text-slate-500"
+        >
+          <p className="mb-1.5 font-heading font-semibold text-slate-300">
+            Nothing has been said yet
+          </p>
+          <p>
+            The name you filed this under is a label for your list. Describe the idea here — the
+            first thing you send is the whole of what the interviewer is asked about, and it
+            reads the repository before answering.
+          </p>
+        </div>
+      )}
+
       {blocks.map((block) => {
         if (block.kind === 'question') {
           const live = block.key === openQuestion;

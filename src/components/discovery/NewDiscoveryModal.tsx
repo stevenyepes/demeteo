@@ -7,7 +7,12 @@ import { createDiscovery } from '../../lib/discovery';
 import { DEFAULT_EFFORT, EFFORT_LABELS, type EffortLevel } from '../../lib/effortLevels';
 import { formatError } from '../../lib/errors';
 import { listMachines } from '../../lib/machines';
-import { interviewerMachineOptions, noVisionNote } from '../../lib/newDiscovery';
+import {
+  interviewerMachineOptions,
+  nameFieldState,
+  noVisionNote,
+  TITLE_MAX_CHARS,
+} from '../../lib/newDiscovery';
 import type { ConfigOptionValue, Discovery, Machine } from '../../types';
 import { AttachmentDropzone, type LaunchStageEntry } from '../AttachmentDropzone';
 import { FieldLabel } from '../ui/FieldLabel';
@@ -25,7 +30,9 @@ interface NewDiscoveryModalProps {
    *  picker starts there and the user may move it: §4.5 makes the host part of
    *  the interviewer choice, so a value they give is never overridden. */
   machineId: string;
-  /** Whatever was typed into the hero card, carried in as the seed. */
+  /** Whatever was typed into the hero card, carried in as the starting name.
+   *  It arrives past [`TITLE_MAX_CHARS`] only when something set it without a
+   *  keystroke, which `maxLength` cannot stop — the counter is what says so. */
   seedTitle: string;
   onClose: () => void;
   onCreated: (discovery: Discovery) => void;
@@ -127,7 +134,9 @@ export function NewDiscoveryModal({
     attachments,
   });
 
-  const canStart = title.trim().length > 0 && agentKind !== '' && !submitting;
+  const name = nameFieldState(title);
+  const canStart =
+    title.trim().length > 0 && !name.overLimit && agentKind !== '' && !submitting;
 
   const start = async () => {
     if (!canStart) return;
@@ -167,15 +176,33 @@ export function NewDiscoveryModal({
 
         <div className="flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto p-5">
           <div>
-            <FieldLabel htmlFor="discovery-seed">What are you trying to work out?</FieldLabel>
-            <textarea
+            <FieldLabel htmlFor="discovery-seed">Name this discovery</FieldLabel>
+            <input
               id="discovery-seed"
-              rows={3}
+              type="text"
               value={title}
+              maxLength={TITLE_MAX_CHARS}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="A fuzzy idea, or work you already understand and want sharpened."
-              className="input-field resize-none leading-relaxed"
+              placeholder="Ask-the-repo chat"
+              className="input-field"
+              aria-describedby="discovery-seed-hint"
             />
+            <div className="mt-2 flex items-start justify-between gap-3">
+              <p id="discovery-seed-hint" className="text-[11px] text-slate-500">
+                A label for your discovery list — the interviewer never reads it. Say the idea
+                itself in the first message; that is what it is asked about.
+              </p>
+              {name.showCounter && (
+                <span
+                  data-testid="discovery-name-remaining"
+                  className={`shrink-0 font-mono text-[11px] ${
+                    name.overLimit ? 'text-ruby-300' : 'text-slate-500'
+                  }`}
+                >
+                  {name.remaining}
+                </span>
+              )}
+            </div>
           </div>
 
           <div>

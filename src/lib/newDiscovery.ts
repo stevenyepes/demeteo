@@ -74,3 +74,42 @@ export function noVisionNote(args: {
   if (filenames.length === 0) return null;
   return { model: args.model.trim() || '(unset)', filenames };
 }
+
+/**
+ * The longest a Discovery's name may be, mirroring
+ * `domain::models::TITLE_MAX_CHARS`. Two copies because the backend is the
+ * authority and the field has to say no before a round trip does — change one
+ * and the `create` refusal is what the user meets instead of the counter.
+ */
+export const TITLE_MAX_CHARS = 80;
+
+/** What the name field shows beneath itself. */
+export interface NameFieldState {
+  /** Characters left, negative once the cap is passed. */
+  remaining: number;
+  /** Whether the counter is worth drawing at all — a name nowhere near the
+   *  cap does not need a number under it, and one that is always on reads as
+   *  a limit being pressed rather than as a name being written. */
+  showCounter: boolean;
+  /** Whether the field is refusing what it holds. */
+  overLimit: boolean;
+}
+
+/**
+ * The name field's own readout of what it holds.
+ *
+ * The counter appears at the last quarter rather than from the first
+ * character: `maxLength` stops typing at the cap silently, and a user whose
+ * name has been cut off mid-word needs the number *then*, not before. It stays
+ * reachable for a value the input never accepted a keystroke for — the seed
+ * carried in from the hero card is set programmatically, so it can arrive past
+ * the cap and has to be able to say so.
+ */
+export function nameFieldState(title: string): NameFieldState {
+  const length = [...title.trim()].length;
+  return {
+    remaining: TITLE_MAX_CHARS - length,
+    showCounter: length > TITLE_MAX_CHARS * 0.75,
+    overLimit: length > TITLE_MAX_CHARS,
+  };
+}

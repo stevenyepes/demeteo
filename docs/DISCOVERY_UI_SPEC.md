@@ -148,9 +148,13 @@ Inner row: `align-items: flex-start; gap: 16px`.
 
 - Leading compass icon, 20px, `color:#a78bfa` (violet-400), `margin: 6px 0 0 4px; flex:none`.
 - Middle column (`flex:1; min-width:0`):
-  - Borderless transparent `<input type="text">`, `padding:8px`, 14px, `#fff`,
-    Inter, no outline. Placeholder verbatim:
-    **`Think something through with an agent before it becomes work...`**
+  - Borderless transparent `<input type="text" maxlength=80>`, `padding:8px`,
+    14px, `#fff`, Inter, no outline. Placeholder verbatim:
+    **`Name something you want to think through...`**
+
+    It carries into the modal as the Discovery's **name**, and the cap is
+    `domain::models::TITLE_MAX_CHARS` — §2.3 carries why the field is bounded
+    at all.
   - Meta row under it (`padding: 0 8px 4px; gap:8px`): label `Interviewer`
     (`.lbl`), then chips **`claude-code`** (cyan), **`opus`** (violet),
     **`effort high`** (slate), then 11px `#64748b` text:
@@ -254,8 +258,16 @@ shape for the list-loading case and `ErrorToast` for failures.
 ### 2.1 Purpose and placement
 
 Modal launched by **New discovery** on the Project Home hero card (§1.5.1). It
-collects the seed question and the interviewer's run shape, then starts the
-Discovery. Build it on the existing `Modal` primitive
+collects the Discovery's **name** and the interviewer's run shape, then starts
+the Discovery.
+
+**The name is a label, not the opening move.** It titles the row in §1.5.2 and
+the workspace header, and no prompt reads it — the idea is said in the
+interview's first message. A free textarea claimed the opposite by its shape: a
+user with an idea in hand typed the idea into it, and opened an interview that
+had never been told any of it. The cap
+(`domain::models::TITLE_MAX_CHARS`) is what makes the field say what it is
+before anyone reads the label. Build it on the existing `Modal` primitive
 (`src/components/ui/Modal.tsx`); the artboard's outer `620 × 760` box with its
 `radial-gradient(circle at 50% 0%, rgba(139,92,246,0.06) 0%, transparent 55%)`
 is the backdrop, not part of the dialog.
@@ -279,9 +291,16 @@ rgba(0,0,0,0.4)`, radius 12px, `overflow:hidden`).
 
 Every label uses `.lbl` as a **block** label (`display:block; margin-bottom:8px`).
 
-1. **`What are you trying to work out?`** — `<textarea class="fld" rows="3">`,
-   placeholder verbatim:
-   **`A fuzzy idea, or work you already understand and want sharpened.`**
+1. **`Name this discovery`** — `<input class="fld" type="text" maxlength=80>`,
+   placeholder verbatim: **`Ask-the-repo chat`**. Beneath it, an 11px `#64748b`
+   hint: **"A label for your discovery list — the interviewer never reads it.
+   Say the idea itself in the first message; that is what it is asked about."**
+   Right-aligned beside the hint, a Fira Code 11px counter of characters
+   remaining, drawn only in the last quarter of the cap — a number that is
+   always on reads as a limit being pressed rather than a name being written.
+   Ruby past the cap, where **`Start discovery`** is also disabled: the seed
+   carried in from §1.5.1 is set without a keystroke, so `maxlength` never sees
+   it and it is the one value that can arrive over.
 2. **`Interviewer`** — a row (`gap:8px`) of three `.pill` buttons:
    `claude-code`, `opencode`, `hermes`. Below, an 11px `#64748b` hint:
    **"Chosen here, not inherited. Interviewing and implementing want different
@@ -507,6 +526,20 @@ re-provision after an idle reclaim (§4.6), which is minutes on a large repo and
 was the whole of what a pressed Decompose used to show. What the strip may say
 there is bounded by what the phase knows: setup provisions a worktree only when
 there is none, so the copy names the turn and never the worktree.
+
+**(d) Empty state** — a Discovery that has been opened and not yet spoken to
+has an empty transcript, because §2.1's name is not a turn. Centred in the
+column, `max-width:380px`, 13px `#64748b` with an Outfit weight-600 `#cbd5e1`
+first line:
+
+- **`Nothing has been said yet`**
+- **"The name you filed this under is a label for your list. Describe the idea
+  here — the first thing you send is the whole of what the interviewer is asked
+  about, and it reads the repository before answering."**
+
+This is the second half of §2.1's cap: the modal stops the idea going into the
+name, and this says where it goes instead. Neither works alone — a bounded
+field with no destination just loses the idea somewhere else.
 
 The seeded transcript, verbatim (use as fixtures):
 
