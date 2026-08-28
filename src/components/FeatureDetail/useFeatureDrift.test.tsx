@@ -26,12 +26,16 @@ function answer(behind: number | null): FeatureDrift {
 }
 
 describe('useFeatureDrift', () => {
-  it('reads without a fetch until somebody asks for one', async () => {
+  /** The pane this feeds is the one surface that turns the count into a
+   *  sentence and a press, and a count off an unfetched ref is the last
+   *  fetch's answer — which is what let it say "Nothing to merge" over a
+   *  branch the base had moved four commits past. */
+  it('fetches the base ref before counting, without waiting to be asked', async () => {
     getFeatureDrift.mockResolvedValue(answer(3));
     const { result } = renderHook(() => useFeatureDrift({ featureId: 'f-1', enabled: true }));
 
     await waitFor(() => expect(result.current.drift?.divergence.behind).toBe(3));
-    expect(getFeatureDrift).toHaveBeenCalledWith('f-1', false);
+    expect(getFeatureDrift).toHaveBeenCalledWith('f-1', true);
 
     await act(async () => {
       result.current.refresh();

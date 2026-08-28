@@ -47,11 +47,13 @@ const drift = (behind: number, fetched: boolean): FeatureDrift => ({
   checked_at: 0,
 });
 
-/** What the two reads answer. The cached one is what a mount gets; the fetched
- *  one is what the press is paying for, and the point of the test is that the
- *  second one reaches the screen. */
-const CACHED = drift(1, false);
-const FETCHED = drift(9, true);
+/** What the two reads answer, in the order the pane makes them: the one it
+ *  makes for itself on open, then the one a Refresh press pays for. Both
+ *  fetch — the pane has no other way to be current — so the count is what tells
+ *  them apart, and the point of the test is that the second one reaches the
+ *  screen. */
+const ON_OPEN = drift(9, true);
+const ON_PRESS = drift(4, true);
 
 const driftCalls: boolean[] = [];
 
@@ -62,7 +64,7 @@ function mockBackend() {
       case 'feature_drift': {
         const refresh = args.refresh === true;
         driftCalls.push(refresh);
-        return Promise.resolve(refresh ? FETCHED : CACHED);
+        return Promise.resolve(driftCalls.length === 1 ? ON_OPEN : ON_PRESS);
       }
       case 'step_list_for_run':
         return Promise.resolve([]);
@@ -131,21 +133,24 @@ beforeEach(() => {
 });
 
 describe('the Sync pane, wired into the run view', () => {
-  it('lands the count its own Refresh paid for', async () => {
+  it('fetches for the count it opens with, and lands the one Refresh paid for', async () => {
     mount();
 
     await userEvent.click(await screen.findByRole('tab', { name: /Sync/ }));
-    await waitFor(() => expect(behindMetric()).toEqual({ label: 'Behind (cached)', value: '1' }));
+    // The pane's own read pays for the fetch, unasked. A count off an
+    // unfetched ref is the previous fetch's answer, and the pane states it as
+    // this one's — which is how it came to say a branch was level with a base
+    // that had moved past it.
+    await waitFor(() => expect(behindMetric()).toEqual({ label: 'Behind', value: '9' }));
+    expect(driftCalls).not.toContain(false);
 
     const pane = screen.getByTestId('sync-panel');
     await userEvent.click(within(pane).getByRole('button', { name: 'Refresh' }));
 
-    // The press pays for the fetch…
-    await waitFor(() => expect(driftCalls).toContain(true));
-    // …and the answer is what the pane ends up showing. Superseding the
-    // in-flight read left the cached 1 on screen with no error anywhere.
-    await waitFor(() => expect(behindMetric()).toEqual({ label: 'Behind', value: '9' }));
-    expect(screen.getByRole('tab', { name: /Sync/ })).toHaveTextContent('Sync · 9');
+    // The later answer is what the pane ends up showing. Superseding the
+    // in-flight read left the opening 9 on screen with no error anywhere.
+    await waitFor(() => expect(behindMetric()).toEqual({ label: 'Behind', value: '4' }));
+    expect(screen.getByRole('tab', { name: /Sync/ })).toHaveTextContent('Sync · 4');
   });
 
   it('shows the pane the header button opens, rather than only selecting it', async () => {

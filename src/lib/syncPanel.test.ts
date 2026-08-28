@@ -55,6 +55,13 @@ const drift = (behind: number | null, ahead: number | null = 2): FeatureDrift =>
   checked_at: 0,
 });
 
+/** The same count, off a ref the read could not refresh. `useFeatureDrift`
+ *  always asks the pane's read to fetch, so this is a fetch that failed. */
+const unfetched = (behind: number | null): FeatureDrift => ({
+  ...drift(behind),
+  fetched: false,
+});
+
 /** A branch that stopped on a divergence, which is one `blocked_stage` for
  *  both of the things that can be true of it. */
 const divergedSession = (over: Partial<SyncSessionView> = {}): SyncSessionView =>
@@ -101,6 +108,21 @@ describe('describeSyncPanel', () => {
     expect(model.state).toBe('up_to_date');
     expect(model.badge).toBe(0);
     expect(intents(model)).not.toContain('sync');
+  });
+
+  /**
+   * The zero that is not an answer. A fetch that did not land leaves the
+   * previous one's count in place, and settling on it is how the pane came to
+   * say "Nothing to merge" beside a pull request the forge had already marked
+   * conflicted. The sync fetches for itself, so the press is the way out.
+   */
+  it('keeps the sync on a zero the read could not verify', () => {
+    const model = panel({ session: null, drift: unfetched(0), canSync: true });
+
+    expect(model.state).not.toBe('up_to_date');
+    expect(model.tone).toBe('slate');
+    expect(model.headline).toContain('origin/master');
+    expect(intents(model)).toEqual(['sync', 'refresh']);
   });
 
   /** "We could not count it" and "there is nothing to pull" are different
@@ -434,7 +456,21 @@ describe('describeSyncPanel', () => {
     expect(intents(model)).toEqual(['sync', 'refresh']);
   });
 
-  /** A measured zero is the one reading that settles it, and a run that has
+  /** The published arm inherits the same rule, and needed saying twice: it is
+   *  where a feature that ever hit a conflict spends the rest of its life. */
+  it('keeps the sync on a published resolution whose zero could not be verified', () => {
+    const model = panel({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 }),
+      drift: unfetched(0),
+      canSync: true,
+    });
+
+    expect(model.tone).toBe('slate');
+    expect(model.body).toContain('carries the merge');
+    expect(intents(model)).toEqual(['sync', 'refresh']);
+  });
+
+  /** A verified zero is the one reading that settles it, and a run that has
    *  started writing to the branch again takes the press away regardless. */
   it('settles a published resolution the base branch has not moved past', () => {
     const even = panel({

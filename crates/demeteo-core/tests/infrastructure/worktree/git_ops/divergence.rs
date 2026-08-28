@@ -1,5 +1,5 @@
 use super::super::common::*;
-use super::{count_divergence, measured_divergence, patch_equivalence};
+use super::{base_fetch_request, count_divergence, measured_divergence, patch_equivalence};
 use crate::ports::execution::ExecutionPort;
 
 /// Commits on `feature/f-1` that `origin/feature/f-1` does not carry, as the
@@ -466,4 +466,34 @@ async fn a_merge_commit_the_cherry_never_printed_is_not_a_reset() {
 
     let _ = std::fs::remove_dir_all(&local_dir);
     let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+/// Both halves of "this fetch always returns".
+///
+/// The Sync pane pays for it on every open of a finished run, so a `git` that
+/// stops to ask holds the reading rather than failing it, and there is nobody
+/// on the other end of the question in any case. The prompt denial rides the
+/// `git_ops` request constructor rather than the subcommands that reach a
+/// remote today, because that set is not stable and a call site that forgets
+/// it hangs instead of breaking.
+#[test]
+fn the_base_fetch_can_neither_ask_nor_run_forever() {
+    let request = base_fetch_request("/repos/demeteo", "master");
+
+    assert_eq!(
+        request.env.get("GIT_TERMINAL_PROMPT").map(String::as_str),
+        Some("0"),
+        "git would prompt for a credential: {:?}",
+        request.env
+    );
+    assert_eq!(
+        request.env.get("GCM_GUI_PROMPT").map(String::as_str),
+        Some("0"),
+        "Git Credential Manager would open a dialog: {:?}",
+        request.env
+    );
+    assert!(
+        request.timeout.is_some(),
+        "an origin that accepts the connection and says nothing would hold the read"
+    );
 }
