@@ -1,5 +1,6 @@
 pub mod agent_probe;
 pub mod agents;
+pub mod ask;
 pub mod attachments;
 pub mod bootstrap;
 pub mod discovery;

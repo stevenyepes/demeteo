@@ -1,6 +1,7 @@
 pub mod agent_execution;
 pub mod agent_runtime;
 pub mod artifact_store;
+pub mod ask;
 pub mod attachment_store;
 pub mod create_project_port;
 pub mod db;

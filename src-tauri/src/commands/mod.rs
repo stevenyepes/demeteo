@@ -5,6 +5,7 @@ pub mod agent_lifecycle;
 pub mod agent_profile;
 pub mod app_session;
 pub mod app_version;
+pub mod ask;
 pub mod attachments;
 pub mod bootstrap;
 pub mod create_project;

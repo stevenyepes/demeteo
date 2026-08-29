@@ -19,6 +19,7 @@
 
 use crate::adapters::agent::registry::AgentRegistry;
 use crate::ports::agent_execution::AgentExecutionPort;
+use crate::ports::ask::AskPort;
 use crate::ports::attachment_store::{AttachmentJsonPort, AttachmentStore};
 use crate::ports::db::{
     AppSettingsRepository, FeatureRepository, GateRepository, MachineRepository,
@@ -199,6 +200,10 @@ pub struct AppContext {
     /// runner-owned feature can later be sourced from a shadow mirror (C4)
     /// transparently to the UI.
     pub run_view: Arc<crate::application::run_view::RunView>,
+
+    /// Standalone Ask chat persistence (V51) — an independent aggregate,
+    /// not part of the Feature/Workflow execution graph.
+    pub ask: Arc<dyn AskPort>,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";

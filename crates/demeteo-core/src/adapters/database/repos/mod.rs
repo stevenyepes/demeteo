@@ -1,4 +1,5 @@
 pub mod app_settings;
+pub mod ask;
 pub mod discovery;
 pub mod feature;
 pub mod feature_steps;

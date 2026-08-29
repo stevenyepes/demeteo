@@ -97,6 +97,7 @@ pub fn build_core_context(
     let sync_sessions_repo: Arc<dyn ports::sync_session::SyncSessionPort> = db_adapter.clone();
     let discoveries_repo: Arc<dyn ports::discovery::DiscoveryPort> = db_adapter.clone();
     let tickets_repo: Arc<dyn ports::discovery::TicketPort> = db_adapter.clone();
+    let ask_repo: Arc<dyn ports::ask::AskPort> = db_adapter.clone();
 
     // Resolve the workspace directory: user-configurable base for repo
     // storage, defaults to `app_data_dir`. Takes effect on next launch
@@ -343,6 +344,7 @@ pub fn build_core_context(
         sync_turns,
         remote_run_mirror_guard: Arc::new(tokio::sync::Mutex::new(())),
         run_view,
+        ask: ask_repo,
     }
 }
 

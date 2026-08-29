@@ -1561,3 +1561,47 @@ export interface TicketEdit {
   model: string | null;
   effort: EffortLevel | null;
 }
+
+/** Mirrors `AskStatus`. Ask never surfaces `closed` yet — no close/reopen
+ *  command exists — but the wire vocabulary already carries it. */
+export type AskStatus = 'open' | 'closed';
+
+/** Mirrors `AskThread`. */
+export interface AskThread {
+  id: string;
+  project_id: string;
+  title: string;
+  status: AskStatus;
+  agent_kind: string;
+  model: string | null;
+  effort: EffortLevel | null;
+  machine_id: string;
+  /** Reserved for `ask-turn-loop`; this ticket never populates it. */
+  worktree_path: string | null;
+  /** Reserved for `ask-turn-loop`; this ticket never populates it. */
+  session_id: string | null;
+  turn_count: number;
+  cost_usd: number;
+  tokens: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Mirrors `AskMessage`. Reserved for `ask-turn-loop`, which is the first
+ *  ticket to ever write one — `AskThreadDetail.messages` is empty until then. */
+export interface AskMessage {
+  id: string;
+  thread_id: string;
+  role: MessageRole;
+  text: string;
+  cost_usd: number | null;
+  tokens: number | null;
+  turn_activity: TurnActivity | null;
+  created_at: number;
+}
+
+/** Mirrors `AskThreadDetail`. */
+export interface AskThreadDetail {
+  thread: AskThread;
+  messages: AskMessage[];
+}
