@@ -1,0 +1,131 @@
+<div class="app">
+<!--@ part/topbar.html -->
+  <div class="body-row">
+<!--@ part/rail.html -->
+    <div class="main">
+
+      <div class="wshead">
+        <div style="min-width:0">
+          <p class="eyebrow">Ask &#183; demeteo</p>
+          <div style="display:flex;align-items:center;gap:12px">
+            <h1 class="wstitle">How a Step reaches the feature branch</h1>
+            <span class="chip violet" style="margin-top:6px">Dataflow</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;flex:0 0 auto">
+          <div class="metrics">
+            <div><div class="metric-l">Turns</div><div class="metric-v">4</div></div>
+            <div><div class="metric-l">Spend</div><div class="metric-v" style="color:#34d399">$0.42</div></div>
+            <div><div class="metric-l">Tokens</div><div class="metric-v" style="color:#22d3ee">48.2k</div></div>
+          </div>
+          <div class="btn-sec">
+            Threads
+            <span class="chip slate" style="padding:1px 6px">4</span>
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+          <div class="btn-pri">
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+            New thread
+          </div>
+        </div>
+      </div>
+
+      <div class="cols">
+        <section class="thread-col">
+          <div class="subhead">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="subhead-title">Thread</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="chip cyan">claude-code</span>
+              <span class="chip violet">sonnet 5</span>
+              <span class="chip emerald"><span class="cdot"></span>web on</span>
+            </div>
+          </div>
+
+          <div class="transcript">
+            <div class="bubble user">
+              <div class="sender">You</div>
+              How does a Step get from queued to merged? I lose the thread between the driver and the worktree.
+            </div>
+
+            <div class="bubble agent">
+              <div class="sender">
+                <svg class="ico" width="12" height="12" viewBox="0 0 24 24"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/></svg>
+                Ask
+              </div>
+              <p>Four hops &#8212; and the worktree only exists between the second and the third.</p>
+              <p style="margin-top:8px"><span class="code">ExecutionDriver</span> walks the DAG and hands one Step down. The Step&#8217;s <span class="code">StepCapability</span> compiles to a <span class="code">PermissionProfile</span>, and <span class="code">git_ops::scope</span> chmods everything outside the write scope read-only.</p>
+
+              <div class="canvas-card">
+                <div class="canvas-card-row">
+                  <div class="canvas-card-ico">
+                    <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg>
+                  </div>
+                  <div style="min-width:0;flex:1">
+                    <div class="canvas-card-t">Step lifecycle</div>
+                    <div class="canvas-card-s">dataflow &#183; 12 nodes &#183; read 6 files</div>
+                  </div>
+                  <span class="chip violet">on canvas</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="bubble user">
+              <div class="sender">You</div>
+              Where is the permission fence actually applied?
+            </div>
+
+            <div class="bubble agent">
+              <div class="sender">
+                <svg class="ico" width="12" height="12" viewBox="0 0 24 24"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/></svg>
+                Ask
+              </div>
+              <p>At the OS level, before the process starts &#8212; driven by <span class="code">write_scope()</span>. No tool policy expresses a path-shaped rule.</p>
+              <div class="hl-note">
+                <span class="hl-swatch"></span>
+                2 nodes highlighted on the canvas
+              </div>
+            </div>
+          </div>
+
+          <div class="composer">
+            <div class="composer-row">
+              <div class="chat-input">Ask a follow-up, or ask for another canvas&#8230;</div>
+              <div class="iconbtn">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </div>
+              <div class="sendbtn">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="canvas-col">
+          <div class="subhead">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="subhead-title">Canvas</span>
+              <div class="seg">
+                <span>Architecture</span>
+                <span>Journey</span>
+                <span class="on">Dataflow</span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="chip violet">2 highlighted</span>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M12 3v18M5 10l7-7 7 7"/></svg></div>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M12 17v5M9 10.8V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6.8a2 2 0 0 0 .5 1.3l1.8 2a1 1 0 0 1-.7 1.7H6.4a1 1 0 0 1-.7-1.7l1.8-2a2 2 0 0 0 .5-1.3z"/></svg></div>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></div>
+            </div>
+          </div>
+          <div class="well">
+<!--@ part/graph-dataflow.html -->
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </div>
+</div>

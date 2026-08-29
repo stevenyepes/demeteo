@@ -1,0 +1,137 @@
+<div class="app">
+<!--@ part/topbar.html -->
+  <div class="body-row">
+<!--@ part/rail.html -->
+    <div class="main">
+
+      <div class="wshead">
+        <div style="min-width:0">
+          <p class="eyebrow">Ask &#183; demeteo</p>
+          <div style="display:flex;align-items:center;gap:12px">
+            <h1 class="wstitle">Where we sit against Tauri v2</h1>
+            <span class="chip cyan" style="margin-top:6px"><span class="cdot"></span>answering</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;flex:0 0 auto">
+          <div class="metrics">
+            <div><div class="metric-l">Turns</div><div class="metric-v">2</div></div>
+            <div><div class="metric-l">Spend</div><div class="metric-v" style="color:#34d399">$0.19</div></div>
+            <div><div class="metric-l">Tokens</div><div class="metric-v" style="color:#22d3ee">21.6k</div></div>
+          </div>
+          <div class="btn-sec">
+            Threads
+            <span class="chip slate" style="padding:1px 6px">5</span>
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+          <div class="btn-pri" style="opacity:.4">
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+            New thread
+          </div>
+        </div>
+      </div>
+
+      <div class="cols">
+        <section class="thread-col">
+          <div class="subhead">
+            <span class="subhead-title">Thread</span>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="chip cyan">claude-code</span>
+              <span class="chip violet">sonnet 5</span>
+              <span class="chip emerald"><span class="cdot"></span>web on</span>
+            </div>
+          </div>
+
+          <div class="transcript">
+            <div class="bubble user">
+              <div class="sender">You</div>
+              Are we still matching Tauri v2&#8217;s capability model? Check upstream, then draw where we sit.
+            </div>
+
+            <div class="bubble agent">
+              <div class="sender">
+                <span class="dot" style="background:currentColor"></span>
+                Ask
+              </div>
+
+              <div class="strip">
+                <div class="strip-row">
+                  <svg class="ico" width="14" height="14" viewBox="0 0 24 24" style="color:#22d3ee"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                  <span class="strip-doing">Fetching v2.tauri.app/security/capabilities</span>
+                  <span class="strip-more">+2</span>
+                  <span class="strip-time">1m 12s</span>
+                </div>
+                <p class="strip-sum">read 8 files &#183; 3 web fetches &#183; 1 command</p>
+              </div>
+
+              <p>Upstream still splits it the same way &#8212; a capability names windows plus a permission set, and scope objects narrow it per command. Ours is the same shape one level down: <span class="code">StepCapability</span> is the named set, and <span class="code">write_scope()</span> is the scope object.</p>
+              <p style="margin-top:8px">The difference is where it bites. Tauri checks at the IPC boundary; we check at the filesystem, because the artifacts-versus-source line is path-shaped and no tool model expresses it<span class="caret"></span></p>
+
+              <div class="srcs">
+                <div class="srcs-h">
+                  <svg class="ico" width="11" height="11" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+                  Sources &#183; 3
+                </div>
+                <div class="src">
+                  <div class="src-ico"><svg class="ico" width="11" height="11" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+                  <div style="min-width:0;flex:1">
+                    <div class="src-d">v2.tauri.app</div>
+                    <div class="src-t">Capabilities &#8212; security</div>
+                  </div>
+                </div>
+                <div class="src">
+                  <div class="src-ico"><svg class="ico" width="11" height="11" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+                  <div style="min-width:0;flex:1">
+                    <div class="src-d">v2.tauri.app</div>
+                    <div class="src-t">Permissions reference</div>
+                  </div>
+                </div>
+                <div class="src">
+                  <div class="src-ico"><svg class="ico" width="11" height="11" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+                  <div style="min-width:0;flex:1">
+                    <div class="src-d">github.com/tauri-apps</div>
+                    <div class="src-t">acl: scope schema changes in 2.x</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="composer">
+            <p class="hint" style="color:var(--s600)">The turn is running &#8212; your next question queues behind it.</p>
+            <div class="composer-row">
+              <div class="chat-input" style="opacity:.5">Ask a follow-up&#8230;</div>
+              <div class="iconbtn" style="opacity:.35">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </div>
+              <div class="sendbtn" style="opacity:.35">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="canvas-col">
+          <div class="subhead">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="subhead-title">Canvas</span>
+              <div class="seg">
+                <span class="on">Architecture</span>
+                <span>Journey</span>
+                <span>Dataflow</span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="chip cyan"><span class="cdot"></span>composing</span>
+              <div class="tool" style="opacity:.35"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div>
+              <div class="tool" style="opacity:.35"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></div>
+            </div>
+          </div>
+          <div class="well">
+<!--@ part/graph-composing.html -->
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </div>
+</div>

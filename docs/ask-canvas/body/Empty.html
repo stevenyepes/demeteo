@@ -1,0 +1,177 @@
+<div class="app">
+<!--@ part/topbar.html -->
+  <div class="body-row">
+<!--@ part/rail.html -->
+    <div class="main">
+
+      <div class="wshead">
+        <div style="min-width:0">
+          <p class="eyebrow">Ask &#183; demeteo</p>
+          <h1 class="wstitle">New thread</h1>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;flex:0 0 auto">
+          <div class="dropwrap">
+            <div class="btn-sec" style="border-color:rgba(255,255,255,.15);color:var(--t1)">
+              Threads
+              <span class="chip slate" style="padding:1px 6px">4</span>
+              <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg>
+            </div>
+            <div class="drop">
+              <div class="drop-h">Threads in demeteo</div>
+              <div class="drop-row on">
+                <div class="drop-t">How a Step reaches the feature branch</div>
+                <div class="drop-m"><span class="chip violet">dataflow</span> 12 min ago &#183; 4 turns</div>
+              </div>
+              <div class="drop-row">
+                <div class="drop-t">Where remote runs diverge from local</div>
+                <div class="drop-m"><span class="chip cyan">architecture</span> yesterday &#183; 9 turns</div>
+              </div>
+              <div class="drop-row">
+                <div class="drop-t">Onboarding a new contributor</div>
+                <div class="drop-m"><span class="chip emerald">journey</span> 3 days ago &#183; 6 turns</div>
+              </div>
+              <div class="drop-row">
+                <div class="drop-t">Why did f-2291 wedge at verify?</div>
+                <div class="drop-m"><span class="chip slate">no canvas</span> 5 days ago &#183; 11 turns</div>
+              </div>
+            </div>
+          </div>
+          <div class="btn-pri">
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+            New thread
+          </div>
+        </div>
+      </div>
+
+      <div class="cols">
+        <section class="thread-col">
+          <div class="subhead">
+            <span class="subhead-title">Thread</span>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="pill">claude-code <svg class="ico" width="10" height="10" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+              <span class="pill">sonnet 5 <svg class="ico" width="10" height="10" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+              <span class="pill" style="border-color:rgba(16,185,129,.3);background:rgba(16,185,129,.1);color:#34d399">
+                <svg class="ico" width="11" height="11" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                web on
+              </span>
+            </div>
+          </div>
+
+          <div class="empty-wrap">
+            <div class="empty-tile">
+              <svg class="ico" width="20" height="20" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <div class="empty-t">Ask about this project</div>
+            <p class="empty-s">Questions about the code, a run, or the pipeline &#8212; the repo, and the web when it needs it. Ask for a diagram and it lands on the canvas beside you.</p>
+
+            <div class="try-label">Try</div>
+            <div class="try">
+              <div class="try-ico tone-violet"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg></div>
+              <div class="try-t">Draw the architecture of <span class="code">crates/demeteo-core</span></div>
+            </div>
+            <div class="try">
+              <div class="try-ico tone-cyan"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><circle cx="18" cy="5" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/></svg></div>
+              <div class="try-t">Map the journey from New Feature to a merged branch</div>
+            </div>
+            <div class="try">
+              <div class="try-ico tone-emerald"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+              <div class="try-t">What changed in Tauri v2 capabilities since 2.1?</div>
+              <span class="chip emerald">web</span>
+            </div>
+          </div>
+
+          <div class="composer">
+            <p class="hint">Enter sends &#183; Shift+Enter for a newline</p>
+            <div class="composer-row">
+              <div class="chat-input">Ask about demeteo&#8230;</div>
+              <div class="iconbtn">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </div>
+              <div class="sendbtn" style="opacity:.35">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="canvas-col">
+          <div class="subhead">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="subhead-title">Canvas</span>
+              <div class="seg">
+                <span>Architecture</span>
+                <span>Journey</span>
+                <span>Dataflow</span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div class="tool" style="opacity:.35"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div>
+              <div class="tool" style="opacity:.35"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></div>
+            </div>
+          </div>
+          <div class="well">
+            <div class="gwell">
+              <div style="position:absolute;left:0;top:272px;width:720px;display:flex;flex-direction:column;align-items:center">
+                <div style="width:48px;height:48px;border-radius:12px;border:1px dashed rgba(139,92,246,.4);
+                     background:rgba(139,92,246,.06);display:flex;align-items:center;justify-content:center;color:#a78bfa">
+                  <svg class="ico" width="22" height="22" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg>
+                </div>
+                <div style="margin-top:16px;font-family:'Outfit',sans-serif;font-size:20px;font-weight:600;color:#fff">The canvas is empty</div>
+                <p style="margin-top:10px;font-size:13px;line-height:1.5;color:var(--s400);max-width:420px;text-align:center">
+                  Ask for a diagram and it is drawn here, not pasted as an image &#8212; every node is a real thing in the repo.
+                </p>
+              </div>
+
+              <div style="position:absolute;left:24px;top:452px;width:672px;display:flex;gap:24px">
+                <div class="kind">
+                  <svg class="kind-thumb" viewBox="0 0 176 96">
+                    <rect x="18" y="14" width="140" height="20" rx="5" fill="rgba(139,92,246,.12)" stroke="rgba(139,92,246,.35)"/>
+                    <rect x="18" y="42" width="66" height="20" rx="5" fill="rgba(6,182,212,.12)" stroke="rgba(6,182,212,.35)"/>
+                    <rect x="92" y="42" width="66" height="20" rx="5" fill="rgba(6,182,212,.12)" stroke="rgba(6,182,212,.35)"/>
+                    <rect x="18" y="70" width="140" height="14" rx="5" fill="rgba(16,185,129,.1)" stroke="rgba(16,185,129,.3)"/>
+                    <path d="M88 34v8M51 62v8M125 62v8" stroke="#334155" stroke-width="1.5"/>
+                  </svg>
+                  <div class="kind-t">Architecture</div>
+                  <p class="kind-d">Crates, ports and adapters, grouped by the hexagon they sit in.</p>
+                </div>
+                <div class="kind">
+                  <svg class="kind-thumb" viewBox="0 0 176 96">
+                    <path d="M26 62h124" stroke="#334155" stroke-width="1.5"/>
+                    <circle cx="26" cy="62" r="7" fill="rgba(6,182,212,.15)" stroke="#22d3ee"/>
+                    <circle cx="67" cy="62" r="7" fill="rgba(6,182,212,.15)" stroke="#22d3ee"/>
+                    <circle cx="108" cy="62" r="7" fill="rgba(245,158,11,.15)" stroke="#fbbf24"/>
+                    <circle cx="150" cy="62" r="7" fill="rgba(16,185,129,.15)" stroke="#34d399"/>
+                    <rect x="12" y="26" width="28" height="10" rx="3" fill="rgba(255,255,255,.06)"/>
+                    <rect x="53" y="26" width="28" height="10" rx="3" fill="rgba(255,255,255,.06)"/>
+                    <rect x="94" y="26" width="28" height="10" rx="3" fill="rgba(255,255,255,.06)"/>
+                    <rect x="136" y="26" width="28" height="10" rx="3" fill="rgba(255,255,255,.06)"/>
+                  </svg>
+                  <div class="kind-t">User journey</div>
+                  <p class="kind-d">The steps a person actually takes, and where each one waits.</p>
+                </div>
+                <div class="kind">
+                  <svg class="kind-thumb" viewBox="0 0 176 96">
+                    <rect x="14" y="14" width="148" height="30" rx="6" fill="rgba(255,255,255,.02)" stroke="rgba(255,255,255,.05)"/>
+                    <rect x="14" y="54" width="148" height="30" rx="6" fill="rgba(255,255,255,.02)" stroke="rgba(255,255,255,.05)"/>
+                    <rect x="24" y="22" width="44" height="14" rx="4" fill="rgba(139,92,246,.14)" stroke="rgba(139,92,246,.35)"/>
+                    <rect x="108" y="22" width="44" height="14" rx="4" fill="rgba(139,92,246,.14)" stroke="rgba(139,92,246,.35)"/>
+                    <rect x="24" y="62" width="44" height="14" rx="4" fill="rgba(16,185,129,.12)" stroke="rgba(16,185,129,.32)"/>
+                    <rect x="108" y="62" width="44" height="14" rx="4" fill="rgba(16,185,129,.12)" stroke="rgba(16,185,129,.32)"/>
+                    <path d="M68 29h36M130 36v18H46v8M68 69h36" stroke="#334155" stroke-width="1.5" fill="none"/>
+                  </svg>
+                  <div class="kind-t">Dataflow</div>
+                  <p class="kind-d">What hands off to what, in lanes, in the order the code runs.</p>
+                </div>
+              </div>
+
+              <div class="mono" style="position:absolute;left:0;top:690px;width:720px;text-align:center;font-size:10px;color:var(--s600)">
+                drawn by demeteo from the agent&#8217;s diagram artifact &#183; nodes deep-link into the repo
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </div>
+</div>

@@ -1,0 +1,32 @@
+.frame{width:720px;height:760px;padding:40px;overflow:hidden;
+  background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.05) 0%,transparent 60%),
+             radial-gradient(circle at 10% 80%,rgba(6,182,212,.04) 0%,transparent 50%),var(--bg-app)}
+.panel{width:640px;border-radius:12px;background:var(--bg-panel);border:1px solid rgba(255,255,255,.08);
+  box-shadow:0 8px 32px rgba(0,0,0,.5);overflow:hidden}
+.panel-h{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;
+  border-bottom:1px solid var(--border-glass)}
+.panel-t{font-family:'Outfit',sans-serif;font-size:15px;font-weight:600;color:#fff}
+.panel-b{padding:20px;display:flex;flex-direction:column;gap:18px}
+.flabel{font-family:'Fira Code',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--s500);margin-bottom:8px}
+.opts{display:flex;gap:8px}
+.opt{padding:7px 13px;border-radius:8px;border:1px solid var(--border-glass);background:rgba(0,0,0,.28);
+  font-size:12.5px;color:var(--s400)}
+.opt.on{background:rgba(6,182,212,.1);border-color:rgba(6,182,212,.35);color:#67e8f9}
+.select{display:flex;align-items:center;justify-content:space-between;background:var(--bg-input);
+  border:1px solid var(--border-glass);border-radius:6px;padding:9px 12px;font-size:13px;color:var(--t1)}
+.locked{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border-radius:12px;background:var(--nested);
+  border:1px solid var(--border-glass)}
+.locked-t{font-size:13px;font-weight:500;color:var(--s100)}
+.locked-d{font-size:11.5px;line-height:1.5;color:var(--s500);margin-top:4px}
+.toggle-row{display:flex;align-items:flex-start;gap:14px;padding:14px;border-radius:12px;
+  background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.25)}
+.switch{width:38px;height:22px;border-radius:999px;background:rgba(16,185,129,.35);border:1px solid rgba(16,185,129,.5);
+  position:relative;flex:0 0 auto;margin-top:2px}
+.switch i{position:absolute;top:2px;left:18px;width:16px;height:16px;border-radius:999px;background:#34d399;
+  box-shadow:0 0 10px rgba(16,185,129,.7)}
+.note{border-radius:8px;border:1px solid rgba(245,158,11,.2);background:rgba(245,158,11,.05);padding:10px 14px;
+  font-size:11px;line-height:1.6}
+.note ul{margin:6px 0 0;padding-left:18px}
+.note li{margin-bottom:3px}
+.panel-f{border-top:1px solid var(--border-glass);padding:14px 20px;display:flex;justify-content:flex-end;gap:10px}

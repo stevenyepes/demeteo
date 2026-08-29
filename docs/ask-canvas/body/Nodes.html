@@ -1,0 +1,136 @@
+<div class="sheet">
+  <div>
+    <div class="sheet-t">Canvas node &#8212; anatomy, states, roles</div>
+    <p class="sheet-s">The card Demeteo draws for one node of a generated diagram. Same anatomy as the workflow node, so a graph reads the same whichever surface drew it.</p>
+  </div>
+
+  <div>
+    <div class="sec-label">Anatomy</div>
+    <div style="display:flex;gap:32px;align-items:center">
+      <div class="node st">
+        <div class="node-row">
+          <div class="node-ico tone-cyan"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+          <div class="node-txt"><div class="node-t">git_ops::scope</div><div class="node-s tx-cyan">chmod fence</div></div>
+        </div>
+        <div class="node-p">git_ops/scope.rs</div>
+      </div>
+      <div class="specs" style="flex:1">
+        <span><b>202 &#215; 72</b> &#183; radius 12</span>
+        <span>border <b>1px slate-700/60</b></span>
+        <span>surface <b>slate-900/70</b></span>
+        <span>shadow <b>lg / black 30%</b></span>
+        <span>icon box <b>32</b> &#183; radius 8</span>
+        <span>title <b>13 / 500</b> &#183; truncates</span>
+        <span>role <b>9 uppercase</b> &#183; tone text</span>
+        <span>path <b>9 mono</b> &#183; indent 44</span>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="sec-label">States</div>
+    <div class="grid4">
+      <div>
+        <div class="node st">
+          <div class="node-row">
+            <div class="node-ico tone-violet"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="m21 16-9 5-9-5V8l9-5 9 5z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/></svg></div>
+            <div class="node-txt"><div class="node-t">Feature</div><div class="node-s tx-violet">Queued</div></div>
+          </div>
+          <div class="node-p">models/feature.rs</div>
+        </div>
+        <p class="cap"><b>Resting</b>Carries a file path, so it is clickable.</p>
+      </div>
+      <div>
+        <div class="node st sel">
+          <div class="node-row">
+            <div class="node-ico tone-violet"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="m21 16-9 5-9-5V8l9-5 9 5z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/></svg></div>
+            <div class="node-txt"><div class="node-t">Feature</div><div class="node-s tx-violet">Queued</div></div>
+          </div>
+          <div class="node-p">models/feature.rs</div>
+        </div>
+        <p class="cap"><b>Selected</b>Cyan ring. The inspector binds to it.</p>
+      </div>
+      <div>
+        <div class="node st hl">
+          <div class="node-row">
+            <div class="node-ico tone-violet"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="m21 16-9 5-9-5V8l9-5 9 5z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/></svg></div>
+            <div class="node-txt"><div class="node-t">Feature</div><div class="node-s tx-violet">Queued</div></div>
+          </div>
+          <div class="node-p">models/feature.rs</div>
+        </div>
+        <p class="cap"><b>Cited</b>Violet ring &#8212; the last answer named it.</p>
+      </div>
+      <div>
+        <div class="node st ghost" style="border-style:dashed;border-color:rgba(51,65,85,.5);background:rgba(15,23,42,.35);box-shadow:none">
+          <div class="node-row">
+            <div class="skel2" style="width:32px;height:32px;border-radius:8px"></div>
+            <div class="node-txt"><div class="skel2" style="width:92px;height:10px"></div><div class="skel2" style="width:62px;height:7px;margin-top:6px"></div></div>
+          </div>
+        </div>
+        <p class="cap"><b>Composing</b>Named but not yet resolved to a file.</p>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="sec-label">Role tones &#8212; the app&#8217;s colour language, unchanged</div>
+    <div class="grid4">
+      <div>
+        <div class="node st">
+          <div class="node-row">
+            <div class="node-ico tone-violet"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg></div>
+            <div class="node-txt"><div class="node-t">ExecutionDriver</div><div class="node-s tx-violet">Orchestration</div></div>
+          </div>
+          <div class="node-p">step_executor/driver.rs</div>
+        </div>
+        <p class="cap"><b>Violet</b>Demeteo&#8217;s own machinery.</p>
+      </div>
+      <div>
+        <div class="node st">
+          <div class="node-row">
+            <div class="node-ico tone-cyan"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg></div>
+            <div class="node-txt"><div class="node-t">ExecutionPort</div><div class="node-s tx-cyan">Boundary</div></div>
+          </div>
+          <div class="node-p">ports/execution.rs</div>
+        </div>
+        <p class="cap"><b>Cyan</b>Ports, streams, anything transport-shaped.</p>
+      </div>
+      <div>
+        <div class="node st">
+          <div class="node-row">
+            <div class="node-ico tone-emerald"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></svg></div>
+            <div class="node-txt"><div class="node-t">opencode</div><div class="node-s tx-emerald">Running agent</div></div>
+          </div>
+          <div class="node-p">agent/opencode/</div>
+        </div>
+        <p class="cap"><b>Emerald</b>Agents and healthy end states.</p>
+      </div>
+      <div>
+        <div class="node st">
+          <div class="node-row">
+            <div class="node-ico tone-amber"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/></svg></div>
+            <div class="node-txt"><div class="node-t">Gate</div><div class="node-s tx-amber">Needs a human</div></div>
+          </div>
+          <div class="node-p">gate_waiter.rs</div>
+        </div>
+        <p class="cap"><b>Amber</b>Blocked on a person. Ruby stays for failure.</p>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="sec-label">Edges</div>
+    <div class="edge-line">
+      <svg width="72" height="10" viewBox="0 0 72 10"><path d="M0 5H64" stroke="#334155" stroke-width="1.5"/><path d="M64 1.5l6 3.5-6 3.5z" fill="#475569"/></svg>
+      <span class="edge-cap"><b>Hands off to</b> &#8212; the normal direction of the flow.</span>
+    </div>
+    <div class="edge-line">
+      <svg width="72" height="10" viewBox="0 0 72 10"><path d="M0 5H64" stroke="#b45309" stroke-width="1.5" stroke-dasharray="5 4"/><path d="M64 1.5l6 3.5-6 3.5z" fill="#b45309"/></svg>
+      <span class="edge-cap"><b>Goes back</b> &#8212; a redirect, a retry, a rework cycle.</span>
+    </div>
+    <div class="edge-line">
+      <svg width="72" height="10" viewBox="0 0 72 10"><path d="M0 5H64" stroke="#1e293b" stroke-width="1.5" stroke-dasharray="3 5"/><path d="M64 1.5l6 3.5-6 3.5z" fill="#334155"/></svg>
+      <span class="edge-cap"><b>Not yet drawn</b> &#8212; the agent named the pair before the nodes landed.</span>
+    </div>
+  </div>
+</div>

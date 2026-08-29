@@ -1,0 +1,408 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Inter:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap">
+<style>:root{
+  --bg-app:#08090c; --bg-sidebar:#0d0f14; --bg-main:#0a0c10; --bg-well:#050608;
+  --bg-panel:rgba(18,22,30,0.92); --bg-panel-hover:rgba(28,34,46,0.85); --bg-input:rgba(10,12,16,0.6);
+  --nested:rgba(18,22,30,0.55);
+  --border-glass:rgba(255,255,255,0.05);
+  --radius-panel:12px;
+  --violet:#8b5cf6; --cyan:#06b6d4; --emerald:#10b981; --ruby:#ef4444; --amber:#f59e0b;
+  --t1:#f3f4f6; --t2:#9ca3af; --t3:#6b7280;
+  --s100:#f1f5f9; --s200:#e2e8f0; --s300:#cbd5e1; --s400:#94a3b8; --s500:#64748b; --s600:#475569; --s700:#334155;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Inter',-apple-system,sans-serif;background:var(--bg-app);color:var(--t1);-webkit-font-smoothing:antialiased;}
+p{margin:0}
+a{color:#a78bfa;text-decoration:none}
+a:hover{color:#c4b5fd}
+.ico{stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+.mono{font-family:'Fira Code','JetBrains Mono',monospace}
+.head{font-family:'Outfit',sans-serif}
+
+/* ---- app shell ---- */
+.app{width:1440px;height:900px;display:flex;flex-direction:column;overflow:hidden;
+  background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.04) 0%,transparent 60%),
+             radial-gradient(circle at 10% 80%,rgba(6,182,212,.03) 0%,transparent 50%),var(--bg-app);}
+.topbar{flex:0 0 56px;height:56px;border-bottom:1px solid var(--border-glass);background:rgba(13,15,20,.8);
+  display:grid;grid-template-columns:minmax(0,1fr) auto minmax(min-content,1fr);align-items:center;gap:16px;padding:0 24px}
+.brand{display:flex;align-items:center;gap:16px;min-width:0}
+.brand-tile{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#8b5cf6,#06b6d4);
+  display:flex;align-items:center;justify-content:center;font-family:'Outfit',sans-serif;font-weight:800;font-size:15px;color:#0b0d12}
+.brand-name{font-family:'Outfit',sans-serif;font-weight:700;font-size:18px;letter-spacing:.02em;color:#fff}
+.searchbox{display:flex;align-items:center;width:346px;padding:6px 12px;border-radius:6px;font-size:14px;color:var(--s400);
+  background:var(--bg-panel);border:1px solid var(--border-glass);box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.kbd{margin-left:auto;font-family:'Fira Code',monospace;font-size:10px;border:1px solid rgba(255,255,255,.1);
+  padding:2px 6px;border-radius:4px;opacity:.5}
+.topnav{display:flex;align-items:center;gap:8px;justify-self:end}
+.navitem{position:relative;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:4px;font-size:12px;color:var(--s400)}
+.navitem span{font-family:'Fira Code',monospace;white-space:nowrap}
+.navitem.on{background:rgba(255,255,255,.04);color:#fff}
+.avatar{width:28px;height:28px;border-radius:999px;border:1px solid rgba(255,255,255,.1);background:rgba(139,92,246,.15);
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#c4b5fd}
+.body-row{flex:1;display:flex;min-height:0}
+.rail{width:240px;flex:0 0 240px;border-right:1px solid var(--border-glass);background:rgba(13,15,20,.5);display:flex;flex-direction:column}
+.rail-head{padding:12px;border-bottom:1px solid var(--border-glass);display:flex;justify-content:space-between;align-items:center}
+.rail-title{font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--s500)}
+.rail-search{margin:8px 12px;position:relative}
+.rail-search input,.rail-search .fake{width:100%;background:rgba(0,0,0,.3);border:1px solid var(--border-glass);border-radius:6px;
+  padding:6px 8px 6px 30px;font-size:11px;color:var(--s600);font-family:'Inter',sans-serif}
+.rail-list{flex:1;padding:12px;display:flex;flex-direction:column;gap:8px;overflow:hidden}
+.proj{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;border:1px solid transparent;color:var(--s300)}
+.proj.on{background:rgba(6,182,212,.08);border-color:rgba(6,182,212,.3);box-shadow:0 0 12px rgba(6,182,212,.15)}
+.proj-name{font-size:13px;font-weight:500;color:var(--t1);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:6px;height:6px;border-radius:999px;flex:0 0 auto}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg-main)}
+.wshead{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:24px;
+  border-bottom:1px solid var(--border-glass);background:rgba(13,15,20,.6);padding:14px 24px}
+.eyebrow{font-family:'Fira Code',monospace;font-size:11px;color:var(--s500)}
+.wstitle{margin:6px 0 0;font-family:'Outfit',sans-serif;font-size:20px;font-weight:700;letter-spacing:-.01em;color:#fff}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;border:1px solid;
+  font-family:'Fira Code',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+.chip.cyan{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.2)}
+.chip.violet{background:rgba(139,92,246,.1);color:#a78bfa;border-color:rgba(139,92,246,.2)}
+.chip.emerald{background:rgba(16,185,129,.1);color:#34d399;border-color:rgba(16,185,129,.2)}
+.chip.amber{background:rgba(245,158,11,.1);color:#fbbf24;border-color:rgba(245,158,11,.2)}
+.chip.slate{background:rgba(100,116,139,.1);color:var(--s400);border-color:rgba(100,116,139,.2)}
+.chip .cdot{width:6px;height:6px;border-radius:999px;background:currentColor}
+.metrics{display:flex;align-items:center;gap:18px;padding:8px 14px;border-radius:8px;background:rgba(0,0,0,.25);border:1px solid var(--border-glass)}
+.metric-l{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--s500)}
+.metric-v{font-family:'Fira Code',monospace;font-size:13px;color:var(--t1);margin-top:2px}
+.btn-sec{background:transparent;border:1px solid var(--border-glass);color:var(--s400);border-radius:6px;
+  padding:8px 14px;font-weight:550;font-size:13px;display:inline-flex;align-items:center;gap:8px}
+.btn-pri{background:linear-gradient(135deg,#8b5cf6,#7c3aed);border:1px solid rgba(139,92,246,.4);color:#fff;border-radius:6px;
+  padding:8px 14px;font-weight:550;font-size:13px;display:inline-flex;align-items:center;gap:8px}
+.cols{flex:1;display:flex;min-height:0}
+.subhead{flex:0 0 38px;height:38px;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  border-bottom:1px solid var(--border-glass);background:rgba(18,22,30,.6);padding:0 16px}
+.subhead-title{font-family:'Outfit',sans-serif;font-size:12px;font-weight:500;color:var(--s400)}
+.thread-col{width:480px;flex:0 0 480px;display:flex;flex-direction:column;border-right:1px solid var(--border-glass);background:rgba(11,13,18,.4)}
+.transcript{flex:1;overflow:hidden;padding:16px;display:flex;flex-direction:column;gap:14px}
+.bubble{max-width:80%;padding:12px 16px;border-radius:10px;line-height:1.45;font-size:14px}
+.bubble.agent{background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.15);align-self:flex-start;border-top-left-radius:2px}
+.bubble.user{background:rgba(6,182,212,.1);border:1px solid rgba(6,182,212,.2);align-self:flex-end;border-top-right-radius:2px}
+.sender{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;display:flex;align-items:center;gap:6px}
+.bubble.agent .sender{color:var(--violet)}
+.bubble.user .sender{color:var(--cyan)}
+.code{background:rgba(5,6,8,.55);border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:1px 5px;
+  font-family:'Fira Code',monospace;font-size:12px;color:#67e8f9}
+.composer{flex:0 0 auto;border-top:1px solid var(--border-glass);background:rgba(13,15,20,.9);padding:14px 16px}
+.composer-row{display:flex;align-items:flex-end;gap:10px}
+.chat-input{flex:1;background:var(--bg-input);border:1px solid var(--border-glass);border-radius:8px;padding:10px 14px;
+  color:var(--s500);font-size:14px}
+.iconbtn{border:1px solid var(--border-glass);background:transparent;color:var(--s400);border-radius:6px;
+  width:38px;height:38px;display:flex;align-items:center;justify-content:center}
+.sendbtn{background:linear-gradient(135deg,#8b5cf6,#7c3aed);border:1px solid rgba(139,92,246,.4);color:#fff;border-radius:6px;
+  width:38px;height:38px;display:flex;align-items:center;justify-content:center}
+.canvas-col{flex:1;min-width:0;display:flex;flex-direction:column}
+.well{flex:1;background:var(--bg-well);position:relative;overflow:hidden}
+.seg{display:flex;padding:2px;border-radius:6px;background:rgba(0,0,0,.35);border:1px solid var(--border-glass)}
+.seg button,.seg span{padding:3px 10px;border-radius:4px;font-size:11px;font-family:'Fira Code',monospace;color:var(--s500);border:none;background:transparent}
+.seg .on{background:rgba(139,92,246,.15);color:#c4b5fd;box-shadow:inset 0 0 0 1px rgba(139,92,246,.3)}
+
+/* ---- canvas: lanes, nodes, edges ---- */
+.gwell{position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 0);background-size:20px 20px}
+.lane{position:absolute;border-radius:12px;background:var(--nested);border:1px solid var(--border-glass)}
+.lane-label{position:absolute;font-family:'Fira Code',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+.node{position:absolute;width:202px;height:72px;border-radius:12px;border:1px solid rgba(51,65,85,.6);
+  background:rgba(15,23,42,.7);padding:0 14px;display:flex;flex-direction:column;justify-content:center;gap:6px;
+  box-shadow:0 10px 15px -3px rgba(0,0,0,.3)}
+.node-row{display:flex;align-items:center;gap:12px;min-width:0}
+.node-ico{width:32px;height:32px;border-radius:8px;border:1px solid;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.node-txt{min-width:0;flex:1}
+.node-t{font-size:13px;font-weight:500;color:var(--s100);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node-s{font-size:9px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
+.node-p{padding-left:44px;font-family:'Fira Code',monospace;font-size:9px;color:var(--s500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node.hl{border-color:rgba(167,139,250,.6);box-shadow:0 0 0 2px rgba(167,139,250,.45),0 0 18px rgba(139,92,246,.25)}
+.node.sel{border-color:rgba(34,211,238,.7);box-shadow:0 0 0 1px rgba(34,211,238,.4),0 0 18px rgba(34,211,238,.25)}
+.tone-violet{background:rgba(139,92,246,.1);border-color:rgba(139,92,246,.2);color:#a78bfa}
+.tone-cyan{background:rgba(6,182,212,.1);border-color:rgba(6,182,212,.2);color:#22d3ee}
+.tone-emerald{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.2);color:#34d399}
+.tone-amber{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.2);color:#fbbf24}
+.tx-violet{color:#a78bfa}.tx-cyan{color:#22d3ee}.tx-emerald{color:#34d399}.tx-amber{color:#fbbf24}
+.tx-slate{color:var(--s500)}
+.legend{position:absolute;border-radius:12px;background:var(--nested);border:1px solid var(--border-glass);
+  display:flex;align-items:center;justify-content:space-between;padding:0 16px}
+.legend-item{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--s400);white-space:nowrap}
+.dropwrap{position:relative}
+.drop{position:absolute;top:calc(100% + 10px);right:0;width:340px;z-index:5;border-radius:12px;
+  background:var(--bg-panel);border:1px solid rgba(255,255,255,.08);box-shadow:0 8px 32px rgba(0,0,0,.6);
+  padding:8px;display:flex;flex-direction:column;gap:4px}
+.drop-h{padding:6px 10px 8px;font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--s500)}
+.drop-row{padding:9px 10px;border-radius:8px;border:1px solid transparent;display:flex;flex-direction:column;gap:5px}
+.drop-row.on{background:rgba(6,182,212,.08);border-color:rgba(6,182,212,.3)}
+.drop-t{font-size:13px;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drop-m{display:flex;align-items:center;gap:8px;font-family:'Fira Code',monospace;font-size:10px;color:var(--s500)}
+
+.empty-wrap{flex:1;display:flex;flex-direction:column;align-items:center;padding:48px 32px 0;text-align:center}
+.empty-tile{width:44px;height:44px;border-radius:12px;background:rgba(139,92,246,.12);border:1px solid rgba(139,92,246,.3);
+  display:flex;align-items:center;justify-content:center;color:#c4b5fd}
+.empty-t{margin-top:16px;font-family:'Outfit',sans-serif;font-size:17px;font-weight:600;color:#fff}
+.empty-s{margin-top:8px;font-size:13px;line-height:1.5;color:var(--s400);max-width:340px}
+.try-label{align-self:flex-start;margin:28px 0 10px;font-family:'Fira Code',monospace;font-size:10px;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--s600)}
+.try{width:100%;display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:12px;
+  background:var(--nested);border:1px solid var(--border-glass);text-align:left;margin-bottom:8px}
+.try-ico{width:28px;height:28px;border-radius:8px;border:1px solid;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.try-t{flex:1;min-width:0;font-size:13px;color:var(--s200);line-height:1.35}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;border:1px solid var(--border-glass);
+  background:rgba(0,0,0,.3);font-family:'Fira Code',monospace;font-size:10px;color:var(--s400)}
+.hint{margin:0 0 8px;font-size:11px;color:var(--s500)}
+
+.kind{width:208px;border-radius:12px;background:var(--nested);border:1px solid var(--border-glass);padding:16px}
+.kind-thumb{width:176px;height:96px;border-radius:8px;background:rgba(5,6,8,.6);border:1px solid rgba(255,255,255,.04)}
+.kind-t{margin-top:12px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:600;color:var(--s100)}
+.kind-d{margin-top:6px;font-size:11px;line-height:1.45;color:var(--s500)}
+</style></head><body style="margin:0"><div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-tile">D</div>
+      <div class="brand-name">demeteo</div>
+    </div>
+    <div style="display:flex;justify-content:center">
+      <div class="searchbox">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="margin-right:8px;opacity:.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <span>Search workspace...</span>
+        <span class="kbd">&#8984;K</span>
+      </div>
+    </div>
+    <div class="topnav">
+      <div class="navitem on">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#a78bfa"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>Ask</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#a78bfa"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+        <span>Workflows</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#22d3ee"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <span>Providers</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#fbbf24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        <span>Runs</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#22d3ee"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 11 2-2-2-2M11 13h4"/></svg>
+        <span>Terminals</span>
+      </div>
+      <div class="navitem" style="padding:6px">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      </div>
+      <div class="avatar">SY</div>
+    </div>
+  </header>
+
+  <div class="body-row">
+    <aside class="rail">
+      <div class="rail-head">
+        <div class="rail-title">Workspaces</div>
+        <div style="display:flex;gap:6px;color:var(--s400)">
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#c4b5fd"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/><path d="M5 3v4M3 5h4"/></svg>
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M13 9l3 3-3 3"/></svg>
+        </div>
+      </div>
+      <div class="rail-search">
+        <svg class="ico" width="14" height="14" viewBox="0 0 24 24" style="position:absolute;left:9px;top:8px;color:var(--s500)"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <div class="fake">Filter projects...</div>
+      </div>
+      <div class="rail-list">
+        <div class="proj on">
+          <span class="dot" style="background:#34d399;box-shadow:0 0 8px rgba(16,185,129,.6)"></span>
+          <span class="proj-name">demeteo</span>
+          <span class="chip slate" style="padding:1px 5px">3</span>
+        </div>
+        <div class="proj">
+          <span class="dot" style="background:var(--s600)"></span>
+          <span class="proj-name">nephosyne</span>
+        </div>
+        <div class="proj">
+          <span class="dot" style="background:#fbbf24"></span>
+          <span class="proj-name">ds-bundle</span>
+        </div>
+      </div>
+      <div style="padding:12px;border-top:1px solid var(--border-glass)">
+        <div class="proj" style="background:#0d0f14;border-color:transparent;padding:8px 12px">
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 11 2-2-2-2M11 13h4"/></svg>
+          <span class="proj-name" style="font-size:12px">Terminals</span>
+          <span class="chip emerald" style="padding:1px 6px">2</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main">
+
+      <div class="wshead">
+        <div style="min-width:0">
+          <p class="eyebrow">Ask &#183; demeteo</p>
+          <h1 class="wstitle">New thread</h1>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;flex:0 0 auto">
+          <div class="dropwrap">
+            <div class="btn-sec" style="border-color:rgba(255,255,255,.15);color:var(--t1)">
+              Threads
+              <span class="chip slate" style="padding:1px 6px">4</span>
+              <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg>
+            </div>
+            <div class="drop">
+              <div class="drop-h">Threads in demeteo</div>
+              <div class="drop-row on">
+                <div class="drop-t">How a Step reaches the feature branch</div>
+                <div class="drop-m"><span class="chip violet">dataflow</span> 12 min ago &#183; 4 turns</div>
+              </div>
+              <div class="drop-row">
+                <div class="drop-t">Where remote runs diverge from local</div>
+                <div class="drop-m"><span class="chip cyan">architecture</span> yesterday &#183; 9 turns</div>
+              </div>
+              <div class="drop-row">
+                <div class="drop-t">Onboarding a new contributor</div>
+                <div class="drop-m"><span class="chip emerald">journey</span> 3 days ago &#183; 6 turns</div>
+              </div>
+              <div class="drop-row">
+                <div class="drop-t">Why did f-2291 wedge at verify?</div>
+                <div class="drop-m"><span class="chip slate">no canvas</span> 5 days ago &#183; 11 turns</div>
+              </div>
+            </div>
+          </div>
+          <div class="btn-pri">
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+            New thread
+          </div>
+        </div>
+      </div>
+
+      <div class="cols">
+        <section class="thread-col">
+          <div class="subhead">
+            <span class="subhead-title">Thread</span>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="pill">claude-code <svg class="ico" width="10" height="10" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+              <span class="pill">sonnet 5 <svg class="ico" width="10" height="10" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+              <span class="pill" style="border-color:rgba(16,185,129,.3);background:rgba(16,185,129,.1);color:#34d399">
+                <svg class="ico" width="11" height="11" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                web on
+              </span>
+            </div>
+          </div>
+
+          <div class="empty-wrap">
+            <div class="empty-tile">
+              <svg class="ico" width="20" height="20" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <div class="empty-t">Ask about this project</div>
+            <p class="empty-s">Questions about the code, a run, or the pipeline &#8212; the repo, and the web when it needs it. Ask for a diagram and it lands on the canvas beside you.</p>
+
+            <div class="try-label">Try</div>
+            <div class="try">
+              <div class="try-ico tone-violet"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg></div>
+              <div class="try-t">Draw the architecture of <span class="code">crates/demeteo-core</span></div>
+            </div>
+            <div class="try">
+              <div class="try-ico tone-cyan"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><circle cx="18" cy="5" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/></svg></div>
+              <div class="try-t">Map the journey from New Feature to a merged branch</div>
+            </div>
+            <div class="try">
+              <div class="try-ico tone-emerald"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+              <div class="try-t">What changed in Tauri v2 capabilities since 2.1?</div>
+              <span class="chip emerald">web</span>
+            </div>
+          </div>
+
+          <div class="composer">
+            <p class="hint">Enter sends &#183; Shift+Enter for a newline</p>
+            <div class="composer-row">
+              <div class="chat-input">Ask about demeteo&#8230;</div>
+              <div class="iconbtn">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </div>
+              <div class="sendbtn" style="opacity:.35">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="canvas-col">
+          <div class="subhead">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="subhead-title">Canvas</span>
+              <div class="seg">
+                <span>Architecture</span>
+                <span>Journey</span>
+                <span>Dataflow</span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div class="tool" style="opacity:.35"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div>
+              <div class="tool" style="opacity:.35"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></div>
+            </div>
+          </div>
+          <div class="well">
+            <div class="gwell">
+              <div style="position:absolute;left:0;top:272px;width:720px;display:flex;flex-direction:column;align-items:center">
+                <div style="width:48px;height:48px;border-radius:12px;border:1px dashed rgba(139,92,246,.4);
+                     background:rgba(139,92,246,.06);display:flex;align-items:center;justify-content:center;color:#a78bfa">
+                  <svg class="ico" width="22" height="22" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg>
+                </div>
+                <div style="margin-top:16px;font-family:'Outfit',sans-serif;font-size:20px;font-weight:600;color:#fff">The canvas is empty</div>
+                <p style="margin-top:10px;font-size:13px;line-height:1.5;color:var(--s400);max-width:420px;text-align:center">
+                  Ask for a diagram and it is drawn here, not pasted as an image &#8212; every node is a real thing in the repo.
+                </p>
+              </div>
+
+              <div style="position:absolute;left:24px;top:452px;width:672px;display:flex;gap:24px">
+                <div class="kind">
+                  <svg class="kind-thumb" viewBox="0 0 176 96">
+                    <rect x="18" y="14" width="140" height="20" rx="5" fill="rgba(139,92,246,.12)" stroke="rgba(139,92,246,.35)"/>
+                    <rect x="18" y="42" width="66" height="20" rx="5" fill="rgba(6,182,212,.12)" stroke="rgba(6,182,212,.35)"/>
+                    <rect x="92" y="42" width="66" height="20" rx="5" fill="rgba(6,182,212,.12)" stroke="rgba(6,182,212,.35)"/>
+                    <rect x="18" y="70" width="140" height="14" rx="5" fill="rgba(16,185,129,.1)" stroke="rgba(16,185,129,.3)"/>
+                    <path d="M88 34v8M51 62v8M125 62v8" stroke="#334155" stroke-width="1.5"/>
+                  </svg>
+                  <div class="kind-t">Architecture</div>
+                  <p class="kind-d">Crates, ports and adapters, grouped by the hexagon they sit in.</p>
+                </div>
+                <div class="kind">
+                  <svg class="kind-thumb" viewBox="0 0 176 96">
+                    <path d="M26 62h124" stroke="#334155" stroke-width="1.5"/>
+                    <circle cx="26" cy="62" r="7" fill="rgba(6,182,212,.15)" stroke="#22d3ee"/>
+                    <circle cx="67" cy="62" r="7" fill="rgba(6,182,212,.15)" stroke="#22d3ee"/>
+                    <circle cx="108" cy="62" r="7" fill="rgba(245,158,11,.15)" stroke="#fbbf24"/>
+                    <circle cx="150" cy="62" r="7" fill="rgba(16,185,129,.15)" stroke="#34d399"/>
+                    <rect x="12" y="26" width="28" height="10" rx="3" fill="rgba(255,255,255,.06)"/>
+                    <rect x="53" y="26" width="28" height="10" rx="3" fill="rgba(255,255,255,.06)"/>
+                    <rect x="94" y="26" width="28" height="10" rx="3" fill="rgba(255,255,255,.06)"/>
+                    <rect x="136" y="26" width="28" height="10" rx="3" fill="rgba(255,255,255,.06)"/>
+                  </svg>
+                  <div class="kind-t">User journey</div>
+                  <p class="kind-d">The steps a person actually takes, and where each one waits.</p>
+                </div>
+                <div class="kind">
+                  <svg class="kind-thumb" viewBox="0 0 176 96">
+                    <rect x="14" y="14" width="148" height="30" rx="6" fill="rgba(255,255,255,.02)" stroke="rgba(255,255,255,.05)"/>
+                    <rect x="14" y="54" width="148" height="30" rx="6" fill="rgba(255,255,255,.02)" stroke="rgba(255,255,255,.05)"/>
+                    <rect x="24" y="22" width="44" height="14" rx="4" fill="rgba(139,92,246,.14)" stroke="rgba(139,92,246,.35)"/>
+                    <rect x="108" y="22" width="44" height="14" rx="4" fill="rgba(139,92,246,.14)" stroke="rgba(139,92,246,.35)"/>
+                    <rect x="24" y="62" width="44" height="14" rx="4" fill="rgba(16,185,129,.12)" stroke="rgba(16,185,129,.32)"/>
+                    <rect x="108" y="62" width="44" height="14" rx="4" fill="rgba(16,185,129,.12)" stroke="rgba(16,185,129,.32)"/>
+                    <path d="M68 29h36M130 36v18H46v8M68 69h36" stroke="#334155" stroke-width="1.5" fill="none"/>
+                  </svg>
+                  <div class="kind-t">Dataflow</div>
+                  <p class="kind-d">What hands off to what, in lanes, in the order the code runs.</p>
+                </div>
+              </div>
+
+              <div class="mono" style="position:absolute;left:0;top:690px;width:720px;text-align:center;font-size:10px;color:var(--s600)">
+                drawn by demeteo from the agent&#8217;s diagram artifact &#183; nodes deep-link into the repo
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </div>
+</div>
+</body></html>

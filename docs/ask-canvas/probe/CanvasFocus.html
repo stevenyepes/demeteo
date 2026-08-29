@@ -1,0 +1,507 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Inter:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap">
+<style>:root{
+  --bg-app:#08090c; --bg-sidebar:#0d0f14; --bg-main:#0a0c10; --bg-well:#050608;
+  --bg-panel:rgba(18,22,30,0.92); --bg-panel-hover:rgba(28,34,46,0.85); --bg-input:rgba(10,12,16,0.6);
+  --nested:rgba(18,22,30,0.55);
+  --border-glass:rgba(255,255,255,0.05);
+  --radius-panel:12px;
+  --violet:#8b5cf6; --cyan:#06b6d4; --emerald:#10b981; --ruby:#ef4444; --amber:#f59e0b;
+  --t1:#f3f4f6; --t2:#9ca3af; --t3:#6b7280;
+  --s100:#f1f5f9; --s200:#e2e8f0; --s300:#cbd5e1; --s400:#94a3b8; --s500:#64748b; --s600:#475569; --s700:#334155;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Inter',-apple-system,sans-serif;background:var(--bg-app);color:var(--t1);-webkit-font-smoothing:antialiased;}
+p{margin:0}
+a{color:#a78bfa;text-decoration:none}
+a:hover{color:#c4b5fd}
+.ico{stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+.mono{font-family:'Fira Code','JetBrains Mono',monospace}
+.head{font-family:'Outfit',sans-serif}
+
+/* ---- app shell ---- */
+.app{width:1440px;height:900px;display:flex;flex-direction:column;overflow:hidden;
+  background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.04) 0%,transparent 60%),
+             radial-gradient(circle at 10% 80%,rgba(6,182,212,.03) 0%,transparent 50%),var(--bg-app);}
+.topbar{flex:0 0 56px;height:56px;border-bottom:1px solid var(--border-glass);background:rgba(13,15,20,.8);
+  display:grid;grid-template-columns:minmax(0,1fr) auto minmax(min-content,1fr);align-items:center;gap:16px;padding:0 24px}
+.brand{display:flex;align-items:center;gap:16px;min-width:0}
+.brand-tile{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#8b5cf6,#06b6d4);
+  display:flex;align-items:center;justify-content:center;font-family:'Outfit',sans-serif;font-weight:800;font-size:15px;color:#0b0d12}
+.brand-name{font-family:'Outfit',sans-serif;font-weight:700;font-size:18px;letter-spacing:.02em;color:#fff}
+.searchbox{display:flex;align-items:center;width:346px;padding:6px 12px;border-radius:6px;font-size:14px;color:var(--s400);
+  background:var(--bg-panel);border:1px solid var(--border-glass);box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.kbd{margin-left:auto;font-family:'Fira Code',monospace;font-size:10px;border:1px solid rgba(255,255,255,.1);
+  padding:2px 6px;border-radius:4px;opacity:.5}
+.topnav{display:flex;align-items:center;gap:8px;justify-self:end}
+.navitem{position:relative;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:4px;font-size:12px;color:var(--s400)}
+.navitem span{font-family:'Fira Code',monospace;white-space:nowrap}
+.navitem.on{background:rgba(255,255,255,.04);color:#fff}
+.avatar{width:28px;height:28px;border-radius:999px;border:1px solid rgba(255,255,255,.1);background:rgba(139,92,246,.15);
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#c4b5fd}
+.body-row{flex:1;display:flex;min-height:0}
+.rail{width:240px;flex:0 0 240px;border-right:1px solid var(--border-glass);background:rgba(13,15,20,.5);display:flex;flex-direction:column}
+.rail-head{padding:12px;border-bottom:1px solid var(--border-glass);display:flex;justify-content:space-between;align-items:center}
+.rail-title{font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--s500)}
+.rail-search{margin:8px 12px;position:relative}
+.rail-search input,.rail-search .fake{width:100%;background:rgba(0,0,0,.3);border:1px solid var(--border-glass);border-radius:6px;
+  padding:6px 8px 6px 30px;font-size:11px;color:var(--s600);font-family:'Inter',sans-serif}
+.rail-list{flex:1;padding:12px;display:flex;flex-direction:column;gap:8px;overflow:hidden}
+.proj{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;border:1px solid transparent;color:var(--s300)}
+.proj.on{background:rgba(6,182,212,.08);border-color:rgba(6,182,212,.3);box-shadow:0 0 12px rgba(6,182,212,.15)}
+.proj-name{font-size:13px;font-weight:500;color:var(--t1);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:6px;height:6px;border-radius:999px;flex:0 0 auto}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg-main)}
+.wshead{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:24px;
+  border-bottom:1px solid var(--border-glass);background:rgba(13,15,20,.6);padding:14px 24px}
+.eyebrow{font-family:'Fira Code',monospace;font-size:11px;color:var(--s500)}
+.wstitle{margin:6px 0 0;font-family:'Outfit',sans-serif;font-size:20px;font-weight:700;letter-spacing:-.01em;color:#fff}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;border:1px solid;
+  font-family:'Fira Code',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+.chip.cyan{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.2)}
+.chip.violet{background:rgba(139,92,246,.1);color:#a78bfa;border-color:rgba(139,92,246,.2)}
+.chip.emerald{background:rgba(16,185,129,.1);color:#34d399;border-color:rgba(16,185,129,.2)}
+.chip.amber{background:rgba(245,158,11,.1);color:#fbbf24;border-color:rgba(245,158,11,.2)}
+.chip.slate{background:rgba(100,116,139,.1);color:var(--s400);border-color:rgba(100,116,139,.2)}
+.chip .cdot{width:6px;height:6px;border-radius:999px;background:currentColor}
+.metrics{display:flex;align-items:center;gap:18px;padding:8px 14px;border-radius:8px;background:rgba(0,0,0,.25);border:1px solid var(--border-glass)}
+.metric-l{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--s500)}
+.metric-v{font-family:'Fira Code',monospace;font-size:13px;color:var(--t1);margin-top:2px}
+.btn-sec{background:transparent;border:1px solid var(--border-glass);color:var(--s400);border-radius:6px;
+  padding:8px 14px;font-weight:550;font-size:13px;display:inline-flex;align-items:center;gap:8px}
+.btn-pri{background:linear-gradient(135deg,#8b5cf6,#7c3aed);border:1px solid rgba(139,92,246,.4);color:#fff;border-radius:6px;
+  padding:8px 14px;font-weight:550;font-size:13px;display:inline-flex;align-items:center;gap:8px}
+.cols{flex:1;display:flex;min-height:0}
+.subhead{flex:0 0 38px;height:38px;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  border-bottom:1px solid var(--border-glass);background:rgba(18,22,30,.6);padding:0 16px}
+.subhead-title{font-family:'Outfit',sans-serif;font-size:12px;font-weight:500;color:var(--s400)}
+.thread-col{width:480px;flex:0 0 480px;display:flex;flex-direction:column;border-right:1px solid var(--border-glass);background:rgba(11,13,18,.4)}
+.transcript{flex:1;overflow:hidden;padding:16px;display:flex;flex-direction:column;gap:14px}
+.bubble{max-width:80%;padding:12px 16px;border-radius:10px;line-height:1.45;font-size:14px}
+.bubble.agent{background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.15);align-self:flex-start;border-top-left-radius:2px}
+.bubble.user{background:rgba(6,182,212,.1);border:1px solid rgba(6,182,212,.2);align-self:flex-end;border-top-right-radius:2px}
+.sender{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;display:flex;align-items:center;gap:6px}
+.bubble.agent .sender{color:var(--violet)}
+.bubble.user .sender{color:var(--cyan)}
+.code{background:rgba(5,6,8,.55);border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:1px 5px;
+  font-family:'Fira Code',monospace;font-size:12px;color:#67e8f9}
+.composer{flex:0 0 auto;border-top:1px solid var(--border-glass);background:rgba(13,15,20,.9);padding:14px 16px}
+.composer-row{display:flex;align-items:flex-end;gap:10px}
+.chat-input{flex:1;background:var(--bg-input);border:1px solid var(--border-glass);border-radius:8px;padding:10px 14px;
+  color:var(--s500);font-size:14px}
+.iconbtn{border:1px solid var(--border-glass);background:transparent;color:var(--s400);border-radius:6px;
+  width:38px;height:38px;display:flex;align-items:center;justify-content:center}
+.sendbtn{background:linear-gradient(135deg,#8b5cf6,#7c3aed);border:1px solid rgba(139,92,246,.4);color:#fff;border-radius:6px;
+  width:38px;height:38px;display:flex;align-items:center;justify-content:center}
+.canvas-col{flex:1;min-width:0;display:flex;flex-direction:column}
+.well{flex:1;background:var(--bg-well);position:relative;overflow:hidden}
+.seg{display:flex;padding:2px;border-radius:6px;background:rgba(0,0,0,.35);border:1px solid var(--border-glass)}
+.seg button,.seg span{padding:3px 10px;border-radius:4px;font-size:11px;font-family:'Fira Code',monospace;color:var(--s500);border:none;background:transparent}
+.seg .on{background:rgba(139,92,246,.15);color:#c4b5fd;box-shadow:inset 0 0 0 1px rgba(139,92,246,.3)}
+
+/* ---- canvas: lanes, nodes, edges ---- */
+.gwell{position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 0);background-size:20px 20px}
+.lane{position:absolute;border-radius:12px;background:var(--nested);border:1px solid var(--border-glass)}
+.lane-label{position:absolute;font-family:'Fira Code',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+.node{position:absolute;width:202px;height:72px;border-radius:12px;border:1px solid rgba(51,65,85,.6);
+  background:rgba(15,23,42,.7);padding:0 14px;display:flex;flex-direction:column;justify-content:center;gap:6px;
+  box-shadow:0 10px 15px -3px rgba(0,0,0,.3)}
+.node-row{display:flex;align-items:center;gap:12px;min-width:0}
+.node-ico{width:32px;height:32px;border-radius:8px;border:1px solid;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.node-txt{min-width:0;flex:1}
+.node-t{font-size:13px;font-weight:500;color:var(--s100);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node-s{font-size:9px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
+.node-p{padding-left:44px;font-family:'Fira Code',monospace;font-size:9px;color:var(--s500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node.hl{border-color:rgba(167,139,250,.6);box-shadow:0 0 0 2px rgba(167,139,250,.45),0 0 18px rgba(139,92,246,.25)}
+.node.sel{border-color:rgba(34,211,238,.7);box-shadow:0 0 0 1px rgba(34,211,238,.4),0 0 18px rgba(34,211,238,.25)}
+.tone-violet{background:rgba(139,92,246,.1);border-color:rgba(139,92,246,.2);color:#a78bfa}
+.tone-cyan{background:rgba(6,182,212,.1);border-color:rgba(6,182,212,.2);color:#22d3ee}
+.tone-emerald{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.2);color:#34d399}
+.tone-amber{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.2);color:#fbbf24}
+.tx-violet{color:#a78bfa}.tx-cyan{color:#22d3ee}.tx-emerald{color:#34d399}.tx-amber{color:#fbbf24}
+.tx-slate{color:var(--s500)}
+.legend{position:absolute;border-radius:12px;background:var(--nested);border:1px solid var(--border-glass);
+  display:flex;align-items:center;justify-content:space-between;padding:0 16px}
+.legend-item{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--s400);white-space:nowrap}
+.strip-col{width:56px;flex:0 0 56px;display:flex;flex-direction:column;border-right:1px solid var(--border-glass);
+  background:rgba(11,13,18,.4)}
+.strip-sub{flex:0 0 38px;height:38px;display:flex;align-items:center;justify-content:center;
+  border-bottom:1px solid var(--border-glass);background:rgba(18,22,30,.6);color:var(--s400)}
+.strip-body{flex:1;display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:14px}
+.vlabel{writing-mode:vertical-rl;font-family:'Outfit',sans-serif;font-size:11px;font-weight:500;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--s500)}
+
+.insp{width:320px;flex:0 0 320px;display:flex;flex-direction:column;border-left:1px solid var(--border-glass);
+  background:rgba(11,13,18,.5)}
+.insp-body{flex:1;padding:16px;display:flex;flex-direction:column;gap:16px;overflow:hidden}
+.insp-head{display:flex;align-items:flex-start;gap:12px}
+.insp-tile{width:36px;height:36px;border-radius:10px;border:1px solid;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.insp-t{font-family:'Outfit',sans-serif;font-size:15px;font-weight:600;color:#fff;line-height:1.25}
+.sec-l{font-family:'Fira Code',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--s600);margin-bottom:8px}
+.sec-p{font-size:12.5px;line-height:1.5;color:var(--s300)}
+.filerow{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--nested);
+  border:1px solid var(--border-glass);margin-bottom:6px}
+.filerow .p{flex:1;min-width:0;font-family:'Fira Code',monospace;font-size:11px;color:var(--s300);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
+.edge-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--s400);padding:4px 0}
+.insp-foot{border-top:1px solid var(--border-glass);padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.btn-block{width:100%;justify-content:center}
+
+.jhead{position:absolute;font-family:'Fira Code',monospace;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--s500);border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:8px}
+.jnode{position:absolute;width:177px;height:96px;border-radius:12px;border:1px solid rgba(51,65,85,.6);
+  background:rgba(15,23,42,.7);padding:12px;display:flex;flex-direction:column;gap:8px;
+  box-shadow:0 10px 15px -3px rgba(0,0,0,.3)}
+.jnode.sel{border-color:rgba(34,211,238,.7);box-shadow:0 0 0 1px rgba(34,211,238,.4),0 0 18px rgba(34,211,238,.25)}
+.jnode-row{display:flex;align-items:center;gap:9px}
+.jnode-ico{width:26px;height:26px;border-radius:7px;border:1px solid;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.jnode-t{font-size:12.5px;font-weight:500;color:var(--s100);line-height:1.25}
+.jnode-d{font-size:10.5px;line-height:1.45;color:var(--s500)}
+.jwait{position:absolute;width:177px;height:96px;border-radius:12px;border:1px dashed rgba(71,85,105,.5);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--s600)}
+.jwait span{font-family:'Fira Code',monospace;font-size:10px;letter-spacing:.06em;text-transform:uppercase}
+</style></head><body style="margin:0"><div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-tile">D</div>
+      <div class="brand-name">demeteo</div>
+    </div>
+    <div style="display:flex;justify-content:center">
+      <div class="searchbox">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="margin-right:8px;opacity:.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <span>Search workspace...</span>
+        <span class="kbd">&#8984;K</span>
+      </div>
+    </div>
+    <div class="topnav">
+      <div class="navitem on">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#a78bfa"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>Ask</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#a78bfa"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+        <span>Workflows</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#22d3ee"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <span>Providers</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#fbbf24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        <span>Runs</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#22d3ee"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 11 2-2-2-2M11 13h4"/></svg>
+        <span>Terminals</span>
+      </div>
+      <div class="navitem" style="padding:6px">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      </div>
+      <div class="avatar">SY</div>
+    </div>
+  </header>
+
+  <div class="body-row">
+    <aside class="rail">
+      <div class="rail-head">
+        <div class="rail-title">Workspaces</div>
+        <div style="display:flex;gap:6px;color:var(--s400)">
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#c4b5fd"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/><path d="M5 3v4M3 5h4"/></svg>
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M13 9l3 3-3 3"/></svg>
+        </div>
+      </div>
+      <div class="rail-search">
+        <svg class="ico" width="14" height="14" viewBox="0 0 24 24" style="position:absolute;left:9px;top:8px;color:var(--s500)"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <div class="fake">Filter projects...</div>
+      </div>
+      <div class="rail-list">
+        <div class="proj on">
+          <span class="dot" style="background:#34d399;box-shadow:0 0 8px rgba(16,185,129,.6)"></span>
+          <span class="proj-name">demeteo</span>
+          <span class="chip slate" style="padding:1px 5px">3</span>
+        </div>
+        <div class="proj">
+          <span class="dot" style="background:var(--s600)"></span>
+          <span class="proj-name">nephosyne</span>
+        </div>
+        <div class="proj">
+          <span class="dot" style="background:#fbbf24"></span>
+          <span class="proj-name">ds-bundle</span>
+        </div>
+      </div>
+      <div style="padding:12px;border-top:1px solid var(--border-glass)">
+        <div class="proj" style="background:#0d0f14;border-color:transparent;padding:8px 12px">
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 11 2-2-2-2M11 13h4"/></svg>
+          <span class="proj-name" style="font-size:12px">Terminals</span>
+          <span class="chip emerald" style="padding:1px 6px">2</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main">
+
+      <div class="wshead">
+        <div style="min-width:0">
+          <p class="eyebrow">Ask &#183; demeteo</p>
+          <div style="display:flex;align-items:center;gap:12px">
+            <h1 class="wstitle">Onboarding a new contributor</h1>
+            <span class="chip emerald" style="margin-top:6px">Journey</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;flex:0 0 auto">
+          <div class="metrics">
+            <div><div class="metric-l">Turns</div><div class="metric-v">6</div></div>
+            <div><div class="metric-l">Spend</div><div class="metric-v" style="color:#34d399">$0.71</div></div>
+            <div><div class="metric-l">Tokens</div><div class="metric-v" style="color:#22d3ee">83.4k</div></div>
+          </div>
+          <div class="btn-sec">
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M12 17v5M9 10.8V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6.8a2 2 0 0 0 .5 1.3l1.8 2a1 1 0 0 1-.7 1.7H6.4a1 1 0 0 1-.7-1.7l1.8-2a2 2 0 0 0 .5-1.3z"/></svg>
+            Pin to docs
+          </div>
+          <div class="btn-pri">
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+            Export
+          </div>
+        </div>
+      </div>
+
+      <div class="cols">
+        <section class="strip-col">
+          <div class="strip-sub">
+            <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M13 9l3 3-3 3"/></svg>
+          </div>
+          <div class="strip-body">
+            <div style="width:30px;height:30px;border-radius:8px;background:rgba(139,92,246,.12);
+                 border:1px solid rgba(139,92,246,.3);display:flex;align-items:center;justify-content:center;color:#c4b5fd">
+              <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <span class="chip violet" style="padding:1px 6px">6</span>
+            <div class="vlabel">Thread</div>
+          </div>
+        </section>
+
+        <section class="canvas-col">
+          <div class="subhead">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="subhead-title">Canvas</span>
+              <div class="seg">
+                <span>Architecture</span>
+                <span class="on">Journey</span>
+                <span>Dataflow</span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="mono" style="font-size:10px;color:var(--s500)">100%</span>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M5 12h14"/></svg></div>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></div>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M12 3v18M5 10l7-7 7 7"/></svg></div>
+            </div>
+          </div>
+
+          <div class="well">
+            <div class="gwell">
+              <svg width="824" height="735" viewBox="0 0 824 735" style="position:absolute;inset:0" aria-hidden="true">
+                <defs>
+                  <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                    <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+                  </marker>
+                </defs>
+                <g stroke="#334155" stroke-width="1.5" fill="none" marker-end="url(#ar3)">
+                  <path d="M205 150 H221"/><path d="M402 150 H418"/><path d="M599 150 H615"/>
+                  <path d="M205 350 H221"/><path d="M402 350 H418"/><path d="M599 350 H615"/>
+                  <path d="M402 550 H418"/>
+                  <path d="M116 198 V298"/>
+                  <path d="M313 398 V498"/>
+                  <path d="M510 502 V402"/>
+                  <path d="M707 302 V202"/>
+                </g>
+              </svg>
+
+              <div class="jhead" style="left:28px;top:16px;width:177px">01 &#183; Describe</div>
+              <div class="jhead" style="left:225px;top:16px;width:177px">02 &#183; Decompose</div>
+              <div class="jhead" style="left:422px;top:16px;width:177px">03 &#183; Run</div>
+              <div class="jhead" style="left:619px;top:16px;width:177px">04 &#183; Gate &amp; merge</div>
+
+              <div class="lane" style="left:16px;top:56px;width:792px;height:176px"></div>
+              <div class="lane" style="left:16px;top:256px;width:792px;height:176px"></div>
+              <div class="lane" style="left:16px;top:456px;width:792px;height:176px"></div>
+
+              <div class="lane-label tx-cyan"    style="left:30px;top:70px">01 &#183; The person</div>
+              <div class="lane-label tx-violet"  style="left:30px;top:270px">02 &#183; Demeteo</div>
+              <div class="lane-label tx-emerald" style="left:30px;top:470px">03 &#183; Coding agent</div>
+
+              <div class="jnode" style="left:28px;top:102px">
+                <div class="jnode-row">
+                  <div class="jnode-ico tone-cyan"><svg class="ico" width="13" height="13" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></div>
+                  <div class="jnode-t">Describes the feature</div>
+                </div>
+                <p class="jnode-d">One paragraph, plain language.</p>
+              </div>
+              <div class="jnode" style="left:225px;top:102px">
+                <div class="jnode-row">
+                  <div class="jnode-ico tone-cyan"><svg class="ico" width="13" height="13" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div>
+                  <div class="jnode-t">Reads the ticket board</div>
+                </div>
+                <p class="jnode-d">Edits or reorders before anything runs.</p>
+              </div>
+              <div class="jwait" style="left:422px;top:102px">
+                <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                <span>waits &#183; notified</span>
+              </div>
+              <div class="jnode sel" style="left:619px;top:102px">
+                <div class="jnode-row">
+                  <div class="jnode-ico tone-amber"><svg class="ico" width="13" height="13" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/></svg></div>
+                  <div class="jnode-t">Approves at the Gate</div>
+                </div>
+                <p class="jnode-d">Approves the diff, or writes a redirect.</p>
+              </div>
+
+              <div class="jnode" style="left:28px;top:302px">
+                <div class="jnode-row">
+                  <div class="jnode-ico tone-violet"><svg class="ico" width="13" height="13" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg></div>
+                  <div class="jnode-t">Start Feature modal</div>
+                </div>
+                <p class="jnode-d">Workflow, agent and effort.</p>
+              </div>
+              <div class="jnode" style="left:225px;top:302px">
+                <div class="jnode-row">
+                  <div class="jnode-ico tone-violet"><svg class="ico" width="13" height="13" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+                  <div class="jnode-t">Discovery interview</div>
+                </div>
+                <p class="jnode-d">Questions, then a ticket board.</p>
+              </div>
+              <div class="jnode" style="left:422px;top:302px">
+                <div class="jnode-row">
+                  <div class="jnode-ico tone-violet"><svg class="ico" width="13" height="13" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg></div>
+                  <div class="jnode-t">Pipeline &amp; worktrees</div>
+                </div>
+                <p class="jnode-d">One worktree per subtask, live.</p>
+              </div>
+              <div class="jnode" style="left:619px;top:302px">
+                <div class="jnode-row">
+                  <div class="jnode-ico tone-violet"><svg class="ico" width="13" height="13" viewBox="0 0 24 24"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg></div>
+                  <div class="jnode-t">Sync &amp; fast-forward</div>
+                </div>
+                <p class="jnode-d">Merges back, or stops on a conflict.</p>
+              </div>
+
+              <div class="jwait" style="left:28px;top:502px">
+                <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>
+                <span>not spawned yet</span>
+              </div>
+              <div class="jnode" style="left:225px;top:502px">
+                <div class="jnode-row">
+                  <div class="jnode-ico tone-emerald"><svg class="ico" width="13" height="13" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5M9 13h6M9 17h4"/></svg></div>
+                  <div class="jnode-t">Decompose into tickets</div>
+                </div>
+                <p class="jnode-d">Read-only. One artifact, no source.</p>
+              </div>
+              <div class="jnode" style="left:422px;top:502px">
+                <div class="jnode-row">
+                  <div class="jnode-ico tone-emerald"><svg class="ico" width="13" height="13" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></svg></div>
+                  <div class="jnode-t">Implement, then verify</div>
+                </div>
+                <p class="jnode-d">Full write, inside its own worktree.</p>
+              </div>
+              <div class="jnode" style="left:619px;top:502px">
+                <div class="jnode-row">
+                  <div class="jnode-ico tone-amber"><svg class="ico" width="13" height="13" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg></div>
+                  <div class="jnode-t">Rework on redirect</div>
+                </div>
+                <p class="jnode-d">Same worktree, the note as the prompt.</p>
+              </div>
+
+              <div class="legend" style="left:16px;top:650px;width:792px;height:48px">
+                <div style="display:flex;align-items:center;gap:20px">
+                  <div class="legend-item">
+                    <span style="width:14px;height:14px;border-radius:4px;border:1px dashed rgba(71,85,105,.7)"></span>
+                    nobody is acting &#8212; the lane is waiting
+                  </div>
+                  <div class="legend-item">
+                    <span style="width:14px;height:14px;border-radius:4px;border:1px solid rgba(34,211,238,.7);
+                          box-shadow:0 0 0 1px rgba(34,211,238,.35)"></span>
+                    selected
+                  </div>
+                </div>
+                <div class="mono" style="font-size:10px;color:var(--s500)">10 nodes &#183; 3 lanes &#183; 4 stages</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="insp">
+          <div class="subhead">
+            <span class="subhead-title">Node</span>
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24" style="color:var(--s500)"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </div>
+          <div class="insp-body">
+            <div class="insp-head">
+              <div class="insp-tile tone-amber"><svg class="ico" width="17" height="17" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/></svg></div>
+              <div style="min-width:0">
+                <div class="insp-t">Approves at the Gate</div>
+                <div style="display:flex;gap:6px;margin-top:7px">
+                  <span class="chip cyan">person</span>
+                  <span class="chip amber">blocking</span>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <div class="sec-l">What happens here</div>
+              <p class="sec-p">The run parks. The reviewer reads the diff the step produced and either approves it or writes a redirect, which becomes the next attempt&#8217;s prompt.</p>
+            </div>
+
+            <div>
+              <div class="sec-l">In the code</div>
+              <div class="filerow">
+                <svg class="ico" width="13" height="13" viewBox="0 0 24 24" style="color:var(--s500)"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5"/></svg>
+                <span class="p">src/components/GateView.tsx</span>
+                <svg class="ico" width="13" height="13" viewBox="0 0 24 24" style="color:#22d3ee"><path d="M15 3h6v6M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+              </div>
+              <div class="filerow">
+                <svg class="ico" width="13" height="13" viewBox="0 0 24 24" style="color:var(--s500)"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5"/></svg>
+                <span class="p">step_executor/gate_waiter.rs</span>
+                <svg class="ico" width="13" height="13" viewBox="0 0 24 24" style="color:#22d3ee"><path d="M15 3h6v6M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+              </div>
+            </div>
+
+            <div>
+              <div class="sec-l">Waits on</div>
+              <div style="display:flex;gap:6px;margin-bottom:8px">
+                <span class="chip amber">a person</span>
+              </div>
+              <p class="sec-p">Nothing downstream runs until this resolves. It is the only node in the journey where the pipeline stops on purpose.</p>
+            </div>
+
+            <div>
+              <div class="sec-l">Edges</div>
+              <div class="edge-row">
+                <svg class="ico" width="13" height="13" viewBox="0 0 24 24" style="color:var(--s500)"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+                in &#8212; <span class="mono" style="font-size:11px;color:var(--s300)">Sync &amp; fast-forward</span>
+              </div>
+              <div class="edge-row">
+                <svg class="ico" width="13" height="13" viewBox="0 0 24 24" style="color:#fbbf24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5"/></svg>
+                out &#8212; <span class="mono" style="font-size:11px;color:var(--s300)">Rework on redirect</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="insp-foot">
+            <div class="btn-pri btn-block">
+              <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+              Open in editor
+            </div>
+            <div class="btn-sec btn-block">
+              <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+              Show in the pipeline
+            </div>
+          </div>
+        </aside>
+      </div>
+
+    </div>
+  </div>
+</div>
+</body></html>
