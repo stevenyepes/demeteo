@@ -1,0 +1,27 @@
+{
+  "artboards": [
+    { "file": "Empty.dc.html",       "x": 0,    "y": 0,    "w": 1440, "h": 900, "title": "Ask — new thread" },
+    { "file": "Main.dc.html",        "x": 1560, "y": 0,    "w": 1440, "h": 900, "title": "Ask — answered, canvas drawn" },
+    { "file": "Streaming.dc.html",   "x": 3120, "y": 0,    "w": 1440, "h": 900, "title": "Ask — answering, web research" },
+    { "file": "CanvasFocus.dc.html", "x": 4680, "y": 0,    "w": 1440, "h": 900, "title": "Ask — canvas focused, node inspector" },
+    { "file": "WebAccess.dc.html",   "x": 0,    "y": 1080, "w": 720,  "h": 760, "title": "Thread settings — web access" },
+    { "file": "Nodes.dc.html",       "x": 840,  "y": 1080, "w": 960,  "h": 720, "title": "Canvas node sheet" }
+  ],
+  "annotations": [
+    {
+      "id": "brief",
+      "x": 0,
+      "y": -230,
+      "w": 620,
+      "text": "Ask — a project-level chat that draws.\n\nTop row is one view in four states, left to right: new thread, answered with a canvas, answering while researching the web, canvas focused with a node inspector. Bottom row is the web-access control and the node vocabulary.\n\nEverything is lifted from the running app — Outfit / Inter / Fira Code, violet · cyan · emerald · amber, 12px panel radius, the existing chat-bubble and glass-panel rules. The diagrams are native Demeteo canvases, not images: each node carries a real path in this repo."
+    },
+    {
+      "id": "sheets",
+      "x": 1920,
+      "y": 1080,
+      "w": 340,
+      "text": "Support sheets.\n\nLeft: web access as a lever on the permission model that already exists — an Ask thread is a read-only capability with network: Allow, and the amber note follows the ConfinementBanner pattern of saying out loud what nothing enforces.\n\nRight: the node card, so a generated diagram reads the same as a workflow graph."
+    }
+  ],
+  "launch": { "view": "canvas" }
+}

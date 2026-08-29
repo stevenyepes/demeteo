@@ -1,0 +1,479 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Inter:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap">
+<style>:root{
+  --bg-app:#08090c; --bg-sidebar:#0d0f14; --bg-main:#0a0c10; --bg-well:#050608;
+  --bg-panel:rgba(18,22,30,0.92); --bg-panel-hover:rgba(28,34,46,0.85); --bg-input:rgba(10,12,16,0.6);
+  --nested:rgba(18,22,30,0.55);
+  --border-glass:rgba(255,255,255,0.05);
+  --radius-panel:12px;
+  --violet:#8b5cf6; --cyan:#06b6d4; --emerald:#10b981; --ruby:#ef4444; --amber:#f59e0b;
+  --t1:#f3f4f6; --t2:#9ca3af; --t3:#6b7280;
+  --s100:#f1f5f9; --s200:#e2e8f0; --s300:#cbd5e1; --s400:#94a3b8; --s500:#64748b; --s600:#475569; --s700:#334155;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Inter',-apple-system,sans-serif;background:var(--bg-app);color:var(--t1);-webkit-font-smoothing:antialiased;}
+p{margin:0}
+a{color:#a78bfa;text-decoration:none}
+a:hover{color:#c4b5fd}
+.ico{stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+.mono{font-family:'Fira Code','JetBrains Mono',monospace}
+.head{font-family:'Outfit',sans-serif}
+
+/* ---- app shell ---- */
+.app{width:1440px;height:900px;display:flex;flex-direction:column;overflow:hidden;
+  background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.04) 0%,transparent 60%),
+             radial-gradient(circle at 10% 80%,rgba(6,182,212,.03) 0%,transparent 50%),var(--bg-app);}
+.topbar{flex:0 0 56px;height:56px;border-bottom:1px solid var(--border-glass);background:rgba(13,15,20,.8);
+  display:grid;grid-template-columns:minmax(0,1fr) auto minmax(min-content,1fr);align-items:center;gap:16px;padding:0 24px}
+.brand{display:flex;align-items:center;gap:16px;min-width:0}
+.brand-tile{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#8b5cf6,#06b6d4);
+  display:flex;align-items:center;justify-content:center;font-family:'Outfit',sans-serif;font-weight:800;font-size:15px;color:#0b0d12}
+.brand-name{font-family:'Outfit',sans-serif;font-weight:700;font-size:18px;letter-spacing:.02em;color:#fff}
+.searchbox{display:flex;align-items:center;width:346px;padding:6px 12px;border-radius:6px;font-size:14px;color:var(--s400);
+  background:var(--bg-panel);border:1px solid var(--border-glass);box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.kbd{margin-left:auto;font-family:'Fira Code',monospace;font-size:10px;border:1px solid rgba(255,255,255,.1);
+  padding:2px 6px;border-radius:4px;opacity:.5}
+.topnav{display:flex;align-items:center;gap:8px;justify-self:end}
+.navitem{position:relative;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:4px;font-size:12px;color:var(--s400)}
+.navitem span{font-family:'Fira Code',monospace;white-space:nowrap}
+.navitem.on{background:rgba(255,255,255,.04);color:#fff}
+.avatar{width:28px;height:28px;border-radius:999px;border:1px solid rgba(255,255,255,.1);background:rgba(139,92,246,.15);
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#c4b5fd}
+.body-row{flex:1;display:flex;min-height:0}
+.rail{width:240px;flex:0 0 240px;border-right:1px solid var(--border-glass);background:rgba(13,15,20,.5);display:flex;flex-direction:column}
+.rail-head{padding:12px;border-bottom:1px solid var(--border-glass);display:flex;justify-content:space-between;align-items:center}
+.rail-title{font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--s500)}
+.rail-search{margin:8px 12px;position:relative}
+.rail-search input,.rail-search .fake{width:100%;background:rgba(0,0,0,.3);border:1px solid var(--border-glass);border-radius:6px;
+  padding:6px 8px 6px 30px;font-size:11px;color:var(--s600);font-family:'Inter',sans-serif}
+.rail-list{flex:1;padding:12px;display:flex;flex-direction:column;gap:8px;overflow:hidden}
+.proj{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;border:1px solid transparent;color:var(--s300)}
+.proj.on{background:rgba(6,182,212,.08);border-color:rgba(6,182,212,.3);box-shadow:0 0 12px rgba(6,182,212,.15)}
+.proj-name{font-size:13px;font-weight:500;color:var(--t1);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:6px;height:6px;border-radius:999px;flex:0 0 auto}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg-main)}
+.wshead{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:24px;
+  border-bottom:1px solid var(--border-glass);background:rgba(13,15,20,.6);padding:14px 24px}
+.eyebrow{font-family:'Fira Code',monospace;font-size:11px;color:var(--s500)}
+.wstitle{margin:6px 0 0;font-family:'Outfit',sans-serif;font-size:20px;font-weight:700;letter-spacing:-.01em;color:#fff}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;border:1px solid;
+  font-family:'Fira Code',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+.chip.cyan{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.2)}
+.chip.violet{background:rgba(139,92,246,.1);color:#a78bfa;border-color:rgba(139,92,246,.2)}
+.chip.emerald{background:rgba(16,185,129,.1);color:#34d399;border-color:rgba(16,185,129,.2)}
+.chip.amber{background:rgba(245,158,11,.1);color:#fbbf24;border-color:rgba(245,158,11,.2)}
+.chip.slate{background:rgba(100,116,139,.1);color:var(--s400);border-color:rgba(100,116,139,.2)}
+.chip .cdot{width:6px;height:6px;border-radius:999px;background:currentColor}
+.metrics{display:flex;align-items:center;gap:18px;padding:8px 14px;border-radius:8px;background:rgba(0,0,0,.25);border:1px solid var(--border-glass)}
+.metric-l{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--s500)}
+.metric-v{font-family:'Fira Code',monospace;font-size:13px;color:var(--t1);margin-top:2px}
+.btn-sec{background:transparent;border:1px solid var(--border-glass);color:var(--s400);border-radius:6px;
+  padding:8px 14px;font-weight:550;font-size:13px;display:inline-flex;align-items:center;gap:8px}
+.btn-pri{background:linear-gradient(135deg,#8b5cf6,#7c3aed);border:1px solid rgba(139,92,246,.4);color:#fff;border-radius:6px;
+  padding:8px 14px;font-weight:550;font-size:13px;display:inline-flex;align-items:center;gap:8px}
+.cols{flex:1;display:flex;min-height:0}
+.subhead{flex:0 0 38px;height:38px;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  border-bottom:1px solid var(--border-glass);background:rgba(18,22,30,.6);padding:0 16px}
+.subhead-title{font-family:'Outfit',sans-serif;font-size:12px;font-weight:500;color:var(--s400)}
+.thread-col{width:480px;flex:0 0 480px;display:flex;flex-direction:column;border-right:1px solid var(--border-glass);background:rgba(11,13,18,.4)}
+.transcript{flex:1;overflow:hidden;padding:16px;display:flex;flex-direction:column;gap:14px}
+.bubble{max-width:80%;padding:12px 16px;border-radius:10px;line-height:1.45;font-size:14px}
+.bubble.agent{background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.15);align-self:flex-start;border-top-left-radius:2px}
+.bubble.user{background:rgba(6,182,212,.1);border:1px solid rgba(6,182,212,.2);align-self:flex-end;border-top-right-radius:2px}
+.sender{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;display:flex;align-items:center;gap:6px}
+.bubble.agent .sender{color:var(--violet)}
+.bubble.user .sender{color:var(--cyan)}
+.code{background:rgba(5,6,8,.55);border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:1px 5px;
+  font-family:'Fira Code',monospace;font-size:12px;color:#67e8f9}
+.composer{flex:0 0 auto;border-top:1px solid var(--border-glass);background:rgba(13,15,20,.9);padding:14px 16px}
+.composer-row{display:flex;align-items:flex-end;gap:10px}
+.chat-input{flex:1;background:var(--bg-input);border:1px solid var(--border-glass);border-radius:8px;padding:10px 14px;
+  color:var(--s500);font-size:14px}
+.iconbtn{border:1px solid var(--border-glass);background:transparent;color:var(--s400);border-radius:6px;
+  width:38px;height:38px;display:flex;align-items:center;justify-content:center}
+.sendbtn{background:linear-gradient(135deg,#8b5cf6,#7c3aed);border:1px solid rgba(139,92,246,.4);color:#fff;border-radius:6px;
+  width:38px;height:38px;display:flex;align-items:center;justify-content:center}
+.canvas-col{flex:1;min-width:0;display:flex;flex-direction:column}
+.well{flex:1;background:var(--bg-well);position:relative;overflow:hidden}
+.seg{display:flex;padding:2px;border-radius:6px;background:rgba(0,0,0,.35);border:1px solid var(--border-glass)}
+.seg button,.seg span{padding:3px 10px;border-radius:4px;font-size:11px;font-family:'Fira Code',monospace;color:var(--s500);border:none;background:transparent}
+.seg .on{background:rgba(139,92,246,.15);color:#c4b5fd;box-shadow:inset 0 0 0 1px rgba(139,92,246,.3)}
+
+/* ---- canvas: lanes, nodes, edges ---- */
+.gwell{position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 0);background-size:20px 20px}
+.lane{position:absolute;border-radius:12px;background:var(--nested);border:1px solid var(--border-glass)}
+.lane-label{position:absolute;font-family:'Fira Code',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+.node{position:absolute;width:202px;height:72px;border-radius:12px;border:1px solid rgba(51,65,85,.6);
+  background:rgba(15,23,42,.7);padding:0 14px;display:flex;flex-direction:column;justify-content:center;gap:6px;
+  box-shadow:0 10px 15px -3px rgba(0,0,0,.3)}
+.node-row{display:flex;align-items:center;gap:12px;min-width:0}
+.node-ico{width:32px;height:32px;border-radius:8px;border:1px solid;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.node-txt{min-width:0;flex:1}
+.node-t{font-size:13px;font-weight:500;color:var(--s100);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node-s{font-size:9px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
+.node-p{padding-left:44px;font-family:'Fira Code',monospace;font-size:9px;color:var(--s500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node.hl{border-color:rgba(167,139,250,.6);box-shadow:0 0 0 2px rgba(167,139,250,.45),0 0 18px rgba(139,92,246,.25)}
+.node.sel{border-color:rgba(34,211,238,.7);box-shadow:0 0 0 1px rgba(34,211,238,.4),0 0 18px rgba(34,211,238,.25)}
+.tone-violet{background:rgba(139,92,246,.1);border-color:rgba(139,92,246,.2);color:#a78bfa}
+.tone-cyan{background:rgba(6,182,212,.1);border-color:rgba(6,182,212,.2);color:#22d3ee}
+.tone-emerald{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.2);color:#34d399}
+.tone-amber{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.2);color:#fbbf24}
+.tx-violet{color:#a78bfa}.tx-cyan{color:#22d3ee}.tx-emerald{color:#34d399}.tx-amber{color:#fbbf24}
+.tx-slate{color:var(--s500)}
+.legend{position:absolute;border-radius:12px;background:var(--nested);border:1px solid var(--border-glass);
+  display:flex;align-items:center;justify-content:space-between;padding:0 16px}
+.legend-item{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--s400);white-space:nowrap}
+.canvas-card{margin-top:10px;border-radius:8px;border:1px solid rgba(139,92,246,.25);background:rgba(139,92,246,.07);padding:10px 12px}
+.canvas-card-row{display:flex;align-items:center;gap:10px}
+.canvas-card-ico{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  background:rgba(139,92,246,.15);border:1px solid rgba(139,92,246,.3);color:#c4b5fd;flex:0 0 auto}
+.canvas-card-t{font-size:13px;font-weight:500;color:var(--s100)}
+.canvas-card-s{font-family:'Fira Code',monospace;font-size:10px;color:var(--s500);margin-top:2px}
+.canvas-card-foot{margin-top:8px;display:flex;align-items:center;gap:8px;font-family:'Fira Code',monospace;font-size:10px;color:var(--s500)}
+.hl-note{margin-top:8px;display:flex;align-items:center;gap:8px;font-size:12px;color:#c4b5fd}
+.hl-swatch{width:14px;height:14px;border-radius:4px;border:1px solid rgba(167,139,250,.6);
+  box-shadow:0 0 0 2px rgba(167,139,250,.35);flex:0 0 auto}
+.tool{width:26px;height:26px;border-radius:6px;border:1px solid var(--border-glass);display:flex;
+  align-items:center;justify-content:center;color:var(--s400)}
+</style></head><body style="margin:0"><div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-tile">D</div>
+      <div class="brand-name">demeteo</div>
+    </div>
+    <div style="display:flex;justify-content:center">
+      <div class="searchbox">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="margin-right:8px;opacity:.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <span>Search workspace...</span>
+        <span class="kbd">&#8984;K</span>
+      </div>
+    </div>
+    <div class="topnav">
+      <div class="navitem on">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#a78bfa"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>Ask</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#a78bfa"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+        <span>Workflows</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#22d3ee"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <span>Providers</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#fbbf24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        <span>Runs</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#22d3ee"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 11 2-2-2-2M11 13h4"/></svg>
+        <span>Terminals</span>
+      </div>
+      <div class="navitem" style="padding:6px">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      </div>
+      <div class="avatar">SY</div>
+    </div>
+  </header>
+
+  <div class="body-row">
+    <aside class="rail">
+      <div class="rail-head">
+        <div class="rail-title">Workspaces</div>
+        <div style="display:flex;gap:6px;color:var(--s400)">
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#c4b5fd"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/><path d="M5 3v4M3 5h4"/></svg>
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M13 9l3 3-3 3"/></svg>
+        </div>
+      </div>
+      <div class="rail-search">
+        <svg class="ico" width="14" height="14" viewBox="0 0 24 24" style="position:absolute;left:9px;top:8px;color:var(--s500)"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <div class="fake">Filter projects...</div>
+      </div>
+      <div class="rail-list">
+        <div class="proj on">
+          <span class="dot" style="background:#34d399;box-shadow:0 0 8px rgba(16,185,129,.6)"></span>
+          <span class="proj-name">demeteo</span>
+          <span class="chip slate" style="padding:1px 5px">3</span>
+        </div>
+        <div class="proj">
+          <span class="dot" style="background:var(--s600)"></span>
+          <span class="proj-name">nephosyne</span>
+        </div>
+        <div class="proj">
+          <span class="dot" style="background:#fbbf24"></span>
+          <span class="proj-name">ds-bundle</span>
+        </div>
+      </div>
+      <div style="padding:12px;border-top:1px solid var(--border-glass)">
+        <div class="proj" style="background:#0d0f14;border-color:transparent;padding:8px 12px">
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 11 2-2-2-2M11 13h4"/></svg>
+          <span class="proj-name" style="font-size:12px">Terminals</span>
+          <span class="chip emerald" style="padding:1px 6px">2</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main">
+
+      <div class="wshead">
+        <div style="min-width:0">
+          <p class="eyebrow">Ask &#183; demeteo</p>
+          <div style="display:flex;align-items:center;gap:12px">
+            <h1 class="wstitle">How a Step reaches the feature branch</h1>
+            <span class="chip violet" style="margin-top:6px">Dataflow</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;flex:0 0 auto">
+          <div class="metrics">
+            <div><div class="metric-l">Turns</div><div class="metric-v">4</div></div>
+            <div><div class="metric-l">Spend</div><div class="metric-v" style="color:#34d399">$0.42</div></div>
+            <div><div class="metric-l">Tokens</div><div class="metric-v" style="color:#22d3ee">48.2k</div></div>
+          </div>
+          <div class="btn-sec">
+            Threads
+            <span class="chip slate" style="padding:1px 6px">4</span>
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+          <div class="btn-pri">
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+            New thread
+          </div>
+        </div>
+      </div>
+
+      <div class="cols">
+        <section class="thread-col">
+          <div class="subhead">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="subhead-title">Thread</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="chip cyan">claude-code</span>
+              <span class="chip violet">sonnet 5</span>
+              <span class="chip emerald"><span class="cdot"></span>web on</span>
+            </div>
+          </div>
+
+          <div class="transcript">
+            <div class="bubble user">
+              <div class="sender">You</div>
+              How does a Step get from queued to merged? I lose the thread between the driver and the worktree.
+            </div>
+
+            <div class="bubble agent">
+              <div class="sender">
+                <svg class="ico" width="12" height="12" viewBox="0 0 24 24"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/></svg>
+                Ask
+              </div>
+              <p>Four hops &#8212; and the worktree only exists between the second and the third.</p>
+              <p style="margin-top:8px"><span class="code">ExecutionDriver</span> walks the DAG and hands one Step down. The Step&#8217;s <span class="code">StepCapability</span> compiles to a <span class="code">PermissionProfile</span>, and <span class="code">git_ops::scope</span> chmods everything outside the write scope read-only.</p>
+
+              <div class="canvas-card">
+                <div class="canvas-card-row">
+                  <div class="canvas-card-ico">
+                    <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg>
+                  </div>
+                  <div style="min-width:0;flex:1">
+                    <div class="canvas-card-t">Step lifecycle</div>
+                    <div class="canvas-card-s">dataflow &#183; 12 nodes &#183; read 6 files</div>
+                  </div>
+                  <span class="chip violet">on canvas</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="bubble user">
+              <div class="sender">You</div>
+              Where is the permission fence actually applied?
+            </div>
+
+            <div class="bubble agent">
+              <div class="sender">
+                <svg class="ico" width="12" height="12" viewBox="0 0 24 24"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/></svg>
+                Ask
+              </div>
+              <p>At the OS level, before the process starts &#8212; driven by <span class="code">write_scope()</span>. No tool policy expresses a path-shaped rule.</p>
+              <div class="hl-note">
+                <span class="hl-swatch"></span>
+                2 nodes highlighted on the canvas
+              </div>
+            </div>
+          </div>
+
+          <div class="composer">
+            <div class="composer-row">
+              <div class="chat-input">Ask a follow-up, or ask for another canvas&#8230;</div>
+              <div class="iconbtn">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </div>
+              <div class="sendbtn">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="canvas-col">
+          <div class="subhead">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="subhead-title">Canvas</span>
+              <div class="seg">
+                <span>Architecture</span>
+                <span>Journey</span>
+                <span class="on">Dataflow</span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="chip violet">2 highlighted</span>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M12 3v18M5 10l7-7 7 7"/></svg></div>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M12 17v5M9 10.8V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6.8a2 2 0 0 0 .5 1.3l1.8 2a1 1 0 0 1-.7 1.7H6.4a1 1 0 0 1-.7-1.7l1.8-2a2 2 0 0 0 .5-1.3z"/></svg></div>
+              <div class="tool"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></div>
+            </div>
+          </div>
+          <div class="well">
+      <div class="gwell">
+        <svg width="720" height="735" viewBox="0 0 720 735" style="position:absolute;inset:0" aria-hidden="true">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+            </marker>
+            <marker id="ar-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#b45309"/>
+            </marker>
+          </defs>
+          <g stroke="#334155" stroke-width="1.5" fill="none" marker-end="url(#ar)">
+            <path d="M230 98 H255"/><path d="M461 98 H486"/>
+            <path d="M230 262 H255"/><path d="M461 262 H486"/>
+            <path d="M230 426 H255"/><path d="M461 426 H486"/>
+            <path d="M230 590 H255"/><path d="M461 590 H486"/>
+            <path d="M591 134 V168 H129 V222"/>
+            <path d="M591 298 V332 H129 V386"/>
+            <path d="M591 462 V496 H129 V550"/>
+          </g>
+          <path d="M28 590 H10 V426 H24" stroke="#b45309" stroke-width="1.5" stroke-dasharray="5 4"
+                fill="none" marker-end="url(#ar-amber)"/>
+        </svg>
+
+        <div class="lane" style="left:16px;top:16px;width:688px;height:140px"></div>
+        <div class="lane" style="left:16px;top:180px;width:688px;height:140px"></div>
+        <div class="lane" style="left:16px;top:344px;width:688px;height:140px"></div>
+        <div class="lane" style="left:16px;top:508px;width:688px;height:140px"></div>
+
+        <div class="lane-label tx-violet"  style="left:30px;top:30px">01 &#183; Orchestrator</div>
+        <div class="lane-label tx-cyan"    style="left:30px;top:194px">02 &#183; Policy &amp; fence</div>
+        <div class="lane-label tx-emerald" style="left:30px;top:358px">03 &#183; Execution</div>
+        <div class="lane-label tx-amber"   style="left:30px;top:522px">04 &#183; Human &amp; merge</div>
+
+        <div class="node" style="left:28px;top:62px">
+          <div class="node-row">
+            <div class="node-ico tone-violet"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="m21 16-9 5-9-5V8l9-5 9 5z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/></svg></div>
+            <div class="node-txt"><div class="node-t">Feature</div><div class="node-s tx-violet">Queued</div></div>
+          </div>
+          <div class="node-p">models/feature.rs</div>
+        </div>
+        <div class="node" style="left:259px;top:62px">
+          <div class="node-row">
+            <div class="node-ico tone-violet"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg></div>
+            <div class="node-txt"><div class="node-t">ExecutionDriver</div><div class="node-s tx-violet">Walks the DAG</div></div>
+          </div>
+          <div class="node-p">step_executor/driver.rs</div>
+        </div>
+        <div class="node" style="left:490px;top:62px">
+          <div class="node-row">
+            <div class="node-ico tone-violet"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M5 3 19 12 5 21z"/></svg></div>
+            <div class="node-txt"><div class="node-t">StepExecutor</div><div class="node-s tx-violet">One step</div></div>
+          </div>
+          <div class="node-p">ports/step_executor.rs</div>
+        </div>
+
+        <div class="node" style="left:28px;top:226px">
+          <div class="node-row">
+            <div class="node-ico tone-cyan"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+            <div class="node-txt"><div class="node-t">StepCapability</div><div class="node-s tx-cyan">Read &#183; write &#183; exec</div></div>
+          </div>
+          <div class="node-p">domain/permission.rs</div>
+        </div>
+        <div class="node hl" style="left:259px;top:226px">
+          <div class="node-row">
+            <div class="node-ico tone-cyan"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg></div>
+            <div class="node-txt"><div class="node-t">PermissionProfile</div><div class="node-s tx-cyan">Allow / deny only</div></div>
+          </div>
+          <div class="node-p">domain/permission.rs</div>
+        </div>
+        <div class="node hl" style="left:490px;top:226px">
+          <div class="node-row">
+            <div class="node-ico tone-cyan"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+            <div class="node-txt"><div class="node-t">git_ops::scope</div><div class="node-s tx-cyan">chmod fence</div></div>
+          </div>
+          <div class="node-p">git_ops/scope.rs</div>
+        </div>
+
+        <div class="node" style="left:28px;top:390px">
+          <div class="node-row">
+            <div class="node-ico tone-emerald"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
+            <div class="node-txt"><div class="node-t">Worktree</div><div class="node-s tx-emerald">One per subtask</div></div>
+          </div>
+          <div class="node-p">adapters/worktree/</div>
+        </div>
+        <div class="node" style="left:259px;top:390px">
+          <div class="node-row">
+            <div class="node-ico tone-emerald"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg></div>
+            <div class="node-txt"><div class="node-t">ExecutionPort</div><div class="node-s tx-emerald">Local &#183; ssh &#183; runner</div></div>
+          </div>
+          <div class="node-p">ports/execution.rs</div>
+        </div>
+        <div class="node" style="left:490px;top:390px">
+          <div class="node-row">
+            <div class="node-ico tone-emerald"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></svg></div>
+            <div class="node-txt"><div class="node-t">opencode</div><div class="node-s tx-emerald">One-shot + JSON</div></div>
+          </div>
+          <div class="node-p">agent/opencode/</div>
+        </div>
+
+        <div class="node" style="left:28px;top:554px">
+          <div class="node-row">
+            <div class="node-ico tone-amber"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/></svg></div>
+            <div class="node-txt"><div class="node-t">Gate</div><div class="node-s tx-amber">Awaiting review</div></div>
+          </div>
+          <div class="node-p">gate_waiter.rs</div>
+        </div>
+        <div class="node" style="left:259px;top:554px">
+          <div class="node-row">
+            <div class="node-ico tone-violet"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg></div>
+            <div class="node-txt"><div class="node-t">Sync</div><div class="node-s tx-violet">Merge worktree</div></div>
+          </div>
+          <div class="node-p">step_executor/sync.rs</div>
+        </div>
+        <div class="node" style="left:490px;top:554px">
+          <div class="node-row">
+            <div class="node-ico tone-emerald"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
+            <div class="node-txt"><div class="node-t">feature branch</div><div class="node-s tx-emerald">Fast-forward</div></div>
+          </div>
+          <div class="node-p">git merge --ff-only</div>
+        </div>
+
+        <div class="legend" style="left:16px;top:666px;width:688px;height:48px">
+          <div style="display:flex;align-items:center;gap:20px">
+            <div class="legend-item">
+              <svg width="26" height="8" viewBox="0 0 26 8"><path d="M0 4H20" stroke="#334155" stroke-width="1.5"/><path d="M20 1l5 3-5 3z" fill="#475569"/></svg>
+              hands off to
+            </div>
+            <div class="legend-item">
+              <svg width="26" height="8" viewBox="0 0 26 8"><path d="M0 4H20" stroke="#b45309" stroke-width="1.5" stroke-dasharray="5 4"/><path d="M20 1l5 3-5 3z" fill="#b45309"/></svg>
+              <span><span class="mono" style="color:#fbbf24">on_failure</span> &#8212; back to the same worktree</span>
+            </div>
+          </div>
+          <div class="mono" style="font-size:10px;color:var(--s500)">12 nodes &#183; click to open a file</div>
+        </div>
+      </div>
+
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </div>
+</div>
+</body></html>

@@ -1,0 +1,12 @@
+.canvas-card{margin-top:10px;border-radius:8px;border:1px solid rgba(139,92,246,.25);background:rgba(139,92,246,.07);padding:10px 12px}
+.canvas-card-row{display:flex;align-items:center;gap:10px}
+.canvas-card-ico{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  background:rgba(139,92,246,.15);border:1px solid rgba(139,92,246,.3);color:#c4b5fd;flex:0 0 auto}
+.canvas-card-t{font-size:13px;font-weight:500;color:var(--s100)}
+.canvas-card-s{font-family:'Fira Code',monospace;font-size:10px;color:var(--s500);margin-top:2px}
+.canvas-card-foot{margin-top:8px;display:flex;align-items:center;gap:8px;font-family:'Fira Code',monospace;font-size:10px;color:var(--s500)}
+.hl-note{margin-top:8px;display:flex;align-items:center;gap:8px;font-size:12px;color:#c4b5fd}
+.hl-swatch{width:14px;height:14px;border-radius:4px;border:1px solid rgba(167,139,250,.6);
+  box-shadow:0 0 0 2px rgba(167,139,250,.35);flex:0 0 auto}
+.tool{width:26px;height:26px;border-radius:6px;border:1px solid var(--border-glass);display:flex;
+  align-items:center;justify-content:center;color:var(--s400)}

@@ -1,0 +1,30 @@
+.dropwrap{position:relative}
+.drop{position:absolute;top:calc(100% + 10px);right:0;width:340px;z-index:5;border-radius:12px;
+  background:var(--bg-panel);border:1px solid rgba(255,255,255,.08);box-shadow:0 8px 32px rgba(0,0,0,.6);
+  padding:8px;display:flex;flex-direction:column;gap:4px}
+.drop-h{padding:6px 10px 8px;font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--s500)}
+.drop-row{padding:9px 10px;border-radius:8px;border:1px solid transparent;display:flex;flex-direction:column;gap:5px}
+.drop-row.on{background:rgba(6,182,212,.08);border-color:rgba(6,182,212,.3)}
+.drop-t{font-size:13px;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drop-m{display:flex;align-items:center;gap:8px;font-family:'Fira Code',monospace;font-size:10px;color:var(--s500)}
+
+.empty-wrap{flex:1;display:flex;flex-direction:column;align-items:center;padding:48px 32px 0;text-align:center}
+.empty-tile{width:44px;height:44px;border-radius:12px;background:rgba(139,92,246,.12);border:1px solid rgba(139,92,246,.3);
+  display:flex;align-items:center;justify-content:center;color:#c4b5fd}
+.empty-t{margin-top:16px;font-family:'Outfit',sans-serif;font-size:17px;font-weight:600;color:#fff}
+.empty-s{margin-top:8px;font-size:13px;line-height:1.5;color:var(--s400);max-width:340px}
+.try-label{align-self:flex-start;margin:28px 0 10px;font-family:'Fira Code',monospace;font-size:10px;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--s600)}
+.try{width:100%;display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:12px;
+  background:var(--nested);border:1px solid var(--border-glass);text-align:left;margin-bottom:8px}
+.try-ico{width:28px;height:28px;border-radius:8px;border:1px solid;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.try-t{flex:1;min-width:0;font-size:13px;color:var(--s200);line-height:1.35}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;border:1px solid var(--border-glass);
+  background:rgba(0,0,0,.3);font-family:'Fira Code',monospace;font-size:10px;color:var(--s400)}
+.hint{margin:0 0 8px;font-size:11px;color:var(--s500)}
+
+.kind{width:208px;border-radius:12px;background:var(--nested);border:1px solid var(--border-glass);padding:16px}
+.kind-thumb{width:176px;height:96px;border-radius:8px;background:rgba(5,6,8,.6);border:1px solid rgba(255,255,255,.04)}
+.kind-t{margin-top:12px;font-family:'Outfit',sans-serif;font-size:13px;font-weight:600;color:var(--s100)}
+.kind-d{margin-top:6px;font-size:11px;line-height:1.45;color:var(--s500)}

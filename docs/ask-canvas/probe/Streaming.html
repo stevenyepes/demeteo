@@ -1,0 +1,459 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Inter:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap">
+<style>:root{
+  --bg-app:#08090c; --bg-sidebar:#0d0f14; --bg-main:#0a0c10; --bg-well:#050608;
+  --bg-panel:rgba(18,22,30,0.92); --bg-panel-hover:rgba(28,34,46,0.85); --bg-input:rgba(10,12,16,0.6);
+  --nested:rgba(18,22,30,0.55);
+  --border-glass:rgba(255,255,255,0.05);
+  --radius-panel:12px;
+  --violet:#8b5cf6; --cyan:#06b6d4; --emerald:#10b981; --ruby:#ef4444; --amber:#f59e0b;
+  --t1:#f3f4f6; --t2:#9ca3af; --t3:#6b7280;
+  --s100:#f1f5f9; --s200:#e2e8f0; --s300:#cbd5e1; --s400:#94a3b8; --s500:#64748b; --s600:#475569; --s700:#334155;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Inter',-apple-system,sans-serif;background:var(--bg-app);color:var(--t1);-webkit-font-smoothing:antialiased;}
+p{margin:0}
+a{color:#a78bfa;text-decoration:none}
+a:hover{color:#c4b5fd}
+.ico{stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+.mono{font-family:'Fira Code','JetBrains Mono',monospace}
+.head{font-family:'Outfit',sans-serif}
+
+/* ---- app shell ---- */
+.app{width:1440px;height:900px;display:flex;flex-direction:column;overflow:hidden;
+  background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.04) 0%,transparent 60%),
+             radial-gradient(circle at 10% 80%,rgba(6,182,212,.03) 0%,transparent 50%),var(--bg-app);}
+.topbar{flex:0 0 56px;height:56px;border-bottom:1px solid var(--border-glass);background:rgba(13,15,20,.8);
+  display:grid;grid-template-columns:minmax(0,1fr) auto minmax(min-content,1fr);align-items:center;gap:16px;padding:0 24px}
+.brand{display:flex;align-items:center;gap:16px;min-width:0}
+.brand-tile{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#8b5cf6,#06b6d4);
+  display:flex;align-items:center;justify-content:center;font-family:'Outfit',sans-serif;font-weight:800;font-size:15px;color:#0b0d12}
+.brand-name{font-family:'Outfit',sans-serif;font-weight:700;font-size:18px;letter-spacing:.02em;color:#fff}
+.searchbox{display:flex;align-items:center;width:346px;padding:6px 12px;border-radius:6px;font-size:14px;color:var(--s400);
+  background:var(--bg-panel);border:1px solid var(--border-glass);box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.kbd{margin-left:auto;font-family:'Fira Code',monospace;font-size:10px;border:1px solid rgba(255,255,255,.1);
+  padding:2px 6px;border-radius:4px;opacity:.5}
+.topnav{display:flex;align-items:center;gap:8px;justify-self:end}
+.navitem{position:relative;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:4px;font-size:12px;color:var(--s400)}
+.navitem span{font-family:'Fira Code',monospace;white-space:nowrap}
+.navitem.on{background:rgba(255,255,255,.04);color:#fff}
+.avatar{width:28px;height:28px;border-radius:999px;border:1px solid rgba(255,255,255,.1);background:rgba(139,92,246,.15);
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#c4b5fd}
+.body-row{flex:1;display:flex;min-height:0}
+.rail{width:240px;flex:0 0 240px;border-right:1px solid var(--border-glass);background:rgba(13,15,20,.5);display:flex;flex-direction:column}
+.rail-head{padding:12px;border-bottom:1px solid var(--border-glass);display:flex;justify-content:space-between;align-items:center}
+.rail-title{font-family:'Outfit',sans-serif;font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--s500)}
+.rail-search{margin:8px 12px;position:relative}
+.rail-search input,.rail-search .fake{width:100%;background:rgba(0,0,0,.3);border:1px solid var(--border-glass);border-radius:6px;
+  padding:6px 8px 6px 30px;font-size:11px;color:var(--s600);font-family:'Inter',sans-serif}
+.rail-list{flex:1;padding:12px;display:flex;flex-direction:column;gap:8px;overflow:hidden}
+.proj{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;border:1px solid transparent;color:var(--s300)}
+.proj.on{background:rgba(6,182,212,.08);border-color:rgba(6,182,212,.3);box-shadow:0 0 12px rgba(6,182,212,.15)}
+.proj-name{font-size:13px;font-weight:500;color:var(--t1);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:6px;height:6px;border-radius:999px;flex:0 0 auto}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg-main)}
+.wshead{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:24px;
+  border-bottom:1px solid var(--border-glass);background:rgba(13,15,20,.6);padding:14px 24px}
+.eyebrow{font-family:'Fira Code',monospace;font-size:11px;color:var(--s500)}
+.wstitle{margin:6px 0 0;font-family:'Outfit',sans-serif;font-size:20px;font-weight:700;letter-spacing:-.01em;color:#fff}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;border:1px solid;
+  font-family:'Fira Code',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+.chip.cyan{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.2)}
+.chip.violet{background:rgba(139,92,246,.1);color:#a78bfa;border-color:rgba(139,92,246,.2)}
+.chip.emerald{background:rgba(16,185,129,.1);color:#34d399;border-color:rgba(16,185,129,.2)}
+.chip.amber{background:rgba(245,158,11,.1);color:#fbbf24;border-color:rgba(245,158,11,.2)}
+.chip.slate{background:rgba(100,116,139,.1);color:var(--s400);border-color:rgba(100,116,139,.2)}
+.chip .cdot{width:6px;height:6px;border-radius:999px;background:currentColor}
+.metrics{display:flex;align-items:center;gap:18px;padding:8px 14px;border-radius:8px;background:rgba(0,0,0,.25);border:1px solid var(--border-glass)}
+.metric-l{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--s500)}
+.metric-v{font-family:'Fira Code',monospace;font-size:13px;color:var(--t1);margin-top:2px}
+.btn-sec{background:transparent;border:1px solid var(--border-glass);color:var(--s400);border-radius:6px;
+  padding:8px 14px;font-weight:550;font-size:13px;display:inline-flex;align-items:center;gap:8px}
+.btn-pri{background:linear-gradient(135deg,#8b5cf6,#7c3aed);border:1px solid rgba(139,92,246,.4);color:#fff;border-radius:6px;
+  padding:8px 14px;font-weight:550;font-size:13px;display:inline-flex;align-items:center;gap:8px}
+.cols{flex:1;display:flex;min-height:0}
+.subhead{flex:0 0 38px;height:38px;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  border-bottom:1px solid var(--border-glass);background:rgba(18,22,30,.6);padding:0 16px}
+.subhead-title{font-family:'Outfit',sans-serif;font-size:12px;font-weight:500;color:var(--s400)}
+.thread-col{width:480px;flex:0 0 480px;display:flex;flex-direction:column;border-right:1px solid var(--border-glass);background:rgba(11,13,18,.4)}
+.transcript{flex:1;overflow:hidden;padding:16px;display:flex;flex-direction:column;gap:14px}
+.bubble{max-width:80%;padding:12px 16px;border-radius:10px;line-height:1.45;font-size:14px}
+.bubble.agent{background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.15);align-self:flex-start;border-top-left-radius:2px}
+.bubble.user{background:rgba(6,182,212,.1);border:1px solid rgba(6,182,212,.2);align-self:flex-end;border-top-right-radius:2px}
+.sender{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;display:flex;align-items:center;gap:6px}
+.bubble.agent .sender{color:var(--violet)}
+.bubble.user .sender{color:var(--cyan)}
+.code{background:rgba(5,6,8,.55);border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:1px 5px;
+  font-family:'Fira Code',monospace;font-size:12px;color:#67e8f9}
+.composer{flex:0 0 auto;border-top:1px solid var(--border-glass);background:rgba(13,15,20,.9);padding:14px 16px}
+.composer-row{display:flex;align-items:flex-end;gap:10px}
+.chat-input{flex:1;background:var(--bg-input);border:1px solid var(--border-glass);border-radius:8px;padding:10px 14px;
+  color:var(--s500);font-size:14px}
+.iconbtn{border:1px solid var(--border-glass);background:transparent;color:var(--s400);border-radius:6px;
+  width:38px;height:38px;display:flex;align-items:center;justify-content:center}
+.sendbtn{background:linear-gradient(135deg,#8b5cf6,#7c3aed);border:1px solid rgba(139,92,246,.4);color:#fff;border-radius:6px;
+  width:38px;height:38px;display:flex;align-items:center;justify-content:center}
+.canvas-col{flex:1;min-width:0;display:flex;flex-direction:column}
+.well{flex:1;background:var(--bg-well);position:relative;overflow:hidden}
+.seg{display:flex;padding:2px;border-radius:6px;background:rgba(0,0,0,.35);border:1px solid var(--border-glass)}
+.seg button,.seg span{padding:3px 10px;border-radius:4px;font-size:11px;font-family:'Fira Code',monospace;color:var(--s500);border:none;background:transparent}
+.seg .on{background:rgba(139,92,246,.15);color:#c4b5fd;box-shadow:inset 0 0 0 1px rgba(139,92,246,.3)}
+
+/* ---- canvas: lanes, nodes, edges ---- */
+.gwell{position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 0);background-size:20px 20px}
+.lane{position:absolute;border-radius:12px;background:var(--nested);border:1px solid var(--border-glass)}
+.lane-label{position:absolute;font-family:'Fira Code',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+.node{position:absolute;width:202px;height:72px;border-radius:12px;border:1px solid rgba(51,65,85,.6);
+  background:rgba(15,23,42,.7);padding:0 14px;display:flex;flex-direction:column;justify-content:center;gap:6px;
+  box-shadow:0 10px 15px -3px rgba(0,0,0,.3)}
+.node-row{display:flex;align-items:center;gap:12px;min-width:0}
+.node-ico{width:32px;height:32px;border-radius:8px;border:1px solid;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.node-txt{min-width:0;flex:1}
+.node-t{font-size:13px;font-weight:500;color:var(--s100);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node-s{font-size:9px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
+.node-p{padding-left:44px;font-family:'Fira Code',monospace;font-size:9px;color:var(--s500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node.hl{border-color:rgba(167,139,250,.6);box-shadow:0 0 0 2px rgba(167,139,250,.45),0 0 18px rgba(139,92,246,.25)}
+.node.sel{border-color:rgba(34,211,238,.7);box-shadow:0 0 0 1px rgba(34,211,238,.4),0 0 18px rgba(34,211,238,.25)}
+.tone-violet{background:rgba(139,92,246,.1);border-color:rgba(139,92,246,.2);color:#a78bfa}
+.tone-cyan{background:rgba(6,182,212,.1);border-color:rgba(6,182,212,.2);color:#22d3ee}
+.tone-emerald{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.2);color:#34d399}
+.tone-amber{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.2);color:#fbbf24}
+.tx-violet{color:#a78bfa}.tx-cyan{color:#22d3ee}.tx-emerald{color:#34d399}.tx-amber{color:#fbbf24}
+.tx-slate{color:var(--s500)}
+.legend{position:absolute;border-radius:12px;background:var(--nested);border:1px solid var(--border-glass);
+  display:flex;align-items:center;justify-content:space-between;padding:0 16px}
+.legend-item{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--s400);white-space:nowrap}
+@keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+@keyframes skelpulse{0%,100%{opacity:.45}50%{opacity:.85}}
+@media (prefers-reduced-motion: reduce){.caret,.skel{animation:none !important}}
+.caret{display:inline-block;width:7px;height:13px;vertical-align:-2px;margin-left:3px;background:#a78bfa;
+  animation:blink 1s steps(1) infinite}
+.strip{margin-bottom:8px;border-radius:6px;border:1px solid var(--border-glass);background:rgba(255,255,255,.02);padding:6px 10px}
+.strip-row{display:flex;align-items:center;gap:8px}
+.strip-doing{flex:1;min-width:0;font-family:'Fira Code',monospace;font-size:11px;color:var(--s300);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.strip-more{font-family:'Fira Code',monospace;font-size:10px;color:var(--s500)}
+.strip-time{font-family:'Fira Code',monospace;font-size:10px;color:rgba(52,211,153,.8);font-variant-numeric:tabular-nums}
+.strip-sum{margin-top:4px;font-family:'Fira Code',monospace;font-size:10px;color:var(--s500)}
+.srcs{margin-top:10px;border-radius:8px;border:1px solid var(--border-glass);background:rgba(5,6,8,.4);padding:8px 10px}
+.srcs-h{display:flex;align-items:center;gap:6px;font-family:'Fira Code',monospace;font-size:10px;
+  letter-spacing:.08em;text-transform:uppercase;color:var(--s500);margin-bottom:6px}
+.src{display:flex;align-items:center;gap:9px;padding:4px 0}
+.src-ico{width:18px;height:18px;border-radius:5px;background:rgba(6,182,212,.1);border:1px solid rgba(6,182,212,.2);
+  color:#22d3ee;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.src-d{font-family:'Fira Code',monospace;font-size:10px;color:#22d3ee}
+.src-t{font-size:12px;color:var(--s300);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.skel{background:rgba(255,255,255,.07);border-radius:4px;animation:skelpulse 1.6s ease-in-out infinite}
+.node.ghost{border-style:dashed;border-color:rgba(51,65,85,.5);background:rgba(15,23,42,.35);box-shadow:none}
+</style></head><body style="margin:0"><div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-tile">D</div>
+      <div class="brand-name">demeteo</div>
+    </div>
+    <div style="display:flex;justify-content:center">
+      <div class="searchbox">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="margin-right:8px;opacity:.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <span>Search workspace...</span>
+        <span class="kbd">&#8984;K</span>
+      </div>
+    </div>
+    <div class="topnav">
+      <div class="navitem on">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#a78bfa"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>Ask</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#a78bfa"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+        <span>Workflows</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#22d3ee"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <span>Providers</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#fbbf24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        <span>Runs</span>
+      </div>
+      <div class="navitem">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#22d3ee"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 11 2-2-2-2M11 13h4"/></svg>
+        <span>Terminals</span>
+      </div>
+      <div class="navitem" style="padding:6px">
+        <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      </div>
+      <div class="avatar">SY</div>
+    </div>
+  </header>
+
+  <div class="body-row">
+    <aside class="rail">
+      <div class="rail-head">
+        <div class="rail-title">Workspaces</div>
+        <div style="display:flex;gap:6px;color:var(--s400)">
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24" style="color:#c4b5fd"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/><path d="M5 3v4M3 5h4"/></svg>
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M13 9l3 3-3 3"/></svg>
+        </div>
+      </div>
+      <div class="rail-search">
+        <svg class="ico" width="14" height="14" viewBox="0 0 24 24" style="position:absolute;left:9px;top:8px;color:var(--s500)"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <div class="fake">Filter projects...</div>
+      </div>
+      <div class="rail-list">
+        <div class="proj on">
+          <span class="dot" style="background:#34d399;box-shadow:0 0 8px rgba(16,185,129,.6)"></span>
+          <span class="proj-name">demeteo</span>
+          <span class="chip slate" style="padding:1px 5px">3</span>
+        </div>
+        <div class="proj">
+          <span class="dot" style="background:var(--s600)"></span>
+          <span class="proj-name">nephosyne</span>
+        </div>
+        <div class="proj">
+          <span class="dot" style="background:#fbbf24"></span>
+          <span class="proj-name">ds-bundle</span>
+        </div>
+      </div>
+      <div style="padding:12px;border-top:1px solid var(--border-glass)">
+        <div class="proj" style="background:#0d0f14;border-color:transparent;padding:8px 12px">
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7 11 2-2-2-2M11 13h4"/></svg>
+          <span class="proj-name" style="font-size:12px">Terminals</span>
+          <span class="chip emerald" style="padding:1px 6px">2</span>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main">
+
+      <div class="wshead">
+        <div style="min-width:0">
+          <p class="eyebrow">Ask &#183; demeteo</p>
+          <div style="display:flex;align-items:center;gap:12px">
+            <h1 class="wstitle">Where we sit against Tauri v2</h1>
+            <span class="chip cyan" style="margin-top:6px"><span class="cdot"></span>answering</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;flex:0 0 auto">
+          <div class="metrics">
+            <div><div class="metric-l">Turns</div><div class="metric-v">2</div></div>
+            <div><div class="metric-l">Spend</div><div class="metric-v" style="color:#34d399">$0.19</div></div>
+            <div><div class="metric-l">Tokens</div><div class="metric-v" style="color:#22d3ee">21.6k</div></div>
+          </div>
+          <div class="btn-sec">
+            Threads
+            <span class="chip slate" style="padding:1px 6px">5</span>
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+          <div class="btn-pri" style="opacity:.4">
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+            New thread
+          </div>
+        </div>
+      </div>
+
+      <div class="cols">
+        <section class="thread-col">
+          <div class="subhead">
+            <span class="subhead-title">Thread</span>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="chip cyan">claude-code</span>
+              <span class="chip violet">sonnet 5</span>
+              <span class="chip emerald"><span class="cdot"></span>web on</span>
+            </div>
+          </div>
+
+          <div class="transcript">
+            <div class="bubble user">
+              <div class="sender">You</div>
+              Are we still matching Tauri v2&#8217;s capability model? Check upstream, then draw where we sit.
+            </div>
+
+            <div class="bubble agent">
+              <div class="sender">
+                <span class="dot" style="background:currentColor"></span>
+                Ask
+              </div>
+
+              <div class="strip">
+                <div class="strip-row">
+                  <svg class="ico" width="14" height="14" viewBox="0 0 24 24" style="color:#22d3ee"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                  <span class="strip-doing">Fetching v2.tauri.app/security/capabilities</span>
+                  <span class="strip-more">+2</span>
+                  <span class="strip-time">1m 12s</span>
+                </div>
+                <p class="strip-sum">read 8 files &#183; 3 web fetches &#183; 1 command</p>
+              </div>
+
+              <p>Upstream still splits it the same way &#8212; a capability names windows plus a permission set, and scope objects narrow it per command. Ours is the same shape one level down: <span class="code">StepCapability</span> is the named set, and <span class="code">write_scope()</span> is the scope object.</p>
+              <p style="margin-top:8px">The difference is where it bites. Tauri checks at the IPC boundary; we check at the filesystem, because the artifacts-versus-source line is path-shaped and no tool model expresses it<span class="caret"></span></p>
+
+              <div class="srcs">
+                <div class="srcs-h">
+                  <svg class="ico" width="11" height="11" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+                  Sources &#183; 3
+                </div>
+                <div class="src">
+                  <div class="src-ico"><svg class="ico" width="11" height="11" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+                  <div style="min-width:0;flex:1">
+                    <div class="src-d">v2.tauri.app</div>
+                    <div class="src-t">Capabilities &#8212; security</div>
+                  </div>
+                </div>
+                <div class="src">
+                  <div class="src-ico"><svg class="ico" width="11" height="11" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+                  <div style="min-width:0;flex:1">
+                    <div class="src-d">v2.tauri.app</div>
+                    <div class="src-t">Permissions reference</div>
+                  </div>
+                </div>
+                <div class="src">
+                  <div class="src-ico"><svg class="ico" width="11" height="11" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+                  <div style="min-width:0;flex:1">
+                    <div class="src-d">github.com/tauri-apps</div>
+                    <div class="src-t">acl: scope schema changes in 2.x</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="composer">
+            <p class="hint" style="color:var(--s600)">The turn is running &#8212; your next question queues behind it.</p>
+            <div class="composer-row">
+              <div class="chat-input" style="opacity:.5">Ask a follow-up&#8230;</div>
+              <div class="iconbtn" style="opacity:.35">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </div>
+              <div class="sendbtn" style="opacity:.35">
+                <svg class="ico" width="15" height="15" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="canvas-col">
+          <div class="subhead">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="subhead-title">Canvas</span>
+              <div class="seg">
+                <span class="on">Architecture</span>
+                <span>Journey</span>
+                <span>Dataflow</span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="chip cyan"><span class="cdot"></span>composing</span>
+              <div class="tool" style="opacity:.35"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div>
+              <div class="tool" style="opacity:.35"><svg class="ico" width="14" height="14" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></div>
+            </div>
+          </div>
+          <div class="well">
+      <div class="gwell">
+        <svg width="720" height="735" viewBox="0 0 720 735" style="position:absolute;inset:0" aria-hidden="true">
+          <defs>
+            <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+            </marker>
+          </defs>
+          <g stroke="#334155" stroke-width="1.5" fill="none" marker-end="url(#ar2)">
+            <path d="M230 98 H255"/><path d="M461 98 H486"/>
+            <path d="M230 262 H255"/><path d="M461 262 H486"/>
+            <path d="M591 134 V168 H129 V222"/>
+          </g>
+          <g stroke="#1e293b" stroke-width="1.5" stroke-dasharray="4 5" fill="none">
+            <path d="M591 298 V332 H129 V386"/>
+            <path d="M230 426 H255"/><path d="M461 426 H486"/>
+            <path d="M591 462 V496 H129 V550"/>
+            <path d="M230 590 H255"/><path d="M461 590 H486"/>
+          </g>
+        </svg>
+
+        <div class="lane" style="left:16px;top:16px;width:688px;height:140px"></div>
+        <div class="lane" style="left:16px;top:180px;width:688px;height:140px"></div>
+        <div class="lane" style="left:16px;top:344px;width:688px;height:140px;opacity:.5"></div>
+        <div class="lane" style="left:16px;top:508px;width:688px;height:140px;opacity:.5"></div>
+
+        <div class="lane-label tx-violet" style="left:30px;top:30px">01 &#183; Tauri surface</div>
+        <div class="lane-label tx-cyan"   style="left:30px;top:194px">02 &#183; Demeteo fence</div>
+        <div class="skel" style="position:absolute;left:30px;top:358px;width:118px;height:10px"></div>
+        <div class="skel" style="position:absolute;left:30px;top:522px;width:96px;height:10px"></div>
+
+        <div class="node" style="left:28px;top:62px">
+          <div class="node-row">
+            <div class="node-ico tone-violet"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5M9 13h6M9 17h4"/></svg></div>
+            <div class="node-txt"><div class="node-t">capabilities/*.json</div><div class="node-s tx-violet">Declared surface</div></div>
+          </div>
+          <div class="node-p">src-tauri/capabilities/</div>
+        </div>
+        <div class="node" style="left:259px;top:62px">
+          <div class="node-row">
+            <div class="node-ico tone-violet"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+            <div class="node-txt"><div class="node-t">Tauri ACL</div><div class="node-s tx-violet">v2 &#183; upstream</div></div>
+          </div>
+          <div class="node-p">tauri::ipc scope check</div>
+        </div>
+        <div class="node" style="left:490px;top:62px">
+          <div class="node-row">
+            <div class="node-ico tone-violet"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+            <div class="node-txt"><div class="node-t">WebView</div><div class="node-s tx-violet">Command calls</div></div>
+          </div>
+          <div class="node-p">src/lib/*.ts wrappers</div>
+        </div>
+
+        <div class="node" style="left:28px;top:226px">
+          <div class="node-row">
+            <div class="node-ico tone-cyan"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+            <div class="node-txt"><div class="node-t">StepCapability</div><div class="node-s tx-cyan">Read &#183; write &#183; exec</div></div>
+          </div>
+          <div class="node-p">domain/permission.rs</div>
+        </div>
+        <div class="node" style="left:259px;top:226px">
+          <div class="node-row">
+            <div class="node-ico tone-cyan"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg></div>
+            <div class="node-txt"><div class="node-t">PermissionProfile</div><div class="node-s tx-cyan">Allow / deny only</div></div>
+          </div>
+          <div class="node-p">domain/permission.rs</div>
+        </div>
+        <div class="node" style="left:490px;top:226px">
+          <div class="node-row">
+            <div class="node-ico tone-cyan"><svg class="ico" width="16" height="16" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+            <div class="node-txt"><div class="node-t">git_ops::scope</div><div class="node-s tx-cyan">chmod fence</div></div>
+          </div>
+          <div class="node-p">git_ops/scope.rs</div>
+        </div>
+
+        <div class="node ghost" style="left:28px;top:390px">
+          <div class="node-row">
+            <div class="skel" style="width:32px;height:32px;border-radius:8px"></div>
+            <div class="node-txt"><div class="skel" style="width:96px;height:10px"></div><div class="skel" style="width:64px;height:7px;margin-top:6px"></div></div>
+          </div>
+        </div>
+        <div class="node ghost" style="left:259px;top:390px">
+          <div class="node-row">
+            <div class="skel" style="width:32px;height:32px;border-radius:8px"></div>
+            <div class="node-txt"><div class="skel" style="width:84px;height:10px"></div><div class="skel" style="width:70px;height:7px;margin-top:6px"></div></div>
+          </div>
+        </div>
+        <div class="node ghost" style="left:490px;top:390px"></div>
+        <div class="node ghost" style="left:28px;top:554px"></div>
+        <div class="node ghost" style="left:259px;top:554px"></div>
+        <div class="node ghost" style="left:490px;top:554px"></div>
+
+        <div class="legend" style="left:16px;top:666px;width:688px;height:48px">
+          <div class="legend-item">
+            <svg class="ico" width="14" height="14" viewBox="0 0 24 24" style="color:#34d399"><path d="M12 2v4m0 12v4M4.9 4.9l2.9 2.9m8.4 8.4 2.9 2.9M2 12h4m12 0h4M4.9 19.1l2.9-2.9m8.4-8.4 2.9-2.9"/></svg>
+            <span>Drawing as the answer arrives &#8212; nodes land when the agent names them.</span>
+          </div>
+          <div class="mono" style="font-size:10px;color:var(--s500)">7 of 12 nodes</div>
+        </div>
+      </div>
+
+          </div>
+        </section>
+      </div>
+
+    </div>
+  </div>
+</div>
+</body></html>
