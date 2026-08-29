@@ -211,6 +211,8 @@ async fn load_returns_the_thread_and_its_transcript() {
             cost_usd: None,
             tokens: None,
             turn_activity: None,
+            canvas_paths: None,
+            checked_commit_sha: None,
             created_at: thread.created_at,
         })
         .unwrap();
@@ -223,6 +225,8 @@ async fn load_returns_the_thread_and_its_transcript() {
             cost_usd: Some(0.02),
             tokens: Some(512),
             turn_activity: None,
+            canvas_paths: None,
+            checked_commit_sha: None,
             created_at: thread.created_at + 1,
         })
         .unwrap();

@@ -15,6 +15,7 @@ use super::events::{
 };
 use super::running::{RunningTurn, ALREADY_RUNNING};
 use crate::adapters::agent::event_stream::turn::{stream_agent_turn, TurnOutcome, TurnResult};
+use crate::application::turn_retry::should_reseed_and_retry;
 use crate::domain::attachment::AttachedFile;
 use crate::domain::discovery_question::parse_interview_turn;
 use crate::domain::ids::DiscoveryId;
@@ -25,38 +26,6 @@ use crate::domain::permission::{Access, PermissionProfile};
 use crate::ports::agent_runtime::AgentContext;
 use crate::ports::discovery::DiscoveryPatch;
 use crate::state::AppContext;
-
-/// Whether a turn should be run again with the transcript carried in the
-/// prompt, because the evidence says the harness no longer knows the session.
-///
-/// **No harness reports a lost session distinguishably.** A `claude --resume`
-/// against an id its store has pruned exits with an error like any other
-/// error; codex, opencode and hermes do the same. Demeteo sees a `Failed` or
-/// `Environmental` ending with a message it has no grammar for, and matching
-/// on that message would be matching on another product's copy — it changes
-/// on their release schedule and nothing here would fail when it did.
-///
-/// So the discriminator is evidential rather than textual, and it is the one
-/// piece of evidence that means something: **a turn that produced no assistant
-/// text never reached the model.** A resumed turn that answered and then fell
-/// over plainly resolved its session; the failure is the agent's and re-asking
-/// would only repeat it. A resumed turn that emitted nothing is either a lost
-/// session or a failure so early that re-seeding repeats it once — which is
-/// the conservative side to be wrong on, because the alternative leaves a
-/// Discovery permanently unable to take another turn, in exactly the
-/// came-back-a-week-later case §4.4 exists for.
-///
-/// What it costs when it is wrong is one extra turn, billed. What it costs to
-/// omit is the Discovery. `resumed` is what bounds it: a turn that already
-/// carried the transcript has nothing left to fall back to, so it is never
-/// retried and the loop cannot run more than twice.
-pub(crate) fn should_reseed_and_retry(
-    resumed: bool,
-    produced_text: bool,
-    ending: TurnEnding,
-) -> bool {
-    resumed && !produced_text && matches!(ending, TurnEnding::Failed | TurnEnding::Environmental)
-}
 
 /// The outcome of a turn that never ran, or of the one ending that carries no
 /// usage by construction.

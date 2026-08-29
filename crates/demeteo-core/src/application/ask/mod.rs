@@ -2,9 +2,17 @@
 //! `docs/PRD_DISCOVERY.md`-adjacent but not itself a Discovery — see
 //! [`crate::domain::models::ask`]).
 //!
-//! Storage and lifecycle only: create, project list, load, rename, delete.
-//! No turn execution, worktree allocation, or stream events — those are
-//! `ask-turn-loop`'s and `ask-thread-ui`'s to add.
+//! Storage, lifecycle, and the turn loop: create, project list, load,
+//! rename, delete, and `turn::send`'s claim/persist/stream/bill/emit run
+//! against a provisioned worktree. `turn::verify_canvas_paths` stats each
+//! canvas node's path against the worktree root and records a per-path
+//! resolved/unresolved verdict on the message.
+
+pub mod events;
+pub mod question;
+pub mod running;
+pub mod turn;
+pub mod worktree;
 
 use serde::{Deserialize, Serialize};
 

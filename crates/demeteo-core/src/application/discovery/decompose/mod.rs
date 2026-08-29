@@ -32,6 +32,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::adapters::agent::event_stream::turn::stream_agent_turn;
+use crate::application::turn_retry::should_reseed_and_retry;
 use crate::domain::ids::{DiscoveryId, TicketId, WorkflowId};
 use crate::domain::models::{DiscoveryStatus, Ticket, TicketState};
 use crate::domain::ticket_graph::{
@@ -272,7 +273,7 @@ where
 
         if ending != TurnEnding::Success {
             if !reseeded
-                && turn::should_reseed_and_retry(was_resumed, !spent.text.trim().is_empty(), ending)
+                && should_reseed_and_retry(was_resumed, !spent.text.trim().is_empty(), ending)
             {
                 p.registry.kill(&p.thread_id).await;
                 reseeded = true;

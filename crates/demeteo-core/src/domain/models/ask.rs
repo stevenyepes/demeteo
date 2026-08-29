@@ -58,7 +58,20 @@ pub struct AskMessage {
     pub tokens: Option<i64>,
     #[serde(default)]
     pub turn_activity: Option<TurnActivity>,
+    #[serde(default)]
+    pub canvas_paths: Option<Vec<CanvasPathVerdict>>,
+    #[serde(default)]
+    pub checked_commit_sha: Option<String>,
     pub created_at: i64,
+}
+
+/// Whether a path a canvas node cited resolves against the tree checked at
+/// `AskMessage::checked_commit_sha`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanvasPathVerdict {
+    pub node_id: String,
+    pub path: String,
+    pub resolved: bool,
 }
 
 /// Whether an Ask thread is still open.

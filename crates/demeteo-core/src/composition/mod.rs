@@ -340,6 +340,7 @@ pub fn build_core_context(
         sync_sessions: sync_sessions_repo,
         discoveries: discoveries_repo,
         discovery_turns: Arc::new(application::discovery::running::RunningTurns::default()),
+        ask_turns: Arc::new(application::ask::running::RunningTurns::default()),
         tickets: tickets_repo,
         sync_turns,
         remote_run_mirror_guard: Arc::new(tokio::sync::Mutex::new(())),

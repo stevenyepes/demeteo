@@ -6,7 +6,7 @@ use rusqlite::params;
 
 use crate::domain::ids::{AskThreadId, ProjectId};
 use crate::domain::models::{
-    AskMessage, AskStatus, AskThread, EffortLevel, MessageRole, TurnActivity,
+    AskMessage, AskStatus, AskThread, CanvasPathVerdict, EffortLevel, MessageRole, TurnActivity,
 };
 use crate::ports::ask::{AskPort, AskThreadPatch};
 
@@ -15,8 +15,8 @@ use super::super::SqliteAdapter;
 const COLUMNS: &str = "id, project_id, title, status, agent_kind, model, effort, machine_id,
      worktree_path, session_id, turn_count, cost_usd, tokens, created_at, updated_at";
 
-const MESSAGE_COLUMNS: &str =
-    "id, thread_id, role, text, cost_usd, tokens, turn_activity_json, created_at";
+const MESSAGE_COLUMNS: &str = "id, thread_id, role, text, cost_usd, tokens, turn_activity_json,
+     canvas_paths_json, checked_commit_sha, created_at";
 
 fn row_to_thread(row: &rusqlite::Row) -> rusqlite::Result<AskThread> {
     let status: String = row.get(3)?;
@@ -54,13 +54,21 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<AskMessage> {
         cost_usd: row.get(4)?,
         tokens: row.get(5)?,
         turn_activity: decode_activity(row.get(6)?),
-        created_at: row.get(7)?,
+        canvas_paths: decode_canvas_paths(row.get(7)?),
+        checked_commit_sha: row.get(8)?,
+        created_at: row.get(9)?,
     })
 }
 
 /// A summary this build cannot read is read as no summary at all, same terms
 /// as `discovery::decode_activity`.
 fn decode_activity(raw: Option<String>) -> Option<TurnActivity> {
+    raw.as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+}
+
+/// Same degrade-to-`None` convention as [`decode_activity`].
+fn decode_canvas_paths(raw: Option<String>) -> Option<Vec<CanvasPathVerdict>> {
     raw.as_deref()
         .and_then(|raw| serde_json::from_str(raw).ok())
 }
@@ -167,7 +175,7 @@ impl AskPort for SqliteAdapter {
         conn.execute(
             &format!(
                 "INSERT OR REPLACE INTO ask_message ({MESSAGE_COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
             ),
             params![
                 message.id,
@@ -180,6 +188,11 @@ impl AskPort for SqliteAdapter {
                     .turn_activity
                     .as_ref()
                     .and_then(|a| serde_json::to_string(a).ok()),
+                message
+                    .canvas_paths
+                    .as_ref()
+                    .and_then(|p| serde_json::to_string(p).ok()),
+                message.checked_commit_sha,
                 message.created_at,
             ],
         )

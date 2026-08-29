@@ -14,5 +14,6 @@ pub mod sync_session;
 pub mod sync_turns;
 pub mod tickets;
 pub mod timeouts;
+pub mod turn_retry;
 pub mod workflows;
 pub mod worktree;
