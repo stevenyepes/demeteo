@@ -19,6 +19,7 @@ pub mod app_view;
 pub mod artifact;
 pub(crate) mod artifact_capture;
 pub mod artifact_contract;
+pub mod ask_canvas;
 pub mod attachment;
 pub mod bootstrap;
 pub mod branch_listing;
