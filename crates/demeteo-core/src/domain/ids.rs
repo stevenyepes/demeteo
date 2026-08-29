@@ -157,6 +157,7 @@ id_newtype!(DiscoveryId);
 id_newtype!(TicketId);
 id_newtype!(WorkflowVersionId);
 id_newtype!(InterceptId);
+id_newtype!(AskThreadId);
 
 #[cfg(test)]
 #[path = "../../tests/domain/ids.rs"]

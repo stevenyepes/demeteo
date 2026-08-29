@@ -1,4 +1,5 @@
 pub mod agent_config;
+pub mod ask;
 pub mod discovery;
 pub mod effort;
 pub mod feature;
@@ -20,6 +21,7 @@ pub mod workflow_v2;
 pub mod workflow_view;
 
 pub use agent_config::*;
+pub use ask::*;
 pub use discovery::*;
 pub use effort::*;
 pub use feature::*;
