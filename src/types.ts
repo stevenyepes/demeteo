@@ -1605,3 +1605,40 @@ export interface AskThreadDetail {
   thread: AskThread;
   messages: AskMessage[];
 }
+
+/** Mirrors `NodeRole`. */
+export type NodeRole = 'orchestration' | 'boundary' | 'agent' | 'needs_human';
+
+/** Mirrors `CanvasKind`. Not branched on by the renderer — see Constraints. */
+export type CanvasKind = 'architecture' | 'journey' | 'dataflow';
+
+/** Mirrors `EdgeKind`. */
+export type EdgeKind = 'hands_off' | 'goes_back';
+
+/** Mirrors `CanvasNode`. `path: null` is the renderer's sole unresolved
+ *  signal — see the precedence rule below. */
+export interface CanvasNode {
+  id: string;
+  title: string;
+  role: NodeRole;
+  path: string | null;
+  stage: number;
+  lane: number;
+}
+
+/** Mirrors `CanvasEdge`. */
+export interface CanvasEdge {
+  from: string;
+  to: string;
+  kind: EdgeKind;
+}
+
+/** Mirrors `AskCanvas`. */
+export interface AskCanvas {
+  kind: CanvasKind;
+  title: string;
+  stages: string[];
+  lanes: string[];
+  nodes: CanvasNode[];
+  edges: CanvasEdge[];
+}
