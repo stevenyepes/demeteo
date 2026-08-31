@@ -654,3 +654,79 @@ fn a_title_with_no_usable_word_boundary_is_still_cut_to_fit() {
     let subject = header.split_once(": ").expect("conventional header").1;
     assert_eq!(subject.chars().count(), 72);
 }
+
+// --- who repairs a rejected list --------------------------------------------
+//
+// The check ("is this executable") and the routing ("whose defect is it")
+// are separate questions, and only the second decides whether the run
+// survives. These pin the second.
+
+#[test]
+fn a_producer_backed_step_sends_a_malformed_list_back_to_its_producer() {
+    let mut plan = plan_of(&["a", "b"]);
+    plan.tasks[1].blocked_by = vec!["ghost".into()];
+    let producer = crate::domain::ids::StepId::from("s-tickets");
+
+    match reject_unexecutable_plan(&plan, Some(&producer)) {
+        Some(PlanRejection::ProducerMustFix { producer, reason }) => {
+            assert_eq!(producer.0, "s-tickets");
+            // The producer is being asked to rewrite the list, so the
+            // message has to name the defect, not just report a rejection.
+            assert!(reason.contains("ghost"), "{reason}");
+            assert!(reason.contains("not an earlier task"), "{reason}");
+        }
+        other => panic!("expected ProducerMustFix, got {other:?}"),
+    }
+}
+
+/// A planner-sourced step wrote the list inside itself, so there is no
+/// other node to send it to — re-running the step re-runs the planner that
+/// just failed.
+#[test]
+fn a_planner_sourced_step_has_nobody_to_send_it_to() {
+    let mut plan = plan_of(&["a", "b"]);
+    plan.tasks[1].blocked_by = vec!["ghost".into()];
+
+    match reject_unexecutable_plan(&plan, None) {
+        Some(PlanRejection::Terminal { reason }) => {
+            assert!(reason.contains("ghost"), "{reason}");
+        }
+        other => panic!("expected Terminal, got {other:?}"),
+    }
+}
+
+/// Every rule the check enforces routes, not just the one that bit in
+/// production — a list rejected for a duplicate id is as repairable as one
+/// rejected for a dangling edge.
+#[test]
+fn every_rejection_rule_routes_to_the_producer() {
+    let producer = crate::domain::ids::StepId::from("s-tickets");
+
+    let duplicate = plan_of(&["a", "a"]);
+    let blank = plan_of(&["a", "  "]);
+    let mut self_dep = plan_of(&["a"]);
+    self_dep.tasks[0].blocked_by = vec!["a".into()];
+    let mut forward = plan_of(&["a", "b"]);
+    forward.tasks[0].blocked_by = vec!["b".into()];
+
+    for (label, plan) in [
+        ("duplicate id", duplicate),
+        ("blank id", blank),
+        ("self dependency", self_dep),
+        ("forward edge", forward),
+    ] {
+        assert!(
+            matches!(
+                reject_unexecutable_plan(&plan, Some(&producer)),
+                Some(PlanRejection::ProducerMustFix { .. })
+            ),
+            "{label} should route to the producer"
+        );
+    }
+}
+
+#[test]
+fn an_executable_list_is_not_rejected_at_all() {
+    let producer = crate::domain::ids::StepId::from("s-tickets");
+    assert!(reject_unexecutable_plan(&plan_of(&["a", "b"]), Some(&producer)).is_none());
+}

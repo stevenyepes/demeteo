@@ -53,6 +53,9 @@ impl ExecutionDriver {
             StepOutcome::VerdictFailed(_) => {
                 unreachable!("VerdictFailed is normalized into Failed above")
             }
+            StepOutcome::ProducerFault { .. } => {
+                unreachable!("ProducerFault is normalized into Failed above")
+            }
             StepOutcome::Environmental(msg) => self.apply_environmental(step_exec, msg, dr).await,
             StepOutcome::NonRetryable(msg) => self.apply_non_retryable(step_exec, msg, dr).await,
             StepOutcome::Cancelled => self.apply_cancelled().await,

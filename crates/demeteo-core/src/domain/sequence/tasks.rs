@@ -301,6 +301,51 @@ pub(crate) fn validate_task_plan(plan: &TaskPlan) -> Option<String> {
     None
 }
 
+/// Who, if anyone, can repair a task list [`validate_task_plan`] rejected.
+///
+/// Split from the check because it is a different question. The check asks
+/// *is this list executable*; this asks *whose defect is it*, and only the
+/// second decides whether the run continues. It lives here rather than at
+/// the call site because the call site is an `async fn` that also reads the
+/// artifact — a routing decision spelled in there is reachable from no test
+/// without standing up the whole driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PlanRejection {
+    /// The step named by `task_list_from` wrote it and can rewrite it.
+    /// Every rule the check enforces names its defect precisely enough to
+    /// act on, so this is repairable unattended.
+    ProducerMustFix {
+        producer: crate::domain::ids::StepId,
+        reason: String,
+    },
+    /// Nobody to send it back to: a planner pass produced this list in the
+    /// sequence step itself, and re-running the step re-runs the planner
+    /// that just failed.
+    Terminal { reason: String },
+}
+
+/// Reject an unexecutable task list, naming who can repair it.
+///
+/// `producer` is the step's `task_list_from`, already emptied-to-`None` by
+/// the caller — an empty string binds no producer, the same rule
+/// `rework_mode` applies.
+pub(crate) fn reject_unexecutable_plan(
+    plan: &TaskPlan,
+    producer: Option<&crate::domain::ids::StepId>,
+) -> Option<PlanRejection> {
+    let reason = format!(
+        "sequence step: the task list is not executable — {}",
+        validate_task_plan(plan)?
+    );
+    Some(match producer {
+        Some(producer) => PlanRejection::ProducerMustFix {
+            producer: producer.clone(),
+            reason,
+        },
+        None => PlanRejection::Terminal { reason },
+    })
+}
+
 /// Build the attempt-1 targeted retry plan from the cached full plan.
 ///
 /// Selects the tasks whose `files` intersect the verdict's

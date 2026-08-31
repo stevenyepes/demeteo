@@ -370,7 +370,8 @@ impl ExecutionDriver {
             StepOutcome::VerdictFailed(vf) => ("failed", Some(vf.to_feedback())),
             StepOutcome::Failed(msg)
             | StepOutcome::Environmental(msg)
-            | StepOutcome::NonRetryable(msg) => ("failed", Some(msg.clone())),
+            | StepOutcome::NonRetryable(msg)
+            | StepOutcome::ProducerFault { reason: msg, .. } => ("failed", Some(msg.clone())),
             StepOutcome::RedirectTo(_) => ("completed", None),
         };
         self.emit_command_status(step_exec, status, wall, error, Some(artifact_refs));

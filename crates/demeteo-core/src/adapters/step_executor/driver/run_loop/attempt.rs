@@ -44,12 +44,14 @@ pub(crate) struct AttemptClassification {
 /// exhaustive on purpose — a new `StepOutcome` variant has to become a
 /// compile error here rather than a silently unclassified attempt row.
 ///
-/// `has_verdict` is whether a structured verifier failure accompanied a
-/// `Failed` outcome, which is the only thing separating a `verdict` class
-/// from an `agent_failure` one once `VerdictFailed` has been normalized.
+/// `is_verdict_class` is whether a normalized `Failed` outcome carries the
+/// `verdict` class — the only thing separating it from an `agent_failure`
+/// one once `VerdictFailed` and `ProducerFault` have both been flattened.
+/// It is not "a `VerdictFailure` was attached": a producer fault is
+/// verdict-classed and carries none.
 pub(crate) fn classify(
     outcome: &StepOutcome,
-    has_verdict: bool,
+    is_verdict_class: bool,
     is_cancelled: bool,
     target_dir: &str,
 ) -> AttemptClassification {
@@ -64,7 +66,7 @@ pub(crate) fn classify(
             } else {
                 "failed"
             },
-            Some(if has_verdict {
+            Some(if is_verdict_class {
                 error_class::VERDICT
             } else {
                 error_class::AGENT_FAILURE
@@ -77,6 +79,11 @@ pub(crate) fn classify(
             "failed",
             Some(error_class::VERDICT),
             Some(normalize_failure_fingerprint(&vf.to_feedback(), target_dir)),
+        ),
+        StepOutcome::ProducerFault { reason, .. } => (
+            "failed",
+            Some(error_class::VERDICT),
+            Some(normalize_failure_fingerprint(reason, target_dir)),
         ),
         StepOutcome::Environmental(msg) => (
             "failed",

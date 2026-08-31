@@ -162,10 +162,24 @@ fn fail_rule() -> RetryRule {
 /// Total: a class missing from the policy fails (derivers always
 /// produce complete policies; this is the safe floor, not a path the
 /// legacy deriver can reach).
+/// `redirect_override` re-addresses a redirect without re-deciding it. It
+/// exists for the one failure whose repairer is not the one the workflow
+/// author named: a `sequence` step handed a malformed task list fails to
+/// its `on_failure` review gate, while the step that can actually rewrite
+/// the list is its `task_list_from` producer. Budget, `rule_id` and the
+/// exhaustion boundary are the policy's either way — only the destination
+/// moves, and it moves in **both** the live and exhausted arms so a
+/// budget-exhausted message names the step that was actually being asked.
+///
+/// It deliberately does **not** manufacture a redirect out of a `Fail`
+/// strategy. `on_failure` is the author's declared retry appetite for that
+/// node; a handler that mints retries the author disabled is a handler
+/// overruling the workflow.
 pub(crate) fn evaluate(
     policy: &RetryPolicy,
     class: FailureClass,
     attempts_used: u32,
+    redirect_override: Option<&crate::domain::ids::StepId>,
 ) -> RetryDecision {
     let rule = match class {
         FailureClass::Environment => policy.environment.as_ref(),
@@ -202,13 +216,19 @@ pub(crate) fn evaluate(
             // fail, mirroring the v1 empty-`on_failure` check.
             match rule.redirect_to.as_ref().filter(|t| !t.0.is_empty()) {
                 None => RetryAction::Fail,
-                Some(target) if attempt > max => RetryAction::Exhausted {
-                    target: Some(target.clone()),
-                },
-                Some(target) => RetryAction::Redirect {
-                    target: target.clone(),
-                    feedback: rule.feedback,
-                },
+                Some(target) => {
+                    let target = redirect_override.unwrap_or(target).clone();
+                    if attempt > max {
+                        RetryAction::Exhausted {
+                            target: Some(target),
+                        }
+                    } else {
+                        RetryAction::Redirect {
+                            target,
+                            feedback: rule.feedback,
+                        }
+                    }
+                }
             }
         }
         RetryStrategy::InPlace => {
