@@ -166,4 +166,30 @@ impl GateRepository for SqliteAdapter {
             None => Ok(None),
         }
     }
+
+    fn all_decided_for_feature(&self, feature_id: &FeatureId) -> Result<Vec<GateDecision>, String> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT gd.id,gd.step_execution_id,gd.decision,gd.feedback,gd.created_at
+                 FROM gate_decisions gd
+                 JOIN step_executions se ON se.id = gd.step_execution_id
+                 WHERE se.feature_id=?1 AND gd.decision IS NOT NULL
+                 ORDER BY gd.created_at ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![feature_id.0], |row| {
+                Ok(GateDecision {
+                    id: row.get(0)?,
+                    step_execution_id: row.get(1)?,
+                    decision: row.get(2)?,
+                    feedback: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
 }

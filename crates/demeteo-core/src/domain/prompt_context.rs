@@ -169,6 +169,7 @@ pub(crate) const BOUND_TOKENS: &[&str] = &[
     "review_entrypoint",
     "gate_feedback",
     "gate_decision",
+    "gate_decision_log",
     "retry_feedback",
     "iteration",
     "max_iterations",

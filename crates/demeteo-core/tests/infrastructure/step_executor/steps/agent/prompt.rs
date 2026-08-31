@@ -159,6 +159,51 @@ fn a_template_naming_the_token_asks_for_the_briefing() {
     ));
 }
 
+// ── needs_gate_decision_log ─────────────────────────────────────────
+//
+// Same opt-in shape as the briefing above, plus one thing the briefing
+// has no equivalent of: the singular `{{gate_decision}}` sits right next
+// to it, and the two must not be confusable in either direction.
+
+#[test]
+fn a_template_without_the_token_asks_for_no_gate_log() {
+    assert!(!needs_gate_decision_log(""));
+    assert!(!needs_gate_decision_log(
+        "Implement {{feature_description}}."
+    ));
+}
+
+#[test]
+fn a_template_naming_the_token_asks_for_the_gate_log() {
+    assert!(needs_gate_decision_log("{{gate_decision_log}}"));
+    assert!(needs_gate_decision_log(
+        "## Decisions\n{{gate_decision_log}}\n\n## Task\n…"
+    ));
+}
+
+/// The singular latest-decision binding must not buy the history, or every
+/// step that only wanted "what did the last gate say" pays for a query it
+/// never reads.
+#[test]
+fn the_singular_gate_decision_token_does_not_ask_for_the_log() {
+    assert!(!needs_gate_decision_log(
+        "{{gate_decision}} {{gate_feedback}}"
+    ));
+}
+
+/// The renderer is `String::replace` per key in insertion order, and
+/// `gate_decision` is bound before `gate_decision_log`. The suffix is what
+/// keeps the shorter token from eating the longer one — assert it rather
+/// than trusting that the two spellings happen not to overlap.
+#[test]
+fn binding_the_singular_token_first_leaves_the_log_token_intact() {
+    let rendered = crate::domain::prompt_context::PromptContext::new()
+        .set("gate_decision", "approve")
+        .set("gate_decision_log", "THE-LOG")
+        .render("decision={{gate_decision}} log={{gate_decision_log}}");
+    assert_eq!(rendered, "decision=approve log=THE-LOG");
+}
+
 // ── attachment_context_dir ──────────────────────────────────────────
 
 fn attached(name: &str) -> AttachedFile {
