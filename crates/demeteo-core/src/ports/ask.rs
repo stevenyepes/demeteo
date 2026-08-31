@@ -5,7 +5,7 @@
 //! to want without the transcript.
 
 use crate::domain::ids::{AskThreadId, ProjectId};
-use crate::domain::models::{AskMessage, AskStatus, AskThread};
+use crate::domain::models::{AskMessage, AskStatus, AskThread, EffortLevel};
 
 /// The fields one transition may change on an [`AskThread`].
 ///
@@ -20,6 +20,10 @@ use crate::domain::models::{AskMessage, AskStatus, AskThread};
 pub struct AskThreadPatch {
     pub title: Option<String>,
     pub status: Option<AskStatus>,
+    pub model: Option<Option<String>>,
+    pub effort: Option<Option<EffortLevel>>,
+    /// Not nullable — a thread always has a network posture.
+    pub network: Option<bool>,
     pub worktree_path: Option<Option<String>>,
     pub session_id: Option<Option<String>>,
     /// Folded into the stored totals rather than replacing them, so two turns

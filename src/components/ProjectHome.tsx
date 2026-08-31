@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
-import { Zap, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Compass, GitPullRequest, Sliders, Terminal } from 'lucide-react';
+import { Zap, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Compass, GitPullRequest, MessageSquare, Sliders, Terminal } from 'lucide-react';
 import { DiscoverySummary, Feature, FeatureDrift, Repository } from '../types';
 import { formatError } from '../lib/errors';
 import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } from '../lib/project';
@@ -36,14 +36,15 @@ import {
 } from '../lib/attachments';
 
 /**
- * The strip's four entries, of which only three swap the body below: Code
- * Review is a route, so choosing it unmounts this component. It sits here
- * rather than in the header because every header entry is global and this
+ * The strip's five entries, of which only three swap the body below: Ask and
+ * Code Review are routes, so choosing either unmounts this component. It sits
+ * here rather than in the header because every header entry is global and this
  * surface is project-scoped — and because `lib/headerLayout.ts` measures the
- * labelled nav cluster at 485px against a 1382px threshold, so a fifth entry
- * would open the 1440 default window icon-only for the first time.
+ * header's own labelled nav cluster at 485px against a 1382px threshold, so a
+ * fifth entry there would open the 1440 default window icon-only for the first
+ * time.
  */
-type ProjectSection = 'pipelines' | 'discovery' | 'terminal';
+type ProjectSection = 'pipelines' | 'discovery' | 'ask' | 'terminal';
 
 const ProjectHome = () => {
     const { navigate } = useNavigation();
@@ -204,6 +205,7 @@ const ProjectHome = () => {
     const tabs: TabDef<ProjectSection>[] = [
         { value: 'pipelines', label: 'Pipelines', icon: <Sliders className="w-3.5 h-3.5" /> },
         { value: 'discovery', label: 'Discovery', icon: <Compass className="w-3.5 h-3.5" /> },
+        { value: 'ask', label: 'Ask', icon: <MessageSquare className="w-3.5 h-3.5" /> },
         ...(activeProject.compute_type === 'remote'
             ? [{ value: 'terminal' as const, label: 'Terminal', icon: <Terminal className="w-3.5 h-3.5" /> }]
             : []),
@@ -653,7 +655,17 @@ const ProjectHome = () => {
                     <TabBar
                         tabs={tabs}
                         activeTab={activeTab}
-                        onChange={setActiveTab}
+                        onChange={(section) => {
+                            // Ask has no ProjectHome-level card list — its own
+                            // workspace owns the thread switcher — so selecting
+                            // it navigates away rather than swapping the panel
+                            // below, the way Discovery and Pipelines do.
+                            if (section === 'ask') {
+                                navigate({ kind: 'ask', projectId: activeProject.id });
+                                return;
+                            }
+                            setActiveTab(section);
+                        }}
                         ariaLabel="Project sections"
                         className="min-w-0 flex-1"
                     />

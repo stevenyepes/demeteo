@@ -13,7 +13,7 @@ use crate::ports::ask::{AskPort, AskThreadPatch};
 use super::super::SqliteAdapter;
 
 const COLUMNS: &str = "id, project_id, title, status, agent_kind, model, effort, machine_id,
-     worktree_path, session_id, turn_count, cost_usd, tokens, created_at, updated_at";
+     worktree_path, session_id, turn_count, cost_usd, tokens, network, created_at, updated_at";
 
 const MESSAGE_COLUMNS: &str = "id, thread_id, role, text, cost_usd, tokens, turn_activity_json,
      canvas_paths_json, checked_commit_sha, created_at";
@@ -37,8 +37,9 @@ fn row_to_thread(row: &rusqlite::Row) -> rusqlite::Result<AskThread> {
         turn_count: row.get(10)?,
         cost_usd: row.get(11)?,
         tokens: row.get(12)?,
-        created_at: row.get(13)?,
-        updated_at: row.get(14)?,
+        network: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
@@ -79,7 +80,7 @@ impl AskPort for SqliteAdapter {
         conn.execute(
             &format!(
                 "INSERT INTO ask_thread ({COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)"
             ),
             params![
                 thread.id,
@@ -95,6 +96,7 @@ impl AskPort for SqliteAdapter {
                 thread.turn_count,
                 thread.cost_usd,
                 thread.tokens,
+                thread.network,
                 thread.created_at,
                 thread.updated_at,
             ],
@@ -138,17 +140,25 @@ impl AskPort for SqliteAdapter {
             "UPDATE ask_thread
                 SET title         = COALESCE(?2, title),
                     status        = COALESCE(?3, status),
-                    worktree_path = CASE WHEN ?4 THEN ?5 ELSE worktree_path END,
-                    session_id    = CASE WHEN ?6 THEN ?7 ELSE session_id END,
-                    turn_count    = turn_count + ?8,
-                    cost_usd      = cost_usd + ?9,
-                    tokens        = tokens + ?10,
-                    updated_at    = ?11
+                    model         = CASE WHEN ?4 THEN ?5 ELSE model END,
+                    effort        = CASE WHEN ?6 THEN ?7 ELSE effort END,
+                    network       = COALESCE(?8, network),
+                    worktree_path = CASE WHEN ?9 THEN ?10 ELSE worktree_path END,
+                    session_id    = CASE WHEN ?11 THEN ?12 ELSE session_id END,
+                    turn_count    = turn_count + ?13,
+                    cost_usd      = cost_usd + ?14,
+                    tokens        = tokens + ?15,
+                    updated_at    = ?16
               WHERE id = ?1",
             params![
                 id.0,
                 patch.title,
                 patch.status.map(AskStatus::as_str),
+                patch.model.is_some(),
+                patch.model.clone().flatten(),
+                patch.effort.is_some(),
+                patch.effort.flatten().map(EffortLevel::as_str),
+                patch.network,
                 patch.worktree_path.is_some(),
                 patch.worktree_path.clone().flatten(),
                 patch.session_id.is_some(),
