@@ -373,6 +373,10 @@ impl ExecutionDriver {
             | StepOutcome::NonRetryable(msg)
             | StepOutcome::ProducerFault { reason: msg, .. } => ("failed", Some(msg.clone())),
             StepOutcome::RedirectTo(_) => ("completed", None),
+            // A command node never asks for a human mid-step; the outcome
+            // layer writes `awaiting_gate` for the ones that do, and this
+            // event would race it.
+            StepOutcome::AwaitHumanDecision(park) => ("awaiting_gate", Some(park.reason.clone())),
         };
         self.emit_command_status(step_exec, status, wall, error, Some(artifact_refs));
         outcome

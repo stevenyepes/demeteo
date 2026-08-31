@@ -68,6 +68,7 @@ pub mod run_spec;
 pub mod sequence;
 pub mod staged_deliverable;
 pub mod step_boundary;
+pub mod step_park;
 pub mod step_seed;
 pub mod sync_failure;
 pub mod sync_resolver;

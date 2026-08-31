@@ -79,7 +79,7 @@ impl DagStepExecutor {
                                             .as_deref()
                                             .map(|v| Some(v.to_string())),
                                         artifact_paths: Some(s.artifact_paths.clone()),
-                                        error_message: Some(Some(reconciled.message)),
+                                        error_message: reconciled.message.map(Some),
                                         ..Default::default()
                                     },
                                 );

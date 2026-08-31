@@ -95,6 +95,12 @@ pub(crate) fn classify(
             Some(error_class::NON_RETRYABLE),
             Some(normalize_failure_fingerprint(msg, target_dir)),
         ),
+        // Not a failure: the step ran, decided it needs a person, and
+        // stopped. No `error_class` because no retry rule answers it, and
+        // no fingerprint because there is no failure to compare. The row
+        // closes here, before the park — which is what keeps a human's
+        // thinking time out of this attempt's wall clock and spend.
+        StepOutcome::AwaitHumanDecision(_) => ("parked", None, None),
         StepOutcome::Cancelled => ("cancelled", None, None),
         StepOutcome::RedirectTo(_) => ("redirected", None, None),
     };

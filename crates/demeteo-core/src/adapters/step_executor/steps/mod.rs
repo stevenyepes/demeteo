@@ -50,6 +50,15 @@ pub(crate) enum StepOutcome {
         /// `{{retry_feedback_section}}`.
         reason: String,
     },
+    /// The step cannot proceed, no retry changes that, and a person can
+    /// decide. Parks on the synthetic gate instead of ending the run.
+    ///
+    /// Reported by the handler, acted on by the outcome layer — which
+    /// matters, because the handler runs inside the window where the step
+    /// is already marked `running` and its attempt row is open. Parking
+    /// from in there would bill a human's thinking time to the attempt and
+    /// have the status it wrote overwritten on the way out.
+    AwaitHumanDecision(crate::domain::step_park::HumanPark),
     /// Execution was cancelled by the user.
     Cancelled,
     /// Gate "redirect" decision — jump to the given step index.

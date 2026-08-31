@@ -258,3 +258,42 @@ describe('GateView artifact picker wiring', () => {
     });
   });
 });
+
+// A step that parked itself for a human puts the question in
+// `error_message` — the only copy of it. A real `gate` step clears that
+// column on the way into the wait, so the two cases are distinguishable
+// without a new field.
+describe('GateView park reason', () => {
+  it('shows why the run stopped when the step carries a reason', async () => {
+    const parked = step({
+      id: 'se-implement',
+      step_id: 's-implement',
+      step_index: 3,
+      step_kind: 'sequence',
+      status: 'awaiting_gate',
+      error_message:
+        "Step 's-tickets' scoped this rework cycle to zero tickets.\n\nIts stated reason:\n\nthe finding is a merge-approval gap, not a defect",
+    });
+    mount({ gateStep: parked, allSteps: [RESEARCH, SPEC, parked] });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('gate-park-reason')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('gate-park-reason')).toHaveTextContent(
+      'the finding is a merge-approval gap, not a defect',
+    );
+    // The generic sentence sends a reviewer looking for an artifact a park
+    // may not have produced.
+    expect(screen.queryByText(/Review the artifact generated below/)).toBeNull();
+  });
+
+  it('shows no reason block for an ordinary gate step', async () => {
+    mount();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('artifact-viewer-stub')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('gate-park-reason')).toBeNull();
+    expect(screen.getByText(/Review the artifact generated below/)).toBeInTheDocument();
+  });
+});

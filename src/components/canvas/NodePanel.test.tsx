@@ -610,6 +610,42 @@ describe('NodePanel — Actions', () => {
     expect(onDecideGate).toHaveBeenCalledTimes(1);
   });
 
+  // A `sequence` node that parked itself for a human writes the same
+  // `awaiting_gate` a gate step does, and `gate_decide` answers both. When
+  // this was gated on `node.type === 'gate'` the panel offered no action at
+  // all — `isFailed` does not cover `awaiting_gate` either — so the only way
+  // to answer was the transient toast.
+  it('offers Decide on a parked non-gate node', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'awaiting_gate', stepExecutionId: 'se-i' };
+    const onDecideGate = vi.fn();
+    const onRetry = vi.fn();
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node({ id: 'implement', type: 'sequence', title: 'Implement Tickets' })}
+        run={run}
+        step={step({
+          id: 'se-i',
+          step_id: 'implement',
+          step_kind: 'sequence',
+          status: 'awaiting_gate',
+        })}
+        onClose={() => {}}
+        onDecideGate={onDecideGate}
+        onRetry={onRetry}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Decide' }));
+    expect(onDecideGate).toHaveBeenCalledTimes(1);
+    // Retry takes the `replay_steps_from` path, which rewinds the row and
+    // arms a second driver against a run the parked one is still holding.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+
   it('lets a retry be re-pinned onto another harness before it fires', async () => {
     invoke.mockResolvedValue([]);
     const run: NodeRunStatus = { status: 'failed', stepExecutionId: 'se-1' };

@@ -40,12 +40,9 @@
 //! the synthetic gate's only question is "safe to re-run here?").
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
-use crate::adapters::step_executor::gate_waiter::GateWaiter;
 use crate::adapters::step_executor::registry::{NodeTypeRegistry, ResumePolicy};
-use crate::domain::ids::GateDecisionId;
-use crate::domain::models::{GateDecision, StepConfig, StepExecution};
-use crate::paths;
-use crate::ports::notification::DomainEvent;
+use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::step_park::{resolve_park, HumanPark, ParkResolution};
 
 /// What the run loop should do after the guard has run.
 #[derive(Debug, PartialEq, Eq)]
@@ -115,61 +112,39 @@ impl ExecutionDriver {
             "interrupted node cannot be resumed blindly; parking at the synthetic gate"
         );
 
-        // The watchdog usually created the synthetic row at boot; create
-        // is a no-op when it exists (unique per step execution).
-        let _ = self.gates.create(GateDecision {
-            id: GateDecisionId::from(format!("gd-syn-{}", step_exec.id.0)),
-            step_execution_id: step_exec.id.clone(),
-            decision: None,
-            feedback: None,
-            created_at: paths::now_ms(),
-        });
+        // Everything from here is the shared park: create the row,
+        // surface it, wait, clean up. Only the reason above is this
+        // guard's own — see `domain::step_park` for what the answer means.
+        let park = HumanPark {
+            reason: mismatch,
+            // Redirect targeting is a real-gate affordance. This park's
+            // only question is "safe to re-run here?", and no earlier step
+            // makes a moved workspace safe.
+            redirect_to: None,
+        };
+        let decision = crate::adapters::step_executor::gate_park::park_for_human(
+            crate::adapters::step_executor::gate_park::SyntheticGate {
+                gates: self.gates.as_ref(),
+                notif: self.notif.as_ref(),
+                waiters: &self.gate_waiters,
+                f_id: &self.f_id,
+            },
+            &step_exec.id,
+            self.cancel_watch.clone(),
+        )
+        .await;
 
-        // A decision may already be durable (the user answered the
-        // watchdog's prompt before this driver armed). Consume it —
-        // clearing the row so a later visit re-asks instead of replaying
-        // a stale answer.
-        if let Ok(Some(rec)) = self.gates.latest_for_step(&step_exec.id) {
-            if let Some(decision) = rec.decision.as_deref() {
-                let _ = self.gates.reset_for_step_execution(&step_exec.id);
-                return match decision {
-                    "approve" => GuardVerdict::Proceed,
-                    other => GuardVerdict::Rejected(format!(
-                        "{mismatch}; user answered '{other}' at the synthetic gate"
-                    )),
-                };
+        match resolve_park(&park, decision.as_ref()) {
+            ParkResolution::Complete => GuardVerdict::Proceed,
+            ParkResolution::Cancelled => GuardVerdict::Cancelled,
+            ParkResolution::Fail(msg) => GuardVerdict::Rejected(msg),
+            // Unreachable with `redirect_to: None` above, and mapped
+            // rather than `unreachable!` so a later edit that gives this
+            // park a target degrades to the old behaviour instead of
+            // panicking a live run.
+            ParkResolution::Redirect { .. } => {
+                GuardVerdict::Rejected("redirect is not an answer to this gate".to_string())
             }
-        }
-
-        // Park: re-surface the prompt and wait for the human, exactly
-        // like a real gate step (same waiter registry `gate_decide`'s
-        // fast path delivers to; the DB row above is the durable truth).
-        let _ = self.notif.emit(&DomainEvent::GateRequired {
-            feature_id: self.f_id.clone(),
-            step_execution_id: step_exec.id.clone(),
-        });
-        let waiter = GateWaiter::new();
-        self.gate_waiters
-            .lock()
-            .unwrap()
-            .insert(step_exec.id.0.clone(), waiter.clone());
-        let mut cancel_watch = self.cancel_watch.clone();
-        let decision = tokio::select! {
-            d = waiter.wait() => d,
-            _ = cancel_watch.changed() => None,
-        };
-        self.gate_waiters.lock().unwrap().remove(&step_exec.id.0);
-
-        let Some(decision) = decision else {
-            return GuardVerdict::Cancelled;
-        };
-        let _ = self.gates.reset_for_step_execution(&step_exec.id);
-        match decision.decision.as_deref() {
-            Some("approve") => GuardVerdict::Proceed,
-            other => GuardVerdict::Rejected(format!(
-                "{mismatch}; user answered '{}' at the synthetic gate",
-                other.unwrap_or("none")
-            )),
         }
     }
 }
