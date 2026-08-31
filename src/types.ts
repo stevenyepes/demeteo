@@ -122,6 +122,10 @@ export type AppView =
    *  it before `discovery_get` answers, exactly as `detail` carries
    *  `featureTitle`. */
   | { kind: 'discovery'; discoveryId: string; discoveryTitle: string }
+  /** One project's Ask workspace — the thread list, transcript and canvas
+   *  live inside `AskThreadView` itself rather than a ProjectHome card grid,
+   *  so this carries only the project, not a thread id. */
+  | { kind: 'ask'; projectId: string }
   | { kind: 'providers' }
   | { kind: 'settings' }
   | { kind: 'remote-inbox' }
@@ -1583,12 +1587,21 @@ export interface AskThread {
   turn_count: number;
   cost_usd: number;
   tokens: number;
+  /** Whether the thread's agent may reach the network. */
+  network: boolean;
   created_at: number;
   updated_at: number;
 }
 
-/** Mirrors `AskMessage`. Reserved for `ask-turn-loop`, which is the first
- *  ticket to ever write one — `AskThreadDetail.messages` is empty until then. */
+/** Mirrors `CanvasPathVerdict`. Whether a path a canvas node cited resolves
+ *  against the tree checked at `AskMessage.checked_commit_sha`. */
+export interface CanvasPathVerdict {
+  node_id: string;
+  path: string;
+  resolved: boolean;
+}
+
+/** Mirrors `AskMessage`. */
 export interface AskMessage {
   id: string;
   thread_id: string;
@@ -1597,13 +1610,25 @@ export interface AskMessage {
   cost_usd: number | null;
   tokens: number | null;
   turn_activity: TurnActivity | null;
+  canvas_paths: CanvasPathVerdict[] | null;
+  checked_commit_sha: string | null;
   created_at: number;
+}
+
+/** Mirrors `AskMessageView`, which `#[serde(flatten)]`s an `AskMessage` and
+ *  the `AskTurn` derived from its text — the same shape `DiscoveryMessageView`
+ *  takes for the same reason: a turn and what it drew can never disagree
+ *  about each other if neither is stored. */
+export interface AskMessageView extends AskMessage {
+  prose: string;
+  canvas: AskCanvas | null;
+  canvas_error: string | null;
 }
 
 /** Mirrors `AskThreadDetail`. */
 export interface AskThreadDetail {
   thread: AskThread;
-  messages: AskMessage[];
+  messages: AskMessageView[];
 }
 
 /** Mirrors `NodeRole`. */

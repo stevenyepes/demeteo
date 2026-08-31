@@ -20,6 +20,7 @@ import { CodeReviewView } from "./components/review/CodeReviewView";
 import { WorkflowList } from "./components/WorkflowList";
 import { WorkflowBuilderScreen } from "./components/canvas/WorkflowBuilderScreen";
 import { DiscoveryView } from "./components/discovery/DiscoveryView";
+import { AskThreadView } from "./components/ask/AskThreadView";
 import { FeatureDetail } from "./components/FeatureDetail";
 import { GateView } from "./components/GateView";
 import { OverlayPortal } from "./components/ui/OverlayPortal";
@@ -459,6 +460,17 @@ function AppInner() {
               discoveryTitle={view.discoveryTitle}
               onOpenFeature={(featureId, featureTitle) =>
                 navigate({ kind: 'detail', featureId, featureTitle })
+              }
+            />
+          )}
+
+          {view.kind === 'ask' && currentProject && (
+            <AskThreadView
+              projectId={view.projectId}
+              machineId={
+                currentProject.compute_type?.toLowerCase() === 'remote'
+                  ? (currentProject.remote_host || 'local')
+                  : 'local'
               }
             />
           )}

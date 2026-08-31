@@ -117,6 +117,7 @@ fn thread(project_id: &ProjectId, id: &str, worktree_path: Option<&str>) -> AskT
         turn_count: 0,
         cost_usd: 0.0,
         tokens: 0,
+        network: true,
         created_at: 0,
         updated_at: 0,
     }

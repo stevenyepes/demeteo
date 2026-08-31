@@ -40,8 +40,16 @@ pub struct AskThread {
     pub cost_usd: f64,
     #[serde(default)]
     pub tokens: i64,
+    /// Whether the thread's agent may reach the network. Matches the
+    /// hard-coded `Access::Allow` posture that predates this column.
+    #[serde(default = "network_default")]
+    pub network: bool,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+pub(crate) fn network_default() -> bool {
+    true
 }
 
 /// One turn of an Ask conversation.

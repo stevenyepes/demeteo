@@ -39,6 +39,10 @@ function discoveryView(discoveryId: string, discoveryTitle: string): AppView {
   return { kind: 'discovery', discoveryId, discoveryTitle };
 }
 
+function askView(projectId: string): AppView {
+  return { kind: 'ask', projectId };
+}
+
 function featureIdOf(view: AppView): string | undefined {
   return view.kind === 'detail' ? view.featureId : undefined;
 }
@@ -123,6 +127,23 @@ describe('NAVIGATE (push)', () => {
       view: discoveryView('dsc-1', 'What a gate should let you edit'),
     });
     expect(otherTitle.backStack).toHaveLength(2);
+  });
+
+  // The Ask arm carries one field, the project id — the thread list lives
+  // inside the workspace itself rather than on the view, so there is no
+  // second field to drop.
+  it('collapses an identical ask view but not a different project', () => {
+    const first = askView('proj-1');
+    const a = navigationReducer(home, { type: 'NAVIGATE', view: first });
+
+    const same = navigationReducer(a, { type: 'NAVIGATE', view: { ...first } });
+    expect(same).toBe(a);
+
+    const otherProject = navigationReducer(a, {
+      type: 'NAVIGATE',
+      view: askView('proj-2'),
+    });
+    expect(otherProject.backStack).toHaveLength(2);
   });
 });
 

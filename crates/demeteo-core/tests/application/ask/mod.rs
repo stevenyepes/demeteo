@@ -70,6 +70,7 @@ fn opening(project_id: &ProjectId, title: &str, machine_id: Option<&str>) -> New
         model: None,
         effort: None,
         machine_id: machine_id.map(str::to_string),
+        network: true,
     }
 }
 
@@ -144,6 +145,50 @@ async fn creating_a_thread_starts_open_with_zero_telemetry() {
         .expect("the thread reads back")
         .expect("the thread was persisted");
     assert_eq!(stored.title, "spend estimate");
+}
+
+/// The modal's network default reaches the row rather than being overridden
+/// by a literal: a thread opened with the network off is persisted off, so
+/// its first turn cannot run with `Access::Allow`.
+#[tokio::test]
+async fn creating_a_thread_with_the_network_off_persists_it_off() {
+    let (ctx, project_id) = fixture("network-off", "local", None);
+
+    let thread = create(
+        &ctx,
+        NewAskThread {
+            network: false,
+            ..opening(&project_id, "offline question", None)
+        },
+    )
+    .expect("the thread opens");
+
+    assert!(!thread.network);
+    let stored = ctx
+        .ask
+        .get(&thread.id)
+        .expect("the thread reads back")
+        .expect("the thread was persisted");
+    assert!(!stored.network);
+}
+
+/// A caller that never names `network` keeps the posture that predates the
+/// control, so nothing built against the old shape changes behaviour.
+#[tokio::test]
+async fn omitting_the_network_field_keeps_the_thread_on() {
+    let (ctx, project_id) = fixture("network-default", "local", None);
+    let opening: NewAskThread = serde_json::from_value(serde_json::json!({
+        "project_id": project_id.as_str(),
+        "title": "quick question",
+        "agent_kind": "claude-code",
+    }))
+    .expect("an opening with no network key deserializes");
+
+    let thread = create(&ctx, opening).expect("the thread opens");
+
+    assert!(thread.network);
+    let stored = ctx.ask.get(&thread.id).unwrap().unwrap();
+    assert!(stored.network);
 }
 
 /// The cap is enforced where the row is written, the same terms
@@ -233,8 +278,72 @@ async fn load_returns_the_thread_and_its_transcript() {
 
     let detail = load(&ctx, &thread.id).expect("the thread loads");
     assert_eq!(detail.thread.id, thread.id);
-    let ids: Vec<&str> = detail.messages.iter().map(|m| m.id.as_str()).collect();
+    let ids: Vec<&str> = detail
+        .messages
+        .iter()
+        .map(|m| m.message.id.as_str())
+        .collect();
     assert_eq!(ids, vec!["m-1", "m-2"]);
+}
+
+/// An assistant message ending in a valid canvas block is derived into a
+/// view whose `prose` has the block cut out and whose `canvas` is parsed.
+#[tokio::test]
+async fn load_derives_prose_and_canvas_from_an_assistant_message() {
+    let (ctx, project_id) = fixture("canvas", "local", None);
+    let thread = create(&ctx, opening(&project_id, "quick question", None)).unwrap();
+    let text = format!(
+        "Here is the shape.\n\n{}",
+        crate::domain::ask_canvas::canvas_block_shape_example()
+    );
+    ctx.ask
+        .append_message(&AskMessage {
+            id: "m-1".to_string(),
+            thread_id: thread.id.clone(),
+            role: crate::domain::models::MessageRole::Assistant,
+            text,
+            cost_usd: None,
+            tokens: None,
+            turn_activity: None,
+            canvas_paths: None,
+            checked_commit_sha: None,
+            created_at: thread.created_at,
+        })
+        .unwrap();
+
+    let detail = load(&ctx, &thread.id).expect("the thread loads");
+    let view = &detail.messages[0];
+    assert_eq!(view.turn.prose, "Here is the shape.");
+    assert!(view.turn.canvas.is_some());
+    assert_eq!(view.turn.canvas_error, None);
+}
+
+/// An assistant message with no canvas block derives to `canvas: None` and a
+/// `prose` equal to the trimmed message text.
+#[tokio::test]
+async fn load_derives_prose_only_when_there_is_no_canvas_block() {
+    let (ctx, project_id) = fixture("no-canvas", "local", None);
+    let thread = create(&ctx, opening(&project_id, "quick question", None)).unwrap();
+    ctx.ask
+        .append_message(&AskMessage {
+            id: "m-1".to_string(),
+            thread_id: thread.id.clone(),
+            role: crate::domain::models::MessageRole::Assistant,
+            text: "  just prose, nothing else  ".to_string(),
+            cost_usd: None,
+            tokens: None,
+            turn_activity: None,
+            canvas_paths: None,
+            checked_commit_sha: None,
+            created_at: thread.created_at,
+        })
+        .unwrap();
+
+    let detail = load(&ctx, &thread.id).expect("the thread loads");
+    let view = &detail.messages[0];
+    assert_eq!(view.turn.prose, "just prose, nothing else");
+    assert_eq!(view.turn.canvas, None);
+    assert_eq!(view.turn.canvas_error, None);
 }
 
 /// Renaming updates and returns the new title and advances `updated_at`.
@@ -249,6 +358,47 @@ async fn renaming_updates_the_title_and_advances_updated_at() {
     assert!(renamed.updated_at >= thread.updated_at);
     let stored = ctx.ask.get(&thread.id).unwrap().unwrap();
     assert_eq!(stored.title, "a better name");
+}
+
+/// `update_settings` changes model, effort, and network on the stored
+/// thread, and leaves `agent_kind` untouched — a thread's harness is fixed at
+/// creation and `AskThreadPatch` has no field for it.
+#[tokio::test]
+async fn update_settings_changes_model_effort_and_network_only() {
+    let (ctx, project_id) = fixture("settings", "local", None);
+    let thread = create(&ctx, opening(&project_id, "quick question", None)).unwrap();
+    assert_eq!(thread.model, None);
+    assert_eq!(thread.effort, None);
+    assert!(thread.network);
+
+    let updated = update_settings(
+        &ctx,
+        &thread.id,
+        AskThreadPatch {
+            model: Some(Some("claude-opus-5".to_string())),
+            effort: Some(Some(crate::domain::models::EffortLevel::High)),
+            network: Some(false),
+            ..Default::default()
+        },
+    )
+    .expect("settings update succeeds");
+
+    assert_eq!(updated.model.as_deref(), Some("claude-opus-5"));
+    assert_eq!(
+        updated.effort,
+        Some(crate::domain::models::EffortLevel::High)
+    );
+    assert!(!updated.network);
+    assert_eq!(updated.agent_kind, thread.agent_kind);
+
+    let stored = ctx.ask.get(&thread.id).unwrap().unwrap();
+    assert_eq!(stored.model.as_deref(), Some("claude-opus-5"));
+    assert_eq!(
+        stored.effort,
+        Some(crate::domain::models::EffortLevel::High)
+    );
+    assert!(!stored.network);
+    assert_eq!(stored.agent_kind, thread.agent_kind);
 }
 
 /// Deleting a thread makes a later load fail.
@@ -276,4 +426,25 @@ async fn missing_threads_are_rejected_with_a_clear_error() {
 
     let delete_err = delete(&ctx, &ghost).expect_err("delete rejects a missing thread");
     assert!(delete_err.contains("no-such-thread"), "{delete_err}");
+}
+
+/// What a surface that mounted mid-turn reads: the claim, and only for as
+/// long as it is held.
+#[tokio::test]
+async fn turn_running_tracks_the_claim() {
+    let (ctx, project_id) = fixture("running", "local", None);
+    let thread =
+        create(&ctx, opening(&project_id, "quick question", None)).expect("the thread opens");
+
+    assert!(!turn_running(&ctx, &thread.id));
+
+    let claim = ctx
+        .ask_turns
+        .clone()
+        .try_claim(thread.id.as_str())
+        .expect("the first turn claims the thread");
+    assert!(turn_running(&ctx, &thread.id));
+
+    drop(claim);
+    assert!(!turn_running(&ctx, &thread.id));
 }

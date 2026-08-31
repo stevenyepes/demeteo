@@ -32,11 +32,24 @@ use crate::ports::execution::{
 
 #[test]
 fn ask_may_read_and_run_but_never_write() {
-    let p = ask_permissions();
+    let p = ask_permissions(true);
     assert_eq!(p.read_fs, Access::Allow);
     assert_eq!(p.write_fs, Access::Deny);
     assert_eq!(p.execute, Access::Allow);
     assert_eq!(p.network, Access::Allow);
+}
+
+#[test]
+fn ask_permissions_denies_network_when_the_thread_disables_it() {
+    assert_eq!(ask_permissions(false).network, Access::Deny);
+}
+
+#[test]
+fn ask_permissions_allows_network_when_the_thread_enables_it_or_defaults() {
+    // `true` is `AskThread::network`'s serde default (`network_default` in
+    // `domain/models/ask.rs`) — a thread that never set the column reads as
+    // network-enabled, matching the hard-coded posture that predated it.
+    assert_eq!(ask_permissions(true).network, Access::Allow);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -203,6 +216,7 @@ async fn fixture(tag: &str, events: Vec<AgentEvent>) -> (AppContext, AskThreadId
         turn_count: 0,
         cost_usd: 0.0,
         tokens: 0,
+        network: true,
         created_at: 0,
         updated_at: 0,
     };

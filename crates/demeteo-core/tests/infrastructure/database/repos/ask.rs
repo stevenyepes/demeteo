@@ -41,6 +41,7 @@ fn thread() -> AskThread {
         turn_count: 0,
         cost_usd: 0.0,
         tokens: 0,
+        network: true,
         created_at: 100,
         updated_at: 100,
     }
@@ -100,8 +101,42 @@ fn a_thread_round_trips_every_column() {
     assert_eq!(read.turn_count, 0);
     assert_eq!(read.cost_usd, 0.0);
     assert_eq!(read.tokens, 0);
+    assert!(read.network);
     assert_eq!(read.created_at, 100);
     assert_eq!(read.updated_at, 100);
+}
+
+/// New threads default to network access on, matching today's hard-coded
+/// `Access::Allow` posture. A row written before this column existed (here
+/// simulated with a direct `INSERT` naming no `network` value) must default
+/// to the same `true` rather than reading back as network-denied.
+#[test]
+fn network_column_round_trips() {
+    let db = db();
+    db.create(&thread()).unwrap();
+    let read = AskPort::get(&db, &tid()).unwrap().unwrap();
+    assert!(read.network);
+
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ask_thread
+                (id, project_id, title, status, agent_kind, machine_id,
+                 turn_count, cost_usd, tokens, created_at, updated_at)
+             VALUES
+                ('t-pre', 'p-1', 'pre-migration', 'open', 'claude-code', 'local',
+                 0, 0.0, 0, 100, 100)",
+            [],
+        )
+        .unwrap();
+    }
+    let pre = AskPort::get(&db, &AskThreadId::from("t-pre".to_string()))
+        .unwrap()
+        .unwrap();
+    assert!(
+        pre.network,
+        "a row with no explicit value must still default to true"
+    );
 }
 
 #[test]
@@ -332,6 +367,44 @@ fn a_patch_distinguishes_leaving_alone_from_clearing() {
     assert_eq!(read.worktree_path, None);
     assert_eq!(read.status, AskStatus::Closed);
     assert_eq!(read.title, "renamed");
+}
+
+/// The same `Option<Option<T>>` contract for the run-shape columns, which
+/// no surface reaches today: a thread reverting to its harness's defaults
+/// clears `model` and `effort`, and nothing but `Some(None)` says that —
+/// a `None` patch has to leave a configured pair standing.
+#[test]
+fn a_patch_clears_model_and_effort_only_when_it_says_so() {
+    let db = db();
+    db.create(&thread()).unwrap();
+
+    db.update(
+        &tid(),
+        &AskThreadPatch {
+            title: Some("still opus".to_string()),
+            ..Default::default()
+        },
+        200,
+    )
+    .unwrap();
+    let read = AskPort::get(&db, &tid()).unwrap().unwrap();
+    assert_eq!(read.model.as_deref(), Some("opus"));
+    assert_eq!(read.effort, Some(EffortLevel::XHigh));
+
+    db.update(
+        &tid(),
+        &AskThreadPatch {
+            model: Some(None),
+            effort: Some(None),
+            ..Default::default()
+        },
+        300,
+    )
+    .unwrap();
+    let read = AskPort::get(&db, &tid()).unwrap().unwrap();
+    assert_eq!(read.model, None);
+    assert_eq!(read.effort, None);
+    assert_eq!(read.title, "still opus");
 }
 
 /// Deleting a thread takes its transcript with it through the declared

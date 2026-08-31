@@ -79,6 +79,9 @@ function shallowEqualView(a: AppView, b: AppView): boolean {
       return b.kind === 'discovery'
         && a.discoveryId === (b as Extract<AppView, { kind: 'discovery' }>).discoveryId
         && a.discoveryTitle === (b as Extract<AppView, { kind: 'discovery' }>).discoveryTitle;
+    case 'ask':
+      return b.kind === 'ask'
+        && a.projectId === (b as Extract<AppView, { kind: 'ask' }>).projectId;
     default:
       return false;
   }

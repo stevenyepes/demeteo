@@ -56,8 +56,8 @@ pub(super) fn split(result: TurnResult) -> (TurnEnding, Option<String>, TurnOutc
     }
 }
 
-/// Ask's posture: read the repository, run commands, reach the network;
-/// write nothing.
+/// Ask's posture: read the repository, run commands, reach the network when
+/// the thread's own `network` field allows it; write nothing.
 ///
 /// A `PermissionProfile` literal, never `StepCapability::base_profile()` or
 /// any existing capability variant — matching
@@ -66,12 +66,12 @@ pub(super) fn split(result: TurnResult) -> (TurnEnding, Option<String>, TurnOutc
 /// case a literal already covers. The write stop is the artifact fence
 /// [`super::worktree::ensure`] applies, and §4.6 of `docs/PRD_DISCOVERY.md`
 /// is explicit that what it buys is intent rather than a platform guarantee.
-fn ask_permissions() -> PermissionProfile {
+fn ask_permissions(network: bool) -> PermissionProfile {
     PermissionProfile {
         read_fs: Access::Allow,
         write_fs: Access::Deny,
         execute: Access::Allow,
-        network: Access::Allow,
+        network: if network { Access::Allow } else { Access::Deny },
     }
 }
 
@@ -301,7 +301,7 @@ async fn prepare(
             platform,
             agent_exec: ctx.agent_exec.clone(),
             exec: ctx.exec.clone(),
-            permissions: ask_permissions(),
+            permissions: ask_permissions(thread.network),
             bare_mode: true,
             keep_harness_personalization: crate::domain::turn_role::TurnRole::Orchestrator
                 .keeps_harness_personalization(),
