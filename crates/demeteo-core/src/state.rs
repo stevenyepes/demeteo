@@ -174,6 +174,12 @@ pub struct AppContext {
     /// reason.
     pub discovery_turns: Arc<crate::application::discovery::running::RunningTurns>,
 
+    /// The Ask threads taking a turn in this process
+    /// ([`crate::application::ask::running`]). A fully independent claim
+    /// space from `discovery_turns` — nothing durable may hold it, for
+    /// [`SyncTurns`](crate::application::sync_turns::SyncTurns)'s reason.
+    pub ask_turns: Arc<crate::application::ask::running::RunningTurns>,
+
     /// The work a Discovery emitted. Nothing here answers whether a Ticket is
     /// startable — that is computed on read from its edges and the forge state
     /// of each dependency, never stored (§6.3).

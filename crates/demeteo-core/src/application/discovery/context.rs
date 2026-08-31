@@ -19,11 +19,18 @@
 //! prevent. Each row is summarised to a line instead, which is what keeps the
 //! cost proportional to the plan rather than to its prose.
 
+use crate::application::turn_retry::render_project_context;
 use crate::domain::models::{Discovery, Feature, Ticket};
 use crate::state::AppContext;
 
-/// How many of the project's own runs the interview is shown.
-pub const RECENT_FEATURES: usize = 10;
+/// How many of the project's own runs the interview is shown. Re-exported
+/// from [`crate::application::turn_retry`], which is what
+/// [`render_project_context`] actually enforces — this is the same constant,
+/// not a copy. Only this module's own `tests` submodule names it directly
+/// (everything else reaches the bound through [`render_project_context`]),
+/// so the non-test build sees no reference and would otherwise warn.
+#[allow(unused_imports)]
+pub(crate) use crate::application::turn_retry::RECENT_FEATURES;
 
 /// Longest a borrowed title or description runs before it is cut. Long enough
 /// to identify the thing, short enough that a hundred of them still fit beside
@@ -40,33 +47,7 @@ pub async fn render(ctx: &AppContext, discovery: &Discovery) -> Result<String, S
 /// The synchronous half, so the bound and the wording are reachable from a
 /// test without a database.
 pub(crate) fn render_from(features: &[Feature], tickets: &[Ticket]) -> String {
-    let mut out = String::new();
-    out.push_str("WHAT ELSE IS GOING ON IN THIS PROJECT\n\n");
-    if features.is_empty() {
-        out.push_str("No runs in flight or recently finished.\n");
-    } else {
-        out.push_str(
-            "The project's most recent runs, newest first. Work already in flight is work you \
-             should not propose again.\n",
-        );
-        for f in features.iter().take(RECENT_FEATURES) {
-            out.push_str("- [");
-            out.push_str(&f.status);
-            if let Some(mr) = f.mr_state.as_deref().filter(|s| !s.trim().is_empty()) {
-                out.push_str(", pr ");
-                out.push_str(mr);
-            }
-            out.push_str("] ");
-            out.push_str(&clip(&f.title));
-            out.push('\n');
-        }
-        if features.len() > RECENT_FEATURES {
-            out.push_str(&format!(
-                "({} older runs not listed.)\n",
-                features.len() - RECENT_FEATURES
-            ));
-        }
-    }
+    let mut out = render_project_context(features);
 
     out.push_str("\nTICKETS THIS CONVERSATION HAS ALREADY PRODUCED\n\n");
     if tickets.is_empty() {

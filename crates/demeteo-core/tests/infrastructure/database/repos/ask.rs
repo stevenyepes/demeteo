@@ -74,6 +74,8 @@ fn message(id: &str, role: MessageRole, at: i64) -> AskMessage {
             MessageRole::User => None,
             MessageRole::Assistant => Some(assistant_activity()),
         },
+        canvas_paths: None,
+        checked_commit_sha: None,
         created_at: at,
     }
 }
@@ -187,6 +189,51 @@ fn optional_activity_and_telemetry_round_trip() {
     assert_eq!(log[1].cost_usd, Some(0.75));
     assert_eq!(log[1].tokens, Some(2048));
     assert_eq!(log[1].turn_activity, Some(assistant_activity()));
+}
+
+/// Path verification is optional per-turn telemetry, same shape as
+/// `turn_activity`: present when a turn checked its canvas paths, absent
+/// otherwise — never present-but-empty for a turn that checked nothing.
+#[test]
+fn canvas_path_verdicts_and_checked_commit_round_trip() {
+    let db = db();
+    db.create(&thread()).unwrap();
+    let verdicts = vec![
+        CanvasPathVerdict {
+            node_id: "n-1".to_string(),
+            path: "src/lib.rs".to_string(),
+            resolved: true,
+        },
+        CanvasPathVerdict {
+            node_id: "n-2".to_string(),
+            path: "src/missing.rs".to_string(),
+            resolved: false,
+        },
+    ];
+    db.append_message(&AskMessage {
+        canvas_paths: Some(verdicts.clone()),
+        checked_commit_sha: Some("deadbeef".to_string()),
+        ..message("m-1", MessageRole::Assistant, 100)
+    })
+    .unwrap();
+
+    let log = db.list_messages(&tid()).unwrap();
+    assert_eq!(log[0].canvas_paths, Some(verdicts));
+    assert_eq!(log[0].checked_commit_sha.as_deref(), Some("deadbeef"));
+}
+
+/// A message that never checked its canvas paths reads back with both
+/// fields absent, mirroring `turn_activity`'s None case.
+#[test]
+fn absent_canvas_path_verdicts_and_checked_commit_round_trip_as_none() {
+    let db = db();
+    db.create(&thread()).unwrap();
+    db.append_message(&message("m-1", MessageRole::Assistant, 100))
+        .unwrap();
+
+    let log = db.list_messages(&tid()).unwrap();
+    assert_eq!(log[0].canvas_paths, None);
+    assert_eq!(log[0].checked_commit_sha, None);
 }
 
 /// A message written before an activity summary existed reads back as no
