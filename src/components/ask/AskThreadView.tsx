@@ -360,6 +360,7 @@ export function AskThreadView({ projectId, machineId }: AskThreadViewProps): Rea
         <section className="flex min-w-0 flex-1 flex-col">
           {thread ? (
             <AskCanvasPane
+              key={thread.id}
               store={store}
               threadId={thread.id}
               lastMessage={

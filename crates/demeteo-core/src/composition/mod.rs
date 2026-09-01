@@ -213,10 +213,10 @@ pub fn build_core_context(
         adapters::attachment_store::fs::FsAttachmentStore::new(app_data_dir.clone()),
     );
     let attachment_json: Arc<dyn ports::attachment_store::AttachmentJsonPort> = db_adapter.clone();
+    let artifact_store: Arc<dyn ports::artifact_store::ArtifactStore> = Arc::new(
+        adapters::artifact_store::fs::FsArtifactStore::new(app_data_dir.clone()),
+    );
     let step_executor_adapter = {
-        let artifact_store: Arc<dyn ports::artifact_store::ArtifactStore> = Arc::new(
-            adapters::artifact_store::fs::FsArtifactStore::new(app_data_dir.clone()),
-        );
         let exec = adapters::step_executor::DagStepExecutor::new(
             machines_repo.clone(),
             projects_repo.clone(),
@@ -235,7 +235,7 @@ pub fn build_core_context(
             merge_executor.clone(),
             db_adapter.clone(),
             sequence_resume_repo.clone(),
-            artifact_store,
+            artifact_store.clone(),
             attachment_store.clone(),
             attachment_json.clone(),
             workspace_dir.clone(),
@@ -346,6 +346,7 @@ pub fn build_core_context(
         remote_run_mirror_guard: Arc::new(tokio::sync::Mutex::new(())),
         run_view,
         ask: ask_repo,
+        artifact_store,
     }
 }
 

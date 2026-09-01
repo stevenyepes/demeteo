@@ -14,6 +14,7 @@ import {
   FileQuestion,
   GitMerge,
   ListChecks,
+  Workflow as WorkflowIcon,
 } from 'lucide-react';
 
 export type ArtifactKind =
@@ -21,6 +22,7 @@ export type ArtifactKind =
   | 'diff'
   | 'json'
   | 'task-list'
+  | 'ask-canvas'
   | 'code'
   | 'text'
   | 'worktree-ref'
@@ -31,6 +33,7 @@ export const ARTIFACT_KIND_LABELS: Record<ArtifactKind, string> = {
   diff: 'Code Diff',
   json: 'JSON',
   'task-list': 'Ticket List',
+  'ask-canvas': 'Pinned Canvas',
   code: 'Code',
   text: 'Text',
   'worktree-ref': 'File Reference',
@@ -42,6 +45,7 @@ export const ARTIFACT_KIND_COLORS: Record<ArtifactKind, string> = {
   diff: 'text-violet-400',
   json: 'text-amber-400',
   'task-list': 'text-violet-400',
+  'ask-canvas': 'text-violet-400',
   code: 'text-emerald-400',
   text: 'text-slate-400',
   'worktree-ref': 'text-cyan-400',
@@ -77,6 +81,9 @@ export function classifyArtifact(
   if (filename.toLowerCase() === 'task-list.json') {
     return { kind: 'task-list', ext: 'json', basename: filename };
   }
+  if (lower.endsWith('.canvas.json')) {
+    return { kind: 'ask-canvas', ext: 'json', basename: filename };
+  }
   if (lower.endsWith('.json')) {
     return { kind: 'json', ext: 'json', basename: filename };
   }
@@ -107,6 +114,8 @@ export function ArtifactIcon({
       return <GitMerge className={className} />;
     case 'task-list':
       return <ListChecks className={className} />;
+    case 'ask-canvas':
+      return <WorkflowIcon className={className} />;
     case 'json':
     case 'code':
       return <FileCode className={className} />;

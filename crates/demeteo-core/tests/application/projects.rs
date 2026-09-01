@@ -1,9 +1,17 @@
 use super::*;
 use crate::adapters::notification_noop::NoopNotificationAdapter;
+use crate::application::ask::pin;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::artifact::Artifact;
 use crate::domain::branch_listing::BranchOption;
-use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId};
-use crate::domain::models::{Project, Repository, WorktreeInfo, WorktreeStrategy};
+use crate::domain::ids::{
+    AskThreadId, MachineId, ProjectId, ProviderId, RepositoryId, LOCAL_MACHINE,
+};
+use crate::domain::models::{
+    AskMessage, AskStatus, AskThread, MessageRole, Project, Repository, WorktreeInfo,
+    WorktreeStrategy,
+};
+use crate::ports::artifact_store::ArtifactStore;
 use crate::ports::worktree_ops::{
     CommitMessageRejected, SquashOutcome, SyncFailure, SyncOutcome, TerminalWorktreeCreated,
     TerminalWorktreeRequest, WorktreeOpsPort,
@@ -761,4 +769,127 @@ async fn repository_owned_by_another_project_is_rejected_before_port_io() {
 
     assert!(error.contains("does not belong to project p-one"));
     assert!(calls.lock().unwrap().is_empty());
+}
+
+/// The cascade path: `ask_thread` rows die inside SQLite when the project
+/// goes, so nothing routes through `application::ask::delete`. The pinned
+/// scope has to be cleared here or the snapshots outlive every index into
+/// them.
+#[tokio::test]
+async fn deleting_a_project_drops_the_canvases_its_threads_pinned() {
+    let (ctx, _worktree_port, _calls) = context();
+    add_project(&ctx, "p-pins", "local", None);
+    let thread_id = AskThreadId::from("t-pins");
+    ctx.ask
+        .create(&AskThread {
+            id: thread_id.clone(),
+            project_id: ProjectId::from("p-pins"),
+            title: "pinned canvas".to_string(),
+            status: AskStatus::Open,
+            agent_kind: "claude-code".to_string(),
+            model: None,
+            effort: None,
+            machine_id: MachineId::from(LOCAL_MACHINE),
+            worktree_path: None,
+            session_id: None,
+            turn_count: 0,
+            cost_usd: 0.0,
+            tokens: 0,
+            network: true,
+            created_at: 0,
+            updated_at: 0,
+        })
+        .unwrap();
+    ctx.ask
+        .append_message(&AskMessage {
+            id: "m-1".to_string(),
+            thread_id: thread_id.clone(),
+            role: MessageRole::Assistant,
+            text: format!(
+                "Here is the shape.\n\n{}",
+                crate::domain::ask_canvas::canvas_block_shape_example()
+            ),
+            cost_usd: None,
+            tokens: None,
+            turn_activity: None,
+            canvas_paths: None,
+            checked_commit_sha: None,
+            created_at: 0,
+        })
+        .unwrap();
+
+    let reference = pin::pin_canvas(&ctx, &thread_id, "m-1").expect("the pin succeeds");
+    assert!(std::path::Path::new(&reference).exists());
+
+    delete_workspace(&ctx, "p-pins".to_string())
+        .await
+        .expect("the workspace deletes");
+
+    assert!(!std::path::Path::new(&reference).exists());
+}
+
+/// An [`ArtifactStore`] that fails every call, so the only thing a test using
+/// it can assert is what happens *around* the failure — per AGENTS.md §7, it
+/// answers nothing it was not told to answer.
+struct FailingStore;
+
+impl ArtifactStore for FailingStore {
+    fn put(&self, _: &str, _: &str, _: &Artifact) -> Result<String, String> {
+        Err("FailingStore: unexpected put".to_string())
+    }
+    fn get(&self, reference: &str) -> Result<String, String> {
+        Err(format!("FailingStore: unexpected get `{reference}`"))
+    }
+    fn list_for_step(&self, _: &str, _: &str) -> Result<Vec<String>, String> {
+        Err("FailingStore: unexpected list_for_step".to_string())
+    }
+    fn clear_step(&self, _: &str, _: &str) -> Result<(), String> {
+        Err("the pinned scope is held open".to_string())
+    }
+}
+
+/// The residual case the all-succeeds test above cannot reach: on Windows
+/// `remove_dir_all` fails on an open handle, so a scanner touching one
+/// `.canvas.json` is enough to make `clear_pins` return `Err`. The project
+/// delete has to survive it — otherwise a pinned chat diagram blocks the
+/// removal of the repository clones and worktrees beside it, with nothing on
+/// screen naming the cause.
+#[tokio::test]
+async fn a_pin_that_cannot_be_dropped_does_not_block_the_project_delete() {
+    let (mut ctx, _worktree_port, _calls) = context();
+    add_project(&ctx, "p-stuck", "local", None);
+    ctx.ask
+        .create(&AskThread {
+            id: AskThreadId::from("t-stuck"),
+            project_id: ProjectId::from("p-stuck"),
+            title: "pinned canvas".to_string(),
+            status: AskStatus::Open,
+            agent_kind: "claude-code".to_string(),
+            model: None,
+            effort: None,
+            machine_id: MachineId::from(LOCAL_MACHINE),
+            worktree_path: None,
+            session_id: None,
+            turn_count: 0,
+            cost_usd: 0.0,
+            tokens: 0,
+            network: true,
+            created_at: 0,
+            updated_at: 0,
+        })
+        .unwrap();
+    ctx.artifact_store = Arc::new(FailingStore);
+
+    delete_workspace(&ctx, "p-stuck".to_string())
+        .await
+        .expect("the workspace deletes despite the stuck pin");
+
+    assert!(
+        !ctx.projects
+            .get_projects()
+            .unwrap()
+            .iter()
+            .any(|p| p.id == ProjectId::from("p-stuck")),
+        "the project row survived a failure the workspace removal below it would have swallowed"
+    );
 }

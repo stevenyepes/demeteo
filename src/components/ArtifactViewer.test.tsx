@@ -103,3 +103,35 @@ describe('ArtifactViewer task-list viewType', () => {
     expect(screen.queryByText('Nope')).not.toBeInTheDocument();
   });
 });
+
+describe('ArtifactViewer ask-canvas viewType', () => {
+  it('renders AskCanvasView with commit sha and unresolved paths for a pinned canvas snapshot', async () => {
+    const snapshot = {
+      thread_id: 'thread-1',
+      message_id: 'msg-1',
+      canvas: {
+        kind: 'architecture',
+        title: 'Pinned canvas',
+        stages: ['01 · Orchestrator'],
+        lanes: ['01 · The person'],
+        nodes: [{ id: 'n1', title: 'Node one', role: 'orchestration', path: null, stage: 0, lane: 0 }],
+        edges: [],
+      },
+      canvas_paths: [
+        { node_id: 'n1', path: 'src/missing/file.ts', resolved: false },
+      ],
+      checked_commit_sha: 'abc1234',
+      pinned_at: 0,
+    };
+    vi.mocked(invoke).mockResolvedValue(JSON.stringify(snapshot));
+
+    render(<ArtifactViewer artifactPath="/tmp/artifacts/m1.canvas.json" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('ask-canvas-view')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('abc1234')).toBeInTheDocument();
+    expect(screen.getByText('src/missing/file.ts')).toBeInTheDocument();
+  });
+});

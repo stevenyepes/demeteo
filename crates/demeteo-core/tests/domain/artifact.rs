@@ -1,4 +1,41 @@
 use super::*;
+use crate::domain::ask_canvas::{AskCanvas, CanvasKind, PinnedCanvasSnapshot};
+
+fn pinned_canvas_snapshot() -> PinnedCanvasSnapshot {
+    PinnedCanvasSnapshot {
+        thread_id: "t1".to_string(),
+        message_id: "m1".to_string(),
+        canvas: AskCanvas {
+            kind: CanvasKind::Architecture,
+            title: "Demeteo orchestration".to_string(),
+            stages: vec!["Orchestrator".to_string()],
+            lanes: vec!["Demeteo".to_string()],
+            nodes: vec![],
+            edges: vec![],
+        },
+        canvas_paths: vec![],
+        checked_commit_sha: Some("deadbeef".to_string()),
+        pinned_at: 1234,
+    }
+}
+
+#[test]
+fn pinned_ask_canvas_artifact_has_no_dot_in_name_and_round_trips_the_snapshot() {
+    let snapshot = pinned_canvas_snapshot();
+    let a = Artifact::pinned_ask_canvas("t1", "m1", &snapshot).unwrap();
+
+    assert_eq!(a.mime, "application/json");
+    assert_eq!(a.name, "m1");
+    assert!(!a.name.contains('.'));
+    assert!(matches!(
+        a.source,
+        ArtifactSource::PinnedAskCanvas { ref thread_id, ref message_id }
+            if thread_id == "t1" && message_id == "m1"
+    ));
+
+    let round_tripped: PinnedCanvasSnapshot = serde_json::from_str(&a.content).unwrap();
+    assert_eq!(round_tripped, snapshot);
+}
 
 #[test]
 fn artifact_mode_round_trip() {

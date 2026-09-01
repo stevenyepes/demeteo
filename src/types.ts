@@ -1667,3 +1667,12 @@ export interface AskCanvas {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
 }
+
+/** Mirrors `PinnedCanvasEntry`. `title` and `pinned_at` are null for an entry
+ *  whose snapshot body could not be read or parsed — the row still opens on
+ *  `path`, so a corrupt pin costs its own label and nothing else. */
+export interface PinnedCanvasEntry {
+  path: string;
+  title: string | null;
+  pinned_at: number | null;
+}

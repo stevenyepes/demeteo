@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AskMessage, AskThread, AskThreadDetail, EffortLevel } from "../types";
+import type { AskMessage, AskThread, AskThreadDetail, EffortLevel, PinnedCanvasEntry } from "../types";
 
 /**
  * Typed IPC wrappers for Ask — the commands in `src-tauri/src/commands/ask.rs`.
@@ -107,6 +107,22 @@ export async function updateAskThreadSettings(
  */
 export async function sendAskTurn(threadId: string, text: string): Promise<AskMessage> {
   return invoke<AskMessage>("ask_send_turn", { threadId, text });
+}
+
+/** Mirrors `ask_pin_canvas` — snapshots a message's canvas as a pinned artifact. */
+export async function pinAskCanvas(threadId: string, messageId: string): Promise<string> {
+  return invoke<string>("ask_pin_canvas", { threadId, messageId });
+}
+
+/** Mirrors `ask_list_pinned_canvases` — a thread's pinned canvases, each
+ *  carrying enough of its snapshot to be told apart on screen. */
+export async function listPinnedAskCanvases(threadId: string): Promise<PinnedCanvasEntry[]> {
+  return invoke<PinnedCanvasEntry[]>("ask_list_pinned_canvases", { threadId });
+}
+
+/** Mirrors `ask_export_canvas`. */
+export async function exportAskCanvas(threadId: string, messageId: string): Promise<string> {
+  return invoke<string>("ask_export_canvas", { threadId, messageId });
 }
 
 // ── The streaming contract (`application/ask/events.rs`) ───────────────────
