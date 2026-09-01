@@ -59,6 +59,11 @@ export const GateView: React.FC<GateViewProps> = ({
   );
   const hasReviewableArtifacts = reviewable.length > 0;
 
+  // A real `gate` step clears `error_message` on the way into the wait, so
+  // anything here belongs to a step that parked itself and put its question
+  // in the row.
+  const parkReason = stepExec?.error_message?.trim() || null;
+
   const loadGateData = useCallback(async () => {
     try {
       const execDetails = await getStepExecution(stepExecutionId);
@@ -193,10 +198,30 @@ export const GateView: React.FC<GateViewProps> = ({
               <Terminal className="w-3.5 h-3.5" /> Pipeline context
             </div>
             <p>
-              The multi-agent workflow is currently **paused** at the step **{stepExec?.step_id ? stepExec.step_id.replace("s-", "").replace(/-/g, " ") : 'Gate Step'}**.
-              Review the artifact generated below.
+              The multi-agent workflow is currently paused at the step{' '}
+              <span className="text-white font-semibold">
+                {stepExec?.step_id ? stepExec.step_id.replace("s-", "").replace(/-/g, " ") : 'Gate Step'}
+              </span>
+              {parkReason ? '.' : '. Review the artifact generated below.'}
             </p>
           </div>
+
+          {/* A step that stopped to ask carries the question in
+              `error_message` — the only copy of it. Without this the modal
+              renders a generic "review the artifact" over a park that may
+              have produced no artifact to review, and the person is asked
+              to decide something nobody told them. */}
+          {parkReason && (
+            <div
+              data-testid="gate-park-reason"
+              className="p-4 rounded-lg bg-amber-500/[0.04] border border-amber-500/20 text-sm text-slate-300 leading-relaxed space-y-3"
+            >
+              <div className="text-amber-300 font-semibold flex items-center gap-1.5 text-xs uppercase tracking-wider">
+                <ShieldAlert className="w-3.5 h-3.5" /> Why the run stopped here
+              </div>
+              <p className="whitespace-pre-wrap">{parkReason}</p>
+            </div>
+          )}
 
           {/* Artifact Preview */}
           <div className="space-y-2 flex flex-col">

@@ -139,9 +139,17 @@ impl ExecutionDriver {
         // plain failure — normalize it here and keep the structured
         // half aside so the retry context can carry failing tests and
         // implicated files to the redirected step.
-        let (outcome, verdict_failure) = match outcome {
-            StepOutcome::VerdictFailed(vf) => (StepOutcome::Failed(vf.to_feedback()), Some(vf)),
-            other => (other, None),
+        let (outcome, verdict_failure, producer_fault) = match outcome {
+            StepOutcome::VerdictFailed(vf) => {
+                (StepOutcome::Failed(vf.to_feedback()), Some(vf), None)
+            }
+            // Same normalization for the same reason: the outcome handler
+            // sees a plain `Failed`, and the half that steers the redirect
+            // is kept aside rather than threaded through the failure text.
+            StepOutcome::ProducerFault { producer, reason } => {
+                (StepOutcome::Failed(reason), None, Some(producer))
+            }
+            other => (other, None, None),
         };
 
         // Evaluate the declarative retry policy (P1.10) for failure
@@ -151,12 +159,17 @@ impl ExecutionDriver {
         let is_cancelled = *self.cancel_watch.borrow();
         let failure_decision: Option<RetryDecision> = match &outcome {
             StepOutcome::Failed(_) if !is_cancelled => {
-                let class = if verdict_failure.is_some() {
+                let class = if verdict_failure.is_some() || producer_fault.is_some() {
                     FailureClass::Verdict
                 } else {
                     FailureClass::AgentFailure
                 };
-                Some(self.retry_decision_for(step_conf, class, step_exec.iteration_count))
+                Some(self.retry_decision_for(
+                    step_conf,
+                    class,
+                    step_exec.iteration_count,
+                    producer_fault.as_ref(),
+                ))
             }
             StepOutcome::Environmental(_) if !is_cancelled => {
                 // Attempts the class has consumed = closed
@@ -185,10 +198,10 @@ impl ExecutionDriver {
                         })
                         .unwrap_or(u32::MAX)
                 };
-                Some(self.retry_decision_for(step_conf, FailureClass::Environment, used))
+                Some(self.retry_decision_for(step_conf, FailureClass::Environment, used, None))
             }
             StepOutcome::NonRetryable(_) => {
-                Some(self.retry_decision_for(step_conf, FailureClass::NonRetryable, 0))
+                Some(self.retry_decision_for(step_conf, FailureClass::NonRetryable, 0, None))
             }
             _ => None,
         };
@@ -201,7 +214,7 @@ impl ExecutionDriver {
         let wall_ms = step_start.elapsed().as_millis() as u64;
         let class = super::attempt::classify(
             &outcome,
-            verdict_failure.is_some(),
+            verdict_failure.is_some() || producer_fault.is_some(),
             is_cancelled,
             &self.target_dir,
         );

@@ -12,11 +12,19 @@ use super::*;
 /// A gate the user never got to answer. The wait was interrupted, not the
 /// step's own work, and the row already has the gate that was waiting — so
 /// nothing is synthesised for it.
+///
+/// It also keeps its `error_message`. A step parked for a human holds the
+/// *question* there and it is the only copy — `GateView` reads it off the
+/// row — so a restart notice written over it leaves the modal asking
+/// nothing, on exactly the path this arm serves.
 #[test]
-fn an_awaiting_gate_step_reports_the_gate_and_synthesises_nothing() {
+fn an_awaiting_gate_step_keeps_its_question_and_synthesises_nothing() {
     let out = interrupted_by_restart("awaiting_gate").expect("an in-flight gate reconciles");
 
-    assert_eq!(out.message, "Gate interrupted by system restart");
+    assert_eq!(
+        out.message, None,
+        "a restart must not overwrite a parked step's question"
+    );
     assert!(
         !out.synthesise_gate_decision,
         "the step already has the gate row it was waiting on; a second would \
@@ -31,7 +39,10 @@ fn an_awaiting_gate_step_reports_the_gate_and_synthesises_nothing() {
 fn a_running_step_reports_the_step_and_gets_a_synthesised_gate() {
     let out = interrupted_by_restart("running").expect("in-flight work reconciles");
 
-    assert_eq!(out.message, "Step interrupted by system restart");
+    assert_eq!(
+        out.message.as_deref(),
+        Some("Step interrupted by system restart")
+    );
     assert!(out.synthesise_gate_decision);
 }
 
@@ -58,7 +69,7 @@ fn no_other_status_is_interrupted_work() {
     }
 }
 
-/// The two arms are distinguishable in the timeline. A single shared sentence
+/// The two arms are distinguishable in the timeline. A single shared answer
 /// would leave a user unable to tell "the agent was killed mid-turn" from "we
 /// were waiting on you" — different things to do next.
 #[test]

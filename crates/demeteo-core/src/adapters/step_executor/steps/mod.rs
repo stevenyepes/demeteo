@@ -31,6 +31,34 @@ pub(crate) enum StepOutcome {
     /// (e.g. verifier infrastructure error: timeout, spawn failure, parse error).
     /// Fails the step immediately without consulting evaluate_on_failure.
     NonRetryable(String),
+    /// The artifact this step was handed is defective, and the step that
+    /// wrote it is the only one that can repair it.
+    ///
+    /// Distinct from [`Self::Failed`] in exactly one way that matters: it
+    /// names its own redirect target. `on_failure` points at whatever the
+    /// workflow wants reviewed when the *work* is wrong — for a sequence
+    /// step that is the review gate — which is the wrong address for a
+    /// producer that can fix its own output unattended. Classified
+    /// `verdict` (it is a verdict on the producer's artifact), so the
+    /// redirect budget applies unchanged and exhaustion still fails.
+    ProducerFault {
+        /// The step whose artifact is defective — `task_list_from`, not
+        /// `on_failure`.
+        producer: crate::domain::ids::StepId,
+        /// What is wrong with it, in the producer's own terms. Becomes
+        /// `RetryContext::feedback`, which the producer renders through
+        /// `{{retry_feedback_section}}`.
+        reason: String,
+    },
+    /// The step cannot proceed, no retry changes that, and a person can
+    /// decide. Parks on the synthetic gate instead of ending the run.
+    ///
+    /// Reported by the handler, acted on by the outcome layer — which
+    /// matters, because the handler runs inside the window where the step
+    /// is already marked `running` and its attempt row is open. Parking
+    /// from in there would bill a human's thinking time to the attempt and
+    /// have the status it wrote overwritten on the way out.
+    AwaitHumanDecision(crate::domain::step_park::HumanPark),
     /// Execution was cancelled by the user.
     Cancelled,
     /// Gate "redirect" decision — jump to the given step index.

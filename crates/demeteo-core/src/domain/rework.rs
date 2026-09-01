@@ -159,6 +159,31 @@ pub fn classify(
     }
 }
 
+/// Whether completing `completed_step_id` closes the retry loop that
+/// `failing_step_id` opened, making the carried feedback stale.
+///
+/// Retry feedback lives until the step that originally failed succeeds.
+/// Intermediate steps — the redirect target and everything between it and
+/// the failing step — all see it; once the failing step passes, the loop is
+/// closed.
+///
+/// `None` is no retry in flight (nothing to close). An empty
+/// `failing_step_id` is the legacy "clear after the next completed step"
+/// shape and still means closed, so a pre-P1.10 row does not pin feedback
+/// to a step id that was never recorded.
+///
+/// Pure because more than one path completes a step — the ordinary one and
+/// a human approving a park — and a rule spelled once per caller is a rule
+/// that drifts. A park raised by the failing step closes its own loop, and
+/// getting that wrong leaks a previous cycle's feedback into every prompt
+/// after it.
+pub fn retry_loop_closed(failing_step_id: Option<&str>, completed_step_id: &str) -> bool {
+    match failing_step_id {
+        None => true,
+        Some(failing) => failing.is_empty() || failing == completed_step_id,
+    }
+}
+
 #[cfg(test)]
 #[path = "../../tests/domain/rework.rs"]
 mod tests;
