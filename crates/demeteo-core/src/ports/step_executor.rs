@@ -164,9 +164,17 @@ pub trait StepExecutor: Send + Sync {
     async fn feature_resolve_sync_conflicts(
         &self,
         feature_id: &str,
-        conflict_files: &[String],
         asked: &crate::domain::sync_resolver::SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String>;
+
+    /// Finish a conflict the user resolved in the sync worktree themselves:
+    /// verify the tree, gate it on the project's checks, commit and publish.
+    ///
+    /// The same landing `feature_resolve_sync_conflicts` reaches, minus the
+    /// turn — so a conflict a person finished and one an agent finished are the
+    /// same commit, verified the same way. Refuses, naming what is left, if
+    /// anything the merge declared still carries markers.
+    async fn feature_continue_sync(&self, feature_id: &str) -> Result<SyncOutcomeView, String>;
 
     /// What `feature_resolve_sync_conflicts` would run under if this attempt
     /// asked for nothing — the same chain, with an empty choice.

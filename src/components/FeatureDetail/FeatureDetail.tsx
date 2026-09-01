@@ -270,6 +270,27 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     setInspectorPane('step');
   }, [resolverStep, selection.selectStep]);
 
+  /** A conflicted path lives in the *sync* worktree, which is a different
+   *  checkout from the feature's. Routed through the feature's, every click in
+   *  the conflict list opened a clean, marker-free copy of the same path with
+   *  nothing on screen to say it was not the file the list had just named. */
+  const openConflictedFile = useCallback(
+    (filePath: string) => {
+      const session = sync.session;
+      if (!session?.worktree_path) return;
+      routing.openEditorInWorktree(
+        {
+          machineId: session.machine_id,
+          worktreePath: session.worktree_path,
+          branch: session.feature_branch,
+          defaultBranch: session.base_branch,
+        },
+        filePath,
+      );
+    },
+    [sync.session, routing.openEditorInWorktree],
+  );
+
   const inspectorPaneRef = useRef<HTMLDivElement | null>(null);
 
   /** The header's press has to *show* the pane, not only select it. Stacked,
@@ -291,6 +312,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     refreshDrift,
     openDiffRange: routing.openDiffRange,
     showResolverStream,
+    openWorktreeTerminal: routing.openWorktreeTerminal,
   });
 
   // The unified feed the Activity panel reads: local runs push it through
@@ -376,7 +398,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
             pending={sync.pending}
             resolverSelection={syncResolver}
             onAction={handleSyncAction}
-            onOpenPath={routing.openEditorForPath}
+            onOpenPath={openConflictedFile}
           />
         }
       />

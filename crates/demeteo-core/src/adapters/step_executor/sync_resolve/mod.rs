@@ -1,4 +1,4 @@
-//! One conflict-resolution turn, for whoever asked for it.
+//! Resolving the conflict a sync left, for whoever is doing it.
 //!
 //! The workflow `sync` node and the "Resolve with agent" button are the same
 //! operation on the same worktree, and while each owned its own copy they
@@ -15,6 +15,12 @@
 //! what the answer is rendered as. Everything the *sync* is — the preflight, the
 //! turn, the marker check, staging, the commit, the push, the session verdict,
 //! the teardown — is here once.
+//!
+//! A third caller has no turn at all: [`continue_sync_resolution`] is the person
+//! who resolved it themselves pressing "I've resolved it". It shares this
+//! module for the same reason the other two do — a conflict a person finished
+//! and one an agent finished must reach origin as the same commit, gated the
+//! same way — so what it skips is the agent and nothing else.
 
 mod land;
 mod preflight;
@@ -35,8 +41,9 @@ use crate::domain::agent_event::AgentEvent;
 use crate::domain::ids::FeatureId;
 use crate::domain::models::StepExecution;
 use crate::domain::sync_session::{
-    gate_follow_up, publish_policy, resolution_is_reviewable, resolution_refusal, GateFollowUp,
-    SyncResolution,
+    gate_follow_up, publish_policy, remaining_conflicts_refusal, resolution_follow_up,
+    resolution_is_reviewable, resolution_refusal, resolution_verification_refusal, GateFollowUp,
+    ResolutionFollowUp, ResolutionPublish, SyncResolution,
 };
 use crate::paths;
 use crate::ports::agent_execution::AgentExecutionPort;
@@ -47,12 +54,13 @@ use crate::ports::notification::{DomainEvent, NotificationPort};
 use crate::ports::pricing::PricingTable;
 
 use self::land::{land, Landing};
+pub(crate) use self::preflight::unresolved_files;
 /// The two stages the module's own tests reach directly. `super::*` in
 /// `tests/infrastructure/step_executor/sync_resolve.rs` resolves through here,
 /// so the split above did not move them out of that file's reach.
 #[cfg(test)]
-use self::preflight::has_conflict_marker;
-use self::preflight::{ensure_conflict_markers_removed, preflight, PreflightRefusal};
+use self::preflight::{conflict_hunks, has_conflict_marker};
+use self::preflight::{preflight, PreflightRefusal};
 #[cfg(test)]
 use self::prompt::{aimed_first, tracking_tip_at_merge_head, IncomingSide};
 use self::prompt::{
@@ -95,7 +103,21 @@ pub(crate) struct ResolveSyncContext<'a> {
     pub machine_str: &'a str,
     pub feature_branch: &'a str,
     pub base_branch: &'a str,
-    pub conflict_files: &'a [String],
+    /// What this resolution must prove marker-free before any of it lands.
+    ///
+    /// The conflict as the *session row* recorded it, and deliberately not the
+    /// index's live answer. Clearing a marker in the working tree leaves the
+    /// path `UU` until something stages it, and `git add -A` collapses every
+    /// stage whatever the file still holds — so an index-derived list can
+    /// neither see that a file was finished nor that one was not. Both checks
+    /// standing between a conflict and a commit used to derive their files from
+    /// `git status`, and an index with nothing unmerged left in it makes both
+    /// iterate an empty list and pass without reading a byte.
+    ///
+    /// Carried by the caller rather than read back here because both callers
+    /// already hold it, and `sync_session` reconciles the row against the
+    /// worktree — several round trips, on a path that may be an SSH one.
+    pub declared_conflicts: &'a [crate::domain::models::ConflictFile],
     /// What this project asks of a resolved tree before it is committed, and
     /// the command the prompt names — the same gate a clean merge is held to,
     /// derived once by
@@ -146,16 +168,24 @@ pub(crate) struct ResolveSyncContext<'a> {
     pub pricing: &'a Arc<dyn PricingTable>,
 }
 
-/// Anti-runaway cap on the resolver's agentic turns, the verifier's number and
-/// its reasoning: a tripped cap ends the turn through the normal error path,
-/// and the caller's own retry ladder owns recovery.
+/// Anti-runaway cap on one *round's* agentic turns — the verifier's number, for
+/// a job that is nothing like the verifier's.
 ///
-/// It is not a cap on the *resolution*. Tripping it after the conflicted files
+/// It is not a cap on the resolution. Tripping it after the conflicted files
 /// were already correct still lands the resolution, because the tree is read
-/// afterwards either way — the reasoning is on
-/// [`resolution_refusal`](crate::domain::sync_session::resolution_refusal).
-/// That is what keeps this number free to be conservative: the cost of it
-/// being too low is a turn that stops early, not work thrown away.
+/// afterwards either way
+/// ([`resolution_refusal`](crate::domain::sync_session::resolution_refusal)) —
+/// and tripping it *part* way now costs a round rather than the resolution,
+/// because the loop reads what is left and hands the next round only that
+/// ([`resolution_follow_up`](crate::domain::sync_session::resolution_follow_up)).
+///
+/// This comment used to say the caller's retry ladder owned recovery from a
+/// tripped cap. Only the workflow node had one. On the button's path a stopped
+/// turn was the whole resolution's verdict, and the press that produced it had
+/// to be repeated by hand — each repetition spending its first two-thirds of
+/// this cap re-reading the files the last one had already finished, because the
+/// prompt was rebuilt from a list that could not shrink. Eight files was enough
+/// for that to never terminate.
 const RESOLVER_MAX_TURNS: u32 = 25;
 
 /// What a stopped resolution reads as, wherever the stop was noticed.
@@ -225,7 +255,48 @@ pub(crate) async fn resolve_sync_conflicts(
     let repo_dir = ctx.repo_dir;
     let resolved_cwd = ctx.resolved_cwd;
 
-    let pre_unmerged = match preflight(&**exec, machine_str, resolved_cwd).await {
+    let declared = open_resolution(
+        &**exec,
+        merge_executor,
+        feature_id,
+        machine_str,
+        resolved_cwd,
+        ctx.declared_conflicts,
+    )
+    .await?;
+
+    let outcome = run_resolver_turn(ctx, &declared).await;
+
+    record_verdict(
+        &**exec,
+        merge_executor,
+        feature_id,
+        machine_str,
+        repo_dir,
+        resolved_cwd,
+        &outcome,
+    )
+    .await;
+    outcome
+}
+
+/// The half of a resolution that is the same whether an agent or a person does
+/// the work: prove there is a merge here, settle what has to end up
+/// marker-free, and say on the row that something is now working on it.
+///
+/// Shared rather than copied because the two callers of it drifted last time
+/// they were not — only one recorded that a turn had started, which left the
+/// other's resolution readable as a conflict nobody was touching, and offerable
+/// to a second presser.
+async fn open_resolution(
+    exec: &dyn ExecutionPort,
+    merge_executor: &Arc<dyn MergeExecutor>,
+    feature_id: &FeatureId,
+    machine_str: &str,
+    resolved_cwd: &str,
+    ctx_declared: &[crate::domain::models::ConflictFile],
+) -> Result<Vec<crate::domain::models::ConflictFile>, ResolveSyncError> {
+    let pre_unmerged = match preflight(exec, machine_str, resolved_cwd).await {
         Ok(files) => files,
         // A verdict closes the session; an unreadable tree leaves it exactly as
         // it was, still naming the worktree, for whoever can reach the machine.
@@ -243,13 +314,31 @@ pub(crate) async fn resolve_sync_conflicts(
         }
     };
 
+    // Falls back to the tree's own answer for a row from before the column
+    // carried a list, and for the empty seed a session opens with.
+    let declared = if ctx_declared.is_empty() {
+        pre_unmerged
+    } else {
+        ctx_declared.to_vec()
+    };
+
     let _ = merge_executor
         .record_sync_resolution(feature_id, &SyncResolution::Started)
         .await;
+    Ok(declared)
+}
 
-    let outcome = run_resolver_turn(ctx, &pre_unmerged).await;
-
-    let verdict = match &outcome {
+/// What the row is left saying, and what becomes of the worktree.
+async fn record_verdict(
+    exec: &dyn ExecutionPort,
+    merge_executor: &Arc<dyn MergeExecutor>,
+    feature_id: &FeatureId,
+    machine_str: &str,
+    repo_dir: &str,
+    resolved_cwd: &str,
+    outcome: &Result<ResolvedSync, ResolveSyncError>,
+) {
+    let verdict = match outcome {
         // A published resolution has nothing left in the tree it was made in.
         // An unpublished one is the opposite: the branch it is committed on is
         // checked out there, so that tree is where the review's `Discard` puts
@@ -257,13 +346,13 @@ pub(crate) async fn resolve_sync_conflicts(
         // out of the state a `reset` in the user's own clone against whatever
         // it happens to have checked out.
         Ok(resolved) if resolved.published => {
-            discard_sync_worktree(&**exec, machine_str, repo_dir, resolved_cwd).await;
+            discard_sync_worktree(exec, machine_str, repo_dir, resolved_cwd).await;
             SyncResolution::Succeeded {
                 merge_commit_sha: resolved.merge_commit_sha.clone(),
                 published: true,
                 worktree_discarded: resolved_cwd == repo_dir
                     || crate::application::sync_session::worktree_confirmed_gone(
-                        &**exec,
+                        exec,
                         machine_str,
                         resolved_cwd,
                     )
@@ -282,8 +371,197 @@ pub(crate) async fn resolve_sync_conflicts(
     let _ = merge_executor
         .record_sync_resolution(feature_id, &verdict)
         .await;
+}
 
+/// Everything the manual finish needs. No agent, and so none of what an agent
+/// costs: no registry, no pricing, no spend to advance.
+pub(crate) struct ContinueSyncContext<'a> {
+    pub exec: &'a Arc<dyn ExecutionPort>,
+    pub app_settings: &'a Arc<dyn AppSettingsRepository>,
+    pub git_ops: &'a GitOpsHelper,
+    pub merge_executor: &'a Arc<dyn MergeExecutor>,
+    pub feature_id: &'a FeatureId,
+    pub repo_dir: &'a str,
+    pub resolved_cwd: &'a str,
+    pub machine_str: &'a str,
+    pub feature_branch: &'a str,
+    pub base_branch: &'a str,
+    pub declared_conflicts: &'a [crate::domain::models::ConflictFile],
+    pub gate: crate::ports::worktree_ops::MergeGate<'a>,
+    pub review_before_push: Option<bool>,
+    pub feature_status: &'a str,
+    pub cancel: Option<watch::Receiver<bool>>,
+}
+
+/// Land a conflict a person resolved themselves.
+///
+/// The pane has told users to "finish it by hand in the worktree" since there
+/// was a pane, and until this there was nothing that would then accept the
+/// result: the only ways out of a conflict were an agent or abandoning the
+/// sync. A resolution six hunks from done had no press that would take it.
+///
+/// It is `resolve_sync_conflicts` with the turn removed, and deliberately not a
+/// second opinion about anything else. The same preflight decides there is a
+/// merge, the same scan decides whether it is finished, the same harness gate
+/// decides whether the tree may be committed, and the same [`land`] commits and
+/// publishes it — so a hand-resolved sync and an agent-resolved one reach
+/// origin identically, and the row cannot tell you which it was.
+pub(crate) async fn continue_sync_resolution(
+    ctx: ContinueSyncContext<'_>,
+) -> Result<ResolvedSync, ResolveSyncError> {
+    let ContinueSyncContext {
+        exec,
+        app_settings,
+        git_ops,
+        merge_executor,
+        feature_id,
+        repo_dir,
+        resolved_cwd,
+        machine_str,
+        feature_branch,
+        base_branch,
+        declared_conflicts,
+        gate,
+        review_before_push,
+        feature_status,
+        cancel,
+    } = ctx;
+
+    let declared = open_resolution(
+        &**exec,
+        merge_executor,
+        feature_id,
+        machine_str,
+        resolved_cwd,
+        declared_conflicts,
+    )
+    .await?;
+
+    let outcome = verify_and_land_by_hand(
+        exec,
+        app_settings,
+        git_ops,
+        machine_str,
+        resolved_cwd,
+        feature_branch,
+        base_branch,
+        &declared,
+        gate,
+        publish_policy(review_before_push, resolution_is_reviewable(feature_status)),
+        cancel,
+    )
+    .await;
+
+    record_verdict(
+        &**exec,
+        merge_executor,
+        feature_id,
+        machine_str,
+        repo_dir,
+        resolved_cwd,
+        &outcome,
+    )
+    .await;
     outcome
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn verify_and_land_by_hand(
+    exec: &Arc<dyn ExecutionPort>,
+    app_settings: &Arc<dyn AppSettingsRepository>,
+    git_ops: &GitOpsHelper,
+    machine_str: &str,
+    resolved_cwd: &str,
+    feature_branch: &str,
+    base_branch: &str,
+    declared: &[crate::domain::models::ConflictFile],
+    gate: crate::ports::worktree_ops::MergeGate<'_>,
+    publish: ResolutionPublish,
+    cancel: Option<watch::Receiver<bool>>,
+) -> Result<ResolvedSync, ResolveSyncError> {
+    if cancelled(&cancel) {
+        return Err(ResolveSyncError::Cancelled(CANCELLED_REASON.to_string()));
+    }
+
+    let left = unresolved_files(&**exec, machine_str, resolved_cwd, declared)
+        .await
+        .map_err(ResolveSyncError::Failed)?;
+    if !left.is_empty() {
+        return Err(ResolveSyncError::Failed(format!(
+            "{} Finish them in the sync worktree and press Continue again, or hand the rest to an agent.",
+            remaining_conflicts_refusal(declared.len(), &left)
+        )));
+    }
+
+    let gate_opts = crate::adapters::step_executor::harness_shell::harness_shell_options(
+        app_settings.as_ref(),
+        resolved_cwd,
+    );
+    let Some(verification) = prepared_verification(
+        &**exec,
+        machine_str,
+        gate,
+        gate_opts.clone(),
+        cancel.clone(),
+    )
+    .await
+    else {
+        return Err(ResolveSyncError::Cancelled(CANCELLED_REASON.to_string()));
+    };
+
+    if let Verification::Gated { command } = verification {
+        match run_gate_harness(
+            &**exec,
+            machine_str,
+            Some(command),
+            gate_opts,
+            cancel.clone(),
+        )
+        .await
+        {
+            GateVerdict::NotGated | GateVerdict::Passed | GateVerdict::Unprepared { .. } => {}
+            GateVerdict::Stopped => {
+                return Err(ResolveSyncError::Cancelled(CANCELLED_REASON.to_string()))
+            }
+            // No repair round, unlike the agent path: the only thing that could
+            // act on the harness's output is the person who just said they were
+            // finished, and they are better told what it said than handed a
+            // turn they did not ask for.
+            GateVerdict::Failed { error } => {
+                match resolution_verification_refusal(command, &error) {
+                    Some(refusal) => return Err(ResolveSyncError::Failed(refusal)),
+                    None => tracing::warn!(
+                        machine = %machine_str,
+                        worktree = %resolved_cwd,
+                        command = %command,
+                        error = %error,
+                        "sync gate reached no verdict: the resolution lands unverified",
+                    ),
+                }
+            }
+        }
+    }
+
+    let (merge_commit_sha, published) = land(
+        Landing {
+            exec,
+            git_ops,
+            app_settings,
+            machine_str,
+            resolved_cwd,
+            base_branch,
+            feature_branch,
+            publish,
+        },
+        None,
+    )
+    .await?;
+
+    Ok(ResolvedSync {
+        merge_commit_sha,
+        published,
+        cache: CacheTokens::default(),
+    })
 }
 
 /// Has a stop arrived? Read before the spawn and again after the turn, because
@@ -295,7 +573,9 @@ fn cancelled(cancel: &Option<watch::Receiver<bool>>) -> bool {
 
 async fn run_resolver_turn(
     sync_ctx: ResolveSyncContext<'_>,
-    pre_unmerged: &[crate::domain::models::ConflictFile],
+    // The persisted conflict list — what this resolution must prove
+    // marker-free. See the call site for why it is not the index's answer.
+    declared: &[crate::domain::models::ConflictFile],
 ) -> Result<ResolvedSync, ResolveSyncError> {
     let ResolveSyncContext {
         exec,
@@ -309,7 +589,6 @@ async fn run_resolver_turn(
         machine_str,
         feature_branch,
         base_branch,
-        conflict_files,
         gate,
         step_exec,
         thread_id_prefix,
@@ -378,6 +657,14 @@ async fn run_resolver_turn(
 
     let mut cache = CacheTokens::default();
     let mut rounds_spent = 0u32;
+    let mut resolution_rounds = 0u32;
+    // What is still conflicted *right now*, which is neither what the caller
+    // named nor what the index says. A round is judged against this, and the
+    // next round's prompt is built from it — see `declared` at the call site
+    // for why the two lists must not be the same list.
+    let mut remaining = unresolved_files(&**exec, machine_str, resolved_cwd, declared)
+        .await
+        .map_err(ResolveSyncError::Failed)?;
     let resolution_start_cost = *accumulated_cost;
     // What a red gate is worth is `domain::sync_session::gate_follow_up`. Held
     // as the built prompt rather than the words it was built from, so the
@@ -386,6 +673,16 @@ async fn run_resolver_turn(
     let turn_stop = loop {
         if cancelled(&cancel) {
             return Err(ResolveSyncError::Cancelled(CANCELLED_REASON.to_string()));
+        }
+
+        // Nothing carries a marker and no harness asked for a repair, so there
+        // is no work an agent could do. Whoever cleared them — an earlier round,
+        // or a person in the sync worktree — already finished; a turn spawned to
+        // confirm that costs money and can only make the tree worse. Fall
+        // through to the gate and the landing on the same terms a turn would
+        // have reached them on.
+        if remaining.is_empty() && repair_prompt.is_none() {
+            break None;
         }
 
         // A fresh session per round: the one before it was reaped ahead of the
@@ -419,13 +716,13 @@ async fn run_resolver_turn(
                 )
                 .await;
                 let base_moves = base_side_moves(&**exec, machine_str, resolved_cwd, within).await;
-                build_resolver_prompt(
-                    feature_branch,
-                    incoming,
-                    conflict_files,
-                    verification,
-                    &base_moves,
-                )
+                // What still has markers, not what the merge originally named.
+                // A round handed the whole original list re-reads every file an
+                // earlier round already finished — sixteen tool calls before the
+                // first edit, on the conflict this loop was written for — and
+                // then trips its turn cap somewhere it has been before.
+                let work: Vec<String> = remaining.iter().map(|(path, _)| path.clone()).collect();
+                build_resolver_prompt(feature_branch, incoming, &work, verification, &base_moves)
             }
         };
 
@@ -503,23 +800,47 @@ async fn run_resolver_turn(
             return Err(ResolveSyncError::Cancelled(CANCELLED_REASON.to_string()));
         }
 
+        // Reaped before the tree is read, not after: the turn is over, and
+        // holding a live process — over SSH, its channel too — across a read of
+        // every conflicted file and the multi-minute build after it is waste.
+        let _ = registry.kill(&resolver_thread_id).await;
+
         // The agent's worktree fence deliberately excludes the linked-worktree
         // index. Demeteo owns staging and committing after the agent resolves
         // the conflicted content.
-        if let Err(reason) =
-            ensure_conflict_markers_removed(&**exec, machine_str, resolved_cwd, pre_unmerged).await
-        {
-            let _ = registry.kill(&resolver_thread_id).await;
-            return Err(ResolveSyncError::Failed(resolution_refusal(
-                turn_stop.as_deref(),
-                &reason,
-            )));
+        //
+        // Read over `declared`, and never over the index's live answer: clearing
+        // a marker in the working tree leaves the path `UU` until something
+        // stages it, so an index-derived list can neither see that a file was
+        // finished nor — once `git add -A` has run — that one was not.
+        let left = match unresolved_files(&**exec, machine_str, resolved_cwd, declared).await {
+            Ok(left) => left,
+            Err(why) => return Err(ResolveSyncError::Failed(why)),
+        };
+        if !left.is_empty() {
+            let before: usize = remaining.iter().map(|(_, hunks)| hunks).sum();
+            let now: usize = left.iter().map(|(_, hunks)| hunks).sum();
+            let standing = remaining_conflicts_refusal(declared.len(), &left);
+            match resolution_follow_up(now, before, resolution_rounds) {
+                // The round moved the tree, so the next one starts from less
+                // work than this one did. That is the whole of the loop: a turn
+                // cap tripped mid-resolution is a stop, not a verdict, and the
+                // press that hit one used to have to be repeated by hand — each
+                // repetition re-reading the files the last one had finished.
+                ResolutionFollowUp::Continue => {
+                    resolution_rounds += 1;
+                    remaining = left;
+                    continue;
+                }
+                ResolutionFollowUp::Refuse(why) => {
+                    return Err(ResolveSyncError::Failed(resolution_refusal(
+                        turn_stop.as_deref(),
+                        &format!("{} {}", standing, why),
+                    )));
+                }
+            }
         }
-
-        // Reaped here rather than on each exit below: the turn is over, and
-        // holding a live process — over SSH, its channel too — across the
-        // multi-minute build the gate is about to run is waste.
-        let _ = registry.kill(&resolver_thread_id).await;
+        remaining = left;
 
         // Before `git add -A`, not after: a red gate leaves a staged index, and
         // the next attempt's marker check would then iterate an empty unmerged

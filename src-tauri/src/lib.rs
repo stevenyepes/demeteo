@@ -495,6 +495,7 @@ pub fn run() {
             commands::features::feature_sync,
             commands::features::feature_drift,
             commands::features::feature_resolve_sync_conflicts,
+            commands::features::feature_continue_sync,
             commands::features::feature_sync_resolver,
             commands::features::sync_session_get,
             commands::features::sync_abort,

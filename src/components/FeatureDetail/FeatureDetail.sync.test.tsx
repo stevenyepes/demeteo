@@ -57,6 +57,34 @@ const ON_PRESS = drift(4, true);
 
 const driftCalls: boolean[] = [];
 
+/** The two checkouts a conflicted feature has. They are different directories,
+ *  and only the sync one holds the merge — which is the whole of the third bug
+ *  this file pins. */
+const FEATURE_WT = '/repos/demeteo_wt_f-1';
+const SYNC_WT = '/repos/demeteo_wt_sync_feature-f-1';
+
+let syncSession: unknown = null;
+
+const conflictedSession = () => ({
+  feature_id: FEATURE_ID,
+  machine_id: 'sync-host',
+  repo_dir: '/repos/demeteo',
+  feature_branch: 'feature/f-1',
+  base_branch: 'master',
+  status: 'conflicted',
+  worktree_path: SYNC_WT,
+  head_before: 'aaaaaaa',
+  merge_commit_sha: null,
+  conflict_files: [{ path: 'src/lib.rs', kind: 'both-modified' }],
+  raw_error: 'CONFLICT (content): Merge conflict in src/lib.rs',
+  blocked_stage: null,
+  pushed_at: null,
+  attempts: 1,
+  created_at: 0,
+  updated_at: 0,
+  user_may_intervene: true,
+});
+
 function mockBackend() {
   driftCalls.length = 0;
   vi.mocked(invoke).mockImplementation(((cmd: string, args: Record<string, unknown>) => {
@@ -69,9 +97,18 @@ function mockBackend() {
       case 'step_list_for_run':
         return Promise.resolve([]);
       case 'sync_session_get':
-        return Promise.resolve(null);
+        return Promise.resolve(syncSession);
       case 'feature_get':
         return Promise.resolve({ id: FEATURE_ID, status: 'completed' });
+      case 'feature_get_worktree':
+        return Promise.resolve({
+          machine_id: 'feature-host',
+          worktree_path: FEATURE_WT,
+          branch: 'feature/f-1',
+          default_branch: 'master',
+        });
+      case 'feature_sync_resolver':
+        return Promise.resolve({ agent_kind: 'claude-code', model: null, effort: 'high' });
       case 'feature_workflow_graph':
       case 'get_app_session':
       case 'remote_run_for_feature':
@@ -95,11 +132,28 @@ function mockBackend() {
 }
 
 function Seed() {
-  const { navigate } = useNavigation();
+  const { navigate, view } = useNavigation();
   useEffect(() => {
     navigate({ kind: 'detail', featureId: FEATURE_ID, featureTitle: 'Run' });
   }, [navigate]);
-  return <FeatureDetail />;
+  // The editor route is what a conflict-list press produces, and *which
+  // checkout it names* is the assertion. Read off the navigation rather than
+  // out of `CodeEditorView`, which states neither in its DOM — and adding them
+  // there would put a test hook in production for one test's benefit.
+  const editor = view.kind === 'editor' ? view.editorContext : null;
+  return (
+    <>
+      {editor ? (
+        <div
+          data-testid="editor-route"
+          data-worktree={editor.worktreePath}
+          data-machine={editor.machineId}
+          data-file={editor.initialFile ?? ''}
+        />
+      ) : null}
+      <FeatureDetail />
+    </>
+  );
 }
 
 function mount() {
@@ -129,6 +183,7 @@ function behindMetric(): { label: string; value: string } {
 }
 
 beforeEach(() => {
+  syncSession = null;
   mockBackend();
 });
 
@@ -151,6 +206,24 @@ describe('the Sync pane, wired into the run view', () => {
     // in-flight read left the opening 9 on screen with no error anywhere.
     await waitFor(() => expect(behindMetric()).toEqual({ label: 'Behind', value: '4' }));
     expect(screen.getByRole('tab', { name: /Sync/ })).toHaveTextContent('Sync · 4');
+  });
+
+  /** The conflict markers are in the *sync* worktree, which is a different
+   *  checkout from the feature's. Routed through the feature's — as every row
+   *  in this list was — the click opened a clean, marker-free copy of the same
+   *  path, with nothing on screen to say it was not the file just named. */
+  it('opens a conflicted path in the sync worktree, not the feature one', async () => {
+    syncSession = conflictedSession();
+    mount();
+
+    await userEvent.click(await screen.findByRole('tab', { name: /Sync/ }));
+    const pane = await screen.findByTestId('sync-panel');
+    await userEvent.click(within(pane).getByRole('button', { name: /src\/lib\.rs/ }));
+
+    const editor = await screen.findByTestId('editor-route');
+    expect(editor).toHaveAttribute('data-worktree', SYNC_WT);
+    expect(editor).toHaveAttribute('data-machine', 'sync-host');
+    expect(editor).toHaveAttribute('data-file', 'src/lib.rs');
   });
 
   it('shows the pane the header button opens, rather than only selecting it', async () => {

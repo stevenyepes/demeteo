@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import {
+  CheckCircle2,
   Cpu,
+  SquareTerminal,
   GitBranch,
   GitCompare,
   GitMerge,
@@ -64,6 +66,8 @@ export interface SyncPanelProps {
 const ACTION_ICON: Record<SyncIntent, ReactNode> = {
   sync: <GitBranch className="h-4 w-4" />,
   resolve: <Cpu className="h-4 w-4" />,
+  continue: <CheckCircle2 className="h-4 w-4" />,
+  terminal: <SquareTerminal className="h-4 w-4" />,
   abort: <XCircle className="h-4 w-4" />,
   review: <GitCompare className="h-4 w-4" />,
   publish: <Upload className="h-4 w-4" />,
@@ -77,6 +81,8 @@ const ACTION_ICON: Record<SyncIntent, ReactNode> = {
 const PENDING_LABEL: Record<SyncIntent, string> = {
   sync: 'Syncing…',
   resolve: 'Resolving…',
+  continue: 'Verifying…',
+  terminal: 'Opening…',
   abort: 'Aborting…',
   review: 'Opening…',
   publish: 'Publishing…',

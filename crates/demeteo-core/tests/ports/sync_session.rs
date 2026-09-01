@@ -68,3 +68,39 @@ fn a_turn_that_has_not_landed_writes_only_what_it_knows() {
         Some(Some("markers left behind".to_string()))
     );
 }
+
+/// The row counts a resolution when it starts, and only then.
+///
+/// The column, the port field and the Sync pane's own `Attempts` metric all
+/// existed; nothing ever set the field. A user who pressed "Resolve with agent"
+/// three times read "Attempts 0" all three times, with no way to tell a turn
+/// that never ran from three that did. Counted at the start rather than the
+/// verdict so a resolution still running already shows as an attempt.
+#[test]
+fn a_resolution_is_counted_when_it_starts_and_not_again_when_it_ends() {
+    assert!(
+        SyncSessionPatch::from_resolution(&SyncResolution::Started, 7).bump_attempts,
+        "the turn beginning is the attempt"
+    );
+    assert!(
+        !SyncSessionPatch::from_resolution(
+            &SyncResolution::Failed {
+                reason: "markers left behind".to_string(),
+            },
+            7,
+        )
+        .bump_attempts,
+        "its verdict is the same attempt, not a second one"
+    );
+    assert!(
+        !SyncSessionPatch::from_resolution(
+            &SyncResolution::Succeeded {
+                merge_commit_sha: "c0ffee".to_string(),
+                published: true,
+                worktree_discarded: true,
+            },
+            7,
+        )
+        .bump_attempts
+    );
+}

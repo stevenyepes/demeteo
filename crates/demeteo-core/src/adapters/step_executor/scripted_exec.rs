@@ -31,6 +31,12 @@ pub(crate) struct ScriptedExec {
     /// test anticipated" stays a failure.
     queued: Mutex<HashMap<String, Vec<Result<String, String>>>>,
     files: HashMap<String, Result<String, String>>,
+    /// The same idea as [`ScriptedExec::queued`], one port over: a conflict
+    /// resolution reads each conflicted file before its turn and again after
+    /// it, and the whole subject of the loop between them is that the second
+    /// read says something different. A single answer per path can only
+    /// describe a tree that never moved.
+    queued_files: Mutex<HashMap<String, Vec<Result<String, String>>>>,
     programs: HashMap<String, Result<String, String>>,
     dirs: HashSet<String>,
     /// Watches to trip as a command is issued, which is the one shape a
@@ -82,6 +88,7 @@ impl ScriptedExec {
             answers: script(answers),
             queued: Mutex::new(HashMap::new()),
             files: HashMap::new(),
+            queued_files: Mutex::new(HashMap::new()),
             programs: HashMap::new(),
             dirs: HashSet::new(),
             stops: HashMap::new(),
@@ -147,6 +154,31 @@ impl ScriptedExec {
         self
     }
 
+    /// Script successive `read_file` answers for one path, consumed in call
+    /// order, the last of which then stands.
+    ///
+    /// Where [`Self::with_queue`] errors once exhausted, this holds — because a
+    /// file and a command differ in what a repeated ask means. Asking git the
+    /// same question twice can legitimately want two answers, so an unplanned
+    /// third ask is a test that lost track of its subject. A file read twice
+    /// with no write between them can only say the same thing, and an extra
+    /// read is a caller being careful, not a caller being wrong.
+    pub(crate) fn with_queued_file(self, path: &str, answers: &[Result<&str, &str>]) -> Self {
+        let queue = answers
+            .iter()
+            .rev()
+            .map(|v| match v {
+                Ok(s) => Ok(s.to_string()),
+                Err(e) => Err(e.to_string()),
+            })
+            .collect();
+        self.queued_files
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), queue);
+        self
+    }
+
     /// Rewrite every scripted key through `f`, so a test can script the answer
     /// against the command it *authored* rather than the command the adapter is
     /// handed — the baseline's `( … ) 2>&1` wrap being the case that needs it.
@@ -155,6 +187,7 @@ impl ScriptedExec {
             answers: self.answers.into_iter().map(|(k, v)| (f(&k), v)).collect(),
             queued: self.queued,
             files: self.files,
+            queued_files: self.queued_files,
             programs: self.programs,
             dirs: self.dirs,
             stops: self.stops,
@@ -234,6 +267,16 @@ impl ExecutionPort for ScriptedExec {
             .unwrap_or_else(|| Err(format!("ScriptedExec: unscripted command `{cmd}`")))
     }
     async fn read_file(&self, _m: &str, p: &str) -> Result<String, String> {
+        if let Some(queue) = self.queued_files.lock().unwrap().get_mut(p) {
+            if queue.len() > 1 {
+                if let Some(answer) = queue.pop() {
+                    return answer;
+                }
+            }
+            if let Some(last) = queue.last() {
+                return last.clone();
+            }
+        }
         self.files
             .get(p)
             .cloned()

@@ -1,30 +1,72 @@
 # Conflict Resolution
 
-When multiple sub-tasks modify overlapping code regions, Git merge conflicts can occur. Demeteo offers a configurable conflict resolution cascade.
+Demeteo hits merge conflicts in two places, and they are handled differently.
 
-## Resolution Policies
+A **step's** task-branch merging back into the feature branch is resolved inline: one
+agent turn in the step's own worktree, and if that turn does not clear it, the step
+fails. Nothing is offered to you, because the run has not finished and the worktree is
+not yours yet.
 
-Configured at the project level under **Workspace Settings → Agent Strategy & Policies**:
+A **sync** — the feature branch merging `origin/<base>` in — is the one you act on. It
+opens a *sync worktree*, a throwaway checkout separate from the feature's, and leaves
+the merge sitting there with its markers. The Sync pane is where you finish it.
 
-### Always Gate (default)
-All conflicts are sent to a gate for manual resolution. The user reviews each conflict file and provides resolution instructions.
+## The Sync pane
 
-### Auto Agent First
-Demeteo attempts to resolve conflicts automatically using an agent. The agent receives the conflicting files with `<<<<<<<` / `=======` / `>>>>>>>` markers and tries to produce a clean merge. If the agent fails or the result is unsatisfactory, the conflict cascades to a manual gate.
+Open it from **Sync** in the feature header. On a conflict it names every unmerged path,
+shows what git said, and offers four ways forward.
 
-### Immediate Manual Merge
-Skips the auto-agent step and immediately presents conflicts for manual resolution through the conflict viewer.
+### Resolve with agent
 
-## The Conflict Viewer
+Spawns an agent in the sync worktree. It clears markers and Demeteo commits the result
+— the agent never stages or commits anything itself.
 
-When a gate is triggered for conflict resolution:
+It works in **rounds**. After each turn Demeteo reads every conflicted file and counts
+what still has markers; a round that cleared some buys another, over only what is left,
+and a round that cleared none stops. So a large conflict finishes in one press, and a
+resolver that is not getting anywhere stops instead of spending your budget.
 
-1. Each conflicting file is listed with its path and conflict count
-2. Click a file to see the merge diff with conflict markers
-3. Provide resolution instructions or approve a proposed resolution
-4. Submit the gate decision to continue the pipeline
+If it does stop early, the reason says what is left and how much — *"2 of 8 files still
+have conflict markers: … (1 hunk), … (5 hunks)"*. Pressing **Try again** carries on from
+there rather than starting over.
 
-## Preventing Conflicts
+### I've resolved it
+
+For when you would rather do it yourself. Fix the files in the sync worktree, then press
+this: Demeteo checks that nothing declared by the merge still carries markers, runs the
+project's own checks in the merged tree, and commits and publishes on exactly the terms
+the agent path does. No agent is spawned.
+
+If anything is still conflicted it refuses and names it, rather than committing a tree
+that is not finished.
+
+### Open a terminal here
+
+A shell in the sync worktree. This is not the feature worktree — the markers are only in
+this one, and it is the checkout both of the presses above act on. Clicking a file in the
+unmerged list opens that same checkout's copy in the editor.
+
+### Abort sync
+
+Undoes the merge and discards the sync worktree. The branch goes back to where the sync
+found it.
+
+## What a fresh Sync will not do
+
+Sync refuses rather than starting over when the existing sync worktree holds work: a
+committed resolution nobody has published, or a conflict you or an agent are part-way
+through. Provisioning a sync worktree force-removes any old one, and nothing but the
+files themselves records that six of eight conflicts were cleared. Finish it, or abort
+it — throwing that work away stays available, it just has to be meant.
+
+## After a resolution
+
+Depending on **Review before push** (Workspace Settings), a resolution either goes
+straight to origin or waits on the branch for you to read. A held one offers **Review
+diff**, **Publish** and **Discard merge**. A resolution whose run is still going never
+waits, because nobody is there to look at it.
+
+## Preventing conflicts
 
 - Use well-defined module boundaries
 - Configure branch prefix conventions to avoid overlapping changes

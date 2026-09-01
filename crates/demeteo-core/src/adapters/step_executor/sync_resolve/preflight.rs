@@ -65,13 +65,25 @@ pub(super) async fn preflight(
     }
 }
 
-pub(super) async fn ensure_conflict_markers_removed(
+/// Every declared conflict that still carries markers, and how many hunks each
+/// has left.
+///
+/// The whole of what separates a converging resolution from a stalled one, and
+/// the reason it counts hunks rather than files: a round that clears three of
+/// four hunks inside one file moves no file count at all. Judged on files
+/// remaining, three consecutive rounds that each cleared real work on one
+/// feature were every one of them recorded as the same failure.
+///
+/// `declared` is the *persisted* conflict list, never the index's live answer —
+/// see [`super::run_resolver_turn`] for why the two must not be the same list.
+pub(crate) async fn unresolved_files(
     exec: &dyn ExecutionPort,
     machine_str: &str,
     worktree: &str,
-    conflict_files: &[crate::domain::models::ConflictFile],
-) -> Result<(), String> {
-    for file in conflict_files {
+    declared: &[crate::domain::models::ConflictFile],
+) -> Result<Vec<(String, usize)>, String> {
+    let mut left = Vec::new();
+    for file in declared {
         let path = paths::join_on(
             worktree,
             [file.path.as_str()],
@@ -82,20 +94,33 @@ pub(super) async fn ensure_conflict_markers_removed(
             .await
             .map_err(|e| format!("Failed to read resolved conflict file {}: {}", file.path, e))?;
         if has_conflict_marker(&content) {
-            return Err(format!(
-                "Resolver left merge conflict markers in {}.",
-                file.path
-            ));
+            left.push((file.path.clone(), conflict_hunks(&content)));
         }
     }
-    Ok(())
+    Ok(left)
 }
 
+/// How many conflicts a file has left, counted by opening marker.
+pub(super) fn conflict_hunks(content: &str) -> usize {
+    content
+        .lines()
+        .filter(|line| line.trim_start().starts_with("<<<<<<<"))
+        .count()
+}
+
+/// Does this file still hold a merge git did not finish?
+///
+/// A bare `=======` is deliberately **not** one of the tells, though it is half
+/// of every conflict. Seven equals signs on their own line are a Markdown setext
+/// underline and a common test fixture, so treating one as a marker makes a file
+/// that is genuinely resolved unresolvable — no edit can clear a marker that was
+/// never a marker. The other three openers have no such second life, and a
+/// half-deleted conflict still trips `>>>>>>>` or `|||||||`, so nothing that
+/// clause caught goes unnoticed.
 pub(super) fn has_conflict_marker(content: &str) -> bool {
     content.lines().any(|line| {
         let trimmed = line.trim_start();
         trimmed.starts_with("<<<<<<<")
-            || trimmed.starts_with("=======")
             || trimmed.starts_with(">>>>>>>")
             || trimmed.starts_with("|||||||")
     })
