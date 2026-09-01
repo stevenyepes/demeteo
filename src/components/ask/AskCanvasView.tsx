@@ -13,7 +13,7 @@ import { useMemo } from 'react';
 
 import { citedNodeIds } from '../../lib/askCanvasCitations';
 import { layoutAskCanvas, NODE_H, NODE_W } from '../../lib/askCanvasLayout';
-import type { AskCanvas, CanvasNode, EdgeKind } from '../../types';
+import type { AskCanvas, CanvasNode, CanvasPathVerdict, EdgeKind } from '../../types';
 import { AskCanvasNode } from './AskCanvasNode';
 
 const HEADER_H = 36;
@@ -29,15 +29,34 @@ const EDGE_CLASS: Record<EdgeKind, string> = {
 export interface AskCanvasViewProps {
   canvas: AskCanvas;
   answerText: string;
+  canvasPaths: CanvasPathVerdict[];
   selectedNodeId: string | null;
   onActivate: (id: string) => void;
 }
 
-export function AskCanvasView({ canvas, answerText, selectedNodeId, onActivate }: AskCanvasViewProps) {
+/** Verdicts are looked up by `(node_id, path)`, not `node_id` alone — a
+ *  verdict computed against a stale `path` must not be credited to a node
+ *  whose path has since changed. */
+function verdictKey(nodeId: string, path: string): string {
+  return `${nodeId} ${path}`;
+}
+
+export function AskCanvasView({
+  canvas,
+  answerText,
+  canvasPaths,
+  selectedNodeId,
+  onActivate,
+}: AskCanvasViewProps) {
   const layout = useMemo(() => layoutAskCanvas(canvas), [canvas]);
   const citedIds = useMemo(() => citedNodeIds(answerText, canvas.nodes), [answerText, canvas.nodes]);
 
   const positionsById = useMemo(() => new Map(layout.nodes.map((node) => [node.id, node])), [layout.nodes]);
+
+  const verdictsByKey = useMemo(
+    () => new Map(canvasPaths.map((verdict) => [verdictKey(verdict.node_id, verdict.path), verdict])),
+    [canvasPaths],
+  );
 
   const nodesByCell = useMemo(() => {
     const map = new Map<string, CanvasNode[]>();
@@ -124,10 +143,15 @@ export function AskCanvasView({ canvas, answerText, selectedNodeId, onActivate }
           {canvas.nodes.map((node) => {
             const position = positionsById.get(node.id);
             if (!position) return null;
+            const resolved =
+              node.path !== null
+                ? (verdictsByKey.get(verdictKey(node.id, node.path))?.resolved ?? false)
+                : false;
             return (
               <foreignObject key={node.id} x={position.x} y={position.y} width={NODE_W} height={NODE_H}>
                 <AskCanvasNode
                   node={node}
+                  resolved={resolved}
                   selected={selectedNodeId === node.id}
                   cited={citedIds.has(node.id)}
                   onActivate={onActivate}

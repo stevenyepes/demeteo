@@ -360,8 +360,10 @@ export function AskThreadView({ projectId, machineId }: AskThreadViewProps): Rea
         <section className="flex min-w-0 flex-1 flex-col">
           {thread ? (
             <AskCanvasPane
+              key={thread.id}
               store={store}
               threadId={thread.id}
+              projectId={projectId}
               lastMessage={
                 detail && detail.messages.length > 0 ? detail.messages[detail.messages.length - 1] : null
               }

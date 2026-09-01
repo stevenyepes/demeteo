@@ -24,3 +24,29 @@ export function citedNodeIds(
 
   return cited;
 }
+
+/**
+ * Derives the inspector's 'What happens here' text from the turn prose
+ * instead of a stored field (spec §0) — the sentence around the same
+ * title-or-path match `citedNodeIds` uses, not the whole answer.
+ */
+export function descriptionForNode(
+  answerText: string,
+  node: Pick<CanvasNode, 'title' | 'path'>,
+): string | null {
+  if (!answerText) return null;
+
+  const title = node.title.length > 0 ? node.title.toLowerCase() : null;
+  const path = node.path !== null && node.path.length > 0 ? node.path.toLowerCase() : null;
+
+  const sentences = answerText.split(/(?<=[.!?])\s+/);
+
+  for (const sentence of sentences) {
+    const haystack = sentence.toLowerCase();
+    if ((title !== null && haystack.includes(title)) || (path !== null && haystack.includes(path))) {
+      return sentence.trim();
+    }
+  }
+
+  return null;
+}

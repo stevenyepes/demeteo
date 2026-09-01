@@ -1,13 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AskThread, AskThreadDetail } from "../types";
+import type { AskThread, AskThreadDetail, NodeResolution } from "../types";
 import {
   createAskThread,
   deleteAskThread,
   listAskThreads,
   loadAskThread,
   renameAskThread,
+  resolveNode,
   updateAskThreadSettings,
 } from "./ask";
 
@@ -133,6 +134,33 @@ describe("deleteAskThread", () => {
     await deleteAskThread("thread-1");
 
     expect(invoke).toHaveBeenCalledWith("ask_delete", { threadId: "thread-1" });
+  });
+});
+
+describe("resolveNode", () => {
+  it("mirrors ask_resolve_node with the thread, message, and node ids", async () => {
+    const resolution: NodeResolution = {
+      kind: "editor",
+      machine_id: "local",
+      worktree_path: "/repo",
+      branch: "main",
+      default_branch: "main",
+      path: "src/index.ts",
+    };
+    vi.mocked(invoke).mockResolvedValue(resolution);
+
+    const result = await resolveNode({
+      threadId: "thread-1",
+      messageId: "message-1",
+      nodeId: "node-1",
+    });
+
+    expect(result).toEqual(resolution);
+    expect(invoke).toHaveBeenCalledWith("ask_resolve_node", {
+      threadId: "thread-1",
+      messageId: "message-1",
+      nodeId: "node-1",
+    });
   });
 });
 

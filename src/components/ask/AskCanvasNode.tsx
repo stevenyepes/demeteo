@@ -9,14 +9,14 @@ import type { CanvasNode, NodeRole } from '../../types';
 
 type NodeCardState = 'resting' | 'selected' | 'cited' | 'unresolved';
 
-const ROLE_ICON: Record<NodeRole, LucideIcon> = {
+export const ROLE_ICON: Record<NodeRole, LucideIcon> = {
   orchestration: Workflow,
   boundary: Boxes,
   agent: Bot,
   needs_human: UserCheck,
 };
 
-const ROLE_LABEL: Record<NodeRole, string> = {
+export const ROLE_LABEL: Record<NodeRole, string> = {
   orchestration: 'Orchestration',
   boundary: 'Boundary',
   agent: 'Running agent',
@@ -24,14 +24,14 @@ const ROLE_LABEL: Record<NodeRole, string> = {
 };
 
 /** Icon-chip tint per role — the app's colour language, unchanged by state. */
-const ROLE_CHIP: Record<NodeRole, string> = {
+export const ROLE_CHIP: Record<NodeRole, string> = {
   orchestration: 'border-violet-500/20 bg-violet-500/10 text-violet-300',
   boundary: 'border-cyan-500/20 bg-cyan-500/10 text-cyan-300',
   agent: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300',
   needs_human: 'border-amber-500/20 bg-amber-500/10 text-amber-300',
 };
 
-const ROLE_TEXT: Record<NodeRole, string> = {
+export const ROLE_TEXT: Record<NodeRole, string> = {
   orchestration: 'text-violet-300',
   boundary: 'text-cyan-300',
   agent: 'text-emerald-300',
@@ -49,8 +49,8 @@ const STATE_CARD: Record<NodeCardState, string> = {
   unresolved: 'border-slate-600/50 border-dashed opacity-50 shadow-none',
 };
 
-function resolveState(node: CanvasNode, selected: boolean, cited: boolean): NodeCardState {
-  if (node.path === null) return 'unresolved';
+function resolveState(resolved: boolean, selected: boolean, cited: boolean): NodeCardState {
+  if (!resolved) return 'unresolved';
   if (selected) return 'selected';
   if (cited) return 'cited';
   return 'resting';
@@ -58,15 +58,18 @@ function resolveState(node: CanvasNode, selected: boolean, cited: boolean): Node
 
 export interface AskCanvasNodeProps {
   node: CanvasNode;
+  /** The caller's looked-up `CanvasPathVerdict.resolved` for this node's
+   *  `(id, path)` pair — this component never looks up the verdict itself. */
+  resolved: boolean;
   selected: boolean;
   cited: boolean;
   onActivate: (id: string) => void;
 }
 
-export function AskCanvasNode({ node, selected, cited, onActivate }: AskCanvasNodeProps) {
-  const state = resolveState(node, selected, cited);
+export function AskCanvasNode({ node, resolved, selected, cited, onActivate }: AskCanvasNodeProps) {
+  const state = resolveState(resolved, selected, cited);
   const Icon = ROLE_ICON[node.role];
-  const clickable = node.path !== null;
+  const clickable = resolved;
 
   return (
     <div

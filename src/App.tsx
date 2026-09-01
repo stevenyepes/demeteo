@@ -82,6 +82,20 @@ export function pickPreviousFeature(features: readonly Feature[], currentId: str
   return features[(idx - 1 + features.length) % features.length];
 }
 
+/**
+ * Where the editor view's back button should land. A Feature-scoped editor
+ * (opened from FeatureDetail) returns to that feature's detail view; an
+ * editor opened with no `featureId` — the Ask canvas node's "Open in
+ * editor" path, which resolves a project checkout rather than a Feature —
+ * has no detail view to return to, so back goes to the project home
+ * instead of fabricating a bogus feature id.
+ */
+export function editorBackTarget(view: { featureId?: string; featureTitle?: string }): { kind: 'detail'; featureId: string; featureTitle: string } | { kind: 'home' } {
+  return view.featureId
+    ? { kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle ?? '' }
+    : { kind: 'home' };
+}
+
 function AppInner() {
   const { view, navigate, goBack, canGoBack } = useNavigation();
   const { state: proj, dispatch: projDispatch } = useProject();
@@ -422,12 +436,12 @@ function AppInner() {
               worktreePath={view.editorContext.worktreePath}
               branch={view.editorContext.branch}
               defaultBranch={view.editorContext.defaultBranch}
-              featureTitle={view.featureTitle}
+              featureTitle={view.featureTitle ?? 'Code'}
               initialFile={view.editorContext.initialFile}
               baseRef={view.editorContext.baseRef}
               headRef={view.editorContext.headRef}
               initialTab={view.editorContext.initialTab}
-              onBack={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle })}
+              onBack={() => navigate(editorBackTarget(view))}
             />
           )}
 

@@ -15,7 +15,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Feature, Provider } from './types';
-import { pickNextFeature, pickPreviousFeature } from './App';
+import { editorBackTarget, pickNextFeature, pickPreviousFeature } from './App';
 import { pickEscapeAction, type UIStateSlice } from './lib/escapeLadder';
 
 const provider: Provider = {
@@ -109,6 +109,23 @@ describe('pickPreviousFeature', () => {
 
   it('stays put on a single-element list', () => {
     expect(pickPreviousFeature([makeFeature('only', 'only')], 'only')?.id).toBe('only');
+  });
+});
+
+describe('editorBackTarget', () => {
+  it('returns to the feature detail view when a featureId is present', () => {
+    expect(editorBackTarget({ featureId: 'f-1', featureTitle: 'A' }))
+      .toEqual({ kind: 'detail', featureId: 'f-1', featureTitle: 'A' });
+  });
+
+  it('falls back to an empty title when featureTitle is missing', () => {
+    expect(editorBackTarget({ featureId: 'f-1' }))
+      .toEqual({ kind: 'detail', featureId: 'f-1', featureTitle: '' });
+  });
+
+  it('goes home instead of a bogus feature when no featureId is present', () => {
+    expect(editorBackTarget({})).toEqual({ kind: 'home' });
+    expect(editorBackTarget({ featureTitle: 'orphaned title with no id' })).toEqual({ kind: 'home' });
   });
 });
 
