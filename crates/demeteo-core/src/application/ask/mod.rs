@@ -9,10 +9,14 @@
 //! resolved/unresolved verdict on the message.
 
 pub mod events;
+pub mod node;
+mod path_containment;
 pub mod question;
 pub mod running;
 pub mod turn;
 pub mod worktree;
+
+pub use node::{resolve as resolve_node, NodeResolution};
 
 use serde::{Deserialize, Serialize};
 

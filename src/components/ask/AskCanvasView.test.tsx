@@ -34,7 +34,13 @@ describe('AskCanvasView', () => {
     };
 
     const { container } = render(
-      <AskCanvasView canvas={canvas} answerText="" selectedNodeId={null} onActivate={vi.fn()} />,
+      <AskCanvasView
+        canvas={canvas}
+        answerText=""
+        canvasPaths={[]}
+        selectedNodeId={null}
+        onActivate={vi.fn()}
+      />,
     );
 
     const emptyCells = screen.getAllByTestId('ask-canvas-empty-cell');
@@ -85,7 +91,13 @@ describe('AskCanvasView', () => {
     };
 
     const { container } = render(
-      <AskCanvasView canvas={canvas} answerText="" selectedNodeId={null} onActivate={vi.fn()} />,
+      <AskCanvasView
+        canvas={canvas}
+        answerText=""
+        canvasPaths={[]}
+        selectedNodeId={null}
+        onActivate={vi.fn()}
+      />,
     );
 
     const edgeLayer = container.querySelector('[data-testid="ask-canvas-edge-layer"]');
@@ -105,11 +117,60 @@ describe('AskCanvasView', () => {
       edges: [],
     };
 
-    render(<AskCanvasView canvas={canvas} answerText="" selectedNodeId={null} onActivate={vi.fn()} />);
+    render(
+      <AskCanvasView
+        canvas={canvas}
+        answerText=""
+        canvasPaths={[]}
+        selectedNodeId={null}
+        onActivate={vi.fn()}
+      />,
+    );
 
     expect(screen.getByText('Describe')).toBeInTheDocument();
     expect(screen.getByText('Decompose')).toBeInTheDocument();
     expect(screen.getByText('The person')).toBeInTheDocument();
     expect(screen.getByText('Demeteo')).toBeInTheDocument();
+  });
+
+  it('threads each verdict to its node by (node_id, path), leaving a non-null path unresolved when the verdict says so', () => {
+    const canvas: AskCanvas = {
+      kind: 'journey',
+      title: 'Ask canvas',
+      stages: ['s0'],
+      lanes: ['l0'],
+      nodes: [
+        node('resolved-node', 0, 0, { path: 'src/lib/foo.ts' }),
+        node('stale-verdict-node', 0, 0, { path: 'src/lib/bar.ts' }),
+        node('no-verdict-node', 0, 0, { path: 'src/lib/baz.ts' }),
+      ],
+      edges: [],
+    };
+
+    render(
+      <AskCanvasView
+        canvas={canvas}
+        answerText=""
+        canvasPaths={[
+          { node_id: 'resolved-node', path: 'src/lib/foo.ts', resolved: true },
+          { node_id: 'stale-verdict-node', path: 'src/lib/bar.ts', resolved: false },
+        ]}
+        selectedNodeId={null}
+        onActivate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('resolved-node').closest('[data-state]')).toHaveAttribute(
+      'data-state',
+      'resting',
+    );
+    expect(screen.getByText('stale-verdict-node').closest('[data-state]')).toHaveAttribute(
+      'data-state',
+      'unresolved',
+    );
+    expect(screen.getByText('no-verdict-node').closest('[data-state]')).toHaveAttribute(
+      'data-state',
+      'unresolved',
+    );
   });
 });

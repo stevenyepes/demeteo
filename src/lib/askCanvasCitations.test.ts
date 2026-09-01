@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { citedNodeIds } from './askCanvasCitations';
+import { citedNodeIds, descriptionForNode } from './askCanvasCitations';
 import type { CanvasNode } from '../types';
 
 function node(id: string, title: string, path: string | null = null): Pick<CanvasNode, 'id' | 'title' | 'path'> {
@@ -46,5 +46,49 @@ describe('citedNodeIds', () => {
     const cited = citedNodeIds('', nodes);
 
     expect(cited.size).toBe(0);
+  });
+});
+
+describe('descriptionForNode', () => {
+  it('returns the sentence containing a title match', () => {
+    const target = node('a', 'Decompose Feature');
+
+    const description = descriptionForNode(
+      'First the workflow starts. The Decompose Feature step runs next. Then it gates for approval.',
+      target,
+    );
+
+    expect(description).toBe('The Decompose Feature step runs next.');
+  });
+
+  it('returns the sentence containing a path match when the title does not appear', () => {
+    const target = node('a', 'Worktree Manager', 'src-tauri/src/adapters/worktree/mod.rs');
+
+    const description = descriptionForNode(
+      'Setup happens first. See src-tauri/src/adapters/worktree/mod.rs for the details. Cleanup happens last.',
+      target,
+    );
+
+    expect(description).toBe('See src-tauri/src/adapters/worktree/mod.rs for the details.');
+  });
+
+  it('returns null when neither the title nor the path appears in the prose', () => {
+    const target = node('a', 'Gate & Merge', 'src-tauri/src/domain/gate.rs');
+
+    const description = descriptionForNode('This answer talks about something unrelated entirely.', target);
+
+    expect(description).toBeNull();
+  });
+
+  it('returns only the matching sentence, not the whole multi-sentence answer', () => {
+    const target = node('a', 'Decompose Feature');
+
+    const description = descriptionForNode(
+      'The workflow begins with setup. The Decompose Feature step splits work into tickets. Finally it gates for approval.',
+      target,
+    );
+
+    expect(description).not.toContain('Finally it gates for approval.');
+    expect(description).toBe('The Decompose Feature step splits work into tickets.');
   });
 });

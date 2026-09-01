@@ -11,15 +11,29 @@ const listAskThreads = vi.fn();
 const loadAskThread = vi.fn();
 const askTurnRunning = vi.fn();
 const sendAskTurn = vi.fn();
+const resolveNodeMock = vi.fn();
 
 vi.mock('../../lib/ask', () => ({
   listAskThreads: (...args: unknown[]) => listAskThreads(...args),
   loadAskThread: (...args: unknown[]) => loadAskThread(...args),
   askTurnRunning: (...args: unknown[]) => askTurnRunning(...args),
   sendAskTurn: (...args: unknown[]) => sendAskTurn(...args),
+  resolveNode: (...args: unknown[]) => resolveNodeMock(...args),
   EVENT_ASK_AGENT_EVENT: 'ask_agent_event',
   EVENT_ASK_TURN_STATUS: 'ask_turn_status',
   EVENT_ASK_TURN_COMPLETED: 'ask_turn_completed',
+}));
+
+const fetchActiveFeaturesMock = vi.fn();
+const listStepsForRunMock = vi.fn();
+vi.mock('../../lib/features', () => ({
+  fetchActiveFeatures: (...args: unknown[]) => fetchActiveFeaturesMock(...args),
+  listStepsForRun: (...args: unknown[]) => listStepsForRunMock(...args),
+}));
+
+const navigateMock = vi.fn();
+vi.mock('../../context', () => ({
+  useNavigation: () => ({ navigate: navigateMock }),
 }));
 
 vi.mock('./NewAskThreadModal', () => ({
@@ -44,7 +58,7 @@ vi.mock('./AskThreadSettingsPanel', () => ({
 }));
 
 import { AskThreadView } from './AskThreadView';
-import type { AskMessageView, AskThread, AskThreadDetail } from '../../types';
+import type { AskCanvas, AskMessageView, AskThread, AskThreadDetail, CanvasNode } from '../../types';
 
 afterEach(cleanup);
 
@@ -128,6 +142,9 @@ function captureListeners() {
 
 beforeEach(() => {
   askTurnRunning.mockResolvedValue(false);
+  resolveNodeMock.mockReturnValue(new Promise(() => {}));
+  fetchActiveFeaturesMock.mockResolvedValue([]);
+  listStepsForRunMock.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -542,5 +559,67 @@ describe('AskThreadView — a turn that ends on a thread the user navigated away
     expect(screen.getByTestId('ask-composer')).not.toBeDisabled();
 
     await askAgainOnA();
+  });
+});
+
+/**
+ * `AskCanvasPane` had no `key` prop keyed on `thread.id`, so switching the
+ * selected thread reused the same instance — its `heldRef` canvas and
+ * `selectedNodeId`/open inspector survived into the newly selected thread.
+ *
+ * Watched to fail first: against the pane rendered with no `key`, opening
+ * Thread A's inspector and then switching to a canvas-free Thread B still
+ * showed Thread A's canvas and its open inspector under Thread B's header.
+ */
+describe('AskThreadView — switching threads resets the canvas pane', () => {
+  it('drops the previous thread’s held canvas and open inspector on switch', async () => {
+    const a = thread({ id: 'a', title: 'Thread A' });
+    const b = thread({ id: 'b', title: 'Thread B' });
+    const canvasNode: CanvasNode = {
+      id: 'n0',
+      title: 'Reads the ticket board',
+      role: 'agent',
+      path: 'src/board.rs',
+      stage: 0,
+      lane: 0,
+    };
+    const canvas: AskCanvas = {
+      kind: 'journey',
+      title: 'Thread A canvas',
+      stages: ['s0'],
+      lanes: ['l0'],
+      nodes: [canvasNode],
+      edges: [],
+    };
+    listAskThreads.mockResolvedValue([a, b]);
+    loadAskThread.mockImplementation(async (id: string) =>
+      id === 'a'
+        ? detail(a, [
+            message({
+              id: 'ma',
+              thread_id: 'a',
+              canvas,
+              canvas_paths: [{ node_id: 'n0', path: 'src/board.rs', resolved: true }],
+            }),
+          ])
+        : detail(b, []),
+    );
+
+    render(<AskThreadView projectId="p1" machineId="local" />);
+
+    expect(await screen.findByText('Thread A')).toBeInTheDocument();
+    fireEvent.click(await screen.findByTitle('Reads the ticket board'));
+    expect(await screen.findByTestId('ask-canvas-node-inspector')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('ask-thread-switcher-trigger'));
+    const rows = await screen.findAllByTestId('ask-thread-switcher-row');
+    const rowB = rows.find((candidate) => candidate.textContent?.includes('Thread B'));
+    if (rowB === undefined) throw new Error('no switcher row for "Thread B"');
+    fireEvent.click(rowB);
+
+    expect(await screen.findByText('Thread B')).toBeInTheDocument();
+    expect(await screen.findByTestId('ask-canvas-placeholder')).toBeInTheDocument();
+    expect(screen.queryByTestId('ask-canvas-node-inspector')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reads the ticket board')).not.toBeInTheDocument();
   });
 });

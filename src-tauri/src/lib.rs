@@ -549,6 +549,7 @@ pub fn run() {
             commands::ask::ask_delete,
             commands::ask::ask_update_settings,
             commands::ask::ask_send_turn,
+            commands::ask::ask_resolve_node,
             commands::discovery::discovery_list,
             commands::discovery::discovery_get,
             commands::discovery::discovery_create,

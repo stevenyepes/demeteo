@@ -22,31 +22,45 @@ const NODE: CanvasNode = {
 
 const UNRESOLVED_NODE: CanvasNode = { ...NODE, id: 'n2', path: null };
 
+// Non-null path whose stored verdict failed verification — the AC-4 case:
+// a path can survive on the node while `CanvasPathVerdict.resolved` is false.
+const VERIFIED_FALSE_NODE: CanvasNode = { ...NODE, id: 'n3', path: 'moved/away.rs' };
+
 describe('AskCanvasNode', () => {
   it('renders a distinct data-state for resting, selected, cited, and unresolved', () => {
     const onActivate = vi.fn();
     const { rerender } = render(
-      <AskCanvasNode node={NODE} selected={false} cited={false} onActivate={onActivate} />,
+      <AskCanvasNode node={NODE} resolved={true} selected={false} cited={false} onActivate={onActivate} />,
     );
     expect(screen.getByText('ExecutionDriver').closest('[data-state]')).toHaveAttribute(
       'data-state',
       'resting',
     );
 
-    rerender(<AskCanvasNode node={NODE} selected={true} cited={false} onActivate={onActivate} />);
+    rerender(
+      <AskCanvasNode node={NODE} resolved={true} selected={true} cited={false} onActivate={onActivate} />,
+    );
     expect(screen.getByText('ExecutionDriver').closest('[data-state]')).toHaveAttribute(
       'data-state',
       'selected',
     );
 
-    rerender(<AskCanvasNode node={NODE} selected={false} cited={true} onActivate={onActivate} />);
+    rerender(
+      <AskCanvasNode node={NODE} resolved={true} selected={false} cited={true} onActivate={onActivate} />,
+    );
     expect(screen.getByText('ExecutionDriver').closest('[data-state]')).toHaveAttribute(
       'data-state',
       'cited',
     );
 
     rerender(
-      <AskCanvasNode node={UNRESOLVED_NODE} selected={false} cited={false} onActivate={onActivate} />,
+      <AskCanvasNode
+        node={UNRESOLVED_NODE}
+        resolved={false}
+        selected={false}
+        cited={false}
+        onActivate={onActivate}
+      />,
     );
     expect(screen.getByText('ExecutionDriver').closest('[data-state]')).toHaveAttribute(
       'data-state',
@@ -56,7 +70,9 @@ describe('AskCanvasNode', () => {
 
   it('selection wins over citation when both are true', () => {
     const onActivate = vi.fn();
-    render(<AskCanvasNode node={NODE} selected={true} cited={true} onActivate={onActivate} />);
+    render(
+      <AskCanvasNode node={NODE} resolved={true} selected={true} cited={true} onActivate={onActivate} />,
+    );
     expect(screen.getByText('ExecutionDriver').closest('[data-state]')).toHaveAttribute(
       'data-state',
       'selected',
@@ -66,7 +82,13 @@ describe('AskCanvasNode', () => {
   it('unresolved wins over selected and cited', () => {
     const onActivate = vi.fn();
     render(
-      <AskCanvasNode node={UNRESOLVED_NODE} selected={true} cited={true} onActivate={onActivate} />,
+      <AskCanvasNode
+        node={UNRESOLVED_NODE}
+        resolved={false}
+        selected={true}
+        cited={true}
+        onActivate={onActivate}
+      />,
     );
     expect(screen.getByText('ExecutionDriver').closest('[data-state]')).toHaveAttribute(
       'data-state',
@@ -76,7 +98,9 @@ describe('AskCanvasNode', () => {
 
   it('calls onActivate with the node id when a resolved node is clicked', () => {
     const onActivate = vi.fn();
-    render(<AskCanvasNode node={NODE} selected={false} cited={false} onActivate={onActivate} />);
+    render(
+      <AskCanvasNode node={NODE} resolved={true} selected={false} cited={false} onActivate={onActivate} />,
+    );
     fireEvent.click(screen.getByText('ExecutionDriver').closest('[data-state]')!);
     expect(onActivate).toHaveBeenCalledTimes(1);
     expect(onActivate).toHaveBeenCalledWith('n1');
@@ -85,9 +109,32 @@ describe('AskCanvasNode', () => {
   it('does not call onActivate when an unresolved node is clicked', () => {
     const onActivate = vi.fn();
     render(
-      <AskCanvasNode node={UNRESOLVED_NODE} selected={false} cited={false} onActivate={onActivate} />,
+      <AskCanvasNode
+        node={UNRESOLVED_NODE}
+        resolved={false}
+        selected={false}
+        cited={false}
+        onActivate={onActivate}
+      />,
     );
     fireEvent.click(screen.getByText('ExecutionDriver').closest('[data-state]')!);
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it('is unresolved and not clickable when the node has a path but its verdict is resolved: false', () => {
+    const onActivate = vi.fn();
+    render(
+      <AskCanvasNode
+        node={VERIFIED_FALSE_NODE}
+        resolved={false}
+        selected={false}
+        cited={false}
+        onActivate={onActivate}
+      />,
+    );
+    const card = screen.getByText('ExecutionDriver').closest('[data-state]')!;
+    expect(card).toHaveAttribute('data-state', 'unresolved');
+    fireEvent.click(card);
     expect(onActivate).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AskMessage, AskThread, AskThreadDetail, EffortLevel } from "../types";
+import type { AskMessage, AskThread, AskThreadDetail, EffortLevel, NodeResolution } from "../types";
 
 /**
  * Typed IPC wrappers for Ask — the commands in `src-tauri/src/commands/ask.rs`.
@@ -107,6 +107,20 @@ export async function updateAskThreadSettings(
  */
 export async function sendAskTurn(threadId: string, text: string): Promise<AskMessage> {
   return invoke<AskMessage>("ask_send_turn", { threadId, text });
+}
+
+/** Mirrors `ask_resolve_node` — where a canvas node's path leads as of the
+ *  click, against the project's own checkout. */
+export async function resolveNode(input: {
+  threadId: string;
+  messageId: string;
+  nodeId: string;
+}): Promise<NodeResolution> {
+  return invoke<NodeResolution>("ask_resolve_node", {
+    threadId: input.threadId,
+    messageId: input.messageId,
+    nodeId: input.nodeId,
+  });
 }
 
 // ── The streaming contract (`application/ask/events.rs`) ───────────────────
