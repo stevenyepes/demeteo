@@ -352,10 +352,15 @@ describe('describeSyncPanel', () => {
     expect(intents(model)).toContain('watch');
   });
 
-  /** Both recovery affordances after a failed agent resolution. Asserted
+  /** Every recovery affordance after a failed agent resolution. Asserted
    *  positively: the `user_may_intervene: false` case below asserts only
-   *  absences, which a model offering nothing at all also satisfies. */
-  it('leaves a failed resolution both ways out', () => {
+   *  absences, which a model offering nothing at all also satisfies.
+   *
+   *  `continue` is here because the refusal that produced this state names what
+   *  is still conflicted — often very little — and the person reading it is
+   *  entitled to finish that themselves rather than buy another turn. `watch`
+   *  is here because the turn that failed is the thing they most want to read. */
+  it('leaves a failed resolution every way out', () => {
     const model = panel({
       session: session({ status: 'resolution_failed', raw_error: 'agent exited 1' }),
       drift: null,
@@ -365,7 +370,7 @@ describe('describeSyncPanel', () => {
     expect(model.state).toBe('resolution_failed');
     expect(model.tone).toBe('ruby');
     expect(model.showResolver).toBe(true);
-    expect(intents(model)).toEqual(['resolve', 'abort']);
+    expect(intents(model)).toEqual(['resolve', 'continue', 'terminal', 'watch', 'abort']);
     expect(model.actions[0]?.label).toBe('Try again');
   });
 
@@ -378,7 +383,30 @@ describe('describeSyncPanel', () => {
     expect(model.badge).toBe(2);
     expect(model.showResolver).toBe(true);
     expect(model.worktreePath).toBe('/repos/demeteo_wt_sync_feature-f-1');
-    expect(intents(model)).toEqual(['resolve', 'abort']);
+    expect(intents(model)).toEqual(['resolve', 'continue', 'terminal', 'abort']);
+  });
+
+  /** The pane has told people to resolve conflicts themselves in the worktree
+   *  since it existed. Until `continue` there was nothing that would take the
+   *  result: the only ways out were an agent or abandoning the sync. */
+  it('offers the hand-resolved finish beside the agent on a fresh conflict', () => {
+    const model = panel({ session: session(), drift: null, canSync: true });
+
+    const finish = model.actions.find((action) => action.intent === 'continue');
+    expect(finish?.label).toBe("I've resolved it");
+    expect(finish?.desc).toContain('Spawns no agent');
+  });
+
+  /** Nothing that writes is offered on a sync somebody else is driving, and a
+   *  hand-resolved finish writes as much as a resolution does. */
+  it('offers no hand-resolved finish on a sync that is not the users', () => {
+    const model = panel({
+      session: session({ user_may_intervene: false }),
+      drift: null,
+      canSync: true,
+    });
+
+    expect(intents(model)).not.toContain('continue');
   });
 
   it('sends a running resolution to the stream rather than to a button', () => {

@@ -9,6 +9,7 @@ import {
   getSyncSession,
   publishSyncResolution,
   reconcileSyncDivergence,
+  continueSync,
   resolveSyncConflicts,
   syncFeature,
   type SyncResolverChoice,
@@ -32,7 +33,8 @@ export interface SyncSession {
   pending: SyncIntent | null;
   refresh: () => Promise<void>;
   startSync: () => Promise<void>;
-  resolve: (files: string[], resolver: SyncResolverChoice) => Promise<void>;
+  resolve: (resolver: SyncResolverChoice) => Promise<void>;
+  continueSync: () => Promise<void>;
   abort: () => Promise<void>;
   publish: () => Promise<void>;
   discard: () => Promise<void>;
@@ -141,8 +143,13 @@ export function useSyncSession(input: {
   );
 
   const resolve = useCallback(
-    (files: string[], resolver: SyncResolverChoice) =>
-      run('resolve', () => resolveSyncConflicts(featureId, files, resolver), true),
+    (resolver: SyncResolverChoice) =>
+      run('resolve', () => resolveSyncConflicts(featureId, resolver), true),
+    [run, featureId],
+  );
+
+  const continueByHand = useCallback(
+    () => run('continue', () => continueSync(featureId), true),
     [run, featureId],
   );
 
@@ -202,6 +209,7 @@ export function useSyncSession(input: {
     refresh,
     startSync,
     resolve,
+    continueSync: continueByHand,
     abort,
     publish,
     discard,

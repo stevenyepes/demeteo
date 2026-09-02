@@ -34,8 +34,8 @@ vi.mock('../../lib/featureSync', () => ({
   abortSync: (featureId: string) => abortSync(featureId),
   publishSyncResolution: (featureId: string) => publishSyncResolution(featureId),
   discardSyncResolution: (featureId: string) => discardSyncResolution(featureId),
-  resolveSyncConflicts: (featureId: string, files: string[], resolver: unknown) =>
-    resolveSyncConflicts(featureId, files, resolver),
+  resolveSyncConflicts: (featureId: string, resolver: unknown) =>
+    resolveSyncConflicts(featureId, resolver),
 }));
 
 import { useSyncSession } from './useSyncSession';
@@ -130,19 +130,19 @@ describe('useSyncSession', () => {
     await waitFor(() => expect(result.current.session?.pushed_at).toBe(1800));
   });
 
-  it('carries the chosen resolver and the file list into the turn', async () => {
+  it('carries the chosen resolver into the turn, and no file list', async () => {
     getSyncSession.mockResolvedValue(session());
     resolveSyncConflicts.mockResolvedValue(undefined);
     const { result } = mount();
 
     await waitFor(() => expect(result.current.session).not.toBeNull());
-    await result.current.resolve(['src/lib.rs'], {
+    await result.current.resolve({
       agentKind: 'codex',
       model: 'gpt-5-codex',
       effort: 'low',
     });
 
-    expect(resolveSyncConflicts).toHaveBeenCalledWith('f-1', ['src/lib.rs'], {
+    expect(resolveSyncConflicts).toHaveBeenCalledWith('f-1', {
       agentKind: 'codex',
       model: 'gpt-5-codex',
       effort: 'low',

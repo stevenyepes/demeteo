@@ -28,7 +28,8 @@ use crate::adapters::step_executor::step_status::{
 };
 use crate::adapters::step_executor::steps::list_unmerged::list_unmerged_files;
 use crate::adapters::step_executor::sync_resolve::{
-    resolve_sync_conflicts, ResolveSyncContext, ResolveSyncError, SYNC_RESOLVER_THREAD_PREFIX,
+    continue_sync_resolution, resolve_sync_conflicts, ContinueSyncContext, ResolveSyncContext,
+    ResolveSyncError, SYNC_RESOLVER_THREAD_PREFIX,
 };
 use crate::domain::agent_session::budget;
 use crate::domain::ids::FeatureId;
@@ -273,7 +274,6 @@ impl DagStepExecutor {
     pub(crate) async fn feature_resolve_sync_conflicts_impl(
         &self,
         feature_id: &str,
-        conflict_files: &[String],
         asked: &SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String> {
         let fid = FeatureId::from(feature_id.to_string());
@@ -372,7 +372,7 @@ impl DagStepExecutor {
             machine_str: &session.machine_id,
             feature_branch: &session.feature_branch,
             base_branch: &session.base_branch,
-            conflict_files,
+            declared_conflicts: &session.conflict_files,
             gate: sync_gate(&settings),
             step_exec: &step_exec,
             thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
@@ -395,6 +395,139 @@ impl DagStepExecutor {
                 start,
             },
             pricing: &self.pricing,
+        })
+        .await;
+
+        let wall = start.elapsed().as_secs();
+        match outcome {
+            Ok(resolved) => {
+                update_step_status(
+                    writers,
+                    &step_exec,
+                    StepTransition::completed(cost, tokens, wall, None, resolved.cache),
+                );
+                Ok(SyncOutcomeView::Resolved {
+                    merge_commit_sha: resolved.merge_commit_sha,
+                })
+            }
+            Err(failure) => {
+                let stopped = matches!(failure, ResolveSyncError::Cancelled(_));
+                let reason = failure.reason();
+                let transition = if stopped {
+                    StepTransition::interrupted(
+                        cost,
+                        tokens,
+                        wall,
+                        reason.clone(),
+                        CacheTokens::default(),
+                    )
+                } else {
+                    StepTransition::failed(
+                        cost,
+                        Some(tokens),
+                        wall,
+                        reason.clone(),
+                        CacheTokens::default(),
+                    )
+                };
+                update_step_status(writers, &step_exec, transition);
+                Ok(SyncOutcomeView::ResolutionFailed {
+                    reason,
+                    conflict_files: list_unmerged_files(&*self.exec, &session.machine_id, worktree)
+                        .await,
+                })
+            }
+        }
+    }
+
+    /// Take a conflict the user resolved themselves: verify the tree, run the
+    /// project's checks in it, commit and publish.
+    ///
+    /// The same operation as `feature_resolve_sync_conflicts_impl` with the
+    /// agent turn removed, and it goes through every one of the same guards for
+    /// the same reasons — the claim so it cannot run beside a resolution, the
+    /// refusal so it cannot touch a worktree a run owns, the row so the
+    /// timeline shows what happened. It reuses `SyncIntervention::Resolve`
+    /// because the precondition is identical: an unpublished conflict on a
+    /// feature nothing else is driving.
+    pub(crate) async fn feature_continue_sync_impl(
+        &self,
+        feature_id: &str,
+    ) -> Result<SyncOutcomeView, String> {
+        let fid = FeatureId::from(feature_id.to_string());
+        let feature = self
+            .features
+            .get(&fid)?
+            .ok_or_else(|| format!("Feature not found: {}", feature_id))?;
+
+        let session = self
+            .merge_executor
+            .sync_session(&fid)
+            .await?
+            .ok_or_else(|| {
+                "This feature has no sync to finish. Run 'Sync with main' first.".to_string()
+            })?;
+        if let Some(refusal) = intervention_refusal(
+            SyncIntervention::Resolve,
+            SyncStanding {
+                status: session.status,
+                published: session.pushed_at.is_some(),
+                blocked_stage: session.blocked_stage,
+                feature_status: &feature.status,
+                liveness: sync_liveness(self.sync_turns.claimed(feature_id), &feature.status),
+            },
+        ) {
+            return Err(refusal.to_string());
+        }
+        let worktree = session.worktree_path.as_deref().ok_or_else(|| {
+            "This sync never provisioned a worktree, so there is nothing to finish in one."
+                .to_string()
+        })?;
+
+        let settings = self
+            .projects
+            .get_settings(&feature.project_id)?
+            .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
+
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let Some(_turn) = self.sync_turns.claim(feature_id, Some(cancel_tx)) else {
+            return Err(
+                "A resolution is already running for this feature; wait for it or stop it."
+                    .to_string(),
+            );
+        };
+
+        let step_exec = manual_sync_row(self.features.as_ref(), &fid, paths::now_ms())?;
+        let writers = StatusWriters {
+            features: self.features.as_ref(),
+            notif: self.notif.as_ref(),
+            f_id: &fid,
+        };
+        let start = Instant::now();
+        let cost = step_exec.cost_usd.unwrap_or(0.0);
+        let tokens = step_exec.tokens.unwrap_or(0);
+        update_step_status(
+            writers,
+            &step_exec,
+            StepTransition::running(cost, Some(tokens), 0),
+        );
+
+        let outcome = continue_sync_resolution(ContinueSyncContext {
+            exec: &self.exec,
+            app_settings: &self.app_settings,
+            git_ops: &self.git_ops,
+            merge_executor: &self.merge_executor,
+            feature_id: &fid,
+            repo_dir: &session.repo_dir,
+            resolved_cwd: worktree,
+            machine_str: &session.machine_id,
+            feature_branch: &session.feature_branch,
+            base_branch: &session.base_branch,
+            declared_conflicts: &session.conflict_files,
+            gate: sync_gate(&settings),
+            review_before_push: settings.sync_review_before_push,
+            feature_status: &feature.status,
+            cancel: Some(cancel_rx),
         })
         .await;
 

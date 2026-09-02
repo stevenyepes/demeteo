@@ -371,6 +371,49 @@ pub fn resync_refusal(
     }
 }
 
+/// Why a fresh sync would throw away work somebody has already done, or `None`
+/// when the conflicted tree holds nothing worth keeping.
+///
+/// [`resync_refusal`] guards the resolution that reached a *commit*. This is
+/// the one that has not: `provision_sync_worktree` sweeps every `_wt_sync`
+/// checkout on the branch with `worktree remove --force`, and a conflicted tree
+/// somebody is part-way through resolving is exactly one of those. Nothing
+/// records that work anywhere else, so the sweep is silent and total.
+///
+/// It happened. Three resolver rounds on one feature cleared six of eight
+/// files; each was recorded as a failure, and the pane's remaining presses were
+/// "Resolve with agent", "Sync with main" and "Abort" — one of which would have
+/// deleted all six without asking. Refusing keeps `Abort` as the way to say
+/// "throw it away", which is a thing the user can mean on purpose.
+///
+/// `still_conflicted` is a count of the declared files that still carry
+/// markers, taken from the worktree; `declared` is what the merge left.
+pub fn partial_resolution_refusal(
+    status: SyncSessionStatus,
+    declared: usize,
+    still_conflicted: usize,
+) -> Option<String> {
+    if !matches!(
+        status,
+        SyncSessionStatus::Conflicted | SyncSessionStatus::ResolutionFailed
+    ) {
+        return None;
+    }
+    if declared == 0 || still_conflicted >= declared {
+        return None;
+    }
+    Some(if still_conflicted == 0 {
+        "Every conflicted file in the sync worktree has been resolved, and the merge is          not committed yet. Finish it with \"I've resolved it\", or abandon the sync —          syncing again would delete that worktree and the resolution in it."
+            .to_string()
+    } else {
+        format!(
+            "{} of the {} conflicted files in the sync worktree are already resolved.              Finish the rest — by hand or with an agent — or abandon the sync: syncing              again would delete that worktree and the work in it.",
+            declared - still_conflicted,
+            declared,
+        )
+    })
+}
+
 /// What happens to a resolution the moment it is committed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionPublish {
@@ -491,6 +534,97 @@ pub fn gate_follow_up(command: &str, error: &str, rounds_spent: u32) -> GateFoll
         GateFollowUp::Refuse(refusal)
     }
 }
+
+/// How many rounds a resolution may spend while it is still making progress.
+///
+/// A backstop, not the intended stop. The intended stop is a round that clears
+/// no hunk — a resolution that keeps clearing them should keep going, because
+/// the alternative is what this constant exists downstream of: a conflict of
+/// eight files whose resolver cleared five, was recorded as failed, and handed
+/// back a tree the next press could not tell had moved.
+///
+/// It exists at all because the ceiling that would otherwise bound this is
+/// `max_budget_usd`, and a project that never set one bounds nothing.
+pub const RESOLVER_MAX_ROUNDS: u32 = 6;
+
+/// What a round that left conflicts behind earns.
+#[derive(Debug, PartialEq)]
+pub enum ResolutionFollowUp {
+    /// Another round, over what is left. The tree moved, so the next round
+    /// starts from strictly less work than this one did.
+    Continue,
+    /// No further round is worth taking. The clause says why, and reads after
+    /// the sentence naming what is still conflicted.
+    Refuse(&'static str),
+}
+
+/// Whether a resolution that has not finished should take another round.
+///
+/// The sibling of [`gate_follow_up`], one question over: that one asks what a
+/// red harness is worth, this one asks what an unfinished tree is worth. Both
+/// answer from counts alone, so both are reachable from a test with no port
+/// doubles (AGENTS.md §3).
+///
+/// `remaining_hunks` must be non-zero — a finished tree is the caller's break,
+/// not a follow-up question. Progress is *strict*: a round that read the files
+/// and cleared nothing will read them again and clear nothing again, and the
+/// turn cap it probably tripped is not evidence either way about the tree.
+pub fn resolution_follow_up(
+    remaining_hunks: usize,
+    hunks_at_round_start: usize,
+    rounds_spent: u32,
+) -> ResolutionFollowUp {
+    if remaining_hunks >= hunks_at_round_start {
+        return ResolutionFollowUp::Refuse(
+            "The last round cleared none of them, so another would read the same files \
+             to the same end. Finish it by hand in the sync worktree, or abort the sync.",
+        );
+    }
+    if rounds_spent + 1 >= RESOLVER_MAX_ROUNDS {
+        return ResolutionFollowUp::Refuse(
+            "Each round cleared some of them, but the resolution has spent every round \
+             it is allowed. Press Resolve again to continue from here, or finish it by \
+             hand in the sync worktree.",
+        );
+    }
+    ResolutionFollowUp::Continue
+}
+
+/// How many files of the declared conflict are still unresolved, and by how much.
+///
+/// Named counts rather than the first offender: `ensure_conflict_markers_removed`
+/// used to return on the first file still carrying a marker, so a resolution that
+/// went from four hunks to one produced a byte-identical string to the one that
+/// went nowhere. Three converging attempts on one feature reported the same
+/// failure three times, and the only way to see they had converged was to read
+/// the worktree by hand.
+pub fn remaining_conflicts_refusal(declared: usize, remaining: &[(String, usize)]) -> String {
+    let verb = if remaining.len() == 1 { "has" } else { "have" };
+    let mut named: Vec<String> = remaining
+        .iter()
+        .take(REMAINING_FILES_NAMED)
+        .map(|(path, hunks)| match hunks {
+            0 => format!("{} (markers left)", path),
+            1 => format!("{} (1 hunk)", path),
+            n => format!("{} ({} hunks)", path, n),
+        })
+        .collect();
+    let rest = remaining.len().saturating_sub(REMAINING_FILES_NAMED);
+    if rest > 0 {
+        named.push(format!("…and {} more", rest));
+    }
+    format!(
+        "{} of {} files still {} conflict markers: {}.",
+        remaining.len(),
+        declared,
+        verb,
+        named.join(", ")
+    )
+}
+
+/// Enough to see the shape of what is left without turning a refusal into a
+/// file listing; the count before it already carries the scale.
+const REMAINING_FILES_NAMED: usize = 8;
 
 const GATE_OUTPUT_HEAD_BYTES: usize = 12_000;
 const GATE_OUTPUT_TAIL_BYTES: usize = 2_000;

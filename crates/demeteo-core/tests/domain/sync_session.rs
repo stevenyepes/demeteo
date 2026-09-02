@@ -938,3 +938,158 @@ fn a_single_enormous_line_is_still_cut_on_a_character() {
     assert!(excerpt.contains("bytes elided"), "it was cut");
     assert!(excerpt.starts_with('x') && excerpt.ends_with('├'));
 }
+
+/// A round that moved the tree is worth another, and a round that did not is
+/// not. The whole of the loop that stopped a resolution having to be re-pressed
+/// by hand.
+#[test]
+fn a_round_that_cleared_a_hunk_buys_another() {
+    assert_eq!(resolution_follow_up(9, 10, 0), ResolutionFollowUp::Continue);
+    assert_eq!(resolution_follow_up(1, 10, 3), ResolutionFollowUp::Continue);
+}
+
+/// Progress is strict, and counted in hunks rather than files.
+///
+/// Counted in files, the round that took one file from four conflicts to one
+/// reads as a round that did nothing — which is the reading that stopped three
+/// converging attempts on one feature from ever being allowed a fourth.
+#[test]
+fn a_round_that_cleared_nothing_ends_the_resolution() {
+    assert!(matches!(
+        resolution_follow_up(10, 10, 0),
+        ResolutionFollowUp::Refuse(_)
+    ));
+    assert!(
+        matches!(
+            resolution_follow_up(11, 10, 0),
+            ResolutionFollowUp::Refuse(_)
+        ),
+        "a round that made the tree worse is not progress either"
+    );
+    assert_eq!(
+        resolution_follow_up(3, 4, 0),
+        ResolutionFollowUp::Continue,
+        "one hunk cleared inside one file is still the tree moving"
+    );
+}
+
+/// The backstop, for the resolution that converges a hunk at a time forever.
+#[test]
+fn a_resolution_that_ran_out_of_rounds_says_it_can_be_pressed_again() {
+    let last = RESOLVER_MAX_ROUNDS - 1;
+    let ResolutionFollowUp::Refuse(why) = resolution_follow_up(1, 2, last) else {
+        panic!("the final round refuses however well it went");
+    };
+    assert!(
+        why.contains("spent every round"),
+        "and says which ceiling it hit, since the two refusals want different \
+         things of the reader: {why}"
+    );
+    assert!(why.contains("Press Resolve again"), "{why}");
+}
+
+/// What is left, and how much of it — never which file happened to be read
+/// first.
+///
+/// The refusal this replaced returned on the first file still carrying a
+/// marker, so a resolution that went from four hunks to one produced a string
+/// byte-identical to one that went nowhere. Three attempts on one feature
+/// reported the same failure three times while the tree converged under them,
+/// and only reading the worktree by hand showed it.
+#[test]
+fn the_refusal_names_what_is_left_and_how_much() {
+    let refusal = remaining_conflicts_refusal(
+        8,
+        &[
+            ("src/components/ask/AskCanvasPane.test.tsx".to_string(), 1),
+            ("src/components/ask/AskThreadView.test.tsx".to_string(), 5),
+        ],
+    );
+
+    assert_eq!(
+        refusal,
+        "2 of 8 files still have conflict markers: \
+         src/components/ask/AskCanvasPane.test.tsx (1 hunk), \
+         src/components/ask/AskThreadView.test.tsx (5 hunks).",
+    );
+}
+
+/// One file left reads as one file left, and a file whose count could not be
+/// taken still gets named.
+#[test]
+fn a_single_file_left_is_not_reported_in_the_plural() {
+    assert_eq!(
+        remaining_conflicts_refusal(3, &[("src/lib.rs".to_string(), 1)]),
+        "1 of 3 files still has conflict markers: src/lib.rs (1 hunk)."
+    );
+    assert_eq!(
+        remaining_conflicts_refusal(3, &[("src/lib.rs".to_string(), 0)]),
+        "1 of 3 files still has conflict markers: src/lib.rs (markers left).",
+        "a closing marker with no opener has no hunk count, and is still unresolved"
+    );
+}
+
+/// A conflict of a hundred files is a refusal to read, not a file listing.
+#[test]
+fn a_long_list_of_remaining_files_says_how_many_it_left_out() {
+    let remaining: Vec<(String, usize)> = (0..12).map(|n| (format!("src/f{n}.rs"), 1)).collect();
+
+    let refusal = remaining_conflicts_refusal(20, &remaining);
+
+    assert!(refusal.starts_with("12 of 20 files"), "{refusal}");
+    assert!(refusal.contains("src/f7.rs (1 hunk)"), "{refusal}");
+    assert!(!refusal.contains("src/f8.rs"), "{refusal}");
+    assert!(refusal.contains("…and 4 more"), "{refusal}");
+}
+
+/// A conflicted worktree somebody is part-way through resolving is not
+/// something the next sync may quietly delete.
+///
+/// `provision_sync_worktree` sweeps every `_wt_sync` checkout on the branch
+/// with `worktree remove --force`, and nothing but the files themselves records
+/// that six of eight conflicts have been cleared. On the feature this was
+/// written for, the presses left beside that half-finished tree were "Resolve
+/// with agent", "Sync with main" and "Abort" — and the middle one would have
+/// taken all six without asking.
+#[test]
+fn a_sync_may_not_delete_a_resolution_somebody_has_started() {
+    let refusal = partial_resolution_refusal(SyncSessionStatus::ResolutionFailed, 8, 2)
+        .expect("six of eight files resolved is work worth keeping");
+
+    assert!(refusal.contains("6 of the 8"), "{refusal}");
+    assert!(
+        refusal.contains("abandon the sync"),
+        "throwing it away stays available, it just has to be meant: {refusal}"
+    );
+}
+
+/// A tree with every marker cleared has the most to lose, and a different thing
+/// to say: there is nothing left to resolve, only a commit to make.
+#[test]
+fn a_fully_hand_resolved_tree_is_pointed_at_the_finish_rather_than_the_agent() {
+    let refusal = partial_resolution_refusal(SyncSessionStatus::Conflicted, 3, 0)
+        .expect("a finished resolution is the most a sync could destroy");
+
+    assert!(refusal.contains("I've resolved it"), "{refusal}");
+}
+
+/// And a merge nobody has touched is swept as it always was — the refusal is
+/// about work, not about conflicts.
+#[test]
+fn a_conflict_nobody_has_worked_on_does_not_block_a_resync() {
+    assert_eq!(
+        partial_resolution_refusal(SyncSessionStatus::Conflicted, 8, 8),
+        None,
+        "every file still conflicted is the merge exactly as git left it"
+    );
+    assert_eq!(
+        partial_resolution_refusal(SyncSessionStatus::Conflicted, 0, 0),
+        None,
+        "a session naming no files knows nothing to protect"
+    );
+    assert_eq!(
+        partial_resolution_refusal(SyncSessionStatus::Resolved, 8, 0),
+        None,
+        "a committed resolution is `resync_refusal`'s to guard, and it does"
+    );
+}

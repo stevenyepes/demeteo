@@ -14,7 +14,7 @@ use crate::adapters::database::SqliteAdapter;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
 use crate::domain::ids::{StepExecutionId, StepId};
-use crate::domain::models::{Availability, EffortLevel, SessionInfo, StepExecution};
+use crate::domain::models::{Availability, ConflictFile, EffortLevel, SessionInfo, StepExecution};
 use crate::domain::sync_session::SyncSessionStatus;
 use crate::ports::agent_runtime::{
     AgentCapabilities, AgentRuntime, AgentSession, AgentStartError, PersonalizationSupport,
@@ -34,6 +34,15 @@ const PORCELAIN: &str =
 const MERGE_HEAD: &str =
     "git -C /repos/demeteo_wt_sync_feature-f-1 rev-parse --verify --quiet MERGE_HEAD";
 const ADD_ALL: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 add -A";
+/// The one file `open_conflicted` declares, and the two things it says.
+///
+/// A resolution reads its declared files before the turn and again after it —
+/// the round exists to change the second answer — so the fixture has to be able
+/// to say both. Scripted as a single clean read it describes a tree with
+/// nothing to resolve, and the turn is skipped as the waste it would be.
+const CONFLICTED: &str = "src/lib.rs";
+const MARKED: &str = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> origin/master\n";
+const RESOLVED: &str = "ours and theirs\n";
 const PENDING_STATUS: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 status --porcelain";
 const COMMIT: &str = "git -c core.hooksPath=/dev/null -C /repos/demeteo_wt_sync_feature-f-1 \
                       -c user.email=demeteo@local -c user.name=demeteo commit -m \
@@ -426,6 +435,11 @@ fn ports(scripted: ScriptedExec, runtimes: Vec<Arc<dyn AgentRuntime>>) -> Ports 
 }
 
 fn open_conflicted(db: &Arc<SqliteAdapter>) {
+    open_conflicted_over(db, &[CONFLICTED]);
+}
+
+/// The same, for a merge that left more than the fixture's one file.
+fn open_conflicted_over(db: &Arc<SqliteAdapter>, paths: &[&str]) {
     let sessions: &dyn SyncSessionPort = &**db;
     sessions
         .open(&SyncSession {
@@ -438,7 +452,13 @@ fn open_conflicted(db: &Arc<SqliteAdapter>) {
             worktree_path: Some(WT.to_string()),
             head_before: Some("aaaaaaa".to_string()),
             merge_commit_sha: None,
-            conflict_files: Vec::new(),
+            conflict_files: paths
+                .iter()
+                .map(|path| ConflictFile {
+                    path: path.to_string(),
+                    kind: "both-modified".to_string(),
+                })
+                .collect(),
             raw_error: None,
             blocked_stage: None,
             pushed_at: None,
@@ -495,6 +515,32 @@ async fn run_gated(
     run_with(p, step_exec, None, cost, tokens, None, "running", gate).await
 }
 
+/// The manual finish, on the same ports and the same row as the agent path.
+async fn run_continue(p: &Ports, gate: MergeGate<'_>) -> Result<ResolvedSync, ResolveSyncError> {
+    let session = {
+        let sessions: &dyn SyncSessionPort = &*p.db;
+        sessions.get(&fid()).unwrap().unwrap()
+    };
+    continue_sync_resolution(ContinueSyncContext {
+        exec: &p.exec,
+        app_settings: &p.app_settings,
+        git_ops: &p.git_ops,
+        merge_executor: &p.merge_executor,
+        feature_id: &fid(),
+        repo_dir: REPO,
+        resolved_cwd: WT,
+        machine_str: crate::domain::ids::LOCAL_MACHINE,
+        feature_branch: "feature/f-1",
+        base_branch: "master",
+        declared_conflicts: &session.conflict_files,
+        gate,
+        review_before_push: None,
+        feature_status: "running",
+        cancel: None,
+    })
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_with(
     p: &Ports,
@@ -506,6 +552,10 @@ async fn run_with(
     feature_status: &str,
     gate: MergeGate<'_>,
 ) -> Result<ResolvedSync, ResolveSyncError> {
+    let session = {
+        let sessions: &dyn SyncSessionPort = &*p.db;
+        sessions.get(&fid()).unwrap().unwrap()
+    };
     resolve_sync_conflicts(ResolveSyncContext {
         exec: &p.exec,
         registry: &p.registry,
@@ -515,12 +565,12 @@ async fn run_with(
         git_ops: &p.git_ops,
         merge_executor: &p.merge_executor,
         feature_id: &fid(),
+        declared_conflicts: &session.conflict_files,
         repo_dir: REPO,
         resolved_cwd: WT,
         machine_str: crate::domain::ids::LOCAL_MACHINE,
         feature_branch: "feature/f-1",
         base_branch: "master",
-        conflict_files: &["src/lib.rs".to_string()],
         gate,
         step_exec,
         thread_id_prefix: SYNC_RESOLVER_THREAD_PREFIX,
@@ -546,6 +596,19 @@ async fn run_with(
 /// they are the same `status --porcelain` command, so a conflicted first answer
 /// and a clean second one need the queue, and the queue is worth spending on
 /// the assertions that need it rather than on every test here.
+/// The two reads a resolution makes of its one declared file: marked going in,
+/// resolved coming out.
+///
+/// Every script that expects a turn to run needs both. A script that answers
+/// only "clean" describes a tree with nothing left to resolve, and the turn is
+/// then skipped as the waste it would be — which is a different test.
+fn resolving(exec: ScriptedExec) -> ScriptedExec {
+    exec.with_queued_file(
+        resolved_file(CONFLICTED).as_str(),
+        &[Ok(MARKED), Ok(RESOLVED)],
+    )
+}
+
 fn happy_path() -> ScriptedExec {
     happy_path_with(&[])
 }
@@ -573,7 +636,12 @@ fn happy_path_with(extra: &[(&str, Result<&str, &str>)]) -> ScriptedExec {
         (GIT_DIR, Err("fatal: not a git repository")),
     ];
     script.extend_from_slice(extra);
-    ScriptedExec::new(&script).with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, Ok(""))])
+    ScriptedExec::new(&script)
+        .with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, Ok(""))])
+        .with_queued_file(
+            resolved_file(CONFLICTED).as_str(),
+            &[Ok(MARKED), Ok(RESOLVED)],
+        )
 }
 
 /// The turn that ends before it starts, and the row that has to say so.
@@ -704,6 +772,7 @@ async fn an_agent_that_committed_on_its_own_does_not_fail_the_sync() {
     // Open when the turn starts, consumed by the agent's own commit by the
     // time Demeteo asks whether one is still owed.
     .with_queue(MERGE_HEAD, &[Ok("b1b2b3b\n"), Ok("")]);
+    let scripted = resolving(scripted);
     let p = ports(scripted, vec![Arc::new(ScriptedRuntime::default())]);
     open_conflicted(&p.db);
     let (mut cost, mut tokens) = (0.0, 0);
@@ -1017,6 +1086,285 @@ fn merge_markers_are_rejected_before_demeteo_stages_the_resolution() {
         "const value = 1;\n<<<<<<< HEAD\nconst branch = 'feature';\n=======\nconst branch = 'main';\n>>>>>>> origin/master\n"
     ));
     assert!(!has_conflict_marker("const value = 1;\n"));
+    assert!(
+        has_conflict_marker("ours\n>>>>>>> origin/master\n"),
+        "half a conflict is still a conflict: an opener edited away leaves a \
+         file no compiler will read"
+    );
+}
+
+/// Seven equals signs are a Markdown setext underline before they are anything
+/// to do with git, and a resolution cannot clear a marker that was never one.
+///
+/// `=======` used to be one of the tells. A conflicted `.md` file — or a test
+/// fixture holding the string, which is how this was found — then read as
+/// unresolved no matter what any resolver did to it, and the sync could not be
+/// landed by an agent or by hand.
+#[test]
+fn a_line_of_equals_signs_is_not_a_conflict_on_its_own() {
+    assert!(!has_conflict_marker("Heading\n=======\n\nbody text\n"));
+    assert_eq!(conflict_hunks("Heading\n=======\n"), 0);
+}
+
+/// Hunks, because a file is not a unit of progress.
+#[test]
+fn a_file_reports_a_hunk_per_opening_marker() {
+    let two = "<<<<<<< HEAD\na\n=======\nb\n>>>>>>> origin/master\n\
+               <<<<<<< HEAD\nc\n=======\nd\n>>>>>>> origin/master\n";
+
+    assert_eq!(conflict_hunks(two), 2);
+    assert_eq!(conflict_hunks("clean\n"), 0);
+}
+
+/// The loop, and the whole reason there is one: a round that finished some of
+/// the files hands the next round only what is left.
+///
+/// Eight conflicted files, a resolver that got through five, and a turn cap
+/// tripped part way — the shape this was written for. Handed the merge's whole
+/// list again, the next round spent two thirds of its cap re-reading files the
+/// last one had already finished and tripped the cap in the same place, three
+/// presses running. Nothing about the tree said it had moved, because the list
+/// the prompt is built from comes from the index and the index does not change
+/// when a marker is deleted.
+#[tokio::test]
+async fn a_round_that_finished_a_file_hands_the_next_round_only_the_rest() {
+    let runtime = Arc::new(ScriptedRuntime::default());
+    let p = ports(
+        happy_path()
+            // Cleared by the first turn.
+            .with_queued_file(
+                resolved_file(CONFLICTED).as_str(),
+                &[Ok(MARKED), Ok(RESOLVED)],
+            )
+            // Still conflicted when the first turn ends, cleared by the second.
+            .with_queued_file(
+                resolved_file("src/main.rs").as_str(),
+                &[Ok(MARKED), Ok(MARKED), Ok(RESOLVED)],
+            ),
+        vec![runtime.clone()],
+    );
+    open_conflicted_over(&p.db, &[CONFLICTED, "src/main.rs"]);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("a resolution that took two rounds still landed");
+
+    let prompts = runtime.prompts();
+    assert_eq!(prompts.len(), 2, "the second round is the fix: {prompts:?}");
+    assert!(
+        prompts[0].contains(CONFLICTED) && prompts[0].contains("src/main.rs"),
+        "the first round is asked for the whole conflict: {}",
+        prompts[0]
+    );
+    assert!(
+        prompts[1].contains("src/main.rs") && !prompts[1].contains(CONFLICTED),
+        "and the second only for what is still conflicted: {}",
+        prompts[1]
+    );
+    assert_eq!(stored_status(&p.db), SyncSessionStatus::Resolved);
+}
+
+/// A round that cleared nothing ends the resolution rather than buying another.
+///
+/// The other half of the loop, and the one that keeps it from running to the
+/// round ceiling on a resolver that is not getting anywhere. The refusal has to
+/// carry what is left, because a user who cannot see the tree has no other way
+/// to tell this apart from the round that finished five files.
+#[tokio::test]
+async fn a_round_that_cleared_nothing_refuses_and_says_what_is_left() {
+    let runtime = Arc::new(ScriptedRuntime::default());
+    let p = ports(
+        happy_path().with_queued_file(resolved_file(CONFLICTED).as_str(), &[Ok(MARKED)]),
+        vec![runtime.clone()],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let outcome = run(&p, &row(), None, &mut cost, &mut tokens).await;
+
+    let Err(ResolveSyncError::Failed(reason)) = outcome else {
+        panic!("a tree still carrying markers is not a resolution: {outcome:?}");
+    };
+    assert_eq!(
+        runtime.prompts().len(),
+        1,
+        "a second round would read the same file to the same end"
+    );
+    assert!(
+        reason.contains("1 of 1 files still has conflict markers")
+            && reason.contains("src/lib.rs (1 hunk)"),
+        "the refusal is what is left, not which file was read first: {reason}"
+    );
+    assert_eq!(stored_status(&p.db), SyncSessionStatus::ResolutionFailed);
+}
+
+/// A staged index does not make an unresolved tree resolved.
+///
+/// The regression this is here for is not hypothetical, it is the shape the
+/// `git add -A` ordering in `land` was written to avoid: both checks between a
+/// conflict and a commit used to take their file list from `git status`, and a
+/// staged index answers that with nothing. Iterating an empty list, both passed
+/// without reading a byte, and the merge commit went to origin with the
+/// markers in it. Reading the *declared* list instead makes the ordering a
+/// second line of defence rather than the only one.
+#[tokio::test]
+async fn a_staged_index_does_not_resolve_a_file_that_still_has_markers() {
+    let p = ports(
+        // `git status` reports nothing unmerged — the index is fully staged —
+        // while the file on disk is exactly as the merge left it.
+        happy_path().with_queued_file(resolved_file(CONFLICTED).as_str(), &[Ok(MARKED)]),
+        vec![Arc::new(ScriptedRuntime::default())],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    let outcome = run(&p, &row(), None, &mut cost, &mut tokens).await;
+
+    assert!(
+        matches!(&outcome, Err(ResolveSyncError::Failed(reason))
+            if reason.contains("still has conflict markers")),
+        "an empty unmerged list is not a resolved tree: {outcome:?}"
+    );
+    assert_eq!(stored_status(&p.db), SyncSessionStatus::ResolutionFailed);
+}
+
+/// A tree somebody already resolved by hand costs no agent at all.
+///
+/// The press is the same one either way, and a turn spawned to confirm work
+/// that is already done can only spend money and edit a correct file.
+#[tokio::test]
+async fn a_tree_with_no_markers_left_lands_without_spawning_a_resolver() {
+    let runtime = Arc::new(ScriptedRuntime::default());
+    let p = ports(
+        happy_path().with_queued_file(resolved_file(CONFLICTED).as_str(), &[Ok(RESOLVED)]),
+        vec![runtime.clone()],
+    );
+    open_conflicted(&p.db);
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    run(&p, &row(), None, &mut cost, &mut tokens)
+        .await
+        .expect("a hand-resolved tree is a resolution");
+
+    assert!(
+        runtime.prompts().is_empty(),
+        "nothing was left to ask an agent: {:?}",
+        runtime.prompts()
+    );
+    assert_eq!(stored_status(&p.db), SyncSessionStatus::Resolved);
+}
+
+/// A conflict somebody resolved in the worktree themselves is a resolution.
+///
+/// The pane has said "resolve them yourself there" since it existed, and until
+/// this there was nothing that would take the result: the ways out of a
+/// conflict were an agent or abandoning the sync, and a resolution six hunks
+/// from done had no press that would finish it.
+#[tokio::test]
+async fn a_hand_resolved_tree_is_committed_without_spawning_anything() {
+    let runtime = Arc::new(ScriptedRuntime::default());
+    let p = ports(
+        happy_path().with_queued_file(resolved_file(CONFLICTED).as_str(), &[Ok(RESOLVED)]),
+        vec![runtime.clone()],
+    );
+    open_conflicted(&p.db);
+
+    let resolved = run_continue(
+        &p,
+        MergeGate {
+            prepare: None,
+            harness: None,
+        },
+    )
+    .await
+    .expect("a tree with no markers left is a resolution");
+
+    assert_eq!(resolved.merge_commit_sha, "c0ffeec");
+    assert!(
+        runtime.prompts().is_empty(),
+        "no agent is spawned to confirm work a person already did"
+    );
+    assert_eq!(stored_status(&p.db), SyncSessionStatus::Resolved);
+}
+
+/// And a conflict they have not finished is refused, naming what is left.
+///
+/// `ADD_ALL` is deliberately unscripted: a continue that staged an unfinished
+/// tree dies on the strict double rather than committing markers, which is what
+/// makes this fail against a missing check as well as a wrong one.
+#[tokio::test]
+async fn a_continue_over_an_unfinished_tree_refuses_and_says_what_is_left() {
+    let p = ports(
+        ScriptedExec::new(&[(PORCELAIN, Ok("")), (MERGE_HEAD, Ok("b1b2b3b\n"))])
+            .with_files(&[(resolved_file(CONFLICTED).as_str(), Ok(MARKED))]),
+        vec![Arc::new(ScriptedRuntime::default())],
+    );
+    open_conflicted(&p.db);
+
+    let outcome = run_continue(
+        &p,
+        MergeGate {
+            prepare: None,
+            harness: None,
+        },
+    )
+    .await;
+
+    let Err(ResolveSyncError::Failed(reason)) = outcome else {
+        panic!("a tree still carrying markers is not finished: {outcome:?}");
+    };
+    assert!(
+        reason.contains("1 of 1 files still has conflict markers")
+            && reason.contains("src/lib.rs (1 hunk)"),
+        "the refusal has to say what is left to do: {reason}"
+    );
+    assert!(
+        reason.contains("press Continue again"),
+        "and that finishing it is still the way out: {reason}"
+    );
+    assert_eq!(stored_status(&p.db), SyncSessionStatus::ResolutionFailed);
+}
+
+/// A hand-resolved tree is held to the project's checks exactly as an
+/// agent-resolved one is.
+///
+/// The gate is not about who did the work — it is about whether the merged tree
+/// builds — so a manual finish that skipped it would be a second, laxer way to
+/// reach origin. `ADD_ALL` unscripted again, for the same reason as above.
+#[tokio::test]
+async fn a_hand_resolved_tree_that_does_not_build_is_not_committed() {
+    let p = ports(
+        ScriptedExec::new(&[
+            (PORCELAIN, Ok("")),
+            (MERGE_HEAD, Ok("b1b2b3b\n")),
+            (
+                CHECKS,
+                Err("Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments"),
+            ),
+        ])
+        .with_files(&[(resolved_file(CONFLICTED).as_str(), Ok(RESOLVED))]),
+        vec![Arc::new(ScriptedRuntime::default())],
+    );
+    open_conflicted(&p.db);
+
+    let outcome = run_continue(
+        &p,
+        MergeGate {
+            prepare: None,
+            harness: Some(CHECKS),
+        },
+    )
+    .await;
+
+    let Err(ResolveSyncError::Failed(reason)) = outcome else {
+        panic!("a tree that does not build is not a resolution: {outcome:?}");
+    };
+    assert!(
+        reason.contains("E0061"),
+        "in the harness's own words: {reason}"
+    );
+    assert_eq!(stored_status(&p.db), SyncSessionStatus::ResolutionFailed);
 }
 
 /// The session as the row holds it, for the two facts publication turns on.
@@ -1060,7 +1408,7 @@ async fn a_resolution_with_nobody_to_review_it_reaches_origin() {
 #[tokio::test]
 async fn a_resolution_somebody_can_look_at_stops_at_the_commit() {
     let p = ports(
-        ScriptedExec::new(&[
+        resolving(ScriptedExec::new(&[
             (PORCELAIN, Ok("")),
             (MERGE_HEAD, Ok("b1b2b3b\n")),
             (ADD_ALL, Ok("")),
@@ -1069,7 +1417,7 @@ async fn a_resolution_somebody_can_look_at_stops_at_the_commit() {
                 Ok("[feature/f-1 c0ffee] chore: resolve sync conflicts"),
             ),
             (HEAD, Ok("c0ffeec\n")),
-        ]),
+        ])),
         vec![Arc::new(ScriptedRuntime::default())],
     );
     open_conflicted(&p.db);
@@ -1195,7 +1543,10 @@ async fn a_push_origin_did_not_confirm_leaves_the_resolution_waiting() {
         (CONTAINS, Err("fatal: not an ancestor")),
     ];
     let p = ports(
-        ScriptedExec::new(&script).with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, Ok(""))]),
+        resolving(
+            ScriptedExec::new(&script)
+                .with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, Ok(""))]),
+        ),
         vec![Arc::new(ScriptedRuntime::default())],
     );
     open_conflicted(&p.db);
@@ -1236,6 +1587,7 @@ async fn a_follow_up_commit_does_not_move_the_diffs_base() {
         (HEAD, Ok("f0110up\n")),
     ])
     .with_queue(MERGE_HEAD, &[Ok("b1b2b3b\n"), Ok("")]);
+    let scripted = resolving(scripted);
     let p = ports(scripted, vec![Arc::new(ScriptedRuntime::default())]);
     open_conflicted(&p.db);
     let (mut cost, mut tokens) = (0.0, 0);
@@ -1323,9 +1675,11 @@ async fn a_turn_the_harness_cut_off_still_bills_what_it_spent() {
 /// explanation, never the verdict.
 #[tokio::test]
 async fn a_tree_still_conflicted_reports_the_turns_ending_beside_it() {
-    let scripted = ScriptedExec::new(&[(ADD_ALL, Ok(""))])
-        .with_queue(PORCELAIN, &[Ok("UU src/lib.rs\n"), Ok("UU src/lib.rs\n")])
-        .with_files(&[(resolved_file("src/lib.rs").as_str(), Ok("no markers\n"))]);
+    // Markers going in so a turn runs and can be cut off, none coming out so
+    // the refusal is `land`'s index re-check rather than the marker scan — the
+    // two halves this test is about are the *index's* verdict and the ending.
+    let scripted = resolving(ScriptedExec::new(&[(ADD_ALL, Ok(""))]))
+        .with_queue(PORCELAIN, &[Ok("UU src/lib.rs\n"), Ok("UU src/lib.rs\n")]);
     let p = ports(scripted, vec![Arc::new(ScriptedRuntime::cut_off())]);
     open_conflicted(&p.db);
     let (mut cost, mut tokens) = (0.0, 0);
@@ -1514,14 +1868,14 @@ fn the_prompt_asks_for_no_verification_when_the_project_names_no_command() {
 #[tokio::test]
 async fn a_resolution_the_projects_checks_reddened_is_not_committed_or_pushed() {
     let p = ports(
-        ScriptedExec::new(&[
+        resolving(ScriptedExec::new(&[
             (PORCELAIN, Ok("")),
             (MERGE_HEAD, Ok("b1b2b3b\n")),
             (
                 CHECKS,
                 Err("Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments"),
             ),
-        ]),
+        ])),
         vec![Arc::new(ScriptedRuntime::default())],
     );
     open_conflicted(&p.db);
@@ -2618,7 +2972,22 @@ async fn a_later_resolution_is_not_told_about_the_one_before_it() {
         "Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments";
     let runtime = Arc::new(ScriptedRuntime::default());
     let p = ports(
-        happy_path().with_queue(CHECKS, &[Err(red), Err(red), Ok("all checks passed")]),
+        happy_path()
+            .with_queue(CHECKS, &[Err(red), Err(red), Ok("all checks passed")])
+            // Two resolutions, and the second opens on a re-merged tree — so the
+            // file is marked again for it. Between them: the first turn clears
+            // the markers, the repair round the red gate buys re-reads the same
+            // resolved file, and then the ask starts over.
+            .with_queued_file(
+                resolved_file(CONFLICTED).as_str(),
+                &[
+                    Ok(MARKED),
+                    Ok(RESOLVED),
+                    Ok(RESOLVED),
+                    Ok(MARKED),
+                    Ok(RESOLVED),
+                ],
+            ),
         vec![runtime.clone()],
     );
     open_conflicted(&p.db);

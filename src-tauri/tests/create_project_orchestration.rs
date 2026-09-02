@@ -357,9 +357,14 @@ impl StepExecutor for StubExecutor {
     async fn feature_resolve_sync_conflicts(
         &self,
         _feature_id: &str,
-        _conflict_files: &[String],
         _asked: &demeteo_core::domain::sync_resolver::SyncResolverChoice,
     ) -> Result<SyncOutcomeView, String> {
+        Ok(SyncOutcomeView::Ok {
+            merge_commit_sha: Some("deadbeef".to_string()),
+            changed: false,
+        })
+    }
+    async fn feature_continue_sync(&self, _feature_id: &str) -> Result<SyncOutcomeView, String> {
         Ok(SyncOutcomeView::Ok {
             merge_commit_sha: Some("deadbeef".to_string()),
             changed: false,

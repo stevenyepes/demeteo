@@ -73,6 +73,7 @@ function mount(over: { session?: SyncSessionView | null; resolver?: SyncResolver
   const calls = {
     startSync: vi.fn(async () => {}),
     resolve: vi.fn(async () => {}),
+    continueSync: vi.fn(async () => {}),
     abort: vi.fn(async () => {}),
     publish: vi.fn(async () => {}),
     discard: vi.fn(async () => {}),
@@ -88,6 +89,7 @@ function mount(over: { session?: SyncSessionView | null; resolver?: SyncResolver
   const refreshDrift = vi.fn();
   const openDiffRange = vi.fn();
   const showResolverStream = vi.fn();
+  const openWorktreeTerminal = vi.fn();
   const { result } = renderHook(() =>
     useSyncActions({
       sync,
@@ -95,14 +97,23 @@ function mount(over: { session?: SyncSessionView | null; resolver?: SyncResolver
       refreshDrift,
       openDiffRange,
       showResolverStream,
+      openWorktreeTerminal,
     }),
   );
-  return { act: result.current, calls, refreshDrift, openDiffRange, showResolverStream };
+  return {
+    act: result.current,
+    calls,
+    refreshDrift,
+    openDiffRange,
+    showResolverStream,
+    openWorktreeTerminal,
+  };
 }
 
 describe('useSyncActions', () => {
   it.each([
     ['sync', 'startSync'],
+    ['continue', 'continueSync'],
     ['abort', 'abort'],
     ['publish', 'publish'],
     ['discard', 'discard'],
@@ -117,19 +128,36 @@ describe('useSyncActions', () => {
     }
   });
 
-  /** The resolver runs against the paths the *row* names, not a selection held
-   *  beside it, and the harness is whatever the picker resolved to. */
-  it('resolves the conflicted paths the session names, under the chosen harness', () => {
+  /** The harness is whatever the picker resolved to. No file list rides along:
+   *  what is still conflicted is the backend's read of the worktree, since a
+   *  list sent from here is a snapshot that never shrinks. */
+  it('resolves under the chosen harness, naming no files', () => {
     const { act, calls } = mount({
       resolver: harness({ selectedAgent: 'claude-code', selectedModel: 'sonnet', selectedEffort: 'high' }),
     });
 
     act('resolve');
 
-    expect(calls.resolve).toHaveBeenCalledWith(['src/lib.rs', 'src/main.rs'], {
+    expect(calls.resolve).toHaveBeenCalledWith({
       agentKind: 'claude-code',
       model: 'sonnet',
       effort: 'high',
+    });
+  });
+
+  /** The merge is in the sync worktree, which is a different checkout from the
+   *  feature's and one the terminal picker excludes on purpose. The pane has
+   *  told people to finish conflicts there since it existed while offering
+   *  nothing but the path as text to copy elsewhere. */
+  it('opens a shell in the sync worktree, not the feature one', () => {
+    const { act, openWorktreeTerminal } = mount();
+
+    act('terminal');
+
+    expect(openWorktreeTerminal).toHaveBeenCalledWith({
+      machineId: 'local',
+      workDir: '/repos/demeteo_wt_sync_feature-f-1',
+      workBranch: 'feature/f-1',
     });
   });
 
@@ -140,7 +168,7 @@ describe('useSyncActions', () => {
 
     act('resolve');
 
-    expect(calls.resolve).toHaveBeenCalledWith(expect.anything(), {
+    expect(calls.resolve).toHaveBeenCalledWith({
       agentKind: null,
       model: null,
       effort: null,

@@ -216,6 +216,41 @@ impl SqliteMergeExecutor {
 }
 
 impl SqliteMergeExecutor {
+    /// How much of a conflicted worktree a fresh sync would delete.
+    ///
+    /// Only asked of a session that is actually conflicted and actually has a
+    /// worktree, so an ordinary sync pays nothing for it. Unreadable answers
+    /// are `None`: a tree nobody could read is not evidence of work to save,
+    /// and refusing a sync on a failed read would wedge the one path out.
+    async fn partial_resolution_at_risk(
+        &self,
+        existing: &crate::ports::sync_session::SyncSession,
+    ) -> Option<String> {
+        if !matches!(
+            existing.status,
+            SyncSessionStatus::Conflicted | SyncSessionStatus::ResolutionFailed
+        ) {
+            return None;
+        }
+        let worktree = existing.worktree_path.as_deref()?;
+        if existing.conflict_files.is_empty() {
+            return None;
+        }
+        let left = crate::adapters::step_executor::sync_resolve::unresolved_files(
+            &*self.exec,
+            &existing.machine_id,
+            worktree,
+            &existing.conflict_files,
+        )
+        .await
+        .ok()?;
+        crate::domain::sync_session::partial_resolution_refusal(
+            existing.status,
+            existing.conflict_files.len(),
+            left.len(),
+        )
+    }
+
     /// Every sync of a feature branch, whether or not a person answered the
     /// divergence first: one session row, one audit row, one turn slot.
     #[allow(clippy::result_large_err)]
@@ -243,6 +278,18 @@ impl SqliteMergeExecutor {
                     return Err(UpstreamSyncFailure::Blocked {
                         stage: SyncBlockedStage::HeldResolution,
                         raw_error: refusal.to_string(),
+                    });
+                }
+                // And the resolution that has *not* reached a commit. Read from
+                // the tree because nothing else knows: a cleared marker changes
+                // no row and no index entry, so a worktree six files into an
+                // eight-file conflict is indistinguishable, on paper, from the
+                // merge as git left it — right up until the sweep below deletes
+                // it.
+                if let Some(refusal) = self.partial_resolution_at_risk(&existing).await {
+                    return Err(UpstreamSyncFailure::Blocked {
+                        stage: SyncBlockedStage::HeldResolution,
+                        raw_error: refusal,
                     });
                 }
             }

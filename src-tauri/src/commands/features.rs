@@ -287,7 +287,8 @@ pub async fn artifact_body(
 /// - `Ok` when the merge was clean (or there was nothing to merge).
 /// - `Conflict` when the merge left unmerged files; the UI offers a
 ///   "Resolve with agent" button that calls
-///   `feature_resolve_sync_conflicts` with the same conflict list.
+///   `feature_resolve_sync_conflicts`, which reads the list back from the
+///   session row rather than being handed one.
 /// - `Blocked` when the sync stopped short of a merge; there is
 ///   nothing for an agent to resolve.
 /// - `Resolved` after a successful agent resolution.
@@ -471,7 +472,6 @@ pub async fn feature_sync_resolver(
 pub async fn feature_resolve_sync_conflicts(
     ctx: State<'_, AppContext>,
     feature_id: String,
-    conflict_files: Option<Vec<String>>,
     agent_kind: Option<String>,
     model: Option<String>,
     effort: Option<EffortLevel>,
@@ -487,9 +487,26 @@ pub async fn feature_resolve_sync_conflicts(
             kind
         )));
     }
-    let files = conflict_files.unwrap_or_default();
     ctx.executor
-        .feature_resolve_sync_conflicts(&feature_id, &files, &asked)
+        .feature_resolve_sync_conflicts(&feature_id, &asked)
+        .await
+        .map_err(AppError::from)
+}
+
+/// Finish a conflict the user resolved in the sync worktree by hand.
+///
+/// Verifies that nothing the merge declared still carries markers, runs the
+/// project's own checks in the merged tree, then commits and publishes on
+/// exactly the terms an agent resolution does. Refuses — naming the files and
+/// how many hunks each has left — rather than committing a tree that is not
+/// finished, and spawns nothing either way.
+#[tauri::command]
+pub async fn feature_continue_sync(
+    ctx: State<'_, AppContext>,
+    feature_id: String,
+) -> Result<SyncOutcomeView, AppError> {
+    ctx.executor
+        .feature_continue_sync(&feature_id)
         .await
         .map_err(AppError::from)
 }

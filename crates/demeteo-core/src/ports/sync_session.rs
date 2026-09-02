@@ -127,6 +127,13 @@ impl SyncSessionPatch {
                 } => Some(None),
                 _ => None,
             },
+            // Counted when the turn *starts*, so a resolution still running is
+            // already visible as an attempt rather than appearing only once it
+            // has a verdict. Nothing in the tree had ever set this: the column,
+            // the port field and the pane's own `Attempts` metric all existed,
+            // and a user who pressed Resolve three times read "Attempts 0" three
+            // times.
+            bump_attempts: matches!(resolution, SyncResolution::Started),
             ..Self::default()
         }
     }
