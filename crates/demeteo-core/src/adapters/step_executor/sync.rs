@@ -517,6 +517,7 @@ impl DagStepExecutor {
             app_settings: &self.app_settings,
             git_ops: &self.git_ops,
             merge_executor: &self.merge_executor,
+            notif: &self.notif,
             feature_id: &fid,
             repo_dir: &session.repo_dir,
             resolved_cwd: worktree,

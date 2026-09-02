@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::intercept::{ExecutionResult, InterceptPayload};
 use crate::domain::models::EffortLevel;
+use crate::domain::sync_session::SyncSessionStatus;
 
 /// The set of events the orchestrator emits to the UI.
 ///
@@ -89,6 +90,24 @@ pub enum DomainEvent {
     ConflictDetected {
         feature_id: FeatureId,
         subtask_id: String,
+    },
+
+    /// Emitted when a feature's sync session moves, so a pane rendering that
+    /// row learns about a resolution it did not press for.
+    ///
+    /// The run's own progress cannot stand in for this. A sync records itself
+    /// on a step every reader of a *run* excludes by design (the frontend's
+    /// `isOutOfBandStep`), so a resolution running in the background moves
+    /// nothing an open pane watches: it read the row when it mounted, and
+    /// without this it reads it again only when a person presses something.
+    ///
+    /// `status` says which transition is being announced and is deliberately
+    /// not what the pane renders — it re-reads through `sync_session_get`,
+    /// which reconciles the row against the worktree on the way out, and a
+    /// status taken from here would be the one reading that skipped that check.
+    SyncStatusChanged {
+        feature_id: FeatureId,
+        status: SyncSessionStatus,
     },
 
     /// Emitted just before a step's agent session is spawned, recording what
