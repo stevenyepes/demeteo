@@ -486,6 +486,7 @@ function AppInner() {
                   ? (currentProject.remote_host || 'local')
                   : 'local'
               }
+              projectName={currentProject.name}
             />
           )}
 

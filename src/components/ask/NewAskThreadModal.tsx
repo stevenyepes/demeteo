@@ -24,6 +24,9 @@ interface NewAskThreadModalProps {
   projectId: string;
   /** The project's own host, which is where its repository was cloned. */
   machineId: string;
+  /** Names the eyebrow label above the modal title; falls back to a generic
+   *  string when the caller has none to give. */
+  projectName?: string;
   /** A "Try" chip's text, carried in as the starting name so the question the
    *  user picked is not retyped here — `NewDiscoveryModal`'s `seedTitle`, same
    *  shape. Empty for every other way of opening this modal. */
@@ -35,6 +38,7 @@ interface NewAskThreadModalProps {
 export function NewAskThreadModal({
   projectId,
   machineId,
+  projectName,
   seedTitle,
   onClose,
   onCreated,
@@ -153,7 +157,7 @@ export function NewAskThreadModal({
       >
         <div className="shrink-0 border-b border-white/5 px-5 py-[18px]">
           <p className="mb-1.5 font-heading text-[11px] font-semibold uppercase tracking-[0.15em] text-cyan-400">
-            demeteo
+            {projectName || 'this project'}
           </p>
           <h2 className="font-heading text-xl font-bold text-white">New ask thread</h2>
         </div>
