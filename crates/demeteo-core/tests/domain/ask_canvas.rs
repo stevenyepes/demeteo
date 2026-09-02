@@ -192,6 +192,53 @@ fn no_role_is_ruby() {
     assert_eq!(tone(NodeRole::NeedsHuman), "amber");
 }
 
+/// The vocabulary is the only place a model is told these tokens exist, and
+/// nothing else goes red when one is missing from it. No match below has a
+/// wildcard arm, on the same terms as `no_role_is_ruby`.
+#[test]
+fn the_vocabulary_names_every_token_a_block_may_carry() {
+    fn role(role: NodeRole) -> &'static str {
+        match role {
+            NodeRole::Orchestration => "orchestration",
+            NodeRole::Boundary => "boundary",
+            NodeRole::Agent => "agent",
+            NodeRole::NeedsHuman => "needs_human",
+        }
+    }
+    fn block_kind(kind: CanvasKind) -> &'static str {
+        match kind {
+            CanvasKind::Architecture => "architecture",
+            CanvasKind::Journey => "journey",
+            CanvasKind::Dataflow => "dataflow",
+        }
+    }
+    fn edge_kind(kind: EdgeKind) -> &'static str {
+        match kind {
+            EdgeKind::HandsOff => "hands_off",
+            EdgeKind::GoesBack => "goes_back",
+        }
+    }
+
+    let vocabulary = canvas_block_vocabulary();
+    let tokens = [
+        role(NodeRole::Orchestration),
+        role(NodeRole::Boundary),
+        role(NodeRole::Agent),
+        role(NodeRole::NeedsHuman),
+        block_kind(CanvasKind::Architecture),
+        block_kind(CanvasKind::Journey),
+        block_kind(CanvasKind::Dataflow),
+        edge_kind(EdgeKind::HandsOff),
+        edge_kind(EdgeKind::GoesBack),
+    ];
+    for token in tokens {
+        assert!(
+            vocabulary.contains(token),
+            "'{token}' deserializes but the prompt never tells the model it exists"
+        );
+    }
+}
+
 fn message_with(
     canvas_paths: Option<Vec<CanvasPathVerdict>>,
     checked_commit_sha: Option<String>,

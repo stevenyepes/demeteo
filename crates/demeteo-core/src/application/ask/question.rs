@@ -6,7 +6,7 @@
 //! posture (answer, don't interrogate) and in what it may append (an
 //! optional canvas block, not a decision question).
 
-use crate::domain::ask_canvas::canvas_block_shape_example;
+use crate::domain::ask_canvas::{canvas_block_shape_example, canvas_block_vocabulary};
 use crate::domain::models::{AskMessage, MessageRole};
 
 /// What Ask is, what it may do, and what a turn of it looks like.
@@ -44,6 +44,10 @@ block, and only one, at the very end of the turn:
 Nothing after the block. Prose above it, block below it, at most one per
 turn. Most turns need no block at all; do not force one.
 
+THE BLOCK'S FIXED VOCABULARY
+
+{vocabulary}
+
 WHAT MAKES A CANVAS WORTH DRAWING
 
 - Only draw one when stages, lanes, and the arrows between nodes actually
@@ -56,6 +60,7 @@ WHAT MAKES A CANVAS WORTH DRAWING
 - Keep it small enough to read at a glance. A canvas nobody can parse in a
   few seconds is prose that should have stayed prose."#,
         shape = canvas_block_shape_example(),
+        vocabulary = canvas_block_vocabulary(),
     )
 }
 

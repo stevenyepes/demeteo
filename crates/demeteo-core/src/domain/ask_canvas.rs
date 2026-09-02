@@ -13,7 +13,8 @@
 //!
 //! [`canvas_block_shape_example`] is the single source for the shape: the
 //! message that reports a malformed block quotes it rather than re-spelling
-//! the JSON, so the two cannot drift.
+//! the JSON, so the two cannot drift. [`canvas_block_vocabulary`] is the
+//! same arrangement for the field values an example cannot exhaust.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -24,7 +25,9 @@ use crate::domain::models::ask::{AskMessage, CanvasPathVerdict};
 /// `docs/ask-canvas/probe/Nodes.html`'s four node tones. Ruby is never a
 /// node role — it is reserved for failure/stopped states elsewhere in the
 /// app (see `App.css`'s ruby tokens), so a fifth variant must not be added
-/// without updating that surface first.
+/// without updating that surface first, nor without
+/// [`canvas_block_vocabulary`], which is the only place a model is told
+/// these four tokens exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeRole {
@@ -175,6 +178,40 @@ pub fn build_pinned_canvas_snapshot(
 /// quotes back at it.
 pub fn canvas_block_shape_example() -> String {
     r#"{"kind": "architecture", "title": "...", "stages": ["01 · Orchestrator", "02 · Policy & fence"], "lanes": ["01 · The person", "02 · Demeteo"], "nodes": [{"id": "n1", "title": "...", "role": "orchestration", "stage": 0, "lane": 1}, {"id": "n2", "title": "...", "role": "boundary", "path": "git_ops::scope", "stage": 1, "lane": 1}], "edges": [{"from": "n1", "to": "n2", "kind": "hands_off"}]}"#
+        .to_string()
+}
+
+/// The closed vocabularies [`NodeRole`], [`CanvasKind`] and [`EdgeKind`]
+/// accept, written for the model that has to produce them.
+///
+/// [`canvas_block_shape_example`] carries two of the four roles and one of
+/// the three kinds — every token a prompt built from the example alone
+/// conveys. So a model placing an `ExecutionDriver` writes `"role":
+/// "driver"`, and serde refuses the block whole before [`validate_canvas`]
+/// ever runs. The mapping that would have sent it to `orchestration` is on
+/// [`NodeRole`]'s variants, where only a Rust reader ever sees it; this is
+/// that mapping on the path the model reads.
+///
+/// A variant added to any of the three is not shipped until it appears
+/// here as well.
+pub fn canvas_block_vocabulary() -> String {
+    r#"Each of these is a closed set. A value outside it is not a canvas with one
+bad field — the whole block is discarded and the turn renders as prose with
+a note saying why.
+
+`role`, on a node:
+  orchestration  drives or sequences work — Feature, ExecutionDriver, Sync
+  boundary       a contract or fence work crosses — StepCapability,
+                 PermissionProfile, ExecutionPort, git_ops::scope
+  agent          a running coding agent, or what one runs in — Worktree,
+                 opencode
+  needs_human    work stops here until a person decides — Gate
+
+`kind`, on the block:  architecture, journey, dataflow
+
+`kind`, on an edge:
+  hands_off      work moving forward: the normal direction
+  goes_back      a redirect, retry, or rework"#
         .to_string()
 }
 
