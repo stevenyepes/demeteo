@@ -92,7 +92,7 @@ function thread(overrides: Partial<AskThread> = {}): AskThread {
 
 /** What the stubbed modal reports back from a creation. Read at click time,
  *  not when the factory above runs, so it is still in TDZ-safe territory. */
-const CREATED = thread({ id: 't-new', title: 'Draw the architecture of crates/demeteo-core' });
+const CREATED = thread({ id: 't-new', title: 'Draw the architecture of this project' });
 
 function message(overrides: Partial<AskMessageView> = {}): AskMessageView {
   return {
@@ -174,15 +174,25 @@ describe('AskThreadView — empty state', () => {
     listAskThreads.mockResolvedValue([thread()]);
     loadAskThread.mockResolvedValue(detail(thread(), []));
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    render(<AskThreadView projectId="p1" machineId="local" projectName="Acme API" />);
 
     const chips = await screen.findAllByTestId('ask-try-chip');
     expect(chips).toHaveLength(3);
     expect(chips[0]).toHaveTextContent('Draw the architecture of');
-    expect(chips[0]).toHaveTextContent('crates/demeteo-core');
+    expect(chips[0]).toHaveTextContent('Acme API');
     expect(chips[1]).toHaveTextContent('Map the journey from New Feature to a merged branch');
-    expect(chips[2]).toHaveTextContent('What changed in Tauri v2 capabilities since 2.1?');
+    expect(chips[2]).toHaveTextContent("What changed in this project's dependencies recently?");
     expect(chips[2]).toHaveTextContent('web');
+  });
+
+  it('falls back to "this project" in the first chip when no projectName is given', async () => {
+    listAskThreads.mockResolvedValue([thread()]);
+    loadAskThread.mockResolvedValue(detail(thread(), []));
+
+    render(<AskThreadView projectId="p1" machineId="local" />);
+
+    const chips = await screen.findAllByTestId('ask-try-chip');
+    expect(chips[0]).toHaveTextContent('this project');
   });
 
   it('never mentions a specific run, ticket id, or failure in a chip', async () => {
@@ -234,7 +244,7 @@ describe('AskThreadView — a Try chip clicked with no thread open', () => {
 
     const input = (await screen.findByTestId('ask-composer')) as HTMLInputElement;
     await waitFor(() =>
-      expect(input.value).toBe('Draw the architecture of crates/demeteo-core'),
+      expect(input.value).toBe('Draw the architecture of this project'),
     );
     expect(sendAskTurn).not.toHaveBeenCalled();
   });

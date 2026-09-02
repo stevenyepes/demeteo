@@ -70,6 +70,36 @@ describe('NewAskThreadModal', () => {
     expect(screen.getByRole('radio', { name: 'opencode' })).toBeInTheDocument();
   });
 
+  it('shows the supplied project name in the eyebrow', async () => {
+    render(
+      <NewAskThreadModal
+        projectId="project-1"
+        machineId="local"
+        projectName="Acme API"
+        seedTitle=""
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText('Acme API')).toBeInTheDocument();
+    expect(screen.queryByText('demeteo')).toBeNull();
+  });
+
+  it('falls back to a generic eyebrow when no project name is given', async () => {
+    render(
+      <NewAskThreadModal
+        projectId="project-1"
+        machineId="local"
+        seedTitle=""
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText('this project')).toBeInTheDocument();
+  });
+
   it('creates a thread and calls onCreated on submit', async () => {
     createAskThread.mockResolvedValue(thread());
     const onCreated = vi.fn();
@@ -138,14 +168,14 @@ describe('NewAskThreadModal', () => {
       <NewAskThreadModal
         projectId="project-1"
         machineId="local"
-        seedTitle="Draw the architecture of crates/demeteo-core"
+        seedTitle="Draw the architecture of Acme API"
         onClose={vi.fn()}
         onCreated={vi.fn()}
       />,
     );
 
     const name = screen.getByPlaceholderText(/ask about the auth flow/i) as HTMLInputElement;
-    expect(name.value).toBe('Draw the architecture of crates/demeteo-core');
+    expect(name.value).toBe('Draw the architecture of Acme API');
     await waitFor(() => expect(screen.getByRole('button', { name: /start thread/i })).toBeEnabled());
   });
 

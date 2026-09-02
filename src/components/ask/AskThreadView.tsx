@@ -29,44 +29,50 @@ interface AskThreadViewProps {
   /** The project's own host — what `NewAskThreadModal`'s machine picker
    *  starts on, same convention as `DiscoverySection`'s `machineId`. */
   machineId: string;
+  /** Names the first "Try" chip and the modal's eyebrow label; falls back to
+   *  a generic string when the caller has none to give, same convention as
+   *  `NewAskThreadModal`'s own `projectName`. */
+  projectName?: string;
 }
 
 /** `Empty.html`'s three `.try` chips, verbatim (Acceptance Criterion 7). Never
  *  a fourth, and never one naming a specific run or ticket. */
-const TRY_CHIPS: ReadonlyArray<{
+function tryChips(resolvedProjectName: string): ReadonlyArray<{
   icon: React.ReactElement;
   tone: 'violet' | 'cyan' | 'emerald';
   text: React.ReactNode;
   seed: string;
   webChip?: boolean;
-}> = [
-  {
-    icon: <Network className="h-3.5 w-3.5" aria-hidden="true" />,
-    tone: 'violet',
-    text: (
-      <>
-        Draw the architecture of{' '}
-        <code className="rounded border border-white/10 bg-black/40 px-1 py-0.5 font-mono text-[12px] text-cyan-300">
-          crates/demeteo-core
-        </code>
-      </>
-    ),
-    seed: 'Draw the architecture of crates/demeteo-core',
-  },
-  {
-    icon: <Route className="h-3.5 w-3.5" aria-hidden="true" />,
-    tone: 'cyan',
-    text: 'Map the journey from New Feature to a merged branch',
-    seed: 'Map the journey from New Feature to a merged branch',
-  },
-  {
-    icon: <Globe className="h-3.5 w-3.5" aria-hidden="true" />,
-    tone: 'emerald',
-    text: 'What changed in Tauri v2 capabilities since 2.1?',
-    seed: 'What changed in Tauri v2 capabilities since 2.1?',
-    webChip: true,
-  },
-];
+}> {
+  return [
+    {
+      icon: <Network className="h-3.5 w-3.5" aria-hidden="true" />,
+      tone: 'violet',
+      text: (
+        <>
+          Draw the architecture of{' '}
+          <code className="rounded border border-white/10 bg-black/40 px-1 py-0.5 font-mono text-[12px] text-cyan-300">
+            {resolvedProjectName}
+          </code>
+        </>
+      ),
+      seed: `Draw the architecture of ${resolvedProjectName}`,
+    },
+    {
+      icon: <Route className="h-3.5 w-3.5" aria-hidden="true" />,
+      tone: 'cyan',
+      text: 'Map the journey from New Feature to a merged branch',
+      seed: 'Map the journey from New Feature to a merged branch',
+    },
+    {
+      icon: <Globe className="h-3.5 w-3.5" aria-hidden="true" />,
+      tone: 'emerald',
+      text: "What changed in this project's dependencies recently?",
+      seed: "What changed in this project's dependencies recently?",
+      webChip: true,
+    },
+  ];
+}
 
 /**
  * One project's Ask workspace (`docs/ask-canvas/probe/Main.html`/`Empty.html`):
@@ -79,7 +85,8 @@ const TRY_CHIPS: ReadonlyArray<{
  * down — the subscription itself stays leaf-mounted in `AskStreamingBubble`/
  * `AskCanvasPane`, per that hook's own doc comment.
  */
-export function AskThreadView({ projectId, machineId }: AskThreadViewProps): React.ReactElement {
+export function AskThreadView({ projectId, machineId, projectName }: AskThreadViewProps): React.ReactElement {
+  const resolvedProjectName = projectName || 'this project';
   const [threads, setThreads] = useState<AskThread[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AskThreadDetail | null>(null);
@@ -311,7 +318,7 @@ export function AskThreadView({ projectId, machineId }: AskThreadViewProps): Rea
                 <p className="mb-2.5 self-start font-mono text-[10px] tracking-[0.1em] text-slate-600 uppercase">
                   Try
                 </p>
-                {TRY_CHIPS.map((chip) => (
+                {tryChips(resolvedProjectName).map((chip) => (
                   <button
                     key={chip.seed}
                     type="button"
@@ -384,6 +391,7 @@ export function AskThreadView({ projectId, machineId }: AskThreadViewProps): Rea
         <NewAskThreadModal
           projectId={projectId}
           machineId={machineId}
+          projectName={resolvedProjectName}
           seedTitle={newThread.seedTitle}
           onClose={closeNewThread}
           onCreated={(created) => {
