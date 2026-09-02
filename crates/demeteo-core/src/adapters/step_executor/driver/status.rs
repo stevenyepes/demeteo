@@ -40,4 +40,42 @@ impl ExecutionDriver {
             );
         }
     }
+
+    /// Move the feature to `awaiting_gate` because a non-gate step stopped
+    /// to ask a human.
+    ///
+    /// The exact mirror of [`Self::ensure_feature_running`], and the reason
+    /// it exists is the same one in reverse: the run loop writes `running`
+    /// before dispatch, so without this the feature reads `running` while
+    /// nothing runs. That is not only a cosmetic lie — `useRunGraph` opens
+    /// the gate modal off this status, so a run that does not say it is
+    /// parked is a run whose question cannot be reached.
+    ///
+    /// Guarded on `running` so it never clobbers a terminal state, and
+    /// undone by `ensure_feature_running`, which already accepts
+    /// `awaiting_gate` as a source.
+    pub(crate) fn park_feature(&self) {
+        let cur = self
+            .features
+            .get(&self.f_id)
+            .ok()
+            .flatten()
+            .map(|f| f.status);
+        if cur.as_deref() != Some("running") {
+            return;
+        }
+        let _ = self.features.update(
+            &self.f_id,
+            &crate::ports::db::FeaturePatch {
+                status: Some("awaiting_gate".to_string()),
+                ..Default::default()
+            },
+        );
+        let _ = self.notif.emit(
+            &crate::ports::notification::DomainEvent::FeatureStatusChanged {
+                feature_id: self.f_id.clone(),
+                status: "awaiting_gate".to_string(),
+            },
+        );
+    }
 }

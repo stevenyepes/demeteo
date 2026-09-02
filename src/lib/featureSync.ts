@@ -65,19 +65,35 @@ export async function getSyncResolver(featureId: string): Promise<SyncResolverVi
  * conflicts left by `syncFeature`. The agent edits the conflict
  * files in a temporary worktree, commits the resolution, and the
  * worktree is merged back into the feature branch.
+ *
+ * Takes no file list. The backend reads what is still conflicted from the
+ * sync session row and the worktree itself, which is the only pair that can
+ * tell a round that finished five of eight files from one that finished none —
+ * a list sent from here is as of the last `sync_session_get` and never shrinks.
  */
 export async function resolveSyncConflicts(
   featureId: string,
-  conflictFiles: string[],
   resolver?: SyncResolverChoice,
 ): Promise<SyncOutcomeView> {
   return invoke<SyncOutcomeView>("feature_resolve_sync_conflicts", {
     featureId,
-    conflictFiles,
     agentKind: resolver?.agentKind ?? null,
     model: resolver?.model ?? null,
     effort: resolver?.effort ?? null,
   });
+}
+
+/**
+ * Finish a conflict resolved by hand in the sync worktree.
+ *
+ * Verifies that nothing the merge declared still carries markers, runs the
+ * project's checks in the merged tree, then commits and publishes on exactly
+ * the terms `resolveSyncConflicts` does. Spawns no agent, and refuses — naming
+ * the files and their remaining hunks — rather than committing a tree that is
+ * not finished.
+ */
+export async function continueSync(featureId: string): Promise<SyncOutcomeView> {
+  return invoke<SyncOutcomeView>("feature_continue_sync", { featureId });
 }
 
 /**

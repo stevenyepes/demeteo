@@ -47,6 +47,16 @@ pub(crate) fn needs_harness_briefing(template: &str) -> bool {
     template.contains("{{harness_baseline}}")
 }
 
+/// Whether the step's template asks for the decided-gate history.
+///
+/// Same opt-in as the harness briefing, for the same reason: it costs a
+/// query per attempt, and only a step that judges the work has any use for
+/// it. Matches the plural token only — `{{gate_decision}}` is the singular
+/// latest-decision binding and is not this.
+pub(crate) fn needs_gate_decision_log(template: &str) -> bool {
+    template.contains("{{gate_decision_log}}")
+}
+
 /// Where the worktree-local copies of the feature's user attachments live,
 /// or `None` when there are none.
 ///
@@ -289,6 +299,19 @@ impl ExecutionDriver {
             String::new()
         };
 
+        // What a human has already decided on this run. A validator that
+        // cannot see the gates reports an approval as missing however
+        // carefully it was given — the block exists to close that.
+        let gate_log = if needs_gate_decision_log(template) {
+            super::gate_decision::gate_decision_log(
+                self.gates.as_ref(),
+                ctx.step_execs,
+                self.f_id_str.as_str(),
+            )
+        } else {
+            String::new()
+        };
+
         let bound = crate::adapters::step_executor::driver::rework::bind_rework_context(
             self.base_ctx.clone(),
             mode,
@@ -301,6 +324,7 @@ impl ExecutionDriver {
             .set("review_base_section", &review_placement.bound)
             .set("gate_feedback", &gate_feedback)
             .set("gate_decision", &gate_decision)
+            .set("gate_decision_log", &gate_log)
             .set("retry_feedback", &retry_feedback)
             .set("iteration", &retry_iteration)
             .set("max_iterations", &retry_max)

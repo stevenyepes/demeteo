@@ -571,6 +571,14 @@ pub trait GateRepository: Send + Sync {
         &self,
         feature_id: &FeatureId,
     ) -> Result<Option<GateDecision>, String>;
+    /// Every decided gate for a feature, **oldest first** — the order a
+    /// reader follows a history in, and deliberately the reverse of
+    /// `latest_decided_for_feature`'s. Backs `{{gate_decision_log}}`.
+    ///
+    /// A live view, not an append-only log: a redirect clears its own row
+    /// and a replay clears its target's, so a gate that was approved and
+    /// later rewound leaves nothing here.
+    fn all_decided_for_feature(&self, feature_id: &FeatureId) -> Result<Vec<GateDecision>, String>;
     /// Latest decided-or-not decision row for a specific step execution.
     /// Used by the driver to reconcile a gate decision that arrived
     /// while the driver was down (app restart, race between event emit

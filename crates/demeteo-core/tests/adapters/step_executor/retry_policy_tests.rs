@@ -86,7 +86,7 @@ fn legacy_budget_precedence_matches_effective_loop_iterations() {
 fn redirect_within_budget_grants_the_retry() {
     let policy = legacy_policy_for_step(&step(Some("s-implement"), Some(3)), None, None);
     // No redirects consumed yet → attempt 1 of 3.
-    let d = evaluate(&policy, FailureClass::Verdict, 0);
+    let d = evaluate(&policy, FailureClass::Verdict, 0, None);
     assert_eq!(
         d.action,
         RetryAction::Redirect {
@@ -98,7 +98,7 @@ fn redirect_within_budget_grants_the_retry() {
     assert_eq!((d.attempt, d.max_attempts), (1, 3));
 
     // Last attempt in the budget is still granted (v1: already+1 > max).
-    let d = evaluate(&policy, FailureClass::AgentFailure, 2);
+    let d = evaluate(&policy, FailureClass::AgentFailure, 2, None);
     assert!(matches!(d.action, RetryAction::Redirect { .. }));
     assert_eq!(d.rule_id, "agent_failure.redirect");
     assert_eq!((d.attempt, d.max_attempts), (3, 3));
@@ -107,7 +107,7 @@ fn redirect_within_budget_grants_the_retry() {
 #[test]
 fn redirect_over_budget_is_exhausted_and_names_the_target() {
     let policy = legacy_policy_for_step(&step(Some("s-implement"), Some(3)), None, None);
-    let d = evaluate(&policy, FailureClass::Verdict, 3);
+    let d = evaluate(&policy, FailureClass::Verdict, 3, None);
     assert_eq!(target(&d), Some("s-implement"));
     assert!(matches!(d.action, RetryAction::Exhausted { .. }));
     assert_eq!(d.rule_id, "verdict.redirect");
@@ -128,7 +128,7 @@ fn redirect_without_target_fails() {
         }),
         ..Default::default()
     };
-    let d = evaluate(&policy, FailureClass::Verdict, 0);
+    let d = evaluate(&policy, FailureClass::Verdict, 0, None);
     assert_eq!(d.action, RetryAction::Fail);
     assert_eq!(d.rule_id, "verdict.redirect");
 }
@@ -141,12 +141,12 @@ fn redirect_without_target_fails() {
 fn environment_grants_exactly_one_free_in_place_retry() {
     let policy = legacy_policy_for_step(&step(Some("s-implement"), Some(9)), None, None);
 
-    let first = evaluate(&policy, FailureClass::Environment, 1);
+    let first = evaluate(&policy, FailureClass::Environment, 1, None);
     assert_eq!(first.action, RetryAction::RetryInPlace { feedback: false });
     assert_eq!(first.rule_id, "environment.in_place");
     assert_eq!((first.attempt, first.max_attempts), (2, ENV_MAX_ATTEMPTS));
 
-    let second = evaluate(&policy, FailureClass::Environment, 2);
+    let second = evaluate(&policy, FailureClass::Environment, 2, None);
     assert_eq!(second.action, RetryAction::Exhausted { target: None });
 }
 
@@ -156,7 +156,7 @@ fn environment_grants_exactly_one_free_in_place_retry() {
 #[test]
 fn broken_accounting_saturates_to_exhausted() {
     let policy = legacy_policy_for_step(&step(None, None), None, None);
-    let d = evaluate(&policy, FailureClass::Environment, u32::MAX);
+    let d = evaluate(&policy, FailureClass::Environment, u32::MAX, None);
     assert_eq!(d.action, RetryAction::Exhausted { target: None });
     assert_eq!(d.attempt, u32::MAX);
 }
@@ -174,11 +174,11 @@ fn in_place_default_budget_is_the_engine_default() {
         }),
         ..Default::default()
     };
-    let d = evaluate(&policy, FailureClass::AgentFailure, 2);
+    let d = evaluate(&policy, FailureClass::AgentFailure, 2, None);
     assert_eq!(d.action, RetryAction::RetryInPlace { feedback: true });
     assert_eq!(d.max_attempts, DEFAULT_LOOP_ITERATIONS);
     assert!(matches!(
-        evaluate(&policy, FailureClass::AgentFailure, 3).action,
+        evaluate(&policy, FailureClass::AgentFailure, 3, None).action,
         RetryAction::Exhausted { target: None }
     ));
 }
@@ -188,7 +188,7 @@ fn in_place_default_budget_is_the_engine_default() {
 #[test]
 fn non_retryable_always_fails() {
     let policy = legacy_policy_for_step(&step(Some("s-implement"), Some(9)), None, None);
-    let d = evaluate(&policy, FailureClass::NonRetryable, 0);
+    let d = evaluate(&policy, FailureClass::NonRetryable, 0, None);
     assert_eq!(d.action, RetryAction::Fail);
     assert_eq!(d.rule_id, "non_retryable.fail");
 }
@@ -204,7 +204,7 @@ fn missing_class_rule_fails_safely() {
         (FailureClass::AgentFailure, "agent_failure.fail"),
         (FailureClass::NonRetryable, "non_retryable.fail"),
     ] {
-        let d = evaluate(&policy, class, 0);
+        let d = evaluate(&policy, class, 0, None);
         assert_eq!(d.action, RetryAction::Fail);
         assert_eq!(d.rule_id, rule_id);
     }
@@ -223,4 +223,95 @@ fn class_names_match_the_stored_error_class_vocabulary() {
         FailureClass::NonRetryable.as_str(),
         error_class::NON_RETRYABLE
     );
+}
+
+// ── Evaluation: redirect override ──────────────────────────────────────
+//
+// The one failure whose repairer is not the step the workflow author named:
+// a `sequence` step handed a malformed task list fails to its `on_failure`
+// review gate, while the step that can rewrite the list is its
+// `task_list_from` producer.
+
+#[test]
+fn an_override_re_addresses_the_redirect_without_re_deciding_it() {
+    let policy = legacy_policy_for_step(&step(Some("s-gate-review"), Some(3)), None, None);
+    let producer = crate::domain::ids::StepId::from("s-tickets".to_string());
+
+    let d = evaluate(&policy, FailureClass::Verdict, 0, Some(&producer));
+    assert_eq!(
+        d.action,
+        RetryAction::Redirect {
+            target: producer.clone(),
+            feedback: true
+        }
+    );
+    // Only the destination moves: the rule that answered, and the budget
+    // it grants, are the policy's.
+    assert_eq!(d.rule_id, "verdict.redirect");
+    assert_eq!((d.attempt, d.max_attempts), (1, 3));
+}
+
+/// The exhausted arm has to move too, or the budget-exhausted message
+/// blames the review gate for a defect the producer wrote.
+#[test]
+fn an_exhausted_override_names_the_producer_not_the_on_failure_target() {
+    let policy = legacy_policy_for_step(&step(Some("s-gate-review"), Some(3)), None, None);
+    let producer = crate::domain::ids::StepId::from("s-tickets".to_string());
+
+    let d = evaluate(&policy, FailureClass::Verdict, 3, Some(&producer));
+    assert!(matches!(d.action, RetryAction::Exhausted { .. }));
+    assert_eq!(target(&d), Some("s-tickets"));
+    assert_eq!((d.attempt, d.max_attempts), (4, 3));
+}
+
+/// `on_failure` is the workflow author's declared retry appetite for a
+/// node. A handler that mints retries the author disabled is a handler
+/// overruling the workflow, so an override re-addresses a redirect that
+/// exists — it never *supplies* a target a rule lacks.
+///
+/// This is the reachable form of that rule: a `Redirect` rule with no
+/// target, which [`redirect_without_target_fails`] pins as degrading to
+/// `Fail`. Deliberately not built through `legacy_policy_for_step`, which
+/// emits `Fail` (not target-less `Redirect`) when `on_failure` is absent —
+/// that route never reaches the override arm, so a test written on it
+/// would pass no matter what the override did.
+#[test]
+fn an_override_does_not_supply_a_target_the_rule_lacks() {
+    let policy = RetryPolicy {
+        verdict: Some(RetryRule {
+            strategy: RetryStrategy::Redirect,
+            max_attempts: Some(3),
+            backoff_secs: None,
+            feedback: true,
+            redirect_to: None,
+        }),
+        ..Default::default()
+    };
+    let producer = crate::domain::ids::StepId::from("s-tickets".to_string());
+
+    let d = evaluate(&policy, FailureClass::Verdict, 0, Some(&producer));
+    assert_eq!(d.action, RetryAction::Fail);
+}
+
+/// A `Fail` strategy never reaches the override arm at all.
+#[test]
+fn an_override_leaves_a_fail_rule_alone() {
+    let policy = legacy_policy_for_step(&step(None, Some(3)), None, None);
+    let producer = crate::domain::ids::StepId::from("s-tickets".to_string());
+
+    let d = evaluate(&policy, FailureClass::Verdict, 0, Some(&producer));
+    assert_eq!(d.action, RetryAction::Fail);
+    assert_eq!(d.rule_id, "verdict.fail");
+}
+
+/// An override is scoped to the redirect strategy — an in-place
+/// environment retry has no target to move.
+#[test]
+fn an_override_leaves_an_in_place_rule_alone() {
+    let policy = legacy_policy_for_step(&step(Some("s-gate-review"), Some(3)), None, None);
+    let producer = crate::domain::ids::StepId::from("s-tickets".to_string());
+
+    let d = evaluate(&policy, FailureClass::Environment, 0, Some(&producer));
+    assert!(matches!(d.action, RetryAction::RetryInPlace { .. }));
+    assert_eq!(d.rule_id, "environment.in_place");
 }

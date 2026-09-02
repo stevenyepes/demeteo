@@ -17,8 +17,8 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::models::StepExecution;
 use crate::domain::sequence::tasks::{
-    apply_landed_checkpoint, extract_task_plan, is_rework_plan, select_targeted_tasks,
-    task_list_json_shape_example, validate_task_plan, PlanKind, TaskPlan,
+    apply_landed_checkpoint, extract_task_plan, is_rework_plan, reject_unexecutable_plan,
+    select_targeted_tasks, task_list_json_shape_example, PlanKind, PlanRejection, TaskPlan,
 };
 
 impl ExecutionDriver {
@@ -167,14 +167,29 @@ impl ExecutionDriver {
         };
 
         // The plan is agent-authored whichever source it came from, so gate it
-        // before it becomes N agent sessions. Non-retryable: re-running the
-        // sequence step cannot fix a malformed task list — the step that wrote
-        // it has to.
-        if let Some(reason) = validate_task_plan(&plan) {
-            return Err(StepOutcome::NonRetryable(format!(
-                "sequence step: the task list is not executable — {}",
-                reason
-            )));
+        // before it becomes N agent sessions. Re-running *this* step cannot
+        // fix a malformed task list — the step that wrote it has to — so send
+        // it there. Every rule `validate_task_plan` enforces (blank id,
+        // duplicate id, self-dependency, forward dependency) is a defect the
+        // producer can repair from the message alone, and the redirect budget
+        // bounds a producer that keeps writing bad lists.
+        //
+        // With no producer to ask there is nowhere to send it, and a planner
+        // pass that re-decomposes from scratch has already had its go — so
+        // that case stays terminal.
+        if let Some(rejection) = reject_unexecutable_plan(
+            &plan,
+            step_conf
+                .task_list_from
+                .as_ref()
+                .filter(|s| !s.0.is_empty()),
+        ) {
+            return Err(match rejection {
+                PlanRejection::ProducerMustFix { producer, reason } => {
+                    StepOutcome::ProducerFault { producer, reason }
+                }
+                PlanRejection::Terminal { reason } => StepOutcome::NonRetryable(reason),
+            });
         }
 
         // Is the list we just read a *delta* against the previous cycle, or
@@ -357,8 +372,13 @@ impl ExecutionDriver {
     /// cannot help: the producer has already looked at the report and the
     /// code and concluded there is no ticket to write, and asking again
     /// spends another cycle to be told the same thing (or, worse, to be
-    /// handed invented work). So it stops the run and hands the producer's
-    /// own reason to the human, who is the only one who *can* act on it.
+    /// handed invented work). So it parks on the synthetic gate and hands
+    /// the producer's own reason to the human, who is the only one who
+    /// *can* act on it.
+    ///
+    /// It used to end the run instead, which was the same sentence with
+    /// the second half missing: the reason went into a database column and
+    /// the decision was in front of nobody.
     ///
     /// **Outside a rework cycle it is a fault**, and a retryable one: a
     /// decomposition step that returned no tickets for a feature that has
@@ -382,13 +402,21 @@ impl ExecutionDriver {
                 producer = %producer,
                 "sequence step: rework cycle scoped to zero tickets — stopping the loop"
             );
-            StepOutcome::NonRetryable(format!(
-                "sequence step: step '{}' scoped this rework cycle to zero tickets — it found \
-                 nothing in the review feedback that an implementation ticket can fix, so there \
-                 is no code change to make and re-running it would only ask the same question \
-                 again. This needs a human decision. Its stated reason: {}",
-                producer, reason
-            ))
+            StepOutcome::AwaitHumanDecision(crate::domain::step_park::HumanPark {
+                reason: format!(
+                    "Step '{}' scoped this rework cycle to zero tickets — it found nothing in \
+                     the review feedback that an implementation ticket can fix, so there is no \
+                     code change to make and re-running it would only ask the same question \
+                     again.\n\nIts stated reason:\n\n{}\n\nApprove to accept that there is \
+                     nothing to implement and let the run continue, or redirect to send '{}' \
+                     back with different direction.",
+                    producer, reason, producer
+                ),
+                // The producer is a real target here, unlike the resume
+                // guard's park: it emitted nothing and can be told what to
+                // emit instead.
+                redirect_to: Some(crate::domain::ids::StepId::from(producer.to_string())),
+            })
         } else {
             StepOutcome::Failed(format!(
                 "sequence step: step '{}' wrote a task list containing no tickets, so there is \

@@ -20,8 +20,22 @@ export function useSyncActions(input: {
   openDiffRange: (refs: { baseRef: string; headRef: string }) => void;
   /** Show the resolver's own step row and the output streaming into it. */
   showResolverStream: () => void;
+  /** Start a shell in a checkout named outright — the sync worktree is not one
+   *  the terminal picker offers, and deliberately so. */
+  openWorktreeTerminal: (at: {
+    machineId: string;
+    workDir: string;
+    workBranch: string;
+  }) => void;
 }): (intent: SyncIntent) => void {
-  const { sync, resolver, refreshDrift, openDiffRange, showResolverStream } = input;
+  const {
+    sync,
+    resolver,
+    refreshDrift,
+    openDiffRange,
+    showResolverStream,
+    openWorktreeTerminal,
+  } = input;
   const { overrides } = resolver;
 
   return useCallback(
@@ -31,15 +45,26 @@ export function useSyncActions(input: {
           void sync.startSync();
           return;
         case 'resolve':
-          void sync.resolve(
-            (sync.session?.conflict_files ?? []).map((file) => file.path),
-            {
-              agentKind: overrides.selectedAgent || null,
-              model: overrides.selectedModel || null,
-              effort: overrides.selectedEffort || null,
-            },
-          );
+          void sync.resolve({
+            agentKind: overrides.selectedAgent || null,
+            model: overrides.selectedModel || null,
+            effort: overrides.selectedEffort || null,
+          });
           return;
+        case 'continue':
+          void sync.continueSync();
+          return;
+        case 'terminal': {
+          const session = sync.session;
+          if (session?.worktree_path) {
+            openWorktreeTerminal({
+              machineId: session.machine_id,
+              workDir: session.worktree_path,
+              workBranch: session.feature_branch,
+            });
+          }
+          return;
+        }
         case 'abort':
           void sync.abort();
           return;
@@ -71,6 +96,6 @@ export function useSyncActions(input: {
           return;
       }
     },
-    [sync, overrides, refreshDrift, openDiffRange, showResolverStream],
+    [sync, overrides, refreshDrift, openDiffRange, showResolverStream, openWorktreeTerminal],
   );
 }

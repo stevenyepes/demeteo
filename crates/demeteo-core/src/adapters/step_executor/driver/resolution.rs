@@ -113,18 +113,22 @@ impl ExecutionDriver {
     /// `attempts_used`: what the class has already consumed — the step's
     /// `iteration_count` for redirect rules, the class-failure count for
     /// in-place rules (see [`retry_policy::evaluate`]).
+    ///
+    /// `redirect_override`: re-addresses the redirect without re-deciding
+    /// it — see [`retry_policy::evaluate`].
     pub(crate) fn retry_decision_for(
         &self,
         step_conf: &StepConfig,
         class: super::super::retry_policy::FailureClass,
         attempts_used: u32,
+        redirect_override: Option<&crate::domain::ids::StepId>,
     ) -> super::super::retry_policy::RetryDecision {
         let policy = super::super::retry_policy::legacy_policy_for_step(
             step_conf,
             self.loop_iterations_override,
             self.project_default_loop_iterations,
         );
-        super::super::retry_policy::evaluate(&policy, class, attempts_used)
+        super::super::retry_policy::evaluate(&policy, class, attempts_used, redirect_override)
     }
 }
 

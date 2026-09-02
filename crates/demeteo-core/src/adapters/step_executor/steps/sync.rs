@@ -51,8 +51,12 @@ use super::StepOutcome;
 /// `files` and `worktree_path` both come out of one [`SyncStepNext::Resolve`];
 /// `feature_branch` and `base_branch` are computed together and never used
 /// apart. The resolution turn two frames down already takes a bundle of the
+/// same shape (`sync_resolve::ResolveSyncContext`). The resolution turn two frames down already takes a bundle of the
 /// same shape (`sync_resolve::ResolveSyncContext`).
 struct SyncConflict<'a> {
+    /// The same list `adapters::merge` just persisted on the session row — what
+    /// the resolution must prove marker-free. Handed down rather than read back
+    /// because reading it back reconciles the row against the worktree.
     files: &'a [crate::domain::models::ConflictFile],
     worktree_path: Option<&'a str>,
     feature_branch: &'a str,
@@ -205,7 +209,7 @@ impl ExecutionDriver {
         spend: RunningSpend<'_>,
     ) -> StepOutcome {
         let SyncConflict {
-            files: conflict_files,
+            files: declared_conflicts,
             worktree_path,
             feature_branch,
             base_branch,
@@ -222,8 +226,6 @@ impl ExecutionDriver {
 
         let chosen = self.resolve_sync_resolver(step_conf, settings);
 
-        let conflict_paths: Vec<String> = conflict_files.iter().map(|f| f.path.clone()).collect();
-
         let outcome = crate::adapters::step_executor::sync_resolve::resolve_sync_conflicts(
             crate::adapters::step_executor::sync_resolve::ResolveSyncContext {
                 exec: &self.exec,
@@ -239,7 +241,7 @@ impl ExecutionDriver {
                 machine_str,
                 feature_branch,
                 base_branch,
-                conflict_files: &conflict_paths,
+                declared_conflicts,
                 gate: crate::adapters::step_executor::sync::sync_gate(settings),
                 step_exec,
                 thread_id_prefix: "sync-step-resolver",

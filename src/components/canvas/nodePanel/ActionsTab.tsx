@@ -50,7 +50,14 @@ export function ActionsTab({
   const graphless = isOutOfBandStep(node.id);
   const isFailed = (status === 'failed' || status === 'interrupted') && !graphless;
   const isRunning = status === 'running' || status === 'verifying';
-  const isGateWaiting = node.type === 'gate' && status === 'awaiting_gate';
+  // Keyed on the status alone, not on the node kind. `awaiting_gate` is
+  // written by exactly two things — the gate handler, and a non-gate step
+  // that parked for a human — and `gate_decide` answers both identically.
+  // Requiring `type === 'gate'` left a parked step with no action at all:
+  // `isFailed` does not cover `awaiting_gate` either, so the panel offered
+  // neither Decide nor Retry and the only way to answer was the transient
+  // toast.
+  const isGateWaiting = status === 'awaiting_gate';
   const guarded = blockedBy !== null;
   const guardMsg = blockedBy
     ? `Ancestor "${blockedBy.step_id}" is still ${blockedBy.status}. Wait for it to finish.`

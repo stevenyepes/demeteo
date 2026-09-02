@@ -252,3 +252,34 @@ fn mode_reports_itself() {
     assert!(!ReworkMode::Revision.is_rework());
     assert!(!ReworkMode::Greenfield.is_rework());
 }
+
+// --- when the retry feedback goes stale --------------------------------------
+
+/// No retry in flight: there is no loop to close and nothing to carry.
+#[test]
+fn no_retry_context_is_already_closed() {
+    assert!(retry_loop_closed(None, "s-implement"));
+}
+
+/// The step that opened the loop succeeded — the feedback describes a
+/// failure that no longer stands.
+#[test]
+fn the_failing_step_succeeding_closes_the_loop() {
+    assert!(retry_loop_closed(Some("s-implement"), "s-implement"));
+}
+
+/// Everything between the redirect target and the failing step still needs
+/// the feedback; clearing it here is how a re-run step goes in blind.
+#[test]
+fn an_intermediate_step_leaves_the_loop_open() {
+    assert!(!retry_loop_closed(Some("s-validate"), "s-tickets"));
+    assert!(!retry_loop_closed(Some("s-validate"), "s-implement"));
+}
+
+/// The legacy shape — a row from before the failing step was recorded —
+/// clears after the next completed step rather than pinning the feedback to
+/// a step id that was never written.
+#[test]
+fn an_unrecorded_failing_step_closes_after_the_next_completion() {
+    assert!(retry_loop_closed(Some(""), "s-implement"));
+}

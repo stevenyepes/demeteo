@@ -35,7 +35,12 @@ pub struct StepAttempt {
     pub step_execution_id: StepExecutionId,
     pub attempt_no: u32,
     /// `running` while in flight, then one of
-    /// `completed | failed | cancelled | interrupted | redirected`.
+    /// `completed | failed | cancelled | interrupted | redirected | parked`.
+    ///
+    /// `parked` is the attempt that stopped to ask a human and closed
+    /// before waiting, so the wait is not billed to it. The column has no
+    /// `CHECK`, so the vocabulary lives here and in V31's comment; V31 is
+    /// applied and checksummed, so this is the copy that gets updated.
     pub status: String,
     /// This attempt's own spend (delta), not the step's running total.
     pub cost_usd: Option<f64>,

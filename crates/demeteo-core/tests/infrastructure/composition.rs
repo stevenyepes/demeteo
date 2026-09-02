@@ -140,7 +140,7 @@ async fn one_sync_registry_is_shared_by_everything_that_reads_a_live_turn() {
 
     let resolve = ctx
         .executor
-        .feature_resolve_sync_conflicts(&feature_id, &[], &Default::default())
+        .feature_resolve_sync_conflicts(&feature_id, &Default::default())
         .await;
     assert!(
         resolve

@@ -148,11 +148,7 @@ async fn resolve(
     let feature_id = seed(&db, label, feature_status);
 
     let view = executor
-        .feature_resolve_sync_conflicts_impl(
-            &feature_id,
-            &["README.md".to_string()],
-            &Default::default(),
-        )
+        .feature_resolve_sync_conflicts_impl(&feature_id, &Default::default())
         .await;
     (view, exec, db, temp_dir)
 }
@@ -276,11 +272,7 @@ async fn a_second_manual_sync_reuses_the_first_ones_row() {
 
     for _ in 0..2 {
         executor
-            .feature_resolve_sync_conflicts_impl(
-                &feature_id,
-                &["README.md".to_string()],
-                &Default::default(),
-            )
+            .feature_resolve_sync_conflicts_impl(&feature_id, &Default::default())
             .await
             .expect("the button answers a view, never an insert error");
     }
@@ -314,11 +306,7 @@ async fn a_repeat_resolution_does_not_erase_what_the_first_one_spent() {
         .expect("the first attempt's row");
 
     executor
-        .feature_resolve_sync_conflicts_impl(
-            &feature_id,
-            &["README.md".to_string()],
-            &Default::default(),
-        )
+        .feature_resolve_sync_conflicts_impl(&feature_id, &Default::default())
         .await
         .expect("the button answers a view");
 
@@ -417,11 +405,7 @@ async fn a_second_resolution_is_refused_while_the_first_is_in_flight() {
     let _turn = executor.claim_sync_cancel_for_test(&feature_id, tx);
 
     let refusal = executor
-        .feature_resolve_sync_conflicts_impl(
-            &feature_id,
-            &["README.md".to_string()],
-            &Default::default(),
-        )
+        .feature_resolve_sync_conflicts_impl(&feature_id, &Default::default())
         .await
         .expect_err("a second agent was let into the same worktree");
     assert!(refusal.contains("already running"), "{refusal}");
@@ -449,13 +433,23 @@ fn merge_open_for_the_resolver() -> ScriptedExec {
             "git -C /repos/demeteo_wt_sync_conflicted rev-parse --verify --quiet MERGE_HEAD",
             Ok("b1b2b3b\n"),
         ),
-        // `preflight` returns on a non-empty unmerged list, so this is the last
-        // thing asked before the spawn.
         (
             "git -C /repos/demeteo_wt_sync_conflicted status --porcelain --untracked-files=no",
             Ok("UU README.md\n"),
         ),
     ])
+    // Read after the preflight and before the spawn: a resolution asks each
+    // declared file what it still holds, and only what still has markers is
+    // worth a turn. Marked here, so these tests reach the spawn they are about.
+    .with_files(&[(
+        crate::paths::join_on(
+            WT,
+            ["README.md"],
+            crate::paths::targets_windows_host(LOCAL_MACHINE),
+        )
+        .as_str(),
+        Ok("<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> origin/master\n"),
+    )])
 }
 
 /// Records the identity one spawn was asked for, then refuses. Refusing is the
@@ -559,7 +553,7 @@ async fn spawned_by(
     prepare(&db, &feature);
 
     let _ = executor
-        .feature_resolve_sync_conflicts_impl(&feature_id, &["README.md".to_string()], &asked)
+        .feature_resolve_sync_conflicts_impl(&feature_id, &asked)
         .await;
 
     let recorded = seen.lock().unwrap().clone();

@@ -145,6 +145,35 @@ impl StepTransition {
         }
     }
 
+    /// The step stopped to ask a human and is waiting on the answer.
+    ///
+    /// `error_message` carries the reason, which is not an error: it is the
+    /// only place the question reaches the person being asked. `GateView`
+    /// reads it off the step row, so a park that leaves it empty renders as
+    /// a modal with no question in it.
+    ///
+    /// The same `awaiting_gate` a real gate step writes, deliberately —
+    /// `awaitingGates()` in the run chrome keys on the status and not on
+    /// the node kind, so a parked `sequence` node joins the strip with no
+    /// frontend change.
+    pub(crate) fn awaiting_gate(
+        cost_usd: f64,
+        tokens: i64,
+        wall_clock_secs: u64,
+        reason: String,
+        cache: CacheTokens,
+    ) -> Self {
+        Self {
+            status: "awaiting_gate",
+            cost_usd,
+            tokens: Some(tokens),
+            wall_clock_secs,
+            artifact_path: None,
+            error_message: Some(Some(reason)),
+            cache,
+        }
+    }
+
     /// The step is parked back at the start line for an in-place retry —
     /// the run loop re-dispatches whatever it finds `pending`.
     pub(crate) fn pending(

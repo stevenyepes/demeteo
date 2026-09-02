@@ -22,10 +22,17 @@
 /// driving it is gone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterruptedStep {
-    /// The `error_message` the row is left carrying. It is what the user reads
-    /// in the timeline, and it names which of the two things was interrupted —
-    /// the step's own work, or the wait for a human.
-    pub message: String,
+    /// The `error_message` to write, or `None` to leave whatever the row
+    /// already carries.
+    ///
+    /// `None` is not a missing message — it is a refusal to overwrite one.
+    /// A step parked for a human keeps its *question* in `error_message`,
+    /// and it is the only copy: `GateView` reads it off the row to show
+    /// the person what they are being asked. Stamping a restart notice
+    /// over it would leave the modal asking nothing, on exactly the path
+    /// the park exists to serve. A real `gate` step loses only the notice,
+    /// and its status already says it is waiting.
+    pub message: Option<String>,
     /// Whether the reconciliation must also create an undecided
     /// [`GateDecision`](crate::domain::models::GateDecision) row for this step.
     ///
@@ -49,11 +56,11 @@ pub struct InterruptedStep {
 pub fn interrupted_by_restart(step_status: &str) -> Option<InterruptedStep> {
     match step_status {
         "awaiting_gate" => Some(InterruptedStep {
-            message: "Gate interrupted by system restart".to_string(),
+            message: None,
             synthesise_gate_decision: false,
         }),
         "running" => Some(InterruptedStep {
-            message: "Step interrupted by system restart".to_string(),
+            message: Some("Step interrupted by system restart".to_string()),
             synthesise_gate_decision: true,
         }),
         _ => None,

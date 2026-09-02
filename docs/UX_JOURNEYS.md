@@ -119,8 +119,10 @@ The application functions within a single unified shell (no multi-window popouts
 *Handling overlapping changes smartly.*
 - **Trigger:** A subtask merge back into `feature/<slug>` fails, or `feature_sync` against `origin/<default>` leaves conflicts.
 - **System Flow:** A conflicting *step* merge costs one automatic agent turn in the step's own worktree (`steps/conflict_pass`); only if that fails does the step fail. A conflicting *sync* surfaces the file list to the user, who triggers `feature_resolve_sync_conflicts` ("Resolve with agent") — it spawns a resolution agent, commits the fix, and replays the validation step. (The "Conflict Resolution Policy" project setting is currently decorative — nothing reads it; see decision 20's history.)
-- **UI State:** No dedicated Monaco 3-way merge component ships in v1. A conflicting *step* merge is shown in `GateView`; a conflicting *sync* is shown in the Sync pane, whose arms Journey 10 walks. Either way the file list is shown and the user can retry, abort, or hand-roll a manual edit via the in-app terminal.
-- **Actions:** Approve (re-run after manual edit), Retry (re-spawn the auto-agent), Abort feature.
+- **UI State:** No dedicated Monaco 3-way merge component ships in v1. A conflicting *step* merge is shown in `GateView`; a conflicting *sync* is shown in the Sync pane, whose arms Journey 10 walks. Either way the file list is shown; on a sync, clicking a path opens it in the *sync* worktree, which is a different checkout from the feature's and the only one holding markers.
+- **Rounds, not presses:** the sync resolver reads every conflicted file after each turn. A round that cleared hunks buys another over only what is left; a round that cleared none stops. A refusal names what remains and how many hunks each file has, so a converging resolution is distinguishable from a stalled one — which it was not while the refusal named whichever file was read first.
+- **Finishing by hand is a supported path, not an escape:** "Open a terminal here" starts a shell in the sync worktree (the terminal *picker* still excludes pipeline checkouts; this names one outright), and "I've resolved it" (`feature_continue_sync`) verifies, gates and commits it on exactly the terms the agent path does. A sync that would delete a part-finished worktree is refused.
+- **Actions:** Resolve with agent · I've resolved it · Open a terminal here · Open the stream · Abort sync.
 
 ### Journey 10: Syncing a Feature Branch With Its Base
 *Bringing the base branch in, when the branch itself has also moved elsewhere.*
@@ -132,7 +134,7 @@ The application functions within a single unified shell (no multi-window popouts
 - **Divergence, origin rewrote this branch:** every local commit's patch is already upstream (a rebase, a squash, an amend elsewhere). The pane says so with the counts and offers two presses — reset onto origin, which loses no work, and merge origin in, which keeps both histories. The reset is human-only: patch equivalence proves content, never intent.
 - **Divergence, mixed or unmeasurable:** `blocked` at `feature_diverged` with git's own counts and no affordance, because only a person knows which history the branch is meant to be.
 - **Unattended runs:** a `sync` node takes the disjoint arm on its own and routes conflicts to the project's configured resolver; the two arms that would pick a history stop the step or park at a gate instead.
-- **Actions:** Sync · Reconcile (merge origin in) · Reset onto origin · Resolve with agent · Abort · Review · Publish · Discard — each offered only to a session no other turn is driving.
+- **Actions:** Sync · Reconcile (merge origin in) · Reset onto origin · Resolve with agent · I've resolved it · Open a terminal here · Abort · Review · Publish · Discard — each offered only to a session no other turn is driving.
 
 ### Journey 11: Workflow Authoring
 *Creating the templates that agents follow.*

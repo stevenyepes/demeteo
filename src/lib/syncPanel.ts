@@ -52,6 +52,8 @@ export type SyncPanelState =
 export type SyncIntent =
   | 'sync'
   | 'resolve'
+  | 'continue'
+  | 'terminal'
   | 'abort'
   | 'review'
   | 'publish'
@@ -153,7 +155,7 @@ export function syncIntentMovesBranch(intent: SyncIntent | null): boolean {
  * "another sync action is still running" would take it away.
  */
 export function isReadOnlySyncIntent(intent: SyncIntent): boolean {
-  return intent === 'watch' || intent === 'review';
+  return intent === 'watch' || intent === 'review' || intent === 'terminal';
 }
 
 const REFRESH: SyncAction = {
@@ -203,6 +205,27 @@ const ABANDON: SyncAction = {
   tone: 'ruby',
   title: 'Discard the sync worktree and close this session',
   desc: 'Discards the sync worktree and closes the session. Anything git already committed to the branch stays on it.',
+};
+
+/** The pane told people to resolve conflicts themselves for as long as it has
+ *  existed, while offering nothing that would take the result: the ways out
+ *  were an agent or abandoning the sync. */
+const CONTINUE: SyncAction = {
+  intent: 'continue',
+  label: "I've resolved it",
+  tone: 'emerald',
+  title: 'Verify what you resolved in the sync worktree, then commit it',
+  desc: 'Checks that no conflict markers are left, runs the project\u2019s checks in the merged tree, and commits. Spawns no agent.',
+};
+
+/** Named outright because the terminal picker cannot offer it: that listing
+ *  excludes pipeline-owned checkouts on purpose, and this is one. */
+const TERMINAL: SyncAction = {
+  intent: 'terminal',
+  label: 'Open a terminal here',
+  tone: 'cyan',
+  title: 'Start a shell in the sync worktree, where the merge is',
+  desc: 'Opens a terminal in the sync worktree \u2014 the checkout holding the merge, which is not the feature worktree.',
 };
 
 const WATCH: SyncAction = {
@@ -280,7 +303,7 @@ export function describeSyncPanel({
         detail: session.raw_error,
         conflictFiles: session.conflict_files,
         showResolver: mine,
-        actions: mine ? [RESOLVE, ABORT] : [],
+        actions: mine ? [RESOLVE, CONTINUE, TERMINAL, ABORT] : [],
         badge: Math.max(session.conflict_files.length, 1),
       };
 
@@ -294,12 +317,19 @@ export function describeSyncPanel({
         tone: 'ruby',
         chipLabel: 'Resolver failed',
         headline: 'The agent could not clear the conflict',
-        body: 'The merge is still on disk with its markers. Try another harness, finish it by hand in the worktree, or abort the sync.',
+        // What is left is in `detail` — the backend's refusal names the files
+        // and the hunks each has, so the body says where to act rather than
+        // repeating a count it would have to derive.
+        body: 'The merge is still on disk. Press Resolve again to carry on from where it got to, finish the rest by hand in the worktree, or abort the sync.',
         detail: session.raw_error,
         conflictFiles: session.conflict_files,
         showResolver: mine,
         showTelemetry: true,
-        actions: mine ? [{ ...RESOLVE, label: 'Try again' }, ABORT] : [],
+        // `watch` here and not only while it runs: the turn that failed is the
+        // thing the user most wants to read, and its row keeps its output.
+        actions: mine
+          ? [{ ...RESOLVE, label: 'Try again' }, CONTINUE, TERMINAL, WATCH, ABORT]
+          : [WATCH],
         badge: 1,
       };
 
