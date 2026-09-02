@@ -3,9 +3,26 @@
  * `WorkflowNode.tsx` so a diagram reads the same whichever surface drew it
  * (docs/ask-canvas/probe/Nodes.html). No placement math or citation
  * matching here; both are pure functions this component only consumes.
+ *
+ * Positioned by the caller through an inline `left`/`top`, the way
+ * `TicketGraphNode.tsx` is and for the same reason — a computed coordinate is
+ * a datum, not a design token, so AGENTS.md §4's ban does not reach it. This
+ * card previously lived inside an SVG `<foreignObject>` to avoid that inline
+ * style; under a transformed `<g>` the webview dropped the ancestor transform
+ * and mis-scaled the subtree, which put every card in the wrong column.
  */
 import { Bot, type LucideIcon, UserCheck, Workflow, Boxes } from 'lucide-react';
 import type { CanvasNode, NodeRole } from '../../types';
+import { NODE_H, NODE_W } from '../../lib/askCanvasLayout';
+
+/**
+ * What this node's `path` turned out to be, which is three answers and not
+ * two. `none` is a node that never named a file — a person, a concept, every
+ * `needs_human` node by definition — and it is a normal card. `missing` is a
+ * node that named one which is not there, and only that earns the dimmed,
+ * dashed treatment. Collapsing the two rendered every Gate as a ghost.
+ */
+export type NodePathState = 'none' | 'resolved' | 'missing';
 
 type NodeCardState = 'resting' | 'selected' | 'cited' | 'unresolved';
 
@@ -49,39 +66,53 @@ const STATE_CARD: Record<NodeCardState, string> = {
   unresolved: 'border-slate-600/50 border-dashed opacity-50 shadow-none',
 };
 
-function resolveState(resolved: boolean, selected: boolean, cited: boolean): NodeCardState {
-  if (!resolved) return 'unresolved';
+function resolveState(
+  pathState: NodePathState,
+  selected: boolean,
+  cited: boolean,
+): NodeCardState {
+  if (pathState === 'missing') return 'unresolved';
   if (selected) return 'selected';
   if (cited) return 'cited';
   return 'resting';
 }
 
+/** The last two segments, which is the part that names the thing — the mock
+ *  labels a node `step_executor/driver.rs`, not the repo path that reaches
+ *  it. Truncating a full path from the right left every node in a Rust tree
+ *  reading `crates/demeteo-core…`, which identifies nothing. */
+export function pathTail(path: string): string {
+  const segments = path.split('/').filter((segment) => segment.length > 0);
+  return segments.slice(-2).join('/');
+}
+
 export interface AskCanvasNodeProps {
   node: CanvasNode;
-  /** The caller's looked-up `CanvasPathVerdict.resolved` for this node's
-   *  `(id, path)` pair — this component never looks up the verdict itself. */
-  resolved: boolean;
+  /** Derived by the caller from its `(id, path)` verdict lookup — this
+   *  component never looks up a verdict itself. */
+  pathState: NodePathState;
   selected: boolean;
   cited: boolean;
+  x: number;
+  y: number;
   onActivate: (id: string) => void;
 }
 
-export function AskCanvasNode({ node, resolved, selected, cited, onActivate }: AskCanvasNodeProps) {
-  const state = resolveState(resolved, selected, cited);
+export function AskCanvasNode({
+  node,
+  pathState,
+  selected,
+  cited,
+  x,
+  y,
+  onActivate,
+}: AskCanvasNodeProps) {
+  const state = resolveState(pathState, selected, cited);
   const Icon = ROLE_ICON[node.role];
-  const clickable = resolved;
+  const clickable = pathState !== 'missing';
 
-  return (
-    <div
-      data-state={state}
-      className={[
-        'flex h-[72px] w-[202px] flex-col justify-center gap-1.5 rounded-xl border px-3.5',
-        'bg-slate-900/70 backdrop-blur-sm',
-        clickable ? 'cursor-pointer' : '',
-        STATE_CARD[state],
-      ].join(' ')}
-      {...(clickable ? { onClick: () => onActivate(node.id) } : {})}
-    >
+  const body = (
+    <>
       <div className="flex min-w-0 items-center gap-3">
         <div
           className={[
@@ -91,7 +122,7 @@ export function AskCanvasNode({ node, resolved, selected, cited, onActivate }: A
         >
           <Icon className="h-4 w-4" aria-hidden />
         </div>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 text-left">
           <div className="truncate text-[13px] font-medium text-slate-100" title={node.title}>
             {node.title}
           </div>
@@ -101,8 +132,41 @@ export function AskCanvasNode({ node, resolved, selected, cited, onActivate }: A
         </div>
       </div>
       {node.path !== null && (
-        <div className="truncate pl-11 font-mono text-[9px] text-slate-500">{node.path}</div>
+        <div className="truncate pl-11 text-left font-mono text-[9px] text-slate-500" title={node.path}>
+          {pathTail(node.path)}
+        </div>
       )}
-    </div>
+    </>
+  );
+
+  const shell = [
+    'absolute flex flex-col justify-center gap-1.5 rounded-xl border px-3.5',
+    'bg-slate-900/70 backdrop-blur-sm',
+    STATE_CARD[state],
+  ].join(' ');
+
+  // A computed coordinate is the datum here, exactly as `TicketGraphNode.tsx`
+  // records for its own inline style.
+  const box = { left: x, top: y, width: NODE_W, height: NODE_H };
+
+  if (!clickable) {
+    return (
+      <div data-state={state} style={box} className={shell}>
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      data-state={state}
+      aria-pressed={selected}
+      onClick={() => onActivate(node.id)}
+      style={box}
+      className={shell}
+    >
+      {body}
+    </button>
   );
 }

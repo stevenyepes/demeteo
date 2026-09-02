@@ -70,7 +70,7 @@ pub struct CanvasNode {
 }
 
 /// Which direction an edge reads as.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
     /// The normal direction: work moving forward.
@@ -211,7 +211,22 @@ a note saying why.
 
 `kind`, on an edge:
   hands_off      work moving forward: the normal direction
-  goes_back      a redirect, retry, or rework"#
+  goes_back      a redirect, retry, or rework
+
+PLACEMENT
+
+  One node per (stage, lane) cell. Two nodes naming the same cell are drawn
+  one under the other and the lane grows to hold them, which is legible but
+  is never what a reader expects; give the second one its own stage or its
+  own lane.
+
+  Stages read left to right. An edge whose `to` sits at an earlier stage than
+  its `from` is a `goes_back`, whatever it feels like — `hands_off` on a
+  backwards edge draws a forward arrow running the wrong way.
+
+  A `title` is a label on a card about 200px wide: roughly 28 characters
+  before it is cut. `opencode / claude-code / hermes` does not fit; `Coding
+  agent` does, and the node's `path` says which one."#
         .to_string()
 }
 
@@ -222,6 +237,14 @@ a note saying why.
 /// at deserialize time, before a value of this type can exist, and that
 /// failure is surfaced through [`refused_tail`] instead. Every other rule
 /// is a rendering failure rather than a taste judgement.
+///
+/// Which is why two nodes sharing a cell, and a backwards `hands_off`, are
+/// **not** rejected: the renderer tiles the first and routes the second from
+/// the positions rather than from the label. Refusing a whole canvas over
+/// either would cost the reader the answer to punish the model for a
+/// placement the surface can absorb. [`canvas_block_vocabulary`] asks for
+/// both anyway — asking is free, refusing is not. A self-edge and a repeated
+/// edge are different: neither has a drawing, so they are refused here.
 pub fn validate_canvas(canvas: &AskCanvas) -> Option<String> {
     for node in &canvas.nodes {
         if node.stage >= canvas.stages.len() {
@@ -253,6 +276,20 @@ pub fn validate_canvas(canvas: &AskCanvas) -> Option<String> {
             if !index.contains_key(id) {
                 return Some(format!("edge names unknown node '{id}'"));
             }
+        }
+    }
+
+    let mut edges_seen: std::collections::HashSet<(&str, &str, EdgeKind)> =
+        std::collections::HashSet::new();
+    for edge in &canvas.edges {
+        if edge.from == edge.to {
+            return Some(format!("edge from '{}' points at itself", edge.from));
+        }
+        if !edges_seen.insert((edge.from.as_str(), edge.to.as_str(), edge.kind)) {
+            return Some(format!(
+                "the edge '{}' -> '{}' is declared more than once",
+                edge.from, edge.to
+            ));
         }
     }
 

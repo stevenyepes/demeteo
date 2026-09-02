@@ -155,11 +155,10 @@ fn resolved(node_id: &str, path: &str) -> CanvasPathVerdict {
 }
 
 /// AC-2: a thread whose worktree was reclaimed (`worktree_path: None`) still
-/// resolves against the project's own checkout — [`resolve`] never reads
-/// [`AskThread::worktree_path`] at all, so there is nothing for a reclaim to
-/// invalidate.
+/// resolves — [`super::super::worktree::ensure`] provisions a fresh one, so a
+/// reclaim costs a checkout and never an answer.
 #[tokio::test]
-async fn resolve_reads_the_project_checkout_when_the_worktree_was_reclaimed() {
+async fn resolve_provisions_a_worktree_when_the_thread_had_none() {
     let (ctx, project_id, repo_dir) = fixture("reclaimed").await;
     init_repo_at(&repo_dir).await;
     let t = thread(&project_id, "t-reclaimed", LOCAL_MACHINE, None);
@@ -184,30 +183,94 @@ async fn resolve_reads_the_project_checkout_when_the_worktree_was_reclaimed() {
             default_branch,
             ..
         } => {
-            assert_eq!(worktree_path, repo_dir.to_string_lossy());
+            // Never the clone's own working tree, whose checked-out branch is
+            // whatever a past feature run left behind — that is what reported
+            // present files as moved.
+            assert_ne!(worktree_path, repo_dir.to_string_lossy());
+            assert!(
+                std::path::Path::new(&worktree_path)
+                    .join("README.md")
+                    .exists(),
+                "the tree resolution names must actually carry the node's file: {worktree_path}"
+            );
             assert_eq!(path, "README.md");
             assert_eq!(
                 branch, default_branch,
-                "a project-level checkout has no feature branch, so both must match"
+                "a detached Ask worktree has no branch of its own, so both must match"
             );
         }
         other => panic!("expected Editor, got {other:?}"),
     }
 }
 
-/// Baseline for AC-2: the same resolution succeeds identically when the
-/// thread's worktree path is still present, proving the project's `repo_dir`
-/// is used regardless of worktree presence — not only as a fallback for the
-/// reclaimed case.
+/// The regression this module was rewritten for: the managed clone's own
+/// working tree is a side effect of whatever last used it, so a file that is
+/// present on the default branch can be absent from the checkout sitting on
+/// disk. Resolving against that checkout called such a node *moved* — of a
+/// file nothing had touched. Here the clone is parked on a branch that
+/// deleted `README.md` while `main` still carries it.
 #[tokio::test]
-async fn resolve_reads_the_project_checkout_even_when_the_worktree_is_still_present() {
+async fn resolve_ignores_what_the_clone_happens_to_have_checked_out() {
+    let (ctx, project_id, repo_dir) = fixture("parked").await;
+    init_repo_at(&repo_dir).await;
+
+    let exec = LocalSubprocessAdapter::new();
+    let repo = repo_dir.to_string_lossy().to_string();
+    for cmd in [
+        format!("git -C \"{repo}\" checkout -b leftover-feature"),
+        format!("git -C \"{repo}\" rm -q README.md"),
+        format!("git -C \"{repo}\" commit -m \"drop the readme\""),
+    ] {
+        exec.run_command("local", &cmd)
+            .await
+            .unwrap_or_else(|e| panic!("{cmd}: {e}"));
+    }
+    assert!(
+        !repo_dir.join("README.md").exists(),
+        "the clone's working tree must not carry the file, or this proves nothing"
+    );
+
+    let t = thread(&project_id, "t-parked", LOCAL_MACHINE, None);
+    ctx.ask.create(&t).expect("the thread is stored");
+    let m = message_with_verdicts(
+        "m-1",
+        &t.id,
+        vec![resolved("n1", "README.md")],
+        Some("deadbeef"),
+    );
+    ctx.ask.append_message(&m).expect("the message is stored");
+
+    match resolve(&ctx, &t.id, "m-1", "n1")
+        .await
+        .expect("resolve succeeds")
+    {
+        NodeResolution::Editor { worktree_path, .. } => {
+            assert!(
+                std::path::Path::new(&worktree_path)
+                    .join("README.md")
+                    .exists(),
+                "resolution must name a tree that carries the file: {worktree_path}"
+            );
+        }
+        other => panic!("expected Editor, got {other:?}"),
+    }
+}
+
+/// The counterpart: a thread whose worktree is still there resolves against
+/// that one rather than provisioning a second, so a click is cheap after the
+/// first and always names the tree the turn itself read.
+#[tokio::test]
+async fn resolve_reuses_the_threads_existing_worktree() {
     let (ctx, project_id, repo_dir) = fixture("present").await;
     init_repo_at(&repo_dir).await;
+    let existing = repo_dir.parent().expect("repos dir").join("standing-tree");
+    std::fs::create_dir_all(&existing).expect("creates the standing worktree");
+    std::fs::write(existing.join("README.md"), "# standing").expect("writes the file");
     let t = thread(
         &project_id,
         "t-present",
         LOCAL_MACHINE,
-        Some("/tmp/does-not-need-to-exist"),
+        Some(&existing.to_string_lossy()),
     );
     ctx.ask.create(&t).expect("the thread is stored");
     let m = message_with_verdicts(
@@ -228,16 +291,16 @@ async fn resolve_reads_the_project_checkout_even_when_the_worktree_is_still_pres
             path,
             ..
         } => {
-            assert_eq!(worktree_path, repo_dir.to_string_lossy());
+            assert_eq!(worktree_path, existing.to_string_lossy());
             assert_eq!(path, "README.md");
         }
         other => panic!("expected Editor, got {other:?}"),
     }
 }
 
-/// AC-3: a verdict stored `resolved: true` whose path no longer exists in
-/// the project's current checkout reports `Moved`, carrying the message's
-/// own `checked_commit_sha` verbatim.
+/// AC-3: a verdict stored `resolved: true` whose path is not in the tree the
+/// thread reads now reports `Moved`, carrying the message's own
+/// `checked_commit_sha` verbatim.
 #[tokio::test]
 async fn resolve_reports_moved_when_the_verified_path_no_longer_exists() {
     let (ctx, project_id, repo_dir) = fixture("moved").await;
@@ -369,7 +432,9 @@ async fn resolve_uses_the_threads_own_machine_not_a_local_default() {
     let (mut ctx, project_id, _repo_dir) = fixture("remote").await;
     let exec = Arc::new(FakeRemoteExec::new("/home/rig"));
     ctx.exec = exec.clone();
-    let t = thread(&project_id, "t-remote", "rig-1", None);
+    // A standing worktree, so `ensure` answers from the stored path rather
+    // than shelling out to git through a double that does not speak it.
+    let t = thread(&project_id, "t-remote", "rig-1", Some("/srv/ask/tree"));
     ctx.ask.create(&t).expect("the thread is stored");
     let m = message_with_verdicts(
         "m-1",

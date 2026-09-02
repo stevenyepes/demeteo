@@ -40,6 +40,34 @@ describe('citedNodeIds', () => {
     expect(cited.has('a')).toBe(false);
   });
 
+  it('does not light a short title that only appears inside a longer word', () => {
+    const nodes = [node('a', 'Gate'), node('b', 'Sync')];
+
+    const cited = citedNodeIds(
+      'The gateway is asynchronous, so nothing here names either node.',
+      nodes,
+    );
+
+    expect(cited.size).toBe(0);
+  });
+
+  it('still matches a whole-token occurrence of a title that short', () => {
+    const nodes = [node('a', 'Gate')];
+
+    expect(citedNodeIds('Work stops at the Gate until a person decides.', nodes).has('a')).toBe(
+      true,
+    );
+  });
+
+  it('matches a path even where a word boundary would not fall', () => {
+    // `.rs` ends in a non-word character, so `\b` after it would happily
+    // match inside `driver.rsx` — hence the hand-rolled token test.
+    const nodes = [node('a', 'Step execution', 'adapters/driver.rs')];
+
+    expect(citedNodeIds('It lives in adapters/driver.rsx now.', nodes).has('a')).toBe(false);
+    expect(citedNodeIds('It lives in `adapters/driver.rs` now.', nodes).has('a')).toBe(true);
+  });
+
   it('returns an empty set for empty answer text', () => {
     const nodes = [node('a', 'Decompose Feature'), node('b', 'Gate & Merge')];
 
@@ -78,6 +106,17 @@ describe('descriptionForNode', () => {
     const description = descriptionForNode('This answer talks about something unrelated entirely.', target);
 
     expect(description).toBeNull();
+  });
+
+  it('returns the sentence as prose, not as the markdown it was written in', () => {
+    const target = node('a', 'ExecutionPort');
+
+    const description = descriptionForNode(
+      '- **ExecutionPort** (`ports/execution.rs`) is the one behavioural contract.',
+      target,
+    );
+
+    expect(description).toBe('ExecutionPort (ports/execution.rs) is the one behavioural contract.');
   });
 
   it('returns only the matching sentence, not the whole multi-sentence answer', () => {

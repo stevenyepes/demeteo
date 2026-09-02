@@ -1,9 +1,15 @@
 /**
- * `AskCanvasView` integration coverage — Acceptance Criteria 2 and 7: the
- * `CanvasFocus.html`-shaped empty cell renders a bare slot, and the two edge
- * kinds render with distinguishable stroke classes.
+ * `AskCanvasView` integration coverage: an unoccupied `(stage, lane)` leaves
+ * its lane band empty rather than dropping the band, the two edge kinds stay
+ * distinguishable, and a node's `(id, path)` verdict reaches its card.
+ *
+ * The structural assertion about `foreignObject` is the load-bearing one.
+ * jsdom lays out no SVG, so the failure that motivated this file's rewrite —
+ * cards inside a transformed `<g>`, rendered by the webview without the
+ * transform and at a different scale — is invisible to every assertion about
+ * appearance. What *is* checkable is the shape that caused it.
  */
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AskCanvasView } from './AskCanvasView';
@@ -15,8 +21,12 @@ function node(id: string, stage: number, lane: number, overrides: Partial<Canvas
   return { id, title: id, role: 'agent', path: null, stage, lane, ...overrides };
 }
 
+function cards(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>('[data-state]'));
+}
+
 describe('AskCanvasView', () => {
-  it('renders a bare empty-cell slot for the CanvasFocus stage-2/lane-0 gap, with no node card inside', () => {
+  it('draws a band for every lane and leaves an unoccupied cell empty', () => {
     const canvas: AskCanvas = {
       kind: 'journey',
       title: 'Ask canvas',
@@ -43,41 +53,41 @@ describe('AskCanvasView', () => {
       />,
     );
 
-    const emptyCells = screen.getAllByTestId('ask-canvas-empty-cell');
-    expect(emptyCells.length).toBeGreaterThan(0);
+    // One band per declared lane, whatever the occupancy — an empty lane is
+    // the statement "nobody is acting here", which is why lanes are authored.
+    expect(container.querySelectorAll('[data-testid="ask-canvas-band"]')).toHaveLength(3);
+    // Exactly one card per declared node; nothing phantom for an empty cell.
+    expect(cards(container)).toHaveLength(canvas.nodes.length);
+  });
 
-    // No phantom card was rendered for an empty cell: exactly one card per declared node.
-    const nodeForeignObjects = Array.from(container.querySelectorAll('foreignObject')).filter(
-      (fo) => fo.querySelector('[data-state]') !== null,
+  it('keeps every card out of the SVG, so no ancestor transform can be dropped', () => {
+    const canvas: AskCanvas = {
+      kind: 'architecture',
+      title: 'Ask canvas',
+      stages: ['s0', 's1'],
+      lanes: ['l0'],
+      nodes: [node('a', 0, 0), node('b', 1, 0)],
+      edges: [{ from: 'a', to: 'b', kind: 'hands_off' }],
+    };
+
+    const { container } = render(
+      <AskCanvasView
+        canvas={canvas}
+        answerText=""
+        canvasPaths={[]}
+        selectedNodeId={null}
+        onActivate={vi.fn()}
+      />,
     );
-    expect(nodeForeignObjects).toHaveLength(canvas.nodes.length);
 
-    // No node card's foreignObject overlaps an empty cell's bounds.
-    for (const cell of emptyCells) {
-      const cellBounds = {
-        x: Number(cell.getAttribute('x')),
-        y: Number(cell.getAttribute('y')),
-        width: Number(cell.getAttribute('width')),
-        height: Number(cell.getAttribute('height')),
-      };
-      for (const fo of nodeForeignObjects) {
-        const foBounds = {
-          x: Number(fo.getAttribute('x')),
-          y: Number(fo.getAttribute('y')),
-          width: Number(fo.getAttribute('width')),
-          height: Number(fo.getAttribute('height')),
-        };
-        const overlaps =
-          foBounds.x < cellBounds.x + cellBounds.width &&
-          foBounds.x + foBounds.width > cellBounds.x &&
-          foBounds.y < cellBounds.y + cellBounds.height &&
-          foBounds.y + foBounds.height > cellBounds.y;
-        expect(overlaps).toBe(false);
-      }
+    expect(container.querySelectorAll('foreignObject')).toHaveLength(0);
+    for (const card of cards(container)) {
+      expect(card.closest('svg')).toBeNull();
+      expect(card.style.left).not.toBe('');
     }
   });
 
-  it('renders hands_off and goes_back edges with different classNames', () => {
+  it('renders hands_off and goes_back edges with different classNames and arrowheads', () => {
     const canvas: AskCanvas = {
       kind: 'journey',
       title: 'Ask canvas',
@@ -105,12 +115,15 @@ describe('AskCanvasView', () => {
     const paths = edgeLayer!.querySelectorAll('path');
     expect(paths).toHaveLength(2);
     expect(paths[0].getAttribute('class')).not.toEqual(paths[1].getAttribute('class'));
+    for (const path of paths) {
+      expect(path.getAttribute('marker-end')).toMatch(/^url\(#/);
+    }
   });
 
-  it('renders stage and lane labels from the canvas', () => {
+  it('renders stage names, lane names and the canvas title', () => {
     const canvas: AskCanvas = {
       kind: 'journey',
-      title: 'Ask canvas',
+      title: 'Feature to Gate',
       stages: ['Describe', 'Decompose'],
       lanes: ['The person', 'Demeteo'],
       nodes: [],
@@ -131,9 +144,11 @@ describe('AskCanvasView', () => {
     expect(screen.getByText('Decompose')).toBeInTheDocument();
     expect(screen.getByText('The person')).toBeInTheDocument();
     expect(screen.getByText('Demeteo')).toBeInTheDocument();
+    // The title had nowhere to render but the svg's aria-label before this.
+    expect(screen.getByRole('heading', { name: 'Feature to Gate' })).toBeInTheDocument();
   });
 
-  it('threads each verdict to its node by (node_id, path), leaving a non-null path unresolved when the verdict says so', () => {
+  it('threads each verdict to its node by (node_id, path), and leaves a path-less node alone', () => {
     const canvas: AskCanvas = {
       kind: 'journey',
       title: 'Ask canvas',
@@ -143,10 +158,12 @@ describe('AskCanvasView', () => {
         node('resolved-node', 0, 0, { path: 'src/lib/foo.ts' }),
         node('stale-verdict-node', 0, 0, { path: 'src/lib/bar.ts' }),
         node('no-verdict-node', 0, 0, { path: 'src/lib/baz.ts' }),
+        node('no-path-node', 0, 0),
       ],
       edges: [],
     };
 
+    const onActivate = vi.fn();
     render(
       <AskCanvasView
         canvas={canvas}
@@ -156,7 +173,7 @@ describe('AskCanvasView', () => {
           { node_id: 'stale-verdict-node', path: 'src/lib/bar.ts', resolved: false },
         ]}
         selectedNodeId={null}
-        onActivate={vi.fn()}
+        onActivate={onActivate}
       />,
     );
 
@@ -172,5 +189,11 @@ describe('AskCanvasView', () => {
       'data-state',
       'unresolved',
     );
+
+    // A node that never claimed a file has nothing to be stale about.
+    const pathless = screen.getByText('no-path-node').closest('[data-state]')!;
+    expect(pathless).toHaveAttribute('data-state', 'resting');
+    fireEvent.click(pathless);
+    expect(onActivate).toHaveBeenCalledWith('no-path-node');
   });
 });

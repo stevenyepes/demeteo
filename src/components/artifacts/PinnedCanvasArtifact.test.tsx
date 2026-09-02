@@ -28,7 +28,7 @@
  *   both rows but logs React's "same key" warning.
  */
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AskCanvas, CanvasPathVerdict } from '../../types';
@@ -58,9 +58,13 @@ function renderArtifact(props: Partial<{ canvasPaths: CanvasPathVerdict[]; check
 }
 
 /** The node card, found through its title — `AskCanvasNode` carries the
- *  render state this feature's selection ring is painted from on `data-state`. */
+ *  render state this feature's selection ring is painted from on `data-state`.
+ *  Scoped to the grid, because the detail strip below it repeats the title of
+ *  whichever node is selected. */
 function nodeCard(title: string): HTMLElement {
-  const card = screen.getByText(title).closest('[data-state]');
+  const grid = screen.getByTestId('ask-canvas-view');
+  const label = within(grid).getByText(title);
+  const card = label.closest('[data-state]');
   if (!(card instanceof HTMLElement)) throw new Error(`no node card for ${title}`);
   return card;
 }
@@ -148,5 +152,17 @@ describe('PinnedCanvasArtifact', () => {
     fireEvent.click(nodeCard('Node one'));
 
     expect(nodeCard('Node one')).toHaveAttribute('data-state', 'resting');
+  });
+
+  it('shows the selected node in a detail strip, so the click leads somewhere', () => {
+    renderArtifact({ canvasPaths: [{ node_id: 'n1', path: 'src/one.ts', resolved: true }] });
+
+    expect(screen.queryByTestId('pinned-canvas-node-detail')).not.toBeInTheDocument();
+
+    fireEvent.click(nodeCard('Node one'));
+
+    const detail = screen.getByTestId('pinned-canvas-node-detail');
+    expect(detail).toHaveTextContent('Node one');
+    expect(detail).toHaveTextContent('src/one.ts');
   });
 });

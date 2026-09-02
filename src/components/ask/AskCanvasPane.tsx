@@ -59,7 +59,12 @@ export interface AskCanvasPaneProps {
 export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }: AskCanvasPaneProps) {
   const turn = useStreamedTurn(store, threadId);
   const elapsed = useElapsed(turn.startedAt);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // Scoped to the message it was made on. A selection is a node id the model
+  // chose, and those repeat across turns (`ui`, `n1`), so carrying one over to
+  // the next canvas opens the inspector on a different node under the same
+  // name. Derived rather than cleared in an effect: this render already knows
+  // which canvas it is drawing.
+  const [selection, setSelection] = useState<{ messageId: string; nodeId: string } | null>(null);
   const [pinned, setPinned] = useState<PinnedCanvasEntry[]>([]);
   const [selectedArtifactPath, setSelectedArtifactPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,7 +112,11 @@ export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }
   }, [refreshPinned]);
 
   const handleActivate = useCallback((id: string) => {
-    setSelectedNodeId((prev) => (prev === id ? null : id));
+    const messageId = heldRef.current?.messageId;
+    if (messageId === undefined) return;
+    setSelection((prev) =>
+      prev?.messageId === messageId && prev.nodeId === id ? null : { messageId, nodeId: id },
+    );
   }, []);
 
   // Reads `heldRef.current` at call time rather than closing over the
@@ -145,6 +154,8 @@ export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }
   }, [threadId]);
 
   const held = heldRef.current;
+  const selectedNodeId =
+    held !== null && selection?.messageId === held.messageId ? selection.nodeId : null;
   const selectedNode =
     held && selectedNodeId ? held.canvas.nodes.find((n) => n.id === selectedNodeId) : undefined;
 
@@ -228,7 +239,7 @@ export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }
                   threadId={threadId}
                   messageId={held.messageId}
                   projectId={projectId}
-                  onDismiss={() => setSelectedNodeId(null)}
+                  onDismiss={() => setSelection(null)}
                 />
               </div>
             )}
