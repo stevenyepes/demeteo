@@ -3,19 +3,26 @@
  * artifact store — as the same grid the live `AskCanvasPane` draws, wrapped in
  * the header strip every `ArtifactViewer` branch shares.
  *
- * Node selection is owned here rather than passed in. `AskCanvasNode` gives
- * every node with a non-null `path` `cursor-pointer` and an `onClick`, so a
- * viewer that hands it a constant `selectedNodeId` renders an affordance that
- * takes a click and does nothing; the toggle below is the one `AskCanvasPane`
- * uses, so a reopened pin selects the way the pane it came from does.
+ * Node selection is owned here rather than passed in, and it lands on the
+ * read-only detail strip below the grid. `AskCanvasNode` gives a selectable
+ * node an `onClick`, so a viewer that renders nothing for the selection is an
+ * affordance that takes a click and does nothing — which is what this was
+ * before the strip existed.
+ *
+ * Deliberately **not** `AskCanvasNodeInspector`: that panel re-resolves the
+ * node against a live worktree and offers to open it. A pin is frozen — its
+ * thread's worktree is normally long reclaimed — so the honest surface here
+ * is what the snapshot itself recorded, and nothing else.
  *
  * The snapshot's JSON parsing and its malformed-body fallback stay in
  * `ArtifactViewer` — this component's contract is an already-decoded snapshot.
  */
 import { useState } from 'react';
 
+import { edgesForNode } from '../../lib/askCanvasEdges';
 import type { AskCanvas, CanvasPathVerdict } from '../../types';
 import { AskCanvasView } from '../ask/AskCanvasView';
+import { ROLE_LABEL } from '../ask/AskCanvasNode';
 
 export interface PinnedCanvasArtifactProps {
   /** Path of the artifact on disk; only its basename is displayed. */
@@ -36,6 +43,8 @@ export function PinnedCanvasArtifact({
 }: PinnedCanvasArtifactProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const unresolved = canvasPaths.filter((p) => !p.resolved);
+  const selected = selectedNodeId ? canvas.nodes.find((n) => n.id === selectedNodeId) : undefined;
+  const neighbors = selected ? edgesForNode(canvas, selected.id) : null;
 
   return (
     <div className="flex-1 min-h-0 min-w-0 rounded-xl border border-white/5 overflow-hidden shadow-lg bg-[#050608]/85 flex flex-col">
@@ -78,6 +87,31 @@ export function PinnedCanvasArtifact({
           onActivate={(id) => setSelectedNodeId((prev) => (prev === id ? null : id))}
         />
       </div>
+      {selected && neighbors && (
+        <div
+          data-testid="pinned-canvas-node-detail"
+          className="shrink-0 space-y-1 border-t border-white/5 px-4 py-3 text-[11px] text-slate-400"
+        >
+          <div className="flex items-baseline gap-2">
+            <span className="font-heading text-[12.5px] font-semibold text-slate-100">
+              {selected.title}
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-wide text-slate-500">
+              {ROLE_LABEL[selected.role]}
+            </span>
+          </div>
+          {selected.path !== null && (
+            <div className="truncate font-mono text-[11px] text-slate-300">{selected.path}</div>
+          )}
+          {[...neighbors.incoming.map((n) => ({ ...n, dir: 'in' })),
+            ...neighbors.outgoing.map((n) => ({ ...n, dir: 'out' }))].map((n) => (
+            <div key={`${n.dir}-${n.nodeId}`}>
+              {n.dir} — <span className="font-mono text-[11px] text-slate-300">{n.title}</span>{' '}
+              <span className="text-slate-600">({n.kind})</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

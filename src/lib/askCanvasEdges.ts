@@ -20,11 +20,14 @@ export function edgesForNode(
   const incoming: CanvasNeighbor[] = [];
   const outgoing: CanvasNeighbor[] = [];
 
+  // Two independent tests, not an if/else: a self-edge is both directions at
+  // once, and the chained form silently reported it as incoming only.
   for (const edge of canvas.edges) {
     if (edge.to === nodeId) {
       const title = titleById.get(edge.from);
       if (title !== undefined) incoming.push({ nodeId: edge.from, title, kind: edge.kind });
-    } else if (edge.from === nodeId) {
+    }
+    if (edge.from === nodeId) {
       const title = titleById.get(edge.to);
       if (title !== undefined) outgoing.push({ nodeId: edge.to, title, kind: edge.kind });
     }

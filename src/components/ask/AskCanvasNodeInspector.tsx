@@ -29,7 +29,13 @@ export interface AskCanvasNodeInspectorProps {
   onDismiss: () => void;
 }
 
-type Resolution = { status: 'pending' } | { status: 'ready'; result: NodeResolution };
+/** `absent` is a node that never named a file — `resolve` refuses those by
+ *  contract, so this component must not ask. See `NodePathState` in
+ *  `AskCanvasNode.tsx` for the same three-way split on the card. */
+type Resolution =
+  | { status: 'absent' }
+  | { status: 'pending' }
+  | { status: 'ready'; result: NodeResolution };
 
 interface PipelineMatch {
   featureId: string;
@@ -73,6 +79,10 @@ export function AskCanvasNodeInspector({
 
   useEffect(() => {
     let cancelled = false;
+    if (node.path === null) {
+      setResolution({ status: 'absent' });
+      return;
+    }
     setResolution({ status: 'pending' });
     resolveNode({ threadId, messageId, nodeId: node.id })
       .then((result) => {
@@ -84,7 +94,7 @@ export function AskCanvasNodeInspector({
     return () => {
       cancelled = true;
     };
-  }, [threadId, messageId, node.id, reportError]);
+  }, [threadId, messageId, node.id, node.path, reportError]);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,6 +176,7 @@ export function AskCanvasNodeInspector({
           <p className="text-[12.5px] leading-relaxed text-slate-300">{description}</p>
         </section>
 
+        {node.path !== null && (
         <section>
           <div className={sectionLabel}>In the code</div>
           {resolution.status === 'ready' && resolution.result.kind === 'moved' ? (
@@ -181,6 +192,7 @@ export function AskCanvasNodeInspector({
             </div>
           )}
         </section>
+        )}
 
         <section>
           <div className={sectionLabel}>Edges</div>

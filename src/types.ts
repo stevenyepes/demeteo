@@ -1641,10 +1641,11 @@ export type CanvasKind = 'architecture' | 'journey' | 'dataflow';
 export type EdgeKind = 'hands_off' | 'goes_back';
 
 /** Mirrors `CanvasNode`. A non-null `path` here is not itself a resolved
- *  signal — the renderer treats a node as unresolved unless its
- *  `CanvasPathVerdict.resolved` says otherwise, so `path: null` (no verdict
- *  ever produced) and `resolved: false` (verdict says the path is stale)
- *  both render the same unresolved state. */
+ *  signal — the renderer credits a path only when its
+ *  `CanvasPathVerdict.resolved` says so. `path: null` is a third answer, not
+ *  the same as `resolved: false`: it means the node named a person or a
+ *  concept and never claimed a file, so it renders as an ordinary card. See
+ *  `NodePathState` in `AskCanvasNode.tsx`. */
 export interface CanvasNode {
   id: string;
   title: string;

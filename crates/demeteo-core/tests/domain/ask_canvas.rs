@@ -116,6 +116,43 @@ fn an_edge_naming_an_unknown_node_is_refused() {
     assert!(validate_canvas(&c).unwrap().contains("nonexistent"));
 }
 
+#[test]
+fn an_edge_pointing_at_its_own_node_is_refused() {
+    let mut c = canvas();
+    c.edges[0].to = c.edges[0].from.clone();
+    assert!(validate_canvas(&c).unwrap().contains("itself"));
+}
+
+/// Not a taste judgement: the renderer keys an edge by its endpoints and its
+/// kind, so a repeat has no drawing of its own to be given.
+#[test]
+fn the_same_edge_declared_twice_is_refused() {
+    let mut c = canvas();
+    let dup = c.edges[0].clone();
+    c.edges.push(dup);
+    assert!(validate_canvas(&c).unwrap().contains("more than once"));
+}
+
+/// The two placements the renderer absorbs rather than refuses: it tiles a
+/// shared cell and routes from positions rather than from the label, so
+/// neither costs the reader the whole answer.
+#[test]
+fn two_nodes_in_one_cell_and_a_backwards_hands_off_are_both_drawable() {
+    let mut c = canvas();
+    let mut second = c.nodes[1].clone();
+    second.id = "n3".to_string();
+    second.stage = c.nodes[0].stage;
+    second.lane = c.nodes[0].lane;
+    c.nodes.push(second);
+    c.edges.push(CanvasEdge {
+        from: "n2".to_string(),
+        to: "n1".to_string(),
+        kind: EdgeKind::HandsOff,
+    });
+
+    assert_eq!(validate_canvas(&c), None);
+}
+
 /// A pushed clone, not a rename, so the shared id is a real duplicate rather
 /// than also orphaning the edge that names the node being renamed away from.
 #[test]
