@@ -363,6 +363,7 @@ export function AskThreadView({ projectId, machineId }: AskThreadViewProps): Rea
               key={thread.id}
               store={store}
               threadId={thread.id}
+              projectId={projectId}
               lastMessage={
                 detail && detail.messages.length > 0 ? detail.messages[detail.messages.length - 1] : null
               }

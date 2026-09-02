@@ -111,7 +111,7 @@ export type AppView =
        */
       selectedStepId?: string | null;
     }
-  | { kind: 'editor'; editorContext: EditorContext; featureId: string; featureTitle: string }
+  | { kind: 'editor'; editorContext: EditorContext; featureId?: string; featureTitle?: string }
   | { kind: 'new-project' }
   | { kind: 'create-project' }
   | { kind: 'project-settings' }
@@ -1640,8 +1640,11 @@ export type CanvasKind = 'architecture' | 'journey' | 'dataflow';
 /** Mirrors `EdgeKind`. */
 export type EdgeKind = 'hands_off' | 'goes_back';
 
-/** Mirrors `CanvasNode`. `path: null` is the renderer's sole unresolved
- *  signal — see the precedence rule below. */
+/** Mirrors `CanvasNode`. A non-null `path` here is not itself a resolved
+ *  signal — the renderer treats a node as unresolved unless its
+ *  `CanvasPathVerdict.resolved` says otherwise, so `path: null` (no verdict
+ *  ever produced) and `resolved: false` (verdict says the path is stale)
+ *  both render the same unresolved state. */
 export interface CanvasNode {
   id: string;
   title: string;
@@ -1676,3 +1679,8 @@ export interface PinnedCanvasEntry {
   title: string | null;
   pinned_at: number | null;
 }
+
+/** Mirrors `NodeResolution`. */
+export type NodeResolution =
+  | { kind: 'editor'; machine_id: string; worktree_path: string; branch: string; default_branch: string; path: string }
+  | { kind: 'moved'; checked_commit_sha: string };

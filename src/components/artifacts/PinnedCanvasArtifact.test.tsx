@@ -133,7 +133,7 @@ describe('PinnedCanvasArtifact', () => {
   });
 
   it('selects a path-bearing node on click, the way the live pane does', () => {
-    renderArtifact();
+    renderArtifact({ canvasPaths: [{ node_id: 'n1', path: 'src/one.ts', resolved: true }] });
 
     expect(nodeCard('Node one')).toHaveAttribute('data-state', 'resting');
 
@@ -142,7 +142,7 @@ describe('PinnedCanvasArtifact', () => {
   });
 
   it('deselects the same node on a second click, the way the live pane does', () => {
-    renderArtifact();
+    renderArtifact({ canvasPaths: [{ node_id: 'n1', path: 'src/one.ts', resolved: true }] });
 
     fireEvent.click(nodeCard('Node one'));
     fireEvent.click(nodeCard('Node one'));

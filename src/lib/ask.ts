@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AskMessage, AskThread, AskThreadDetail, EffortLevel, PinnedCanvasEntry } from "../types";
+import type {
+  AskMessage,
+  AskThread,
+  AskThreadDetail,
+  EffortLevel,
+  NodeResolution,
+  PinnedCanvasEntry,
+} from "../types";
 
 /**
  * Typed IPC wrappers for Ask — the commands in `src-tauri/src/commands/ask.rs`.
@@ -123,6 +130,20 @@ export async function listPinnedAskCanvases(threadId: string): Promise<PinnedCan
 /** Mirrors `ask_export_canvas`. */
 export async function exportAskCanvas(threadId: string, messageId: string): Promise<string> {
   return invoke<string>("ask_export_canvas", { threadId, messageId });
+}
+
+/** Mirrors `ask_resolve_node` — where a canvas node's path leads as of the
+ *  click, against the project's own checkout. */
+export async function resolveNode(input: {
+  threadId: string;
+  messageId: string;
+  nodeId: string;
+}): Promise<NodeResolution> {
+  return invoke<NodeResolution>("ask_resolve_node", {
+    threadId: input.threadId,
+    messageId: input.messageId,
+    nodeId: input.nodeId,
+  });
 }
 
 // ── The streaming contract (`application/ask/events.rs`) ───────────────────

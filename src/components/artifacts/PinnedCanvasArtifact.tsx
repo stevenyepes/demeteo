@@ -73,6 +73,7 @@ export function PinnedCanvasArtifact({
         <AskCanvasView
           canvas={canvas}
           answerText=""
+          canvasPaths={canvasPaths}
           selectedNodeId={selectedNodeId}
           onActivate={(id) => setSelectedNodeId((prev) => (prev === id ? null : id))}
         />

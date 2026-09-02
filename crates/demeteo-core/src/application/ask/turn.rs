@@ -489,8 +489,9 @@ fn latch_session_id(p: &Prepared, session: &dyn crate::ports::agent_runtime::Age
 /// research recorded: "joined against the mounted worktree path". A `path`
 /// that is absolute, or whose `..` segments lexically walk the join back out
 /// of `p.agent_ctx.cwd`, names something the canvas has no business
-/// describing — see [`resolve_within_worktree`] — and is recorded
-/// unresolved without ever reaching [`crate::ports::execution::ExecutionPort::get_metadata`].
+/// describing — see [`super::path_containment::resolve_within_root`] — and is
+/// recorded unresolved without ever reaching
+/// [`crate::ports::execution::ExecutionPort::get_metadata`].
 ///
 /// Runs synchronously in `run`'s own call stack, before that turn's worktree
 /// becomes eligible for reclaim — never deferred to a background task, and
@@ -511,7 +512,7 @@ async fn verify_canvas_paths(
         let Some(path) = node.path.as_deref() else {
             continue;
         };
-        let resolved = match resolve_within_worktree(&p.agent_ctx.cwd, path) {
+        let resolved = match super::path_containment::resolve_within_root(&p.agent_ctx.cwd, path) {
             Some(full_path) => {
                 let full_path = full_path.to_string_lossy().to_string();
                 p.exec
@@ -534,40 +535,6 @@ async fn verify_canvas_paths(
         .await
         .ok();
     (Some(verdicts), sha)
-}
-
-/// Join `path` onto `cwd` and return it only if the result is still `cwd`
-/// or a descendant of it — `None` for anything absolute or that walks out
-/// via `..`, the same containment
-/// [`crate::domain::models::sandbox::PathContainment`] states for this class
-/// of problem elsewhere: a canvas node's path is not a claim to be trusted,
-/// only a claim to be checked against the one repository it describes.
-///
-/// Purely lexical, like [`std::path::Path::join`] itself — no filesystem
-/// access, so a `..` past a symlink is not this function's problem, only a
-/// `..` past `cwd`'s own component boundary is.
-fn resolve_within_worktree(cwd: &str, path: &str) -> Option<std::path::PathBuf> {
-    use std::path::Component;
-
-    if std::path::Path::new(path).is_absolute() {
-        return None;
-    }
-    let mut components: Vec<Component> = std::path::Path::new(cwd).components().collect();
-    let boundary = components.len();
-    for component in std::path::Path::new(path).components() {
-        match component {
-            Component::Normal(_) => components.push(component),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if components.len() <= boundary {
-                    return None;
-                }
-                components.pop();
-            }
-            Component::RootDir | Component::Prefix(_) => return None,
-        }
-    }
-    Some(components.iter().collect())
 }
 
 /// Persist what Ask said, verbatim — the whole turn, canvas block included,

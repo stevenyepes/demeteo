@@ -7,7 +7,9 @@
 use crate::domain::ids::AskThreadId;
 use crate::domain::models::{AskMessage, AskThread, EffortLevel};
 use crate::state::AppContext;
-use demeteo_core::application::ask::{self, pin, turn, AskThreadDetail, NewAskThread};
+use demeteo_core::application::ask::{
+    self, pin, turn, AskThreadDetail, NewAskThread, NodeResolution,
+};
 use demeteo_core::ports::ask::AskThreadPatch;
 use serde::Deserialize;
 use tauri::{Emitter, State};
@@ -145,6 +147,16 @@ pub fn ask_export_canvas(
     message_id: String,
 ) -> Result<String, String> {
     pin::export_canvas(&ctx, &AskThreadId::from(thread_id), &message_id)
+}
+
+#[tauri::command]
+pub async fn ask_resolve_node(
+    ctx: State<'_, AppContext>,
+    thread_id: String,
+    message_id: String,
+    node_id: String,
+) -> Result<NodeResolution, String> {
+    ask::resolve_node(&ctx, &AskThreadId::from(thread_id), &message_id, &node_id).await
 }
 
 #[cfg(test)]
