@@ -73,6 +73,17 @@ impl ArtifactStore for FsArtifactStore {
                 .extension()
                 .and_then(|s| s.to_str())
                 .unwrap_or_else(|| FsArtifactStore::ext_for_mime(&artifact.mime)),
+            // Keyed on the source variant, not the mime, and the reason
+            // sits on the far side of the IPC boundary: `classifyArtifact`
+            // (`src/lib/artifacts.tsx`) selects the ask-canvas viewer off a
+            // `.canvas.json` suffix and nothing else. A snapshot's mime is
+            // `application/json`, which `ext_for_mime` would name
+            // `<message_id>.json` — that falls through to the generic JSON
+            // branch and reopens a pin as raw Monaco text. Nothing else writes
+            // into this scope, so the compound suffix is not disambiguating
+            // files from each other; it is the only channel the viewer choice
+            // travels through.
+            ArtifactSource::PinnedAskCanvas { .. } => "canvas.json",
             _ => FsArtifactStore::ext_for_mime(&artifact.mime),
         };
         let safe_name = sanitize(&artifact.name);

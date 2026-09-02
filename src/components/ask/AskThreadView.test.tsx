@@ -11,6 +11,9 @@ const listAskThreads = vi.fn();
 const loadAskThread = vi.fn();
 const askTurnRunning = vi.fn();
 const sendAskTurn = vi.fn();
+const listPinnedAskCanvases = vi.fn();
+const pinAskCanvas = vi.fn();
+const exportAskCanvas = vi.fn();
 const resolveNodeMock = vi.fn();
 
 vi.mock('../../lib/ask', () => ({
@@ -18,6 +21,9 @@ vi.mock('../../lib/ask', () => ({
   loadAskThread: (...args: unknown[]) => loadAskThread(...args),
   askTurnRunning: (...args: unknown[]) => askTurnRunning(...args),
   sendAskTurn: (...args: unknown[]) => sendAskTurn(...args),
+  listPinnedAskCanvases: (...args: unknown[]) => listPinnedAskCanvases(...args),
+  pinAskCanvas: (...args: unknown[]) => pinAskCanvas(...args),
+  exportAskCanvas: (...args: unknown[]) => exportAskCanvas(...args),
   resolveNode: (...args: unknown[]) => resolveNodeMock(...args),
   EVENT_ASK_AGENT_EVENT: 'ask_agent_event',
   EVENT_ASK_TURN_STATUS: 'ask_turn_status',
@@ -142,10 +148,22 @@ function captureListeners() {
 
 beforeEach(() => {
   askTurnRunning.mockResolvedValue(false);
+  listPinnedAskCanvases.mockResolvedValue([]);
   resolveNodeMock.mockReturnValue(new Promise(() => {}));
   fetchActiveFeaturesMock.mockResolvedValue([]);
   listStepsForRunMock.mockResolvedValue([]);
 });
+
+function canvas(title: string): AskCanvas {
+  return {
+    kind: 'journey',
+    title,
+    stages: ['s0'],
+    lanes: ['l0'],
+    nodes: [{ id: 'n0', title, role: 'agent', path: null, stage: 0, lane: 0 }],
+    edges: [],
+  };
+}
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -559,6 +577,85 @@ describe('AskThreadView — a turn that ends on a thread the user navigated away
     expect(screen.getByTestId('ask-composer')).not.toBeDisabled();
 
     await askAgainOnA();
+  });
+});
+
+/**
+ * Both tests below were watched to fail first, against a draft with no `key` on the
+ * `<AskCanvasPane>` element: the canvas, toolbar, and error banner all
+ * survived the switch to Thread B.
+ */
+describe('AskThreadView — canvas pane remounts on thread switch', () => {
+  const A = thread({ id: 'a', title: 'Thread A' });
+  const B = thread({ id: 'b', title: 'Thread B' });
+
+  async function switchTo(title: string) {
+    fireEvent.click(screen.getByTestId('ask-thread-switcher-trigger'));
+    const rows = await screen.findAllByTestId('ask-thread-switcher-row');
+    const row = rows.find((candidate) => candidate.textContent?.includes(title));
+    if (row === undefined) throw new Error(`no switcher row for "${title}"`);
+    fireEvent.click(row);
+  }
+
+  it('never renders thread A’s canvas, Pin/Export toolbar, pinned list, or error banner under thread B’s header once B has no canvas yet', async () => {
+    listAskThreads.mockResolvedValue([A, B]);
+    loadAskThread.mockImplementation(async (id: string) =>
+      id === 'a'
+        ? detail(A, [message({ id: 'ma', thread_id: 'a', canvas: canvas('A’s canvas'), prose: 'answer a' })])
+        : detail(B, []),
+    );
+    listPinnedAskCanvases.mockImplementation(async (id: string) =>
+      id === 'a'
+        ? [{ path: 'artifacts/pinned/ma.canvas.json', title: 'A’s canvas', pinned_at: 0 }]
+        : [],
+    );
+
+    render(<AskThreadView projectId="p1" machineId="local" />);
+
+    expect(await screen.findByTestId('ask-canvas-view')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pin to Demeteo' })).toBeInTheDocument();
+    await screen.findByText('ma.canvas.json');
+
+    // Thread A also has a stale error banner up when the switch happens.
+    pinAskCanvas.mockRejectedValueOnce(new Error('boom'));
+    fireEvent.click(screen.getByRole('button', { name: 'Pin to Demeteo' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('boom');
+
+    await switchTo('Thread B');
+    await waitFor(() => expect(loadAskThread).toHaveBeenLastCalledWith('b'));
+
+    expect(await screen.findByTestId('ask-canvas-placeholder')).toBeInTheDocument();
+    expect(screen.queryByTestId('ask-canvas-view')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pin to Demeteo' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
+    expect(screen.queryByText('ma.canvas.json')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('pinning the canvas shown for a thread always acts on that thread’s own held message id', async () => {
+    listAskThreads.mockResolvedValue([A, B]);
+    loadAskThread.mockImplementation(async (id: string) =>
+      id === 'a'
+        ? detail(A, [message({ id: 'ma', thread_id: 'a', canvas: canvas('A’s canvas'), prose: 'answer a' })])
+        : detail(B, []),
+    );
+    pinAskCanvas.mockResolvedValue('artifacts/pinned/ma.canvas.json');
+
+    render(<AskThreadView projectId="p1" machineId="local" />);
+
+    await screen.findByTestId('ask-canvas-view');
+    fireEvent.click(screen.getByRole('button', { name: 'Pin to Demeteo' }));
+    await waitFor(() => expect(pinAskCanvas).toHaveBeenCalledWith('a', 'ma'));
+
+    await switchTo('Thread B');
+    await waitFor(() => expect(loadAskThread).toHaveBeenLastCalledWith('b'));
+    await screen.findByTestId('ask-canvas-placeholder');
+
+    // No held canvas on B, so there is nothing to pin — and nothing carries
+    // thread A's message id into a call scoped to thread B.
+    expect(screen.queryByRole('button', { name: 'Pin to Demeteo' })).not.toBeInTheDocument();
+    expect(pinAskCanvas).toHaveBeenCalledTimes(1);
+    expect(pinAskCanvas).not.toHaveBeenCalledWith('b', 'ma');
   });
 });
 

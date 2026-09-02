@@ -412,6 +412,93 @@ async fn deleting_a_thread_makes_it_unloadable() {
     assert!(load(&ctx, &thread.id).is_err());
 }
 
+/// Deleting a thread drops the canvases it pinned: nothing in the product
+/// can unpin one, so `delete` is the only thing that can, and a thread whose
+/// rows are gone must not leave snapshots on disk.
+#[tokio::test]
+async fn deleting_a_thread_drops_the_canvases_it_pinned() {
+    let (ctx, project_id) = fixture("delete-pins", "local", None);
+    let thread = create(&ctx, opening(&project_id, "quick question", None)).unwrap();
+    ctx.ask
+        .append_message(&AskMessage {
+            id: "m-1".to_string(),
+            thread_id: thread.id.clone(),
+            role: crate::domain::models::MessageRole::Assistant,
+            text: format!(
+                "Here is the shape.\n\n{}",
+                crate::domain::ask_canvas::canvas_block_shape_example()
+            ),
+            cost_usd: None,
+            tokens: None,
+            turn_activity: None,
+            canvas_paths: None,
+            checked_commit_sha: None,
+            created_at: thread.created_at,
+        })
+        .unwrap();
+
+    let reference = pin::pin_canvas(&ctx, &thread.id, "m-1").expect("the pin succeeds");
+    let pinned_paths = |ctx: &AppContext| -> Vec<String> {
+        pin::list_pinned(ctx, &thread.id)
+            .expect("the list reads back")
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect()
+    };
+    assert_eq!(pinned_paths(&ctx), vec![reference.clone()]);
+    assert!(std::path::Path::new(&reference).exists());
+
+    delete(&ctx, &thread.id).expect("the thread deletes");
+
+    assert_eq!(pinned_paths(&ctx), Vec::<String>::new());
+    assert!(!std::path::Path::new(&reference).exists());
+}
+
+/// An [`ArtifactStore`](crate::ports::artifact_store::ArtifactStore) that
+/// fails every call, per AGENTS.md §7 — it answers nothing it was not told to
+/// answer, so the assertion below is about the abort and not about a default.
+struct FailingStore;
+
+impl crate::ports::artifact_store::ArtifactStore for FailingStore {
+    fn put(
+        &self,
+        _: &str,
+        _: &str,
+        _: &crate::domain::artifact::Artifact,
+    ) -> Result<String, String> {
+        Err("FailingStore: unexpected put".to_string())
+    }
+    fn get(&self, reference: &str) -> Result<String, String> {
+        Err(format!("FailingStore: unexpected get `{reference}`"))
+    }
+    fn list_for_step(&self, _: &str, _: &str) -> Result<Vec<String>, String> {
+        Err("FailingStore: unexpected list_for_step".to_string())
+    }
+    fn clear_step(&self, _: &str, _: &str) -> Result<(), String> {
+        Err("the pinned scope is held open".to_string())
+    }
+}
+
+/// The half of the asymmetry that lives here: a store failure aborts, and the
+/// thread is still loadable afterwards — which is what makes retrying worth
+/// offering and is exactly what
+/// [`projects::delete_workspace`](crate::application::projects::delete_workspace)
+/// cannot promise, since the cascade takes the rows either way.
+#[tokio::test]
+async fn a_pin_that_cannot_be_dropped_aborts_the_thread_delete() {
+    let (mut ctx, project_id) = fixture("delete-stuck-pins", "local", None);
+    let thread = create(&ctx, opening(&project_id, "quick question", None)).unwrap();
+    ctx.artifact_store = Arc::new(FailingStore);
+
+    let error = delete(&ctx, &thread.id).expect_err("the delete refuses to strand the pins");
+
+    assert!(error.contains("held open"), "{error}");
+    assert!(
+        load(&ctx, &thread.id).is_ok(),
+        "the thread has to survive the abort, or there is nothing left to retry"
+    );
+}
+
 /// Load, rename and delete all reject a thread nothing created.
 #[tokio::test]
 async fn missing_threads_are_rejected_with_a_clear_error() {

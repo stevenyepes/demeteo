@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::ask_canvas::PinnedCanvasSnapshot;
+
 /// How much of the artifact the executor should persist and how the
 /// next step should consume it. Set per artifact via `ArtifactDecl.mode`
 /// in the workflow JSON.
@@ -100,6 +102,16 @@ pub enum ArtifactSource {
     /// The `ref_` is opaque to the executor; `ArtifactStore.put` is
     /// the only thing that interprets it.
     External { ref_: String },
+    /// A user pinned an Ask Canvas message. `thread_id` and `message_id`
+    /// identify the pinned turn; the content is the serialized
+    /// `PinnedCanvasSnapshot` (`crate::domain::ask_canvas`), already frozen
+    /// by [`crate::domain::ask_canvas::build_pinned_canvas_snapshot`] at
+    /// pin time. Unlike `Diff` or `WorktreeRef` there is nothing left to
+    /// compute at materialization time — the content is final at `put()`.
+    PinnedAskCanvas {
+        thread_id: String,
+        message_id: String,
+    },
 }
 
 /// A single, typed artifact produced (or derived) by a step.
@@ -176,6 +188,25 @@ impl Artifact {
                 path,
             },
         }
+    }
+
+    pub fn pinned_ask_canvas(
+        thread_id: impl Into<String>,
+        message_id: impl Into<String>,
+        snapshot: &PinnedCanvasSnapshot,
+    ) -> Result<Self, String> {
+        let thread_id = thread_id.into();
+        let message_id = message_id.into();
+        let content = serde_json::to_string(snapshot).map_err(|e| e.to_string())?;
+        Ok(Self {
+            name: message_id.clone(),
+            mime: "application/json".into(),
+            content,
+            source: ArtifactSource::PinnedAskCanvas {
+                thread_id,
+                message_id,
+            },
+        })
     }
 }
 

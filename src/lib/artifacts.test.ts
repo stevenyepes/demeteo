@@ -28,6 +28,14 @@ describe('classifyArtifact', () => {
     expect(classifyArtifact('artifacts/task-list-schema.json').kind).toBe('json');
   });
 
+  it('classifies a pinned-canvas snapshot as ask-canvas, not json', () => {
+    expect(classifyArtifact('artifacts/m1.canvas.json')).toEqual({
+      kind: 'ask-canvas',
+      ext: 'json',
+      basename: 'm1.canvas.json',
+    });
+  });
+
   it('classifies other .json files as json', () => {
     expect(classifyArtifact('artifacts/validation-report.json')).toEqual({
       kind: 'json',

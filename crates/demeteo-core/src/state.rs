@@ -210,6 +210,11 @@ pub struct AppContext {
     /// Standalone Ask chat persistence (V51) — an independent aggregate,
     /// not part of the Feature/Workflow execution graph.
     pub ask: Arc<dyn AskPort>,
+
+    /// Artifact persistence (pinned Ask Canvas snapshots, step artifacts).
+    /// Shared with the step executor's own copy — Ask's pin/export path is
+    /// the first consumer outside `composition::run()`'s executor wiring.
+    pub artifact_store: Arc<dyn crate::ports::artifact_store::ArtifactStore>,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";

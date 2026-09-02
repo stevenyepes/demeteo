@@ -348,6 +348,31 @@ pub async fn delete_workspace(ctx: &AppContext, id: String) -> Result<(), String
         .find(|p| p.id == project_id)
         .ok_or_else(|| format!("Project {} not found", id))?;
 
+    // `ask_thread.project_id` is `ON DELETE CASCADE` (V51__ask.sql), so every
+    // thread row — the only index into its own pinned-canvas scope — vanishes
+    // inside SQLite without passing through `ask::delete`, the other caller of
+    // `clear_pins`. Clearing has to happen before that or the snapshots outlive
+    // every index into them.
+    //
+    // A failure is logged and stepped over, on the same terms as the workspace
+    // removal below: this function already tolerates orphaning the whole
+    // project tree — worktrees, clones, agent output — so refusing the delete
+    // over a few KB of pinned JSON buys the smaller leak with the larger one,
+    // and hands the user an error naming a chat diagram with no override but
+    // retry. `ask::delete` decides the opposite way on the same call because
+    // there the thread row survives the abort, which keeps the delete
+    // retryable; here the rows are going regardless, so the strand is the
+    // residue of a cascade rather than something a second attempt can reach.
+    for thread in ctx.ask.list_for_project(&project_id)? {
+        if let Err(e) = crate::application::ask::pin::clear_pins(ctx, &thread.id) {
+            eprintln!(
+                "[delete_project] could not clear pinned canvases for thread {}: {}",
+                thread.id.as_str(),
+                e
+            );
+        }
+    }
+
     // Delete project from database
     ctx.projects.delete(&project_id)?;
 

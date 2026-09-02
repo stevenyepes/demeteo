@@ -1,6 +1,9 @@
 // Tests extracted from `crates/demeteo-core/src/domain/ask_canvas.rs` (mirrored-tests convention). `super` = that module.
 
 use super::*;
+use crate::domain::ids::AskThreadId;
+use crate::domain::models::ask::CanvasPathVerdict;
+use crate::domain::models::MessageRole;
 
 fn node(id: &str, role: NodeRole, stage: usize, lane: usize) -> CanvasNode {
     CanvasNode {
@@ -187,4 +190,62 @@ fn no_role_is_ruby() {
     assert_eq!(tone(NodeRole::Boundary), "cyan");
     assert_eq!(tone(NodeRole::Agent), "emerald");
     assert_eq!(tone(NodeRole::NeedsHuman), "amber");
+}
+
+fn message_with(
+    canvas_paths: Option<Vec<CanvasPathVerdict>>,
+    checked_commit_sha: Option<String>,
+) -> AskMessage {
+    AskMessage {
+        id: "m1".to_string(),
+        thread_id: AskThreadId::new("t1"),
+        role: MessageRole::Assistant,
+        text: String::new(),
+        cost_usd: None,
+        tokens: None,
+        turn_activity: None,
+        canvas_paths,
+        checked_commit_sha,
+        created_at: 0,
+    }
+}
+
+#[test]
+fn a_pinned_snapshot_round_trips_the_canvas_paths_and_commit_sha() {
+    let paths = vec![
+        CanvasPathVerdict {
+            node_id: "n1".to_string(),
+            path: "src/lib.rs".to_string(),
+            resolved: true,
+        },
+        CanvasPathVerdict {
+            node_id: "n2".to_string(),
+            path: "src/gone.rs".to_string(),
+            resolved: false,
+        },
+    ];
+    let message = message_with(Some(paths.clone()), Some("deadbeef".to_string()));
+    let turn = AskTurn {
+        prose: "prose".to_string(),
+        canvas: Some(canvas()),
+        canvas_error: None,
+    };
+
+    let snapshot = build_pinned_canvas_snapshot("t1", &message, &turn, 1_700_000_123_456)
+        .expect("a turn with a canvas must produce a snapshot");
+
+    assert_eq!(snapshot.thread_id, "t1");
+    assert_eq!(snapshot.message_id, "m1");
+    assert_eq!(snapshot.canvas, canvas());
+    assert_eq!(snapshot.canvas_paths, paths);
+    assert_eq!(snapshot.checked_commit_sha, Some("deadbeef".to_string()));
+    assert_eq!(snapshot.pinned_at, 1_700_000_123_456);
+}
+
+#[test]
+fn a_turn_with_no_canvas_cannot_be_pinned() {
+    let message = message_with(None, None);
+    let turn = AskTurn::default();
+
+    assert!(build_pinned_canvas_snapshot("t1", &message, &turn, 0).is_err());
 }

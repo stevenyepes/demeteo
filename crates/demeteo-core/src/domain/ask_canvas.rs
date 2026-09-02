@@ -18,6 +18,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::domain::models::ask::{AskMessage, CanvasPathVerdict};
+
 /// Where a node sits and what it does, fixed vocabulary matching
 /// `docs/ask-canvas/probe/Nodes.html`'s four node tones. Ruby is never a
 /// node role — it is reserved for failure/stopped states elsewhere in the
@@ -123,6 +125,50 @@ pub struct AskTurn {
     /// promoted to a turn-level error: the turn keeps its prose either way.
     #[serde(default)]
     pub canvas_error: Option<String>,
+}
+
+/// The frozen content of a pin: the block as parsed, plus the stored path
+/// verdicts and the commit sha they were checked against, plus enough to
+/// trace it back to its turn. No prose: nothing that reopens a pin renders
+/// citation highlighting for it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PinnedCanvasSnapshot {
+    pub thread_id: String,
+    pub message_id: String,
+    pub canvas: AskCanvas,
+    pub canvas_paths: Vec<CanvasPathVerdict>,
+    pub checked_commit_sha: Option<String>,
+    pub pinned_at: i64,
+}
+
+/// The domain decision of what a pin contains. `Err` when `turn` carries no
+/// canvas — pinning a message with no canvas must fail rather than silently
+/// produce an empty one.
+///
+/// Pure (no I/O): `pinned_at` is sampled by the caller in
+/// `application/ask/pin.rs`, on the same terms [`crate::application::ask`]
+/// passes the clock down for a rename. Sampling it here would be the only
+/// ambient nondeterminism under [`crate::domain`], and it would make
+/// [`PinnedCanvasSnapshot`]'s derived `PartialEq` a trap: two snapshots of
+/// one message would compare unequal across a millisecond boundary.
+pub fn build_pinned_canvas_snapshot(
+    thread_id: &str,
+    message: &AskMessage,
+    turn: &AskTurn,
+    pinned_at: i64,
+) -> Result<PinnedCanvasSnapshot, String> {
+    let canvas = turn
+        .canvas
+        .clone()
+        .ok_or_else(|| "message's turn carries no canvas to pin".to_string())?;
+    Ok(PinnedCanvasSnapshot {
+        thread_id: thread_id.to_string(),
+        message_id: message.id.clone(),
+        canvas,
+        canvas_paths: message.canvas_paths.clone().unwrap_or_default(),
+        checked_commit_sha: message.checked_commit_sha.clone(),
+        pinned_at,
+    })
 }
 
 /// The shape the assistant is asked to emit, and the shape an error message

@@ -1,5 +1,6 @@
 use super::*;
 use crate::domain::artifact::{Artifact, ArtifactSource};
+use crate::domain::ask_canvas::{AskCanvas, CanvasKind, PinnedCanvasSnapshot};
 
 fn temp_store() -> (FsArtifactStore, PathBuf) {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -99,4 +100,36 @@ fn worktree_ref_drops_env_json_sentinel() {
     let listed = store.list_for_step("f1", "s1").unwrap();
     assert_eq!(listed.len(), 1);
     assert!(listed[0].ends_with(".worktree-ref.json"));
+}
+
+#[test]
+fn pinned_ask_canvas_round_trips_with_canvas_json_extension() {
+    let (store, _dir) = temp_store();
+    let snapshot = PinnedCanvasSnapshot {
+        thread_id: "thread-1".into(),
+        message_id: "msg-1".into(),
+        canvas: AskCanvas {
+            kind: CanvasKind::Architecture,
+            title: "Pinned".into(),
+            stages: vec![],
+            lanes: vec![],
+            nodes: vec![],
+            edges: vec![],
+        },
+        canvas_paths: vec![],
+        checked_commit_sha: None,
+        pinned_at: 0,
+    };
+    let a = Artifact::pinned_ask_canvas("thread-1", "msg-1", &snapshot).unwrap();
+    let r = store.put("ask-canvas", "thread-1", &a).unwrap();
+    let expected = Path::new("ask-canvas")
+        .join("thread-1")
+        .join("msg-1.canvas.json");
+    assert!(Path::new(&r).ends_with(&expected));
+
+    let back = store.get(&r).unwrap();
+    assert_eq!(back, a.content);
+
+    let listed = store.list_for_step("ask-canvas", "thread-1").unwrap();
+    assert!(listed.contains(&r));
 }

@@ -3,8 +3,9 @@ import { formatError } from '../lib/errors';
 import { artifactBody } from '../lib/features';
 import { classifyArtifact } from '../lib/artifacts';
 import { parseTaskPlan } from '../lib/taskPlan';
+import { PinnedCanvasArtifact } from './artifacts/PinnedCanvasArtifact';
 import { TaskListArtifact } from './artifacts/TaskListArtifact';
-import type { TaskPlan } from '../types';
+import type { TaskPlan, AskCanvas } from '../types';
 import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -40,10 +41,17 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [viewType, setViewType] = useState<'markdown' | 'diff' | 'code' | 'worktree-ref' | 'task-list'>('code');
+  const [viewType, setViewType] = useState<
+    'markdown' | 'diff' | 'code' | 'worktree-ref' | 'task-list' | 'ask-canvas'
+  >('code');
   const [language, setLanguage] = useState<string>('plaintext');
   const [worktreeRef, setWorktreeRef] = useState<{ machine_id: string; branch: string; path: string } | null>(null);
   const [taskPlan, setTaskPlan] = useState<TaskPlan | null>(null);
+  const [askCanvasSnapshot, setAskCanvasSnapshot] = useState<{
+    canvas: AskCanvas;
+    canvas_paths: { node_id: string; path: string; resolved: boolean }[];
+    checked_commit_sha: string | null;
+  } | null>(null);
 
   useEffect(() => {
     if (!artifactPath) {
@@ -51,6 +59,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
       setError(null);
       setWorktreeRef(null);
       setTaskPlan(null);
+      setAskCanvasSnapshot(null);
       return;
     }
 
@@ -68,6 +77,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
       setError(null);
       setWorktreeRef(null);
       setTaskPlan(null);
+      setAskCanvasSnapshot(null);
       try {
         // Run-artifact display read goes through the RunView-backed
         // `artifact_body` command (C3), not `sftp_read_file` directly — so a
@@ -110,6 +120,29 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
           }
           // Malformed JSON or shape mismatch — fall through to the code/JSON
           // Monaco detection below exactly as any other artifact.
+        }
+
+        if (classifyArtifact(artifactPath).kind === 'ask-canvas') {
+          try {
+            const parsed = JSON.parse(fileContent) as {
+              canvas?: AskCanvas;
+              canvas_paths?: { node_id: string; path: string; resolved: boolean }[];
+              checked_commit_sha?: string | null;
+            };
+            if (parsed && parsed.canvas) {
+              setViewType('ask-canvas');
+              setAskCanvasSnapshot({
+                canvas: parsed.canvas,
+                canvas_paths: parsed.canvas_paths ?? [],
+                checked_commit_sha: parsed.checked_commit_sha ?? null,
+              });
+              setLoading(false);
+              return;
+            }
+          } catch {
+            // Malformed JSON — fall through to the code/JSON Monaco detection
+            // below exactly as the task-list branch does on a shape mismatch.
+          }
         }
 
         // Detect type and language
@@ -440,6 +473,14 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
             <TaskListArtifact plan={taskPlan} />
           </div>
         </div>
+      ) : viewType === 'ask-canvas' && askCanvasSnapshot ? (
+        <PinnedCanvasArtifact
+          artifactPath={artifactPath}
+          body={content}
+          canvas={askCanvasSnapshot.canvas}
+          canvasPaths={askCanvasSnapshot.canvas_paths}
+          checkedCommitSha={askCanvasSnapshot.checked_commit_sha}
+        />
       ) : (
         <div className="flex-1 min-h-0 min-w-0 rounded-xl border border-white/5 overflow-hidden shadow-lg bg-[#050608]/85 flex flex-col">
           <div className="bg-white/[0.02] px-4 py-2 border-b border-white/5 flex justify-between items-center text-[10px] uppercase font-bold text-slate-500 tracking-wider">

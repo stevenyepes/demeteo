@@ -7,7 +7,9 @@
 use crate::domain::ids::AskThreadId;
 use crate::domain::models::{AskMessage, AskThread, EffortLevel};
 use crate::state::AppContext;
-use demeteo_core::application::ask::{self, turn, AskThreadDetail, NewAskThread, NodeResolution};
+use demeteo_core::application::ask::{
+    self, pin, turn, AskThreadDetail, NewAskThread, NodeResolution,
+};
 use demeteo_core::ports::ask::AskThreadPatch;
 use serde::Deserialize;
 use tauri::{Emitter, State};
@@ -119,6 +121,32 @@ pub async fn ask_send_turn(
         },
     )
     .await
+}
+
+#[tauri::command]
+pub fn ask_pin_canvas(
+    ctx: State<'_, AppContext>,
+    thread_id: String,
+    message_id: String,
+) -> Result<String, String> {
+    pin::pin_canvas(&ctx, &AskThreadId::from(thread_id), &message_id)
+}
+
+#[tauri::command]
+pub fn ask_list_pinned_canvases(
+    ctx: State<'_, AppContext>,
+    thread_id: String,
+) -> Result<Vec<pin::PinnedCanvasEntry>, String> {
+    pin::list_pinned(&ctx, &AskThreadId::from(thread_id))
+}
+
+#[tauri::command]
+pub fn ask_export_canvas(
+    ctx: State<'_, AppContext>,
+    thread_id: String,
+    message_id: String,
+) -> Result<String, String> {
+    pin::export_canvas(&ctx, &AskThreadId::from(thread_id), &message_id)
 }
 
 #[tauri::command]

@@ -11,6 +11,7 @@
 pub mod events;
 pub mod node;
 mod path_containment;
+pub mod pin;
 pub mod question;
 pub mod running;
 pub mod turn;
@@ -176,9 +177,18 @@ pub fn update_settings(
     get(ctx, id)
 }
 
-/// Delete an Ask thread and its transcript, via the declared foreign key.
+/// Delete an Ask thread and its transcript, via the declared foreign key,
+/// after dropping the canvases it pinned.
+///
+/// The artifacts go first and a store failure aborts the delete, rather than
+/// being tolerated: the thread row is the only index into its pinned scope,
+/// so deleting the row past a failed clear would strand files that no
+/// surface in the product can list or remove. Aborting leaves the thread
+/// whole and the delete retryable, which is the recoverable half of the
+/// choice.
 pub fn delete(ctx: &AppContext, id: &AskThreadId) -> Result<(), String> {
     get(ctx, id)?;
+    pin::clear_pins(ctx, id)?;
     ctx.ask.delete(id)
 }
 
