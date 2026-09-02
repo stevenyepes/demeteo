@@ -10,9 +10,10 @@
  * `src/test/setup.ts` resolves `undefined` for every unstubbed command — the
  * TypeScript form of a double that can never fail (AGENTS.md §7).
  */
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { listen } from '@tauri-apps/api/event';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { FeatureDivergence, SyncSessionView } from '../../types';
 
@@ -63,6 +64,26 @@ const session = (over: Partial<SyncSessionView> = {}): SyncSessionView => ({
 
 const mount = (reload = () => {}) =>
   renderHook(() => useSyncSession({ featureId: 'f-1', status: 'completed', reload }));
+
+const eventHandlers = new Map<string, (e: { payload: unknown }) => void>();
+
+beforeEach(() => {
+  eventHandlers.clear();
+  vi.mocked(listen).mockImplementation((
+    (event: string, handler: (e: { payload: unknown }) => void) => {
+      eventHandlers.set(event, handler);
+      return Promise.resolve(() => eventHandlers.delete(event));
+    }
+  ) as unknown as typeof listen);
+});
+
+async function announce(payload: { feature_id: string; status: string }): Promise<void> {
+  const handler = eventHandlers.get('sync_status_changed');
+  if (!handler) throw new Error('nothing subscribed to sync_status_changed');
+  await act(async () => {
+    handler({ payload });
+  });
+}
 
 describe('useSyncSession', () => {
   it('reads the persisted session on mount, files and git words intact', async () => {
@@ -224,6 +245,38 @@ describe('useSyncSession', () => {
 
     expect(confirmDialog).not.toHaveBeenCalled();
     expect(reconcileSyncDivergence).toHaveBeenCalledWith('f-1', 'merge_origin');
+  });
+
+  /** A resolution that finishes in the background moves nothing else this hook
+   *  reads on: its other input is the run's status, and the rollup that
+   *  produces it excludes the out-of-band sync step by design
+   *  (`isOutOfBandStep`). So a pane left open across a resolution kept
+   *  rendering the `resolving` it read on mount, beside a branch that had been
+   *  merged and committed hours earlier. */
+  it('re-reads the row when the backend announces a transition', async () => {
+    getSyncSession
+      .mockResolvedValueOnce(session({ status: 'resolving' }))
+      .mockResolvedValue(session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222' }));
+    const { result } = mount();
+    await waitFor(() => expect(result.current.session?.status).toBe('resolving'));
+
+    await announce({ feature_id: 'f-1', status: 'resolved' });
+
+    await waitFor(() => expect(result.current.session?.status).toBe('resolved'));
+  });
+
+  /** One announcement reaches every open pane, and re-reading is four git
+   *  invocations on the way out (`probe_worktree`) — over SSH for a remote
+   *  session. */
+  it('ignores a transition announced for another feature', async () => {
+    getSyncSession.mockResolvedValue(session({ status: 'resolving' }));
+    const { result } = mount();
+    await waitFor(() => expect(result.current.session?.status).toBe('resolving'));
+    getSyncSession.mockClear();
+
+    await announce({ feature_id: 'f-other', status: 'resolved' });
+
+    expect(getSyncSession).not.toHaveBeenCalled();
   });
 
   it('reloads the run after a sync, so the timeline sees the merge', async () => {

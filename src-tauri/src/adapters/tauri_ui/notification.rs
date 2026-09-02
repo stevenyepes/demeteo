@@ -170,6 +170,10 @@ impl NotificationPort for TauriNotificationAdapter {
                 "conflict_detected",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
+            DomainEvent::SyncStatusChanged { .. } => (
+                "sync_status_changed",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
             DomainEvent::AgentSpawned { .. } => (
                 "agent_spawned",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,

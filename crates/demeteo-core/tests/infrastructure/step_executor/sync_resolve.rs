@@ -526,6 +526,7 @@ async fn run_continue(p: &Ports, gate: MergeGate<'_>) -> Result<ResolvedSync, Re
         app_settings: &p.app_settings,
         git_ops: &p.git_ops,
         merge_executor: &p.merge_executor,
+        notif: &p.notif,
         feature_id: &fid(),
         repo_dir: REPO,
         resolved_cwd: WT,
@@ -715,6 +716,41 @@ async fn the_turn_bills_the_totals_it_was_handed_and_streams_to_its_own_row() {
                 if step_id == "s-sync" && status == "running"
         )),
         "and the Activity panel's run-event feed reads StepProgress: {events:?}"
+    );
+}
+
+/// Both halves of the turn have to reach the pane that renders the row.
+///
+/// The pane's other input is the *run*'s status, and the rollup that produces
+/// it excludes this step by design, so a verdict written without an
+/// announcement is one an open pane cannot learn about at all: it read the row
+/// when it mounted, and nothing it watches moves again. That left `resolving`
+/// on screen beside a branch merged and committed hours earlier.
+#[tokio::test]
+async fn both_halves_of_a_resolution_are_announced_to_the_ui() {
+    let p = ports(happy_path(), vec![Arc::new(ScriptedRuntime::default())]);
+    open_conflicted(&p.db);
+    let step_exec = row();
+    let (mut cost, mut tokens) = (0.0, 0);
+
+    run(&p, &step_exec, None, &mut cost, &mut tokens)
+        .await
+        .unwrap();
+
+    let events = p.capturing.events.lock().unwrap();
+    let announced: Vec<SyncSessionStatus> = events
+        .iter()
+        .filter_map(|e| match e {
+            DomainEvent::SyncStatusChanged { feature_id, status } if *feature_id == fid() => {
+                Some(*status)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        announced,
+        vec![SyncSessionStatus::Resolving, SyncSessionStatus::Resolved],
+        "the turn starting and its verdict both move the row: {events:?}"
     );
 }
 

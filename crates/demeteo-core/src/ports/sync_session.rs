@@ -108,9 +108,17 @@ impl SyncSessionPatch {
                 } => Some(None),
                 _ => None,
             },
+            // Cleared by a success, because the resolver works in rounds and a
+            // round that ends badly writes its reason here before the next one
+            // runs. A `Succeeded` that left it standing produces a row saying
+            // both — `resolved`, beside the turn cap that stopped an earlier
+            // round — with nothing on it to say which came last. `Started` is
+            // not that: the reason on the row is then still the only account of
+            // the tree the turn is about to work on.
             raw_error: match resolution {
                 SyncResolution::Failed { reason } => Some(Some(reason.clone())),
-                _ => None,
+                SyncResolution::Succeeded { .. } => Some(None),
+                SyncResolution::Started => None,
             },
             // Written in both directions from the outcome alone, because the
             // turn is the only thing that can know: the commit is on the branch

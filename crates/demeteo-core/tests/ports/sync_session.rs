@@ -69,6 +69,25 @@ fn a_turn_that_has_not_landed_writes_only_what_it_knows() {
     );
 }
 
+/// A success is the one outcome that contradicts a stored failure, so it is the
+/// one that has to clear it.
+///
+/// The resolver works in rounds, and a round that trips its turn cap writes its
+/// reason here before the next one runs. Left standing, the row that finally
+/// resolved reads back as `resolved` beside "the agent stopped at its turn cap"
+/// — a verdict and its own refutation, with nothing to say which happened last.
+#[test]
+fn a_landed_resolution_clears_the_reason_an_earlier_round_left() {
+    assert_eq!(
+        SyncSessionPatch::from_resolution(&succeeded(false, false), 5).raw_error,
+        Some(None)
+    );
+    assert_eq!(
+        SyncSessionPatch::from_resolution(&succeeded(true, true), 5).raw_error,
+        Some(None)
+    );
+}
+
 /// The row counts a resolution when it starts, and only then.
 ///
 /// The column, the port field and the Sync pane's own `Attempts` metric all

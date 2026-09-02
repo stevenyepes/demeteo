@@ -238,6 +238,34 @@ pub(crate) struct ResolvedSync {
     pub cache: CacheTokens,
 }
 
+/// Where a resolution is written down, and where it is announced.
+///
+/// One parameter rather than two, for
+/// [`StatusWriters`](crate::adapters::step_executor::step_status)' reason: the
+/// row is the truth and the event is its push, and a caller that can reach the
+/// first without the second writes verdicts nothing tells the UI about. That is
+/// not hypothetical here — a sync records itself on a step every reader of a
+/// *run* excludes by design, so the pane rendering this row has no other way to
+/// hear that a background resolution finished.
+#[derive(Clone, Copy)]
+struct ResolutionRecorder<'a> {
+    merge_executor: &'a Arc<dyn MergeExecutor>,
+    notif: &'a Arc<dyn NotificationPort>,
+}
+
+impl ResolutionRecorder<'_> {
+    async fn record(&self, feature_id: &FeatureId, resolution: &SyncResolution) {
+        let _ = self
+            .merge_executor
+            .record_sync_resolution(feature_id, resolution)
+            .await;
+        let _ = self.notif.emit(&DomainEvent::SyncStatusChanged {
+            feature_id: feature_id.clone(),
+            status: resolution.status(),
+        });
+    }
+}
+
 /// Resolve the conflicts in `resolved_cwd` with an agent: the merge commit's
 /// sha, or why the resolution did not land.
 ///
@@ -248,7 +276,10 @@ pub(crate) struct ResolvedSync {
 pub(crate) async fn resolve_sync_conflicts(
     ctx: ResolveSyncContext<'_>,
 ) -> Result<ResolvedSync, ResolveSyncError> {
-    let merge_executor = ctx.merge_executor;
+    let recorder = ResolutionRecorder {
+        merge_executor: ctx.merge_executor,
+        notif: ctx.notif,
+    };
     let feature_id = ctx.feature_id;
     let exec = ctx.exec;
     let machine_str = ctx.machine_str;
@@ -257,7 +288,7 @@ pub(crate) async fn resolve_sync_conflicts(
 
     let declared = open_resolution(
         &**exec,
-        merge_executor,
+        recorder,
         feature_id,
         machine_str,
         resolved_cwd,
@@ -269,7 +300,7 @@ pub(crate) async fn resolve_sync_conflicts(
 
     record_verdict(
         &**exec,
-        merge_executor,
+        recorder,
         feature_id,
         machine_str,
         repo_dir,
@@ -290,7 +321,7 @@ pub(crate) async fn resolve_sync_conflicts(
 /// to a second presser.
 async fn open_resolution(
     exec: &dyn ExecutionPort,
-    merge_executor: &Arc<dyn MergeExecutor>,
+    recorder: ResolutionRecorder<'_>,
     feature_id: &FeatureId,
     machine_str: &str,
     resolved_cwd: &str,
@@ -302,8 +333,8 @@ async fn open_resolution(
         // it was, still naming the worktree, for whoever can reach the machine.
         Err(PreflightRefusal::Unreadable(why)) => return Err(ResolveSyncError::Failed(why)),
         Err(PreflightRefusal::NothingToResolve(why)) => {
-            let _ = merge_executor
-                .record_sync_resolution(
+            recorder
+                .record(
                     feature_id,
                     &SyncResolution::Failed {
                         reason: why.clone(),
@@ -322,16 +353,14 @@ async fn open_resolution(
         ctx_declared.to_vec()
     };
 
-    let _ = merge_executor
-        .record_sync_resolution(feature_id, &SyncResolution::Started)
-        .await;
+    recorder.record(feature_id, &SyncResolution::Started).await;
     Ok(declared)
 }
 
 /// What the row is left saying, and what becomes of the worktree.
 async fn record_verdict(
     exec: &dyn ExecutionPort,
-    merge_executor: &Arc<dyn MergeExecutor>,
+    recorder: ResolutionRecorder<'_>,
     feature_id: &FeatureId,
     machine_str: &str,
     repo_dir: &str,
@@ -368,9 +397,7 @@ async fn record_verdict(
             reason: failure.message().to_string(),
         },
     };
-    let _ = merge_executor
-        .record_sync_resolution(feature_id, &verdict)
-        .await;
+    recorder.record(feature_id, &verdict).await;
 }
 
 /// Everything the manual finish needs. No agent, and so none of what an agent
@@ -380,6 +407,7 @@ pub(crate) struct ContinueSyncContext<'a> {
     pub app_settings: &'a Arc<dyn AppSettingsRepository>,
     pub git_ops: &'a GitOpsHelper,
     pub merge_executor: &'a Arc<dyn MergeExecutor>,
+    pub notif: &'a Arc<dyn NotificationPort>,
     pub feature_id: &'a FeatureId,
     pub repo_dir: &'a str,
     pub resolved_cwd: &'a str,
@@ -414,6 +442,7 @@ pub(crate) async fn continue_sync_resolution(
         app_settings,
         git_ops,
         merge_executor,
+        notif,
         feature_id,
         repo_dir,
         resolved_cwd,
@@ -427,9 +456,13 @@ pub(crate) async fn continue_sync_resolution(
         cancel,
     } = ctx;
 
+    let recorder = ResolutionRecorder {
+        merge_executor,
+        notif,
+    };
     let declared = open_resolution(
         &**exec,
-        merge_executor,
+        recorder,
         feature_id,
         machine_str,
         resolved_cwd,
@@ -454,7 +487,7 @@ pub(crate) async fn continue_sync_resolution(
 
     record_verdict(
         &**exec,
-        merge_executor,
+        recorder,
         feature_id,
         machine_str,
         repo_dir,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 
+import { useTauriEvent } from '../../hooks/useTauriEvent';
 import { useErrorBus } from '../../lib/errorBus';
 import {
   abortSync,
@@ -91,6 +92,25 @@ export function useSyncSession(input: {
       cancelled = true;
     };
   }, [featureId, status, reportError]);
+
+  /**
+   * The backend's own announcement that this feature's session moved
+   * (`DomainEvent::SyncStatusChanged`), which is the only thing that reaches a
+   * pane nobody is pressing anything in.
+   *
+   * The effect above cannot stand in for it: the status it re-reads on is the
+   * *run*'s, and the rollup that produces it excludes the out-of-band sync step
+   * by design (`isOutOfBandStep`) — so a resolution running in the background
+   * moves nothing this hook watches, and the pane kept rendering the
+   * `resolving` it read on mount for the whole of one.
+   *
+   * The event's own status is deliberately not folded into state. Re-reading is
+   * what reconciles the row against the worktree, and taking the status from
+   * here would be the one reading that skipped that check.
+   */
+  useTauriEvent<{ feature_id: string; status: string }>('sync_status_changed', ({ feature_id }) => {
+    if (feature_id === featureId) void read();
+  });
 
   /**
    * The divergence, re-read on every row this hook lands, so a reconcile that
