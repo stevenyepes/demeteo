@@ -33,6 +33,7 @@ fn a_reseed_carries_the_preamble_and_the_transcript() {
 
     assert!(rendered.contains("answering questions inside Demeteo"));
     assert!(rendered.contains(&canvas_block_shape_example()));
+    assert!(rendered.contains(&canvas_block_vocabulary()));
     assert!(rendered.contains("USER: what does the scope fence do?"));
     assert!(rendered.contains("YOU: it denies writes outside the tree"));
     assert!(rendered.ends_with("USER: and on remote hosts?"));
