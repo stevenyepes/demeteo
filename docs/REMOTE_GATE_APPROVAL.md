@@ -24,11 +24,17 @@ the point where the run has a question. A gate reached at 09:00 costs the rest
 of the day if the user is not at that machine. The notification already reaches
 a phone; the answer cannot leave one.
 
-**This brief is about the return path only.** A companion mobile app is a
-separate, much larger question, and [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) §17
-still rules it out ("demeteo is a desktop control plane"). Nothing here asks to
-revisit that: a chat channel is not a client, holds no state, and renders no
-part of the app.
+**This brief is about the return path.** A companion mobile app stays out of
+scope: [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) §17 rules it out ("demeteo is a
+desktop control plane"), and a chat channel does not reopen it — it is not a
+client, holds no state, and renders no part of the app.
+
+One option below does reach that entry, and says so where it is raised: a
+**self-hosted hub** (§4.1) is a web companion by any reading of §17, and would
+need that decision revisited deliberately rather than by implication. It is
+listed because it is the only candidate that answers a question the others
+cannot — *the status of every pipeline across every machine* — and because the
+identity it would introduce is the missing half of §3's provenance gap.
 
 ---
 
@@ -56,11 +62,11 @@ segment between them.
 
 1. **An inbound leg.** Nothing in the tree ever *receives*. `AwayNotifier` is
    fire-and-forget by construction ("a broken webhook must never fail the run").
-2. **A decidable message.** The webhook body is one scrubbed string. It carries
+3. **A decidable message.** The webhook body is one scrubbed string. It carries
    no gate identity a machine can act on and no affordance to answer with.
-3. **Authorization for a channel that is not a Demeteo client.** `client_id`
+4. **Authorization for a channel that is not a Demeteo client.** `client_id`
    ownership (MC-D2) assumes the caller is an install. A chat account is not one.
-4. **Provenance.** `gate_decisions` (V1) has `decision`, `feedback`,
+5. **Provenance.** `gate_decisions` (V1) has `decision`, `feedback`,
    `created_at` — and no actor. Today that is honest, because there is exactly
    one way to answer a gate. A second channel makes the column's absence a lie
    by omission, and [`REMOTE_EXECUTION.md`](REMOTE_EXECUTION.md) §5 sells
@@ -85,6 +91,47 @@ obvious answer (a Slack app with a request URL) is the expensive one:
 | **Slack, Socket Mode** | Outbound WebSocket | A WebSocket dependency, an app-level token, an app manifest the user must install into a workspace. Same reachability property as Telegram, ~3× the setup |
 | **Slack/Discord webhooks + request URL** | Inbound HTTPS | A public endpoint. Rejected on the constraint above unless Demeteo runs hosted infrastructure |
 | **Poll a forge** (approve by commenting on the PR) | Outbound HTTPS, credentials already exist | No new channel at all, and the PR is where a reviewer already is — but a parked gate often has no PR yet, and the forge PAT is run-scoped and wiped at terminal state |
+| **A self-hosted hub** every install connects out to | Outbound from each install; the hub holds the integrations | The only option that can answer *"all pipelines across machines"*, and the only place a **person** could exist as an identity (§4.1). Also a service the user must host, secure and upgrade, and a third copy of state unless kept thin |
+
+### 4.1 The hub option deserves its own argument
+
+A self-hosted hub — one service the user runs, every Demeteo install connects
+out to it, integrations are configured there once — is the only option in the
+table that is not merely a transport. It is worth separating what it uniquely
+gives from what it merely also gives.
+
+**What only a hub can do.** There is no *person* anywhere in Demeteo. Identity
+is `install_id` — a per-install UUID that MC-D2 states outright is "not a
+security boundary" — and there is no `users` table in any migration. An
+approval arriving from a phone is an act by a human, and there is nothing in the
+schema for it to be attributed to. Likewise there is no cross-machine view of
+anything: a client reconciles only the runs *it* launched
+([`MULTI_CLIENT_RUNNER.md`](MULTI_CLIENT_RUNNER.md) §2.1 — reconcile is
+mirror-driven, not enumeration-driven), so a second laptop cannot see the
+first's work even on a shared runner. Both gaps are real, both are permanent
+under the current shape, and a hub is the natural home for both. MC-D7's
+"drop runner-side push-notify in favor of client pull-reconcile" is the same
+finding from the other side: push does not route with N clients, and a hub is
+what would make it route again.
+
+**Thin or fat is the whole question.** A *thin* hub holds identity, integration
+credentials, and the routing table: it learns that a gate parked, fans the
+notice out to the configured channels, accepts an answer, and calls the install's
+existing decision path. The source of truth stays where it already is. A *fat*
+hub also mirrors run state and artifacts so it can render status itself — which
+makes it a third copy after the runner's database and `remote_run_mirror`, with
+its own staleness, and puts it on the critical path for visibility. The tree
+already carries a scar from a mirror that accepted a write: the shadow refusal
+in `adapters/step_executor/impl_traits/gate_presenter.rs` exists because a
+decision written to a read-only mirror returned `Ok` and silently did nothing.
+
+**What it costs that the other rows do not.** A hub reachable by every install
+is a service on a network holding integration tokens and the authority to clear
+a gate that merges to a default branch. Today's authorization is deliberately
+soft — MC-D5 rates it rung **(A)** of three and parks the bearer-token rung at
+P2 — because everyone is already inside an SSH trust boundary. A hub is outside
+it, and lands on rung (B) as a *precondition* rather than a hardening step. The
+user also becomes its operator.
 
 **Provisional recommendation for the Discovery to attack:** Telegram first,
 because it is the only option where the inbound leg costs a loop and a token —
@@ -156,28 +203,35 @@ hole the moment this feature exists.
 ## 7. Open questions for the Discovery
 
 1. **Which side hosts the channel** — the runner (covers detached runs while the
-   laptop is off, which is the whole point) or the desktop (covers local runs,
-   but only while the app is open)? Both, behind one port, is plausible and
-   doubles the surface.
-2. **Where the bot token lives**, given §6. Per-machine SQLite + systemd env,
+   laptop is off, which is the whole point), the desktop (covers local runs, but
+   only while the app is open), or a self-hosted hub both connect out to (§4.1)?
+   Both of the first two, behind one port, is plausible and doubles the surface.
+2. **Is the fleet view a requirement or a bonus?** It is the question that
+   decides §4.1, and it is not a remote-approval question at all. If a unified
+   cross-machine view is wanted for its own sake, a hub is justified on its own
+   terms and approval rides along. If the goal is answering a gate from a phone,
+   a hub is the most expensive way to reach the cheapest outcome — and the port
+   seam matters more than the destination, so a hub stays a second adapter
+   rather than a rewrite.
+3. **Where the bot token lives**, given §6. Per-machine SQLite + systemd env,
    following the webhook precedent? Injected over the tunnel at connect,
    memory-only, accepting that a runner restart silences approvals until the
    laptop next connects? Keyring on the desktop only, making desktop-hosted the
    only configuration that satisfies the invariant as written?
-3. **Who may answer.** An allowlist of chat ids per machine is the floor. Does a
+4. **Who may answer.** An allowlist of chat ids per machine is the floor. Does a
    decision need a second factor — a nonce in the message that must be echoed,
    a short expiry — given that clearing a dangerous gate can merge to the
    default branch?
-4. **What a remote decision records.** An actor column on `gate_decisions`
+5. **What a remote decision records.** An actor column on `gate_decisions`
    (`desktop` / `telegram:<id>` / `policy:auto-approve`), and whether the
    existing auto-approve path backfills as an actor too.
-5. **Which gates are remotely decidable** (§5), and whether that is authored per
+6. **Which gates are remotely decidable** (§5), and whether that is authored per
    workflow, derived from `gate_class`, or a project setting.
-6. **What the message carries** — and what it must never carry, given the
+7. **What the message carries** — and what it must never carry, given the
    scrubber exists because these bodies have echoed credential-bearing URLs.
-7. **Multi-client routing** (§6) — is per-client notification routing a
+8. **Multi-client routing** (§6) — is per-client notification routing a
    prerequisite, or is this feature single-tenant until MC lands fully?
-8. **What happens to the desktop's own view** when a gate is cleared from a
+9. **What happens to the desktop's own view** when a gate is cleared from a
    phone: `GateDecided` already exists as an event; does the mirror reconcile
    catch it, or does an open `GateView` sit there offering buttons for a
    decision that has already been made?
@@ -210,5 +264,8 @@ A plausible shape, for the Discovery to accept or discard:
 | 1 | One channel, runner-hosted, allowlisted chat ids, approve/reject only, actor recorded |
 | 2 | Redirect with feedback; the remotely-decidable classification from §5 |
 | 3 | Second adapter (Slack Socket Mode) behind the same port; desktop-hosted variant for local runs |
+| — | A hub (§4.1) is deliberately *not* a phase here. It is a separate product decision that this sequence neither needs nor forecloses: if it is built, it arrives as one more adapter behind the same port, and the port is the reason that stays true |
 
-Mobile stays where [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) §17 left it.
+Mobile stays where [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) §17 left it. The hub
+is the one option worth deciding on its own merits rather than as a means to
+this end — §7's second question is the one that settles it.
