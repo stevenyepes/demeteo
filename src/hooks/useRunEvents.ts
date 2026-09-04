@@ -1,42 +1,75 @@
+/**
+ * The single run-event consumer both run-mode surfaces share (P2.2): the
+ * workflow **canvas** overlay and the **timeline** read node status from the
+ * same place, so they can never disagree about what a run is doing.
+ *
+ * Two inputs, one shape out:
+ *  - `steps` (the feature's `step_executions` snapshot, reloaded by
+ *    `FeatureDetail` on every `step_progress`/`feature_status_changed` event)
+ *    is the authoritative status/cost/duration source. Deltas are never
+ *    replayed to derive those: a step row already holds the settled value, so
+ *    reading it keeps the overlay correct after a reload with no gap-recovery
+ *    bookkeeping. The log is read for what a step row cannot carry, and only
+ *    for that.
+ *  - the unified `run_events` stream (P1.13) supplies two such things. The
+ *    **failure class** (`retry_decision`) is lifted per node so a failed card
+ *    can name *why* it failed — `step_executions` has no column for it, and
+ *    the rule that chose it is not recoverable from the status alone. The
+ *    **spawn evidence** (`agent_spawned`) is what the run actually launched,
+ *    which the workflow definition can only predict. Both are backfilled from
+ *    offset 0 on mount, because both outlive the push subscription: a view
+ *    opened after the fact would otherwise show a blank where the record is.
+ *
+ * Node ids are the migrated v2 node ids, which equal the v1 `step_id` the
+ * migration preserves — so `statusByNode[node.id]` resolves directly.
+ *
+ * Assignments come out keyed by `step_execution_id` and are deliberately *not*
+ * projected onto nodes here: `statusByNode` keeps one execution per node id,
+ * and the timeline renders every attempt. Joining the two is the caller's, in
+ * `useRunGraph`, which is also where a detached run substitutes its own
+ * evidence — merging it in here would produce a value that caller can only
+ * discard.
+ */
 import { useEffect, useMemo, useState } from 'react';
 import type { NodeRunStatus } from '../components/canvas/types';
 import { listRunEventsSince } from '../lib/featureDetail';
+import type { RunEventAssignments } from '../lib/runEventAssignments';
 import {
-  reconcileRunEventAssignments,
-  type RunEventAssignments,
-} from '../lib/runEventAssignments';
+  EMPTY_RUN_EVENT_FEED,
+  mergeRunEventFeed,
+  type RunEventFeed,
+} from '../lib/runEventFeed';
 import type { RunEvent, StepExecution } from '../types';
 import { useTauriEvent } from './useTauriEvent';
-
-const MAX_EVENTS = 500;
 
 interface RetryDecision {
   errorClass: string;
   offset: number;
 }
 
+const NO_RETRY_DECISIONS: Record<string, RetryDecision> = {};
+
 interface FeatureRunEventState {
   featureId: string;
-  events: RunEvent[];
-  seenOffsets: Set<number>;
-  assignments: RunEventAssignments;
+  feed: RunEventFeed;
   retryDecisions: Record<string, RetryDecision>;
-}
-
-export interface RunEventsState {
-  statusByNode: Record<string, NodeRunStatus>;
-  events: RunEvent[];
-  assignments: RunEventAssignments;
 }
 
 function emptyState(featureId: string): FeatureRunEventState {
   return {
     featureId,
-    events: [],
-    seenOffsets: new Set(),
-    assignments: {},
-    retryDecisions: {},
+    feed: EMPTY_RUN_EVENT_FEED,
+    retryDecisions: NO_RETRY_DECISIONS,
   };
+}
+
+export interface RunEventsState {
+  /** node id (== `step_id`) → live run state for the canvas overlay. */
+  statusByNode: Record<string, NodeRunStatus>;
+  /** Raw append-only run-event feed (P1.13), oldest→newest, bounded. */
+  events: RunEvent[];
+  /** Newest spawn evidence per `step_execution_id`, unbounded by the feed cap. */
+  assignments: RunEventAssignments;
 }
 
 function retryDecision(event: RunEvent): { stepId: string; errorClass: string } | null {
@@ -59,19 +92,12 @@ function mergeEvents(
   state: FeatureRunEventState,
   incoming: readonly RunEvent[],
 ): FeatureRunEventState {
-  const seenOffsets = new Set(state.seenOffsets);
-  const accepted: RunEvent[] = [];
-
-  for (const event of incoming) {
-    if (event.run_id !== state.featureId || seenOffsets.has(event.offset)) continue;
-    seenOffsets.add(event.offset);
-    accepted.push(event);
-  }
-
-  if (accepted.length === 0) return state;
+  const scoped = incoming.filter((event) => event.run_id === state.featureId);
+  const feed = mergeRunEventFeed(state.feed, scoped);
+  if (feed === state.feed) return state;
 
   const retryDecisions = { ...state.retryDecisions };
-  for (const event of accepted) {
+  for (const event of scoped) {
     const decision = retryDecision(event);
     if (!decision) continue;
     const existing = retryDecisions[decision.stepId];
@@ -83,15 +109,7 @@ function mergeEvents(
     }
   }
 
-  const events = [...state.events, ...accepted].sort((a, b) => a.offset - b.offset);
-
-  return {
-    ...state,
-    events: events.length > MAX_EVENTS ? events.slice(events.length - MAX_EVENTS) : events,
-    seenOffsets,
-    assignments: reconcileRunEventAssignments(state.assignments, accepted),
-    retryDecisions,
-  };
+  return { ...state, feed, retryDecisions };
 }
 
 export function useRunEvents(
@@ -133,7 +151,12 @@ export function useRunEvents(
     [featureId],
   );
 
-  const scopedState = state.featureId === featureId ? state : emptyState(featureId);
+  // The render between a `featureId` change and the effect that scopes state to
+  // it still holds the previous feature's fold; the constants make that render
+  // hand out the same empty identities every time rather than fresh ones the
+  // memo below would have to re-run for.
+  const scoped = state.featureId === featureId ? state : emptyState(featureId);
+  const { feed, retryDecisions } = scoped;
   const statusByNode = useMemo(() => {
     const map: Record<string, NodeRunStatus> = {};
     const seenUpdated: Record<string, number> = {};
@@ -145,25 +168,21 @@ export function useRunEvents(
         continue;
       }
       seenUpdated[step.step_id] = step.updated_at;
-      const assignment = scopedState.assignments[step.id];
       map[step.step_id] = {
         status: step.status,
         costUsd: step.cost_usd ?? null,
         wallClockSecs: step.wall_clock_secs ?? null,
         tokens: step.tokens ?? null,
-        errorClass: scopedState.retryDecisions[step.step_id]?.errorClass ?? null,
+        errorClass: retryDecisions[step.step_id]?.errorClass ?? null,
         stepExecutionId: step.id,
-        ...(assignment
-          ? { agentKind: assignment.agentKind, effort: assignment.effort }
-          : {}),
       };
     }
     return map;
-  }, [steps, scopedState.assignments, scopedState.retryDecisions]);
+  }, [steps, retryDecisions]);
 
   return {
     statusByNode,
-    events: scopedState.events,
-    assignments: scopedState.assignments,
+    events: feed.events,
+    assignments: feed.assignments,
   };
 }

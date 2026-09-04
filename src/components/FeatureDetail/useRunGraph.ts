@@ -59,30 +59,33 @@ export function useRunGraph(input: {
     events: localRunEvents,
     assignments: localAssignments,
   } = useRunEvents(featureId, steps);
-  const selectedAssignments = detachedAssignments ?? localAssignments;
-  const { runStatusByNode, runAssignments } = useMemo(() => {
-    const statuses = Object.fromEntries(
-      Object.entries(localStatusByNode).map(([nodeId, status]) => {
-        const { agentKind: _agentKind, effort: _effort, ...baseStatus } = status;
-        const assignment = status.stepExecutionId
-          ? selectedAssignments[status.stepExecutionId]
-          : undefined;
-        return [
-          nodeId,
-          assignment
-            ? { ...baseStatus, agentKind: assignment.agentKind, effort: assignment.effort }
-            : baseStatus,
-        ];
-      }),
-    );
-    const assignments: RunEventAssignments = {};
-    for (const status of Object.values(statuses)) {
-      if (!status.stepExecutionId) continue;
-      const assignment = selectedAssignments[status.stepExecutionId];
-      if (assignment) assignments[status.stepExecutionId] = assignment;
-    }
-    return { runStatusByNode: statuses, runAssignments: assignments };
-  }, [localStatusByNode, selectedAssignments]);
+  /** A detached run's evidence comes off the runner's log, whose `run_id` is
+   *  the runner's, not the feature's — so the local log holds nothing for it
+   *  and substituting rather than merging is what keeps a stale local row from
+   *  being read as this run's. */
+  const runAssignments = detachedAssignments ?? localAssignments;
+  /** The canvas draws one card per node, so it gets the assignment of the
+   *  execution `statusByNode` picked. The timeline draws one card per attempt
+   *  and is handed `runAssignments` whole (keyed by `step_execution_id`), so an
+   *  earlier attempt keeps its own evidence — which is the reading a retry
+   *  exists to be compared against. */
+  const runStatusByNode = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(localStatusByNode).map(([nodeId, status]) => {
+          const assignment = status.stepExecutionId
+            ? runAssignments[status.stepExecutionId]
+            : undefined;
+          return [
+            nodeId,
+            assignment
+              ? { ...status, agentKind: assignment.agentKind, effort: assignment.effort }
+              : status,
+          ];
+        }),
+      ),
+    [localStatusByNode, runAssignments],
+  );
 
   // Load the pinned version's v2 graph once per feature id — it's immutable
   // for the run's lifetime (runs pin their version forever, PRD §2), so a
