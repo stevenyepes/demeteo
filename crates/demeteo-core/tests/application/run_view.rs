@@ -12,7 +12,7 @@ use crate::ports::execution::{ExecutionPort, InteractiveHandle, SftpEntry};
 use async_trait::async_trait;
 use rusqlite::Connection;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// `RunView::sequence_state` never reads `exec` — every method panics so an
 /// accidental new dependency on it would fail this test loudly rather than
