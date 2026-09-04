@@ -344,6 +344,7 @@ Read the relevant doc before modifying that area.
 | Reliability invariants & open backlog | [docs/RELIABILITY_PLAN.md](docs/RELIABILITY_PLAN.md) |
 | Harness truthfulness & baseline preflight | [docs/HARNESS_BASELINE.md](docs/HARNESS_BASELINE.md) |
 | Remote execution design | [docs/REMOTE_EXECUTION.md](docs/REMOTE_EXECUTION.md) |
+| Approving Gates away from the desktop (brief) | [docs/REMOTE_GATE_APPROVAL.md](docs/REMOTE_GATE_APPROVAL.md) |
 | Multi-client runner (designed, not built) | [docs/MULTI_CLIENT_RUNNER.md](docs/MULTI_CLIENT_RUNNER.md) |
 | Remote-runner dev workflow & triage | [docs/RUNNER_DEV.md](docs/RUNNER_DEV.md) |
 | Terminal agent activity | [docs/TERMINAL_ACTIVITY.md](docs/TERMINAL_ACTIVITY.md) |
