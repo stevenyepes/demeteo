@@ -84,7 +84,7 @@ const TICKETS = [ticket(1), ticket(2)];
 
 /** Owns the same selection/editor state `DiscoveryView` does, so the row is
  *  driven exactly as its real caller drives it. */
-function Harness() {
+function Harness({ pending = false }: { pending?: boolean } = {}) {
   const [selectedId, setSelectedId] = useState<string | null>(TICKETS[0].ticket.id);
   const [editingId, setEditingId] = useState<string | null>(null);
   const index = useMemo(() => indexTickets(TICKETS), []);
@@ -97,7 +97,7 @@ function Harness() {
       messages={[]}
       blocks={[]}
       machineLabel="local"
-      pending={false}
+      pending={pending}
       store={STORE}
       onSend={() => {}}
       onRefresh={() => {}}
@@ -232,6 +232,74 @@ describe('DiscoveryWorkspaceRow', () => {
 
     expect(composer.closest('[aria-hidden="true"]')).toBeNull();
     expect(composer).toHaveValue('a draft in progress');
+  });
+
+  it('hiding the interview leaves the rail as the way back, and the draft intact behind it', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    resizeTo(1400);
+
+    const composer = screen.getByTestId('interview-composer');
+    await user.type(composer, 'a draft in progress');
+    expect(screen.queryByTestId('interview-show')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('interview-hide'));
+
+    expect(composer.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(screen.getByTestId('interview-show')).toBeInTheDocument();
+    // Not unmounted: the turn behind the rail is still the one being typed.
+    expect(composer).toHaveValue('a draft in progress');
+
+    await user.click(screen.getByTestId('interview-show'));
+
+    expect(composer.closest('[aria-hidden="true"]')).toBeNull();
+    expect(composer).toHaveValue('a draft in progress');
+    expect(screen.queryByTestId('interview-show')).not.toBeInTheDocument();
+  });
+
+  it('a hidden interview hands its width to the inspector: 1000px seats it in-row instead of overlaying', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    resizeTo(1000);
+
+    expect(screen.getByLabelText('Ticket inspector')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('interview-hide'));
+
+    const row = screen.getByTestId('discovery-workspace-row');
+    expect(screen.queryByLabelText('Ticket inspector')).not.toBeInTheDocument();
+    expect(row).toContainElement(screen.getByTestId('ticket-verdict'));
+  });
+
+  it('the rail pulses while a turn runs behind it', async () => {
+    const user = userEvent.setup();
+    render(<Harness pending />);
+    resizeTo(1400);
+
+    await user.click(screen.getByTestId('interview-hide'));
+
+    expect(screen.getByTestId('interview-rail-pulse')).toBeInTheDocument();
+  });
+
+  it('stacked ignores a hide rather than emptying its own Interview pane, and honours it again on widening', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    resizeTo(1400);
+    await user.click(screen.getByTestId('interview-hide'));
+
+    // Below the graph's own minimum there is nothing left for a hide to buy,
+    // so the pane toggle takes back over — with Interview on it.
+    resizeTo(300);
+
+    expect(screen.getByRole('radiogroup', { name: 'Workspace pane' })).toBeInTheDocument();
+    expect(screen.queryByTestId('interview-show')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('interview-hide')).not.toBeInTheDocument();
+    expect(screen.getByTestId('interview-composer').closest('[aria-hidden="true"]')).toBeNull();
+
+    resizeTo(1400);
+
+    expect(screen.getByTestId('interview-show')).toBeInTheDocument();
+    expect(screen.getByTestId('interview-composer').closest('[aria-hidden="true"]')).not.toBeNull();
   });
 
   it('a resize crossing back above 920px during a stacked session shows both panes again', () => {
