@@ -28,6 +28,16 @@ const ZOOM_STEP = 0.15;
 /**
  * What depends on what.
  *
+ * `fit()` preserves aspect, so one axis is left over whenever the pane's is
+ * not the graph's — and the pane's changes on its own now that the interview
+ * column can be hidden. The leftover is centred by `m-auto` on a flex item
+ * rather than `justify-center` on the scroller: with content larger than the
+ * viewport, centring the *container* puts the overflow's leading edge outside
+ * the scroll range and nothing can reach it, while auto margins collapse to
+ * zero once there is no free space. `shrink-0` is the third of the three —
+ * the canvas has a definite width, and a flex item would otherwise shrink to
+ * the pane and take the horizontal scroll with it.
+ *
  * **Not `WorkflowCanvas`** — `docs/TASKS_DISCOVERY.md` records why: reuse would
  * import the run-tone vocabulary the canvas exists to paint, and a ticket lane
  * is not a run status. With no pan, no wheel zoom, no drag and no minimap
@@ -84,9 +94,11 @@ export function TicketGraph({
     <div data-testid="ticket-graph" className="absolute inset-0">
       <div
         ref={viewport}
-        className="absolute inset-0 overflow-auto bg-[#050608] bg-[radial-gradient(#334155_1px,transparent_1px)] bg-[length:20px_20px]"
+        className="absolute inset-0 flex overflow-auto bg-[#050608] bg-[radial-gradient(#334155_1px,transparent_1px)] bg-[length:20px_20px]"
       >
         <div
+          data-testid="ticket-graph-canvas"
+          className="m-auto shrink-0"
           style={{
             width: layout.width * zoom,
             height: layout.height * zoom,
