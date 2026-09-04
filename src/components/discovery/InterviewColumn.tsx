@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Info } from 'lucide-react';
+import { Info, PanelLeftClose } from 'lucide-react';
 
 import { nothingLeftToSettle, openQuestionKey } from '../../lib/discoveryInterview';
 import type { TranscriptBlock } from '../../lib/discoveryInterview';
@@ -31,6 +31,10 @@ interface InterviewColumnProps {
   /** Hides via class + `aria-hidden`, not unmounting — the draft and scroll
    *  position must survive a `'stacked'`-mode toggle. */
   hidden?: boolean;
+  /** Offered only where hiding this column leaves another one visible;
+   *  `'stacked'`'s pane toggle already is that control, so it passes nothing
+   *  and no button renders. */
+  onHide?: () => void;
 }
 
 /**
@@ -53,6 +57,7 @@ export function InterviewColumn({
   onRefresh,
   widthMode = 'fixed',
   hidden = false,
+  onHide,
 }: InterviewColumnProps): React.ReactElement {
   const [draft, setDraft] = useState('');
   const composerRef = useRef<HTMLInputElement | null>(null);
@@ -96,6 +101,18 @@ export function InterviewColumn({
         <Chip size="sm" tone="slate" maxWidth="8rem">
           {machineLabel}
         </Chip>
+        {onHide && (
+          <button
+            type="button"
+            onClick={onHide}
+            data-testid="interview-hide"
+            aria-label="Hide the interview"
+            title="Hide the interview — the turn keeps running"
+            className="rounded p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-white"
+          >
+            <PanelLeftClose className="h-3.5 w-3.5" />
+          </button>
+        )}
       </ColumnSubHeader>
 
       <ConfinementBanner agentKind={discovery.agent_kind} />

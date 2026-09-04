@@ -11,6 +11,7 @@ import type {
   WorkflowWithSteps,
 } from '../../types';
 import { SegmentedControl } from '../ui/SegmentedControl';
+import { InterviewCollapsedRail } from './InterviewCollapsedRail';
 import { InterviewColumn } from './InterviewColumn';
 import { TicketColumn } from './TicketColumn';
 import { TicketEditorDrawer } from './TicketEditorDrawer';
@@ -65,7 +66,14 @@ interface DiscoveryWorkspaceRowProps {
  * `'stacked'`'s pane toggle hides with a class rather than unmounting, so an
  * in-progress interview draft and the graph's zoom state survive a toggle —
  * the same reason `InterviewColumn`/`TicketColumn` grew a `hidden` prop
- * instead of this component conditionally rendering them.
+ * instead of this component conditionally rendering them. The interview's own
+ * hide toggle rides the same prop for the same reason.
+ *
+ * That toggle is a *request*, not the verdict: `'stacked'` shows one pane at a
+ * time and already offers the interview as one of them, so honouring a hide
+ * there would leave a pane toggle whose Interview position renders nothing.
+ * The request is kept rather than cleared, so widening the row restores the
+ * collapse the user asked for.
  */
 export function DiscoveryWorkspaceRow({
   discovery,
@@ -98,11 +106,13 @@ export function DiscoveryWorkspaceRow({
   onInspectorEdit,
   onInspectorOpenFeature,
 }: DiscoveryWorkspaceRowProps): React.ReactElement {
-  const { setRowEl, layoutMode } = useDiscoveryColumnLayout();
+  const [interviewHidden, setInterviewHidden] = useState(false);
+  const { setRowEl, layoutMode } = useDiscoveryColumnLayout(interviewHidden);
   const [stackedPane, setStackedPane] = useState<'interview' | 'tickets'>('interview');
 
   const overlaid = layoutMode !== 'three-up';
   const stacked = layoutMode === 'stacked';
+  const interviewCollapsed = interviewHidden && !stacked;
 
   const pane = editing ? (
     <TicketEditorDrawer
@@ -162,8 +172,13 @@ export function DiscoveryWorkspaceRow({
           onSend={onSend}
           onRefresh={onRefresh}
           widthMode={stacked ? 'full' : 'fixed'}
-          hidden={stacked && stackedPane !== 'interview'}
+          hidden={stacked ? stackedPane !== 'interview' : interviewCollapsed}
+          onHide={stacked ? undefined : () => setInterviewHidden(true)}
         />
+
+        {interviewCollapsed && (
+          <InterviewCollapsedRail onShow={() => setInterviewHidden(false)} pending={pending} />
+        )}
 
         <TicketColumn
           tickets={tickets}

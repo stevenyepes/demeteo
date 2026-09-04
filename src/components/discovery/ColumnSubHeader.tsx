@@ -5,7 +5,8 @@ interface ColumnSubHeaderProps {
   title?: string;
   /** Chips or a segmented control, right-aligned. */
   children?: React.ReactNode;
-  /** The inspector's bar rides over its own scroller. */
+  /** The inspector's bar rides over its own scroller, so it turns opaque —
+   *  a tinted bar lets the text scrolling beneath it read through. */
   sticky?: boolean;
   left?: React.ReactNode;
   className?: string;
@@ -26,8 +27,8 @@ export function ColumnSubHeader({
   return (
     <div
       data-testid="column-sub-header"
-      className={`flex h-[38px] shrink-0 items-center justify-between gap-3 border-b border-white/5 bg-[#12161e]/60 px-4 ${
-        sticky ? 'sticky top-0 z-[2]' : ''
+      className={`flex h-[38px] shrink-0 items-center justify-between gap-3 border-b border-white/5 px-4 ${
+        sticky ? 'sticky top-0 z-[2] bg-[#12161e]' : 'bg-[#12161e]/60'
       } ${className}`}
     >
       <div className="flex min-w-0 items-center gap-2">

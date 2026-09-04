@@ -122,7 +122,7 @@ export function TicketInspector({
   const forced = view.ticket.force_started_at !== null;
 
   return (
-    <div className="flex w-[360px] min-h-0 shrink-0 flex-col overflow-y-auto border-l border-white/5 bg-[#0d0f14]/70">
+    <div className="flex w-[360px] min-h-0 shrink-0 flex-col overflow-y-auto border-l border-white/5 bg-[#0d0f14]">
       <ColumnSubHeader title={ticketLabel(view.ticket.seq)} sticky>
         <Chip size="sm" tone={tone}>
           {stateLabel(view)}

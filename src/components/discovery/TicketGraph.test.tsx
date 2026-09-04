@@ -63,6 +63,35 @@ function scaleOf(container: HTMLElement): string {
   return scaled.style.transform;
 }
 
+describe('TicketGraph centring', () => {
+  // jsdom lays nothing out, so what is assertable is the contract the three
+  // classes make together — and each of the three is individually removable
+  // without any other test noticing: drop `flex` or `m-auto` and the graph
+  // sits against the left edge of a pane wider than it, drop `shrink-0` and
+  // the canvas is squeezed to the pane instead of scrolling.
+  it('centres the canvas in the leftover pane without stranding the overflow', () => {
+    render(
+      <TicketGraph
+        tickets={TICKETS}
+        index={indexTickets(TICKETS)}
+        selectedId={null}
+        onSelect={() => {}}
+      />,
+    );
+
+    const viewport = screen.getByTestId('ticket-graph').firstElementChild as HTMLElement;
+    const canvas = screen.getByTestId('ticket-graph-canvas');
+
+    expect(viewport).toHaveClass('flex', 'overflow-auto');
+    expect(canvas).toHaveClass('m-auto', 'shrink-0');
+    // Separately: `.not.toHaveClass(a, b)` passes when only one is absent,
+    // which is how a container-centred scroller slips past this assertion.
+    expect(viewport).not.toHaveClass('justify-center');
+    expect(viewport).not.toHaveClass('items-center');
+    expect(canvas.parentElement).toBe(viewport);
+  });
+});
+
 describe('TicketGraph auto-fit on resize', () => {
   it('re-fits from a measured viewport resize with no button click', () => {
     const { container } = render(
