@@ -100,6 +100,7 @@ describe('switching tickets while one is open for edit', () => {
     const view = render(<DiscoveryView discoveryId="d-1" discoveryTitle="multi-client runner" />);
     await view.findByPlaceholderText(/./);
 
+    fireEvent.click(view.getByRole('radio', { name: 'Tickets' }));
     fireEvent.click(view.getByRole('radio', { name: 'Board' }));
 
     const boardEl = await view.findByTestId('ticket-board');

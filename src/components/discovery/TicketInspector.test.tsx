@@ -1,17 +1,24 @@
+// `TicketOverlayPanel`'s backdrop is pointer-events-none (§3.2.1), so once the
+// inspector floats as an overlay in 'overlay-inspector'/'stacked' mode, Escape
+// is its only dismiss path unless the panel itself carries a visible control.
+// This pins that control the same way `TicketEditorDrawer.test.tsx` would pin
+// its own Close/Discard button, mirroring the pattern this ticket copies.
+//
 // The description is model-authored (`docs/PRD_DISCOVERY.md`'s discovery
 // interview writes it), so it renders through `AgentMarkdown` rather than as
 // plain text — see `AgentMarkdown.test.tsx` for why these render the real
 // react-markdown instead of stubbing it.
 
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { TicketInspector } from './TicketInspector';
 import { indexTickets } from '../../lib/ticketPresentation';
 import type { Ticket, TicketView } from '../../types';
+import { TicketInspector } from './TicketInspector';
 
 vi.mock('../../lib/discovery', () => ({
-  getTicketBriefing: vi.fn(async () => 'DSC-2 has not landed.'),
+  getTicketBriefing: vi.fn(async () => 'DSC-3 has not landed.'),
 }));
 
 afterEach(cleanup);
@@ -61,10 +68,40 @@ function renderInspector(subject: TicketView) {
       onForceStart={() => {}}
       onEdit={() => {}}
       onOpenFeature={() => {}}
+      onClose={() => {}}
       busy={false}
     />,
   );
 }
+
+describe('TicketInspector', () => {
+  it('renders a Close button in its sub-header and calls onClose when clicked', async () => {
+    const user = userEvent.setup();
+    const subject = view(ticket());
+    const onClose = vi.fn();
+
+    render(
+      <TicketInspector
+        view={subject}
+        index={indexTickets([subject])}
+        workflowName={null}
+        busy={false}
+        onStart={() => {}}
+        onForceStart={() => {}}
+        onEdit={() => {}}
+        onOpenFeature={() => {}}
+        onClose={onClose}
+      />,
+    );
+
+    const close = screen.getByRole('button', { name: 'Close' });
+    expect(close).toBeInTheDocument();
+
+    await user.click(close);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('the ticket description', () => {
   it('renders bold Markdown as a strong element, not literal asterisks', () => {

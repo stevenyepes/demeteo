@@ -25,6 +25,12 @@ interface InterviewColumnProps {
   onSend: (text: string) => void;
   /** Re-read the Discovery — its attachments are what the composer edits. */
   onRefresh: () => void;
+  /** `'fixed'` (default) keeps today's 560px column; `'full'` is for the
+   *  `'stacked'` layout's sole-visible pane. */
+  widthMode?: 'fixed' | 'full';
+  /** Hides via class + `aria-hidden`, not unmounting — the draft and scroll
+   *  position must survive a `'stacked'`-mode toggle. */
+  hidden?: boolean;
 }
 
 /**
@@ -45,6 +51,8 @@ export function InterviewColumn({
   store,
   onSend,
   onRefresh,
+  widthMode = 'fixed',
+  hidden = false,
 }: InterviewColumnProps): React.ReactElement {
   const [draft, setDraft] = useState('');
   const composerRef = useRef<HTMLInputElement | null>(null);
@@ -67,7 +75,10 @@ export function InterviewColumn({
   }
 
   return (
-    <div className="flex w-[560px] min-h-0 shrink-0 flex-col border-r border-white/5 bg-[#0b0d12]/40">
+    <div
+      className={`flex ${widthMode === 'full' ? 'w-full min-w-0 flex-1' : 'w-[560px] shrink-0 border-r border-white/5'} min-h-0 flex-col bg-[#0b0d12]/40 ${hidden ? 'hidden' : ''}`}
+      aria-hidden={hidden ? 'true' : undefined}
+    >
       <ColumnSubHeader title="Interview">
         <Chip size="sm" tone="cyan">
           {discovery.agent_kind}

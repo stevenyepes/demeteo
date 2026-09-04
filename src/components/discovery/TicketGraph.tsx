@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { layoutTicketGraph } from '../../lib/ticketGraphLayout';
 import { ticketTone, type TicketIndex } from '../../lib/ticketPresentation';
@@ -58,6 +58,27 @@ export function TicketGraph({
       ),
     );
   }
+
+  // Keeps the graph framed as the panel is resized, same rounding + identity
+  // guard as WorkflowCanvas's container measurement. `clientWidth`/`clientHeight`
+  // are read directly rather than from `entry.contentRect` because jsdom's
+  // `ResizeObserverStub` fires with an empty entry list.
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    let size: { width: number; height: number } | null = null;
+    const observer = new ResizeObserver(() => {
+      const next = {
+        width: Math.round(element.clientWidth / 8) * 8,
+        height: Math.round(element.clientHeight / 8) * 8,
+      };
+      if (size && size.width === next.width && size.height === next.height) return;
+      size = next;
+      fit();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [layout]);
 
   return (
     <div data-testid="ticket-graph" className="absolute inset-0">
