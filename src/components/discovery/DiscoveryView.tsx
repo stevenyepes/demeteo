@@ -301,6 +301,11 @@ export function DiscoveryView({
     }
   }
 
+  function selectTicket(id: string) {
+    setSelectedId(id);
+    if (editingId !== null && editingId !== id) setEditingId(null);
+  }
+
   const pendingProposal = detail?.pending_proposal ?? null;
 
   const selected = selectedId !== null ? index.get(selectedId) : undefined;
@@ -374,7 +379,7 @@ export function DiscoveryView({
         index={index}
         progress={board?.progress ?? null}
         selectedId={selectedId}
-        onSelect={setSelectedId}
+        onSelect={selectTicket}
         editing={editing}
         selected={selected}
         workflows={workflows}

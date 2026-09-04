@@ -17,6 +17,7 @@ import {
 import type { TicketView } from '../../types';
 import { Chip } from '../ui/Chip';
 import { FieldLabel } from '../ui/FieldLabel';
+import { AgentMarkdown } from './AgentMarkdown';
 import { ColumnSubHeader } from './ColumnSubHeader';
 
 const VERDICT_SURFACE: Record<RunStatusTone, string> = {
@@ -137,7 +138,7 @@ export function TicketInspector({
             {view.ticket.title}
           </h2>
           {view.ticket.description && (
-            <p className="m-0 text-xs leading-relaxed text-slate-400">{view.ticket.description}</p>
+            <AgentMarkdown text={view.ticket.description} size="dense" />
           )}
         </div>
 
