@@ -61,6 +61,7 @@ interface TicketInspectorProps {
    *  locked can actually be shown. */
   onEdit: () => void;
   onOpenFeature: (featureId: string) => void;
+  onClose: () => void;
   busy: boolean;
 }
 
@@ -81,6 +82,7 @@ export function TicketInspector({
   onForceStart,
   onEdit,
   onOpenFeature,
+  onClose,
   busy,
 }: TicketInspectorProps): React.ReactElement {
   const [briefing, setBriefing] = useState<string | null>(null);
@@ -124,6 +126,9 @@ export function TicketInspector({
         <Chip size="sm" tone={tone}>
           {stateLabel(view)}
         </Chip>
+        <button type="button" onClick={onClose} className="btn-secondary text-xs">
+          Close
+        </button>
       </ColumnSubHeader>
 
       <div className="flex flex-col gap-[18px] p-4">

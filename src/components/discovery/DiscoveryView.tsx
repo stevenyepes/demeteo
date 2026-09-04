@@ -33,11 +33,8 @@ import type {
 } from '../../types';
 import { DecomposeModal } from './DecomposeModal';
 import { DiscoveryWorkspaceHeader } from './DiscoveryWorkspaceHeader';
-import { InterviewColumn } from './InterviewColumn';
+import { DiscoveryWorkspaceRow } from './DiscoveryWorkspaceRow';
 import { PendingProposalNotice } from './PendingProposalNotice';
-import { TicketColumn } from './TicketColumn';
-import { TicketEditorDrawer } from './TicketEditorDrawer';
-import { TicketInspector } from './TicketInspector';
 import { TurnCompleteToast } from './TurnCompleteToast';
 import { useDiscoveryStream } from './useDiscoveryStream';
 
@@ -96,6 +93,12 @@ export function DiscoveryView({
   // learn from was reported to a component that is gone.
   const adopted = useRef<string | null>(null);
   const awaitingAdopted = useRef(false);
+  // Set by `closeInspector`, cleared whenever the auto-select effect has a
+  // reason to run that isn't that close — the selected ticket disappearing,
+  // or a fresh discovery. Without it, the effect below re-selects `tickets[0]`
+  // the instant `selectedId` goes `null`, and a deliberate close can never
+  // stick (`DISCOVERY_UI_SPEC.md` §3.2.1's overlay would reopen itself).
+  const suppressAutoSelect = useRef(false);
 
   const { store, begin, end } = useDiscoveryStream();
 
@@ -117,6 +120,7 @@ export function DiscoveryView({
     setDetail(null);
     setBoard(null);
     setSelectedId(null);
+    suppressAutoSelect.current = false;
     setError(null);
     void refresh();
   }, [refresh]);
@@ -220,8 +224,17 @@ export function DiscoveryView({
 
   useEffect(() => {
     if (selectedId !== null && index.has(selectedId)) return;
+    // A stale `selectedId` (its ticket dropped or removed) is not a close —
+    // it always wins over a still-standing suppression.
+    if (selectedId !== null) suppressAutoSelect.current = false;
+    if (suppressAutoSelect.current) return;
     setSelectedId(tickets.length > 0 ? tickets[0].ticket.id : null);
   }, [tickets, index, selectedId]);
+
+  const closeInspector = useCallback(() => {
+    suppressAutoSelect.current = true;
+    setSelectedId(null);
+  }, []);
 
   async function send(text: string) {
     setActionError(null);
@@ -348,66 +361,47 @@ export function DiscoveryView({
         />
       )}
 
-      <div className="flex min-h-0 flex-1">
-        <InterviewColumn
-          discovery={detail.discovery}
-          messages={detail.messages}
-          blocks={blocks}
-          machineLabel={machineName ?? detail.discovery.machine_id}
-          pending={pending || sending}
-          store={store}
-          onSend={(text) => void send(text)}
-          onRefresh={() => void refresh()}
-        />
-
-        <TicketColumn
-          tickets={tickets}
-          index={index}
-          progress={board?.progress ?? null}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-        />
-
-        {editing ? (
-          <TicketEditorDrawer
-            key={editing.ticket.id}
-            view={editing}
-            index={index}
-            siblings={tickets}
-            workflows={workflows}
-            machineId={detail.discovery.machine_id}
-            busy={busy}
-            onClose={() => setEditingId(null)}
-            onSaved={setBoard}
-            onRefresh={() => void refresh()}
-            onStart={() => void runAction(() => startTicket(editing.ticket.id))}
-            onForceStart={(reason) =>
-              void runAction(() => forceStartTicket(editing.ticket.id, reason))
-            }
-            onDrop={(reason) => void runAction(() => dropTicket(editing.ticket.id, reason))}
-          />
-        ) : (
-          selected && (
-            <TicketInspector
-              key={selected.ticket.id}
-              view={selected}
-              index={index}
-              workflowName={
-                selected.ticket.workflow_id
-                  ? (workflowNames[selected.ticket.workflow_id] ?? null)
-                  : null
-              }
-              busy={busy}
-              onStart={() => void runAction(() => startTicket(selected.ticket.id))}
-              onForceStart={(reason) =>
-                void runAction(() => forceStartTicket(selected.ticket.id, reason))
-              }
-              onEdit={() => setEditingId(selected.ticket.id)}
-              onOpenFeature={(featureId) => onOpenFeature?.(featureId, selected.ticket.title)}
-            />
-          )
-        )}
-      </div>
+      <DiscoveryWorkspaceRow
+        discovery={detail.discovery}
+        messages={detail.messages}
+        blocks={blocks}
+        machineLabel={machineName ?? detail.discovery.machine_id}
+        pending={pending || sending}
+        store={store}
+        onSend={(text) => void send(text)}
+        onRefresh={() => void refresh()}
+        tickets={tickets}
+        index={index}
+        progress={board?.progress ?? null}
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        editing={editing}
+        selected={selected}
+        workflows={workflows}
+        workflowName={
+          selected?.ticket.workflow_id ? (workflowNames[selected.ticket.workflow_id] ?? null) : null
+        }
+        busy={busy}
+        machineId={detail.discovery.machine_id}
+        onEditorClose={() => setEditingId(null)}
+        onInspectorClose={closeInspector}
+        onEditorSaved={setBoard}
+        onEditorStart={() => editing && void runAction(() => startTicket(editing.ticket.id))}
+        onEditorForceStart={(reason) =>
+          editing && void runAction(() => forceStartTicket(editing.ticket.id, reason))
+        }
+        onEditorDrop={(reason) =>
+          editing && void runAction(() => dropTicket(editing.ticket.id, reason))
+        }
+        onInspectorStart={() => selected && void runAction(() => startTicket(selected.ticket.id))}
+        onInspectorForceStart={(reason) =>
+          selected && void runAction(() => forceStartTicket(selected.ticket.id, reason))
+        }
+        onInspectorEdit={() => selected && setEditingId(selected.ticket.id)}
+        onInspectorOpenFeature={(featureId) =>
+          selected && onOpenFeature?.(featureId, selected.ticket.title)
+        }
+      />
 
       {proposal && (
         <DecomposeModal

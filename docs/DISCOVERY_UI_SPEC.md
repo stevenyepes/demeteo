@@ -27,9 +27,12 @@ which are reproduced under each artboard below.
 **Three transcription rules that apply to every artboard:**
 
 1. **Sizes are artboard sizes, not viewport sizes.** Fixed widths that are
-   *structural* (the 560 px interview column, the 360 px inspector, the 72/260
-   rail+sidebar grid) are called out as such and must be kept; the outer
-   `width:`/`height:` on the artboard root is scaffolding and must be dropped.
+   *structural* (the 72/260 rail+sidebar grid) are called out as such and must
+   be kept; the outer `width:`/`height:` on the artboard root is scaffolding
+   and must be dropped. The one exception is the workspace row's own three
+   columns (§3.2): the 560 px interview / 360 px inspector widths are this
+   artboard's widest-case layout, not an unconditional rule — the row degrades
+   through three modes as it narrows, per `src/components/discovery/discoveryLayout.ts`.
 2. **The mock stylesheets are throwaway.** Each mock re-declares its own `.glass`,
    `.chip`, `.btn-p`, `.fld` etc. inside a `<helmet><style>` block. **None of
    those class names exist in `src/App.css`** — writing `class="glass"` or
@@ -396,6 +399,10 @@ Root: column flex, `background:#0a0c10`, `position:relative; overflow:hidden`
 
 ### 3.2 Region map
 
+This is the region map at full width — the artboard's own size, and the
+`'three-up'` layout mode below. The row is not always this wide; §3.2.1
+describes the two narrower modes.
+
 ```
 ┌───────────────────────────────────────────────────────────────┐
 │ Workspace header (flex:none, 14px 24px, bottom border)        │
@@ -413,6 +420,44 @@ Root: column flex, `background:#0a0c10`, `position:relative; overflow:hidden`
 
 Middle band is `flex:1; display:flex; min-height:0`. All three columns are
 `min-height:0` so their internal scrollers work.
+
+#### 3.2.1 Layout modes
+
+`DiscoveryWorkspaceRow` (`src/components/discovery/DiscoveryWorkspaceRow.tsx`)
+measures its own width via `useDiscoveryColumnLayout` and picks one of three
+modes with `pickDiscoveryLayout`, both in
+`src/components/discovery/discoveryLayout.ts` — that module is the source of
+truth for the exact width thresholds; they are not restated here.
+
+- **`'three-up'`** — the row is wide enough for all three columns at once.
+  This is the layout diagrammed above: 560 px interview, flexible ticket
+  graph/board pane, and the 360 px inspector (or the 760 px `TicketEditorDrawer`
+  when a ticket is being edited) in-row as the third column.
+- **`'overlay-inspector'`** — the row is too narrow for a third column but
+  still fits Interview and the ticket graph/board pane side by side. Those two
+  stay in-row; the inspector or editor no longer takes a column and instead
+  renders in `TicketOverlayPanel` (`src/components/discovery/TicketOverlayPanel.tsx`),
+  a portalled panel docked to the right edge of the workspace, floating over
+  the ticket pane rather than displacing it.
+- **`'stacked'`** — the row is too narrow to hold Interview and the ticket
+  graph/board pane side by side. A segmented control lets the user toggle
+  which one is visible; both remain mounted (`InterviewColumn`/`TicketColumn`
+  take a `hidden` prop rather than being unmounted, so an in-progress
+  interview draft and the graph's zoom state survive a toggle). The inspector
+  or editor still renders in the same `TicketOverlayPanel` as
+  `'overlay-inspector'`, docked over whichever pane is currently visible.
+
+In both `'overlay-inspector'` and `'stacked'`, `TicketEditorDrawer`'s 760 px
+width (§5.1) is presented inside `TicketOverlayPanel` as a permanent overlay,
+never as an in-row column — only `'three-up'` gives the editor or inspector
+its own column.
+
+`TicketOverlayPanel`'s backdrop is `pointer-events-none` so it never blocks
+clicks aimed at Interview or the ticket graph/board pane behind it — which
+means there is no backdrop click-to-dismiss. The overlay is closed by pressing
+Escape, or by the visible `Close` button in the panel's own sub-header
+(`TicketEditorDrawer` shows `Close`/`Discard` there; `TicketInspector` shows
+`Close`) — never by clicking outside it.
 
 ### 3.3 Workspace header
 
@@ -436,10 +481,13 @@ Right cluster (`gap:18px; flex:none`):
   (`<path d="M12 3v18">` + `<path d="m8 7-4 4 4 4">` + `<path d="m16 7 4 4-4 4">`),
   `gap:8px`.
 
-### 3.4 Interview column (560 px, fixed)
+### 3.4 Interview column (560 px in `'three-up'`)
 
 `width:560px; flex:none; column; border-right:1px solid rgba(255,255,255,0.05);
-background: rgba(11,13,18,0.4); min-height:0`.
+background: rgba(11,13,18,0.4); min-height:0`. This is the `'three-up'` width
+(§3.2.1); in `'stacked'` mode `InterviewColumn` instead takes the row's full
+width (its `widthMode="full"` prop), and in either narrower mode it may carry
+`hidden` rather than being unmounted.
 
 #### 3.4.1 Column sub-header (38 px)
 
@@ -948,10 +996,14 @@ DSC-4 `Desktop picks a runner identity per project` · DSC-5 `Fair-share
 scheduling across clients` · DSC-6 `Operator guide for multi-client runners` ·
 DSC-7 `Topology conformance for two clients`.
 
-### 3.6 Inspector column (360 px, fixed)
+### 3.6 Inspector column (360 px in `'three-up'`)
 
 `.scroll` at `width:360px; flex:none; border-left:1px solid rgba(255,255,255,0.05);
-background: rgba(13,15,20,0.7); overflow-y:auto; min-height:0`.
+background: rgba(13,15,20,0.7); overflow-y:auto; min-height:0`. This is the
+`'three-up'` width and placement (§3.2.1): the inspector renders in-row as the
+row's third column only in that mode. In `'overlay-inspector'` and `'stacked'`
+it renders unchanged but inside `TicketOverlayPanel` instead, docked to the
+right edge of the workspace rather than occupying a column.
 
 **Sticky sub-header** (`padding:0 16px; height:38px; background: rgba(18,22,30,0.6);
 border-bottom:1px solid rgba(255,255,255,0.05); position:sticky; top:0; z-index:2`):

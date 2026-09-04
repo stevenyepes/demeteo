@@ -13,6 +13,7 @@ import type {
   DiscoveryBoard,
   DiscoveryDetail,
   DiscoveryMessage,
+  TicketView,
 } from '../../types';
 import { DiscoveryView } from './DiscoveryView';
 
@@ -190,5 +191,78 @@ describe('a turn that has been accepted but not yet set up', () => {
       expect(view.getByRole('alert').textContent).toContain('already working'),
     );
     expect(composer).not.toBeDisabled();
+  });
+});
+
+describe('the inspector overlay', () => {
+  const ticketOne: TicketView = {
+    ticket: {
+      id: 't-1',
+      discovery_id: 'd-1',
+      seq: 1,
+      title: 'Ticket 1',
+      description: '',
+      acceptance: [],
+      files: [],
+      blocked_by: [],
+      test_command: null,
+      workflow_id: null,
+      agent_kind: null,
+      model: null,
+      effort: null,
+      attachments: [],
+      state: 'unstarted',
+      drop_reason: null,
+      force_start_reason: null,
+      force_started_at: null,
+      feature_id: null,
+      created_at: 0,
+      updated_at: 0,
+    },
+    standing: { id: 't-1', lane: 'ready', startable: true, blockers: [] },
+    feature: null,
+  };
+
+  const boardWithTicket: DiscoveryBoard = {
+    tickets: [ticketOne],
+    progress: { blocked: 0, ready: 1, in_flight: 0, landed: 0, dropped: 0, live: 1 },
+  };
+
+  function mockBoard(withTicket: boolean) {
+    vi.mocked(invoke).mockImplementation((command: string) => {
+      switch (command) {
+        case 'discovery_get':
+          return Promise.resolve(detail);
+        case 'discovery_board':
+          return Promise.resolve(withTicket ? boardWithTicket : board);
+        case 'workflow_list':
+        case 'get_machines':
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(undefined);
+      }
+    });
+  }
+
+  it('auto-selects the first ticket once the board loads, opening the inspector', async () => {
+    mockBoard(true);
+    const view = await openWorkspace();
+
+    await waitFor(() => expect(view.getByTestId('ticket-verdict')).toBeInTheDocument());
+  });
+
+  it('Escape closes the inspector, and the auto-select effect does not reopen it', async () => {
+    mockBoard(true);
+    const view = await openWorkspace();
+    await waitFor(() => expect(view.getByTestId('ticket-verdict')).toBeInTheDocument());
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(view.queryByTestId('ticket-verdict')).not.toBeInTheDocument();
+
+    // Give the auto-select effect another render to try to fight the close.
+    await act(async () => {});
+    expect(view.queryByTestId('ticket-verdict')).not.toBeInTheDocument();
   });
 });

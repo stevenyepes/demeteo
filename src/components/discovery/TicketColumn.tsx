@@ -25,6 +25,9 @@ interface TicketColumnProps {
   progress: TicketProgress | null;
   selectedId: string | null;
   onSelect: (ticketId: string) => void;
+  /** Hides via class + `aria-hidden`, not unmounting — the graph's zoom state
+   *  must survive a `'stacked'`-mode toggle. */
+  hidden?: boolean;
 }
 
 /**
@@ -45,6 +48,7 @@ export function TicketColumn({
   progress,
   selectedId,
   onSelect,
+  hidden = false,
 }: TicketColumnProps): React.ReactElement {
   const [mode, setMode] = useState<TicketViewMode>('graph');
 
@@ -52,7 +56,10 @@ export function TicketColumn({
   const segments = progress ? progressSegments(progress) : null;
 
   return (
-    <div className="flex min-w-0 min-h-0 flex-1 flex-col">
+    <div
+      className={`flex min-w-0 min-h-0 flex-1 flex-col ${hidden ? 'hidden' : ''}`}
+      aria-hidden={hidden ? 'true' : undefined}
+    >
       <ColumnSubHeader
         left={
           <SegmentedControl
