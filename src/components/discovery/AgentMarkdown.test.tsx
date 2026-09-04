@@ -93,4 +93,12 @@ describe('the interviewer’s prose', () => {
   it('is memoized, so a settled message parses once', () => {
     expect(AgentMarkdown).toHaveProperty('$$typeof', Symbol.for('react.memo'));
   });
+
+  it('applies a tighter type scale when size="dense"', () => {
+    const { container } = render(<AgentMarkdown text="## Topology" size="dense" />);
+
+    const heading = container.querySelector('h2');
+    expect(heading?.className).toContain('text-xs');
+    expect(heading?.className).not.toContain('text-[14px]');
+  });
 });
