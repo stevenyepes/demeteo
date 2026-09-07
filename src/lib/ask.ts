@@ -79,9 +79,25 @@ export async function renameAskThread(threadId: string, title: string): Promise<
 }
 
 /** Mirrors `ask_delete` — deletes the thread and its transcript, via the
- *  declared foreign key. */
+ *  declared foreign key, after dropping its session, worktree and pinned
+ *  canvases. */
 export async function deleteAskThread(threadId: string): Promise<void> {
   return invoke<void>("ask_delete", { threadId });
+}
+
+/**
+ * Mirrors `ask_close` — ends the thread and hands its checkout back. A closed
+ * thread refuses a turn, so the composer has nothing to send until
+ * {@link reopenAskThread}.
+ */
+export async function closeAskThread(threadId: string): Promise<AskThread> {
+  return invoke<AskThread>("ask_close", { threadId });
+}
+
+/** Mirrors `ask_reopen`. Closing destroyed nothing the next turn does not
+ *  rebuild, so it is undoable. */
+export async function reopenAskThread(threadId: string): Promise<AskThread> {
+  return invoke<AskThread>("ask_reopen", { threadId });
 }
 
 /**

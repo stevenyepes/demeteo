@@ -10,6 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const listAskThreads = vi.fn();
 const loadAskThread = vi.fn();
 const askTurnRunning = vi.fn();
+const closeAskThread = vi.fn();
+const reopenAskThread = vi.fn();
+const deleteAskThread = vi.fn();
 const sendAskTurn = vi.fn();
 const listPinnedAskCanvases = vi.fn();
 const pinAskCanvas = vi.fn();
@@ -20,6 +23,9 @@ vi.mock('../../lib/ask', () => ({
   listAskThreads: (...args: unknown[]) => listAskThreads(...args),
   loadAskThread: (...args: unknown[]) => loadAskThread(...args),
   askTurnRunning: (...args: unknown[]) => askTurnRunning(...args),
+  closeAskThread: (...args: unknown[]) => closeAskThread(...args),
+  reopenAskThread: (...args: unknown[]) => reopenAskThread(...args),
+  deleteAskThread: (...args: unknown[]) => deleteAskThread(...args),
   sendAskTurn: (...args: unknown[]) => sendAskTurn(...args),
   listPinnedAskCanvases: (...args: unknown[]) => listPinnedAskCanvases(...args),
   pinAskCanvas: (...args: unknown[]) => pinAskCanvas(...args),
@@ -192,13 +198,28 @@ function renderAsk(props: { projectName?: string } = {}) {
   return render(
     <RoutedSelection>
       {(threadId, onSelectThread) => (
-        <AskThreadView
-          projectId="p1"
-          machineId="local"
-          threadId={threadId}
-          onSelectThread={onSelectThread}
-          {...props}
-        />
+        <>
+          {/* Opening another thread is navigation now that the workspace has
+              no switcher of its own: Project Home's Ask tab opens a card by
+              routing to it. These stand in for that. */}
+          {['a', 'b'].map((id) => (
+            <button
+              key={id}
+              type="button"
+              data-testid={`route-to-${id}`}
+              onClick={() => onSelectThread(id)}
+            >
+              open {id}
+            </button>
+          ))}
+          <AskThreadView
+            projectId="p1"
+            machineId="local"
+            threadId={threadId}
+            onSelectThread={onSelectThread}
+            {...props}
+          />
+        </>
       )}
     </RoutedSelection>,
   );
@@ -427,10 +448,7 @@ describe('AskThreadView — a turn that ends without completing', () => {
     loadAskThread.mockResolvedValue(detail(t, []));
     renderAsk();
     await screen.findAllByTestId('ask-try-chip');
-    // The header's `AskThreadSwitcher` mounts with the thread and loads its
-    // own copy of the list; letting that land here keeps its `setState` out
-    // of the emissions below.
-    await waitFor(() => expect(listAskThreads).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(listAskThreads).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(listeners.get('ask_turn_status')?.length ?? 0).toBeGreaterThan(0));
   }
 
@@ -508,12 +526,8 @@ describe('AskThreadView — a turn that ends on a thread the user navigated away
   const A = thread({ id: 'a', title: 'Thread A' });
   const B = thread({ id: 'b', title: 'Thread B' });
 
-  async function openFromSwitcher(title: string) {
-    fireEvent.click(screen.getByTestId('ask-thread-switcher-trigger'));
-    const rows = await screen.findAllByTestId('ask-thread-switcher-row');
-    const row = rows.find((candidate) => candidate.textContent?.includes(title));
-    if (row === undefined) throw new Error(`no switcher row for "${title}"`);
-    fireEvent.click(row);
+  function openThreadRoute(id: string) {
+    fireEvent.click(screen.getByTestId(`route-to-${id}`));
   }
 
   /** Thread A answering, with prose, a source and two reads folded in — then
@@ -557,13 +571,13 @@ describe('AskThreadView — a turn that ends on a thread the user navigated away
     expect(bubble.getByTestId('turn-activity-summary')).toHaveTextContent('2 reads');
     expect(bubble.getAllByTestId('ask-source')).toHaveLength(1);
 
-    await openFromSwitcher('Thread B');
+    openThreadRoute('b');
     await waitFor(() => expect(loadAskThread).toHaveBeenLastCalledWith('b'));
   }
 
   /** Back on A, ask again — and assert the bubble is about *this* question. */
   async function askAgainOnA() {
-    await openFromSwitcher('Thread A');
+    openThreadRoute('a');
     await waitFor(() => expect(loadAskThread).toHaveBeenLastCalledWith('a'));
 
     const composer = (await screen.findByTestId('ask-composer')) as HTMLInputElement;
@@ -634,12 +648,8 @@ describe('AskThreadView — canvas pane remounts on thread switch', () => {
   const A = thread({ id: 'a', title: 'Thread A' });
   const B = thread({ id: 'b', title: 'Thread B' });
 
-  async function switchTo(title: string) {
-    fireEvent.click(screen.getByTestId('ask-thread-switcher-trigger'));
-    const rows = await screen.findAllByTestId('ask-thread-switcher-row');
-    const row = rows.find((candidate) => candidate.textContent?.includes(title));
-    if (row === undefined) throw new Error(`no switcher row for "${title}"`);
-    fireEvent.click(row);
+  function switchTo(id: string) {
+    fireEvent.click(screen.getByTestId(`route-to-${id}`));
   }
 
   it('never renders thread A’s canvas, Pin/Export toolbar, pinned list, or error banner under thread B’s header once B has no canvas yet', async () => {
@@ -666,7 +676,7 @@ describe('AskThreadView — canvas pane remounts on thread switch', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pin to Demeteo' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('boom');
 
-    await switchTo('Thread B');
+    switchTo('b');
     await waitFor(() => expect(loadAskThread).toHaveBeenLastCalledWith('b'));
 
     expect(await screen.findByTestId('ask-canvas-placeholder')).toBeInTheDocument();
@@ -692,7 +702,7 @@ describe('AskThreadView — canvas pane remounts on thread switch', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pin to Demeteo' }));
     await waitFor(() => expect(pinAskCanvas).toHaveBeenCalledWith('a', 'ma'));
 
-    await switchTo('Thread B');
+    switchTo('b');
     await waitFor(() => expect(loadAskThread).toHaveBeenLastCalledWith('b'));
     await screen.findByTestId('ask-canvas-placeholder');
 
@@ -754,11 +764,7 @@ describe('AskThreadView — switching threads resets the canvas pane', () => {
     fireEvent.click(await screen.findByTitle('Reads the ticket board'));
     expect(await screen.findByTestId('ask-canvas-node-inspector')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('ask-thread-switcher-trigger'));
-    const rows = await screen.findAllByTestId('ask-thread-switcher-row');
-    const rowB = rows.find((candidate) => candidate.textContent?.includes('Thread B'));
-    if (rowB === undefined) throw new Error('no switcher row for "Thread B"');
-    fireEvent.click(rowB);
+    fireEvent.click(screen.getByTestId('route-to-b'));
 
     expect(await screen.findByText('Thread B')).toBeInTheDocument();
     expect(await screen.findByTestId('ask-canvas-placeholder')).toBeInTheDocument();
@@ -818,5 +824,56 @@ describe('AskThreadView — hiding the chat column', () => {
 
     await screen.findByRole('heading', { name: 'New thread' });
     expect(screen.queryByTestId('ask-chat-hide')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Ending a thread from the workspace. Closing is the half a user undoes: the
+ * only durable trace is `status`, and the composer reads it, so a draft that
+ * still sends after a close would put the refusal in `ask_send_turn`'s hands
+ * — where the user's question has already been typed and lost.
+ */
+describe('AskThreadView — closing, reopening and deleting', () => {
+  it('closes the thread, quiets the composer, and reopens it', async () => {
+    const open = thread();
+    const closed = thread({ status: 'closed' });
+    listAskThreads.mockResolvedValue([open]);
+    loadAskThread.mockResolvedValue(detail(open, [message({ thread_id: 't1' })]));
+    closeAskThread.mockResolvedValue(closed);
+    reopenAskThread.mockResolvedValue(open);
+
+    renderAsk();
+
+    fireEvent.click(await screen.findByTestId('ask-toggle-open'));
+
+    await waitFor(() => expect(closeAskThread).toHaveBeenCalledWith('t1'));
+    await waitFor(() => expect(screen.getByTestId('ask-composer')).toBeDisabled());
+    expect(screen.getByTestId('ask-toggle-open')).toHaveTextContent('Reopen thread');
+
+    fireEvent.click(screen.getByTestId('ask-toggle-open'));
+
+    await waitFor(() => expect(reopenAskThread).toHaveBeenCalledWith('t1'));
+    await waitFor(() => expect(screen.getByTestId('ask-composer')).not.toBeDisabled());
+  });
+
+  it('deletes only once confirmed, and lands on the empty workspace', async () => {
+    const t = thread();
+    listAskThreads.mockResolvedValue([t]);
+    loadAskThread.mockResolvedValue(detail(t, [message({ thread_id: 't1' })]));
+    deleteAskThread.mockResolvedValue(undefined);
+    const confirmed = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    renderAsk();
+
+    fireEvent.click(await screen.findByTestId('ask-delete-thread'));
+    expect(deleteAskThread).not.toHaveBeenCalled();
+
+    confirmed.mockReturnValue(true);
+    listAskThreads.mockResolvedValue([]);
+    fireEvent.click(screen.getByTestId('ask-delete-thread'));
+
+    await waitFor(() => expect(deleteAskThread).toHaveBeenCalledWith('t1'));
+    expect(await screen.findByRole('heading', { name: 'New thread' })).toBeInTheDocument();
+    confirmed.mockRestore();
   });
 });

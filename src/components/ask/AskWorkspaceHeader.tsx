@@ -1,28 +1,34 @@
 import React from 'react';
-import { Plus, Settings } from 'lucide-react';
+import { Plus, Settings, Trash2 } from 'lucide-react';
 
 import { formatCost, formatTokens } from '../../lib/utils';
 import type { AskThread } from '../../types';
 import { BackButton } from '../ui/BackButton';
 import { Chip } from '../ui/Chip';
 import { Metric, MetricStrip } from '../ui/MetricStrip';
-import { AskThreadSwitcher } from './AskThreadSwitcher';
 
 interface AskWorkspaceHeaderProps {
   thread: AskThread;
-  projectId: string;
-  onSelectThread: (threadId: string) => void;
   onNewThread: () => void;
   onOpenSettings: () => void;
+  /** Close an open thread, reopen a closed one — the caller reads
+   *  `thread.status` for which, so this stays one button. */
+  onToggleOpen: () => void;
+  onDelete: () => void;
+  /** A close, reopen or delete is in flight. */
+  busy: boolean;
 }
 
 export function AskWorkspaceHeader({
   thread,
-  projectId,
-  onSelectThread,
   onNewThread,
   onOpenSettings,
+  onToggleOpen,
+  onDelete,
+  busy,
 }: AskWorkspaceHeaderProps): React.ReactElement {
+  const closed = thread.status === 'closed';
+
   return (
     <header className="flex shrink-0 items-center justify-between gap-6 border-b border-white/5 bg-[#0d0f14]/60 px-6 py-3.5">
       <div className="flex min-w-0 items-start gap-3">
@@ -36,6 +42,11 @@ export function AskWorkspaceHeader({
           <Chip size="sm" tone="cyan">
             {thread.agent_kind}
           </Chip>
+          {closed && (
+            <Chip size="sm" tone="slate">
+              Closed
+            </Chip>
+          )}
         </div>
         </div>
       </div>
@@ -47,11 +58,26 @@ export function AskWorkspaceHeader({
           <Metric label="Tokens" value={formatTokens(thread.tokens)} tone="cyan" />
         </MetricStrip>
 
-        <AskThreadSwitcher
-          projectId={projectId}
-          activeThreadId={thread.id}
-          onSelect={onSelectThread}
-        />
+        <button
+          type="button"
+          data-testid="ask-toggle-open"
+          onClick={onToggleOpen}
+          disabled={busy}
+          className="btn-secondary text-[13px] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {closed ? 'Reopen thread' : 'Close thread'}
+        </button>
+
+        <button
+          type="button"
+          data-testid="ask-delete-thread"
+          aria-label="Delete thread"
+          onClick={onDelete}
+          disabled={busy}
+          className="btn-secondary inline-flex items-center gap-2 text-ruby-200 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
 
         <button
           type="button"

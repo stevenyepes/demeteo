@@ -47,8 +47,18 @@ pub fn ask_rename(
 }
 
 #[tauri::command]
-pub fn ask_delete(ctx: State<'_, AppContext>, thread_id: String) -> Result<(), String> {
-    ask::delete(&ctx, &AskThreadId::from(thread_id))
+pub async fn ask_delete(ctx: State<'_, AppContext>, thread_id: String) -> Result<(), String> {
+    ask::delete(&ctx, &AskThreadId::from(thread_id)).await
+}
+
+#[tauri::command]
+pub async fn ask_close(ctx: State<'_, AppContext>, thread_id: String) -> Result<AskThread, String> {
+    ask::close(&ctx, &AskThreadId::from(thread_id)).await
+}
+
+#[tauri::command]
+pub fn ask_reopen(ctx: State<'_, AppContext>, thread_id: String) -> Result<AskThread, String> {
+    ask::reopen(&ctx, &AskThreadId::from(thread_id))
 }
 
 /// Distinguishes a key that was present-and-`null` from one that was absent,

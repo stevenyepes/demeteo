@@ -9,7 +9,7 @@ import type { AskThread } from '../types';
  * another.
  *
  * Derived, because `AskStatus` stores only open/closed. `Asking` is a turn
- * running *right now*, which nothing persists — `AskThreadSwitcher` records
+ * running *right now*, which nothing persists — `useLiveAskTurns` records
  * why liveness can only come off the `ask_turn_status` stream.
  */
 export interface AskLifecycle {

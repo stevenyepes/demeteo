@@ -3,7 +3,7 @@
 //! [`crate::domain::models::ask`]).
 //!
 //! Storage, lifecycle, and the turn loop: create, project list, load,
-//! rename, delete, and `turn::send`'s claim/persist/stream/bill/emit run
+//! rename, close/reopen, delete, and `turn::send`'s claim/persist/stream/bill/emit run
 //! against a provisioned worktree. `turn::verify_canvas_paths` stats each
 //! canvas node's path against the worktree root and records a per-path
 //! resolved/unresolved verdict on the message.
@@ -186,10 +186,62 @@ pub fn update_settings(
 /// surface in the product can list or remove. Aborting leaves the thread
 /// whole and the delete retryable, which is the recoverable half of the
 /// choice.
-pub fn delete(ctx: &AppContext, id: &AskThreadId) -> Result<(), String> {
-    get(ctx, id)?;
+///
+/// The delete also drops the session and hands the checkout back, because
+/// the sweep that would otherwise reach the tree — [`worktree::reclaim_idle`]
+/// — walks stored threads, so a row deleted while it still names a worktree
+/// leaves one nothing in the product can reach.
+pub async fn delete(ctx: &AppContext, id: &AskThreadId) -> Result<(), String> {
+    let thread = get(ctx, id)?;
+    ctx.registry.kill(&turn::thread_id(id)).await;
+    release(ctx, &thread, "delete").await;
     pin::clear_pins(ctx, id)?;
     ctx.ask.delete(id)
+}
+
+/// End a thread without ending anything else, on the terms
+/// [`discovery::close`](crate::application::discovery::close) sets: the
+/// session goes and the checkout goes back here rather than waiting for the
+/// idle sweep, since [`turn::send`] refuses a closed thread and so there is
+/// no next turn to recreate it for.
+pub async fn close(ctx: &AppContext, id: &AskThreadId) -> Result<AskThread, String> {
+    let thread = get(ctx, id)?;
+    ctx.registry.kill(&turn::thread_id(id)).await;
+    release(ctx, &thread, "close").await;
+    set_status(ctx, id, AskStatus::Closed)
+}
+
+/// Reopen a closed thread. Closing destroys nothing that the next turn does
+/// not rebuild — the worktree is a checkout of a commit — so it is undoable,
+/// matching [`discovery::reopen`](crate::application::discovery::reopen).
+pub fn reopen(ctx: &AppContext, id: &AskThreadId) -> Result<AskThread, String> {
+    get(ctx, id)?;
+    set_status(ctx, id, AskStatus::Open)
+}
+
+fn set_status(ctx: &AppContext, id: &AskThreadId, status: AskStatus) -> Result<AskThread, String> {
+    ctx.ask.update(
+        id,
+        &AskThreadPatch {
+            status: Some(status),
+            ..Default::default()
+        },
+        crate::paths::now_ms(),
+    )?;
+    get(ctx, id)
+}
+
+/// A tree that resists teardown is logged, never returned: refusing to close
+/// or delete over it would leave the user with a thread they cannot end and
+/// no way to reach the tree either.
+async fn release(ctx: &AppContext, thread: &AskThread, action: &str) {
+    if let Err(e) = worktree::reclaim(ctx, thread).await {
+        tracing::warn!(
+            ask_thread = %thread.id.as_str(),
+            error = %e,
+            "ask: {action} could not reclaim the worktree"
+        );
+    }
 }
 
 /// Refuse a machine nothing is configured for, the same check

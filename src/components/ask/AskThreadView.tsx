@@ -3,10 +3,13 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import {
   askTurnRunning,
+  closeAskThread,
+  deleteAskThread,
   EVENT_ASK_TURN_COMPLETED,
   EVENT_ASK_TURN_STATUS,
   listAskThreads,
   loadAskThread,
+  reopenAskThread,
   type AskTurnCompletedPayload,
   type AskTurnStatusPayload,
 } from '../../lib/ask';
@@ -17,7 +20,6 @@ import { AskCanvasPane } from './AskCanvasPane';
 import { AskChatCollapsedRail } from './AskChatCollapsedRail';
 import { AskChatColumn } from './AskChatColumn';
 import { AskThreadSettingsPanel } from './AskThreadSettingsPanel';
-import { AskThreadSwitcher } from './AskThreadSwitcher';
 import { AskWorkspaceHeader } from './AskWorkspaceHeader';
 import { NewAskThreadModal } from './NewAskThreadModal';
 import { useAskStream } from './useAskStream';
@@ -75,6 +77,9 @@ export function AskThreadView({
   // — a "Try" chip's text when a chip is what opened it.
   const [newThread, setNewThread] = useState<{ seedTitle: string } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // A close, reopen or delete is in flight — one at a time, and the header's
+  // buttons say so.
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
   // A chip's text, remounting the composer (by nonce) to seed it — the
   // composer owns its own input state and takes an initial value only once,
   // on mount, per its own doc comment.
@@ -179,7 +184,7 @@ export function AskThreadView({
     // deltas into it whatever is selected, so hoisting this guard over
     // `begin`/`end` strands the entry of any thread the user walks away from
     // mid-turn — and the next question asked on it renders that turn's text,
-    // ledger and clock. `AskThreadSwitcher` folds this event unguarded too.
+    // ledger and clock. `useLiveAskTurns` folds this event unguarded too.
     if (thread_id !== selectedId) return;
     // Selection-scoped for a second reason: it guards *this* thread's
     // recovery read, which another thread's traffic says nothing about.
@@ -197,12 +202,6 @@ export function AskThreadView({
     void loadSelected();
     if (payload.ending !== 'success' && payload.reason) setError(payload.reason);
   });
-
-  function selectThread(next: string) {
-    if (next === selectedId) return;
-    onSelectThread(next);
-    setSeed(null);
-  }
 
   function handleSent(message: AskMessage) {
     setDetail((current) =>
@@ -231,6 +230,44 @@ export function AskThreadView({
     if (selectedId === null) setSeed(null);
   }
 
+  async function toggleOpen() {
+    const open = detail?.thread;
+    if (!open) return;
+    setLifecycleBusy(true);
+    setError(null);
+    try {
+      const updated =
+        open.status === 'open' ? await closeAskThread(open.id) : await reopenAskThread(open.id);
+      setDetail((current) => (current ? { ...current, thread: updated } : current));
+      void refreshThreads();
+    } catch (cause) {
+      setError(formatError(cause));
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }
+
+  async function deleteThread() {
+    const open = detail?.thread;
+    if (!open) return;
+    if (!confirm(`Delete "${open.title}"? Its transcript and pinned canvases go with it.`)) return;
+    setLifecycleBusy(true);
+    setError(null);
+    try {
+      await deleteAskThread(open.id);
+      // Selecting nothing rather than the next thread along: the workspace
+      // lands on its empty state, which is the one destination that cannot be
+      // a thread the user did not ask to read.
+      onSelectThread(null);
+      setDetail(null);
+      void refreshThreads();
+    } catch (cause) {
+      setError(formatError(cause));
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }
+
   if (error && threads === null) {
     return (
       <div className="flex flex-1 items-center justify-center bg-[#0a0c10]">
@@ -252,10 +289,11 @@ export function AskThreadView({
       {thread ? (
         <AskWorkspaceHeader
           thread={thread}
-          projectId={projectId}
-          onSelectThread={selectThread}
           onNewThread={() => setNewThread({ seedTitle: '' })}
           onOpenSettings={() => setSettingsOpen(true)}
+          onToggleOpen={() => void toggleOpen()}
+          onDelete={() => void deleteThread()}
+          busy={lifecycleBusy}
         />
       ) : (
         <header className="flex shrink-0 items-center justify-between gap-6 border-b border-white/5 bg-[#0d0f14]/60 px-6 py-3.5">
@@ -264,7 +302,6 @@ export function AskThreadView({
             <h1 className="m-0 font-heading text-xl font-bold tracking-tight text-white">New thread</h1>
           </div>
           <div className="flex shrink-0 items-center gap-4">
-            <AskThreadSwitcher projectId={projectId} activeThreadId={null} onSelect={selectThread} />
             <button
               type="button"
               data-testid="ask-new-thread"
