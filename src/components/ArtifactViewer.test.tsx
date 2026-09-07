@@ -114,7 +114,7 @@ describe('ArtifactViewer ask-canvas viewType', () => {
         title: 'Pinned canvas',
         stages: ['01 · Orchestrator'],
         lanes: ['01 · The person'],
-        nodes: [{ id: 'n1', title: 'Node one', role: 'orchestration', path: null, stage: 0, lane: 0 }],
+        nodes: [{ id: 'n1', title: 'Node one', detail: null, role: 'orchestration', path: null, stage: 0, lane: 0 }],
         edges: [],
       },
       canvas_paths: [

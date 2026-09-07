@@ -107,7 +107,7 @@ function pin(path: string, overrides: Partial<PinnedCanvasEntry> = {}): PinnedCa
 }
 
 function node(overrides: Partial<CanvasNode> = {}): CanvasNode {
-  return { id: 'n0', title: 'Node 0', role: 'agent', path: null, stage: 0, lane: 0, ...overrides };
+  return { id: 'n0', title: 'Node 0', detail: null, role: 'agent', path: null, stage: 0, lane: 0, ...overrides };
 }
 
 function canvas(title: string, nodes: CanvasNode[] = [node({ title })]): AskCanvas {
@@ -493,6 +493,62 @@ describe('AskCanvasPane', () => {
 
     fireEvent.click(screen.getByTitle('Reads the ticket board'));
     expect(screen.queryByTestId('ask-canvas-node-inspector')).not.toBeInTheDocument();
+  });
+
+  /** The authored `detail` wins over the prose scavenge, which is the whole
+   *  point of the field: the sentence a substring match happens to land on is
+   *  not necessarily about this node. */
+  it('prefers a node’s own detail over the sentence matched out of the prose', async () => {
+    const n0 = node({
+      id: 'n0',
+      title: 'Reads the ticket board',
+      detail: 'Picks the next unblocked ticket and claims it.',
+      role: 'agent',
+      path: null,
+    });
+
+    render(
+      <AskCanvasPane
+        store={fakeStore}
+        threadId="t1"
+        projectId="p1"
+        lastMessage={message({
+          canvas: canvas('Onboarding', [n0]),
+          prose: 'Reads the ticket board before anything runs.',
+        })}
+        phase={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle('Reads the ticket board'));
+
+    const inspector = await screen.findByTestId('ask-canvas-node-inspector');
+    expect(inspector).toHaveTextContent('Picks the next unblocked ticket and claims it.');
+    expect(inspector).not.toHaveTextContent('before anything runs');
+  });
+
+  /** A canvas pinned before `detail` existed replays with none, so the older
+   *  scavenge stays reachable rather than leaving the reader a role name. */
+  it('falls back to the prose sentence when a node carries no detail', async () => {
+    const n0 = node({ id: 'n0', title: 'Reads the ticket board', detail: null, role: 'agent', path: null });
+
+    render(
+      <AskCanvasPane
+        store={fakeStore}
+        threadId="t1"
+        projectId="p1"
+        lastMessage={message({
+          canvas: canvas('Onboarding', [n0]),
+          prose: 'Reads the ticket board before anything runs.',
+        })}
+        phase={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle('Reads the ticket board'));
+
+    const inspector = await screen.findByTestId('ask-canvas-node-inspector');
+    expect(inspector).toHaveTextContent('Reads the ticket board before anything runs.');
   });
 
   it('surfaces the moved-path sha copy inside the pane’s open inspector', async () => {

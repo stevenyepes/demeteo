@@ -10,9 +10,9 @@ function canvas(): AskCanvas {
     stages: [],
     lanes: [],
     nodes: [
-      { id: 'a', title: 'Decompose Feature', role: 'orchestration', path: null, stage: 0, lane: 0 },
-      { id: 'b', title: 'Implement Step', role: 'agent', path: null, stage: 1, lane: 0 },
-      { id: 'c', title: 'Gate & Merge', role: 'boundary', path: null, stage: 2, lane: 0 },
+      { id: 'a', title: 'Decompose Feature', detail: null, role: 'orchestration', path: null, stage: 0, lane: 0 },
+      { id: 'b', title: 'Implement Step', detail: null, role: 'agent', path: null, stage: 1, lane: 0 },
+      { id: 'c', title: 'Gate & Merge', detail: null, role: 'boundary', path: null, stage: 2, lane: 0 },
     ],
     edges: [
       { from: 'a', to: 'b', kind: 'hands_off' },
@@ -34,7 +34,7 @@ describe('edgesForNode', () => {
   });
 
   it('returns two empty arrays for a node with no edges', () => {
-    const isolated: AskCanvas = { ...canvas(), nodes: [...canvas().nodes, { id: 'd', title: 'Isolated', role: 'agent', path: null, stage: 3, lane: 0 }] };
+    const isolated: AskCanvas = { ...canvas(), nodes: [...canvas().nodes, { id: 'd', title: 'Isolated', detail: null, role: 'agent', path: null, stage: 3, lane: 0 }] };
 
     const { incoming, outgoing } = edgesForNode(isolated, 'd');
 

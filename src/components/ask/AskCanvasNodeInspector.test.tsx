@@ -28,6 +28,7 @@ afterEach(cleanup);
 const NODE: CanvasNode = {
   id: 'n1',
   title: 'ExecutionDriver',
+  detail: null,
   role: 'orchestration',
   path: 'step_executor/driver.rs',
   stage: 0,

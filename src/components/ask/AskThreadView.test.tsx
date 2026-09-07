@@ -160,7 +160,7 @@ function canvas(title: string): AskCanvas {
     title,
     stages: ['s0'],
     lanes: ['l0'],
-    nodes: [{ id: 'n0', title, role: 'agent', path: null, stage: 0, lane: 0 }],
+    nodes: [{ id: 'n0', title, detail: null, role: 'agent', path: null, stage: 0, lane: 0 }],
     edges: [],
   };
 }
@@ -685,6 +685,7 @@ describe('AskThreadView — switching threads resets the canvas pane', () => {
     const canvasNode: CanvasNode = {
       id: 'n0',
       title: 'Reads the ticket board',
+      detail: null,
       role: 'agent',
       path: 'src/board.rs',
       stage: 0,

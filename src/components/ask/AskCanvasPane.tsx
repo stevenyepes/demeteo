@@ -234,7 +234,11 @@ export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }
               <div className="w-[360px] shrink-0 border-l border-white/5">
                 <AskCanvasNodeInspector
                   node={selectedNode}
-                  description={descriptionForNode(held.answerText, selectedNode) ?? ROLE_LABEL[selectedNode.role]}
+                  description={
+                    selectedNode.detail ??
+                    descriptionForNode(held.answerText, selectedNode) ??
+                    ROLE_LABEL[selectedNode.role]
+                  }
                   {...edgesForNode(held.canvas, selectedNode.id)}
                   threadId={threadId}
                   messageId={held.messageId}

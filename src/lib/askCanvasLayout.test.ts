@@ -12,6 +12,7 @@ function node(id: string, stage: number, lane: number, overrides: Partial<Canvas
   return {
     id,
     title: id,
+    detail: null,
     role: 'agent',
     path: null,
     stage,

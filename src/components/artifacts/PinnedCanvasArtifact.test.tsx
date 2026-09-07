@@ -40,7 +40,7 @@ const canvas: AskCanvas = {
   stages: ['01 · Orchestrator'],
   lanes: ['01 · The person'],
   nodes: [
-    { id: 'n1', title: 'Node one', role: 'orchestration', path: 'src/one.ts', stage: 0, lane: 0 },
+    { id: 'n1', title: 'Node one', detail: 'Kicks the run off.', role: 'orchestration', path: 'src/one.ts', stage: 0, lane: 0 },
   ],
   edges: [],
 };
@@ -164,5 +164,16 @@ describe('PinnedCanvasArtifact', () => {
     const detail = screen.getByTestId('pinned-canvas-node-detail');
     expect(detail).toHaveTextContent('Node one');
     expect(detail).toHaveTextContent('src/one.ts');
+  });
+
+  /** A pin stores no prose, so `AskCanvasPane`'s scavenge fallback has nothing
+   *  to read here — the node's own `detail` is the only explanation a reopened
+   *  pin can carry. */
+  it('shows a node’s detail in the strip, the one explanation a pin still has', () => {
+    renderArtifact({ canvasPaths: [{ node_id: 'n1', path: 'src/one.ts', resolved: true }] });
+
+    fireEvent.click(nodeCard('Node one'));
+
+    expect(screen.getByTestId('pinned-canvas-node-detail')).toHaveTextContent('Kicks the run off.');
   });
 });

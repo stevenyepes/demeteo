@@ -100,6 +100,9 @@ export function PinnedCanvasArtifact({
               {ROLE_LABEL[selected.role]}
             </span>
           </div>
+          {selected.detail !== null && (
+            <div className="text-[11.5px] leading-relaxed text-slate-300">{selected.detail}</div>
+          )}
           {selected.path !== null && (
             <div className="truncate font-mono text-[11px] text-slate-300">{selected.path}</div>
           )}
