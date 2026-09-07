@@ -15,19 +15,17 @@
  * jsdom lays out no SVG, so no test could see it. The rule was about design
  * tokens; a computed coordinate was never one.
  */
-import { useMemo, useRef, useState } from 'react';
+import { useMemo } from 'react';
 
 import { citedNodeIds } from '../../lib/askCanvasCitations';
 import { layoutAskCanvas } from '../../lib/askCanvasLayout';
 import type { AskCanvas, CanvasPathVerdict, EdgeKind, NodeRole } from '../../types';
+import { useCanvasViewport } from '../../hooks/useCanvasViewport';
+import { CanvasZoomControls } from '../ui/CanvasZoomControls';
 import { AskCanvasNode, ROLE_LABEL, type NodePathState } from './AskCanvasNode';
 
 const HEADER_H = 32;
 const LANE_LABEL_H = 22;
-
-const ZOOM_MIN = 0.4;
-const ZOOM_MAX = 1.5;
-const ZOOM_STEP = 0.15;
 
 /** Stroke treatment per edge kind — colour and dash. `kind` reaches the
  *  stroke and nothing else; the route is `askCanvasLayout`'s, derived from
@@ -92,14 +90,10 @@ export function AskCanvasView({
     [canvasPaths],
   );
 
-  const viewport = useRef<HTMLDivElement | null>(null);
-  const [zoom, setZoom] = useState(1);
-
-  function fit() {
-    const element = viewport.current;
-    if (!element || layout.width === 0 || layout.height === 0) return;
-    setZoom(clamp(Math.min(element.clientWidth / layout.width, element.clientHeight / layout.height)));
-  }
+  const viewport = useCanvasViewport({
+    width: layout.width,
+    height: HEADER_H + layout.height,
+  });
 
   return (
     <div data-testid="ask-canvas-view" className="relative flex h-full w-full flex-col">
@@ -109,16 +103,25 @@ export function AskCanvasView({
 
       <div className="relative min-h-0 flex-1">
         <div
-          ref={viewport}
-          className="absolute inset-0 overflow-auto bg-[radial-gradient(rgba(255,255,255,0.05)_1px,transparent_0)] bg-[length:20px_20px]"
+          ref={viewport.paneRef}
+          {...viewport.panProps}
+          className={`absolute inset-0 touch-none overflow-auto bg-[radial-gradient(rgba(255,255,255,0.05)_1px,transparent_0)] bg-[length:20px_20px] ${
+            viewport.panning ? 'cursor-grabbing select-none' : 'cursor-grab'
+          }`}
         >
-          <div style={{ width: layout.width * zoom, height: (HEADER_H + layout.height) * zoom }}>
+          <div
+            ref={viewport.canvasRef}
+            style={{
+              width: layout.width * viewport.zoom,
+              height: (HEADER_H + layout.height) * viewport.zoom,
+            }}
+          >
             <div
               className="relative origin-top-left"
               style={{
                 width: layout.width,
                 height: HEADER_H + layout.height,
-                transform: `scale(${zoom})`,
+                transform: `scale(${viewport.zoom})`,
               }}
             >
               {layout.columns.map((column) => (
@@ -226,31 +229,10 @@ export function AskCanvasView({
             ))}
           </div>
 
-          <div className="pointer-events-auto absolute right-4 bottom-4 flex items-center gap-1.5">
-            <button
-              type="button"
-              aria-label="Zoom out"
-              onClick={() => setZoom((current) => clamp(current - ZOOM_STEP))}
-              className="btn-secondary bg-slate-900/90! px-2.5! py-1.5!"
-            >
-              &minus;
-            </button>
-            <button
-              type="button"
-              aria-label="Zoom in"
-              onClick={() => setZoom((current) => clamp(current + ZOOM_STEP))}
-              className="btn-secondary bg-slate-900/90! px-2.5! py-1.5!"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              onClick={fit}
-              className="btn-secondary bg-slate-900/90! px-2.5! py-1.5! text-[11px]"
-            >
-              Fit
-            </button>
-          </div>
+          <CanvasZoomControls
+            viewport={viewport}
+            className="pointer-events-auto absolute right-4 bottom-4"
+          />
         </div>
       </div>
     </div>
@@ -266,10 +248,6 @@ function pathStateOf(
 ): NodePathState {
   if (path === null) return 'none';
   return verdicts.get(verdictKey(nodeId, path))?.resolved === true ? 'resolved' : 'missing';
-}
-
-function clamp(zoom: number): number {
-  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom));
 }
 
 export default AskCanvasView;
