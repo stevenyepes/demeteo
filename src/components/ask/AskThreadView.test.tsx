@@ -731,3 +731,57 @@ describe('AskThreadView — switching threads resets the canvas pane', () => {
     expect(screen.queryByText('Reads the ticket board')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Hiding the chat column (`AskChatColumn`/`AskChatCollapsedRail`).
+ *
+ * The draft case is the one that pins *how*: it is red against any draft that
+ * conditionally renders the column instead of hiding it by class, because the
+ * composer owns its own input state and an unmount takes the unsent text with
+ * it. The other two were watched to fail against the fixed-width column that
+ * preceded them — neither control existed.
+ */
+describe('AskThreadView — hiding the chat column', () => {
+  it('collapses the column to a rail, leaving the canvas pane on screen', async () => {
+    const t = thread();
+    listAskThreads.mockResolvedValue([t]);
+    loadAskThread.mockResolvedValue(detail(t, [message({ thread_id: 't1' })]));
+
+    render(<AskThreadView projectId="p1" machineId="local" />);
+
+    fireEvent.click(await screen.findByTestId('ask-chat-hide'));
+
+    expect(screen.getByTestId('ask-chat-column')).toHaveClass('hidden');
+    expect(screen.getByTestId('ask-chat-show')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('ask-chat-show'));
+
+    expect(screen.getByTestId('ask-chat-column')).not.toHaveClass('hidden');
+    expect(screen.queryByTestId('ask-chat-show')).not.toBeInTheDocument();
+  });
+
+  it('keeps an unsent draft across a hide and a show', async () => {
+    const t = thread();
+    listAskThreads.mockResolvedValue([t]);
+    loadAskThread.mockResolvedValue(detail(t, [message({ thread_id: 't1' })]));
+
+    render(<AskThreadView projectId="p1" machineId="local" />);
+
+    const composer = await screen.findByTestId('ask-composer');
+    fireEvent.change(composer, { target: { value: 'half a question' } });
+
+    fireEvent.click(screen.getByTestId('ask-chat-hide'));
+    fireEvent.click(screen.getByTestId('ask-chat-show'));
+
+    expect(screen.getByTestId('ask-composer')).toHaveValue('half a question');
+  });
+
+  it('offers no hide control with no thread open', async () => {
+    listAskThreads.mockResolvedValue([]);
+
+    render(<AskThreadView projectId="p1" machineId="local" />);
+
+    await screen.findByRole('heading', { name: 'New thread' });
+    expect(screen.queryByTestId('ask-chat-hide')).not.toBeInTheDocument();
+  });
+});
