@@ -5,6 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AskWorkspaceHeader } from './AskWorkspaceHeader';
 import { listAskThreads } from '../../lib/ask';
 import type { AskThread } from '../../types';
+import { NavigationProvider } from '../../context';
+
+// These surfaces carry the shared Back control, which reads the navigation
+// stack, so every render needs a provider around it.
+function renderWithNav(ui: Parameters<typeof render>[0]) {
+  return render(ui, { wrapper: NavigationProvider });
+}
+
 
 vi.mock('../../lib/ask', () => ({
   listAskThreads: vi.fn(),
@@ -48,7 +56,7 @@ beforeEach(() => {
 
 describe('AskWorkspaceHeader', () => {
   it("renders title, kind chip, and Turns/Spend/Tokens straight off the thread row", () => {
-    render(
+    renderWithNav(
       <AskWorkspaceHeader
         thread={thread()}
         projectId="p1"
@@ -69,7 +77,7 @@ describe('AskWorkspaceHeader', () => {
   it('opens AskThreadSwitcher from the Threads trigger', async () => {
     vi.mocked(listAskThreads).mockResolvedValue([thread()]);
 
-    render(
+    renderWithNav(
       <AskWorkspaceHeader
         thread={thread()}
         projectId="p1"
@@ -86,7 +94,7 @@ describe('AskWorkspaceHeader', () => {
 
   it('calls onNewThread when New thread is clicked', () => {
     const onNewThread = vi.fn();
-    render(
+    renderWithNav(
       <AskWorkspaceHeader
         thread={thread()}
         projectId="p1"

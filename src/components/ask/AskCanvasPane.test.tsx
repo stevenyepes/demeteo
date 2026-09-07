@@ -56,8 +56,12 @@ vi.mock('../../lib/features', () => ({
 }));
 
 const navigateMock = vi.fn();
+// `useOptionalUIState` is here because the artifact modal registers itself as
+// an overlay; returning `null` is the documented "no provider, nothing to tell"
+// path, so the modal renders without one.
 vi.mock('../../context', () => ({
   useNavigation: () => ({ navigate: navigateMock }),
+  useOptionalUIState: () => null,
 }));
 
 import { AskCanvasPane } from './AskCanvasPane';

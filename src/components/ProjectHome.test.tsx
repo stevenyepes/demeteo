@@ -22,6 +22,7 @@ import {
   ProjectProvider,
   UIStateProvider,
   TerminalPanelProvider,
+  useNavigation,
   useProject,
   useUIState,
 } from '../context';
@@ -127,6 +128,50 @@ function mount(project: Project) {
             <ProjectSeed project={project}>
               <ProjectHome />
               <StartFeatureSeedProbe />
+            </ProjectSeed>
+          </TerminalPanelProvider>
+        </UIStateProvider>
+      </ProjectProvider>
+    </NavigationProvider>,
+  );
+}
+
+/**
+ * Mounts Project Home the way `App` does — only while the view is `home` — so
+ * the tab strip is exercised across a real unmount, which is where the section
+ * used to be lost. A plain `<ProjectHome />` under a provider never unmounts
+ * and so cannot see this class of bug at all.
+ */
+function RoutedHome(): ReactElement {
+  const { view, goBack, navigate } = useNavigation();
+  // The provider opens on `empty-state`; App's workspace load is what puts it
+  // on `home`. Replace, so the stack starts empty exactly as it does there.
+  useEffect(() => {
+    navigate({ kind: 'home' }, 'replace');
+  }, [navigate]);
+  return (
+    <>
+      <button type="button" onClick={goBack}>Go back</button>
+      <button
+        type="button"
+        onClick={() => navigate({ kind: 'discovery', discoveryId: 'dsc-1', discoveryTitle: 'A discovery' })}
+      >
+        Open a discovery
+      </button>
+      <p>view: {view.kind}</p>
+      {view.kind === 'home' && <ProjectHome />}
+    </>
+  );
+}
+
+function mountRouted(project: Project) {
+  render(
+    <NavigationProvider>
+      <ProjectProvider>
+        <UIStateProvider>
+          <TerminalPanelProvider>
+            <ProjectSeed project={project}>
+              <RoutedHome />
             </ProjectSeed>
           </TerminalPanelProvider>
         </UIStateProvider>
@@ -1108,5 +1153,56 @@ describe('the project view’s persisted list preferences', () => {
 
     expect(writes()).toEqual([{ key: 'ui.pipeline_segment', value: 'all' }]);
     expect(screen.getByText('Landed already')).toBeInTheDocument();
+  });
+});
+
+// The reported bug, end to end: Back out of a discovery landed on Pipelines
+// rather than on the Discovery tab it was opened from, because the strip's
+// selection was component state that a remount reset.
+describe('ProjectHome — the tab Back returns to', () => {
+  it('restores the Discovery tab after Back out of a discovery', async () => {
+    mockBackend(['/repo/one']);
+    mountRouted(baseProject({ compute_type: 'local' }));
+
+    await screen.findByTestId('project-home-composer');
+    await act(async () => {
+      await userEvent.click(screen.getByText('Discovery').closest('button')!);
+    });
+    expect(screen.queryByTestId('project-home-composer')).toBeNull();
+
+    await act(async () => {
+      await userEvent.click(screen.getByText('Open a discovery'));
+    });
+    await screen.findByText('view: discovery');
+
+    await act(async () => {
+      await userEvent.click(screen.getByText('Go back'));
+    });
+
+    await screen.findByText('view: home');
+    // The composer belongs to the Pipelines panel. Its absence is what says
+    // Back landed on Discovery and not on the default tab.
+    expect(screen.queryByTestId('project-home-composer')).toBeNull();
+    expect(screen.getByText('Discovery').closest('button')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('does not stack a history entry per tab switch', async () => {
+    mockBackend(['/repo/one']);
+    mountRouted(baseProject({ compute_type: 'local' }));
+
+    await screen.findByTestId('project-home-composer');
+    await act(async () => {
+      await userEvent.click(screen.getByText('Discovery').closest('button')!);
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByText('Pipelines').closest('button')!);
+    });
+
+    // Two switches, no entries: Back still means "leave Project Home", which
+    // here is the empty stack the provider starts with.
+    await act(async () => {
+      await userEvent.click(screen.getByText('Go back'));
+    });
+    expect(screen.getByText('view: home')).toBeInTheDocument();
   });
 });

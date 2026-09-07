@@ -13,6 +13,7 @@ import {
 } from '../lib/workflows';
 import { MiniGraph } from './canvas/MiniGraph';
 import type { WorkflowDefinitionV2 } from './canvas/types';
+import { BackButton } from './ui/BackButton';
 
 interface WorkflowListProps {
   onEdit: (id: string) => void;
@@ -127,7 +128,10 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
       {/* Left Column: List */}
       <div className="w-1/3 border-r border-white/5 bg-[#0d0f14]/50 flex flex-col h-full">
         <div className="p-6 flex items-center justify-between border-b border-white/5">
-          <h2 className="text-xl font-bold font-heading text-white tracking-wide">Workflow Library</h2>
+          <div className="flex items-center gap-3 min-w-0">
+            <BackButton />
+            <h2 className="text-xl font-bold font-heading text-white tracking-wide">Workflow Library</h2>
+          </div>
           <div className="flex items-center gap-2">
             <input
               ref={importInput}

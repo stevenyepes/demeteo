@@ -36,7 +36,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import {
   AlertTriangle,
-  ArrowLeft,
   CalendarClock,
   Check,
   Code2,
@@ -51,6 +50,7 @@ import {
 import { useErrorBus } from '../../lib/errorBus';
 import { MONACO_RESIZE_SAFE } from '../../lib/monaco';
 import { useNavigationGuard } from '../../hooks/useNavigationGuard';
+import { BackButton } from '../ui/BackButton';
 import type { NavigationIntent } from '../../context/NavigationContext';
 import { ConfigPanel } from './ConfigPanel';
 import { ScheduleDrawer, type WorkflowScheduleValue } from './ScheduleDrawer';
@@ -105,14 +105,17 @@ export interface WorkflowBuilderProps {
     name: string;
     description: string;
   }) => void;
-  /** Leave the builder. Called only once it is safe to do so. */
-  onClose: () => void;
   className?: string;
 }
 
-/** What a blocked exit was trying to do, so it can be replayed. `'close'` is
- *  the builder's own Back arrow, which isn't a navigation intent. */
-type PendingExit = { kind: 'intent'; intent: NavigationIntent } | { kind: 'close' };
+/** The navigation a dirty draft blocked, held so it can be replayed once the
+ *  author has saved or discarded.
+ *
+ *  Every exit is one of these now. The builder used to carry its own Back
+ *  arrow, which called `onClose` directly and so needed a second variant that
+ *  no guard could see — the shared control navigates instead, which is the
+ *  point of it: one kind of exit means one thing to replay. */
+type PendingExit = { kind: 'intent'; intent: NavigationIntent };
 
 /** Is the keystroke aimed at a text field? Then it belongs to that field's own
  *  undo stack, not the graph's. */
@@ -147,7 +150,6 @@ export function WorkflowBuilder({
   schedule: initialSchedule = null,
   onSave,
   onWorkflowReplaced,
-  onClose,
   className = '',
 }: WorkflowBuilderProps) {
   const { reportError } = useErrorBus();
@@ -334,19 +336,13 @@ export function WorkflowBuilder({
     setPendingExit({ kind: 'intent', intent }),
   );
 
-  const requestClose = useCallback(() => {
-    if (dirty) setPendingExit({ kind: 'close' });
-    else onClose();
-  }, [dirty, onClose]);
-
   /** Perform the exit the guard held onto. */
   const performExit = useCallback(
     (exit: PendingExit) => {
       setPendingExit(null);
-      if (exit.kind === 'close') onClose();
-      else proceed(exit.intent);
+      proceed(exit.intent);
     },
-    [onClose, proceed],
+    [proceed],
   );
 
   const exitSaving = useCallback(async () => {
@@ -401,14 +397,7 @@ export function WorkflowBuilder({
       data-testid="workflow-builder"
     >
       <header className="flex items-center gap-3 border-b border-white/5 px-4 py-3">
-        <button
-          type="button"
-          onClick={requestClose}
-          className="rounded-lg border border-slate-700/60 p-1.5 text-slate-300 transition-colors hover:border-slate-600 hover:text-white"
-          aria-label="Back to workflows"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </button>
+        <BackButton />
 
         <input
           value={name}

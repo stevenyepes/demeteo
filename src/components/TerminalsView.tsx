@@ -5,6 +5,7 @@ import { useTerminalPanel } from '../hooks/useTerminalPanel';
 import { TerminalSurface } from './TerminalSurface';
 import { SessionRow } from './SessionRow';
 import { NewTerminalMenu } from './NewTerminalMenu';
+import { BackButton } from './ui/BackButton';
 import { ScrollArea } from './ui/ScrollArea';
 
 export interface TerminalsViewProps {
@@ -82,6 +83,10 @@ export function TerminalsView({ active, openLauncherSignal }: TerminalsViewProps
             navigate around the app.
           </div>
           <NewTerminalMenu openSignal={openLauncherSignal} />
+          {/* With no session list there is no header to hold it, and this view
+              is reached from a tab that navigates away — so without a control
+              here the only way out of an empty Terminals is the rail. */}
+          <BackButton />
         </div>
       ) : (
         <>
@@ -89,6 +94,7 @@ export function TerminalsView({ active, openLauncherSignal }: TerminalsViewProps
           <div className="w-56 shrink-0 border-r border-white/5 bg-[#0b0c10] flex flex-col min-h-0">
             <div className="flex items-center justify-between px-3 py-2 border-b border-white/5 shrink-0">
               <div className="flex items-center gap-2 text-[11px] font-mono text-slate-300">
+                <BackButton />
                 <span className="uppercase tracking-wider font-semibold text-slate-400">
                   Terminals
                 </span>

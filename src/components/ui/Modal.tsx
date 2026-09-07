@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { useOverlay } from '../../hooks/useOverlay';
 import { OverlayPortal } from './OverlayPortal';
 
 interface ModalProps {
@@ -9,6 +10,11 @@ interface ModalProps {
 }
 
 export function Modal({ onClose, children, className = '', backdropClassName = '' }: ModalProps) {
+  // Every `Modal` is an overlay, so registering here covers all of them at
+  // once — and a dialog added later is covered the day it is written, which a
+  // per-modal flag never was (audit F35).
+  useOverlay();
+
   useEffect(() => {
     if (!onClose) return;
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };

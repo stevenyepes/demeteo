@@ -18,6 +18,13 @@ import type {
   TicketProgress,
   TicketView,
 } from '../../types';
+import { NavigationProvider } from '../../context';
+
+// These surfaces carry the shared Back control, which reads the navigation
+// stack, so every render needs a provider around it.
+function renderWithNav(ui: Parameters<typeof render>[0]) {
+  return render(ui, { wrapper: NavigationProvider });
+}
 
 afterEach(cleanup);
 
@@ -98,7 +105,7 @@ const SEVEN_ONE_DROPPED: DiscoveryBoard = {
 
 describe('DiscoveryCard', () => {
   it('counts landed against live tickets, not against the whole set', () => {
-    render(
+    renderWithNav(
       <DiscoveryCard
         discovery={discovery({ progress: SEVEN_ONE_DROPPED.progress })}
         board={SEVEN_ONE_DROPPED}
@@ -118,7 +125,7 @@ describe('DiscoveryCard', () => {
   // The counter rides on the list row, so it is drawn with the card rather
   // than a board fetch later — which is what `DiscoverySummary` exists for.
   it('draws the bar from the list row, before any board has answered', () => {
-    render(
+    renderWithNav(
       <DiscoveryCard
         discovery={discovery({ progress: SEVEN_ONE_DROPPED.progress })}
         board={null}
@@ -132,7 +139,7 @@ describe('DiscoveryCard', () => {
   });
 
   it('reads its turn count off the row', () => {
-    render(
+    renderWithNav(
       <DiscoveryCard
         discovery={discovery({ message_count: 4 })}
         board={null}
@@ -146,7 +153,7 @@ describe('DiscoveryCard', () => {
   });
 
   it('says one turn, not one turns', () => {
-    render(
+    renderWithNav(
       <DiscoveryCard
         discovery={discovery({ message_count: 1 })}
         board={null}
@@ -160,7 +167,7 @@ describe('DiscoveryCard', () => {
   });
 
   it('shows no progress arithmetic before anything has been proposed', () => {
-    render(
+    renderWithNav(
       <DiscoveryCard
         discovery={discovery()}
         board={{ tickets: [], progress: NOTHING_PROPOSED }}
@@ -175,7 +182,7 @@ describe('DiscoveryCard', () => {
 
   it('opens the discovery it was clicked on', () => {
     const onOpen = vi.fn();
-    render(
+    renderWithNav(
       <DiscoveryCard
         discovery={discovery()}
         board={null}
@@ -237,7 +244,7 @@ describe('the turn count, across both surfaces', () => {
   ];
 
   it('reads the same number on the card and in the workspace header', () => {
-    render(
+    renderWithNav(
       <DiscoveryCard
         discovery={discovery({ message_count: MESSAGES.length })}
         board={null}
@@ -249,7 +256,7 @@ describe('the turn count, across both surfaces', () => {
     expect(screen.getByText('2 turns')).toBeTruthy();
     cleanup();
 
-    render(
+    renderWithNav(
       <DiscoveryWorkspaceHeader
         discovery={discovery()}
         board={null}

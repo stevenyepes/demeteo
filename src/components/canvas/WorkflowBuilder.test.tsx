@@ -26,6 +26,8 @@ import {
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke, type InvokeArgs } from '@tauri-apps/api/core';
 
+import { useEffect } from 'react';
+
 import { NavigationProvider, useNavigation } from '../../context/NavigationContext';
 import { WorkflowBuilder } from './WorkflowBuilder';
 import catalogFixture from './__fixtures__/node_catalog.json';
@@ -113,14 +115,19 @@ function mockBackend() {
 
 interface HarnessProps {
   onSave?: (req: { definition: WorkflowDefinitionV2; name: string }) => Promise<void>;
-  onClose?: () => void;
   workflowId?: string | null;
 }
 
 /** The builder inside a real navigation context, plus a button that navigates
  *  from "elsewhere in the app" so the guard can be exercised honestly. */
-function Harness({ onSave = () => Promise.resolve(), onClose = () => {}, workflowId = 'wf-b' }: HarnessProps) {
+function Harness({ onSave = () => Promise.resolve(), workflowId = 'wf-b' }: HarnessProps) {
   const { view, navigate } = useNavigation();
+  // Seat the builder on its own route. The shared Back control reads the
+  // stack, so a builder mounted under `empty-state` would have nowhere to go
+  // and would render disabled — a harness that quietly tested nothing.
+  useEffect(() => {
+    navigate({ kind: 'workflow-editor', workflowId }, 'replace');
+  }, [navigate, workflowId]);
   return (
     <div style={{ width: 900, height: 700 }}>
       <span data-testid="view">{view.kind}</span>
@@ -133,7 +140,6 @@ function Harness({ onSave = () => Promise.resolve(), onClose = () => {}, workflo
         name="Builder Test"
         version={3}
         onSave={onSave}
-        onClose={onClose}
       />
     </div>
   );
@@ -246,7 +252,6 @@ describe('version history (P3.4)', () => {
             version={3}
             onSave={() => Promise.resolve()}
             onWorkflowReplaced={onWorkflowReplaced}
-            onClose={() => {}}
           />
         </div>
       </NavigationProvider>,
@@ -398,12 +403,12 @@ describe('dirty guard (audit F38)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Elsewhere' }));
     expect(screen.getByTestId('dirty-guard')).toBeInTheDocument();
     // Still here: the intent was vetoed, not deferred.
-    expect(screen.getByTestId('view')).toHaveTextContent('empty-state');
+    expect(screen.getByTestId('view')).toHaveTextContent('workflow-editor');
 
     // Keep editing → the intent is dropped entirely.
     fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
     expect(screen.queryByTestId('dirty-guard')).not.toBeInTheDocument();
-    expect(screen.getByTestId('view')).toHaveTextContent('empty-state');
+    expect(screen.getByTestId('view')).toHaveTextContent('workflow-editor');
 
     // Discard → the blocked navigation is replayed.
     fireEvent.click(screen.getByRole('button', { name: 'Elsewhere' }));
@@ -432,18 +437,20 @@ describe('dirty guard (audit F38)', () => {
     expect(screen.getByTestId('view')).toHaveTextContent('workflows');
   });
 
-  it('guards its own Back arrow too', async () => {
-    const onClose = vi.fn();
-    renderBuilder({ onClose });
+  // The builder's Back is the app's Back now, so the guard covers it for the
+  // same reason it covers Escape and the mouse button: all three are one
+  // navigation intent. It used to be a fourth path, guarded separately.
+  it('guards the shared Back control too', async () => {
+    renderBuilder();
     await ready();
     fireEvent.click(screen.getByRole('option', { name: /Gate/ }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Back to workflows' }));
+    fireEvent.click(screen.getByTestId('back-button'));
     expect(screen.getByTestId('dirty-guard')).toBeInTheDocument();
-    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('view')).toHaveTextContent('workflow-editor');
 
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('view')).toHaveTextContent('workflows');
   });
 });
 

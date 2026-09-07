@@ -506,7 +506,6 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         driftRefreshing={refreshingDrift}
         onRefreshDrift={refreshDrift}
         mrUrl={mr.mrUrl}
-        onBack={() => navigate({ kind: 'home' })}
         onOpenTerminalTab={routing.handleOpenTerminalTab}
         onBrowseCode={routing.openEditor}
         onCancelFeature={rerun.handleCancelFeature}

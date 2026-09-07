@@ -8,6 +8,8 @@ import type { AppView, Provider } from '../types';
  * `src/context/UIStateContext.tsx`.
  */
 export interface UIStateSlice {
+  /** Overlays that registered themselves via `useOverlay`, newest last. */
+  overlays: string[];
   commandPaletteOpen: boolean;
   docsPanelOpen: boolean;
   isConnectModalOpen: boolean;
@@ -26,10 +28,16 @@ export type EscapeAction =
   | { type: 'close-connect-modal' }
   | { type: 'close-start-feature' }
   | { type: 'close-gate-view'; featureId: string; featureTitle: string }
+  /** A registered overlay is on screen and owns its own dismissal, so the
+   *  global handler does nothing at all. Distinct from `navigate-back` and
+   *  from the named rungs: there is no dispatch to make here — acting would be
+   *  the bug (audit F35), not the fix. */
+  | { type: 'overlay-owns-dismissal' }
   | { type: 'navigate-back' };
 
 /**
- * Decide which overlay (if any) a single Escape press should close.
+ * What a Back gesture should do right now — `Escape`, the mouse back button and
+ * `Alt+←` all ask this, so the three cannot drift apart.
  *
  * Priority order (topmost first, per the implementation spec AC-3):
  *   1. command palette     (ui.commandPaletteOpen)
@@ -37,14 +45,16 @@ export type EscapeAction =
  *   3. provider connect    (ui.isConnectModalOpen || ui.editingProvider)
  *   4. start-feature modal (ui.startFeatureOpen)
  *   5. gate view overlay   (view.kind === 'detail' && view.gateStepExecutionId)
- *   6. fallback            (navigate back)
+ *   6. any registered overlay (ui.overlays) — stand down, it dismisses itself
+ *   7. fallback            (navigate back)
  *
- * Per-modal ESC handlers in `CommandPalette`, `StartFeatureModal`,
- * `DocsPanel`, `EnvModal`, `GateView`, etc. are expected to call
- * `event.stopPropagation()` so the global hook only fires once. The
- * notification-bell popover is owned by `NotificationBell` and
- * dismisses itself on the same keypress; the prompt dialog
- * (`FeatureDetail`'s local modal) is handled the same way.
+ * Rung 6 is the general case and the other five are older, named ones that
+ * predate it; it sits below them so those keep the explicit dispatch they
+ * already had. It closes audit F35: before it, every dialog outside `UIState`
+ * fell straight through to `navigate-back`, so pressing Escape to dismiss an
+ * attachment preview or the ticket editor *also* moved the view underneath.
+ * The fix is a registry rather than a sixth flag because a flag list goes stale
+ * silently — the next dialog added without one reopens the same bug.
  *
  * This lives outside `App.tsx` so a component *inside* the tree App renders can
  * consult the ladder without an import cycle — see `hasEscapeOverlay`.
@@ -61,11 +71,12 @@ export function pickEscapeAction(ui: UIStateSlice, view: AppView): EscapeAction 
       featureTitle: view.featureTitle,
     };
   }
+  if (ui.overlays.length > 0) return { type: 'overlay-owns-dismissal' };
   return { type: 'navigate-back' };
 }
 
 /**
- * True when some layer above the base view currently owns Escape.
+ * True when some layer above the base view currently owns the gesture.
  *
  * Derived from `pickEscapeAction` rather than from its own list of flags: a
  * header popover that swallows Escape has to know when it is *not* the topmost

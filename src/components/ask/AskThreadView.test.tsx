@@ -38,8 +38,23 @@ vi.mock('../../lib/features', () => ({
 }));
 
 const navigateMock = vi.fn();
+const goBackMock = vi.fn();
+// The workspace header carries the shared Back control, so the stub has to be
+// a whole navigation and not just `navigate` — a partial one throws inside the
+// button rather than failing an assertion, which reads as 22 unrelated
+// failures.
 vi.mock('../../context', () => ({
-  useNavigation: () => ({ navigate: navigateMock }),
+  useNavigation: () => ({
+    view: { kind: 'ask', projectId: 'p1' },
+    previousView: { kind: 'home' },
+    canGoBack: true,
+    canGoForward: false,
+    navigate: navigateMock,
+    goBack: goBackMock,
+    goForward: () => {},
+    registerGuard: () => () => {},
+    proceed: () => {},
+  }),
 }));
 
 vi.mock('./NewAskThreadModal', () => ({
@@ -63,6 +78,7 @@ vi.mock('./AskThreadSettingsPanel', () => ({
   AskThreadSettingsPanel: () => <div data-testid="ask-thread-settings-panel-stub" />,
 }));
 
+import { RoutedSelection } from '../../test/routedSelection';
 import { AskThreadView } from './AskThreadView';
 import type { AskCanvas, AskMessageView, AskThread, AskThreadDetail, CanvasNode } from '../../types';
 
@@ -169,12 +185,31 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// The open thread lives on the `ask` route, so the harness stands in for the
+// router: it starts `undefined` so the seeding effect runs, and holds what the
+// view selects so switching thread actually switches.
+function renderAsk(props: { projectName?: string } = {}) {
+  return render(
+    <RoutedSelection>
+      {(threadId, onSelectThread) => (
+        <AskThreadView
+          projectId="p1"
+          machineId="local"
+          threadId={threadId}
+          onSelectThread={onSelectThread}
+          {...props}
+        />
+      )}
+    </RoutedSelection>,
+  );
+}
+
 describe('AskThreadView — empty state', () => {
   it('renders exactly the three Empty.html chips, verbatim, for a thread with no messages', async () => {
     listAskThreads.mockResolvedValue([thread()]);
     loadAskThread.mockResolvedValue(detail(thread(), []));
 
-    render(<AskThreadView projectId="p1" machineId="local" projectName="Acme API" />);
+    renderAsk({ projectName: "Acme API" });
 
     const chips = await screen.findAllByTestId('ask-try-chip');
     expect(chips).toHaveLength(3);
@@ -189,7 +224,7 @@ describe('AskThreadView — empty state', () => {
     listAskThreads.mockResolvedValue([thread()]);
     loadAskThread.mockResolvedValue(detail(thread(), []));
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     const chips = await screen.findAllByTestId('ask-try-chip');
     expect(chips[0]).toHaveTextContent('this project');
@@ -199,7 +234,7 @@ describe('AskThreadView — empty state', () => {
     listAskThreads.mockResolvedValue([thread()]);
     loadAskThread.mockResolvedValue(detail(thread(), []));
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     await screen.findAllByTestId('ask-try-chip');
     expect(screen.queryByText(/f-2291/i)).not.toBeInTheDocument();
@@ -210,7 +245,7 @@ describe('AskThreadView — empty state', () => {
     listAskThreads.mockResolvedValue([thread()]);
     loadAskThread.mockResolvedValue(detail(thread(), []));
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     const chips = await screen.findAllByTestId('ask-try-chip');
     fireEvent.click(chips[1]);
@@ -235,7 +270,7 @@ describe('AskThreadView — a Try chip clicked with no thread open', () => {
     listAskThreads.mockResolvedValue([]);
     loadAskThread.mockResolvedValue(detail(CREATED, []));
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     const chips = await screen.findAllByTestId('ask-try-chip');
     fireEvent.click(chips[0]);
@@ -252,7 +287,7 @@ describe('AskThreadView — a Try chip clicked with no thread open', () => {
   it('offers the chip’s text as the new thread’s name', async () => {
     listAskThreads.mockResolvedValue([]);
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     const chips = await screen.findAllByTestId('ask-try-chip');
     fireEvent.click(chips[1]);
@@ -265,7 +300,7 @@ describe('AskThreadView — a Try chip clicked with no thread open', () => {
   it('starts a thread opened from the header button on an empty name', async () => {
     listAskThreads.mockResolvedValue([]);
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     fireEvent.click(await screen.findByTestId('ask-new-thread'));
 
@@ -280,7 +315,7 @@ describe('AskThreadView — thread selection', () => {
     listAskThreads.mockResolvedValue([open, closed]);
     loadAskThread.mockResolvedValue(detail(open, [message({ thread_id: 'open-1' })]));
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     expect(await screen.findByText('Open thread')).toBeInTheDocument();
     expect(loadAskThread).toHaveBeenCalledWith('open-1');
@@ -291,7 +326,7 @@ describe('AskThreadView — thread selection', () => {
   it('renders a project-level empty state when there is no open thread', async () => {
     listAskThreads.mockResolvedValue([]);
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     expect(await screen.findByRole('heading', { name: 'New thread' })).toBeInTheDocument();
     expect(screen.getAllByTestId('ask-try-chip')).toHaveLength(3);
@@ -320,7 +355,7 @@ describe('AskThreadView — a turn already running when the surface mounts', () 
     loadAskThread.mockResolvedValue(detail(t, [message({ role: 'user', text: 'Why?', prose: 'Why?' })]));
     askTurnRunning.mockResolvedValue(true);
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     expect(await screen.findByTestId('ask-streaming-bubble')).toBeInTheDocument();
     expect(askTurnRunning).toHaveBeenCalledWith('t1');
@@ -340,7 +375,7 @@ describe('AskThreadView — a turn already running when the surface mounts', () 
       }),
     );
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
     await screen.findByTestId('ask-transcript');
     await waitFor(() => expect(listeners.get('ask_turn_status')?.length ?? 0).toBeGreaterThan(0));
 
@@ -360,7 +395,7 @@ describe('AskThreadView — a turn already running when the surface mounts', () 
     loadAskThread.mockResolvedValue(detail(t, [message({ role: 'user', text: 'Why?', prose: 'Why?' })]));
     askTurnRunning.mockResolvedValue(false);
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     expect(await screen.findByTestId('ask-transcript')).toBeInTheDocument();
     await waitFor(() => expect(askTurnRunning).toHaveBeenCalledWith('t1'));
@@ -390,7 +425,7 @@ describe('AskThreadView — a turn that ends without completing', () => {
   async function openThread(t: AskThread = thread()) {
     listAskThreads.mockResolvedValue([t]);
     loadAskThread.mockResolvedValue(detail(t, []));
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
     await screen.findAllByTestId('ask-try-chip');
     // The header's `AskThreadSwitcher` mounts with the thread and loads its
     // own copy of the list; letting that land here keeps its `setState` out
@@ -491,7 +526,7 @@ describe('AskThreadView — a turn that ends on a thread the user navigated away
         : detail(B, [message({ id: 'mb', thread_id: 'b', role: 'user', text: 'Where?', prose: 'Where?' })]),
     );
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
     await screen.findByTestId('ask-transcript');
     await waitFor(() => expect(listeners.get('ask_turn_status')?.length ?? 0).toBeGreaterThan(0));
 
@@ -620,7 +655,7 @@ describe('AskThreadView — canvas pane remounts on thread switch', () => {
         : [],
     );
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     expect(await screen.findByTestId('ask-canvas-view')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pin to Demeteo' })).toBeInTheDocument();
@@ -651,7 +686,7 @@ describe('AskThreadView — canvas pane remounts on thread switch', () => {
     );
     pinAskCanvas.mockResolvedValue('artifacts/pinned/ma.canvas.json');
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     await screen.findByTestId('ask-canvas-view');
     fireEvent.click(screen.getByRole('button', { name: 'Pin to Demeteo' }));
@@ -713,7 +748,7 @@ describe('AskThreadView — switching threads resets the canvas pane', () => {
         : detail(b, []),
     );
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     expect(await screen.findByText('Thread A')).toBeInTheDocument();
     fireEvent.click(await screen.findByTitle('Reads the ticket board'));
@@ -747,7 +782,7 @@ describe('AskThreadView — hiding the chat column', () => {
     listAskThreads.mockResolvedValue([t]);
     loadAskThread.mockResolvedValue(detail(t, [message({ thread_id: 't1' })]));
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     fireEvent.click(await screen.findByTestId('ask-chat-hide'));
 
@@ -765,7 +800,7 @@ describe('AskThreadView — hiding the chat column', () => {
     listAskThreads.mockResolvedValue([t]);
     loadAskThread.mockResolvedValue(detail(t, [message({ thread_id: 't1' })]));
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     const composer = await screen.findByTestId('ask-composer');
     fireEvent.change(composer, { target: { value: 'half a question' } });
@@ -779,7 +814,7 @@ describe('AskThreadView — hiding the chat column', () => {
   it('offers no hide control with no thread open', async () => {
     listAskThreads.mockResolvedValue([]);
 
-    render(<AskThreadView projectId="p1" machineId="local" />);
+    renderAsk();
 
     await screen.findByRole('heading', { name: 'New thread' });
     expect(screen.queryByTestId('ask-chat-hide')).not.toBeInTheDocument();

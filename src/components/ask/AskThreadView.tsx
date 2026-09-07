@@ -31,6 +31,14 @@ interface AskThreadViewProps {
    *  a generic string when the caller has none to give, same convention as
    *  `NewAskThreadModal`'s own `projectName`. */
   projectName?: string;
+  /**
+   * Which thread is open, held on the route so Back returns to the thread the
+   * user was reading rather than to whichever one seeds first. Absent means
+   * nothing has chosen yet and the effect below seeds from the thread list;
+   * once set it is the answer, even when that thread is closed.
+   */
+  threadId?: string | null;
+  onSelectThread: (threadId: string | null) => void;
 }
 
 /**
@@ -46,10 +54,20 @@ interface AskThreadViewProps {
  * down — the subscription itself stays leaf-mounted in `AskStreamingBubble`/
  * `AskCanvasPane`, per that hook's own doc comment.
  */
-export function AskThreadView({ projectId, machineId, projectName }: AskThreadViewProps): React.ReactElement {
+export function AskThreadView({
+  projectId,
+  machineId,
+  projectName,
+  threadId,
+  onSelectThread,
+}: AskThreadViewProps): React.ReactElement {
   const resolvedProjectName = projectName || 'this project';
   const [threads, setThreads] = useState<AskThread[] | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedId = threadId ?? null;
+  // The seeding effect below runs on project change and answers when its fetch
+  // lands, which is after any of this can have moved.
+  const selection = useRef({ threadId, onSelect: onSelectThread });
+  selection.current = { threadId, onSelect: onSelectThread };
   const [detail, setDetail] = useState<AskThreadDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<TurnPhase | null>(null);
@@ -85,14 +103,22 @@ export function AskThreadView({ projectId, machineId, projectName }: AskThreadVi
 
   useEffect(() => {
     setThreads(null);
-    setSelectedId(null);
     setDetail(null);
     setError(null);
     void refreshThreads().then((list) => {
+      // Only seed when the route names no thread. A thread that arrived on the
+      // view — a Back, a forward, a deep link — is the user's choice and
+      // outranks whichever one happens to be open.
+      //
+      // Read through refs, so switching thread does not re-list: a dependency
+      // here would refetch the whole list for a selection the list already
+      // holds, and the answer wanted is the one current when the fetch lands,
+      // not the one captured when it was issued.
+      if (selection.current.threadId !== undefined) return;
       const openThread = list.find((t) => t.status === 'open');
-      if (openThread) setSelectedId(openThread.id);
+      if (openThread) selection.current.onSelect(openThread.id);
     });
-  }, [refreshThreads]);
+  }, [refreshThreads, selection]);
 
   const loadSelected = useCallback(async () => {
     if (selectedId === null) return;
@@ -172,9 +198,9 @@ export function AskThreadView({ projectId, machineId, projectName }: AskThreadVi
     if (payload.ending !== 'success' && payload.reason) setError(payload.reason);
   });
 
-  function selectThread(threadId: string) {
-    if (threadId === selectedId) return;
-    setSelectedId(threadId);
+  function selectThread(next: string) {
+    if (next === selectedId) return;
+    onSelectThread(next);
     setSeed(null);
   }
 
@@ -313,7 +339,7 @@ export function AskThreadView({ projectId, machineId, projectName }: AskThreadVi
           onCreated={(created) => {
             setNewThread(null);
             void refreshThreads();
-            setSelectedId(created.id);
+            onSelectThread(created.id);
           }}
         />
       )}

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { useNavigation } from '../context/NavigationContext';
+import { useNavigation, useUIState } from '../context';
+import { hasEscapeOverlay } from '../lib/escapeLadder';
 
 /**
  * Window-level mouse back/forward bridge.
@@ -17,17 +18,26 @@ import { useNavigation } from '../context/NavigationContext';
  * the webview cannot fall back to its own history traversal in response to
  * the same button press.
  *
+ * **Suppressed while an overlay is open**, which `lib/shortcuts.ts` has
+ * documented since it was written and nothing implemented: the press used to
+ * go straight past a modal to the view underneath it, so dismissing a dialog
+ * with the mouse moved the app instead. The ladder decides, rather than a
+ * second list of conditions here — it is the same question Escape asks, and
+ * two answers to it is how the pair drift apart.
+ *
  * Self-mounting: drop a single `<MouseNavigationBridge />` anywhere inside
  * `<NavigationProvider>` (typically near the app root) and the listener is
  * installed for the lifetime of that mount.
  */
 export function useMouseNavigation(): void {
-  const { goBack, goForward } = useNavigation();
+  const { view, goBack, goForward } = useNavigation();
+  const { ui } = useUIState();
 
   useEffect(() => {
     const handleMouseDown = (event: MouseEvent): void => {
       if (event.button !== 3 && event.button !== 4) return;
       event.preventDefault();
+      if (hasEscapeOverlay(ui, view)) return;
       if (event.button === 3) {
         goBack();
       } else {
@@ -39,7 +49,7 @@ export function useMouseNavigation(): void {
     return () => {
       window.removeEventListener('mousedown', handleMouseDown);
     };
-  }, [goBack, goForward]);
+  }, [ui, view, goBack, goForward]);
 }
 
 /**

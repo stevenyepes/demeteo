@@ -21,6 +21,7 @@ import { bucketFor, type Bucket } from '../lib/remoteRunBuckets';
 import { useNavigation } from '../context';
 import { formatError } from '../lib/errors';
 import { listMachines } from '../lib/machines';
+import { BackButton } from './ui/BackButton';
 import {
   cancelRemoteRun,
   listMirroredRuns,
@@ -182,7 +183,9 @@ const RemoteRunInbox: React.FC = () => {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[300px] bg-cyan-600/5 rounded-full blur-[120px] pointer-events-none"></div>
       <div className="max-w-4xl mx-auto relative z-10">
         <div className="flex items-end justify-between mb-6 border-b border-white/5 pb-4">
-          <div>
+          <div className="flex items-start gap-3">
+            <BackButton className="mt-1.5" />
+            <div>
             <h2 className="text-2xl font-heading font-bold text-white mb-1 flex items-center gap-2">
               <Inbox className="w-6 h-6 text-cyan-400" />
               Runs
@@ -193,6 +196,7 @@ const RemoteRunInbox: React.FC = () => {
                 <span className="text-amber-300"> {totalActionable} need{totalActionable === 1 ? 's' : ''} your attention.</span>
               )}
             </p>
+            </div>
           </div>
           <button
             onClick={reconcile}

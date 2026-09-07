@@ -200,7 +200,6 @@ export function WorkflowBuilderScreen({ workflowId, onBack }: WorkflowBuilderScr
       onWorkflowReplaced={({ version, name, description }) =>
         setLoaded((prev) => (prev ? { ...prev, version, name, description } : prev))
       }
-      onClose={onBack}
     />
   );
 }

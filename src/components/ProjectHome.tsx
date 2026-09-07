@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTauriEvent } from '../hooks/useTauriEvent';
 import { Zap, ChevronRight, Settings, AlertTriangle, RotateCw, Check, Compass, GitPullRequest, MessageSquare, Sliders, Terminal } from 'lucide-react';
-import { DiscoverySummary, Feature, FeatureDrift, Repository } from '../types';
+import { DiscoverySummary, Feature, FeatureDrift, ProjectSection, Repository, RestingSection } from '../types';
 import { formatError } from '../lib/errors';
 import { getProposedStrategy, getRepositoriesForProject, saveProjectSettings } from '../lib/project';
 import { bootstrapProject } from '../lib/createProjectWizard';
@@ -35,19 +35,8 @@ import {
     stageBrowserFilesForLaunch,
 } from '../lib/attachments';
 
-/**
- * The strip's five entries, of which only three swap the body below: Ask and
- * Code Review are routes, so choosing either unmounts this component. It sits
- * here rather than in the header because every header entry is global and this
- * surface is project-scoped — and because `lib/headerLayout.ts` measures the
- * header's own labelled nav cluster at 485px against a 1382px threshold, so a
- * fifth entry there would open the 1440 default window icon-only for the first
- * time.
- */
-type ProjectSection = 'pipelines' | 'discovery' | 'ask' | 'terminal';
-
 const ProjectHome = () => {
-    const { navigate } = useNavigation();
+    const { view, navigate } = useNavigation();
     const { state: { currentProjectId, projects, providers }, dispatch: projDispatch } = useProject();
     const { uiDispatch } = useUIState();
     const activeProject = projects.find(p => p.id === currentProjectId)!;
@@ -55,7 +44,24 @@ const ProjectHome = () => {
     const [features, setFeatures] = useState<Feature[]>([]);
     const [driftByFeature, setDriftByFeature] = useState<Record<string, FeatureDrift>>({});
     const [isLoadingFeatures, setIsLoadingFeatures] = useState(true);
-    const [activeTab, setActiveTab] = useState<ProjectSection>('pipelines');
+    // The resting selection is a routed field, not local state: held locally it
+    // reset to 'pipelines' on every remount, so Back out of a discovery landed
+    // on Pipelines instead of the tab the discovery was opened from.
+    //
+    // Terminal is the exception, and stays local. It is a launcher — its panel
+    // navigates to the Terminals view on mount — so it is only ever the
+    // selection for the frames between the click and that navigation, which is
+    // also why leaving Project Home resets it for free. See `RestingSection`.
+    const restingTab: RestingSection = view.kind === 'home' ? view.section ?? 'pipelines' : 'pipelines';
+    const [terminalTab, setTerminalTab] = useState(false);
+    const activeTab: ProjectSection = terminalTab ? 'terminal' : restingTab;
+    const setActiveTab = useCallback(
+        (section: RestingSection) => {
+            setTerminalTab(false);
+            navigate({ kind: 'home', section }, 'replace');
+        },
+        [navigate],
+    );
     const [pipelineFilter, setPipelineFilter] = usePersistedPipelineFilter();
     const [density, setDensity] = usePersistedPref(densityPref, DEFAULT_DENSITY);
     const [activeRepositoryId, setActiveRepositoryId] = useState<string>('');
@@ -69,9 +75,20 @@ const ProjectHome = () => {
     const [discoveries, setDiscoveries] = useState<DiscoverySummary[]>([]);
     const [isLoadingDiscoveries, setIsLoadingDiscoveries] = useState(true);
 
+    // A different project's tabs are not this project's — 'terminal' exists only
+    // for a remote project, and the Discovery list is per-project — so switching
+    // project resets the strip.
+    //
+    // On a *change* only, never on mount. The routed section arrives with the
+    // view, so a mount-time reset would fire immediately after Back restored
+    // `section: 'discovery'` and put the user back on Pipelines: the exact bug
+    // routing the field exists to fix, reintroduced from the other side.
+    const resetForProject = useRef(activeProject.id);
     useEffect(() => {
+        if (resetForProject.current === activeProject.id) return;
+        resetForProject.current = activeProject.id;
         setActiveTab('pipelines');
-    }, [activeProject.id]);
+    }, [activeProject.id, setActiveTab]);
 
     useTauriEvent<{ feature_id: string; status: string }>('feature_status_changed', ({ feature_id, status }) => {
         setFeatures(prev => prev.map(f => f.id === feature_id ? { ...f, status } : f));
@@ -662,6 +679,10 @@ const ProjectHome = () => {
                             // below, the way Discovery and Pipelines do.
                             if (section === 'ask') {
                                 navigate({ kind: 'ask', projectId: activeProject.id });
+                                return;
+                            }
+                            if (section === 'terminal') {
+                                setTerminalTab(true);
                                 return;
                             }
                             setActiveTab(section);

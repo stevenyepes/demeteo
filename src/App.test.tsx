@@ -15,8 +15,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Feature, Provider } from './types';
-import { editorBackTarget, pickNextFeature, pickPreviousFeature } from './App';
-import { pickEscapeAction, type UIStateSlice } from './lib/escapeLadder';
+import { pickNextFeature, pickPreviousFeature } from './App';
+import { hasEscapeOverlay, pickEscapeAction, type UIStateSlice } from './lib/escapeLadder';
 
 const provider: Provider = {
   id: 'prov-1',
@@ -50,6 +50,7 @@ const F = [
 
 function emptyUi(): UIStateSlice {
   return {
+    overlays: [],
     commandPaletteOpen: false,
     docsPanelOpen: false,
     isConnectModalOpen: false,
@@ -109,23 +110,6 @@ describe('pickPreviousFeature', () => {
 
   it('stays put on a single-element list', () => {
     expect(pickPreviousFeature([makeFeature('only', 'only')], 'only')?.id).toBe('only');
-  });
-});
-
-describe('editorBackTarget', () => {
-  it('returns to the feature detail view when a featureId is present', () => {
-    expect(editorBackTarget({ featureId: 'f-1', featureTitle: 'A' }))
-      .toEqual({ kind: 'detail', featureId: 'f-1', featureTitle: 'A' });
-  });
-
-  it('falls back to an empty title when featureTitle is missing', () => {
-    expect(editorBackTarget({ featureId: 'f-1' }))
-      .toEqual({ kind: 'detail', featureId: 'f-1', featureTitle: '' });
-  });
-
-  it('goes home instead of a bogus feature when no featureId is present', () => {
-    expect(editorBackTarget({})).toEqual({ kind: 'home' });
-    expect(editorBackTarget({ featureTitle: 'orphaned title with no id' })).toEqual({ kind: 'home' });
   });
 });
 
@@ -215,5 +199,36 @@ describe('pickEscapeAction', () => {
     'empty-state',
   ] as const)('falls back to navigate-back on the %s view', (kind) => {
     expect(pickEscapeAction(emptyUi(), { kind })).toEqual({ type: 'navigate-back' });
+  });
+});
+
+// Audit F35: every dialog outside `UIState` used to fall through to
+// `navigate-back`, so dismissing one *also* moved the view underneath it.
+describe('pickEscapeAction — registered overlays', () => {
+  it('stands down for a registered overlay instead of navigating', () => {
+    expect(pickEscapeAction({ ...emptyUi(), overlays: ['dlg-1'] }, { kind: 'home' }))
+      .toEqual({ type: 'overlay-owns-dismissal' });
+  });
+
+  it('still navigates back when the registry is empty', () => {
+    expect(pickEscapeAction(emptyUi(), { kind: 'home' }))
+      .toEqual({ type: 'navigate-back' });
+  });
+
+  // The named rungs predate the registry and keep their explicit dispatch, so
+  // a dialog that is both (a `Modal` whose open flag also lives in UIState)
+  // behaves exactly as it did.
+  it('leaves the named rungs above it untouched', () => {
+    expect(
+      pickEscapeAction(
+        { ...emptyUi(), overlays: ['dlg-1'], commandPaletteOpen: true },
+        { kind: 'home' },
+      ),
+    ).toEqual({ type: 'close-command-palette' });
+  });
+
+  it('reports an overlay to hasEscapeOverlay, so a popover knows it is not topmost', () => {
+    expect(hasEscapeOverlay({ ...emptyUi(), overlays: ['dlg-1'] }, { kind: 'home' })).toBe(true);
+    expect(hasEscapeOverlay(emptyUi(), { kind: 'home' })).toBe(false);
   });
 });

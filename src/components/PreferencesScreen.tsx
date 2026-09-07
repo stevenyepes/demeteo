@@ -3,6 +3,7 @@ import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, Rotate
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import MachinesView from './MachinesView';
 import MemoryAgentSettings from './MemoryAgentSettings';
+import { BackButton } from './ui/BackButton';
 import { TabBar } from './ui/TabBar';
 import type { TabDef } from './ui/TabBar';
 import { useNavigation } from '../context';
@@ -24,7 +25,7 @@ type PrefTab = 'machines' | 'providers' | 'defaults' | 'memory' | 'about';
 
 const PreferencesScreen = () => {
   const { navigate } = useNavigation();
-  const onNavigate = (view: 'home' | 'providers') => navigate({ kind: view });
+  const onNavigate = (view: 'providers') => navigate({ kind: view });
   const [activeTab, setActiveTab] = useState<PrefTab>('machines');
 
   // Workspace directory state
@@ -149,18 +150,13 @@ const PreferencesScreen = () => {
         {/* Header */}
         <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
           <div className="flex items-center gap-3">
+            <BackButton />
             <Settings className="w-6 h-6 text-cyan-400" />
             <div>
               <h1 className="text-2xl font-heading font-bold text-white">Preferences</h1>
               <p className="text-sm text-slate-400">Global settings for Demeteo orchestrator</p>
             </div>
           </div>
-          <button
-            onClick={() => onNavigate('home')}
-            className="px-4 py-2 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 transition-colors"
-          >
-            Back to Projects
-          </button>
         </div>
 
         {/* Tab bar */}

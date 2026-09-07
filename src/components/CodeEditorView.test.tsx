@@ -32,19 +32,23 @@ vi.mock('../lib/files', () => ({
   },
 }));
 
+import { NavigationProvider } from '../context';
 import { CodeEditorView } from './CodeEditorView';
 
 function mount(over: Record<string, unknown> = {}) {
+  // The editor's Back control is the shared one, which reads the navigation
+  // stack rather than taking a destination.
   return render(
-    <CodeEditorView
-      machineId="local"
-      worktreePath="/repos/demeteo"
-      branch="feature/f-1"
-      defaultBranch="master"
-      featureTitle="Add a metric strip"
-      onBack={() => {}}
-      {...over}
-    />,
+    <NavigationProvider>
+      <CodeEditorView
+        machineId="local"
+        worktreePath="/repos/demeteo"
+        branch="feature/f-1"
+        defaultBranch="master"
+        featureTitle="Add a metric strip"
+        {...over}
+      />
+    </NavigationProvider>,
   );
 }
 

@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { useOverlay } from '../../hooks/useOverlay';
 import { OverlayPortal } from '../ui/OverlayPortal';
 
 interface TicketOverlayPanelProps {
@@ -17,6 +18,11 @@ interface TicketOverlayPanelProps {
 // itself re-enables pointer events. With no exposed backdrop region left to
 // click, there is no click-to-dismiss — Escape is the only dismiss gesture.
 export function TicketOverlayPanel({ widthPx, onClose, label, children }: TicketOverlayPanelProps) {
+  // This component exists only in the overlaid layouts — three-up renders the
+  // same pane inline, where it is a column and not an overlay — so registering
+  // here says "an overlay is open" exactly when one is.
+  useOverlay();
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);

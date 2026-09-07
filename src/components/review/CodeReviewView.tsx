@@ -17,6 +17,7 @@ import {
   type PullRequestSummary,
 } from '../../lib/pullRequests';
 import type { ReviewLaunchParams } from '../../lib/reviewLaunch';
+import { BackButton } from '../ui/BackButton';
 
 type ListState =
   | { status: 'loading' }
@@ -151,11 +152,14 @@ export function CodeReviewView(): React.ReactElement {
   return (
     <div className="flex-1 min-w-0 overflow-y-auto p-8">
       <div className="max-w-5xl mx-auto w-full space-y-6">
-        <div>
-          <h1 className="font-heading text-2xl font-bold text-white tracking-tight">Code Review</h1>
-          <p className="mt-1 text-sm text-slate-400">
-            Open pull requests{projectName ? ` in ${projectName}` : ''}.
-          </p>
+        <div className="flex items-start gap-3">
+          <BackButton className="mt-1" />
+          <div>
+            <h1 className="font-heading text-2xl font-bold text-white tracking-tight">Code Review</h1>
+            <p className="mt-1 text-sm text-slate-400">
+              Open pull requests{projectName ? ` in ${projectName}` : ''}.
+            </p>
+          </div>
         </div>
 
         {state.status === 'loading' && <PullRequestListSkeleton />}

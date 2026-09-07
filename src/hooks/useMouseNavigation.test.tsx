@@ -15,10 +15,13 @@ import { describe, expect, it } from 'vitest';
 
 import { MouseNavigationBridge, useMouseNavigation } from './useMouseNavigation';
 import { NavigationProvider, useNavigation } from '../context/NavigationContext';
+import { UIStateProvider } from '../context/UIStateContext';
+import { useOverlay } from './useOverlay';
 
 type NavView = { kind: 'home' } | { kind: 'settings' } | { kind: 'providers' };
 
 interface NavProbe {
+  view: { kind: string };
   navigate: (view: NavView) => void;
   goBack: () => void;
   goForward: () => void;
@@ -37,9 +40,11 @@ function mountProbe() {
   const holder: { current: NavProbe | null } = { current: null };
 
   const view = render(
-    <NavigationProvider>
-      <Probe holder={holder} />
-    </NavigationProvider>,
+    <UIStateProvider>
+      <NavigationProvider>
+        <Probe holder={holder} />
+      </NavigationProvider>
+    </UIStateProvider>,
   );
 
   const probe = (): NavProbe => {
@@ -112,9 +117,11 @@ describe('useMouseNavigation', () => {
 describe('MouseNavigationBridge', () => {
   it('self-mounts, renders no UI, and survives a dispatch', () => {
     const { container } = render(
-      <NavigationProvider>
-        <MouseNavigationBridge />
-      </NavigationProvider>,
+      <UIStateProvider>
+        <NavigationProvider>
+          <MouseNavigationBridge />
+        </NavigationProvider>
+      </UIStateProvider>,
     );
 
     expect(container).toBeEmptyDOMElement();
@@ -122,5 +129,60 @@ describe('MouseNavigationBridge', () => {
     dispatchMouseDown(3);
 
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+// `lib/shortcuts.ts` has claimed this since the entry was written; nothing
+// implemented it, so the press went past an open dialog to the view beneath —
+// the mouse half of audit F35.
+describe('an overlay is open', () => {
+  function OverlayProbe({ holder }: { holder: { current: NavProbe | null } }): ReactElement {
+    useOverlay();
+    return <Probe holder={holder} />;
+  }
+
+  it('suppresses back and forward, and still swallows the webview default', () => {
+    const holder: { current: NavProbe | null } = { current: null };
+    render(
+      <UIStateProvider>
+        <NavigationProvider>
+          <OverlayProbe holder={holder} />
+        </NavigationProvider>
+      </UIStateProvider>,
+    );
+    const probe = (): NavProbe => {
+      if (!holder.current) throw new Error('probe did not mount');
+      return holder.current;
+    };
+
+    act(() => probe().navigate({ kind: 'home' }));
+    act(() => probe().navigate({ kind: 'settings' }));
+    expect(probe().canGoBack).toBe(true);
+
+    // The view is what discriminates. `canGoBack` does not: with two entries
+    // banked it stays true whether or not the press was honoured, so a test
+    // written against it passes against the unguarded hook too.
+    expect(dispatchMouseDown(3).prevented).toBe(true);
+    expect(probe().view.kind).toBe('settings');
+
+    expect(dispatchMouseDown(4).prevented).toBe(true);
+    expect(probe().view.kind).toBe('settings');
+  });
+});
+
+// The bridge sat directly under `NavigationProvider` for as long as it existed.
+// Reading the overlay registry gave it a second provider to be inside, and
+// nothing in this suite noticed — every case here mounts its own providers, so
+// the app booted with the bridge throwing on first render and no mouse
+// navigation at all, and only running it showed that.
+describe('what the bridge must be mounted inside', () => {
+  it('needs the UI-state provider as well as the navigation one', () => {
+    expect(() =>
+      render(
+        <NavigationProvider>
+          <MouseNavigationBridge />
+        </NavigationProvider>,
+      ),
+    ).toThrow(/UIStateProvider/);
   });
 });

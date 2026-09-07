@@ -35,11 +35,14 @@ function detailView(featureId: string, gateStepExecutionId: string | null = null
   };
 }
 
-function discoveryView(discoveryId: string, discoveryTitle: string): AppView {
+function discoveryView(
+  discoveryId: string,
+  discoveryTitle: string,
+): Extract<AppView, { kind: 'discovery' }> {
   return { kind: 'discovery', discoveryId, discoveryTitle };
 }
 
-function askView(projectId: string): AppView {
+function askView(projectId: string): Extract<AppView, { kind: 'ask' }> {
   return { kind: 'ask', projectId };
 }
 
@@ -129,9 +132,6 @@ describe('NAVIGATE (push)', () => {
     expect(otherTitle.backStack).toHaveLength(2);
   });
 
-  // The Ask arm carries one field, the project id — the thread list lives
-  // inside the workspace itself rather than on the view, so there is no
-  // second field to drop.
   it('collapses an identical ask view but not a different project', () => {
     const first = askView('proj-1');
     const a = navigationReducer(home, { type: 'NAVIGATE', view: first });
@@ -144,6 +144,85 @@ describe('NAVIGATE (push)', () => {
       view: askView('proj-2'),
     });
     expect(otherProject.backStack).toHaveLength(2);
+  });
+
+  // Home's section is what Back returns to. Drop it from `shallowEqualView` and
+  // every tab switch collapses into a no-op: the strip stops responding, and
+  // Back out of a discovery lands on Pipelines again.
+  it('tells two home sections apart, and an absent one from pipelines', () => {
+    const a = navigationReducer(initial({ kind: 'settings' }), {
+      type: 'NAVIGATE',
+      view: { kind: 'home', section: 'discovery' },
+    });
+
+    const same = navigationReducer(a, {
+      type: 'NAVIGATE',
+      view: { kind: 'home', section: 'discovery' },
+    });
+    expect(same).toBe(a);
+
+    const other = navigationReducer(a, {
+      type: 'NAVIGATE',
+      view: { kind: 'home', section: 'pipelines' },
+    });
+    expect(other.backStack).toHaveLength(2);
+
+    // Absent is not 'pipelines'. ProjectHome renders them the same, but only
+    // the absent one has yet to be chosen, and a collapse here would drop the
+    // very first tab click of a session.
+    const unset = navigationReducer(
+      navigationReducer(initial({ kind: 'settings' }), {
+        type: 'NAVIGATE',
+        view: { kind: 'home' },
+      }),
+      { type: 'NAVIGATE', view: { kind: 'home', section: 'pipelines' } },
+    );
+    expect(unset.backStack).toHaveLength(2);
+  });
+
+  // The same three-state comparison `selectedStepId` needs below: absent means
+  // "seed one", null means "the user closed it". Collapse them and closing the
+  // ticket inspector either does nothing or can never be undone.
+  it("tells a discovery's ticket selection apart, absent from null included", () => {
+    const base = discoveryView('dsc-1', 'Runner serves more than one client');
+    const a = navigationReducer(home, { type: 'NAVIGATE', view: base });
+
+    const selected = navigationReducer(a, {
+      type: 'NAVIGATE',
+      view: { ...base, selectedTicketId: 't-1' },
+    });
+    expect(selected.backStack).toHaveLength(2);
+
+    const cleared = navigationReducer(a, {
+      type: 'NAVIGATE',
+      view: { ...base, selectedTicketId: null },
+    });
+    expect(cleared.backStack).toHaveLength(2);
+
+    const same = navigationReducer(selected, {
+      type: 'NAVIGATE',
+      view: { ...base, selectedTicketId: 't-1' },
+    });
+    expect(same).toBe(selected);
+  });
+
+  it("tells an ask workspace's open thread apart", () => {
+    const a = navigationReducer(home, {
+      type: 'NAVIGATE',
+      view: { ...askView('proj-1'), threadId: 'th-1' },
+    });
+
+    const same = navigationReducer(a, {
+      type: 'NAVIGATE',
+      view: { ...askView('proj-1'), threadId: 'th-1' },
+    });
+    expect(same).toBe(a);
+
+    const other = navigationReducer(a, {
+      type: 'NAVIGATE',
+      view: { ...askView('proj-1'), threadId: 'th-2' },
+    });
+    expect(other.backStack).toHaveLength(2);
   });
 });
 

@@ -10,6 +10,13 @@ import { useTerminalPanel } from '../hooks/useTerminalPanel';
 import { MIN_PLAUSIBLE_COLS, setLastTerminalSize } from '../lib/terminalViewport';
 import { resizeObserverStubs, setFitGeometry } from '../test/setup';
 import { TerminalsView } from './TerminalsView';
+import { NavigationProvider } from '../context';
+
+// The Terminals view carries the shared Back control, which reads the
+// navigation stack.
+function renderWithNav(ui: Parameters<typeof render>[0]) {
+  return render(ui, { wrapper: NavigationProvider });
+}
 
 let nextSessionId = 0;
 
@@ -53,7 +60,7 @@ function mount(active = true): Harness {
       </TerminalPanelProvider>
     </ProjectProvider>
   );
-  const view = render(tree(active));
+  const view = renderWithNav(tree(active));
   return {
     get panel() {
       if (!ref.current) throw new Error('panel did not mount');

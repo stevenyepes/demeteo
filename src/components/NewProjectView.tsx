@@ -8,6 +8,7 @@ import { listMachines, setMachineSecret, testMachineConnection } from '../lib/ma
 import { fetchProviderRepos } from '../lib/providers';
 import { bootstrapProject, createProject } from '../lib/createProjectWizard';
 import { useNavigation, useProject } from '../context';
+import { BackButton } from './ui/BackButton';
 
 interface AvailableRepo {
     path: string;
@@ -368,7 +369,10 @@ const NewProjectView = () => {
                 <div className="space-y-6">
                     <div>
                         <div className="flex items-center justify-between gap-4 mb-2">
-                            <h1 className="text-3xl font-heading font-bold text-white">Project Bootstrap</h1>
+                            <div className="flex items-center gap-3 min-w-0">
+                                <BackButton />
+                                <h1 className="text-3xl font-heading font-bold text-white">Project Bootstrap</h1>
+                            </div>
                             <button
                                 type="button"
                                 onClick={() => navigate({ kind: 'create-project' })}
