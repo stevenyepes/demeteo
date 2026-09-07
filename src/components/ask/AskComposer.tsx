@@ -36,6 +36,10 @@ interface AskComposerProps {
    * new value rather than pushing updates into an already-mounted composer.
    */
   initialValue?: string;
+  /** The thread is closed, so `ask_send_turn` would refuse this turn. Said
+   *  here rather than let the backend say it: the refusal is a state the user
+   *  chose and can undo from the header, not an error about their question. */
+  closed?: boolean;
 }
 
 /**
@@ -62,6 +66,7 @@ export function AskComposer({
   end,
   onSent,
   initialValue,
+  closed = false,
 }: AskComposerProps): React.ReactElement {
   const [value, setValue] = useState(initialValue ?? '');
   const [sending, setSending] = useState(false);
@@ -71,7 +76,7 @@ export function AskComposer({
     if (phase !== null) setSending(false);
   }, [phase]);
 
-  const blocked = phase !== null || sending;
+  const blocked = phase !== null || sending || closed;
 
   async function send() {
     const text = value.trim();
@@ -105,7 +110,13 @@ export function AskComposer({
             event.preventDefault();
             void send();
           }}
-          placeholder={blocked ? 'A turn is running — this queues behind it…' : 'Ask about the codebase…'}
+          placeholder={
+            closed
+              ? 'This thread is closed — reopen it to ask again.'
+              : blocked
+                ? 'A turn is running — this queues behind it…'
+                : 'Ask about the codebase…'
+          }
           className="chat-input disabled:opacity-50"
         />
         <button

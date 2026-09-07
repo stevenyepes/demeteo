@@ -1,9 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { listen } from '@tauri-apps/api/event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AskWorkspaceHeader } from './AskWorkspaceHeader';
-import { listAskThreads } from '../../lib/ask';
 import type { AskThread } from '../../types';
 import { NavigationProvider } from '../../context';
 
@@ -12,12 +10,6 @@ import { NavigationProvider } from '../../context';
 function renderWithNav(ui: Parameters<typeof render>[0]) {
   return render(ui, { wrapper: NavigationProvider });
 }
-
-
-vi.mock('../../lib/ask', () => ({
-  listAskThreads: vi.fn(),
-  EVENT_ASK_TURN_STATUS: 'ask_turn_status',
-}));
 
 afterEach(cleanup);
 
@@ -49,22 +41,23 @@ function thread(overrides: Partial<AskThread> = {}): AskThread {
   };
 }
 
-beforeEach(() => {
-  vi.mocked(listAskThreads).mockResolvedValue([]);
-  vi.mocked(listen).mockImplementation(async () => () => {});
-});
+function renderHeader(overrides: Partial<Parameters<typeof AskWorkspaceHeader>[0]> = {}) {
+  const props = {
+    thread: thread(),
+    onNewThread: vi.fn(),
+    onOpenSettings: vi.fn(),
+    onToggleOpen: vi.fn(),
+    onDelete: vi.fn(),
+    busy: false,
+    ...overrides,
+  };
+  renderWithNav(<AskWorkspaceHeader {...props} />);
+  return props;
+}
 
 describe('AskWorkspaceHeader', () => {
   it("renders title, kind chip, and Turns/Spend/Tokens straight off the thread row", () => {
-    renderWithNav(
-      <AskWorkspaceHeader
-        thread={thread()}
-        projectId="p1"
-        onSelectThread={vi.fn()}
-        onNewThread={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    renderHeader();
 
     expect(screen.getByText('How a Step reaches the feature branch')).toBeInTheDocument();
     expect(screen.getByText('claude-code')).toBeInTheDocument();
@@ -74,38 +67,34 @@ describe('AskWorkspaceHeader', () => {
     expect(metric('Tokens')).toHaveTextContent('48.2k');
   });
 
-  it('opens AskThreadSwitcher from the Threads trigger', async () => {
-    vi.mocked(listAskThreads).mockResolvedValue([thread()]);
-
-    renderWithNav(
-      <AskWorkspaceHeader
-        thread={thread()}
-        projectId="p1"
-        onSelectThread={vi.fn()}
-        onNewThread={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />,
-    );
-
-    fireEvent.click(screen.getByTestId('ask-thread-switcher-trigger'));
-
-    expect(await screen.findByTestId('ask-thread-switcher-menu')).toBeInTheDocument();
-  });
-
   it('calls onNewThread when New thread is clicked', () => {
-    const onNewThread = vi.fn();
-    renderWithNav(
-      <AskWorkspaceHeader
-        thread={thread()}
-        projectId="p1"
-        onSelectThread={vi.fn()}
-        onNewThread={onNewThread}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    const { onNewThread } = renderHeader();
 
     fireEvent.click(screen.getByTestId('ask-new-thread'));
 
     expect(onNewThread).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Close on an open thread and Reopen on a closed one', () => {
+    const { onToggleOpen } = renderHeader();
+    expect(screen.getByTestId('ask-toggle-open')).toHaveTextContent('Close thread');
+    fireEvent.click(screen.getByTestId('ask-toggle-open'));
+    expect(onToggleOpen).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    renderHeader({ thread: thread({ status: 'closed' }) });
+    expect(screen.getByTestId('ask-toggle-open')).toHaveTextContent('Reopen thread');
+    expect(screen.getByText('Closed')).toBeInTheDocument();
+  });
+
+  it('asks the caller to delete, and disables both while one is in flight', () => {
+    const { onDelete } = renderHeader();
+    fireEvent.click(screen.getByTestId('ask-delete-thread'));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    renderHeader({ busy: true });
+    expect(screen.getByTestId('ask-delete-thread')).toBeDisabled();
+    expect(screen.getByTestId('ask-toggle-open')).toBeDisabled();
   });
 });

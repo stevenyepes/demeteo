@@ -548,6 +548,8 @@ pub fn run() {
             commands::ask::ask_running,
             commands::ask::ask_rename,
             commands::ask::ask_delete,
+            commands::ask::ask_close,
+            commands::ask::ask_reopen,
             commands::ask::ask_update_settings,
             commands::ask::ask_send_turn,
             commands::ask::ask_pin_canvas,

@@ -178,6 +178,7 @@ export function AskChatColumn({
           end={end}
           onSent={onSent}
           initialValue={seed?.text}
+          closed={thread.status === 'closed'}
         />
       )}
     </section>

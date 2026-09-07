@@ -401,13 +401,37 @@ async fn update_settings_changes_model_effort_and_network_only() {
     assert_eq!(stored.agent_kind, thread.agent_kind);
 }
 
+/// Closing is what makes the composer's refusal true: `turn::send` reads the
+/// stored status, so the round trip has to leave it where each call claims.
+#[tokio::test]
+async fn closing_refuses_the_next_turn_and_reopening_takes_it_back() {
+    let (ctx, project_id) = fixture("close", "local", None);
+    let thread = create(&ctx, opening(&project_id, "quick question", None)).unwrap();
+
+    let closed = close(&ctx, &thread.id).await.expect("the thread closes");
+    assert_eq!(closed.status, AskStatus::Closed);
+    assert_eq!(
+        ctx.ask.get(&thread.id).unwrap().unwrap().status,
+        AskStatus::Closed
+    );
+
+    let refusal = turn::send(&ctx, &thread.id, "one more thing", |_, _| {})
+        .await
+        .expect_err("a closed thread takes no turn");
+    assert!(refusal.contains("closed"), "{refusal}");
+
+    let reopened = reopen(&ctx, &thread.id).expect("the thread reopens");
+    assert_eq!(reopened.status, AskStatus::Open);
+    assert!(reopened.updated_at >= closed.updated_at);
+}
+
 /// Deleting a thread makes a later load fail.
 #[tokio::test]
 async fn deleting_a_thread_makes_it_unloadable() {
     let (ctx, project_id) = fixture("delete", "local", None);
     let thread = create(&ctx, opening(&project_id, "quick question", None)).unwrap();
 
-    delete(&ctx, &thread.id).expect("the thread deletes");
+    delete(&ctx, &thread.id).await.expect("the thread deletes");
 
     assert!(load(&ctx, &thread.id).is_err());
 }
@@ -448,7 +472,7 @@ async fn deleting_a_thread_drops_the_canvases_it_pinned() {
     assert_eq!(pinned_paths(&ctx), vec![reference.clone()]);
     assert!(std::path::Path::new(&reference).exists());
 
-    delete(&ctx, &thread.id).expect("the thread deletes");
+    delete(&ctx, &thread.id).await.expect("the thread deletes");
 
     assert_eq!(pinned_paths(&ctx), Vec::<String>::new());
     assert!(!std::path::Path::new(&reference).exists());
@@ -490,7 +514,9 @@ async fn a_pin_that_cannot_be_dropped_aborts_the_thread_delete() {
     let thread = create(&ctx, opening(&project_id, "quick question", None)).unwrap();
     ctx.artifact_store = Arc::new(FailingStore);
 
-    let error = delete(&ctx, &thread.id).expect_err("the delete refuses to strand the pins");
+    let error = delete(&ctx, &thread.id)
+        .await
+        .expect_err("the delete refuses to strand the pins");
 
     assert!(error.contains("held open"), "{error}");
     assert!(
@@ -499,7 +525,7 @@ async fn a_pin_that_cannot_be_dropped_aborts_the_thread_delete() {
     );
 }
 
-/// Load, rename and delete all reject a thread nothing created.
+/// Load, rename, delete, close and reopen all reject a thread nothing created.
 #[tokio::test]
 async fn missing_threads_are_rejected_with_a_clear_error() {
     let (ctx, _project_id) = fixture("missing", "local", None);
@@ -511,8 +537,18 @@ async fn missing_threads_are_rejected_with_a_clear_error() {
     let rename_err = rename(&ctx, &ghost, "new name").expect_err("rename rejects a missing thread");
     assert!(rename_err.contains("no-such-thread"), "{rename_err}");
 
-    let delete_err = delete(&ctx, &ghost).expect_err("delete rejects a missing thread");
+    let delete_err = delete(&ctx, &ghost)
+        .await
+        .expect_err("delete rejects a missing thread");
     assert!(delete_err.contains("no-such-thread"), "{delete_err}");
+
+    let close_err = close(&ctx, &ghost)
+        .await
+        .expect_err("close rejects a missing thread");
+    assert!(close_err.contains("no-such-thread"), "{close_err}");
+
+    let reopen_err = reopen(&ctx, &ghost).expect_err("reopen rejects a missing thread");
+    assert!(reopen_err.contains("no-such-thread"), "{reopen_err}");
 }
 
 /// What a surface that mounted mid-turn reads: the claim, and only for as

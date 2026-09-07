@@ -27,11 +27,12 @@ interface AskSectionProps {
  *
  * The tab used to be a launcher — choosing it navigated straight into
  * whichever thread happened to be open, and the only way to reach any other
- * was the "Threads ▾" dropdown inside the workspace. That dropdown is a
- * switcher, not a list: it has no filter, no spend, and it is behind the very
- * view you are trying to leave, so a project with a dozen threads had no
- * surface that showed them. `AskThreadSwitcher` stays for what it is good at,
- * which is switching without leaving.
+ * was a "Threads ▾" dropdown inside the workspace. That dropdown was a
+ * switcher, not a list: no filter, no spend, and behind the very view you
+ * were trying to leave, so a project with a dozen threads had no surface that
+ * showed them. This list is that surface, and the dropdown is gone rather
+ * than kept beside it — two ways to reach a thread, one of them worse, is the
+ * shape that put the tab in the state it was in.
  *
  * The thread list is fetched here rather than by Project Home — this component
  * mounts only when the tab is chosen, so a project whose Ask tab is never
