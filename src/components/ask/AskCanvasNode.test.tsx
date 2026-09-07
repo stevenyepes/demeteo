@@ -2,9 +2,15 @@
  * The Ask Canvas node card — `data-state` precedence and the click contract.
  *
  * The table under test is the three-way `NodePathState`, not a boolean: a
- * node that never named a file is a normal, clickable card, and only a node
- * whose named file is not there is dimmed. Collapsing those two rendered
- * every `needs_human` node — which by definition names a person — as a ghost.
+ * node that never named a file is a normal card, and only a node whose named
+ * file is not there is dimmed. Collapsing those two rendered every
+ * `needs_human` node — which by definition names a person — as a ghost.
+ *
+ * `data-path-state` and `data-state` are asserted separately on purpose. They
+ * were one attribute, and the fold made a missing path swallow the selection
+ * ring; worse, it was read as licence to make the card inert, which left a
+ * canvas whose model wrote module names for paths with a whole unclickable
+ * lane.
  */
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -36,7 +42,7 @@ function card() {
 }
 
 describe('AskCanvasNode', () => {
-  it('renders a distinct data-state for resting, selected, cited, and unresolved', () => {
+  it('renders a distinct data-state for resting, selected and cited, with path state beside it', () => {
     const onActivate = vi.fn();
     const { rerender } = render(
       <AskCanvasNode
@@ -88,7 +94,8 @@ describe('AskCanvasNode', () => {
         onActivate={onActivate}
       />,
     );
-    expect(card()).toHaveAttribute('data-state', 'unresolved');
+    expect(card()).toHaveAttribute('data-state', 'resting');
+    expect(card()).toHaveAttribute('data-path-state', 'missing');
   });
 
   it('selection wins over citation when both are true', () => {
@@ -106,7 +113,7 @@ describe('AskCanvasNode', () => {
     expect(card()).toHaveAttribute('data-state', 'selected');
   });
 
-  it('a missing path wins over selected and cited', () => {
+  it('a missing path dims the card without hiding that it is selected', () => {
     render(
       <AskCanvasNode
         node={VERIFIED_FALSE_NODE}
@@ -118,7 +125,9 @@ describe('AskCanvasNode', () => {
         onActivate={vi.fn()}
       />,
     );
-    expect(card()).toHaveAttribute('data-state', 'unresolved');
+    expect(card()).toHaveAttribute('data-state', 'selected');
+    expect(card()).toHaveAttribute('data-path-state', 'missing');
+    expect(card().className).toContain('border-dashed');
   });
 
   it('calls onActivate with the node id when a resolved node is clicked', () => {
@@ -139,7 +148,7 @@ describe('AskCanvasNode', () => {
     expect(onActivate).toHaveBeenCalledWith('n1');
   });
 
-  it('a node that named no file is a normal, clickable card with no path row', () => {
+  it('a node that named no file is a normal card with no path row', () => {
     const onActivate = vi.fn();
     render(
       <AskCanvasNode
@@ -158,7 +167,7 @@ describe('AskCanvasNode', () => {
     expect(onActivate).toHaveBeenCalledWith('n2');
   });
 
-  it('does not call onActivate when a node whose file is missing is clicked', () => {
+  it('activates a node whose named file is missing — inspecting it needs no file', () => {
     const onActivate = vi.fn();
     render(
       <AskCanvasNode
@@ -172,7 +181,7 @@ describe('AskCanvasNode', () => {
       />,
     );
     fireEvent.click(card());
-    expect(onActivate).not.toHaveBeenCalled();
+    expect(onActivate).toHaveBeenCalledWith('n3');
   });
 
   it('shows the tail of a path, keeping the whole of it in the title', () => {

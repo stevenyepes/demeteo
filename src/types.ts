@@ -84,8 +84,8 @@ export interface WorkflowSummary {
 }
 
 /**
- * Project Home's tab strip, of which only three swap the body below: Ask and
- * Code Review are routes, so choosing either unmounts that component. The strip
+ * Project Home's tab strip. Three tabs swap the body below; Terminal is a
+ * route, so choosing it unmounts this component. The strip
  * sits inside Project Home rather than in the header because every header entry
  * is global and this surface is project-scoped — and because
  * `lib/headerLayout.ts` measures the header's own labelled nav cluster at 485px
@@ -100,14 +100,18 @@ export type ProjectSection = 'pipelines' | 'discovery' | 'ask' | 'terminal';
 /**
  * The sections that are a *place to be*, and so the only ones the route holds.
  *
- * Ask and Terminal are launchers: choosing either navigates away, to `ask` and
- * to `terminals` respectively. Recording one as the section Back returns to
- * would make Back unusable — it would land on the launcher, which would launch
- * again, and the user could never get out of the view they were trying to
- * leave. Encoded rather than described because the trap is invisible: putting
- * `'terminal'` here type-checks and only fails as a Back that does nothing.
+ * Terminal is a launcher: choosing it navigates away, to `terminals`.
+ * Recording it as the section Back returns to would make Back unusable — it
+ * would land on the launcher, which would launch again, and the user could
+ * never get out of the view they were trying to leave. Encoded rather than
+ * described because the trap is invisible: putting `'terminal'` here
+ * type-checks and only fails as a Back that does nothing.
+ *
+ * Ask was one of those, and is no longer: the tab lists a project's threads
+ * (`AskSection.tsx`) instead of opening whichever one happened to be first, so
+ * it is somewhere to be and Back from a thread returns to it.
  */
-export type RestingSection = Extract<ProjectSection, 'pipelines' | 'discovery'>;
+export type RestingSection = Extract<ProjectSection, 'pipelines' | 'discovery' | 'ask'>;
 
 export type AppView =
   | { kind: 'empty-state' }
@@ -169,11 +173,12 @@ export type AppView =
       discoveryTitle: string;
       selectedTicketId?: string | null;
     }
-  /** One project's Ask workspace. The thread list, transcript and canvas live
-   *  inside `AskThreadView` itself rather than a ProjectHome card grid, so the
-   *  project is what identifies the workspace; `threadId` names which thread is
-   *  open within it, so Back returns to the thread the user was reading rather
-   *  than to whichever one seeds first. Absent = seed from the thread list. */
+  /** One project's Ask workspace: the transcript and the canvas for one
+   *  thread. The project is what identifies the workspace, and `threadId`
+   *  names which thread is open within it, so Back returns to the thread the
+   *  user was reading rather than to whichever one seeds first. Absent = seed
+   *  from the thread list, which is what a deep link with no thread does;
+   *  Project Home's Ask tab (`AskSection.tsx`) always names one. */
   | { kind: 'ask'; projectId: string; threadId?: string | null }
   | { kind: 'providers' }
   | { kind: 'settings' }
