@@ -16,8 +16,10 @@ import type { TicketView } from '../types';
 export const NODE_W = 280;
 /** Fixed rather than measured: the edges anchor to the node's bottom edge, and
  *  a curve drawn from a height the browser has not laid out yet points at
- *  nothing. Nodes clamp their content to it. */
-export const NODE_H = 96;
+ *  nothing. Nodes clamp their content to it — sized for the two-line title
+ *  `TicketGraphNode` clamps to, plus its lane chip, at the line heights that
+ *  card pins. */
+export const NODE_H = 104;
 const COL_GAP = 20;
 const ROW_GAP = 60;
 const PAD = 16;

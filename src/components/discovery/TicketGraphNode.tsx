@@ -13,6 +13,17 @@ import { Chip } from '../ui/Chip';
  * once a prerequisite's PR merged, a lock while it has not. The tile carries
  * the verdict so an agent-built plan can be read for what is done first, and
  * the tint only agrees with it.
+
+ *
+ * The card is a column, and its bottom row is the one that must survive: the
+ * lane chip is what the graph is scanned for, and it used to be whatever got
+ * pushed out of a fixed-height tile by a title long enough to wrap. Growing
+ * the tile only moves the threshold, so the layout carries it instead — the
+ * title's half takes the leftover (`flex-1 min-h-0`) and clips, the chip row
+ * never shrinks, and the note ellipsizes on the chip's own line rather than
+ * wrapping under it. Line heights are pinned rather than left at `normal`
+ * because the three OSes resolve that from different font metrics, which is
+ * a per-platform threshold no gate here can see.
  */
 const LANE_ICON: Record<TicketLane, LucideIcon> = {
   landed: Check,
@@ -65,14 +76,18 @@ export function TicketGraphNode({
       data-ticket={view.ticket.id}
       aria-pressed={selected}
       onClick={onSelect}
+      // Both halves of what the card had to clip to fit: the inspector shows
+      // them in full, and until it is open a hover is the only way back to
+      // them.
+      title={note ? `${view.ticket.title}\n${note}` : view.ticket.title}
       // The one legitimate inline style here: a computed coordinate is the
       // datum, and no utility can express "wherever this plan's shape put it".
       style={{ left: x, top: y, width: NODE_W, height: NODE_H }}
-      className={`absolute overflow-hidden rounded-xl border bg-slate-900/70 px-3.5 py-2.5 text-left shadow-[0_10px_15px_-3px_rgba(0,0,0,0.35)] backdrop-blur-[4px] transition-colors ${
+      className={`absolute flex flex-col overflow-hidden rounded-xl border bg-slate-900/70 px-3.5 py-2.5 text-left shadow-[0_10px_15px_-3px_rgba(0,0,0,0.35)] backdrop-blur-[4px] transition-colors ${
         selected ? SELECTED : TONE_BORDER[tone]
       } ${dropped ? 'border-dashed opacity-50' : ''}`}
     >
-      <div className="flex items-start gap-2.5">
+      <div className="flex min-h-0 flex-1 items-start gap-2.5">
         <span
           aria-hidden="true"
           className={`flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg border ${TONE_CHIP[tone]}`}
@@ -83,11 +98,11 @@ export function TicketGraphNode({
           />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block font-mono text-[9px] tracking-widest text-slate-500">
+          <span className="block font-mono text-[9px] leading-tight tracking-widest text-slate-500">
             {ticketLabel(view.ticket.seq)}
           </span>
           <span
-            className={`line-clamp-2 block text-[13px] font-medium ${
+            className={`line-clamp-2 block text-[13px] leading-snug font-medium ${
               dropped
                 ? 'text-slate-500 line-through'
                 : lane === 'landed'
@@ -100,11 +115,13 @@ export function TicketGraphNode({
         </span>
       </div>
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-10">
+      <div className="mt-2 flex shrink-0 items-center gap-1.5 pl-10">
         <Chip size="sm" tone={tone}>
           {stateLabel(view)}
         </Chip>
-        {note && <span className="truncate font-mono text-[9px] text-slate-500">{note}</span>}
+        {note && (
+          <span className="min-w-0 truncate font-mono text-[9px] text-slate-500">{note}</span>
+        )}
       </div>
     </button>
   );

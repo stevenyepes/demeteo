@@ -1,12 +1,12 @@
 /**
- * The manual 'Fit' button already covers the zoom math (`ticketGraphLayout.test.ts`
- * pins the layout it divides into). What's untested is the automatic half: a
- * panel resize should reach the same `fit()` with no click, the way
- * `useDiscoveryColumnLayout` reaches its layout decision from a triggered
- * `ResizeObserverStub` tick rather than `entry.contentRect`, which jsdom never
- * fills in.
+ * The zoom arithmetic is `lib/canvasZoom.test.ts`; what needs a DOM is which
+ * gesture reaches it and which one it must not undo. A panel resize should
+ * reach a fit with no click — the way `useDiscoveryColumnLayout` reaches its
+ * layout decision from a triggered `ResizeObserverStub` tick rather than
+ * `entry.contentRect`, which jsdom never fills in — and it must stop doing
+ * that once the operator has zoomed themselves.
  */
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { indexTickets } from '../../lib/ticketPresentation';
@@ -112,5 +112,86 @@ describe('TicketGraph auto-fit on resize', () => {
     act(() => observerFor(viewport).trigger());
 
     expect(scaleOf(container)).not.toBe('scale(1)');
+  });
+});
+
+describe('TicketGraph gestures', () => {
+  function mount() {
+    const view = render(
+      <TicketGraph
+        tickets={TICKETS}
+        index={indexTickets(TICKETS)}
+        selectedId={null}
+        onSelect={() => {}}
+      />,
+    );
+    const pane = screen.getByTestId('ticket-graph').firstElementChild as HTMLElement;
+    Object.defineProperty(pane, 'clientWidth', { configurable: true, value: 400 });
+    Object.defineProperty(pane, 'clientHeight', { configurable: true, value: 300 });
+    return { ...view, pane };
+  }
+
+  /**
+   * The bug the auto-fit guard exists for, and the reason the +/− buttons read
+   * as dead: zooming past the pane raises the scrollbars, a scrollbar shrinks
+   * the pane's content box, the observer ticks, and an unguarded refit puts the
+   * zoom back within the frame. Nothing in the DOM says a button was pressed —
+   * it simply does not work.
+   */
+  it('does not undo the operator zoom on the next pane resize', () => {
+    const { container, pane } = mount();
+
+    act(() => observerFor(pane).trigger());
+    const fitted = scaleOf(container);
+
+    fireEvent.click(screen.getByLabelText('Zoom in'));
+    const zoomed = scaleOf(container);
+    expect(zoomed).not.toBe(fitted);
+
+    Object.defineProperty(pane, 'clientWidth', { configurable: true, value: 385 });
+    act(() => observerFor(pane).trigger());
+
+    expect(scaleOf(container)).toBe(zoomed);
+  });
+
+  it('re-arms the framing when Fit is pressed', () => {
+    const { container, pane } = mount();
+
+    fireEvent.click(screen.getByLabelText('Zoom in'));
+    fireEvent.click(screen.getByLabelText('Fit to view'));
+    const fitted = scaleOf(container);
+
+    act(() => observerFor(pane).trigger());
+    expect(scaleOf(container)).toBe(fitted);
+  });
+
+  it('zooms on the wheel', () => {
+    const { container, pane } = mount();
+    const before = scaleOf(container);
+
+    fireEvent.wheel(pane, { deltaY: -240, clientX: 200, clientY: 150 });
+
+    expect(scaleOf(container)).not.toBe(before);
+    expect(screen.getByLabelText('Reset zoom to 100%')).not.toHaveTextContent('100%');
+  });
+
+  // A card is a button, so a drag that starts on one is someone missing a
+  // click, not someone panning — pan it and the click never lands.
+  it('pans from the background and not from a card', () => {
+    const { pane } = mount();
+
+    fireEvent.pointerDown(pane, { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+    expect(pane).toHaveClass('cursor-grabbing');
+
+    fireEvent.pointerUp(pane, { pointerId: 1 });
+    expect(pane).toHaveClass('cursor-grab');
+
+    fireEvent.pointerDown(screen.getAllByTestId('ticket-node')[0], {
+      pointerId: 2,
+      button: 0,
+      clientX: 10,
+      clientY: 10,
+    });
+    expect(pane).toHaveClass('cursor-grab');
   });
 });
