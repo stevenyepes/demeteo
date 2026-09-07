@@ -1,13 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Compass } from 'lucide-react';
 
 import { getDiscoveryBoard, summaryOfNew } from '../../lib/discovery';
 import { TITLE_MAX_CHARS } from '../../lib/newDiscovery';
 import { phaseOfStatus } from '../../lib/discoveryActivity';
+import { DEFAULT_SESSION_FILTER, filterSessions } from '../../lib/sessionFilter';
 import type { DiscoveryBoard, DiscoverySummary } from '../../types';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import EmptyStateCard from '../EmptyStateCard';
 import { PipelineListSkeleton } from '../PipelineListSkeleton';
+import { SessionFilterBar } from '../SessionFilterBar';
 import { DiscoveryCard } from './DiscoveryCard';
 import { NewDiscoveryModal } from './NewDiscoveryModal';
 
@@ -43,11 +45,17 @@ export function DiscoverySection({
 }: DiscoverySectionProps): React.ReactElement {
   const [seed, setSeed] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [filter, setFilter] = useState(DEFAULT_SESSION_FILTER);
   const [boards, setBoards] = useState<Record<string, DiscoveryBoard>>({});
   const [runningTurns, setRunningTurns] = useState<Set<string>>(new Set());
   // One instant for every age on screen, so two cards rendered in the same
   // pass do not read as if they were measured against different clocks.
   const now = Date.now();
+
+  // `filterSessions` returns `discoveries` itself when nothing was dropped and
+  // nothing moved, so the boards effect below does not re-run on a keystroke
+  // that changed no row.
+  const visible = useMemo(() => filterSessions(discoveries, filter), [discoveries, filter]);
 
   const ids = discoveries.map((d) => d.id).join(',');
 
@@ -142,18 +150,28 @@ export function DiscoverySection({
           description="A discovery is a conversation you can leave and come back to. It reads this repository, runs commands in its own worktree, and ends by proposing tickets you can start one at a time."
         />
       ) : (
-        <div className="flex flex-col gap-4">
-          {discoveries.map((discovery) => (
-            <DiscoveryCard
-              key={discovery.id}
-              discovery={discovery}
-              board={boards[discovery.id] ?? null}
-              turnRunning={runningTurns.has(discovery.id)}
-              now={now}
-              onOpen={onOpen}
-            />
-          ))}
-        </div>
+        <>
+          <SessionFilterBar
+            value={filter}
+            onChange={setFilter}
+            sessions={discoveries}
+            resultCount={visible.length}
+            noun="discoveries"
+            testId="discovery-filter-bar"
+          />
+          <div className="flex flex-col gap-4">
+            {visible.map((discovery) => (
+              <DiscoveryCard
+                key={discovery.id}
+                discovery={discovery}
+                board={boards[discovery.id] ?? null}
+                turnRunning={runningTurns.has(discovery.id)}
+                now={now}
+                onOpen={onOpen}
+              />
+            ))}
+          </div>
+        </>
       )}
 
       {modalOpen && (
