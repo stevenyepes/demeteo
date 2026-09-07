@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Globe, MessageSquare, Network, Route } from 'lucide-react';
 
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import {
@@ -14,12 +13,11 @@ import {
 import { phaseOfStatus, type TurnPhase } from '../../lib/askActivity';
 import { formatError } from '../../lib/errors';
 import type { AskMessage, AskThread, AskThreadDetail } from '../../types';
-import { Chip } from '../ui/Chip';
 import { AskCanvasPane } from './AskCanvasPane';
-import { AskComposer } from './AskComposer';
+import { AskChatCollapsedRail } from './AskChatCollapsedRail';
+import { AskChatColumn } from './AskChatColumn';
 import { AskThreadSettingsPanel } from './AskThreadSettingsPanel';
 import { AskThreadSwitcher } from './AskThreadSwitcher';
-import { AskTranscript } from './AskTranscript';
 import { AskWorkspaceHeader } from './AskWorkspaceHeader';
 import { NewAskThreadModal } from './NewAskThreadModal';
 import { useAskStream } from './useAskStream';
@@ -35,51 +33,14 @@ interface AskThreadViewProps {
   projectName?: string;
 }
 
-/** `Empty.html`'s three `.try` chips, verbatim (Acceptance Criterion 7). Never
- *  a fourth, and never one naming a specific run or ticket. */
-function tryChips(resolvedProjectName: string): ReadonlyArray<{
-  icon: React.ReactElement;
-  tone: 'violet' | 'cyan' | 'emerald';
-  text: React.ReactNode;
-  seed: string;
-  webChip?: boolean;
-}> {
-  return [
-    {
-      icon: <Network className="h-3.5 w-3.5" aria-hidden="true" />,
-      tone: 'violet',
-      text: (
-        <>
-          Draw the architecture of{' '}
-          <code className="rounded border border-white/10 bg-black/40 px-1 py-0.5 font-mono text-[12px] text-cyan-300">
-            {resolvedProjectName}
-          </code>
-        </>
-      ),
-      seed: `Draw the architecture of ${resolvedProjectName}`,
-    },
-    {
-      icon: <Route className="h-3.5 w-3.5" aria-hidden="true" />,
-      tone: 'cyan',
-      text: 'Map the journey from New Feature to a merged branch',
-      seed: 'Map the journey from New Feature to a merged branch',
-    },
-    {
-      icon: <Globe className="h-3.5 w-3.5" aria-hidden="true" />,
-      tone: 'emerald',
-      text: "What changed in this project's dependencies recently?",
-      seed: "What changed in this project's dependencies recently?",
-      webChip: true,
-    },
-  ];
-}
-
 /**
  * One project's Ask workspace (`docs/ask-canvas/probe/Main.html`/`Empty.html`):
- * the header, the transcript column, and the canvas pane beside it. Thin by
+ * the header, the chat column, and the canvas pane beside it. Thin by
  * construction (AGENTS.md §3) — every column is a component built elsewhere;
  * this file only owns which thread is open and the turn-lifecycle events that
- * decide `phase` (nothing here parses an `AgentEvent` itself).
+ * decide `phase` (nothing here parses an `AgentEvent` itself) — plus whether
+ * the chat column is hidden, which is here rather than inside the column
+ * because the rail that brings it back is a sibling of it.
  *
  * `useAskStream` is instantiated once, here, and only its `store` travels
  * down — the subscription itself stays leaf-mounted in `AskStreamingBubble`/
@@ -100,6 +61,9 @@ export function AskThreadView({ projectId, machineId, projectName }: AskThreadVi
   // composer owns its own input state and takes an initial value only once,
   // on mount, per its own doc comment.
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null);
+  // Hiding is a class on the column, never an unmount — see `AskChatColumn`'s
+  // own `hidden` prop for why, and `AskChatCollapsedRail` for the way back.
+  const [chatHidden, setChatHidden] = useState(false);
 
   const { store, begin, end } = useAskStream();
   // Whether the turn stream has spoken about the selected thread yet. The
@@ -252,6 +216,10 @@ export function AskThreadView({ projectId, machineId, projectName }: AskThreadVi
   }
 
   const thread = detail?.thread ?? null;
+  // The hide is a request, not the verdict: with no thread open the canvas
+  // pane is a bare placeholder, so honouring it would leave the workspace
+  // showing nothing but a rail and the words "No canvas yet."
+  const chatCollapsed = chatHidden && thread !== null;
 
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden bg-[#0a0c10]">
@@ -293,76 +261,24 @@ export function AskThreadView({ projectId, machineId, projectName }: AskThreadVi
       )}
 
       <div className="flex min-h-0 flex-1">
-        <section className="flex w-[480px] shrink-0 flex-col border-r border-white/5 bg-[rgba(11,13,18,0.4)]">
-          {thread && detail && detail.messages.length > 0 ? (
-            <AskTranscript
-              threadId={thread.id}
-              messages={detail.messages}
-              pending={phase !== null}
-              store={store}
-            />
-          ) : (
-            <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-8 pt-12 text-center">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-violet-500/30 bg-violet-500/10 text-violet-300">
-                <MessageSquare className="h-5 w-5" aria-hidden="true" />
-              </div>
-              <h2 className="mt-4 font-heading text-[17px] font-semibold text-white">
-                Ask about this project
-              </h2>
-              <p className="mt-2 max-w-[340px] text-[13px] leading-relaxed text-slate-400">
-                Questions about the code, a run, or the pipeline — the repo, and the web when it needs
-                it. Ask for a diagram and it lands on the canvas beside you.
-              </p>
+        <AskChatColumn
+          thread={thread}
+          detail={detail}
+          projectName={resolvedProjectName}
+          phase={phase}
+          store={store}
+          begin={begin}
+          end={end}
+          onSent={handleSent}
+          onPickChip={pickChip}
+          seed={seed}
+          hidden={chatCollapsed}
+          onHide={thread ? () => setChatHidden(true) : undefined}
+        />
 
-              <div className="mt-7 w-full">
-                <p className="mb-2.5 self-start font-mono text-[10px] tracking-[0.1em] text-slate-600 uppercase">
-                  Try
-                </p>
-                {tryChips(resolvedProjectName).map((chip) => (
-                  <button
-                    key={chip.seed}
-                    type="button"
-                    data-testid="ask-try-chip"
-                    onClick={() => pickChip(chip.seed)}
-                    className="mb-2 flex w-full items-center gap-2.5 rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2.5 text-left"
-                  >
-                    <span
-                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${
-                        chip.tone === 'violet'
-                          ? 'border-violet-500/20 bg-violet-500/10 text-violet-300'
-                          : chip.tone === 'cyan'
-                            ? 'border-cyan-500/20 bg-cyan-500/10 text-cyan-300'
-                            : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
-                      }`}
-                    >
-                      {chip.icon}
-                    </span>
-                    <span className="min-w-0 flex-1 text-[13px] leading-snug text-slate-200">
-                      {chip.text}
-                    </span>
-                    {chip.webChip && (
-                      <Chip size="sm" tone="emerald">
-                        web
-                      </Chip>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {thread && (
-            <AskComposer
-              key={`composer-${thread.id}-${seed?.nonce ?? 0}`}
-              threadId={thread.id}
-              phase={phase}
-              begin={begin}
-              end={end}
-              onSent={handleSent}
-              initialValue={seed?.text}
-            />
-          )}
-        </section>
+        {chatCollapsed && (
+          <AskChatCollapsedRail onShow={() => setChatHidden(false)} pending={phase !== null} />
+        )}
 
         <section className="flex min-w-0 flex-1 flex-col">
           {thread ? (

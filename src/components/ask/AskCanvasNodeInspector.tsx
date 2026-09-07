@@ -18,8 +18,9 @@ import { ROLE_CHIP, ROLE_ICON, ROLE_LABEL } from './AskCanvasNode';
 
 export interface AskCanvasNodeInspectorProps {
   node: CanvasNode;
-  /** Already resolved by the caller via `descriptionForNode(...)`, role-label
-   *  fallback included — this component never re-derives it. */
+  /** Already resolved by the caller — the node's own `detail`, else
+   *  `descriptionForNode(...)`, else the role label. This component never
+   *  re-derives it. */
   description: string;
   incoming: CanvasNeighbor[];
   outgoing: CanvasNeighbor[];

@@ -140,13 +140,23 @@ pub fn ask_list_pinned_canvases(
     pin::list_pinned(&ctx, &AskThreadId::from(thread_id))
 }
 
+/// A message's canvas written to `dest_path`, which the frontend obtained from
+/// the OS save dialog. The path is the frontend's only part in this: the
+/// webview cannot write a file, and letting it try — `<a download>` over a
+/// blob URL — gave the user no say in where the export landed.
 #[tauri::command]
-pub fn ask_export_canvas(
+pub fn ask_export_canvas_to_file(
     ctx: State<'_, AppContext>,
     thread_id: String,
     message_id: String,
-) -> Result<String, String> {
-    pin::export_canvas(&ctx, &AskThreadId::from(thread_id), &message_id)
+    dest_path: String,
+) -> Result<(), String> {
+    pin::export_canvas_to_file(
+        &ctx,
+        &AskThreadId::from(thread_id),
+        &message_id,
+        std::path::Path::new(&dest_path),
+    )
 }
 
 #[tauri::command]

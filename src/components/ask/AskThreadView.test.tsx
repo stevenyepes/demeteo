@@ -13,7 +13,7 @@ const askTurnRunning = vi.fn();
 const sendAskTurn = vi.fn();
 const listPinnedAskCanvases = vi.fn();
 const pinAskCanvas = vi.fn();
-const exportAskCanvas = vi.fn();
+const exportAskCanvasToFile = vi.fn();
 const resolveNodeMock = vi.fn();
 
 vi.mock('../../lib/ask', () => ({
@@ -23,7 +23,7 @@ vi.mock('../../lib/ask', () => ({
   sendAskTurn: (...args: unknown[]) => sendAskTurn(...args),
   listPinnedAskCanvases: (...args: unknown[]) => listPinnedAskCanvases(...args),
   pinAskCanvas: (...args: unknown[]) => pinAskCanvas(...args),
-  exportAskCanvas: (...args: unknown[]) => exportAskCanvas(...args),
+  exportAskCanvasToFile: (...args: unknown[]) => exportAskCanvasToFile(...args),
   resolveNode: (...args: unknown[]) => resolveNodeMock(...args),
   EVENT_ASK_AGENT_EVENT: 'ask_agent_event',
   EVENT_ASK_TURN_STATUS: 'ask_turn_status',
@@ -160,7 +160,7 @@ function canvas(title: string): AskCanvas {
     title,
     stages: ['s0'],
     lanes: ['l0'],
-    nodes: [{ id: 'n0', title, role: 'agent', path: null, stage: 0, lane: 0 }],
+    nodes: [{ id: 'n0', title, detail: null, role: 'agent', path: null, stage: 0, lane: 0 }],
     edges: [],
   };
 }
@@ -685,6 +685,7 @@ describe('AskThreadView — switching threads resets the canvas pane', () => {
     const canvasNode: CanvasNode = {
       id: 'n0',
       title: 'Reads the ticket board',
+      detail: null,
       role: 'agent',
       path: 'src/board.rs',
       stage: 0,
@@ -728,5 +729,59 @@ describe('AskThreadView — switching threads resets the canvas pane', () => {
     expect(await screen.findByTestId('ask-canvas-placeholder')).toBeInTheDocument();
     expect(screen.queryByTestId('ask-canvas-node-inspector')).not.toBeInTheDocument();
     expect(screen.queryByText('Reads the ticket board')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Hiding the chat column (`AskChatColumn`/`AskChatCollapsedRail`).
+ *
+ * The draft case is the one that pins *how*: it is red against any draft that
+ * conditionally renders the column instead of hiding it by class, because the
+ * composer owns its own input state and an unmount takes the unsent text with
+ * it. The other two were watched to fail against the fixed-width column that
+ * preceded them — neither control existed.
+ */
+describe('AskThreadView — hiding the chat column', () => {
+  it('collapses the column to a rail, leaving the canvas pane on screen', async () => {
+    const t = thread();
+    listAskThreads.mockResolvedValue([t]);
+    loadAskThread.mockResolvedValue(detail(t, [message({ thread_id: 't1' })]));
+
+    render(<AskThreadView projectId="p1" machineId="local" />);
+
+    fireEvent.click(await screen.findByTestId('ask-chat-hide'));
+
+    expect(screen.getByTestId('ask-chat-column')).toHaveClass('hidden');
+    expect(screen.getByTestId('ask-chat-show')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('ask-chat-show'));
+
+    expect(screen.getByTestId('ask-chat-column')).not.toHaveClass('hidden');
+    expect(screen.queryByTestId('ask-chat-show')).not.toBeInTheDocument();
+  });
+
+  it('keeps an unsent draft across a hide and a show', async () => {
+    const t = thread();
+    listAskThreads.mockResolvedValue([t]);
+    loadAskThread.mockResolvedValue(detail(t, [message({ thread_id: 't1' })]));
+
+    render(<AskThreadView projectId="p1" machineId="local" />);
+
+    const composer = await screen.findByTestId('ask-composer');
+    fireEvent.change(composer, { target: { value: 'half a question' } });
+
+    fireEvent.click(screen.getByTestId('ask-chat-hide'));
+    fireEvent.click(screen.getByTestId('ask-chat-show'));
+
+    expect(screen.getByTestId('ask-composer')).toHaveValue('half a question');
+  });
+
+  it('offers no hide control with no thread open', async () => {
+    listAskThreads.mockResolvedValue([]);
+
+    render(<AskThreadView projectId="p1" machineId="local" />);
+
+    await screen.findByRole('heading', { name: 'New thread' });
+    expect(screen.queryByTestId('ask-chat-hide')).not.toBeInTheDocument();
   });
 });

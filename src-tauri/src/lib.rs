@@ -552,7 +552,7 @@ pub fn run() {
             commands::ask::ask_send_turn,
             commands::ask::ask_pin_canvas,
             commands::ask::ask_list_pinned_canvases,
-            commands::ask::ask_export_canvas,
+            commands::ask::ask_export_canvas_to_file,
             commands::ask::ask_resolve_node,
             commands::discovery::discovery_list,
             commands::discovery::discovery_get,

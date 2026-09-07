@@ -284,6 +284,50 @@ async fn exporting_matches_a_pin_and_never_writes() {
         .expect("export succeeds against a store that refuses every put");
 }
 
+/// The file written to a chosen destination is byte-for-byte what
+/// [`export_canvas`] returns, and a refused write is reported rather than
+/// swallowed — the frontend has no other way to learn the export did not land.
+///
+/// Watched to fail against a draft that wrote `format!("{snapshot:?}")`: the
+/// parse assertion went red while the "a file exists" one stayed green, which
+/// is the pair that makes this a content check rather than a touch check.
+#[tokio::test]
+async fn exporting_to_a_file_writes_the_export_verbatim() {
+    let (ctx, thread_id) = fixture("export-file");
+    let message = append(&ctx, &thread_id, message_with_canvas("m-1"));
+
+    let dir = std::env::temp_dir().join(format!(
+        "demeteo-ask-export-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is after the epoch")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("the destination directory is created");
+    let dest = dir.join("journey.json");
+
+    export_canvas_to_file(&ctx, &thread_id, &message.id, &dest).expect("the export is written");
+
+    let written = std::fs::read_to_string(&dest).expect("the export reads back");
+    let snapshot: crate::domain::ask_canvas::PinnedCanvasSnapshot =
+        serde_json::from_str(&written).expect("the written file is the export JSON");
+    let expected = crate::domain::ask_canvas::parse_ask_turn(&message.text)
+        .canvas
+        .expect("the fixture message has a canvas");
+    assert_eq!(snapshot.canvas, expected);
+    assert_eq!(snapshot.message_id, message.id);
+
+    let unwritable = dir.join("no-such-directory").join("journey.json");
+    let refused = export_canvas_to_file(&ctx, &thread_id, &message.id, &unwritable)
+        .expect_err("a write into a missing directory is refused");
+    assert!(
+        refused.contains("journey.json"),
+        "the rejection names the destination: {refused}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A thread with no pins lists empty.
 #[tokio::test]
 async fn listing_pins_on_an_untouched_thread_is_empty() {

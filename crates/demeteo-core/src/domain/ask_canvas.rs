@@ -59,6 +59,17 @@ pub struct CanvasNode {
     pub id: String,
     pub title: String,
     pub role: NodeRole,
+    /// One clause answering "what happens here" for a reader who opened the
+    /// node — authored by the turn rather than derived from its prose.
+    ///
+    /// Optional because every canvas pinned before this field existed has
+    /// none, and those snapshots are replayed from the artifact store as
+    /// they were written. That is also why the surface keeps its older
+    /// scavenge of the prose (`descriptionForNode` in
+    /// `src/lib/askCanvasCitations.ts`) behind this: an absent detail falls
+    /// back to it, then to the role label.
+    #[serde(default)]
+    pub detail: Option<String>,
     /// The file or module this node names, when it has one — e.g.
     /// `git_ops::scope`. Absent for nodes that name a person or a concept.
     #[serde(default)]
@@ -177,7 +188,7 @@ pub fn build_pinned_canvas_snapshot(
 /// The shape the assistant is asked to emit, and the shape an error message
 /// quotes back at it.
 pub fn canvas_block_shape_example() -> String {
-    r#"{"kind": "architecture", "title": "...", "stages": ["01 · Orchestrator", "02 · Policy & fence"], "lanes": ["01 · The person", "02 · Demeteo"], "nodes": [{"id": "n1", "title": "...", "role": "orchestration", "stage": 0, "lane": 1}, {"id": "n2", "title": "...", "role": "boundary", "path": "git_ops::scope", "stage": 1, "lane": 1}], "edges": [{"from": "n1", "to": "n2", "kind": "hands_off"}]}"#
+    r#"{"kind": "architecture", "title": "...", "stages": ["01 · Orchestrator", "02 · Policy & fence"], "lanes": ["01 · The person", "02 · Demeteo"], "nodes": [{"id": "n1", "title": "...", "detail": "...", "role": "orchestration", "stage": 0, "lane": 1}, {"id": "n2", "title": "...", "detail": "...", "role": "boundary", "path": "git_ops::scope", "stage": 1, "lane": 1}], "edges": [{"from": "n1", "to": "n2", "kind": "hands_off"}]}"#
         .to_string()
 }
 
@@ -224,9 +235,27 @@ PLACEMENT
   its `from` is a `goes_back`, whatever it feels like — `hands_off` on a
   backwards edge draws a forward arrow running the wrong way.
 
+WHAT A NODE SAYS
+
   A `title` is a label on a card about 200px wide: roughly 28 characters
   before it is cut. `opencode / claude-code / hermes` does not fit; `Coding
-  agent` does, and the node's `path` says which one."#
+  agent` does, and the node's `path` says which one.
+
+  A `detail` is one clause, roughly 90 characters — the width of the panel
+  that opens when a reader clicks the node. Say what this node does that the
+  ones beside it do not. Write one for every node: without it the panel falls
+  back to scavenging a sentence out of the prose, and to the node's role name
+  — which the reader can already see on the card — when that finds nothing.
+
+  Two things a detail is not. It is not the title again — `Return inbox` ->
+  `the return inbox` tells a reader nothing they did not just click on. And
+  it is not a sentence lifted from the prose above it; that prose is already
+  on screen next to the diagram.
+
+  A detail is also where a qualifier belongs, which is what keeps a title
+  inside its budget: `Start Feature (unattended)` is cut mid-word. Title it
+  `Start Feature`, and let the detail be the place that says what running
+  unattended actually changes."#
         .to_string()
 }
 

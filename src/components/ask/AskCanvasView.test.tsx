@@ -18,7 +18,7 @@ import type { AskCanvas, CanvasNode } from '../../types';
 afterEach(cleanup);
 
 function node(id: string, stage: number, lane: number, overrides: Partial<CanvasNode> = {}): CanvasNode {
-  return { id, title: id, role: 'agent', path: null, stage, lane, ...overrides };
+  return { id, title: id, detail: null, role: 'agent', path: null, stage, lane, ...overrides };
 }
 
 function cards(container: HTMLElement): HTMLElement[] {

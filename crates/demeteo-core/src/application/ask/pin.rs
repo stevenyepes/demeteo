@@ -6,6 +6,8 @@
 //! already builds on every read, rather than re-deriving a turn from raw
 //! message text a second time.
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use crate::domain::ask_canvas::{build_pinned_canvas_snapshot, PinnedCanvasSnapshot};
@@ -133,6 +135,23 @@ fn export_canvas_at(
 ) -> Result<String, String> {
     let snapshot = snapshot_for(ctx, thread_id, message_id, pinned_at)?;
     serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())
+}
+
+/// [`export_canvas`]'s JSON written to a destination the user named in the
+/// OS save dialog.
+///
+/// The path arrives from the frontend because the picker is the only thing
+/// that knows it, and it is the only writer of a path outside the artifact
+/// store in this module — the webview cannot write a file itself, and the
+/// `<a download>` route this replaced offered no choice of destination.
+pub fn export_canvas_to_file(
+    ctx: &AppContext,
+    thread_id: &AskThreadId,
+    message_id: &str,
+    dest: &Path,
+) -> Result<(), String> {
+    let json = export_canvas(ctx, thread_id, message_id)?;
+    std::fs::write(dest, json).map_err(|e| format!("{}: {e}", dest.display()))
 }
 
 fn snapshot_for(

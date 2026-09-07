@@ -1649,6 +1649,11 @@ export type EdgeKind = 'hands_off' | 'goes_back';
 export interface CanvasNode {
   id: string;
   title: string;
+  /** The turn's own one-clause answer to "what happens here". `null` on every
+   *  canvas pinned before the field existed, which is the only reason
+   *  `descriptionForNode`'s scavenge of the prose is still wired in behind
+   *  it — see `AskCanvasPane`'s `description` prop. */
+  detail: string | null;
   role: NodeRole;
   path: string | null;
   stage: number;

@@ -9,6 +9,7 @@ fn node(id: &str, role: NodeRole, stage: usize, lane: usize) -> CanvasNode {
     CanvasNode {
         id: id.to_string(),
         title: format!("title {id}"),
+        detail: Some(format!("what {id} does")),
         role,
         path: None,
         stage,
@@ -38,6 +39,40 @@ fn canvas() -> AskCanvas {
 fn the_shape_example_is_what_the_parser_accepts() {
     let turn = parse_ask_turn(&canvas_block_shape_example());
     assert!(turn.canvas.is_some());
+    assert_eq!(turn.canvas_error, None);
+}
+
+/// `detail` is optional to the parser, so nothing in the type system makes
+/// the example carry one — and an example that omits it is the whole prompt
+/// a model sees on the subject.
+#[test]
+fn the_shape_example_asks_every_node_for_a_detail() {
+    let turn = parse_ask_turn(&canvas_block_shape_example());
+    let canvas = turn.canvas.expect("the shape example must parse");
+    for n in &canvas.nodes {
+        assert!(
+            n.detail.is_some(),
+            "node '{}' in the shape example has no `detail`, so the prompt never shows one",
+            n.id
+        );
+    }
+}
+
+/// Every canvas pinned before `detail` existed replays from the artifact
+/// store without the key; refusing those would cost the reader a whole
+/// stored diagram over a field the surface has a fallback for.
+#[test]
+fn a_block_written_before_detail_existed_still_parses() {
+    let json = serde_json::to_string(&canvas()).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    for n in value["nodes"].as_array_mut().unwrap() {
+        n.as_object_mut().unwrap().remove("detail");
+    }
+    let turn = parse_ask_turn(&serde_json::to_string(&value).unwrap());
+    let canvas = turn
+        .canvas
+        .expect("a block with no `detail` key is still a canvas");
+    assert!(canvas.nodes.iter().all(|n| n.detail.is_none()));
     assert_eq!(turn.canvas_error, None);
 }
 
