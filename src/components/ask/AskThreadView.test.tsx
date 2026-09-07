@@ -13,7 +13,7 @@ const askTurnRunning = vi.fn();
 const sendAskTurn = vi.fn();
 const listPinnedAskCanvases = vi.fn();
 const pinAskCanvas = vi.fn();
-const exportAskCanvas = vi.fn();
+const exportAskCanvasToFile = vi.fn();
 const resolveNodeMock = vi.fn();
 
 vi.mock('../../lib/ask', () => ({
@@ -23,7 +23,7 @@ vi.mock('../../lib/ask', () => ({
   sendAskTurn: (...args: unknown[]) => sendAskTurn(...args),
   listPinnedAskCanvases: (...args: unknown[]) => listPinnedAskCanvases(...args),
   pinAskCanvas: (...args: unknown[]) => pinAskCanvas(...args),
-  exportAskCanvas: (...args: unknown[]) => exportAskCanvas(...args),
+  exportAskCanvasToFile: (...args: unknown[]) => exportAskCanvasToFile(...args),
   resolveNode: (...args: unknown[]) => resolveNodeMock(...args),
   EVENT_ASK_AGENT_EVENT: 'ask_agent_event',
   EVENT_ASK_TURN_STATUS: 'ask_turn_status',

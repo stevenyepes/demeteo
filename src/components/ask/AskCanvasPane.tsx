@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { save } from '@tauri-apps/plugin-dialog';
 
 import { useElapsed } from '../../hooks/useElapsed';
-import { exportAskCanvas, listPinnedAskCanvases, pinAskCanvas } from '../../lib/ask';
+import { exportAskCanvasToFile, listPinnedAskCanvases, pinAskCanvas } from '../../lib/ask';
 import { descriptionForNode } from '../../lib/askCanvasCitations';
 import { edgesForNode } from '../../lib/askCanvasEdges';
 import type { TurnPhase } from '../../lib/askActivity';
@@ -48,7 +49,7 @@ export interface AskCanvasPaneProps {
  * The Pin/Export toolbar is the one thing that does *not* get that treatment,
  * and the split is deliberate: the list navigates to pins already on disk,
  * whereas both buttons act on `heldRef.current` — so while a turn runs they
- * would pin or download a canvas this pane is deliberately not showing, under
+ * would pin or export a canvas this pane is deliberately not showing, under
  * a message id nothing on screen names. It is gated on `phase === null` for
  * that reason, not as a leftover of the early return it used to live under.
  *
@@ -68,6 +69,10 @@ export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }
   const [pinned, setPinned] = useState<PinnedCanvasEntry[]>([]);
   const [selectedArtifactPath, setSelectedArtifactPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Where the last export landed. A save dialog closes the moment it is
+  // confirmed, so without this the only evidence of a successful export is a
+  // file the user has to go and look for.
+  const [savedTo, setSavedTo] = useState<string | null>(null);
 
   // Mutated in render, not in an effect: the point is that this render's
   // output already reflects the latest non-null canvas, not next render's.
@@ -127,6 +132,7 @@ export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }
     const current = heldRef.current;
     if (current === null) return;
     setError(null);
+    setSavedTo(null);
     try {
       await pinAskCanvas(threadId, current.messageId);
       await refreshPinned();
@@ -135,19 +141,24 @@ export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }
     }
   }, [threadId, refreshPinned]);
 
+  // The destination is the OS save dialog's, and the write is the backend's.
+  // The `<a download>` + blob-URL route this replaced never asked: a webview
+  // download lands wherever the platform decides, silently and un-cancellably,
+  // which on macOS is not a place the user chose and may be nowhere at all.
   const handleExport = useCallback(async () => {
     const current = heldRef.current;
     if (current === null) return;
     setError(null);
+    setSavedTo(null);
     try {
-      const json = await exportAskCanvas(threadId, current.messageId);
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `ask-canvas-${current.messageId}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const destination = await save({
+        title: 'Export canvas',
+        defaultPath: `ask-canvas-${current.messageId}.json`,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (destination === null) return;
+      await exportAskCanvasToFile(threadId, current.messageId, destination);
+      setSavedTo(destination);
     } catch (cause) {
       setError(formatError(cause));
     }
@@ -182,6 +193,11 @@ export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }
       {error && (
         <p role="alert" className="mx-3 mt-2 font-mono text-[11px] text-ruby-200">
           {error}
+        </p>
+      )}
+      {savedTo !== null && (
+        <p data-testid="ask-canvas-exported" className="mx-3 mt-2 truncate font-mono text-[11px] text-emerald-200/90">
+          Exported to {savedTo}
         </p>
       )}
       {pinned.length > 0 && (

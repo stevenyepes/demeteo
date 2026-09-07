@@ -127,9 +127,15 @@ export async function listPinnedAskCanvases(threadId: string): Promise<PinnedCan
   return invoke<PinnedCanvasEntry[]>("ask_list_pinned_canvases", { threadId });
 }
 
-/** Mirrors `ask_export_canvas`. */
-export async function exportAskCanvas(threadId: string, messageId: string): Promise<string> {
-  return invoke<string>("ask_export_canvas", { threadId, messageId });
+/** Mirrors `ask_export_canvas_to_file` — the same JSON, written by the backend
+ *  to a path the user picked. The webview has no filesystem of its own, so the
+ *  path is all the frontend ever handles. */
+export async function exportAskCanvasToFile(
+  threadId: string,
+  messageId: string,
+  destPath: string,
+): Promise<void> {
+  return invoke<void>("ask_export_canvas_to_file", { threadId, messageId, destPath });
 }
 
 /** Mirrors `ask_resolve_node` — where a canvas node's path leads as of the

@@ -18,6 +18,10 @@
  * canvas-free completion — and Export never touches the artifact store
  * (AC4 for this ticket).
  *
+ * The two Export cases were watched to fail against the `<a download>` +
+ * blob-URL draft they replaced, which never consulted `save` and so had no
+ * destination to assert and nothing to cancel.
+ *
  * The three "pins are still listed" / "the banner renders" cases were watched
  * to fail against the two early returns that preceded them — they were red
  * with the list and banner nested inside the held-canvas branch, which is the
@@ -57,19 +61,20 @@ vi.mock('../../context', () => ({
 }));
 
 import { AskCanvasPane } from './AskCanvasPane';
-import { exportAskCanvas, listPinnedAskCanvases, pinAskCanvas } from '../../lib/ask';
+import { exportAskCanvasToFile, listPinnedAskCanvases, pinAskCanvas } from '../../lib/ask';
+import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { NO_TURN } from '../../lib/askActivity';
 import type { AskStreamStore } from './useAskStream';
 import type { AskCanvas, AskMessageView, CanvasNode, NodeResolution, PinnedCanvasEntry } from '../../types';
 
 // A double per AGENTS.md §7: `listPinnedAskCanvases` defaults to an empty
 // list (it fires unconditionally on every mount, whichever branch renders),
-// but `pinAskCanvas`/`exportAskCanvas` default to a rejection so a call no
-// test explicitly arranged fails loudly instead of resolving as if it had
-// succeeded.
+// but `pinAskCanvas`/`exportAskCanvasToFile`/`save` default to a rejection, so
+// a call no test explicitly arranged fails loudly instead of resolving as if
+// it had succeeded.
 vi.mock('../../lib/ask', () => ({
   pinAskCanvas: vi.fn(),
-  exportAskCanvas: vi.fn(),
+  exportAskCanvasToFile: vi.fn(),
   listPinnedAskCanvases: vi.fn(),
   resolveNode: (...args: unknown[]) => resolveNodeMock(...args),
 }));
@@ -82,7 +87,10 @@ afterEach(() => {
 beforeEach(() => {
   vi.mocked(listPinnedAskCanvases).mockResolvedValue([]);
   vi.mocked(pinAskCanvas).mockRejectedValue(new Error('pinAskCanvas: no expectation set for this test'));
-  vi.mocked(exportAskCanvas).mockRejectedValue(new Error('exportAskCanvas: no expectation set for this test'));
+  vi.mocked(exportAskCanvasToFile).mockRejectedValue(
+    new Error('exportAskCanvasToFile: no expectation set for this test'),
+  );
+  vi.mocked(saveDialog).mockRejectedValue(new Error('save: no expectation set for this test'));
 });
 
 beforeEach(() => {
@@ -414,11 +422,9 @@ describe('AskCanvasPane', () => {
     expect(await screen.findByTestId('artifact-modal-title')).toHaveTextContent('m2.canvas.json');
   });
 
-  it("clicking Export downloads a Blob built from exportAskCanvas's return value, without pinning (AC4)", async () => {
-    vi.mocked(exportAskCanvas).mockResolvedValue('{"kind":"journey"}');
-    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-url');
-    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  it('clicking Export writes to the path the save dialog returned, without pinning (AC4)', async () => {
+    vi.mocked(saveDialog).mockResolvedValue('/Users/dev/Desktop/journey.json');
+    vi.mocked(exportAskCanvasToFile).mockResolvedValue(undefined);
 
     render(
       <AskCanvasPane
@@ -433,18 +439,34 @@ describe('AskCanvasPane', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Export' }));
 
-    await waitFor(() => expect(exportAskCanvas).toHaveBeenCalledWith('t1', 'm1'));
-    expect(createObjectURL).toHaveBeenCalledTimes(1);
-    const blobArg = createObjectURL.mock.calls[0][0];
-    if (!(blobArg instanceof Blob)) throw new Error('expected Export to revoke a Blob URL');
-    expect(blobArg.type).toBe('application/json');
-    expect(clickSpy).toHaveBeenCalledTimes(1);
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
+    await waitFor(() =>
+      expect(exportAskCanvasToFile).toHaveBeenCalledWith('t1', 'm1', '/Users/dev/Desktop/journey.json'),
+    );
+    expect(await screen.findByTestId('ask-canvas-exported')).toHaveTextContent(
+      '/Users/dev/Desktop/journey.json',
+    );
     expect(pinAskCanvas).not.toHaveBeenCalled();
+  });
 
-    clickSpy.mockRestore();
-    createObjectURL.mockRestore();
-    revokeObjectURL.mockRestore();
+  it('writes nothing when the save dialog is dismissed', async () => {
+    vi.mocked(saveDialog).mockResolvedValue(null);
+
+    render(
+      <AskCanvasPane
+        store={fakeStore}
+        threadId="t1"
+        projectId="p1"
+        lastMessage={message({ id: 'm1', canvas: canvas('c') })}
+        phase={null}
+      />,
+    );
+    await waitFor(() => expect(listPinnedAskCanvases).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+
+    await waitFor(() => expect(saveDialog).toHaveBeenCalled());
+    expect(exportAskCanvasToFile).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('ask-canvas-exported')).not.toBeInTheDocument();
   });
 
   it('opens the inspector on selecting a resolved node, and closes it on re-activation (AC 8/9)', async () => {
