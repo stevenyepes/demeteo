@@ -71,6 +71,32 @@ pub fn job_control_prefix(interactive: bool) -> &'static str {
     }
 }
 
+/// The account's own login shell, when it is one that reads the bodies built
+/// above; `None` for anything else, which means "use `bash`".
+///
+/// Hardcoding bash was the older answer, on the grounds that `$SHELL` may name
+/// a shell that never sources `~/.bashrc`. That is true, and it is the failure
+/// rather than the reason: `mise`/`asdf`/`nvm` write their PATH activation
+/// into the rc of the shell the account actually logs into, so a zsh account's
+/// shims are declared in `~/.zshrc`, which bash never reads. Launched from a
+/// desktop entry — where the session PATH carries no shims either — Demeteo
+/// then resolves none of the tool-managed harnesses and reports each one as
+/// absent, `pi` and a `mise`-installed `opencode` alike.
+///
+/// The family check is what keeps the body parseable: it carries `set +m` and
+/// `export K='V'`, which fish and csh reject outright. Those fall back to
+/// bash, which is also what a tool manager configures when it is set up under
+/// them.
+pub fn posix_login_shell(shell_var: Option<&str>) -> Option<&str> {
+    let path = shell_var.map(str::trim).filter(|p| !p.is_empty())?;
+    let name = path.rsplit('/').next()?;
+    matches!(
+        name,
+        "bash" | "zsh" | "ksh" | "ksh93" | "mksh" | "dash" | "ash" | "sh"
+    )
+    .then_some(path)
+}
+
 /// Escape `s` so it is safe to interpolate into a POSIX shell command
 /// line as a single argument.
 pub fn escape_posix(s: &str) -> String {

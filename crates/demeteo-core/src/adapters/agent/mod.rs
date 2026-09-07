@@ -97,15 +97,18 @@ fn resolve_on_unix(binary: &str) -> Option<String> {
     }
 
     // Fallback: resolve via an **interactive login** shell so we get profile
-    // additions (homebrew, nvm, mise, pyenv, etc.). We use bash explicitly
-    // rather than the SHELL env var because SHELL might be set to e.g.
-    // /bin/zsh which doesn't source ~/.bashrc on macOS/Linux when invoked as
-    // "zsh -l".
+    // additions (homebrew, nvm, mise, pyenv, etc.).
+    //
+    // The account's own login shell goes first, per
+    // [`crate::shared::shell::posix_login_shell`], which carries why: a tool
+    // manager declares its shims in the rc of the shell the account logs into,
+    // so a zsh account's are invisible to every bash below. bash stays the
+    // fallback rather than the rule.
     //
     // `-i` is load-bearing: the common developer tool-managers (`mise`,
-    // `asdf`, `nvm`) put binaries on `PATH` from `~/.bashrc`, behind the
+    // `asdf`, `nvm`) put binaries on `PATH` from an rc file, behind the
     // standard non-interactive guard (`case $- in *i*) ;; *) return;; esac`).
-    // A plain `bash -l -c` hits that guard and returns *before* the tool is on
+    // A plain `-l -c` hits that guard and returns *before* the tool is on
     // `PATH`, so it reports a correctly-installed agent as "missing" — the
     // exact mismatch behind a remote run's readiness probe saying "opencode
     // isn't installed" while an interactive SSH session runs it fine. This
@@ -113,13 +116,16 @@ fn resolve_on_unix(binary: &str) -> Option<String> {
     // adapter's probe/spawn) so "available" and "runnable" always agree. Job-
     // control warnings from an interactive shell without a TTY go to stderr,
     // so stdout stays clean; we still read the last non-empty line defensively
-    // in case a ~/.bashrc echoes a banner ahead of the `which` result.
-    let shells = [
-        "/bin/bash",
-        "/usr/local/bin/bash",
-        "/usr/bin/bash",
-        "/bin/sh",
-    ];
+    // in case an rc file echoes a banner ahead of the `which` result.
+    let account_shell = std::env::var("SHELL").ok();
+    let shells = crate::shared::shell::posix_login_shell(account_shell.as_deref())
+        .into_iter()
+        .chain([
+            "/bin/bash",
+            "/usr/local/bin/bash",
+            "/usr/bin/bash",
+            "/bin/sh",
+        ]);
     for shell in shells {
         if std::path::Path::new(shell).exists() {
             let mut command = std::process::Command::new(shell);

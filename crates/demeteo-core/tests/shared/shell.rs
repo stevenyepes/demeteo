@@ -54,3 +54,33 @@ fn tilde_expansion_preserved() {
     assert_eq!(escape_posix("~/foo bar"), "~/'foo bar'");
     assert_eq!(escape_posix("~/foo/bar"), "~/foo/bar");
 }
+
+/// The case the hardcoded `bash` got wrong: a zsh account's tool-manager
+/// shims are declared in `~/.zshrc`, so only zsh's own `-l -i` puts them on
+/// PATH.
+#[test]
+fn a_posix_login_shell_is_taken_as_it_stands() {
+    assert_eq!(
+        posix_login_shell(Some("/usr/bin/zsh")),
+        Some("/usr/bin/zsh")
+    );
+    assert_eq!(posix_login_shell(Some("/bin/bash")), Some("/bin/bash"));
+    assert_eq!(posix_login_shell(Some("dash")), Some("dash"));
+}
+
+/// A shell that cannot parse `set +m; export K='V'; …` is refused, so the
+/// body still runs — under bash, whose rc a tool manager writes when it is
+/// the one configured.
+#[test]
+fn a_shell_that_cannot_read_the_body_falls_back() {
+    assert_eq!(posix_login_shell(Some("/usr/bin/fish")), None);
+    assert_eq!(posix_login_shell(Some("/bin/csh")), None);
+    assert_eq!(posix_login_shell(Some("/usr/bin/nu")), None);
+}
+
+#[test]
+fn an_unset_or_blank_shell_is_no_answer() {
+    assert_eq!(posix_login_shell(None), None);
+    assert_eq!(posix_login_shell(Some("")), None);
+    assert_eq!(posix_login_shell(Some("   ")), None);
+}

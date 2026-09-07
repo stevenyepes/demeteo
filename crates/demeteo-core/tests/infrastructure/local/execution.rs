@@ -28,6 +28,26 @@ fn harness_opts(timeout: Option<Duration>) -> ShellOptions {
     }
 }
 
+/// The pid the script recorded, waited for rather than assumed.
+///
+/// One fixed window does not cover every host: the body runs under the
+/// account's own login shell (`shared::shell::posix_login_shell`), and an rc
+/// file with plugins in it can spend a tenth of a second before the first
+/// command of the body executes — which under a loaded suite is the
+/// difference between the file being there and the read panicking.
+#[cfg(unix)]
+fn recorded_pid(pidfile: &std::path::Path) -> u32 {
+    for _ in 0..100 {
+        if let Ok(text) = std::fs::read_to_string(pidfile) {
+            if let Ok(pid) = text.trim().parse() {
+                return pid;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("the script never recorded its grandchild pid at {pidfile:?}");
+}
+
 /// Is `pid` still alive? `kill(pid, 0)` is the standard liveness probe.
 #[cfg(unix)]
 fn alive(pid: u32) -> bool {
@@ -263,20 +283,12 @@ async fn the_timeout_kills_the_whole_process_tree_not_just_the_shell() {
 
     let script = format!("sleep 60 & echo $! > {}; wait", pidfile.display());
     let err = adapter
-        .run_command_with(
-            "local",
-            &script,
-            harness_opts(Some(Duration::from_millis(500))),
-        )
+        .run_command_with("local", &script, harness_opts(Some(Duration::from_secs(2))))
         .await
         .expect_err("the ceiling is exceeded");
     assert!(err.starts_with(TIMEOUT_ERROR_PREFIX));
 
-    let pid: u32 = std::fs::read_to_string(&pidfile)
-        .expect("the script recorded its grandchild pid")
-        .trim()
-        .parse()
-        .expect("pid parses");
+    let pid = recorded_pid(&pidfile);
 
     // Give the signal a moment to land.
     for _ in 0..50 {
@@ -312,16 +324,13 @@ async fn abandoning_the_future_kills_the_tree_too() {
 
     {
         let run = adapter.run_command_with("local", &script, harness_opts(None));
-        // Long enough for the script to have written the pidfile.
-        let _ = tokio::time::timeout(Duration::from_millis(600), run).await;
+        // Long enough for the script to have written the pidfile, shell
+        // startup included — `recorded_pid` waits out the rest.
+        let _ = tokio::time::timeout(Duration::from_secs(2), run).await;
         // `run` is dropped here.
     }
 
-    let pid: u32 = std::fs::read_to_string(&pidfile)
-        .expect("the script recorded its grandchild pid")
-        .trim()
-        .parse()
-        .expect("pid parses");
+    let pid = recorded_pid(&pidfile);
 
     for _ in 0..50 {
         if !alive(pid) {

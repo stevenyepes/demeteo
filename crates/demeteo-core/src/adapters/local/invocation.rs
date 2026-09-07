@@ -7,7 +7,9 @@
 //!
 //! Almost none of it is `#[cfg]`-gated, and that is deliberate — the Windows
 //! answers are decisions, and a decision behind a `cfg` is one no local test
-//! reaches (AGENTS.md §7). Only [`shell_program`] has two bodies.
+//! reaches (AGENTS.md §7). Only [`shell_program`] has two bodies, and the
+//! Unix one defers its choice to `unix_shell_program`, which takes `$SHELL`
+//! as an argument for the same reason.
 
 use std::path::PathBuf;
 
@@ -60,19 +62,37 @@ fn shell_args(cmd: &str, opts: &ShellOptions) -> Vec<String> {
     }
 }
 
-/// The interpreter that runs the body: bash for a login shell, sh otherwise.
+/// The interpreter that runs the body: the account's login shell for a login
+/// shell, sh otherwise.
 ///
-/// On Unix these stay the bare names `execvp` resolves through `PATH`, exactly
-/// as before. On Windows they are absolute paths inside the Git for Windows
+/// On Unix these stay names `execvp` resolves through `PATH` unless `$SHELL`
+/// named a path. On Windows they are absolute paths inside the Git for Windows
 /// installation [`crate::shared::win::posix_shell`] located, because a bare
 /// `bash` there is `C:\Windows\System32\bash.exe` — the WSL launcher, which
 /// resolves none of the paths Demeteo passes.
 ///
-/// The bash/sh split is mirrored rather than collapsed so a local `sh -c` and
-/// a remote `sh -c` remain the same interpreter family.
+/// The sh half is mirrored rather than collapsed so a local `sh -c` and a
+/// remote `sh -c` remain the same interpreter family. The login half is not:
+/// the SSH adapter still spells `bash` (`adapters/ssh/command.rs`), because
+/// the account there is the *remote* one and its `$SHELL` costs a round trip
+/// this side does not pay. Both transports follow the same rule — run the
+/// login shell whose rc declares the account's PATH — and remote satisfies it
+/// only while that shell is bash.
 #[cfg(not(windows))]
 fn shell_program(login_shell: bool) -> Result<PathBuf, String> {
-    Ok(PathBuf::from(if login_shell { "bash" } else { "sh" }))
+    Ok(unix_shell_program(
+        login_shell,
+        std::env::var("SHELL").ok().as_deref(),
+    ))
+}
+
+/// Split from the `$SHELL` read so the choice is reachable from a test.
+#[cfg(not(windows))]
+fn unix_shell_program(login_shell: bool, shell_var: Option<&str>) -> PathBuf {
+    if !login_shell {
+        return PathBuf::from("sh");
+    }
+    PathBuf::from(shell::posix_login_shell(shell_var).unwrap_or("bash"))
 }
 
 #[cfg(windows)]
