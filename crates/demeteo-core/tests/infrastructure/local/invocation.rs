@@ -68,12 +68,31 @@ fn the_working_directory_never_reaches_the_body() {
     );
 }
 
+/// The argv is the same everywhere; only which file reads it moves, and it
+/// moves only for a login shell. Asserted through `unix_shell_program` rather
+/// than the `$SHELL` read above it, so the answer does not depend on the
+/// account running the suite.
 #[cfg(unix)]
 #[test]
-fn on_unix_the_program_is_the_bare_name_execvp_resolves() {
-    let (program, args) = shell_invocation("npm test", &ShellOptions::login_interactive())
+fn on_unix_a_login_body_runs_under_the_accounts_own_shell() {
+    assert_eq!(
+        unix_shell_program(true, Some("/usr/bin/zsh")),
+        PathBuf::from("/usr/bin/zsh")
+    );
+    assert_eq!(unix_shell_program(true, None), PathBuf::from("bash"));
+    assert_eq!(
+        unix_shell_program(true, Some("/usr/bin/fish")),
+        PathBuf::from("bash"),
+        "a shell that cannot parse the body would fail every command, not just find fewer tools"
+    );
+    assert_eq!(
+        unix_shell_program(false, Some("/usr/bin/zsh")),
+        PathBuf::from("sh"),
+        "only the login half reads a profile, so only it asks which shell owns one"
+    );
+
+    let (_, args) = shell_invocation("npm test", &ShellOptions::login_interactive())
         .expect("a Unix host always has a shell to name");
-    assert_eq!(program, PathBuf::from("bash"));
     assert_eq!(args, vec!["-l", "-i", "-c", "set +m; npm test"]);
 
     let (program, args) = shell_invocation("npm test", &ShellOptions::default())

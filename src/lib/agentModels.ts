@@ -53,7 +53,13 @@ export async function getAgentModels(
         agentKind,
       });
       const list = models || [];
-      resolved.set(k, list);
+      // An empty list is never cached. `discover_models` answers a probe it
+      // could not run with the harness's bundled fallback, which is empty for
+      // a harness that ships none (`pi`), so "this harness lists no models"
+      // and "the probe failed" arrive here as the same value — and caching it
+      // would make one bad probe permanent for the session, on a surface
+      // whose only recovery is restarting the app.
+      if (list.length > 0) resolved.set(k, list);
       return list;
     } finally {
       cache.delete(k);
