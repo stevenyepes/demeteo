@@ -66,7 +66,7 @@ export interface AskCanvasViewProps {
 /** Verdicts are looked up by `(node_id, path)`, not `node_id` alone — a
  *  verdict computed against a stale `path` must not be credited to a node
  *  whose path has since changed. */
-function verdictKey(nodeId: string, path: string): string {
+export function verdictKey(nodeId: string, path: string): string {
   return `${nodeId} ${path}`;
 }
 
@@ -240,8 +240,11 @@ export function AskCanvasView({
 }
 
 /** A node that never named a file is `none`, not `missing` — see
- *  [`NodePathState`](./AskCanvasNode.tsx). */
-function pathStateOf(
+ *  [`NodePathState`](./AskCanvasNode.tsx).
+ *
+ *  Exported because the inspector is gated on the same answer, and the one
+ *  thing worse than two components asking is two components deriving. */
+export function pathStateOf(
   nodeId: string,
   path: string | null,
   verdicts: ReadonlyMap<string, CanvasPathVerdict>,

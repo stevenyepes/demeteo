@@ -21,10 +21,22 @@ import { NODE_H, NODE_W } from '../../lib/askCanvasLayout';
  * `needs_human` node by definition — and it is a normal card. `missing` is a
  * node that named one which is not there, and only that earns the dimmed,
  * dashed treatment. Collapsing the two rendered every Gate as a ghost.
+ *
+ * **It never decides whether the card is clickable.** It did, and a canvas
+ * whose model wrote module names (`application::discovery`) rather than file
+ * paths stat'd to `missing` on every node, so a whole lane was inert with no
+ * way to tell that from a lane the renderer had simply not wired up. Opening
+ * a node reads its title, detail and edges — all of which are in the canvas —
+ * and only *Open in editor* needs a resolved verdict, which is a decision
+ * `AskCanvasNodeInspector` makes on its own.
  */
 export type NodePathState = 'none' | 'resolved' | 'missing';
 
-type NodeCardState = 'resting' | 'selected' | 'cited' | 'unresolved';
+/** How the card reads as an interactive element. Orthogonal to
+ *  [`NodePathState`], which composes over it as a dimming overlay — the two
+ *  were one enum, and folding them meant a selected node whose path was
+ *  missing showed no selection at all. */
+type NodeCardState = 'resting' | 'selected' | 'cited';
 
 export const ROLE_ICON: Record<NodeRole, LucideIcon> = {
   orchestration: Workflow,
@@ -55,23 +67,21 @@ export const ROLE_TEXT: Record<NodeRole, string> = {
   needs_human: 'text-amber-300',
 };
 
-/** Card border + glow per state. `unresolved` is a muted/dashed overlay, not
- *  a ring — it never competes with the role tone carried by `ROLE_CHIP`. */
+/** Card border + glow per state. */
 const STATE_CARD: Record<NodeCardState, string> = {
   resting: 'border-slate-700/60 shadow-lg shadow-black/30',
   selected:
     'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.4),0_0_18px_rgba(34,211,238,0.25)]',
   cited:
     'border-violet-400/60 shadow-[0_0_0_2px_rgba(167,139,250,0.45),0_0_18px_rgba(139,92,246,0.25)]',
-  unresolved: 'border-slate-600/50 border-dashed opacity-50 shadow-none',
 };
 
-function resolveState(
-  pathState: NodePathState,
-  selected: boolean,
-  cited: boolean,
-): NodeCardState {
-  if (pathState === 'missing') return 'unresolved';
+/** A muted/dashed overlay, not a ring — it never competes with the role tone
+ *  carried by `ROLE_CHIP`, and it leaves whichever `STATE_CARD` treatment is
+ *  underneath it legible. */
+const UNRESOLVED_OVERLAY = 'border-dashed opacity-60';
+
+function cardState(selected: boolean, cited: boolean): NodeCardState {
   if (selected) return 'selected';
   if (cited) return 'cited';
   return 'resting';
@@ -107,9 +117,8 @@ export function AskCanvasNode({
   y,
   onActivate,
 }: AskCanvasNodeProps) {
-  const state = resolveState(pathState, selected, cited);
+  const state = cardState(selected, cited);
   const Icon = ROLE_ICON[node.role];
-  const clickable = pathState !== 'missing';
 
   const body = (
     <>
@@ -143,24 +152,18 @@ export function AskCanvasNode({
     'absolute flex flex-col justify-center gap-1.5 rounded-xl border px-3.5',
     'bg-slate-900/70 backdrop-blur-sm',
     STATE_CARD[state],
+    pathState === 'missing' ? UNRESOLVED_OVERLAY : '',
   ].join(' ');
 
   // A computed coordinate is the datum here, exactly as `TicketGraphNode.tsx`
   // records for its own inline style.
   const box = { left: x, top: y, width: NODE_W, height: NODE_H };
 
-  if (!clickable) {
-    return (
-      <div data-state={state} style={box} className={shell}>
-        {body}
-      </div>
-    );
-  }
-
   return (
     <button
       type="button"
       data-state={state}
+      data-path-state={pathState}
       aria-pressed={selected}
       onClick={() => onActivate(node.id)}
       style={box}

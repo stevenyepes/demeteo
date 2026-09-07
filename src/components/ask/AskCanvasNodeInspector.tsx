@@ -14,7 +14,7 @@ import { fetchActiveFeatures, listStepsForRun } from '../../lib/features';
 import type { CanvasNeighbor } from '../../lib/askCanvasEdges';
 import type { CanvasNode, Feature, NodeResolution, StepExecution } from '../../types';
 import { INSPECTOR_SURFACE } from '../ui/Inspector';
-import { ROLE_CHIP, ROLE_ICON, ROLE_LABEL } from './AskCanvasNode';
+import { ROLE_CHIP, ROLE_ICON, ROLE_LABEL, type NodePathState } from './AskCanvasNode';
 
 export interface AskCanvasNodeInspectorProps {
   node: CanvasNode;
@@ -22,6 +22,12 @@ export interface AskCanvasNodeInspectorProps {
    *  `descriptionForNode(...)`, else the role label. This component never
    *  re-derives it. */
   description: string;
+  /** The same verdict the card was drawn from, so the two agree by
+   *  construction rather than by both asking. It gates `resolveNode`: that
+   *  command refuses anything but `resolved` by contract, so calling it for a
+   *  `missing` node buys an error toast in place of an answer this side
+   *  already has. */
+  pathState: NodePathState;
   incoming: CanvasNeighbor[];
   outgoing: CanvasNeighbor[];
   threadId: string;
@@ -30,11 +36,14 @@ export interface AskCanvasNodeInspectorProps {
   onDismiss: () => void;
 }
 
-/** `absent` is a node that never named a file — `resolve` refuses those by
- *  contract, so this component must not ask. See `NodePathState` in
- *  `AskCanvasNode.tsx` for the same three-way split on the card. */
+/** `absent` is a node that never named a file and `unverified` one whose file
+ *  did not stat at turn time — `resolve` refuses both by contract, so this
+ *  component must not ask about either. The three-way split mirrors
+ *  `NodePathState` in `AskCanvasNode.tsx`, with `pending`/`ready` covering the
+ *  one case that does reach the backend. */
 type Resolution =
   | { status: 'absent' }
+  | { status: 'unverified' }
   | { status: 'pending' }
   | { status: 'ready'; result: NodeResolution };
 
@@ -65,6 +74,7 @@ function findPipelineMatch(
 export function AskCanvasNodeInspector({
   node,
   description,
+  pathState,
   incoming,
   outgoing,
   threadId,
@@ -84,6 +94,10 @@ export function AskCanvasNodeInspector({
       setResolution({ status: 'absent' });
       return;
     }
+    if (pathState !== 'resolved') {
+      setResolution({ status: 'unverified' });
+      return;
+    }
     setResolution({ status: 'pending' });
     resolveNode({ threadId, messageId, nodeId: node.id })
       .then((result) => {
@@ -95,7 +109,7 @@ export function AskCanvasNodeInspector({
     return () => {
       cancelled = true;
     };
-  }, [threadId, messageId, node.id, node.path, reportError]);
+  }, [threadId, messageId, node.id, node.path, pathState, reportError]);
 
   useEffect(() => {
     let cancelled = false;
@@ -186,11 +200,22 @@ export function AskCanvasNodeInspector({
               {resolution.result.checked_commit_sha.slice(0, 8)}
             </p>
           ) : (
-            <div className="truncate rounded-lg border border-white/5 bg-white/5 px-2.5 py-2 font-mono text-[11px] text-slate-300">
-              {resolution.status === 'ready' && resolution.result.kind === 'editor'
-                ? resolution.result.path
-                : node.path}
-            </div>
+            <>
+              <div className="truncate rounded-lg border border-white/5 bg-white/5 px-2.5 py-2 font-mono text-[11px] text-slate-300">
+                {resolution.status === 'ready' && resolution.result.kind === 'editor'
+                  ? resolution.result.path
+                  : node.path}
+              </div>
+              {resolution.status === 'unverified' && (
+                <p
+                  data-testid="ask-canvas-node-unverified"
+                  className="mt-2 text-[12px] leading-relaxed text-slate-500"
+                >
+                  No file by that name was in the tree Ask read, so there is nothing to open.
+                  Nodes often name a module or a concept rather than a file.
+                </p>
+              )}
+            </>
           )}
         </section>
         )}

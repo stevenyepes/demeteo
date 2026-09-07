@@ -177,22 +177,22 @@ describe('AskCanvasView', () => {
       />,
     );
 
-    expect(screen.getByText('resolved-node').closest('[data-state]')).toHaveAttribute(
-      'data-state',
-      'resting',
+    expect(screen.getByText('resolved-node').closest('[data-path-state]')).toHaveAttribute(
+      'data-path-state',
+      'resolved',
     );
-    expect(screen.getByText('stale-verdict-node').closest('[data-state]')).toHaveAttribute(
-      'data-state',
-      'unresolved',
+    expect(screen.getByText('stale-verdict-node').closest('[data-path-state]')).toHaveAttribute(
+      'data-path-state',
+      'missing',
     );
-    expect(screen.getByText('no-verdict-node').closest('[data-state]')).toHaveAttribute(
-      'data-state',
-      'unresolved',
+    expect(screen.getByText('no-verdict-node').closest('[data-path-state]')).toHaveAttribute(
+      'data-path-state',
+      'missing',
     );
 
     // A node that never claimed a file has nothing to be stale about.
-    const pathless = screen.getByText('no-path-node').closest('[data-state]')!;
-    expect(pathless).toHaveAttribute('data-state', 'resting');
+    const pathless = screen.getByText('no-path-node').closest('[data-path-state]')!;
+    expect(pathless).toHaveAttribute('data-path-state', 'none');
     fireEvent.click(pathless);
     expect(onActivate).toHaveBeenCalledWith('no-path-node');
   });

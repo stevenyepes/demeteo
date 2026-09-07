@@ -13,7 +13,7 @@ import { ArtifactRow } from '../ArtifactRow';
 import { AskActivityStrip } from './AskActivityStrip';
 import { AskCanvasNodeInspector } from './AskCanvasNodeInspector';
 import { ROLE_LABEL } from './AskCanvasNode';
-import { AskCanvasView } from './AskCanvasView';
+import { AskCanvasView, pathStateOf, verdictKey } from './AskCanvasView';
 import { useStreamedTurn, type AskStreamStore } from './useAskStream';
 
 export interface AskCanvasPaneProps {
@@ -169,6 +169,16 @@ export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }
     held !== null && selection?.messageId === held.messageId ? selection.nodeId : null;
   const selectedNode =
     held && selectedNodeId ? held.canvas.nodes.find((n) => n.id === selectedNodeId) : undefined;
+  // Derived here rather than passed up from the card, so the inspector is
+  // gated on the same verdict the card was drawn from without either of them
+  // asking the backend a question the message already answers.
+  const selectedPathState = selectedNode
+    ? pathStateOf(
+        selectedNode.id,
+        selectedNode.path,
+        new Map(held?.canvasPaths.map((v) => [verdictKey(v.node_id, v.path), v]) ?? []),
+      )
+    : 'none';
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -255,6 +265,7 @@ export function AskCanvasPane({ store, threadId, projectId, lastMessage, phase }
                     descriptionForNode(held.answerText, selectedNode) ??
                     ROLE_LABEL[selectedNode.role]
                   }
+                  pathState={selectedPathState}
                   {...edgesForNode(held.canvas, selectedNode.id)}
                   threadId={threadId}
                   messageId={held.messageId}

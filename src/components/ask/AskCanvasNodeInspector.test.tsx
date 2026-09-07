@@ -82,6 +82,7 @@ function renderInspector(overrides: Partial<Parameters<typeof AskCanvasNodeInspe
     <AskCanvasNodeInspector
       node={NODE}
       description="What the ExecutionDriver does."
+      pathState="resolved"
       incoming={INCOMING}
       outgoing={OUTGOING}
       threadId="thread-1"
@@ -221,5 +222,22 @@ describe('AskCanvasNodeInspector', () => {
       messageId: 'message-1',
       nodeId: 'n1',
     });
+  });
+});
+
+/**
+ * A node whose path did not stat at turn time is inspectable — it is only
+ * unopenable. The gate is here rather than at the card because `ask_resolve_node`
+ * refuses an unresolved verdict by contract, so asking would put an error
+ * toast where the answer this side already holds belongs.
+ */
+describe('AskCanvasNodeInspector, unresolved path', () => {
+  it('never calls resolveNode and says why there is nothing to open', async () => {
+    renderInspector({ pathState: 'missing' });
+
+    expect(await screen.findByTestId('ask-canvas-node-unverified')).toBeInTheDocument();
+    expect(screen.getByText('step_executor/driver.rs')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Open in editor/ })).toBeNull();
+    expect(resolveNodeMock).not.toHaveBeenCalled();
   });
 });

@@ -604,7 +604,7 @@ describe('AskCanvasPane', () => {
     expect(screen.getByText(/abc12345/)).toBeInTheDocument();
   });
 
-  it('never opens the inspector on a click against an unresolved node’s rendered card', () => {
+  it('opens the inspector on an unresolved node without asking the backend to resolve it', () => {
     const n0 = node({ id: 'n0', title: 'Not spawned yet', role: 'agent', path: 'src/nope.rs' });
     const oneNodeCanvas = canvas('Onboarding', [n0]);
 
@@ -623,7 +623,8 @@ describe('AskCanvasPane', () => {
 
     fireEvent.click(screen.getByTitle('Not spawned yet'));
 
-    expect(screen.queryByTestId('ask-canvas-node-inspector')).not.toBeInTheDocument();
+    expect(screen.getByTestId('ask-canvas-node-inspector')).toBeInTheDocument();
+    expect(screen.getByTestId('ask-canvas-node-unverified')).toBeInTheDocument();
     expect(resolveNodeMock).not.toHaveBeenCalled();
   });
 });
