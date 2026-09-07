@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 
-import { listAskThreads, EVENT_ASK_TURN_STATUS, type AskTurnStatusPayload } from '../../lib/ask';
-import { phaseOfStatus } from '../../lib/askActivity';
+import { listAskThreads } from '../../lib/ask';
+import { turnCountLabel } from '../../lib/askLifecycle';
 import { formatError } from '../../lib/errors';
-import { useTauriEvent } from '../../hooks/useTauriEvent';
+import { useLiveAskTurns } from '../../hooks/useLiveAskTurns';
 import { relativeTime } from '../../lib/utils';
 import { Chip } from '../ui/Chip';
 import type { AskThread } from '../../types';
@@ -19,23 +19,14 @@ interface AskThreadSwitcherProps {
   onSelect: (threadId: string) => void;
 }
 
-function turnCountLabel(turnCount: number): string {
-  return turnCount === 1 ? '1 turn' : `${turnCount} turns`;
-}
-
 /**
  * The "Threads ▾" dropdown (`docs/ask-canvas/probe/Empty.html`/`Main.html`'s
  * `.drop` block): every open/closed thread in the project, title + kind chip
  * + turn count per row.
  *
- * **Liveness is read off `ask_turn_status`, never stored.** A thread mid-turn
- * has no column that says so — `AskThread` only knows what the last *settled*
- * turn left behind (`turn_count`, `updated_at`). `DiscoverySection.tsx` faces
- * the identical gap for Discovery cards and solves it the same way: a
- * `Set<string>` of thread ids kept live purely from the event stream,
- * `phaseOfStatus(status) !== null` adding to it and any other status clearing
- * it. Reloading this component drops that set back to empty until the next
- * event arrives, same as Discovery's.
+ * **Liveness is read off `ask_turn_status`, never stored** — see
+ * [`useLiveAskTurns`](../../hooks/useLiveAskTurns.ts), which this shares with
+ * `AskSection.tsx` and which records why.
  */
 export function AskThreadSwitcher({
   projectId,
@@ -45,7 +36,7 @@ export function AskThreadSwitcher({
   const [open, setOpen] = useState(false);
   const [threads, setThreads] = useState<AskThread[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [runningThreads, setRunningThreads] = useState<Set<string>>(new Set());
+  const runningThreads = useLiveAskTurns();
 
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -64,15 +55,6 @@ export function AskThreadSwitcher({
   useEffect(() => {
     void load();
   }, [load]);
-
-  useTauriEvent<AskTurnStatusPayload>(EVENT_ASK_TURN_STATUS, ({ thread_id, status }) => {
-    setRunningThreads((prev) => {
-      const next = new Set(prev);
-      if (phaseOfStatus(status) !== null) next.add(thread_id);
-      else next.delete(thread_id);
-      return next;
-    });
-  });
 
   const closeAndRestoreFocus = useCallback(() => {
     setOpen(false);

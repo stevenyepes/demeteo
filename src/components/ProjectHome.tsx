@@ -16,6 +16,7 @@ import EmptyStateCard from './EmptyStateCard';
 import { PipelineCard } from './PipelineCard';
 import { PipelineFilterBar } from './PipelineFilterBar';
 import { PipelineListSkeleton } from './PipelineListSkeleton';
+import { AskSection } from './ask/AskSection';
 import { DiscoverySection } from './discovery/DiscoverySection';
 import { ProjectTelemetry } from './ProjectTelemetry';
 import { StartSessionButton } from './StartSessionButton';
@@ -673,14 +674,6 @@ const ProjectHome = () => {
                         tabs={tabs}
                         activeTab={activeTab}
                         onChange={(section) => {
-                            // Ask has no ProjectHome-level card list — its own
-                            // workspace owns the thread switcher — so selecting
-                            // it navigates away rather than swapping the panel
-                            // below, the way Discovery and Pipelines do.
-                            if (section === 'ask') {
-                                navigate({ kind: 'ask', projectId: activeProject.id });
-                                return;
-                            }
                             if (section === 'terminal') {
                                 setTerminalTab(true);
                                 return;
@@ -701,7 +694,18 @@ const ProjectHome = () => {
                     </button>
                 </div>
 
-                {activeTab === 'discovery' ? (
+                {activeTab === 'ask' ? (
+                    <div className="flex-1 overflow-y-auto pr-1 min-h-0">
+                        <AskSection
+                            projectId={activeProject.id}
+                            machineId={machineId}
+                            projectName={activeProject.name}
+                            onOpen={(threadId) =>
+                                navigate({ kind: 'ask', projectId: activeProject.id, threadId })
+                            }
+                        />
+                    </div>
+                ) : activeTab === 'discovery' ? (
                     <div className="flex-1 overflow-y-auto pr-1 min-h-0">
                         <DiscoverySection
                             projectId={activeProject.id}
