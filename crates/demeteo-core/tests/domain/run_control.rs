@@ -132,6 +132,63 @@ fn a_step_in_flight_or_already_done_is_refused_in_its_own_words() {
     }
 }
 
+// ── Which gates still have a decision to take ────────────────────────────────
+
+fn gate_row(decision: Option<&str>) -> GateDecision {
+    GateDecision {
+        id: crate::domain::ids::GateDecisionId::from("gd-se-1".to_string()),
+        step_execution_id: StepExecutionId::from("se-1".to_string()),
+        decision: decision.map(|d| d.to_string()),
+        feedback: None,
+        created_at: 0,
+    }
+}
+
+/// The open row is half the signal, and the status half deliberately does not
+/// stand alone: a synthetic gate parks on a step reading `interrupted`, so a
+/// status-only test would refuse the resume-fingerprint prompt the conformance
+/// suite approves.
+#[test]
+fn an_unanswered_row_on_a_parked_step_may_be_decided() {
+    for parked in ["awaiting_gate", "interrupted", "running", "pending"] {
+        assert_eq!(gate_decision_refusal(parked, Some(&gate_row(None))), None);
+    }
+}
+
+/// The re-delivery `gate_decide` is idempotent for: a double-click, and the
+/// user nudging a gate whose driver died before it reconciled. The row already
+/// has the answer and the step is still parked, so the call must go through and
+/// re-arm the driver.
+#[test]
+fn an_answered_row_on_a_still_parked_step_is_a_re_delivery_not_a_refusal() {
+    assert_eq!(
+        gate_decision_refusal("awaiting_gate", Some(&gate_row(Some("approve")))),
+        None
+    );
+}
+
+/// The reported bug: Back re-opened a decided gate and its Approve still fired.
+#[test]
+fn an_answered_row_under_a_terminal_step_is_refused_naming_the_answer_it_has() {
+    for done in ["completed", "failed", "cancelled"] {
+        assert!(
+            gate_decision_refusal(done, Some(&gate_row(Some("approve"))))
+                .is_some_and(|m| m.contains("approve") && m.contains(done)),
+            "{done} must be refused, naming the standing answer"
+        );
+    }
+}
+
+/// Every park deletes its row on the way out, so an absent row is a gate
+/// nothing is waiting on — refused whatever the step reads, since the statuses
+/// a park can hold are exactly the ones a live step holds too.
+#[test]
+fn a_gate_with_no_row_at_all_is_refused() {
+    for status in ["awaiting_gate", "interrupted", "completed"] {
+        assert!(gate_decision_refusal(status, None).is_some());
+    }
+}
+
 // ── Nothing upstream may still be working ────────────────────────────────────
 
 const BLOCKING: [&str; 4] = ["pending", "running", "verifying", "awaiting_gate"];

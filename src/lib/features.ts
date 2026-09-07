@@ -228,6 +228,26 @@ export function isEnvironmentError(errorMessage: string | null | undefined): boo
 }
 
 /**
+ * Why this gate obviously cannot be decided, or `null` when it may be.
+ *
+ * The authority is `gate_decision_refusal` in
+ * `crates/demeteo-core/src/domain/run_control.rs`, which reads the step's
+ * status *and* its `gate_decisions` row — and the row is the half the UI does
+ * not have. So this answers only the subset it can see honestly: a step in a
+ * terminal status is a gate the run finished with, and no park ever sits on
+ * one. Everything else it lets through to the backend, which has both halves.
+ *
+ * The case this exists for is the reachable one: the gate modal is addressed by
+ * step execution id, so a back navigation or a stale window re-opens it on a
+ * `completed` gate and offers an Approve that decides nothing.
+ */
+export function gateDecisionRefusal(status: string | undefined): string | null {
+  if (status === undefined) return null;
+  if (!["completed", "failed", "cancelled"].includes(status)) return null;
+  return `This gate is no longer awaiting a decision (the step is ${status}).`;
+}
+
+/**
  * Pure helper: find the first non-terminal predecessor of `target`
  * in `steps`, ordered by `step_index`. Returns `null` when no
  * predecessor is blocking — used by the UI to decide whether to

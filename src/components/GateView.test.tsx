@@ -66,11 +66,15 @@ const SPEC = step({
 // carries its predecessor's `artifact_paths` copied verbatim (`steps/gate/
 // mod.rs`), never a path of its own. A fixture that invents one hides whether
 // the default lands on a row the picker actually renders.
+// `status` is part of that shape too: a gate the modal opens on is parked in
+// `awaiting_gate`, and the fixture has to say so — a `completed` one is the
+// settled case below, where the actions are withheld.
 const GATE_STEP = step({
   id: 'se-gate',
   step_id: 's-gate-review',
   step_index: 2,
   step_kind: 'gate',
+  status: 'awaiting_gate',
   artifact_paths: ['artifacts/implementation-spec.md'],
 });
 
@@ -140,6 +144,7 @@ describe('GateView artifact picker wiring', () => {
       step_id: 's-gate-review',
       step_index: 2,
       step_kind: 'gate',
+      status: 'awaiting_gate',
       artifact_paths: ['src/lib/auth.ts', 'artifacts/implementation-report.md'],
     });
     mount({ gateStep: gate, allSteps: [RESEARCH, implement, gate] });
@@ -204,6 +209,7 @@ describe('GateView artifact picker wiring', () => {
       id: 'se-gate',
       step_id: 's-gate-review',
       step_index: 2,
+      status: 'awaiting_gate',
       artifact_paths: [],
     });
     mount({ gateStep: gateWithNoArtifact, allSteps: [RESEARCH, SPEC, gateWithNoArtifact] });
@@ -256,6 +262,59 @@ describe('GateView artifact picker wiring', () => {
     await waitFor(() => {
       expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent('artifacts/research-report.md');
     });
+  });
+});
+
+// The modal is addressed by step execution id, so any route that still holds
+// one — a back navigation, a stale window, an old notification — re-opens it
+// for a gate the run decided long ago. Nothing in the fetched row makes that
+// visible except its status.
+describe('GateView on a gate the run has moved past', () => {
+  const DECIDED = step({
+    id: 'se-gate',
+    step_id: 's-gate-review',
+    step_index: 2,
+    step_kind: 'gate',
+    status: 'completed',
+    artifact_paths: ['artifacts/implementation-spec.md'],
+  });
+
+  it('withholds every decision and says the gate is already decided', async () => {
+    mount({ gateStep: DECIDED, allSteps: [RESEARCH, SPEC, DECIDED] });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('gate-settled-banner')).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /approve step/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /redirect \/ loop/i })).toBeDisabled();
+    // Abort is enabled under a blocking predecessor and withheld here: with no
+    // waiter left on this gate the click would land nowhere at all.
+    expect(screen.getByRole('button', { name: /abort feature/i })).toBeDisabled();
+    // The paused-here sentence is the part a reviewer reads first, and on a
+    // settled gate it is simply false.
+    expect(screen.queryByText(/currently paused at the step/)).toBeNull();
+  });
+
+  it('does not call gate_decide even if the approve handler is reached', async () => {
+    mount({ gateStep: DECIDED, allSteps: [RESEARCH, SPEC, DECIDED] });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('gate-settled-banner')).toBeInTheDocument();
+    });
+    await userEvent.click(screen.getByRole('button', { name: /approve step/i }));
+
+    expect(decideGate).not.toHaveBeenCalled();
+  });
+
+  it('still lists and shows the artifacts, which are the reason to open a decided gate', async () => {
+    mount({ gateStep: DECIDED, allSteps: [RESEARCH, SPEC, DECIDED] });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent(
+        'artifacts/implementation-spec.md',
+      );
+    });
+    expect(screen.getByText('research-report.md')).toBeInTheDocument();
   });
 });
 

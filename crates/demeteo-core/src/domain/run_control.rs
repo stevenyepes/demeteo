@@ -26,7 +26,7 @@
 use std::collections::HashSet;
 
 use crate::domain::ids::StepId;
-use crate::domain::models::StepExecution;
+use crate::domain::models::{GateDecision, StepExecution};
 
 /// What a caller is trying to do to a run — the only thing that differs
 /// between the five shadow refusals.
@@ -126,6 +126,58 @@ pub fn retry_refusal(status: &str) -> Option<String> {
         "Cannot retry a step in '{}' status. Only failed or interrupted steps can be retried.",
         status
     ))
+}
+
+/// Whether the gate on a step is still open, given the step's status and its
+/// `gate_decisions` row. `Some` is the refusal.
+///
+/// Neither input answers this alone, which is why both are here:
+///
+/// * The **row** is what a park owns. Every park creates one with
+///   `decision = None` and every exit deletes it or fills it in, so its absence
+///   means nothing is waiting — while the *status* cannot say that: a real gate
+///   step parks in `awaiting_gate`, but the synthetic gate a resume-fingerprint
+///   or a non-idempotent command parks on sits on a step reading `interrupted`,
+///   and the same `interrupted` on a step nothing parked on is not a gate.
+/// * The **status** is what says the run moved on. An answered row on a still
+///   parked step is the ordinary re-delivery — a double-click, or the user
+///   nudging a gate whose driver died before it reconciled — and `gate_decide`
+///   is deliberately idempotent for it, because the re-arm in its tail is the
+///   only self-heal there is. The same answered row under a *terminal* step is
+///   the stale one: the decision was applied, the run is elsewhere, and no
+///   waiter will ever read a second copy.
+///
+/// Refusing that last case is what keeps a decision from being written and
+/// dropped — the user told their answer landed, the run-event log recording a
+/// human approval that decided nothing, and an `approve` left on a gate the
+/// scheduler later rewinds re-applied by the reconciliation fast-path in
+/// `steps/gate/mod.rs` with no human in it. `cancel` is refused with the rest
+/// rather than exempted as it is in the predecessor guard: aborting through a
+/// settled gate delivers to no waiter either, and the feature's own Cancel is
+/// the control that stops a run.
+///
+/// It is reachable at all because the gate modal is addressed by step execution
+/// id, so any route that still holds one — a stale window, a back navigation, a
+/// notification — re-opens a gate whose answer was applied long ago.
+pub fn gate_decision_refusal(step_status: &str, recorded: Option<&GateDecision>) -> Option<String> {
+    let Some(row) = recorded else {
+        return Some(
+            "No gate on this step is awaiting a decision; the run has moved past it.".to_string(),
+        );
+    };
+    if !matches!(step_status, "completed" | "failed" | "cancelled") {
+        return None;
+    }
+    Some(match row.decision.as_deref() {
+        Some(answer) => format!(
+            "This gate was already decided ('{}'); the step is {} and the run has moved past it.",
+            answer, step_status
+        ),
+        None => format!(
+            "This gate is no longer awaiting a decision; the step is {}.",
+            step_status
+        ),
+    })
 }
 
 /// Refuse to act on `target` while any of its graph *ancestors* is still

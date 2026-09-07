@@ -239,13 +239,18 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       // for the next 1 Hz heartbeat. Prevents a stale
       // `awaiting_gate` chip lingering alongside the new gate card.
       run.reload();
-      navigate({ kind: 'detail', featureId, featureTitle: run.featureTitle, gateStepExecutionId: step_execution_id });
+      navigate({ kind: 'detail', featureId, featureTitle: run.featureTitle, gateStepExecutionId: step_execution_id }, 'replace');
     }
   });
 
+  /** Replaces, like every other route into the gate overlay — see the
+   *  `<GateView>` render in `App.tsx` for why the stack must not learn it. */
   const decideGate = useCallback(
     (stepExecutionId: string) =>
-      navigate({ kind: 'detail', featureId, featureTitle: run.featureTitle, gateStepExecutionId: stepExecutionId }),
+      navigate(
+        { kind: 'detail', featureId, featureTitle: run.featureTitle, gateStepExecutionId: stepExecutionId },
+        'replace',
+      ),
     [navigate, featureId, run.featureTitle],
   );
 

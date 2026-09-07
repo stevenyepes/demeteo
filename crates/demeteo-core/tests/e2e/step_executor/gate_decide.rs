@@ -474,5 +474,29 @@ async fn test_gate_decide_recovers_after_driver_death() {
     let once_more = gates.latest_for_step(&se_id).unwrap().unwrap();
     assert_eq!(once_more.decision.as_deref(), Some("approve"));
 
+    // …and the mirror image, which is the same row under a driver that *did*
+    // reconcile: once the gate step is terminal the standing answer has been
+    // applied and there is no waiter left, so the same call is refused rather
+    // than writing a second copy nothing reads. The modal is addressed by step
+    // execution id, so a back navigation reaches exactly here.
+    db.step_update(
+        &se_id,
+        &crate::ports::db::StepExecutionPatch {
+            status: Some("completed".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let err = executor
+        .gate_decide("se-recov", "approve", Some("ship it"))
+        .await
+        .expect_err("a gate the run has moved past must refuse a second decision");
+    assert!(
+        format!("{:?}", err).contains("already decided"),
+        "refusal should name the standing answer, got: {:?}",
+        err
+    );
+
     let _ = std::fs::remove_dir_all(temp_dir);
 }

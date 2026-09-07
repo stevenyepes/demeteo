@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { NavigationMode } from '../../context/NavigationContext';
 import type { AppView, StepExecution } from '../../types';
 import { usePersistedPref } from '../../hooks/usePersistedPref';
 import { useRunEvents } from '../../hooks/useRunEvents';
@@ -23,7 +24,7 @@ export function useRunGraph(input: {
   featureId: string;
   featureTitle: string;
   steps: StepExecution[];
-  navigate: (view: AppView) => void;
+  navigate: (view: AppView, mode?: NavigationMode) => void;
   startReplay: (target: ReplayTarget, previewNodes: Set<string> | null) => void;
   /** The node id the current selection resolves to, for the canvas overlay. */
   selectedNodeId: string | null;
@@ -118,12 +119,15 @@ export function useRunGraph(input: {
     (nodeId: string) => {
       const run = runStatusByNode[nodeId];
       if (run?.status === 'awaiting_gate' && run.stepExecutionId) {
-        navigate({
-          kind: 'detail',
-          featureId,
-          featureTitle,
-          gateStepExecutionId: run.stepExecutionId,
-        });
+        navigate(
+          {
+            kind: 'detail',
+            featureId,
+            featureTitle,
+            gateStepExecutionId: run.stepExecutionId,
+          },
+          'replace',
+        );
         return;
       }
       toggleNode(nodeId);

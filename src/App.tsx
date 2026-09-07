@@ -338,7 +338,7 @@ function AppInner() {
           uiDispatch({ type: 'CLOSE_START_FEATURE' });
           break;
         case 'close-gate-view':
-          navigate({ kind: 'detail', featureId: action.featureId, featureTitle: action.featureTitle });
+          navigate({ kind: 'detail', featureId: action.featureId, featureTitle: action.featureTitle }, 'replace');
           break;
         case 'overlay-owns-dismissal':
           // Deliberately nothing: the overlay's own handler has this keypress.
@@ -511,12 +511,17 @@ function AppInner() {
               to <body>; they stay children of this component in the React tree,
               so navigation, project state and error-bus context are unchanged. */}
           <OverlayPortal>
-          {/* Gate overlay — rendered on top of detail view */}
+          {/* Gate overlay — rendered on top of detail view. Opening and
+              closing it both replace, here and at every other route into it
+              (`FeatureDetail`, `useRunGraph`, the Escape ladder above); the
+              stack refuses to bank the overlay either way — `isGateOverlay` in
+              `NavigationContext` carries why. Back while it is open belongs to
+              the ladder, not the stack. */}
           {view.kind === 'detail' && view.gateStepExecutionId && (
             <GateView
               stepExecutionId={view.gateStepExecutionId}
-              onDecisionSubmitted={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle })}
-              onClose={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle })}
+              onDecisionSubmitted={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle }, 'replace')}
+              onClose={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle }, 'replace')}
             />
           )}
 
