@@ -6,6 +6,7 @@ import { useErrorBus } from '../lib/errorBus';
 import { deleteProviderInstance } from '../lib/providers';
 import ProviderSettings from './ProviderSettings';
 import { OverlayPortal } from './ui/OverlayPortal';
+import { BackButton } from './ui/BackButton';
 
 export default function ProvidersPage() {
   const { state: { providers, projects, reposByProject }, dispatch: projDispatch } = useProject();
@@ -48,9 +49,12 @@ export default function ProvidersPage() {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[300px] bg-cyan-600/5 rounded-full blur-[120px] pointer-events-none" />
 
       <div className="flex justify-between items-center mb-8 border-b border-white/5 pb-4 z-10">
-        <div>
+        <div className="flex items-start gap-3">
+          <BackButton className="mt-1" />
+          <div>
           <h1 className="text-2xl font-heading font-bold text-white mb-2">Source Providers</h1>
           <p className="text-sm text-slate-400">Manage Git hosting endpoints for cloning repositories and creating merge requests.</p>
+          </div>
         </div>
         <button onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true })} className="bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-sm px-4 py-2 rounded-lg transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] flex items-center gap-2">
           <Plus className="w-4 h-4" /> Connect Provider

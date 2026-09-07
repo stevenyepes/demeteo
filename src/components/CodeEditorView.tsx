@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Editor from '@monaco-editor/react';
 import { DiffEditor } from '@monaco-editor/react';
 import {
-  ArrowLeft, FolderOpen, Folder, File, RefreshCw, GitBranch, Loader2,
+  FolderOpen, Folder, File, RefreshCw, GitBranch, Loader2,
   GitCommit, FilePlus, FileMinus, FileEdit,
 } from 'lucide-react';
 import { formatError } from '../lib/errors';
@@ -15,6 +15,7 @@ import {
   type SftpEntry,
 } from '../lib/files';
 import { MONACO_RESIZE_SAFE } from '../lib/monaco';
+import { BackButton } from './ui/BackButton';
 
 interface FileNode {
   entry: SftpEntry;
@@ -35,7 +36,6 @@ interface CodeEditorViewProps {
   baseRef?: string;
   headRef?: string;
   initialTab?: 'files' | 'changes';
-  onBack: () => void;
 }
 
 type SidebarTab = 'files' | 'changes';
@@ -100,7 +100,6 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
   baseRef,
   headRef,
   initialTab,
-  onBack,
 }) => {
   const diffBase = baseRef ?? defaultBranch;
   const diffHead = headRef ?? branch;
@@ -304,13 +303,8 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     <div className="flex flex-col h-full w-full overflow-hidden bg-[#0a0c10]">
       {/* Top bar */}
       <div className="flex items-center gap-3 px-4 py-2.5 border-b border-white/5 bg-[#0d0f14]/80 shrink-0">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-1.5 text-slate-400 hover:text-white transition-colors text-xs font-medium"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>{featureTitle}</span>
-        </button>
+        <BackButton />
+        <span className="text-xs font-medium text-slate-400">{featureTitle}</span>
         <span className="text-white/10">·</span>
         <div className="flex items-center gap-1.5 text-xs text-slate-500 font-mono">
           <GitBranch className="w-3.5 h-3.5 text-cyan-500/70" />

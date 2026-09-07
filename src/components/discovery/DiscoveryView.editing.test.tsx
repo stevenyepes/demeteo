@@ -9,7 +9,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Discovery, DiscoveryBoard, DiscoveryDetail, Ticket, TicketView } from '../../types';
+import { RoutedSelection } from '../../test/routedSelection';
 import { DiscoveryView } from './DiscoveryView';
+import { NavigationProvider } from '../../context';
 
 const discovery: Discovery = {
   id: 'd-1',
@@ -97,7 +99,19 @@ beforeEach(() => {
 
 describe('switching tickets while one is open for edit', () => {
   it('does not keep the editor open on the ticket that is no longer selected', async () => {
-    const view = render(<DiscoveryView discoveryId="d-1" discoveryTitle="multi-client runner" />);
+    const view = render(
+      <RoutedSelection>
+        {(selectedTicketId, onSelectTicket) => (
+          <DiscoveryView
+            discoveryId="d-1"
+            discoveryTitle="multi-client runner"
+            selectedTicketId={selectedTicketId}
+            onSelectTicket={onSelectTicket}
+          />
+        )}
+      </RoutedSelection>,
+      { wrapper: NavigationProvider },
+    );
     await view.findByPlaceholderText(/./);
 
     fireEvent.click(view.getByRole('radio', { name: 'Tickets' }));

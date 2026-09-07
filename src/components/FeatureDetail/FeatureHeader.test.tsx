@@ -10,11 +10,15 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { runStatusMeta, TONE_TEXT } from '../../lib/runStatus';
 import { REFRESH_HINT } from '../../lib/staleness';
+import { NavigationProvider } from '../../context';
 import { FeatureHeader } from './FeatureHeader';
 
 function renderHeader(overrides: Partial<Parameters<typeof FeatureHeader>[0]> = {}) {
   const noop = () => {};
+  // The header carries the shared Back control, which reads the navigation
+  // stack — there is no destination prop left to hand it instead.
   return render(
+    <NavigationProvider>
     <FeatureHeader
       featureId="feat-1"
       featureTitle="Add a metric strip"
@@ -33,7 +37,6 @@ function renderHeader(overrides: Partial<Parameters<typeof FeatureHeader>[0]> = 
       publishing={false}
       syncBadge={0}
       mrUrl={null}
-      onBack={noop}
       onOpenTerminalTab={noop}
       onBrowseCode={noop}
       onCancelFeature={noop}
@@ -41,7 +44,8 @@ function renderHeader(overrides: Partial<Parameters<typeof FeatureHeader>[0]> = 
       onPublish={noop}
       onCleanup={noop}
       {...overrides}
-    />,
+    />
+    </NavigationProvider>,
   );
 }
 

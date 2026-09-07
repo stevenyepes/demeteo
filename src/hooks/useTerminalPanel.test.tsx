@@ -10,6 +10,13 @@ import { TerminalPanelProvider } from '../context/TerminalPanelProvider';
 import { ProjectProvider } from '../context/ProjectContext';
 import { useTerminalPanel } from '../hooks/useTerminalPanel';
 import type { SessionInfo } from '../types';
+import { NavigationProvider } from '../context';
+
+// The Terminals view carries the shared Back control, which reads the
+// navigation stack.
+function renderWithNav(ui: Parameters<typeof render>[0]) {
+  return render(ui, { wrapper: NavigationProvider });
+}
 
 let nextSessionId = 0;
 const nextId = (): string => `sess_${++nextSessionId}`;
@@ -55,7 +62,7 @@ function mountHarness(): PanelHarness {
     return <span data-testid="capture-debug">{panel.state.tabs.length}</span>;
   }
 
-  render(
+  renderWithNav(
     <TerminalPanelProvider>
       <Capture />
     </TerminalPanelProvider>,
@@ -563,7 +570,7 @@ describe('useTerminalPanel — view unmount safety', () => {
       );
     }
 
-    const view = render(
+    const view = renderWithNav(
       <TerminalPanelProvider>
         <Harness />
       </TerminalPanelProvider>,
@@ -605,7 +612,7 @@ describe('useTerminalPanel — focus() rebinds detached tabs', () => {
       return <TerminalsView active />;
     }
 
-    render(
+    renderWithNav(
       <ProjectProvider>
         <TerminalPanelProvider>
           <Host />

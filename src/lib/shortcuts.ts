@@ -340,8 +340,8 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
     label: 'Navigate back',
     description:
       'Press the mouse back button (XButton1) anywhere in the app to pop the ' +
-      'in-app navigation stack. Suppressed while any modal is open or a text ' +
-      'field is focused.',
+      'in-app navigation stack. Suppressed while an overlay is open, which ' +
+      'dismisses itself instead.',
     category: 'mouse',
   },
   {
@@ -350,8 +350,8 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
     label: 'Navigate forward',
     description:
       'Press the mouse forward button (XButton2) to advance the in-app ' +
-      'navigation stack. Suppressed while any modal is open or a text field ' +
-      'is focused.',
+      'navigation stack. Suppressed while an overlay is open, which dismisses ' +
+      'itself instead.',
     category: 'mouse',
   },
   {

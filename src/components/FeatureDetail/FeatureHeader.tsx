@@ -3,6 +3,7 @@ import type { FeatureDrift, Project, RemoteRunMirror } from '../../types';
 import { runStatusMeta, TERMINAL_STATUSES } from '../../lib/runStatus';
 import { describeStaleness, REFRESH_HINT } from '../../lib/staleness';
 import { formatCost, formatTokens } from '../../lib/utils';
+import { BackButton } from '../ui/BackButton';
 import { Chip } from '../ui/Chip';
 import { Metric, MetricStrip } from '../ui/MetricStrip';
 
@@ -33,7 +34,6 @@ interface FeatureHeaderProps {
   mrUrl: string | null;
   /** Quieter chrome for a scrolled run column; `lib/headerCollapse.ts` decides it. */
   collapsed?: boolean;
-  onBack: () => void;
   onOpenTerminalTab: () => void;
   onBrowseCode: () => void;
   onCancelFeature: () => void;
@@ -88,7 +88,6 @@ export function FeatureHeader({
   driftRefreshing = false,
   mrUrl,
   collapsed = false,
-  onBack,
   onOpenTerminalTab,
   onBrowseCode,
   onCancelFeature,
@@ -108,12 +107,7 @@ export function FeatureHeader({
     >
       <div className="space-y-1 min-w-0 flex-1">
         <div className="flex items-center gap-3 min-w-0">
-          <button
-            onClick={onBack}
-            className="text-xs px-2.5 py-1 bg-white/5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition uppercase font-bold shrink-0"
-          >
-            Back
-          </button>
+          <BackButton />
           <h1
             className={`${
               collapsed ? 'text-lg' : 'text-xl'

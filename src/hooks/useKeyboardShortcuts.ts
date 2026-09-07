@@ -16,6 +16,11 @@ interface ShortcutMap {
   onCloseCurrentView?: () => void;
   onNextFeature?: () => void;
   onPreviousFeature?: () => void;
+  /** `Alt+←` / `Alt+→` — the keyboard aliases for the mouse back/forward
+   *  buttons, sharing their in-app stack. Registered in `lib/shortcuts.ts`
+   *  since that file was written; nothing dispatched them until now. */
+  onNavigateBack?: () => void;
+  onNavigateForward?: () => void;
   /** Opens the full-page Terminals view. Named "open" rather than
    *  "toggle": the navigation reducer dedups a repeat navigation, so the
    *  chord only ever opens the view, it does not toggle back. */
@@ -48,6 +53,15 @@ export function useKeyboardShortcuts(handlers: ShortcutMap) {
       if (e.key === '?' && !mod && !e.shiftKey && !e.altKey && !isEditableTarget(e.target)) {
         e.preventDefault();
         h.onOpenDocs?.();
+        return;
+      }
+
+      // Alt+arrow, ahead of the mod-only gate below: neither Cmd nor Ctrl is
+      // part of this chord.
+      if (e.altKey && !mod && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault();
+        if (e.key === 'ArrowLeft') h.onNavigateBack?.();
+        else h.onNavigateForward?.();
         return;
       }
 

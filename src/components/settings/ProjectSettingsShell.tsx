@@ -1,4 +1,5 @@
 import { AlertTriangle, RotateCw, Check, X, Search, Box, Save, Trash2, ShieldAlert, Activity } from 'lucide-react';
+import { BackButton } from '../ui/BackButton';
 import { Modal } from '../ui/Modal';
 import { TabBar } from '../ui/TabBar';
 import type { TabDef } from '../ui/TabBar';
@@ -211,9 +212,12 @@ function Shell() {
 
       {/* Header */}
       <div className="flex justify-between items-center mb-8 border-b border-white/5 pb-4 z-10">
-        <div>
+        <div className="flex items-start gap-3">
+          <BackButton className="mt-1" />
+          <div>
           <h1 className="text-2xl font-heading font-bold text-white mb-2">Workspace Settings</h1>
           <p className="text-sm text-slate-400">Configure code isolation rules, repositories and environment configurations for <span className="text-white font-medium">{s.activeProject.name}</span>.</p>
+          </div>
         </div>
         <button onClick={s.handleSave} disabled={s.status === 'saving'} className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-600/50 text-white font-medium text-sm px-4 py-2 rounded-lg transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] flex items-center gap-2">
           {s.status === 'saving' ? <RotateCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
@@ -258,9 +262,6 @@ function Shell() {
         )}
       </div>
 
-      <div className="mt-8 flex justify-end gap-3 z-10 border-t border-white/5 pt-4">
-        <button onClick={() => s.navigate({ kind: 'home' })} className="px-5 py-2.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-white/5 transition-all">Back to Project</button>
-      </div>
     </div>
   );
 }

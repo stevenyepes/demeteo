@@ -325,7 +325,16 @@ otherwise works offline, this silently breaks the review half of the core journe
 phones out to a third-party CDN). Fix: add `monaco-editor` and call
 `loader.config({ monaco })` once, so Vite bundles it.
 
-### F35. Escape is double-handled by every dialog — closing a modal also navigates back
+### F35. Escape is double-handled by every dialog — **RESOLVED (2026-09-07)**
+Closed by an overlay registry rather than by the `stopPropagation()` discipline the
+original fix proposed: `hooks/useOverlay.ts` pushes an id onto `ui.overlays` for as long
+as an overlay is mounted, `ui/Modal.tsx` calls it so every dialog built on it is covered
+the day it is written, and `lib/escapeLadder.ts` grew a rung that stands down when the
+registry is non-empty. A registry rather than a sixth flag because a flag list goes stale
+silently — the next dialog added without one reopens the bug. The same rung now answers
+for the mouse back button (`hooks/useMouseNavigation.ts`) and `Alt+←`, which had the
+identical hole. Original finding below, kept for traceability.
+
 `App.tsx:113-118` documents that per-modal ESC handlers must call
 `event.stopPropagation()`. **None do**, and the shared primitives can't:
 - `ui/Modal.tsx:11-16` and `PromptDialog.tsx:39-46` add their own window-level Escape
@@ -389,7 +398,16 @@ saves, and the version-history drawer ships diff/restore. Original finding below
 - Cron validation checks only "5 whitespace-separated fields" (`:145`); no syntax check,
   no next-run preview.
 
-### F40. Mouse back/forward fire underneath open modals despite documented suppression
+### F40. Mouse back/forward fire underneath open modals — **RESOLVED (2026-09-07)**
+Closed with F35, by the same registry: `useMouseNavigation.ts` now asks
+`hasEscapeOverlay` before acting, so the press is swallowed (the webview must still not
+run its own traversal) but not honoured. `Alt+←` / `Alt+→`, registered since
+`lib/shortcuts.ts` was written and never dispatched, are implemented on that same rung.
+The registry's description was corrected to what is built: the "or a text field is
+focused" half was dropped rather than implemented — a mouse button is not typing, and
+suppressing navigation because a composer has focus would be its own surprise. Original
+finding below, kept for traceability.
+
 `lib/shortcuts.ts:264-282` describes XButton1/XButton2 as "Suppressed while any modal is
 open or a text field is focused". `useMouseNavigation.ts:27-42` has **no suppression of
 any kind** — mouse-back while the Start-Feature modal or terminal drawer is open
@@ -501,9 +519,9 @@ running feature (e.g. before a gate redirect), despite the backend supporting it
    name heuristic. Switching fixes the false-positive warning (F20) properly.
 10. **Bundle Monaco** (F34) — one `loader.config` call plus a `monaco-editor` dependency
     makes Browse Code, artifact previews, and gate review work offline.
-11. **A single overlay/Escape registry** (F35, F40) — one ordered stack that Escape,
-    mouse-back, and `Cmd+W` all consult would fix an entire class of "closing X changed
-    Y" bugs and make the shortcut registry's suppression claims true.
+11. ~~**A single overlay/Escape registry** (F35, F40)~~ — **done, 2026-09-07.** One
+    registry that Escape, mouse-back and `Alt+←` all consult, via the rung
+    `lib/escapeLadder.ts` grew for it.
 12. **Expose post-launch attachments** (F47) — render the existing `direct`-mode
     dropzone in Feature Detail; the backend commands are already registered.
 13. **Delete the dead implementations** (F36) — or, for `ShortcutHelp`, mount it; it is

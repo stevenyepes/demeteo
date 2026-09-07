@@ -45,6 +45,22 @@ interface DiscoveryViewProps {
   discoveryTitle: string;
   /** Opens a started ticket's Feature. */
   onOpenFeature?: (featureId: string, featureTitle: string) => void;
+  /**
+   * Which ticket the inspector is showing, held on the route so it survives
+   * back/forward rather than resetting on every remount.
+   *
+   * Optional *and* nullable, and the two are not interchangeable — the same
+   * contract `AppView`'s `detail` arm documents for `selectedStepId`. Absent
+   * means nothing has chosen yet, so the auto-select effect below seeds one;
+   * `null` means the user closed the inspector, and it must stay closed
+   * (`DISCOVERY_UI_SPEC.md` §3.2.1's overlay would otherwise reopen itself).
+   * Collapsing absent to `null` anywhere upstream makes the close stick
+   * forever; collapsing it the other way makes the close do nothing.
+   */
+  selectedTicketId?: string | null;
+  /** All three states are writable, `undefined` included — see above for why
+   *  "nothing to seed from yet" cannot be spelled `null`. */
+  onSelectTicket: (ticketId: string | null | undefined) => void;
 }
 
 /**
@@ -60,7 +76,10 @@ export function DiscoveryView({
   discoveryId,
   discoveryTitle,
   onOpenFeature,
+  selectedTicketId,
+  onSelectTicket,
 }: DiscoveryViewProps): React.ReactElement {
+  const selectedId = selectedTicketId ?? null;
   const [detail, setDetail] = useState<DiscoveryDetail | null>(null);
   const [board, setBoard] = useState<DiscoveryBoard | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +93,6 @@ export function DiscoveryView({
   // which on a reclaimed worktree is minutes, and a second turn kills the
   // first agent's child.
   const [sending, setSending] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ title: string; detail: string } | null>(null);
   // Which settled turns had to carry the transcript themselves. Only the
   // completion event knows, and nothing stores it, so this is what the
@@ -93,12 +111,6 @@ export function DiscoveryView({
   // learn from was reported to a component that is gone.
   const adopted = useRef<string | null>(null);
   const awaitingAdopted = useRef(false);
-  // Set by `closeInspector`, cleared whenever the auto-select effect has a
-  // reason to run that isn't that close — the selected ticket disappearing,
-  // or a fresh discovery. Without it, the effect below re-selects `tickets[0]`
-  // the instant `selectedId` goes `null`, and a deliberate close can never
-  // stick (`DISCOVERY_UI_SPEC.md` §3.2.1's overlay would reopen itself).
-  const suppressAutoSelect = useRef(false);
 
   const { store, begin, end } = useDiscoveryStream();
 
@@ -119,8 +131,6 @@ export function DiscoveryView({
   useEffect(() => {
     setDetail(null);
     setBoard(null);
-    setSelectedId(null);
-    suppressAutoSelect.current = false;
     setError(null);
     void refresh();
   }, [refresh]);
@@ -223,18 +233,26 @@ export function DiscoveryView({
   );
 
   useEffect(() => {
-    if (selectedId !== null && index.has(selectedId)) return;
-    // A stale `selectedId` (its ticket dropped or removed) is not a close —
-    // it always wins over a still-standing suppression.
-    if (selectedId !== null) suppressAutoSelect.current = false;
-    if (suppressAutoSelect.current) return;
-    setSelectedId(tickets.length > 0 ? tickets[0].ticket.id : null);
-  }, [tickets, index, selectedId]);
+    // An explicit close stays closed; only the absent case seeds. A selection
+    // whose ticket has since been dropped is stale rather than closed, so it
+    // falls through to be re-seeded.
+    if (selectedTicketId === null) return;
+    if (selectedTicketId !== undefined && index.has(selectedTicketId)) return;
+    if (tickets.length === 0) {
+      // Nothing to seed from — and the board is empty on the first render of
+      // every discovery, before `discovery_board` answers. Writing `null` here
+      // reads as a close, so the inspector would stay shut for the rest of the
+      // session once the real board arrived. Drop a stale id back to unset
+      // instead, and leave an already-unset one alone.
+      if (selectedTicketId !== undefined) onSelectTicket(undefined);
+      return;
+    }
+    onSelectTicket(tickets[0].ticket.id);
+  }, [tickets, index, selectedTicketId, onSelectTicket]);
 
   const closeInspector = useCallback(() => {
-    suppressAutoSelect.current = true;
-    setSelectedId(null);
-  }, []);
+    onSelectTicket(null);
+  }, [onSelectTicket]);
 
   async function send(text: string) {
     setActionError(null);
@@ -302,7 +320,7 @@ export function DiscoveryView({
   }
 
   function selectTicket(id: string) {
-    setSelectedId(id);
+    onSelectTicket(id);
     if (editingId !== null && editingId !== id) setEditingId(null);
   }
 

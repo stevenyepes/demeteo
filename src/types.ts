@@ -83,9 +83,45 @@ export interface WorkflowSummary {
   version: number;
 }
 
+/**
+ * Project Home's tab strip, of which only three swap the body below: Ask and
+ * Code Review are routes, so choosing either unmounts that component. The strip
+ * sits inside Project Home rather than in the header because every header entry
+ * is global and this surface is project-scoped — and because
+ * `lib/headerLayout.ts` measures the header's own labelled nav cluster at 485px
+ * against a 1382px threshold, so a fifth entry there would open the 1440
+ * default window icon-only for the first time.
+ *
+ * It lives here rather than beside the strip because it is a routed field: see
+ * `AppView`'s `home` arm.
+ */
+export type ProjectSection = 'pipelines' | 'discovery' | 'ask' | 'terminal';
+
+/**
+ * The sections that are a *place to be*, and so the only ones the route holds.
+ *
+ * Ask and Terminal are launchers: choosing either navigates away, to `ask` and
+ * to `terminals` respectively. Recording one as the section Back returns to
+ * would make Back unusable — it would land on the launcher, which would launch
+ * again, and the user could never get out of the view they were trying to
+ * leave. Encoded rather than described because the trap is invisible: putting
+ * `'terminal'` here type-checks and only fails as a Back that does nothing.
+ */
+export type RestingSection = Extract<ProjectSection, 'pipelines' | 'discovery'>;
+
 export type AppView =
   | { kind: 'empty-state' }
-  | { kind: 'home' }
+  /**
+   * Project Home. `section` is which tab of the strip is showing, held here so
+   * Back from a drill-down returns to the tab it was launched from rather than
+   * to `pipelines` — the whole of the bug this field exists to fix.
+   *
+   * Written with `'replace'`, never `'push'`: choosing a tab is an in-page
+   * control, so it rides on the current history entry instead of making one.
+   * Back therefore always means "leave Project Home", never "undo a tab".
+   * Absent = `pipelines`.
+   */
+  | { kind: 'home'; section?: RestingSection }
   | {
       kind: 'detail';
       featureId: string;
@@ -120,12 +156,25 @@ export type AppView =
   | { kind: 'workflow-editor'; workflowId: string | null }
   /** One Discovery's workspace. The title rides along so the header can name
    *  it before `discovery_get` answers, exactly as `detail` carries
-   *  `featureTitle`. */
-  | { kind: 'discovery'; discoveryId: string; discoveryTitle: string }
-  /** One project's Ask workspace — the thread list, transcript and canvas
-   *  live inside `AskThreadView` itself rather than a ProjectHome card grid,
-   *  so this carries only the project, not a thread id. */
-  | { kind: 'ask'; projectId: string }
+   *  `featureTitle`.
+   *
+   *  `selectedTicketId` is which ticket the inspector is showing, and carries
+   *  the same absent-vs-`null` contract `selectedStepId` documents above:
+   *  absent means "nothing has chosen yet, seed one", `null` means "the user
+   *  closed it". `DiscoveryView`'s auto-select effect reads that difference, so
+   *  normalising one to the other here collapses it silently. */
+  | {
+      kind: 'discovery';
+      discoveryId: string;
+      discoveryTitle: string;
+      selectedTicketId?: string | null;
+    }
+  /** One project's Ask workspace. The thread list, transcript and canvas live
+   *  inside `AskThreadView` itself rather than a ProjectHome card grid, so the
+   *  project is what identifies the workspace; `threadId` names which thread is
+   *  open within it, so Back returns to the thread the user was reading rather
+   *  than to whichever one seeds first. Absent = seed from the thread list. */
+  | { kind: 'ask'; projectId: string; threadId?: string | null }
   | { kind: 'providers' }
   | { kind: 'settings' }
   | { kind: 'remote-inbox' }

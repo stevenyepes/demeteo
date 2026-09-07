@@ -4,6 +4,7 @@ import { Code } from 'lucide-react';
 import { discoveryLifecycle } from '../../lib/discoveryProgress';
 import { formatCost, formatTokens } from '../../lib/utils';
 import type { Discovery, DiscoveryBoard } from '../../types';
+import { BackButton } from '../ui/BackButton';
 import { Chip } from '../ui/Chip';
 import { Metric, MetricStrip } from '../ui/MetricStrip';
 
@@ -42,7 +43,9 @@ export function DiscoveryWorkspaceHeader({
 
   return (
     <header className="flex shrink-0 items-center justify-between gap-6 border-b border-white/5 bg-[#0d0f14]/60 px-6 py-3.5">
-      <div className="flex min-w-0 flex-col gap-1.5">
+      <div className="flex min-w-0 items-start gap-3">
+        <BackButton className="mt-1" />
+        <div className="flex min-w-0 flex-col gap-1.5">
         <p className="m-0 font-mono text-[11px] text-slate-500">Discovery</p>
         <div className="flex min-w-0 items-center gap-3">
           <h1 className="m-0 truncate font-heading text-xl font-bold tracking-tight text-white">
@@ -56,6 +59,7 @@ export function DiscoveryWorkspaceHeader({
               {tickets.length} tickets · {started} started
             </Chip>
           )}
+        </div>
         </div>
       </div>
 

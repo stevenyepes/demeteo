@@ -15,7 +15,9 @@ import type {
   DiscoveryMessage,
   TicketView,
 } from '../../types';
+import { RoutedSelection } from '../../test/routedSelection';
 import { DiscoveryView } from './DiscoveryView';
+import { NavigationProvider } from '../../context';
 
 const discovery: Discovery = {
   id: 'd-1',
@@ -93,7 +95,19 @@ beforeEach(() => {
 });
 
 async function openWorkspace() {
-  const view = render(<DiscoveryView discoveryId="d-1" discoveryTitle="multi-client runner" />);
+  const view = render(
+    <RoutedSelection>
+      {(selectedTicketId, onSelectTicket) => (
+        <DiscoveryView
+          discoveryId="d-1"
+          discoveryTitle="multi-client runner"
+          selectedTicketId={selectedTicketId}
+          onSelectTicket={onSelectTicket}
+        />
+      )}
+    </RoutedSelection>,
+    { wrapper: NavigationProvider },
+  );
   await waitFor(() => expect(listeners.has('discovery_turn_status')).toBe(true));
   await view.findByPlaceholderText(/./);
   return view;

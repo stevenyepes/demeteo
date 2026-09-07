@@ -50,7 +50,6 @@ function shallowEqualView(a: AppView, b: AppView): boolean {
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case 'empty-state':
-    case 'home':
     case 'new-project':
     case 'create-project':
     case 'project-settings':
@@ -61,6 +60,9 @@ function shallowEqualView(a: AppView, b: AppView): boolean {
     case 'terminals':
     case 'remote-inbox':
       return true;
+    case 'home':
+      return b.kind === 'home'
+        && a.section === (b as Extract<AppView, { kind: 'home' }>).section;
     case 'detail':
       return b.kind === 'detail'
         && a.featureId === (b as Extract<AppView, { kind: 'detail' }>).featureId
@@ -78,10 +80,12 @@ function shallowEqualView(a: AppView, b: AppView): boolean {
     case 'discovery':
       return b.kind === 'discovery'
         && a.discoveryId === (b as Extract<AppView, { kind: 'discovery' }>).discoveryId
-        && a.discoveryTitle === (b as Extract<AppView, { kind: 'discovery' }>).discoveryTitle;
+        && a.discoveryTitle === (b as Extract<AppView, { kind: 'discovery' }>).discoveryTitle
+        && a.selectedTicketId === (b as Extract<AppView, { kind: 'discovery' }>).selectedTicketId;
     case 'ask':
       return b.kind === 'ask'
-        && a.projectId === (b as Extract<AppView, { kind: 'ask' }>).projectId;
+        && a.projectId === (b as Extract<AppView, { kind: 'ask' }>).projectId
+        && a.threadId === (b as Extract<AppView, { kind: 'ask' }>).threadId;
     default:
       return false;
   }
@@ -133,6 +137,9 @@ export function navigationReducer(state: NavigationState, action: Action): Navig
 
 interface NavigationContextValue {
   view: AppView;
+  /** The entry Back would land on, so a control can name where it leads
+   *  without reaching into the stack itself. `null` when there is none. */
+  previousView: AppView | null;
   canGoBack: boolean;
   canGoForward: boolean;
   navigate: (view: AppView, mode?: NavigationMode) => void;
@@ -208,6 +215,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const value = useMemo<NavigationContextValue>(
     () => ({
       view: state.current,
+      previousView: state.backStack[state.backStack.length - 1] ?? null,
       canGoBack: state.backStack.length > 0,
       canGoForward: state.forwardStack.length > 0,
       navigate,
@@ -218,7 +226,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     }),
     [
       state.current,
-      state.backStack.length,
+      state.backStack,
       state.forwardStack.length,
       navigate,
       goBack,

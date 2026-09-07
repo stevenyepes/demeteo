@@ -82,22 +82,8 @@ export function pickPreviousFeature(features: readonly Feature[], currentId: str
   return features[(idx - 1 + features.length) % features.length];
 }
 
-/**
- * Where the editor view's back button should land. A Feature-scoped editor
- * (opened from FeatureDetail) returns to that feature's detail view; an
- * editor opened with no `featureId` — the Ask canvas node's "Open in
- * editor" path, which resolves a project checkout rather than a Feature —
- * has no detail view to return to, so back goes to the project home
- * instead of fabricating a bogus feature id.
- */
-export function editorBackTarget(view: { featureId?: string; featureTitle?: string }): { kind: 'detail'; featureId: string; featureTitle: string } | { kind: 'home' } {
-  return view.featureId
-    ? { kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle ?? '' }
-    : { kind: 'home' };
-}
-
 function AppInner() {
-  const { view, navigate, goBack, canGoBack } = useNavigation();
+  const { view, navigate, goBack, goForward, canGoBack } = useNavigation();
   const { state: proj, dispatch: projDispatch } = useProject();
   const { ui, uiDispatch } = useUIState();
 
@@ -318,6 +304,16 @@ function AppInner() {
     onCloseCurrentView: () => {
       if (canGoBack) goBack();
     },
+    // Alt+←/→ share the mouse buttons' stack, and stand down for the same
+    // overlays: one ladder, every Back gesture.
+    onNavigateBack: () => {
+      if (pickEscapeAction(ui, view).type !== 'navigate-back') return;
+      if (canGoBack) goBack();
+    },
+    onNavigateForward: () => {
+      if (pickEscapeAction(ui, view).type !== 'navigate-back') return;
+      goForward();
+    },
     onNextFeature: () => {
       const next = pickNextFeature(features, currentFeatureId);
       if (next) navigate({ kind: 'detail', featureId: next.id, featureTitle: next.title });
@@ -343,6 +339,9 @@ function AppInner() {
           break;
         case 'close-gate-view':
           navigate({ kind: 'detail', featureId: action.featureId, featureTitle: action.featureTitle });
+          break;
+        case 'overlay-owns-dismissal':
+          // Deliberately nothing: the overlay's own handler has this keypress.
           break;
         case 'navigate-back':
           if (canGoBack) goBack();
@@ -441,7 +440,6 @@ function AppInner() {
               baseRef={view.editorContext.baseRef}
               headRef={view.editorContext.headRef}
               initialTab={view.editorContext.initialTab}
-              onBack={() => navigate(editorBackTarget(view))}
             />
           )}
 
@@ -472,6 +470,15 @@ function AppInner() {
             <DiscoveryView
               discoveryId={view.discoveryId}
               discoveryTitle={view.discoveryTitle}
+              selectedTicketId={view.selectedTicketId}
+              /* Replace, never push: choosing a ticket changes what the
+                 inspector reads, it is not a destination. Pushing would put a
+                 history entry behind every card the user glances at and leave
+                 Back walking the board instead of leaving it — the same rule
+                 `useStepSelection` states for a run's steps. */
+              onSelectTicket={(selectedTicketId) =>
+                navigate({ ...view, selectedTicketId }, 'replace')
+              }
               onOpenFeature={(featureId, featureTitle) =>
                 navigate({ kind: 'detail', featureId, featureTitle })
               }
@@ -487,6 +494,8 @@ function AppInner() {
                   : 'local'
               }
               projectName={currentProject.name}
+              threadId={view.threadId}
+              onSelectThread={(threadId) => navigate({ ...view, threadId }, 'replace')}
             />
           )}
 
@@ -552,17 +561,19 @@ function App() {
   return (
     <ErrorBusProvider>
       <NavigationProvider>
-        {/*
-          MouseNavigationBridge installs the window-level XButton1 /
-          XButton2 listeners that drive `useNavigation().goBack()` /
-          `goForward()`. It must be mounted exactly once inside
-          NavigationProvider so the useNavigation() call inside the
-          hook resolves to a real provider. The bridge returns null
-          and contributes no UI of its own.
-        */}
-        <MouseNavigationBridge />
         <ProjectProvider>
           <UIStateProvider>
+            {/*
+              MouseNavigationBridge installs the window-level XButton1 /
+              XButton2 listeners that drive `useNavigation().goBack()` /
+              `goForward()`. Mounted exactly once, and inside *both*
+              NavigationProvider and UIStateProvider: it reads the overlay
+              registry to know when to stand down, so mounted a level up — as
+              it was until the registry existed — it throws on first render
+              and the app boots with no mouse navigation at all. The bridge
+              returns null and contributes no UI of its own.
+            */}
+            <MouseNavigationBridge />
             <TerminalPanelProvider>
               <AppInner />
             </TerminalPanelProvider>
