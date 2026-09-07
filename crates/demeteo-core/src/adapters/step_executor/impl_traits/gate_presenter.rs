@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use crate::domain::ids::{FeatureId, GateDecisionId, StepExecutionId};
 use crate::domain::models::GateDecision;
-use crate::domain::run_control::{shadow_refusal, RunAction};
+use crate::domain::run_control::{gate_decision_refusal, shadow_refusal, RunAction};
 use crate::error::AppError;
 use crate::paths;
 use crate::ports::notification::DomainEvent;
@@ -56,6 +56,15 @@ impl GatePresenter for DagStepExecutor {
                 RunAction::DecideGate,
                 &step_exec.feature_id.0,
             )));
+        }
+
+        // A gate the run has already moved past has no waiter, so every branch
+        // below is a write nobody reads and an event that misreports a human.
+        // A re-delivery to a gate still parked is a different thing and stays
+        // idempotent — the driver re-arm below is the only self-heal there is.
+        let recorded = self.gates.latest_for_step(&se_id).map_err(AppError::from)?;
+        if let Some(refusal) = gate_decision_refusal(&step_exec.status, recorded.as_ref()) {
+            return Err(AppError::validation(refusal));
         }
 
         // 1. Durable: write the decision to the DB. UPSERT so the call

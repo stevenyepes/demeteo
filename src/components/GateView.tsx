@@ -10,6 +10,7 @@ import {
   getStepExecution,
   isBlockingError,
   findActivePredecessor,
+  gateDecisionRefusal,
   listStepsForRun,
   type GateBlocker,
 } from '../lib/features';
@@ -63,6 +64,20 @@ export const GateView: React.FC<GateViewProps> = ({
   // anything here belongs to a step that parked itself and put its question
   // in the row.
   const parkReason = stepExec?.error_message?.trim() || null;
+
+  /**
+   * Non-null when the run has moved past this gate — see `gateDecisionRefusal`
+   * for the rule and `run_control.rs` for the authority. Without it the modal
+   * renders "currently paused at gate review" over a run three steps further
+   * on, and offers decisions the backend refuses.
+   *
+   * `blockedBy` is the mirror-image case, a gate open but too early to decide,
+   * and the two differ over *Abort*: it stays enabled there because aborting is
+   * a separate intent, and is withheld here because a settled gate has no
+   * waiter for any answer, abort included.
+   */
+  const settled = gateDecisionRefusal(stepExec?.status);
+  const decisionsBlocked = blockedBy !== null || settled !== null;
 
   const loadGateData = useCallback(async () => {
     try {
@@ -135,6 +150,7 @@ export const GateView: React.FC<GateViewProps> = ({
     // Defence-in-depth: also short-circuit in the modal so a double-click
     // doesn't fire a redundant IPC after the parent re-renders.
     if (blockedBy && decision !== 'cancel') return;
+    if (settled) return;
     setLoading(true);
     try {
       const gateFeedback = decision === 'redirect' ? feedback : null;
@@ -198,11 +214,11 @@ export const GateView: React.FC<GateViewProps> = ({
               <Terminal className="w-3.5 h-3.5" /> Pipeline context
             </div>
             <p>
-              The multi-agent workflow is currently paused at the step{' '}
+              {settled ? 'This gate was decided; the run has moved past the step ' : 'The multi-agent workflow is currently paused at the step '}
               <span className="text-white font-semibold">
                 {stepExec?.step_id ? stepExec.step_id.replace("s-", "").replace(/-/g, " ") : 'Gate Step'}
               </span>
-              {parkReason ? '.' : '. Review the artifact generated below.'}
+              {settled ? '. Its artifacts are below, read-only.' : parkReason ? '.' : '. Review the artifact generated below.'}
             </p>
           </div>
 
@@ -282,8 +298,24 @@ export const GateView: React.FC<GateViewProps> = ({
             running. The banner sits above the action buttons so the
             user cannot miss the precondition violation. "Abort
             feature" intentionally remains enabled — aborting is a
-            separate intent from approving. */}
-        {blockedBy && (
+            separate intent from approving, and unlike the settled case
+            above there is still a waiter to receive it. */}
+        {settled && (
+          <div
+            data-testid="gate-settled-banner"
+            className="mx-6 mb-3 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-300 flex items-start gap-2"
+            title={settled}
+          >
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span className="leading-relaxed">
+              <span className="font-bold uppercase tracking-wider">Already decided.</span>{' '}
+              {settled} Nothing here is waiting on you — close this and use the run's own
+              controls.
+            </span>
+          </div>
+        )}
+
+        {blockedBy && !settled && (
           <div
             data-testid="gate-blocked-banner"
             className="mx-6 mb-3 p-3 rounded-lg border border-rose-500/30 bg-rose-500/10 text-xs text-rose-300 flex items-start gap-2"
@@ -302,7 +334,9 @@ export const GateView: React.FC<GateViewProps> = ({
         <div className="p-6 border-t border-white/5 bg-white/[0.01] flex items-center justify-between">
           <button
             onClick={() => submitDecision('cancel')}
-            className="px-4 py-2 border border-rose-500/20 hover:border-rose-500/50 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition duration-300"
+            disabled={settled !== null}
+            title={settled ?? 'Abort the whole feature'}
+            className="px-4 py-2 border border-rose-500/20 hover:border-rose-500/50 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-white disabled:border-rose-900/30 disabled:bg-rose-900/20 disabled:text-rose-800 disabled:hover:text-rose-800 disabled:cursor-not-allowed rounded-lg text-xs font-bold transition duration-300"
           >
             Abort feature
           </button>
@@ -318,11 +352,12 @@ export const GateView: React.FC<GateViewProps> = ({
                 </button>
                 <button
                   onClick={() => submitDecision('redirect')}
-                  disabled={blockedBy !== null}
+                  disabled={decisionsBlocked}
                   title={
-                    blockedBy
-                      ? `Cannot redirect while '${blockedBy.step_id}' is ${blockedBy.status}`
-                      : 'Send the redirect feedback to the agent'
+                    settled
+                      ?? (blockedBy
+                        ? `Cannot redirect while '${blockedBy.step_id}' is ${blockedBy.status}`
+                        : 'Send the redirect feedback to the agent')
                   }
                   className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 hover:bg-violet-500 hover:shadow-[0_0_15px_rgba(139,92,246,0.4)] disabled:bg-violet-900/40 disabled:hover:bg-violet-900/40 disabled:cursor-not-allowed disabled:shadow-none rounded-lg text-xs font-bold text-white transition duration-300"
                 >
@@ -333,11 +368,12 @@ export const GateView: React.FC<GateViewProps> = ({
               <>
                 <button
                   onClick={() => setIsRedirecting(true)}
-                  disabled={blockedBy !== null}
+                  disabled={decisionsBlocked}
                   title={
-                    blockedBy
-                      ? `Cannot redirect while '${blockedBy.step_id}' is ${blockedBy.status}`
-                      : 'Switch into redirect / loop mode'
+                    settled
+                      ?? (blockedBy
+                        ? `Cannot redirect while '${blockedBy.step_id}' is ${blockedBy.status}`
+                        : 'Switch into redirect / loop mode')
                   }
                   className="px-4 py-2 border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 text-violet-400 hover:text-white disabled:border-violet-900/30 disabled:bg-violet-900/20 disabled:text-violet-700 disabled:cursor-not-allowed rounded-lg text-xs font-bold transition duration-300"
                 >
@@ -345,11 +381,12 @@ export const GateView: React.FC<GateViewProps> = ({
                 </button>
                 <button
                   onClick={() => submitDecision('approve')}
-                  disabled={blockedBy !== null}
+                  disabled={decisionsBlocked}
                   title={
-                    blockedBy
-                      ? `Cannot approve while '${blockedBy.step_id}' is ${blockedBy.status}`
-                      : 'Approve this gate and let the pipeline continue'
+                    settled
+                      ?? (blockedBy
+                        ? `Cannot approve while '${blockedBy.step_id}' is ${blockedBy.status}`
+                        : 'Approve this gate and let the pipeline continue')
                   }
                   className="flex items-center gap-1.5 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.5)] disabled:bg-emerald-900/40 disabled:hover:bg-emerald-900/40 disabled:cursor-not-allowed disabled:shadow-none rounded-lg text-xs font-bold text-white transition duration-300 shadow-[0_0_15px_rgba(16,185,129,0.3)]"
                 >

@@ -293,6 +293,60 @@ describe('selectedStepId', () => {
   });
 });
 
+// The gate overlay is a modal keyed by step execution id, not a place. Left in
+// the back stack it becomes one — and the entry outlives the decision, so Back
+// out of a run reopens a gate the run has already moved past. Both halves of
+// the loop are here: the entry never being banked, and Back reaching the view
+// the run was opened from.
+describe('the gate overlay', () => {
+  const gate = detailView('feat-1', 'se-9');
+
+  it('is never banked when navigating away from it', () => {
+    const opened = navigationReducer(initial(detailView('feat-1')), {
+      type: 'NAVIGATE',
+      view: gate,
+      mode: 'replace',
+    });
+
+    const closed = navigationReducer(opened, {
+      type: 'NAVIGATE',
+      view: detailView('feat-1'),
+    });
+
+    expect(closed.current).toEqual(detailView('feat-1'));
+    expect(closed.backStack).toEqual([]);
+  });
+
+  it('leaves Back pointing at where the run was opened from', () => {
+    const detail = navigationReducer(home, { type: 'NAVIGATE', view: detailView('feat-1') });
+    const opened = navigationReducer(detail, { type: 'NAVIGATE', view: gate, mode: 'replace' });
+    const closed = navigationReducer(opened, {
+      type: 'NAVIGATE',
+      view: detailView('feat-1'),
+    });
+
+    const back = navigationReducer(closed, { type: 'BACK' });
+
+    expect(back.current.kind).toBe('home');
+  });
+
+  it('swaps one open gate for another without banking the first', () => {
+    const opened = navigationReducer(initial(detailView('feat-1')), {
+      type: 'NAVIGATE',
+      view: gate,
+      mode: 'replace',
+    });
+
+    const second = navigationReducer(opened, {
+      type: 'NAVIGATE',
+      view: detailView('feat-1', 'se-10'),
+    });
+
+    expect(second.current).toEqual(detailView('feat-1', 'se-10'));
+    expect(second.backStack).toEqual([]);
+  });
+});
+
 describe('NAVIGATE (replace)', () => {
   it('swaps the current view without growing either stack', () => {
     const pushed = navigationReducer(home, { type: 'NAVIGATE', view: { kind: 'settings' } });

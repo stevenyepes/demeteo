@@ -91,6 +91,20 @@ function shallowEqualView(a: AppView, b: AppView): boolean {
   }
 }
 
+/**
+ * Whether a view is the gate overlay rather than a place.
+ *
+ * `detail` carrying a `gateStepExecutionId` renders a modal on top of the run
+ * it names, and a modal is not somewhere the user *was*. Left in the back stack
+ * it becomes one: Back out of the run re-opened a gate the run had already
+ * moved past, closing it pushed the entry straight back, and the pair looped
+ * with no exit — the second half of that being a gate modal offering Approve on
+ * a decided gate.
+ */
+function isGateOverlay(view: AppView): boolean {
+  return view.kind === 'detail' && Boolean(view.gateStepExecutionId);
+}
+
 export function navigationReducer(state: NavigationState, action: Action): NavigationState {
   switch (action.type) {
     case 'NAVIGATE': {
@@ -100,6 +114,11 @@ export function navigationReducer(state: NavigationState, action: Action): Navig
         return { ...state, current: action.view };
       }
       if (shallowEqualView(state.current, action.view)) return state;
+      // Dismissing or switching an overlay is a push in every caller's terms,
+      // and the overlay still must not land in the history — so the rule lives
+      // here rather than in each caller's `mode`, which is a thing to remember
+      // and therefore a thing to forget.
+      if (isGateOverlay(state.current)) return { ...state, current: action.view };
       const nextBack = [...state.backStack, state.current];
       const trimmedBack = nextBack.length > MAX_BACK_STACK
         ? nextBack.slice(nextBack.length - MAX_BACK_STACK)
