@@ -80,7 +80,12 @@ export function useRunGraph(input: {
           return [
             nodeId,
             assignment
-              ? { ...status, agentKind: assignment.agentKind, effort: assignment.effort }
+              ? {
+                  ...status,
+                  agentKind: assignment.agentKind,
+                  model: assignment.model,
+                  effort: assignment.effort,
+                }
               : status,
           ];
         }),

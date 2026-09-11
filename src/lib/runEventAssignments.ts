@@ -5,6 +5,11 @@ export interface AssignmentEvidence {
   stepExecutionId: string;
   agentKind: string;
   effort: EffortLevel | null;
+  /**
+   * The resolved/pinned model id; `null` when no tier pinned one and the
+   * harness chose its own; absent when the payload made no usable claim.
+   */
+  model?: string | null;
 }
 
 export interface RunEventAssignment extends AssignmentEvidence {
@@ -20,6 +25,8 @@ export interface AssignmentRunEvent {
 }
 
 export const NO_INJECTED_EFFORT_LABEL = 'No injected effort';
+
+export const HARNESS_DEFAULT_MODEL_LABEL = 'Harness default';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -60,11 +67,19 @@ export function parseAssignmentEvidence(
   // a spawn that actually happened.
   if (payload.effort !== null && !isEffortLevel(payload.effort)) return null;
 
-  return {
+  const evidence: AssignmentEvidence = {
     stepExecutionId: payload.step_execution_id,
     agentKind: payload.agent_kind,
     effort: payload.effort,
   };
+  // `model` is read leniently where `effort` is strict: the agent and effort
+  // above are valid evidence on their own, so a missing or mistyped `model`
+  // drops only the model claim — no chip — rather than the whole assignment.
+  // That is the component's "no claim, no chip" rule applied one field down.
+  if (payload.model === null || isNonEmptyString(payload.model)) {
+    evidence.model = payload.model;
+  }
+  return evidence;
 }
 
 /** [`parseAssignmentEvidence`] stamped with the durable offset it arrived at. */
@@ -99,16 +114,24 @@ export function assignmentEffortLabel(effort: EffortLevel | null): string {
   return effort === null ? NO_INJECTED_EFFORT_LABEL : EFFORT_LABELS[effort];
 }
 
+export function assignmentModelLabel(model: string | null): string {
+  return model ?? HARNESS_DEFAULT_MODEL_LABEL;
+}
+
 /**
- * The one accessible name for an assignment badge pair, so the canvas and the
- * timeline announce the same fact with the same words. `subject` names what is
- * being annotated (a node title, a step name) — the badges sit inside cards
- * that are visually self-locating and are not, to a screen reader.
+ * The one accessible name for an assignment's agent/model/effort reading, so
+ * the canvas and the timeline announce the same fact with the same words.
+ * `subject` names what is being annotated (a node title, a step name) — the
+ * badges sit inside cards that are visually self-locating and are not, to a
+ * screen reader. Without `modelLabel` the model segment is omitted, not
+ * defaulted: an absent model is no evidence, not the harness default.
  */
 export function assignmentAriaLabel(
   subject: string,
   agentKind: string,
   effortLabel: string,
+  modelLabel?: string,
 ): string {
-  return `Actual assignment for ${subject}: Agent: ${agentKind}; Effective effort: ${effortLabel}`;
+  const model = modelLabel === undefined ? '' : `Model: ${modelLabel}; `;
+  return `Actual assignment for ${subject}: Agent: ${agentKind}; ${model}Effective effort: ${effortLabel}`;
 }

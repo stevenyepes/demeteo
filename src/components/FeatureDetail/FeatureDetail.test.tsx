@@ -358,6 +358,7 @@ describe('FeatureDetail — observed assignments across run views', () => {
       stepExecutionId: string,
       agentKind: string,
       effort: 'max' | 'xhigh' | null,
+      model?: string | null,
     ): RunEvent => ({
       offset,
       run_id: runId,
@@ -366,13 +367,14 @@ describe('FeatureDetail — observed assignments across run views', () => {
         step_execution_id: stepExecutionId,
         agent_kind: agentKind,
         effort,
+        model,
       }),
       created_at: offset,
     });
     const events = [
       spawned(1, FEATURE_ID, 'se-old', 'stale-agent', 'max'),
-      spawned(2, FEATURE_ID, 'se-clamped', 'codex', 'xhigh'),
-      spawned(3, FEATURE_ID, 'se-null', 'claude-code', null),
+      spawned(2, FEATURE_ID, 'se-clamped', 'codex', 'xhigh', 'gpt-5.6-codex'),
+      spawned(3, FEATURE_ID, 'se-null', 'claude-code', null, null),
       spawned(4, 'another-run', 'se-clamped', 'wrong-run-agent', 'max'),
       spawned(5, FEATURE_ID, 'se-other-execution', 'wrong-execution-agent', 'max'),
     ];
@@ -416,12 +418,15 @@ describe('FeatureDetail — observed assignments across run views', () => {
     // One card per node: the canvas shows the execution `statusByNode` picked,
     // so the superseded attempt's agent is absent here.
     const graphAssignment = await screen.findByLabelText(
-      'Actual assignment for Clamped work: Agent: codex; Effective effort: Extra high',
+      'Actual assignment for Clamped work: Agent: codex; Model: gpt-5.6-codex; Effective effort: Extra high',
     );
     expect(within(graphAssignment).getByTitle('Agent: codex')).toBeInTheDocument();
-    expect(
-      screen.getByLabelText(/Actual assignment for Defaulted work/),
-    ).toHaveTextContent('No injected effort');
+    expect(within(graphAssignment).getByTitle('Model: gpt-5.6-codex')).toBeInTheDocument();
+    const defaultedAssignment = screen.getByLabelText(
+      'Actual assignment for Defaulted work: Agent: claude-code; Model: Harness default; Effective effort: No injected effort',
+    );
+    expect(defaultedAssignment).toHaveTextContent('No injected effort');
+    expect(within(defaultedAssignment).getByTitle('Model: Harness default')).toBeInTheDocument();
     expect(
       screen.queryByLabelText(/Actual assignment for Unspawned work/),
     ).not.toBeInTheDocument();
@@ -439,15 +444,23 @@ describe('FeatureDetail — observed assignments across run views', () => {
     expect(unspawnedRow).not.toBeNull();
     expect(within(clampedRow as HTMLElement).getByTitle('Agent: codex')).toBeVisible();
     expect(
+      within(clampedRow as HTMLElement).getByTitle('Model: gpt-5.6-codex'),
+    ).toBeVisible();
+    expect(
       within(clampedRow as HTMLElement).getByTitle('Effective effort: Extra high'),
     ).toBeVisible();
     expect(within(nullRow as HTMLElement).getByTitle('Agent: claude-code')).toBeVisible();
+    expect(
+      within(nullRow as HTMLElement).getByTitle('Model: Harness default'),
+    ).toBeVisible();
     expect(
       within(nullRow as HTMLElement).getByTitle('Effective effort: No injected effort'),
     ).toBeVisible();
     // One card per attempt: the superseded execution keeps the evidence of what
     // *it* ran, which is the comparison a retry exists to be read against.
     expect(within(oldRow as HTMLElement).getByTitle('Agent: stale-agent')).toBeVisible();
+    // Its spawn payload carries no `model` key: no claim, so no chip — never "Harness default".
+    expect(within(oldRow as HTMLElement).queryByTitle(/Model:/)).not.toBeInTheDocument();
     expect(within(unspawnedRow as HTMLElement).queryByTitle(/Agent:/)).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('radio', { name: 'Graph' }));

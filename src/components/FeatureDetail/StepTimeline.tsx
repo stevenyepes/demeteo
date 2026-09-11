@@ -110,6 +110,7 @@ export function StepTimeline({
               cardRef={cardRefFor(step.id)}
               density={classes}
               agentKind={assignment?.agentKind}
+              model={assignment?.model}
               effort={assignment?.effort}
               onSelect={onSelect}
               onDecideGate={onDecideGate}

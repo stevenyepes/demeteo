@@ -19,6 +19,7 @@ interface StepCardProps {
   cardRef: (el: HTMLDivElement | null) => void;
   density: DensityClasses;
   agentKind?: string | null;
+  model?: string | null;
   effort?: EffortLevel | null;
   onSelect: (stepExecutionId: string) => void;
   onDecideGate: (stepExecutionId: string) => void;
@@ -32,6 +33,7 @@ function StepCardInner({
   cardRef,
   density,
   agentKind,
+  model,
   effort,
   onSelect,
   onDecideGate,
@@ -106,7 +108,7 @@ function StepCardInner({
               <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono shrink-0">
                 {step.step_kind}
               </span>
-              <AssignmentChips subject={stepName} agentKind={agentKind} effort={effort} />
+              <AssignmentChips subject={stepName} agentKind={agentKind} model={model} effort={effort} />
               {(step.iteration_count ?? 0) > 0 && (
                 <span
                   className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono"

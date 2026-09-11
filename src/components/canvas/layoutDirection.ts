@@ -19,9 +19,25 @@ import type { LayoutEdge, LayoutNode } from './useElkLayout';
 
 export type LayoutDirection = 'DOWN' | 'RIGHT';
 
-/** Card dimensions when React Flow hasn't measured a node yet — same
- *  fallback `useElkLayout` feeds elk, so the estimate matches the result. */
+/** Card dimensions when React Flow hasn't measured a node yet. */
 const DEFAULT_NODE = { width: 240, height: 64 };
+
+/**
+ * The box one node occupies as far as layout is concerned — its measurement
+ * where React Flow has one, `DEFAULT_NODE` per missing axis otherwise.
+ *
+ * The single definition of a node's size: `useElkLayout` feeds elk exactly
+ * this, the orientation estimate averages it, and `layoutSizeKey` fingerprints
+ * it. A second fallback anywhere would let the fingerprint disagree with what
+ * elk actually laid out.
+ */
+export function layoutNodeSize(node: LayoutNode): { width: number; height: number } {
+  return {
+    width: node.measured?.width ?? DEFAULT_NODE.width,
+    height: node.measured?.height ?? DEFAULT_NODE.height,
+  };
+}
+
 /** Mirrors `elk.spacing.nodeNode` (within a layer). */
 const GAP_WITHIN = 48;
 /** Mirrors `elk.layered.spacing.nodeNodeBetweenLayers` (across layers). */
@@ -181,10 +197,8 @@ export function planLayout(
   // Average card size: elk packs layers by actual node extents, and the
   // average is the closest single number to that without replaying its
   // placement pass.
-  const cardWidth =
-    nodes.reduce((sum, n) => sum + (n.measured?.width ?? DEFAULT_NODE.width), 0) / nodes.length;
-  const cardHeight =
-    nodes.reduce((sum, n) => sum + (n.measured?.height ?? DEFAULT_NODE.height), 0) / nodes.length;
+  const cardWidth = nodes.reduce((sum, n) => sum + layoutNodeSize(n).width, 0) / nodes.length;
+  const cardHeight = nodes.reduce((sum, n) => sum + layoutNodeSize(n).height, 0) / nodes.length;
 
   const down = {
     width: extent(breadth, cardWidth, GAP_WITHIN),
@@ -274,4 +288,50 @@ export function graphBoxHeight(plan: LayoutPlan, availableHeight: number): numbe
 export function needsMiniMap(plan: LayoutPlan, nodeCount: number): boolean {
   if (nodeCount >= MINIMAP_NODE_THRESHOLD) return true;
   return plan.fitScale > 0 && plan.fitScale < MINIMAP_MIN_SCALE;
+}
+
+/**
+ * Order-independent fingerprint of every node's layout box — `layoutNodeSize`,
+ * nothing else. Positions and run status are deliberately absent: a status
+ * tick re-seeds every node without resizing one, and must never re-run elk.
+ */
+export function layoutSizeKey(nodes: LayoutNode[]): string {
+  return nodes
+    .map((n) => {
+      const { width, height } = layoutNodeSize(n);
+      return `${n.id}:${width}x${height}`;
+    })
+    .sort()
+    .join(',');
+}
+
+/** Whether React Flow has measured every node on both axes — the only state a
+ *  `layoutSizeKey` is worth acting on. */
+export function everyNodeMeasured(nodes: LayoutNode[]): boolean {
+  return nodes.every((n) => n.measured?.width !== undefined && n.measured?.height !== undefined);
+}
+
+/** What the last successful auto-layout handed elk. */
+export interface AppliedLayout {
+  direction: LayoutDirection;
+  sizeKey: string;
+}
+
+/**
+ * Whether the run canvas re-runs elk or only re-fits the viewport.
+ *
+ * Elk places cards at the size they had when it ran, spaced `GAP_WITHIN` /
+ * `GAP_BETWEEN` apart. A card that then grows — the assignment chips arriving
+ * with `agent_spawned`, the cost row on completion — grows in place, and 80px
+ * of growth into a 64px gap is an overlap. So a changed size is as much a
+ * reason to lay out again as a changed direction; more room alone is not.
+ */
+export function autoLayoutAction(
+  applied: AppliedLayout | null,
+  direction: LayoutDirection,
+  sizeKey: string,
+): 'layout' | 'fit' {
+  if (!applied) return 'layout';
+  if (applied.direction !== direction) return 'layout';
+  return applied.sizeKey === sizeKey ? 'fit' : 'layout';
 }

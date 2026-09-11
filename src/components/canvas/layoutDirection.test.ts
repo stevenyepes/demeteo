@@ -6,8 +6,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  autoLayoutAction,
+  everyNodeMeasured,
   graphBoxHeight,
   graphContainer,
+  layoutNodeSize,
+  layoutSizeKey,
   MAX_ZOOM as CANVAS_MAX_ZOOM,
   MINIMAP_MIN_SCALE,
   MINIMAP_NODE_THRESHOLD,
@@ -15,9 +19,10 @@ import {
   needsMiniMap,
   pickDirection,
   planLayout,
+  type AppliedLayout,
   type ContainerSize,
 } from './layoutDirection';
-import type { LayoutEdge, LayoutNode } from './useElkLayout';
+import { toElkGraph, type LayoutEdge, type LayoutNode } from './useElkLayout';
 
 const MAX_ZOOM = 1.75;
 
@@ -280,5 +285,92 @@ describe('needsMiniMap', () => {
 
   it('does not demand a minimap for an unmeasured canvas', () => {
     expect(needsMiniMap(planLayout([], [], null, CANVAS_MAX_ZOOM), 0)).toBe(false);
+  });
+});
+
+/**
+ * Elk places cards at the size they had when it ran; a card that grows
+ * afterwards grows into the gap beside it. These pin that a changed size is a
+ * reason to lay out again, and that a status tick — which re-seeds every node
+ * without resizing one — is not.
+ */
+describe('autoLayoutAction', () => {
+  /** A pending chain laid out at the card's `min-w`, before any chips. */
+  const pending: LayoutNode[] = [
+    { id: 'research', measured: { width: 200, height: 80 } },
+    { id: 'implement', measured: { width: 200, height: 80 } },
+    { id: 'critic', measured: { width: 200, height: 80 } },
+  ];
+  const applied: AppliedLayout = { direction: 'RIGHT', sizeKey: layoutSizeKey(pending) };
+  const resized = (id: string, measured: { width: number; height: number }) =>
+    pending.map((n) => (n.id === id ? { ...n, measured } : n));
+
+  it('lays out when nothing has been laid out yet', () => {
+    expect(autoLayoutAction(null, 'RIGHT', layoutSizeKey(pending))).toBe('layout');
+  });
+
+  it('only re-fits when the direction and every size are unchanged', () => {
+    expect(autoLayoutAction(applied, 'RIGHT', layoutSizeKey(pending))).toBe('fit');
+  });
+
+  it('lays out again when a card widens from min-w to max-w in the same direction', () => {
+    const spawned = resized('implement', { width: 280, height: 80 });
+    expect(autoLayoutAction(applied, 'RIGHT', layoutSizeKey(spawned))).toBe('layout');
+  });
+
+  it('lays out again when a card grows taller in the same direction', () => {
+    const costed = resized('critic', { width: 200, height: 104 });
+    expect(autoLayoutAction(applied, 'RIGHT', layoutSizeKey(costed))).toBe('layout');
+  });
+
+  it('lays out again when the direction flips', () => {
+    expect(autoLayoutAction(applied, 'DOWN', layoutSizeKey(pending))).toBe('layout');
+  });
+});
+
+describe('layoutSizeKey', () => {
+  const nodes: LayoutNode[] = [
+    { id: 'a', measured: { width: 200, height: 80 } },
+    { id: 'b', measured: { width: 280, height: 96 } },
+  ];
+
+  it('ignores where the nodes are and the order they arrive in', () => {
+    const moved = nodes.map((n, i) => ({ ...n, position: { x: 500 * i, y: 30 } }));
+    expect(layoutSizeKey(moved)).toBe(layoutSizeKey(nodes));
+    expect(layoutSizeKey([...nodes].reverse())).toBe(layoutSizeKey(nodes));
+  });
+
+  it('tells apart two nodes that swapped sizes', () => {
+    const swapped = [
+      { id: 'a', measured: { width: 280, height: 96 } },
+      { id: 'b', measured: { width: 200, height: 80 } },
+    ];
+    expect(layoutSizeKey(swapped)).not.toBe(layoutSizeKey(nodes));
+  });
+
+  it('fingerprints exactly the box elk is fed, fallback included', () => {
+    // Unmeasured and half-measured nodes are where a second fallback constant
+    // would drift: the fingerprint must describe the graph elk actually got.
+    const partial: LayoutNode[] = [
+      { id: 'bare' },
+      { id: 'wide', measured: { width: 280 } },
+      { id: 'tall', measured: { height: 120 } },
+    ];
+    const fed = toElkGraph(partial, [], 'DOWN').children ?? [];
+    expect(fed.map((c) => ({ width: c.width, height: c.height }))).toEqual(
+      partial.map(layoutNodeSize),
+    );
+    const asFed = fed.map((c) => ({ id: c.id, measured: { width: c.width, height: c.height } }));
+    expect(layoutSizeKey(partial)).toBe(layoutSizeKey(asFed));
+  });
+});
+
+describe('everyNodeMeasured', () => {
+  it('is false while any node is missing an axis', () => {
+    expect(everyNodeMeasured([{ id: 'a', measured: { width: 200, height: 80 } }])).toBe(true);
+    expect(everyNodeMeasured([{ id: 'a', measured: { width: 200 } }])).toBe(false);
+    expect(everyNodeMeasured([{ id: 'a' }, { id: 'b', measured: { width: 1, height: 1 } }])).toBe(
+      false,
+    );
   });
 });

@@ -62,6 +62,34 @@ describe('describeEvent', () => {
     expect(d.detail).toBe('Agent opencode · Effective effort Medium');
   });
 
+  it('renders a pinned model between the agent and the effort', () => {
+    const d = describeEvent(
+      'agent_spawned',
+      JSON.stringify({
+        step_execution_id: 'execution-1',
+        agent_kind: 'codex',
+        effort: 'xhigh',
+        model: 'gpt-5.6-codex',
+      }),
+    );
+
+    expect(d.detail).toBe('Agent codex · Model gpt-5.6-codex · Effective effort Extra high');
+  });
+
+  it('renders an explicit null model as the harness default', () => {
+    const d = describeEvent(
+      'agent_spawned',
+      JSON.stringify({
+        step_execution_id: 'execution-1',
+        agent_kind: 'hermes',
+        effort: null,
+        model: null,
+      }),
+    );
+
+    expect(d.detail).toBe('Agent hermes · Model Harness default · Effective effort No injected effort');
+  });
+
   it.each([
     ['malformed JSON', '{'],
     [
