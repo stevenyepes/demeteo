@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { startFeature } from '../lib/createProjectWizard';
 import { submitRemoteRun } from '../lib/remoteRuns';
-import { useNavigation } from '../context';
+import { useNavigation, useProject } from '../context';
 import { useErrorBus } from '../lib/errorBus';
 import { stagedAttachmentInputs } from '../lib/attachments';
 import type { LaunchStageEntry } from '../components/AttachmentDropzone';
@@ -60,6 +60,7 @@ export function useLaunchRun(options: {
 }) {
   const { projectId, onLaunched } = options;
   const { navigate } = useNavigation();
+  const { refreshProjectActivity } = useProject();
   const { reportError } = useErrorBus();
 
   return useCallback(
@@ -121,6 +122,7 @@ export function useLaunchRun(options: {
             model: params.model,
           };
           onLaunched?.(feature);
+          refreshProjectActivity();
           navigate({ kind: 'detail', featureId: feature.id, featureTitle: feature.title });
           return feature;
         }
@@ -154,7 +156,10 @@ export function useLaunchRun(options: {
           agent_kind: res.agent_kind,
           model: res.model,
         };
+        // Inserted at `bootstrapping` with no event; the first one comes after
+        // worktree, branch and preflight.
         onLaunched?.(feature);
+        refreshProjectActivity();
         navigate({ kind: 'detail', featureId: feature.id, featureTitle: feature.title });
         return feature;
       } catch (err) {
@@ -162,6 +167,6 @@ export function useLaunchRun(options: {
         return null;
       }
     },
-    [projectId, onLaunched, navigate, reportError],
+    [projectId, onLaunched, navigate, refreshProjectActivity, reportError],
   );
 }

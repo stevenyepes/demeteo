@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   EffortLevel,
+  FeatureStatusCount,
   Project,
   ProjectMemoryEntry,
   ProjectSettingsData,
@@ -14,6 +15,10 @@ import type {
 
 export async function getProjects(): Promise<Project[]> {
   return invoke<Project[]>("get_projects");
+}
+
+export async function getFeatureStatusRollup(): Promise<FeatureStatusCount[]> {
+  return invoke<FeatureStatusCount[]>("feature_status_rollup");
 }
 
 /** Create the demo project. The backend pins a fixed id and discards the

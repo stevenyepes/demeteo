@@ -9,6 +9,7 @@ import {
   type PipelineFilterOptions,
   type PipelineRow,
 } from './pipelineFilter';
+import type { FeatureRunStatusFields } from './runStatus';
 
 type Row = PipelineRow & { id: string };
 
@@ -54,8 +55,19 @@ describe('segmentFor', () => {
     expect(segmentFor(row('f', '', 1))).toBe('done');
   });
 
-  it('resolves through featureRunStatus, so a published PR wins over the raw status', () => {
-    expect(segmentFor(row('f', 'running', 1, { mr_url: 'https://x/pr/1', mr_state: 'open' }))).toBe('done');
+  it('resolves through featureRunStatus, so a published PR wins over a completed status', () => {
+    expect(segmentFor(row('f', 'completed', 1, { mr_url: 'https://x/pr/1', mr_state: 'open' }))).toBe('done');
+  });
+
+  it('bands a replayed published run by what it is doing now, not by its PR', () => {
+    const pr = { mr_url: 'https://x/pr/1', mr_state: 'open' };
+    expect(segmentFor(row('f', 'running', 1, pr))).toBe('active');
+    expect(segmentFor(row('f', 'awaiting_gate', 1, pr))).toBe('needs-you');
+  });
+
+  it('takes anything carrying a status, not only a full pipeline row', () => {
+    const fields: FeatureRunStatusFields = { status: 'gated' };
+    expect(segmentFor(fields)).toBe('needs-you');
   });
 });
 

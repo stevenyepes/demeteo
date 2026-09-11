@@ -429,6 +429,7 @@ pub fn run() {
             commands::providers::delete_provider_instance,
             commands::project::create_project,
             commands::project::get_projects,
+            commands::project::feature_status_rollup,
             commands::project::seed_sample_project,
             commands::project::update_project,
             commands::project::delete_project,

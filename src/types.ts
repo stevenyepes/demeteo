@@ -30,6 +30,12 @@ export interface Project {
   remote_host?: string | null;
 }
 
+export interface FeatureStatusCount {
+  project_id: string;
+  status: string;
+  count: number;
+}
+
 export interface Provider {
   id: string;
   type: string;

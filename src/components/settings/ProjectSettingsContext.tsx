@@ -780,7 +780,7 @@ await saveProjectSettings(activeProject.id, settingsToPersist());
         // Settings tab doesn't fall back to "Local Compute" the next
         // time the user reopens it. Mirrors the re-bootstrap save path
         // below (line ~531).
-        setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, name: projectName, repos: selectedRepos.length, nodes: computeType === 'local' ? 4 : 8, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null } : p));
+        setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, name: projectName, repos: selectedRepos.length, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null } : p));
         setStatus('success'); setOriginalRepos(selectedRepos);
         fadeLater(() => setStatus('idle'), 1500);
       } catch (err) { setStatus('error'); setErrorMsg(formatError(err)); }
@@ -811,7 +811,7 @@ await saveProjectSettings(activeProject.id, settingsToPersist());
   const handleApproveStrategy = async () => {
     try {
       await saveAllSettings();
-      setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, name: projectName, status: 'idle', repos: selectedRepos.length, nodes: computeType === 'local' ? 4 : 8, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null } : p));
+      setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, name: projectName, status: 'idle', repos: selectedRepos.length, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null } : p));
       setBootstrapStep('bootstrap_success');
     } catch (err) { setBootstrapStep('error'); setBootstrapError(formatError(err)); }
   };

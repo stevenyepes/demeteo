@@ -38,10 +38,10 @@ use crate::domain::ids::{
     StepExecutionId, StepId, ThreadId, WorkflowId, WorkflowVersionId,
 };
 use crate::domain::models::{
-    AgentConfig, AgentProfile, Feature, GateDecision, Machine, Message, Notification, Project,
-    ProjectSettings, ProjectWorkflowOverride, ProviderInstance, RepoContext, Repository,
-    StepExecution, SubtaskRunMirrorRow, ThreadSession, Workflow, WorkflowSchedule, WorkflowVersion,
-    WorkingMemoryEntry,
+    AgentConfig, AgentProfile, Feature, FeatureStatusCount, GateDecision, Machine, Message,
+    Notification, Project, ProjectSettings, ProjectWorkflowOverride, ProviderInstance, RepoContext,
+    Repository, StepExecution, SubtaskRunMirrorRow, ThreadSession, Workflow, WorkflowSchedule,
+    WorkflowVersion, WorkingMemoryEntry,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,6 +227,30 @@ pub trait ProjectRepository: Send + Sync {
 
     fn add_repository(&self, repo: Repository) -> Result<(), String>;
     fn get_repositories_for(&self, project_id: &ProjectId) -> Result<Vec<Repository>, String>;
+
+    /// One row per distinct `(project, status)` over every feature that still
+    /// exists — counts, deliberately not a verdict.
+    ///
+    /// `mr_url` / `mr_state` are left out on purpose. `featureRunStatus` does
+    /// read them, but only to relabel a run that already finished well, which
+    /// never moves it between bands — and a projectActivity test pins that for
+    /// every status. Grouping on them once hid a replayed published run parked
+    /// at a gate, because the rule then promoted on the PR alone.
+    ///
+    /// The temptation here is to answer the question the caller actually has
+    /// ("is anything running? is anything waiting on a human?") with a
+    /// `WHERE status IN (…)` or a `COUNT(*) FILTER (…)` per bucket. Don't.
+    /// Which statuses mean "running" and which mean "needs you" is decided in
+    /// exactly one place, `src/lib/runStatus.ts`, and naming those statuses in
+    /// SQL would fork that vocabulary into a second registry, in a third
+    /// language, that no TypeScript test can reach — so the two would drift
+    /// apart silently the first time a status is added. Grouping by the raw
+    /// column keeps the bucketing where the vocabulary lives, and leaves this
+    /// method with nothing to get wrong.
+    ///
+    /// A project with no features contributes no row; absent means quiet, not
+    /// missing.
+    fn feature_status_rollup(&self) -> Result<Vec<FeatureStatusCount>, String>;
 
     fn get_settings(&self, project_id: &ProjectId) -> Result<Option<ProjectSettings>, String>;
     fn save_settings(&self, settings: ProjectSettings) -> Result<(), String>;

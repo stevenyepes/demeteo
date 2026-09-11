@@ -1,4 +1,7 @@
+import { useId } from 'react';
 import type { LucideIcon } from 'lucide-react';
+
+import RailBadge from './RailBadge';
 
 // A single button in the left project rail (TERMINALS_VIEW_SPEC §5, §6) — used
 // for the "Terminals" entry. Two variants share one component so the rail can
@@ -42,6 +45,14 @@ export function RailNavItem({
 }: RailNavItemProps): React.ReactElement {
   const hasCount = typeof count === 'number' && count > 0;
   const hasAttention = typeof attentionCount === 'number' && attentionCount > 0;
+  const countLabel = `${count} ${label}`;
+  const attentionLabel = `${attentionCount} awaiting your decision`;
+  // `aria-label` replaces a button's name-from-content, so the badges inside
+  // it are never read. Their words reach assistive tech as a description, and
+  // from plain text: a description does not reliably take a referenced
+  // node's own `aria-label` (dom-accessibility-api ignores it outright).
+  const description = [hasAttention && attentionLabel, hasCount && countLabel].filter(Boolean).join(', ');
+  const descriptionId = useId();
 
   const activeClasses = active
     ? 'bg-white/[0.07] border border-white/10 text-white'
@@ -52,6 +63,7 @@ export function RailNavItem({
     onClick,
     title: label,
     'aria-label': label,
+    'aria-describedby': description ? descriptionId : undefined,
     'data-testid': 'rail-nav-item',
     'data-active': active ? 'true' : 'false',
     'aria-current': active ? ('page' as const) : undefined,
@@ -69,22 +81,22 @@ export function RailNavItem({
       >
         <Icon className="w-4 h-4" />
         {hasCount && (
-          <span className="absolute -top-1 -right-1 min-w-[15px] h-[15px] px-1 rounded-full flex items-center justify-center text-[10px] font-mono font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-            {count}
-          </span>
+          <RailBadge tone="emerald" count={count} label={countLabel} corner="right" />
         )}
         {hasAttention && (
-          <span
-            data-testid="rail-nav-attention"
-            aria-label={`${attentionCount} awaiting your decision`}
-            className="absolute -top-1 -left-1 min-w-[15px] h-[15px] px-1 rounded-full flex items-center justify-center text-[10px] font-mono font-semibold bg-ruby-500/20 text-ruby-300 border border-ruby-500/40 animate-pulse-glow"
-          >
-            {attentionCount}
-          </span>
+          <RailBadge
+            testId="rail-nav-attention"
+            tone="ruby"
+            count={attentionCount}
+            label={attentionLabel}
+            corner="left"
+            pulse
+          />
         )}
         {pulse && (
           <span className="absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow" />
         )}
+        {description && <span id={descriptionId} className="sr-only">{description}</span>}
       </button>
     );
   }
@@ -101,22 +113,19 @@ export function RailNavItem({
       <Icon className="w-4 h-4 shrink-0" />
       <span className="text-xs font-medium truncate flex-1 text-left">{label}</span>
       {hasAttention && (
-        <span
-          data-testid="rail-nav-attention"
-          aria-label={`${attentionCount} awaiting your decision`}
-          className="shrink-0 min-w-[18px] px-1.5 py-0.5 rounded-full flex items-center justify-center text-[10px] font-mono font-semibold bg-ruby-500/20 text-ruby-300 border border-ruby-500/40 animate-pulse-glow"
-        >
-          {attentionCount}
-        </span>
+        <RailBadge
+          testId="rail-nav-attention"
+          tone="ruby"
+          count={attentionCount}
+          label={attentionLabel}
+          pulse
+        />
       )}
       {pulse && (
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow shrink-0" />
       )}
-      {hasCount && (
-        <span className="shrink-0 min-w-[18px] px-1.5 py-0.5 rounded-full flex items-center justify-center text-[10px] font-mono font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-          {count}
-        </span>
-      )}
+      {hasCount && <RailBadge tone="emerald" count={count} label={countLabel} />}
+      {description && <span id={descriptionId} className="sr-only">{description}</span>}
     </button>
   );
 }

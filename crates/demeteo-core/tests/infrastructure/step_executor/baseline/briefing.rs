@@ -80,6 +80,8 @@ impl ProjectRepository for SettingsDouble {
         delete_repositories_for(&ProjectId) -> Result<(), String>;
         add_repository(crate::domain::models::Repository) -> Result<(), String>;
         get_repositories_for(&ProjectId) -> Result<Vec<crate::domain::models::Repository>, String>;
+        feature_status_rollup()
+            -> Result<Vec<crate::domain::models::FeatureStatusCount>, String>;
         save_settings(ProjectSettings) -> Result<(), String>;
         list_workflow_overrides(&ProjectId)
             -> Result<Vec<crate::domain::models::ProjectWorkflowOverride>, String>;

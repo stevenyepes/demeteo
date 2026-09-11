@@ -54,7 +54,7 @@ export const DEFAULT_PIPELINE_FILTER: PipelineFilterOptions = {
   sort: 'needs-you-first',
 };
 
-export function segmentFor(feature: PipelineRow): PipelineBand {
+export function segmentFor(feature: FeatureRunStatusFields): PipelineBand {
   const meta = runStatusMeta(featureRunStatus(feature));
   if (meta.tone === 'amber' && !meta.active) return 'needs-you';
   if (meta.active) return 'active';

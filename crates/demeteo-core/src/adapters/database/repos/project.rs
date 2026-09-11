@@ -2,7 +2,8 @@ use rusqlite::params;
 
 use crate::domain::ids::{ProjectId, WorkflowId};
 use crate::domain::models::{
-    EffortLevel, Project, ProjectSettings, ProjectWorkflowOverride, Repository, WorktreeStrategy,
+    EffortLevel, FeatureStatusCount, Project, ProjectSettings, ProjectWorkflowOverride, Repository,
+    WorktreeStrategy,
 };
 use crate::ports::db::ProjectRepository;
 
@@ -109,6 +110,29 @@ impl ProjectRepository for SqliteAdapter {
                     spend: row.get(6)?,
                     tokens: row.get(7)?,
                     created_at: row.get(8)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        iter.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    }
+
+    fn feature_status_rollup(&self) -> Result<Vec<FeatureStatusCount>, String> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT project_id, status, COUNT(*) AS count
+                 FROM features
+                 WHERE status NOT IN ('archived', 'deleted')
+                 GROUP BY project_id, status",
+            )
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map([], |row| {
+                Ok(FeatureStatusCount {
+                    project_id: row.get(0)?,
+                    status: row.get(1)?,
+                    count: row.get(2)?,
                 })
             })
             .map_err(|e| e.to_string())?;

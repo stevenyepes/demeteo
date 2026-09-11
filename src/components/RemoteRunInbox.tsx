@@ -18,7 +18,7 @@ import { RemoteGateActions, ReinjectCredentials } from './RemoteRunActions';
 import { TONE_BORDER_L, TONE_TEXT, type RunStatusTone } from '../lib/runStatus';
 import { relativeTime } from '../lib/utils';
 import { bucketFor, type Bucket } from '../lib/remoteRunBuckets';
-import { useNavigation } from '../context';
+import { useNavigation, useProject } from '../context';
 import { formatError } from '../lib/errors';
 import { listMachines } from '../lib/machines';
 import { BackButton } from './ui/BackButton';
@@ -111,6 +111,7 @@ const RemoteRunInbox: React.FC = () => {
   const [reconciling, setReconciling] = useState(false);
   const [error, setError] = useState<string>('');
   const { navigate } = useNavigation();
+  const { refreshProjectActivity } = useProject();
 
   const machineName = useCallback(
     (id: string) => machines.find((m) => m.id === id)?.name ?? id,
@@ -135,12 +136,14 @@ const RemoteRunInbox: React.FC = () => {
     try {
       const list = await reconcileRuns();
       setRuns(list ?? []);
+      // Hydrating the shadow rows writes runner-owned status with no event.
+      refreshProjectActivity();
     } catch (e) {
       setError(formatError(e));
     } finally {
       setReconciling(false);
     }
-  }, []);
+  }, [refreshProjectActivity]);
 
   useEffect(() => {
     (async () => {

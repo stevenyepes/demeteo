@@ -6,7 +6,9 @@ use crate::application::discovery::decompose;
 use crate::application::discovery::running::RunningTurns;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
 use crate::domain::ids::{MachineId, ProjectId, WorkflowId, LOCAL_MACHINE};
-use crate::domain::models::{Project, ProjectSettings, ProjectWorkflowOverride, Repository};
+use crate::domain::models::{
+    FeatureStatusCount, Project, ProjectSettings, ProjectWorkflowOverride, Repository,
+};
 use crate::ports::db::ProjectRepository;
 
 #[test]
@@ -176,6 +178,9 @@ impl ProjectRepository for HeldProjects {
         reject_project_call!()
     }
     fn get_project(&self, _: &ProjectId) -> Result<Option<Project>, String> {
+        reject_project_call!()
+    }
+    fn feature_status_rollup(&self) -> Result<Vec<FeatureStatusCount>, String> {
         reject_project_call!()
     }
     fn add(&self, _: Project) -> Result<(), String> {

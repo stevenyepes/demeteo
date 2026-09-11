@@ -71,6 +71,23 @@ describe('published beats completed', () => {
     expect(featureRunStatus({ status: 'completed', mr_state: 'open' })).toBe('completed');
     expect(featureRunStatus({ status: 'running', mr_url: '', mr_state: 'none' })).toBe('running');
   });
+
+  it.each(['awaiting_mr', 'pr_ready'])('promotes %s, which also finished well', (status) => {
+    expect(featureRunStatus({ status, mr_url: 'https://github.com/acme/repo/pull/7', mr_state: 'open' })).toBe(
+      'published',
+    );
+  });
+
+  // Replay leaves `mr_url`/`mr_state` in place, so the PR outlives the run
+  // that is now back in motion, waiting on a human, or finished badly.
+  it.each(['pending', 'bootstrapping', 'running', 'verifying', 'awaiting_gate', 'gated', 'parked', 'needs-credentials', 'interrupted', 'failed', 'cancelled'])(
+    'keeps a replayed published run at its own status while it is %s',
+    (status) => {
+      expect(
+        featureRunStatus({ status, mr_url: 'https://github.com/acme/repo/pull/7', mr_state: 'open' }),
+      ).toBe(status);
+    },
+  );
 });
 
 describe('unknown statuses', () => {

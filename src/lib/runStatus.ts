@@ -46,6 +46,9 @@ const META: Record<string, RunStatusMeta> = {
   unreachable:          { label: 'Unreachable',       tone: 'slate',   active: false },
 };
 
+/** Every status string the vocabulary knows, for tests that must hold for all of them. */
+export const RUN_STATUSES: readonly string[] = Object.keys(META);
+
 export function runStatusMeta(status: string): RunStatusMeta {
   return (
     META[status.toLowerCase()] ?? {
@@ -77,9 +80,23 @@ const PUBLISHED_MR_STATES = ['draft', 'open', 'merged'];
  *
  * `mr_state = 'closed'` (PR closed without merge) deliberately falls
  * through to the feature's own status — nothing was published.
+ *
+ * Only a run that finished well is promoted. Nothing ever clears the MR
+ * columns, so a replayed published feature keeps its PR while it runs,
+ * parks at a gate or fails again; promoting on the PR alone labelled that
+ * gate "Published" and dropped it out of "needs you" everywhere. The
+ * promoted statuses already band `done`, so the PR can never move a run
+ * between bands — `foldProjectActivity` counts on that to group on
+ * `status` alone.
  */
 export function featureRunStatus(feature: FeatureRunStatusFields): string {
-  if (feature.mr_url && PUBLISHED_MR_STATES.includes((feature.mr_state ?? '').toLowerCase())) {
+  const own = runStatusMeta(feature.status);
+  if (
+    own.tone === 'emerald' &&
+    !own.active &&
+    feature.mr_url &&
+    PUBLISHED_MR_STATES.includes((feature.mr_state ?? '').toLowerCase())
+  ) {
     return 'published';
   }
   return feature.status;
@@ -93,6 +110,22 @@ export const TONE_CHIP: Record<RunStatusTone, string> = {
   amber:   'bg-amber-500/10 text-amber-400 border-amber-500/20',
   ruby:    'bg-ruby-500/10 text-ruby-400 border-ruby-500/20',
   slate:   'bg-slate-500/10 text-slate-400 border-slate-500/20',
+};
+
+/**
+ * `bg/text/border` for a rail count badge — a louder ladder than `TONE_CHIP`
+ * on purpose: a chip sits in a row of text, a badge is a 15px glyph on the
+ * corner of a rail button and has to read at a glance. The tones that mean
+ * *stop and look* — amber (needs a human), ruby (went badly) — take the
+ * heavier border.
+ */
+export const TONE_BADGE: Record<RunStatusTone, string> = {
+  emerald: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+  cyan:    'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
+  violet:  'bg-violet-500/20 text-violet-300 border-violet-500/30',
+  amber:   'bg-amber-500/20 text-amber-300 border-amber-500/40',
+  ruby:    'bg-ruby-500/20 text-ruby-300 border-ruby-500/40',
+  slate:   'bg-slate-500/20 text-slate-300 border-slate-500/30',
 };
 
 /** Foreground accent (icons, section headers) in the given tone. */
