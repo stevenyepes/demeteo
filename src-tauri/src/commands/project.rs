@@ -2,7 +2,9 @@ use crate::application::projects::{
     ProjectConfig, RepoDirtyStatus, TerminalBranchOptions, TerminalLocations,
 };
 use crate::domain::ids::ProjectId;
-use crate::domain::models::{EffortLevel, Project, RepoHealthStatus, Repository};
+use crate::domain::models::{
+    EffortLevel, FeatureStatusCount, Project, RepoHealthStatus, Repository,
+};
 use crate::error::AppError;
 use crate::paths;
 use crate::ports::worktree_ops::{TerminalWorktreeCreated, TerminalWorktreeRequest};
@@ -30,6 +32,13 @@ pub async fn create_project(
 #[tauri::command]
 pub fn get_projects(ctx: State<'_, AppContext>) -> Result<Vec<Project>, AppError> {
     ctx.projects.get_projects().map_err(AppError::from)
+}
+
+#[tauri::command]
+pub fn feature_status_rollup(
+    ctx: State<'_, AppContext>,
+) -> Result<Vec<FeatureStatusCount>, AppError> {
+    ctx.projects.feature_status_rollup().map_err(AppError::from)
 }
 
 #[tauri::command]

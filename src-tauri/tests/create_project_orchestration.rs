@@ -52,7 +52,8 @@ use demeteo_lib::domain::feature_origin::FeatureOrigin;
 use demeteo_lib::domain::ids::{ProjectId, ProviderId, RepositoryId, WorkflowId};
 use demeteo_lib::domain::models::GateDecision;
 use demeteo_lib::domain::models::{
-    Feature, Project, ProjectSettings, ProjectWorkflowOverride, Repository, StepExecution,
+    Feature, FeatureStatusCount, Project, ProjectSettings, ProjectWorkflowOverride, Repository,
+    StepExecution,
 };
 use demeteo_lib::error::AppError;
 use demeteo_lib::ports::create_project_port::{CreateProjectPort, LaunchedFeature};
@@ -200,6 +201,9 @@ impl ProjectRepository for StubProjects {
         Ok(())
     }
     fn get_repositories_for(&self, _project_id: &ProjectId) -> Result<Vec<Repository>, String> {
+        Ok(Vec::new())
+    }
+    fn feature_status_rollup(&self) -> Result<Vec<FeatureStatusCount>, String> {
         Ok(Vec::new())
     }
     fn get_settings(&self, _project_id: &ProjectId) -> Result<Option<ProjectSettings>, String> {

@@ -1,8 +1,10 @@
 import { useState, useMemo } from 'react';
-import { Plus, Search, Box, GitBranch, PanelLeftOpen, PanelLeftClose, Sparkles, TerminalSquare } from 'lucide-react';
+import { Plus, Search, PanelLeftOpen, PanelLeftClose, Sparkles, TerminalSquare } from 'lucide-react';
 import { StatusBadge } from './ui/StatusBadge';
 import { RailNavItem } from './ui/RailNavItem';
 import { ScrollArea } from './ui/ScrollArea';
+import { ProjectRailActivity } from './ProjectRailActivity';
+import { activityFor, activityTitle, combinedActivity, railProjectLabel, railProjectStatus } from '../lib/projectActivity';
 import { useNavigation, useProject, useUIState, useTerminalPanel } from '../context';
 
 function fuzzyMatch(text: string, query: string): boolean {
@@ -15,19 +17,11 @@ function fuzzyMatch(text: string, query: string): boolean {
   return qi === q.length;
 }
 
-const statusLabel: Record<string, string> = {
-  idle: 'Ready',
-  active: 'Active',
-  running: 'Running',
-  bootstrapping: 'Bootstrapping',
-  gated: 'Gate Required',
-  error: 'Error',
-  failed: 'Failed',
-};
+const COLLAPSED_PROJECT_LIMIT = 8;
 
 function ProjectRail() {
   const { navigate, view } = useNavigation();
-  const { state: { projects, currentProjectId }, dispatch } = useProject();
+  const { state: { projects, currentProjectId, activityByProject }, dispatch } = useProject();
   const { ui: { sidebarCollapsed }, uiDispatch } = useUIState();
   const { state: terminalState } = useTerminalPanel();
   const terminalCount = terminalState.tabs.length;
@@ -52,6 +46,10 @@ function ProjectRail() {
   }, [projects, searchQuery]);
 
   if (collapsed) {
+    const hidden = projects.slice(COLLAPSED_PROJECT_LIMIT);
+    const hiddenActivity = combinedActivity(activityByProject, hidden.map(p => p.id));
+    const hiddenSummary = activityTitle(hiddenActivity);
+    const hiddenTitle = `${hidden.length} more project${hidden.length === 1 ? '' : 's'}`;
     return (
       <aside className="w-14 border-r border-white/5 bg-[#0d0f14]/50 backdrop-blur-xl flex flex-col items-center py-3 z-10 shrink-0 gap-3">
         <button
@@ -76,11 +74,11 @@ function ProjectRail() {
           <Sparkles className="w-5 h-5" />
         </button>
         <div className="w-6 border-t border-white/10" />
-        {projects.slice(0, 8).map(p => (
+        {projects.slice(0, COLLAPSED_PROJECT_LIMIT).map(p => (
           <button
             key={p.id}
             onClick={() => { setCurrentProject(p.id); setView('home'); }}
-            className={`w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold font-mono transition-all ${
+            className={`relative w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold font-mono transition-all ${
               currentProject === p.id
                 ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
                 : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
@@ -88,8 +86,19 @@ function ProjectRail() {
             title={p.name}
           >
             {p.name.charAt(0).toUpperCase()}
+            <ProjectRailActivity activity={activityFor(activityByProject, p.id)} collapsed />
           </button>
         ))}
+        {hidden.length > 0 && (
+          <button
+            onClick={onToggleCollapse}
+            className="relative w-9 h-9 rounded-lg flex items-center justify-center text-[10px] font-mono text-slate-500 hover:text-slate-300 hover:bg-white/5 transition-all"
+            title={hiddenSummary ? `${hiddenTitle} — ${hiddenSummary}` : hiddenTitle}
+          >
+            +{hidden.length}
+            <ProjectRailActivity activity={hiddenActivity} collapsed />
+          </button>
+        )}
         <div className="mt-auto">
           <RailNavItem
             icon={TerminalSquare}
@@ -147,42 +156,34 @@ function ProjectRail() {
             {searchQuery ? 'No matching projects.' : 'No workspaces configured.'}
           </div>
         ) : (
-          filtered.map((p) => (
-            <div
-              key={p.id}
-              onClick={() => { setCurrentProject(p.id); setView('home'); }}
-              className={`flex items-center justify-between px-3 py-2 mx-2 rounded-lg cursor-pointer transition-all duration-200 ${
-                currentProject === p.id
-                  ? 'glass-panel text-white shadow-[0_0_15px_rgba(139,92,246,0.15)]'
-                  : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
-              }`}
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <StatusBadge status={p.status} />
-                <div className="min-w-0">
-                  <div className="text-xs font-medium truncate max-w-[120px]">{p.name}</div>
-                  <div className="text-[9px] text-slate-500 font-mono">
-                    {statusLabel[p.status] || p.status}
+          filtered.map((p) => {
+            const activity = activityFor(activityByProject, p.id);
+            const derived = railProjectStatus(p.status, activity);
+            const summary = activityTitle(activity);
+            return (
+              <div
+                key={p.id}
+                onClick={() => { setCurrentProject(p.id); setView('home'); }}
+                title={summary ? `${p.name} — ${summary}` : p.name}
+                className={`flex items-center justify-between px-3 py-2 mx-2 rounded-lg cursor-pointer transition-all duration-200 ${
+                  currentProject === p.id
+                    ? 'glass-panel text-white shadow-[0_0_15px_rgba(139,92,246,0.15)]'
+                    : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <StatusBadge status={derived} />
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium truncate max-w-[120px]">{p.name}</div>
+                    <div className="text-[9px] text-slate-500 font-mono">
+                      {railProjectLabel(derived)}
+                    </div>
                   </div>
                 </div>
+                <ProjectRailActivity activity={activity} />
               </div>
-              <div className="flex items-center gap-2 text-[9px] font-mono text-slate-600 shrink-0">
-                <span className="flex items-center gap-0.5">
-                  <GitBranch className="w-2.5 h-2.5" />
-                  {p.repos}
-                </span>
-                {p.nodes != null && (
-                  <>
-                    <span className="text-slate-700">|</span>
-                    <span className="flex items-center gap-0.5">
-                      <Box className="w-2.5 h-2.5" />
-                      {p.nodes}
-                    </span>
-                  </>
-                )}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </ScrollArea>
 

@@ -16,7 +16,7 @@
 // `OverridesTab.test.tsx` / `HarnessesSection.test.tsx`).
 
 import { invoke } from '@tauri-apps/api/core';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useEffect, type ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,6 +37,8 @@ const EXISTING_TEST_COMMAND = 'A: stale DB command';
 interface Scenario {
   /** Project status that routes `handleSave` into `proceedWithReBootstrap`. */
   status?: 'idle' | 'active' | 'error' | 'bootstrapping';
+  nodes?: number;
+  remoteHost?: string;
 }
 
 // Routes `invoke(cmd, args)` to a scripted handler. Anything unscripted
@@ -77,6 +79,7 @@ function scriptIpc(_scenario: Scenario) {
     list_agents: () => [],
     set_agent_configs: () => undefined,
     update_project: () => undefined,
+    save_project_settings: () => undefined,
     probe_project_commands: () => ({ machine: 'local', commands: [], detail: null, guidance: '', blocks_launch: false }),
     bootstrap_project: () => ({
       default_branch: 'main',
@@ -97,7 +100,7 @@ function scriptIpc(_scenario: Scenario) {
   }) as typeof invoke);
 }
 
-function Harness({ children, status }: { children: ReactNode; status: Scenario['status'] }) {
+function Harness({ children, scenario }: { children: ReactNode; scenario: Scenario }) {
   const { state, dispatch } = useProject();
   useEffect(() => {
     if (state.projects.length === 0) {
@@ -106,12 +109,13 @@ function Harness({ children, status }: { children: ReactNode; status: Scenario['
         project: {
           id: PROJECT_ID,
           name: 'Demeteo',
-          status: status ?? 'error',
+          status: scenario.status ?? 'error',
           repos: 1,
-          nodes: 1,
+          nodes: scenario.nodes ?? 1,
           spend: 0,
           tokens: 0,
           compute_type: 'local',
+          remote_host: scenario.remoteHost,
         },
       });
       dispatch({ type: 'SET_CURRENT', id: PROJECT_ID });
@@ -119,7 +123,12 @@ function Harness({ children, status }: { children: ReactNode; status: Scenario['
   }, [state.projects.length, dispatch]);
 
   if (state.currentProjectId !== PROJECT_ID) return null;
-  return <>{children}</>;
+  return (
+    <>
+      <span data-testid="project-row">{JSON.stringify(state.projects.find(p => p.id === PROJECT_ID))}</span>
+      {children}
+    </>
+  );
 }
 
 /** Mount the real settings view and land on the Strategy tab, where the
@@ -132,7 +141,7 @@ async function mount(scenario: Scenario = {}, ipcScript: (s: Scenario) => void =
     <ErrorBusProvider>
       <NavigationProvider>
         <ProjectProvider>
-          <Harness status={scenario.status}>
+          <Harness scenario={scenario}>
             <ProjectSettingsView />
           </Harness>
         </ProjectProvider>
@@ -289,5 +298,31 @@ describe('proceedWithReBootstrap — defaultBranch/branchPrefix precedence', () 
     // win over `strategy.*` regardless of what `bootstrap_project` re-detects.
     expect(getInputByLabel('Default Branch')).toHaveValue(EXISTING_DEFAULT_BRANCH);
     expect(getInputByLabel('Branch Prefix')).toHaveValue(EXISTING_BRANCH_PREFIX);
+  });
+});
+
+describe('handleSave — the rail row it writes', () => {
+  const SEEDED_NODES = 7;
+
+  function projectRow(): Record<string, unknown> {
+    return JSON.parse(screen.getByTestId('project-row').textContent ?? 'null');
+  }
+
+  it('carries telemetry through untouched while still writing the fields the Settings tab reads back', async () => {
+    await mount({ status: 'idle', nodes: SEEDED_NODES, remoteHost: '' });
+
+    expect(projectRow().nodes).toBe(SEEDED_NODES);
+
+    await userEvent.click(screen.getByRole('button', { name: /Save Changes/ }));
+
+    await waitFor(() => expect(projectRow().repos).toBe(0));
+
+    expect(projectRow()).toMatchObject({
+      name: 'Demeteo',
+      status: 'idle',
+      nodes: SEEDED_NODES,
+      compute_type: 'local',
+      remote_host: null,
+    });
   });
 });

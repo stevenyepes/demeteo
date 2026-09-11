@@ -144,6 +144,13 @@ impl Feature {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeatureStatusCount {
+    pub project_id: ProjectId,
+    pub status: String,
+    pub count: i64,
+}
+
 /// A per-step agent/model/effort override selected when launching a feature.
 /// Any field may be `None`, meaning "inherit" for that dimension.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

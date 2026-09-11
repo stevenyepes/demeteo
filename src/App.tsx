@@ -84,7 +84,7 @@ export function pickPreviousFeature(features: readonly Feature[], currentId: str
 
 function AppInner() {
   const { view, navigate, goBack, goForward, canGoBack } = useNavigation();
-  const { state: proj, dispatch: projDispatch } = useProject();
+  const { state: proj, dispatch: projDispatch, refreshProjectActivity } = useProject();
   const { ui, uiDispatch } = useUIState();
 
   const { projects, currentProjectId, providers, reposByProject, initialLoadError } = proj;
@@ -183,6 +183,7 @@ function AppInner() {
       copy[idx] = { ...copy[idx], status };
       return copy;
     });
+    refreshProjectActivity();
   });
 
   // Map CTA events from ErrorToast into navigation
@@ -225,6 +226,11 @@ function AppInner() {
       ];
     });
     navigate({ kind: 'detail', featureId: feature_id, featureTitle, gateStepExecutionId: step_execution_id }, 'replace');
+    refreshProjectActivity();
+  });
+
+  useTauriEvent<unknown>('gate_decided', () => {
+    refreshProjectActivity();
   });
 
   // Initial data load
@@ -238,9 +244,14 @@ function AppInner() {
         // never blocks the rest of startup, and any newly-actionable run
         // (PR ready/failed/parked/needs-credentials) surfaces as a
         // notification right away instead of waiting for a manual check.
-        reconcileRuns().catch((err) => {
-          console.error('Failed to reconcile remote runs on startup:', err);
-        });
+        reconcileRuns().then(
+          // Reconcile writes runner-owned status into the shadow rows without
+          // an event, and usually lands after the rollup below has read them.
+          () => refreshProjectActivity(),
+          (err) => {
+            console.error('Failed to reconcile remote runs on startup:', err);
+          },
+        );
 
         const backendProviders = await listProviderInstances();
         const mappedProviders: Provider[] = backendProviders.map(p => ({
@@ -263,6 +274,7 @@ function AppInner() {
         }));
 
         projDispatch({ type: 'LOAD_PROJECTS', projects: mappedProjects, reposByProject: repoMap });
+        refreshProjectActivity();
         if (mappedProjects.length > 0) {
           projDispatch({ type: 'SET_CURRENT', id: mappedProjects[0].id });
           navigate({ kind: 'home' });

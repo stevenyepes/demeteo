@@ -18,7 +18,8 @@ use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
 use crate::domain::agent_event::{AgentEvent, StopReason, Usage};
 use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId, LOCAL_MACHINE};
 use crate::domain::models::{
-    Availability, PathContainment, Platform, Project, Repository, SessionInfo, WindowsAgentShell,
+    Availability, FeatureStatusCount, PathContainment, Platform, Project, Repository, SessionInfo,
+    WindowsAgentShell,
 };
 use crate::ports::agent_runtime::{
     AgentCapabilities, AgentContext, AgentRuntime, AgentSession, AgentStartFuture,
@@ -488,6 +489,9 @@ impl ProjectRepository for HeldProjects {
         reject_project_call!()
     }
     fn get_project(&self, _: &ProjectId) -> Result<Option<Project>, String> {
+        reject_project_call!()
+    }
+    fn feature_status_rollup(&self) -> Result<Vec<FeatureStatusCount>, String> {
         reject_project_call!()
     }
     fn add(&self, _: Project) -> Result<(), String> {

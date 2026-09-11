@@ -3,6 +3,7 @@ import { confirm as confirmDialog, message as messageDialog } from '@tauri-apps/
 import type { AppView, MrState } from '../../types';
 import { formatError } from '../../lib/errors';
 import { useErrorBus } from '../../lib/errorBus';
+import { useProject } from '../../context';
 import { fetchMrState, getFeature } from '../../lib/featureSync';
 import { cleanupFeature, publishMr } from '../../lib/featureDetail';
 
@@ -22,6 +23,7 @@ export function useFeatureMr(input: {
 }) {
   const { featureId, projectId, status, reload, navigate } = input;
   const { reportError } = useErrorBus();
+  const { refreshProjectActivity } = useProject();
   const [publishing, setPublishing] = useState(false);
   const [mrState, setMrState] = useState<MrState | null>(null);
   const [mrUrl, setMrUrl] = useState<string | null>(null);
@@ -105,6 +107,9 @@ export function useFeatureMr(input: {
   const handleCleanup = async (force = false) => {
     try {
       const result = await cleanupFeature({ featureId, force });
+      // The lifecycle archives with a bare status write — and the Cleanup
+      // button is offered on a stuck gate, the one row the rail flags.
+      refreshProjectActivity();
       let msg = `Cleanup (${result.policy}): ${result.action}`;
       if (result.warnings?.length) {
         msg += `\n\nWarnings:\n${result.warnings.join('\n')}`;

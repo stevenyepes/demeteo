@@ -130,4 +130,26 @@ describe('RailNavItem', () => {
     );
     expect(screen.getByTestId('rail-nav-attention')).toHaveTextContent('2');
   });
+
+  it.each([false, true])('describes its badges to assistive tech (collapsed=%s)', (collapsed) => {
+    render(
+      <RailNavItem
+        icon={TerminalSquare}
+        label="Terminals"
+        collapsed={collapsed}
+        count={3}
+        attentionCount={1}
+        onClick={() => {}}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: 'Terminals' });
+    expect(button).toHaveAccessibleDescription('1 awaiting your decision, 3 Terminals');
+  });
+
+  it('describes nothing when there is nothing to count', () => {
+    render(<RailNavItem icon={TerminalSquare} label="Terminals" onClick={() => {}} />);
+
+    expect(screen.getByRole('button', { name: 'Terminals' })).not.toHaveAttribute('aria-describedby');
+  });
 });

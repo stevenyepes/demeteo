@@ -1,7 +1,9 @@
 use super::SqliteAdapter;
-use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId, WorkflowId};
+use crate::domain::feature_origin::FeatureOrigin;
+use crate::domain::ids::{FeatureId, MachineId, ProjectId, ProviderId, RepositoryId, WorkflowId};
 use crate::domain::models::{
-    EffortLevel, Project, ProjectSettings, ProjectWorkflowOverride, Repository, WorktreeStrategy,
+    EffortLevel, Feature, Project, ProjectSettings, ProjectWorkflowOverride, Repository,
+    WorktreeStrategy,
 };
 use crate::ports::db::ProjectRepository;
 use rusqlite::Connection;
@@ -586,4 +588,115 @@ fn project_settings_sync_resolver_default_round_trips() {
     assert_eq!(cleared.sync_resolver_effort, None);
     assert_eq!(cleared.sync_review_before_push, None);
     assert_eq!(cleared.review_entrypoint.as_deref(), Some("/code-review"));
+}
+
+fn rollup_project(id: &str) -> Project {
+    Project {
+        id: ProjectId::from(id.to_string()),
+        name: id.to_string(),
+        compute_type: "local".to_string(),
+        remote_host: None,
+        status: "idle".to_string(),
+        nodes: 0,
+        spend: 0.0,
+        tokens: 0,
+        created_at: 1_700_000_000,
+    }
+}
+
+fn rollup_feature(id: &str, project_id: &str, status: &str) -> Feature {
+    Feature {
+        id: FeatureId::from(id.to_string()),
+        project_id: ProjectId::from(project_id.to_string()),
+        workflow_id: None,
+        workflow_version_id: None,
+        title: id.to_string(),
+        description: String::new(),
+        status: status.to_string(),
+        total_cost: 0.0,
+        duration: "0s".to_string(),
+        tokens: 0,
+        created_at: 1_700_000_000,
+        agent_kind: None,
+        model: None,
+        effort: None,
+        mr_url: None,
+        mr_state: Some("none".to_string()),
+        pr_title: None,
+        pr_body: None,
+        commit_artifacts: None,
+        loop_iterations: None,
+        max_budget_usd: None,
+        step_overrides: Vec::new(),
+        attachments: Vec::new(),
+        harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
+    }
+}
+
+#[test]
+fn test_feature_status_rollup_counts_live_features_per_project_and_status() {
+    let conn = Connection::open_in_memory().unwrap();
+    let adapter = SqliteAdapter::new(conn).unwrap();
+
+    assert!(
+        adapter.feature_status_rollup().unwrap().is_empty(),
+        "an empty features table is an empty rollup, not an error"
+    );
+
+    for id in ["p_roll_a", "p_roll_b", "p_roll_quiet"] {
+        adapter.add(rollup_project(id)).unwrap();
+    }
+
+    for (id, project, status) in [
+        ("f_a1", "p_roll_a", "running"),
+        ("f_a2", "p_roll_a", "running"),
+        ("f_a3", "p_roll_a", "gated"),
+        ("f_a4", "p_roll_a", "archived"),
+        ("f_a5", "p_roll_a", "deleted"),
+        ("f_b1", "p_roll_b", "completed"),
+    ] {
+        crate::ports::db::FeatureRepository::add(&adapter, rollup_feature(id, project, status))
+            .unwrap();
+    }
+
+    let mut republished = rollup_feature("f_a6", "p_roll_a", "running");
+    republished.mr_url = Some("https://example.invalid/pr/1".to_string());
+    republished.mr_state = Some("open".to_string());
+    crate::ports::db::FeatureRepository::add(&adapter, republished).unwrap();
+
+    let rollup = adapter.feature_status_rollup().unwrap();
+    let counts = |project: &str| {
+        let mut rows: Vec<(String, i64)> = rollup
+            .iter()
+            .filter(|r| r.project_id.0 == project)
+            .map(|r| (r.status.clone(), r.count))
+            .collect();
+        rows.sort();
+        rows
+    };
+
+    assert_eq!(
+        counts("p_roll_a"),
+        vec![("gated".to_string(), 1), ("running".to_string(), 3)],
+        "a replayed published run counts under the status it has now; its PR \
+         is not part of the key"
+    );
+    assert!(
+        !rollup
+            .iter()
+            .any(|r| r.status == "archived" || r.status == "deleted"),
+        "features that no longer exist to the user are excluded"
+    );
+    assert_eq!(
+        counts("p_roll_b"),
+        vec![("completed".to_string(), 1)],
+        "another project's features never land under the first one's id"
+    );
+    assert!(
+        counts("p_roll_quiet").is_empty(),
+        "a project with no features contributes no row at all"
+    );
 }
