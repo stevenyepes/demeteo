@@ -11,6 +11,7 @@
 import React from 'react';
 import {
   assignmentEffortLabel,
+  assignmentModelLabel,
   parseAssignmentEvidence,
 } from '../lib/runEventAssignments';
 import type { RunEvent } from '../types';
@@ -131,9 +132,11 @@ export function describeEvent(
     case 'agent_spawned': {
       const evidence = parseAssignmentEvidence(kind, payloadJson);
       if (!evidence) break;
+      const model =
+        evidence.model === undefined ? '' : ` · Model ${assignmentModelLabel(evidence.model)}`;
       return {
         label: fallbackLabel,
-        detail: `Agent ${evidence.agentKind} · Effective effort ${assignmentEffortLabel(evidence.effort)}`,
+        detail: `Agent ${evidence.agentKind}${model} · Effective effort ${assignmentEffortLabel(evidence.effort)}`,
         tone: 'default',
       };
     }

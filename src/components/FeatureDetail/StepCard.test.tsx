@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 
 import { densityClasses } from '../../lib/density';
 import type { EffortLevel } from '../../lib/effortLevels';
-import { NO_INJECTED_EFFORT_LABEL } from '../../lib/runEventAssignments';
+import {
+  HARNESS_DEFAULT_MODEL_LABEL,
+  NO_INJECTED_EFFORT_LABEL,
+} from '../../lib/runEventAssignments';
 import type { StepExecution } from '../../types';
 import { StepCard } from './StepCard';
 
@@ -23,10 +26,12 @@ const step = (over: Partial<StepExecution> = {}): StepExecution => ({
 function renderCard({
   execution = step(),
   agentKind,
+  model,
   effort,
 }: {
   execution?: StepExecution;
   agentKind?: string | null;
+  model?: string | null;
   effort?: EffortLevel | null;
 } = {}) {
   return render(
@@ -40,6 +45,7 @@ function renderCard({
       onSelect={() => {}}
       onDecideGate={() => {}}
       agentKind={agentKind}
+      model={model}
       effort={effort}
     />,
   );
@@ -78,8 +84,21 @@ describe('StepCard observed assignment', () => {
       />,
     );
 
-    expect(screen.queryByText('Agent', { selector: 'span' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Effort', { selector: 'span' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /Actual assignment/ })).not.toBeInTheDocument();
+  });
+
+  it('forwards a pinned model to its own chip', () => {
+    renderCard({ agentKind: 'codex', model: 'gpt-5.1-codex', effort: 'high' });
+
+    expect(screen.getByTitle('Model: gpt-5.1-codex')).toHaveTextContent('gpt-5.1-codex');
+  });
+
+  it('names an unpinned model as the harness default', () => {
+    renderCard({ agentKind: 'claude-code', model: null, effort: 'medium' });
+
+    expect(screen.getByTitle(`Model: ${HARNESS_DEFAULT_MODEL_LABEL}`)).toHaveTextContent(
+      HARNESS_DEFAULT_MODEL_LABEL,
+    );
   });
 
   it('does not show assignment metadata for a gate without spawn evidence', () => {
@@ -87,8 +106,7 @@ describe('StepCard observed assignment', () => {
       execution: step({ step_id: 's-review', step_kind: 'gate', status: 'awaiting_gate' }),
     });
 
-    expect(screen.queryByText('Agent', { selector: 'span' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Effort', { selector: 'span' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /Actual assignment/ })).not.toBeInTheDocument();
   });
 
   it('keeps a long observed agent value available through its full title', () => {

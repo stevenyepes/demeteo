@@ -12,6 +12,7 @@
  * errors.
  */
 import type { ComponentProps } from 'react';
+import type { ElkNode } from 'elkjs/lib/elk-api.js';
 import { act, render, screen, cleanup, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,7 +24,7 @@ import {
   MIN_ZOOM,
   MINIMAP_NODE_THRESHOLD,
 } from './layoutDirection';
-import { nodeTypeMeta, type WorkflowDefinitionV2 } from './types';
+import { nodeTypeMeta, type NodeRunStatus, type WorkflowDefinitionV2 } from './types';
 
 /** Props every `ReactFlow` render was handed, newest last. Recorded by the
  *  spy below so the zoom bounds can be asserted against the exported
@@ -62,6 +63,24 @@ vi.mock('./layoutDirection', async (importOriginal) => {
     },
   };
 });
+
+/** Every graph the canvas handed elk, oldest first. The worker is replaced
+ *  rather than spawned: jsdom has no `Worker`, and this double answers with
+ *  a position for exactly the children it was given. */
+const { elkGraphs } = vi.hoisted(() => ({ elkGraphs: [] as ElkNode[] }));
+
+vi.mock('elkjs/lib/elk-api.js', () => ({
+  default: class {
+    async layout(graph: ElkNode): Promise<ElkNode> {
+      elkGraphs.push(graph);
+      return {
+        ...graph,
+        children: (graph.children ?? []).map((c, i) => ({ ...c, x: i * 400, y: 0 })),
+      };
+    }
+    terminateWorker() {}
+  },
+}));
 
 import bugfix from './__fixtures__/bugfix-pipeline.v2.json';
 import cifix from './__fixtures__/ci-fix.v2.json';
@@ -343,6 +362,40 @@ describe('WorkflowCanvas render', () => {
     expect(within(assignment).queryByText('High')).not.toBeInTheDocument();
   });
 
+  it('shows the full pinned model id on the run node it was spawned with', () => {
+    const longModel = 'anthropic/claude-sonnet-4-5-20250929-with-a-provider-routed-suffix';
+    expect(longModel.length).toBeGreaterThan(60);
+    const def: WorkflowDefinitionV2 = {
+      schema_version: 2,
+      id: 'wf-model',
+      name: 'Model',
+      nodes: [{ id: 'implement', type: 'agent', title: 'Implement' }],
+      edges: [],
+    };
+
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas
+          definition={def}
+          statusByNode={{
+            implement: {
+              status: 'completed',
+              stepExecutionId: 'se-implement',
+              agentKind: 'claude-code',
+              model: longModel,
+              effort: 'high',
+            },
+          }}
+        />
+      </div>,
+    );
+
+    const assignment = screen.getByLabelText(
+      `Actual assignment for Implement: Agent: claude-code; Model: ${longModel}; Effective effort: High`,
+    );
+    expect(within(assignment).getByTitle(`Model: ${longModel}`)).toHaveTextContent(longModel);
+  });
+
   it('keeps configured design-mode essence separate from actual assignment metadata', () => {
     const def: WorkflowDefinitionV2 = {
       schema_version: 2,
@@ -509,5 +562,117 @@ describe('WorkflowCanvas resize damping', () => {
     act(() => void vi.advanceTimersByTime(1000));
 
     expect(planLayoutCalls.count).toBe(2);
+  });
+});
+
+/**
+ * Elk places each card at the size it had when it ran. A run-mode card grows
+ * after that — the assignment chips arrive with `agent_spawned` — and growing
+ * in place past the 64px layer gap overlaps the next card, so a measured size
+ * change has to reach elk. A status tick must not, including across the
+ * unmeasured render its re-seed causes (the `measured` guard in the canvas).
+ */
+describe('WorkflowCanvas re-layout on a measured size change', () => {
+  const def = simpleTask as unknown as WorkflowDefinitionV2;
+  /** What each card measures, by node id. jsdom lays nothing out, so this is
+   *  the only source of `offsetWidth` / `offsetHeight` React Flow reads. */
+  const sizes = new Map<string, { width: number; height: number }>();
+  const offset = {
+    width: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth'),
+    height: Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight'),
+  };
+
+  const statuses = (implement: string): Record<string, NodeRunStatus> =>
+    Object.fromEntries(
+      def.nodes.map((n) => [n.id, { status: n.id === 's-implement' ? implement : 'pending' }]),
+    );
+
+  /** Deliver the node ResizeObserver's callback for every card still mounted,
+   *  the way a browser does once a card is observed or resized. */
+  const measureNodes = () => {
+    for (const o of observers) {
+      const cards = o.targets.filter((t) => t.isConnected && t.classList.contains('react-flow__node'));
+      if (cards.length === 0) continue;
+      o.callback(cards.map((target) => ({ target }) as unknown as ResizeObserverEntry), o);
+    }
+  };
+
+  /** Let measurement, the elk promise and every re-seed they cause run out. */
+  const settle = async () => {
+    for (let i = 0; i < 6; i++) {
+      act(measureNodes);
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+  };
+
+  const widthFedFor = (graph: ElkNode | undefined, id: string) =>
+    graph?.children?.find((c) => c.id === id)?.width;
+
+  beforeEach(() => {
+    observers.length = 0;
+    elkGraphs.length = 0;
+    sizes.clear();
+    for (const n of def.nodes) sizes.set(n.id, { width: 200, height: 80 });
+    const dimension = (axis: 'width' | 'height') =>
+      function (this: HTMLElement) {
+        const id = this.classList.contains('react-flow__node') ? this.getAttribute('data-id') : null;
+        return id ? (sizes.get(id)?.[axis] ?? 0) : axis === 'width' ? 1600 : 600;
+      };
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+      configurable: true,
+      get: dimension('width'),
+    });
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get: dimension('height'),
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    if (offset.width) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', offset.width);
+    if (offset.height) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offset.height);
+  });
+
+  async function mountLaidOut() {
+    const view = render(
+      <div style={{ width: 1600, height: 600 }}>
+        <WorkflowCanvas definition={def} statusByNode={statuses('pending')} />
+      </div>,
+    );
+    act(() => canvasObserver().tick(1600, 600));
+    await settle();
+    expect(elkGraphs).toHaveLength(1);
+    return view;
+  }
+
+  it('lays out once, at the measured size, and not again once it settles', async () => {
+    await mountLaidOut();
+    expect(widthFedFor(elkGraphs[0], 's-implement')).toBe(200);
+  });
+
+  it('does not re-run elk for a status tick that resizes nothing', async () => {
+    const { rerender } = await mountLaidOut();
+
+    rerender(
+      <div style={{ width: 1600, height: 600 }}>
+        <WorkflowCanvas definition={def} statusByNode={statuses('running')} />
+      </div>,
+    );
+    await settle();
+
+    expect(elkGraphs).toHaveLength(1);
+  });
+
+  it('re-runs elk when a card widens in place, at the new width', async () => {
+    await mountLaidOut();
+
+    sizes.set('s-implement', { width: 280, height: 80 });
+    await settle();
+
+    expect(elkGraphs).toHaveLength(2);
+    expect(widthFedFor(elkGraphs[1], 's-implement')).toBe(280);
   });
 });

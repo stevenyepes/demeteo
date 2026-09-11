@@ -125,6 +125,11 @@ pub enum DomainEvent {
         feature_id: FeatureId,
         step_execution_id: StepExecutionId,
         agent_kind: String,
+        /// The model Demeteo *pinned* for this spawn — step override, then
+        /// feature, step config, project default, runtime default — never one
+        /// the harness reported back. `None` = no tier pinned one, so the
+        /// harness ran its own default and which model ran is unknown; the UI
+        /// says `Harness default` rather than guessing a name.
         model: Option<String>,
         /// `None` = no effort was injected on this spawn at all.
         effort: Option<EffortLevel>,

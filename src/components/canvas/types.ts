@@ -103,6 +103,9 @@ export interface NodeRunStatus {
   stepExecutionId?: string | null;
   /** Present only when a valid launch event names the actual agent. */
   agentKind?: string | null;
+  /** The pinned/resolved model; `null` means nothing was pinned and the harness
+   *  chose its own; absence means no launch evidence. */
+  model?: string | null;
   /** `null` means the launch injected no effort; absence means no launch evidence. */
   effort?: EffortLevel | null;
 }

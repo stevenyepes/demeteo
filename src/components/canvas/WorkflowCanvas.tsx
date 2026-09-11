@@ -43,13 +43,16 @@ import '@xyflow/react/dist/style.css';
 import { WorkflowNode } from './nodes/WorkflowNode';
 import { toFlowGraph, type GraphOrientation, type WorkflowFlowNode } from './flowGraph';
 import {
+  autoLayoutAction,
+  everyNodeMeasured,
+  layoutSizeKey,
   needsMiniMap,
   planLayout,
   FIT_PADDING,
   MAX_ZOOM,
   MIN_ZOOM,
+  type AppliedLayout,
   type ContainerSize,
-  type LayoutDirection,
 } from './layoutDirection';
 import { useElkLayout } from './useElkLayout';
 import { NodeTypePicker, Palette, NODE_TYPE_MIME, type PaletteEntry } from './Palette';
@@ -177,15 +180,16 @@ function CanvasInner({
    *  into the migrated column a second after we laid it out. Cleared whenever
    *  the definition changes, so an edit can't resurrect stale coordinates. */
   const laidOutRef = useRef<Map<string, PositionV2> | null>(null);
-  /** The direction already applied, so a resize that doesn't change the
-   *  verdict doesn't re-run elk. */
-  const appliedDirRef = useRef<LayoutDirection | null>(null);
+  /** Direction and card sizes elk last laid out, so a resize that changes
+   *  neither only re-fits. Sizes are here because a card that grows after elk
+   *  placed it grows into its neighbour's gap (`autoLayoutAction`). */
+  const appliedRef = useRef<AppliedLayout | null>(null);
 
   // A new definition owns its own layout — drop what we computed for the old
   // one. Declared before the re-seed effect so the drop lands first.
   useEffect(() => {
     laidOutRef.current = null;
-    appliedDirRef.current = null;
+    appliedRef.current = null;
   }, [definition]);
 
   // Re-seed when the definition (or its overlay) changes identity, carrying
@@ -283,6 +287,13 @@ function CanvasInner({
   // read the labels at — the second case is what a responsive box introduces.
   const showMiniMap = needsMiniMap(plan, nodes.length);
 
+  const sizeKey = layoutSizeKey(nodes);
+  // A re-seed from `base` drops every `measured` for one render, while
+  // `nodesInitialized` still reports the last commit's `true`. Acting then
+  // feeds elk placeholder sizes — and the placeholder plan can disagree on
+  // direction, which ping-pongs elk on every status tick.
+  const measured = everyNodeMeasured(nodes);
+
   /** Lay the graph out, choosing the orientation that renders largest in the
    *  space the canvas currently has. Reads nodes/edges imperatively so it
    *  doesn't change identity on every status tick. */
@@ -300,7 +311,9 @@ function CanvasInner({
       const positions = await layout(layoutNodes, layoutEdges, direction);
       if (positions.length === 0) return;
       const byId = new Map(positions.map((p) => [p.id, { x: p.x, y: p.y }]));
-      appliedDirRef.current = direction;
+      // Keyed on what elk was fed, never on `getNodes()` now: a card that
+      // resized while elk ran must still read as changed afterwards.
+      appliedRef.current = { direction, sizeKey: layoutSizeKey(layoutNodes) };
       // Held before the state updates below: changing the orientation
       // invalidates `base`, and the re-seed it triggers has to find these
       // positions or it would drop the layout it just asked for.
@@ -332,25 +345,28 @@ function CanvasInner({
    *  depends on the window, not on the author. */
   const autoArrange = !design;
 
-  // Orient an unarranged graph for the space available, and re-orient when a
-  // resize actually changes the verdict — `runAutoLayout` no-ops the rest of
-  // the time via `appliedDirRef`, so dragging a window edge doesn't thrash elk.
+  // Lay the graph out for the space available, and again whenever the
+  // direction verdict or a card's measured size moves; anything else — more
+  // room, a status tick — only re-fits, so dragging a window edge doesn't
+  // thrash elk.
   useEffect(() => {
-    if (!autoArrange || !nodesInitialized || !containerSize) return;
-    if (plan.direction === appliedDirRef.current) {
-      // Same shape, more (or less) room: just re-fit into it.
+    if (!autoArrange || !nodesInitialized || !measured || !containerSize) return;
+    const applied = appliedRef.current;
+    if (autoLayoutAction(applied, plan.direction, sizeKey) === 'fit') {
       void fitView({ ...FIT_VIEW_OPTIONS, duration: 200 });
       return;
     }
-    void runAutoLayout({ duration: appliedDirRef.current ? 300 : 0 });
+    void runAutoLayout({ duration: applied ? 300 : 0 });
   }, [
     autoArrange,
     // A new definition resets both refs above, so this has to run again to
     // re-derive the layout — the booleans alone wouldn't have changed.
     definition,
     nodesInitialized,
+    measured,
     containerSize,
     plan,
+    sizeKey,
     fitView,
     runAutoLayout,
   ]);

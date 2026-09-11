@@ -18,8 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import ELK, { type ELK as Elk, type ElkNode } from 'elkjs/lib/elk-api.js';
 import ElkWorker from 'elkjs/lib/elk-worker.min.js?worker';
 
-/** Default card dimensions when React Flow hasn't measured a node yet. */
-const DEFAULT_NODE = { width: 240, height: 64 };
+import { layoutNodeSize, type LayoutDirection } from './layoutDirection';
 
 /**
  * Everything except the direction, which the caller picks from the space the
@@ -49,6 +48,24 @@ export interface LayoutEdge {
   target: string;
 }
 
+/** The graph `layout` hands elk. */
+export function toElkGraph(
+  nodes: LayoutNode[],
+  edges: LayoutEdge[],
+  direction: LayoutDirection,
+): ElkNode {
+  return {
+    id: 'root',
+    layoutOptions: { ...LAYOUT_OPTIONS, 'elk.direction': direction },
+    children: nodes.map((n) => ({ id: n.id, ...layoutNodeSize(n) })),
+    edges: edges.map((e) => ({
+      id: e.id,
+      sources: [e.source],
+      targets: [e.target],
+    })),
+  };
+}
+
 export function useElkLayout() {
   const elkRef = useRef<Elk | null>(null);
   const [running, setRunning] = useState(false);
@@ -65,7 +82,7 @@ export function useElkLayout() {
     async (
       nodes: LayoutNode[],
       edges: LayoutEdge[],
-      direction: 'DOWN' | 'RIGHT' = 'DOWN',
+      direction: LayoutDirection = 'DOWN',
     ): Promise<ElkLayoutResult> => {
       if (!elkRef.current) {
         elkRef.current = new ELK({
@@ -73,20 +90,7 @@ export function useElkLayout() {
         });
       }
 
-      const graph: ElkNode = {
-        id: 'root',
-        layoutOptions: { ...LAYOUT_OPTIONS, 'elk.direction': direction },
-        children: nodes.map((n) => ({
-          id: n.id,
-          width: n.measured?.width ?? DEFAULT_NODE.width,
-          height: n.measured?.height ?? DEFAULT_NODE.height,
-        })),
-        edges: edges.map((e) => ({
-          id: e.id,
-          sources: [e.source],
-          targets: [e.target],
-        })),
-      };
+      const graph = toElkGraph(nodes, edges, direction);
 
       setRunning(true);
       try {

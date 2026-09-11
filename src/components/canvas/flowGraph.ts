@@ -28,7 +28,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   /** In the replay cone about to re-run (P2.4) — draws a "will re-run" ring. */
   highlighted?: boolean;
   /** Config-essence badges for design mode (P3.2); undefined in run mode,
-   *  where the card's second row belongs to cost/duration instead. */
+   *  where the card's lower rows belong to the actual-assignment chips (agent,
+   *  model, effort) and then cost/duration instead. */
   essence?: NodeEssence;
   /** Structural-lint badge (P3.3); undefined when the node is clean. */
   lint?: NodeLint;

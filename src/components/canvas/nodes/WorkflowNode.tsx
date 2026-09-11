@@ -5,8 +5,9 @@
  *
  * Run-mode overlay (P2.2): when `data.run` is present the card takes on the
  * run-status color language (`lib/runStatus.ts`) — a pulsing dot for in-motion
- * nodes, a tone-matched glow, duration+cost chips on completion, and the
- * failure class on a failed node. Animation is **opacity-only** (`animate-pulse`,
+ * nodes, a tone-matched glow, the agent/model/effort the step actually spawned
+ * with, duration+cost chips on completion, and the failure class on a failed
+ * node. Animation is **opacity-only** (`animate-pulse`,
  * static box-shadows) to honor the webview battery rule; no infinite transforms.
  */
 import { Handle, Position, type NodeProps } from '@xyflow/react';
@@ -208,6 +209,7 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
       <AssignmentChips
         subject={data.title}
         agentKind={run?.agentKind}
+        model={run?.model}
         effort={run?.effort}
         className="pl-11"
       />
