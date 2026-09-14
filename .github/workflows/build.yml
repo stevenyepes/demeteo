@@ -3,9 +3,6 @@ name: Build & Release
 on:
   push:
     branches: [master]
-    # Skip the rc counter retrigger; rc commits only touch .release/**.
-    paths-ignore:
-      - '.release/**'
     tags: ["v*.*.*"]
 
 concurrency:
@@ -17,75 +14,69 @@ env:
 
 jobs:
   # ════════════════════════════════════════════════════════════════════
-  # rc — bumps .release/rc-counter.json and pushes back to master.
-  # Runs ONLY on master pushes (not tag pushes). Builds depend on this.
-  # The follow-up push from this job only touches .release/** and is
-  # filtered out by the workflow's paths-ignore, preventing recursion.
+  # version — the one place the shipped version string is decided.
+  #   master push  → <base>-N, base from package.json, N = 1 + commits
+  #                  since the commit that set that base. Derived, never
+  #                  stored: the previous design pushed a counter commit
+  #                  back to master, which needed a PAT, doubled master's
+  #                  history and raced whenever two pushes landed minutes
+  #                  apart. Anchored on the version-bump commit rather
+  #                  than on the v* tag because promote.yml pushes the
+  #                  commit before the tag, so the master run it triggers
+  #                  may not see the tag yet and would count from the
+  #                  previous release.
+  #   tag push     → the manifest version, which must equal the tag.
   # ════════════════════════════════════════════════════════════════════
-  rc:
-    if: github.ref == 'refs/heads/master'
+  version:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
     outputs:
-      base: ${{ steps.bump.outputs.base }}
-      rc: ${{ steps.bump.outputs.rc }}
-      next_version: ${{ steps.bump.outputs.next_version }}
+      base: ${{ steps.derive.outputs.base }}
+      next_version: ${{ steps.derive.outputs.next_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          # PAT is required so the pushed commit can retrigger build.yml.
-          # The default GITHUB_TOKEN cannot trigger downstream workflows.
-          token: ${{ secrets.RELEASE_PAT }}
+          # Tags and history are the input to the rc number.
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Bump rc counter
-        id: bump
+      - name: Derive version
+        id: derive
+        shell: bash
         run: |
-          output=$(node -e "
-            const fs = require('fs');
-            const path = '.release/rc-counter.json';
-            const counter = JSON.parse(fs.readFileSync(path, 'utf8'));
-            const nextRc = (counter.rc || 0) + 1;
-            counter.rc = nextRc;
-            fs.writeFileSync(path, JSON.stringify(counter, null, 2) + '\n');
-            const version = counter.base + '-' + nextRc;
-            console.log('base=' + counter.base);
-            console.log('rc=' + nextRc);
-            console.log('next_version=' + version);
-          ")
-          echo "$output" >> "$GITHUB_OUTPUT"
-          next_version=$(awk -F= '/^next_version=/{print $2}' <<< "$output")
-          echo "::notice::Next nightly: $next_version"
-
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Commit counter bump
-        run: |
-          git add .release/rc-counter.json
-          git commit -m "chore(release): bump rc to ${{ steps.bump.outputs.next_version }}"
-
-      - name: Push counter bump
-        run: git push origin master
+          base=$(node -p "require('./package.json').version")
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            next="${GITHUB_REF_NAME#v}"
+            if [ "$next" != "$base" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match package.json version $base"
+              exit 1
+            fi
+          else
+            anchor=$(git log -1 --format=%H -S"\"version\": \"$base\"" -- package.json)
+            if [ -n "$anchor" ]; then
+              n=$(( $(git rev-list --count "$anchor..HEAD") + 1 ))
+            else
+              n=$(git rev-list --count HEAD)
+            fi
+            next="$base-$n"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "next_version=$next" >> "$GITHUB_OUTPUT"
+          echo "::notice::Version: $next"
 
   # ════════════════════════════════════════════════════════════════════
   # Build — single matrix for both triggers.
   #   master push  → embeds <base>-N via -c override.
   #   tag push     → uses the manifest version (clean stable).
   # Artifact name differs so nightly & stable don't collide on retries.
+  # No `if:` here on purpose: `always()`/`!cancelled()` would exempt the
+  # three expensive legs from the concurrency cancel above.
   # ════════════════════════════════════════════════════════════════════
   build:
-    needs: rc
-    if: always() && (needs.rc.result == 'success' || (needs.rc.result == 'skipped' && startsWith(github.ref, 'refs/tags/v')))
+    needs: version
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -105,8 +96,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
       # ── Linux system dependencies ──────────────────────────────────
       - name: Install Linux dependencies
@@ -134,9 +123,21 @@ jobs:
         run: npm ci
 
       # ── Rust ───────────────────────────────────────────────────────
+      # Install the pinned channel directly rather than `@stable`, which
+      # rust-toolchain.toml then overrides at the first cargo call — that
+      # downloaded two toolchains per job. (pr-checks.yml, cross-os)
+      - name: Resolve pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           targets: ${{ matrix.rust_target }}
 
       # demeteo-runner ships as a static musl binary so it runs on any
@@ -153,10 +154,13 @@ jobs:
           rustup target add x86_64-unknown-linux-musl
           sudo apt-get install -y musl-tools cmake
 
+      # Cargo.lock lives at the repo root and .cargo/config.toml pins the
+      # target dir under src-tauri; both halves have to be named or the key
+      # never rotates on a lockfile change.
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: ". -> src-tauri/target"
           key: ${{ matrix.rust_target }}
 
       # ── Version override (master pushes only) ──────────────────────
@@ -167,20 +171,35 @@ jobs:
         if: github.ref == 'refs/heads/master'
         shell: bash
         run: |
-          printf '{\n  "version": "%s"\n}\n' "${{ needs.rc.outputs.next_version }}" \
+          mkdir -p .release
+          printf '{\n  "version": "%s"\n}\n' "${{ needs.version.outputs.next_version }}" \
             > .release/tauri-version-override.json
           cat .release/tauri-version-override.json
 
-      - name: Build Tauri app (nightly rc)
-        if: github.ref == 'refs/heads/master'
+      # Retried because every build.yml failure in the last 99 runs was a
+      # Tauri bundler flake (bundle_dmg.sh ×3, linuxdeploy download ×1) and
+      # none was a compile error; cargo is incremental, so a second attempt
+      # re-runs only the bundling. --verbose keeps the bundler's stderr,
+      # which the default log drops.
+      - name: Build Tauri app
         shell: bash
+        env:
+          TAURI_CONFIG_OVERRIDE: ${{ github.ref == 'refs/heads/master' && '.release/tauri-version-override.json' || '' }}
         run: |
-          npx tauri build --target ${{ matrix.rust_target }} \
-            -c .release/tauri-version-override.json
-
-      - name: Build Tauri app (stable)
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: npx tauri build --target ${{ matrix.rust_target }}
+          args=(--verbose --target "${{ matrix.rust_target }}")
+          if [ -n "$TAURI_CONFIG_OVERRIDE" ]; then
+            args+=(-c "$TAURI_CONFIG_OVERRIDE")
+          fi
+          for attempt in 1 2 3; do
+            if npx tauri build "${args[@]}"; then
+              exit 0
+            fi
+            echo "::warning::tauri build attempt $attempt failed"
+            if [ "$attempt" -lt 3 ]; then
+              sleep 20
+            fi
+          done
+          exit 1
 
       # ── demeteo-runner (Linux leg only) ─────────────────────────────
       # Built with the exact same version string as the app it ships
@@ -188,21 +207,10 @@ jobs:
       # so `demeteo-runner --version` can be string-compared directly
       # against `app.package_info().version` when the laptop decides
       # whether a locally cached runner build is up to date.
-      - name: Resolve demeteo-runner version
-        if: matrix.platform == 'ubuntu-22.04'
-        id: runner_version
-        shell: bash
-        run: |
-          if [ "${{ github.ref }}" = "refs/heads/master" ]; then
-            echo "version=${{ needs.rc.outputs.next_version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build demeteo-runner
         if: matrix.platform == 'ubuntu-22.04'
         env:
-          DEMETEO_RUNNER_VERSION: ${{ steps.runner_version.outputs.version }}
+          DEMETEO_RUNNER_VERSION: ${{ needs.version.outputs.next_version }}
         run: |
           cargo build --release -p demeteo-runner --target x86_64-unknown-linux-musl
 
@@ -287,13 +295,14 @@ jobs:
           retention-days: 14
 
   # ════════════════════════════════════════════════════════════════════
-  # nightly-release — fires on master pushes after build + rc.
+  # nightly-release — fires on master pushes after every build leg passed.
   # Tag = <base>-N (does NOT match v*.*.*, so it never retriggers).
   # ════════════════════════════════════════════════════════════════════
   nightly-release:
-    needs: [build, rc]
+    needs: [build, version]
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
 
@@ -324,9 +333,12 @@ jobs:
       - name: Build changelog
         id: changelog
         run: |
-          VERSION="${{ needs.rc.outputs.next_version }}"
-          BASE="${{ needs.rc.outputs.base }}"
-          PREV=$(git tag --list "${BASE}-*" --sort=-version:refname | sed -n '2p')
+          VERSION="${{ needs.version.outputs.next_version }}"
+          BASE="${{ needs.version.outputs.base }}"
+          PREV=$(git tag --list "${BASE}-*" --sort=-version:refname | sed -n '1p')
+          if [ -z "$PREV" ]; then
+            PREV=$(git tag --list 'v*.*.*' --sort=-version:refname | sed -n '1p')
+          fi
           if [ -z "$PREV" ]; then
             PREV=$(git rev-list --max-parents=0 HEAD)
           fi
@@ -341,12 +353,12 @@ jobs:
       - name: Publish nightly rc release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.rc.outputs.next_version }}
-          name: "Nightly ${{ needs.rc.outputs.next_version }}"
+          tag_name: ${{ needs.version.outputs.next_version }}
+          name: "Nightly ${{ needs.version.outputs.next_version }}"
           body: |
             > ⚠️ **Automated pre-release** — not recommended for production use.
 
-            **Version:** `${{ needs.rc.outputs.next_version }}`
+            **Version:** `${{ needs.version.outputs.next_version }}`
             **Commit:** [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
             **Date:** ${{ github.event.head_commit.timestamp }}
 
@@ -377,11 +389,14 @@ jobs:
 
   # ════════════════════════════════════════════════════════════════════
   # stable-release — fires on tag pushes (vX.Y.Z from promote workflow).
+  # Requires every build leg: v1.2.0 once shipped as "latest" with no
+  # macOS asset because this job ran under `always()`.
   # ════════════════════════════════════════════════════════════════════
   stable-release:
     needs: build
-    if: always() && startsWith(github.ref, 'refs/tags/v')
+    if: needs.build.result == 'success' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
 
@@ -483,5 +498,6 @@ jobs:
           prerelease: false
           make_latest: true
           files: release-files/*
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
