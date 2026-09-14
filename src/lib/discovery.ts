@@ -228,6 +228,18 @@ export async function applyDecomposition(input: DecomposeApply): Promise<Discove
 }
 
 /**
+ * Mirrors `discovery_set_base`. `null` clears the override back to the
+ * project's default branch. Refused once any ticket has started — those runs
+ * already launched from the branch that was in effect at the time.
+ */
+export async function setDiscoveryBase(
+  discoveryId: string,
+  branch: string | null,
+): Promise<Discovery> {
+  return invoke<Discovery>("discovery_set_base", { discoveryId, branch });
+}
+
+/**
  * Mirrors `ticket_update`.
  *
  * Takes the whole {@link TicketEdit} because every key of it is required on

@@ -182,3 +182,15 @@ pub fn discovery_apply_decomposition(
 ) -> Result<DiscoveryBoard, String> {
     decompose::apply(&ctx, input)
 }
+
+/// Set or clear the branch tickets launch from instead of the project
+/// default. Refused once any ticket has started — `base_branch_lock_refusal`
+/// says why.
+#[tauri::command]
+pub async fn discovery_set_base(
+    ctx: State<'_, AppContext>,
+    discovery_id: String,
+    branch: Option<String>,
+) -> Result<Discovery, String> {
+    discovery::set_base(&ctx, &DiscoveryId::from(discovery_id), branch).await
+}

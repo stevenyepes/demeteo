@@ -12,6 +12,7 @@ use crate::domain::action::ActionKind;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{DiscoveryId, MachineId, ProjectId};
+use crate::domain::models::ticket::{Ticket, TicketState};
 use crate::domain::models::EffortLevel;
 
 /// One planning conversation, as the row holds it.
@@ -44,6 +45,11 @@ pub struct Discovery {
     /// answered by provisioning again.
     #[serde(default)]
     pub worktree_path: Option<String>,
+    /// `None` means the project's default branch (see V54), not "not yet
+    /// decided" — a Discovery has no state in which its tickets start from
+    /// nowhere.
+    #[serde(default)]
+    pub base_branch: Option<String>,
     /// What the user handed the interviewer (§4.6). Owned by the Discovery
     /// rather than by a turn: the composer's chip row survives the turn that
     /// added it, and every later turn is prompted with the same set.
@@ -90,6 +96,31 @@ pub fn validate_title(raw: &str) -> Result<String, String> {
         ));
     }
     Ok(title.to_string())
+}
+
+/// `None` (editable) while every ticket is `Unstarted`; `Some(reason)` once
+/// any ticket has started or been dropped — the branch a run already cut
+/// from cannot be moved out from under it.
+pub fn base_branch_lock_refusal(tickets: &[Ticket]) -> Option<String> {
+    let locked: Vec<String> = tickets
+        .iter()
+        .filter(|t| t.state != TicketState::Unstarted)
+        .map(|t| format!("#{}", t.seq))
+        .collect();
+    if locked.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "this discovery's base branch cannot be changed: {} ({}) {} already started or been \
+         dropped, and the run it cut its branch from cannot be moved out from under it.",
+        if locked.len() == 1 {
+            "ticket"
+        } else {
+            "tickets"
+        },
+        locked.join(", "),
+        if locked.len() == 1 { "has" } else { "have" },
+    ))
 }
 
 /// Whether the interview is still being conducted.

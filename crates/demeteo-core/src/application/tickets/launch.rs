@@ -5,6 +5,7 @@
 //! Every function here is reached from a user's explicit act; there is no
 //! scheduler above them and none is coming.
 
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::TicketId;
 use crate::domain::models::{Feature, Ticket, TicketState};
 use crate::domain::ticket_graph::{derive_board, BlockerReason, TicketStanding};
@@ -67,6 +68,11 @@ pub async fn start(ctx: &AppContext, ticket_id: &TicketId) -> Result<Feature, St
             model: ticket.model.clone(),
             effort: ticket.effort,
             staged_attachments: attachments::staged_for_launch(ctx, &ticket)?,
+            origin: discovery
+                .base_branch
+                .clone()
+                .map(|base| FeatureOrigin::Branch { base })
+                .unwrap_or_default(),
             ..FeatureLaunch::default()
         })
         .await?;

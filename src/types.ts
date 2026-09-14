@@ -1312,6 +1312,7 @@ export interface Discovery {
   effort: EffortLevel | null;
   resume_session_id: string | null;
   worktree_path: string | null;
+  base_branch: string | null;
   /** What the user handed the interviewer. Owned by the Discovery rather than
    *  by a turn, so the composer's chip row survives the turn that added it and
    *  every later turn is prompted with the same set. */

@@ -63,6 +63,7 @@ fn discovery() -> Discovery {
         effort: None,
         resume_session_id: None,
         worktree_path: None,
+        base_branch: None,
         attachments: Vec::new(),
         total_cost: 0.0,
         tokens: 0,

@@ -191,6 +191,10 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // the resting state — see the migration's header.
     add_column_if_missing(conn, "discoveries", "pending_proposal_json", "TEXT")?;
 
+    // Which branch a Discovery's tickets launch from (V54). Nullable, and NULL
+    // reads as the project's default branch — see the migration's header.
+    add_column_if_missing(conn, "discoveries", "base_branch", "TEXT")?;
+
     Ok(())
 }
 

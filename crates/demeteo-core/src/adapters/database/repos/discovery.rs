@@ -14,8 +14,8 @@ use crate::ports::discovery::{DiscoveryListRow, DiscoveryPatch, DiscoveryPort};
 use super::super::SqliteAdapter;
 
 const COLUMNS: &str = "id, project_id, title, status, machine_id, agent_kind, model, effort,
-     resume_session_id, worktree_path, attachments_json, total_cost, tokens, created_at,
-     updated_at";
+     resume_session_id, worktree_path, base_branch, attachments_json, total_cost, tokens,
+     created_at, updated_at";
 
 const MESSAGE_COLUMNS: &str =
     "id, discovery_id, role, content, cost_usd, tokens, activity_json, created_at";
@@ -40,11 +40,12 @@ fn row_to_discovery(row: &rusqlite::Row) -> rusqlite::Result<Discovery> {
         effort: effort.as_deref().and_then(EffortLevel::parse),
         resume_session_id: row.get(8)?,
         worktree_path: row.get(9)?,
-        attachments: decode_attachments(row.get(10)?),
-        total_cost: row.get(11)?,
-        tokens: row.get(12)?,
-        created_at: row.get(13)?,
-        updated_at: row.get(14)?,
+        base_branch: row.get(10)?,
+        attachments: decode_attachments(row.get(11)?),
+        total_cost: row.get(12)?,
+        tokens: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
@@ -103,7 +104,7 @@ impl DiscoveryPort for SqliteAdapter {
             .query_map(params![project_id.0], |row| {
                 Ok(DiscoveryListRow {
                     discovery: row_to_discovery(row)?,
-                    message_count: row.get(15)?,
+                    message_count: row.get(16)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -130,7 +131,7 @@ impl DiscoveryPort for SqliteAdapter {
         conn.execute(
             &format!(
                 "INSERT INTO discoveries ({COLUMNS})
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)"
             ),
             params![
                 discovery.id,
@@ -143,6 +144,7 @@ impl DiscoveryPort for SqliteAdapter {
                 discovery.effort.map(EffortLevel::as_str),
                 discovery.resume_session_id,
                 discovery.worktree_path,
+                discovery.base_branch,
                 encode_attachments(&discovery.attachments)?,
                 discovery.total_cost,
                 discovery.tokens,
@@ -169,11 +171,12 @@ impl DiscoveryPort for SqliteAdapter {
                     effort            = CASE WHEN ?6 THEN ?7 ELSE effort END,
                     resume_session_id = CASE WHEN ?8 THEN ?9 ELSE resume_session_id END,
                     worktree_path     = CASE WHEN ?10 THEN ?11 ELSE worktree_path END,
-                    attachments_json  = COALESCE(?12, attachments_json),
-                    pending_proposal_json = CASE WHEN ?13 THEN ?14 ELSE pending_proposal_json END,
-                    total_cost        = total_cost + ?15,
-                    tokens            = tokens + ?16,
-                    updated_at        = ?17
+                    base_branch       = CASE WHEN ?12 THEN ?13 ELSE base_branch END,
+                    attachments_json  = COALESCE(?14, attachments_json),
+                    pending_proposal_json = CASE WHEN ?15 THEN ?16 ELSE pending_proposal_json END,
+                    total_cost        = total_cost + ?17,
+                    tokens            = tokens + ?18,
+                    updated_at        = ?19
               WHERE id = ?1",
             params![
                 id.0,
@@ -187,6 +190,8 @@ impl DiscoveryPort for SqliteAdapter {
                 patch.resume_session_id.clone().flatten(),
                 patch.worktree_path.is_some(),
                 patch.worktree_path.clone().flatten(),
+                patch.base_branch.is_some(),
+                patch.base_branch.clone().flatten(),
                 attachments,
                 patch.pending_proposal.is_some(),
                 patch.pending_proposal.clone().flatten(),

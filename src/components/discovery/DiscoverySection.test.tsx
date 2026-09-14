@@ -44,6 +44,7 @@ function discovery(overrides: Partial<DiscoverySummary> = {}): DiscoverySummary 
     effort: null,
     resume_session_id: null,
     worktree_path: null,
+    base_branch: null,
     attachments: [],
     total_cost: 0,
     tokens: 0,

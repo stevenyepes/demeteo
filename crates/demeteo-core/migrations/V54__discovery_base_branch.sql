@@ -1,0 +1,12 @@
+-- Which branch a Discovery's tickets launch from.
+--
+-- NULL means the project's default branch, not "unknown" — the same shape as
+-- `origin_json`'s DefaultBranch (V41) and for the same reason: a Discovery has
+-- no state in which its tickets launch from nowhere, so every row written
+-- before this column existed behaves exactly as if it named the default
+-- branch, because that was the only thing the code could do. Encoding absence
+-- as a distinct third state would force every reader to answer "and what do
+-- we do when we don't know?", and the only correct answer is the default
+-- branch — so readers collapse NULL to it and the question never reaches
+-- them.
+ALTER TABLE discoveries ADD COLUMN base_branch TEXT;
