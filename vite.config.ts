@@ -60,8 +60,12 @@ export default defineConfig(async () => ({
   // pushing peak RSS past 3 GB and forcing the `--max-old-space-size` band-aid
   // in the `build` script. Isolating monaco lets Rollup emit and minify it as a
   // separate unit, cutting peak memory (and shrinking the app chunk the webview
-  // parses on boot).
+  // parses on boot). `chunkSizeWarningLimit` sits above monaco (~4.4 MB) because
+  // the reporter has one number and one unnamed message: with a deliberate
+  // chunk over it, the warning reads the same whether the ~1.5 MB app chunk
+  // doubled or not, so a lower limit guarded nothing.
   build: {
+    chunkSizeWarningLimit: 5000,
     rollupOptions: {
       output: {
         manualChunks(id) {

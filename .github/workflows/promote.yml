@@ -187,18 +187,6 @@ jobs:
       # checksum and an uninstallable PKGBUILD. Finalize it post-release with
       # `scripts/aur/update-pkgbuild.sh` (pkgver + sha256 + .SRCINFO together).
 
-      # ── Reset rc counter to 0 against new base ──────────────────────
-      - name: Reset rc counter
-        run: |
-          node -e "
-            const fs = require('fs');
-            fs.writeFileSync(
-              '.release/rc-counter.json',
-              JSON.stringify({ base: '${{ steps.infer.outputs.next }}', rc: 0 }, null, 2) + '\n'
-            );
-          "
-          cat .release/rc-counter.json
-
       # ── Verify changes ─────────────────────────────────────────────
       - name: Verify version updates
         run: |
@@ -210,8 +198,6 @@ jobs:
           grep -A1 '\[workspace.package\]' Cargo.toml
           echo "── Cargo.lock (all demeteo entries) ──"
           grep -A1 'name = "demeteo' Cargo.lock
-          echo "── rc-counter.json ──"
-          cat .release/rc-counter.json
 
       # ── Commit, tag, push ──────────────────────────────────────────
       - name: Configure git
@@ -226,8 +212,7 @@ jobs:
             package-lock.json \
             Cargo.toml \
             Cargo.lock \
-            src-tauri/tauri.conf.json \
-            .release/rc-counter.json
+            src-tauri/tauri.conf.json
           git commit -m "chore(release): bump to v${{ steps.infer.outputs.next }} (${{ steps.infer.outputs.bump_type }})"
 
       - name: Create annotated tag

@@ -14,8 +14,10 @@
 # Usage:
 #   scripts/checks.sh                 # run every gate, including commitlint
 #   scripts/checks.sh --skip-commitlint
+#   scripts/checks.sh frontend        # tsc, biome, class names, vitest — no Rust
+#   scripts/checks.sh rust            # fmt, clippy, doc, doc-refs, tests — no Node gates
 #   npm run checks:code               # every gate EXCEPT commitlint — see below
-#   CHECKS_SKIP_COMMITLINT=1 ...      # same, via env (what pr-checks.yml sets)
+#   CHECKS_SKIP_COMMITLINT=1 ...      # same, via env
 #   CHECKS_BASE=origin/master ...     # commit range base for commitlint
 #
 # ## Absent is not green
@@ -44,6 +46,15 @@
 # be `npm run checks:code`; the `pre-push` hook and CI keep running the full
 # `checks`, which is where linting the range is meaningful.
 #
+# `frontend` and `rust` exist for CI, not for people. pr-checks.yml used to run
+# this whole script as one 13–15 minute step, so a type error in a component
+# and a clippy lint in a crate arrived at the same minute and the run's timing
+# showed nothing about which gate was slow. The two subsets are the two
+# toolchains: the frontend job needs no Rust, no webkit packages and no cargo
+# cache, so its verdict lands in ~2 minutes; the rust job carries the rest.
+# Neither subset runs commitlint — that lives in lint-commits.yml on CI, and in
+# the no-argument form here. The gate list is still spelled once, in this file.
+#
 # Fails fast on the first failing gate with a nonzero exit.
 set -euo pipefail
 
@@ -54,9 +65,13 @@ cd "$ROOT"
 step() { printf '\n\033[1;34m==>\033[0m %s\n' "$1"; }
 
 SKIP_COMMITLINT="${CHECKS_SKIP_COMMITLINT:-0}"
+RUN_FRONTEND=1
+RUN_RUST=1
 for arg in "$@"; do
   case "$arg" in
     --skip-commitlint) SKIP_COMMITLINT=1 ;;
+    frontend) RUN_RUST=0; SKIP_COMMITLINT=1 ;;
+    rust) RUN_FRONTEND=0; SKIP_COMMITLINT=1 ;;
     *) printf 'unknown argument: %s\n' "$arg" >&2; exit 2 ;;
   esac
 done
@@ -70,12 +85,17 @@ need_node_bin() { [ -e "$BIN/$1" ] || MISSING="${MISSING}  - node_modules/.bin/$
 need_host_bin() { command -v "$1" >/dev/null 2>&1 || MISSING="${MISSING}  - $1 — not on PATH ($2)"$'\n'; }
 
 step "Toolchain preflight"
-need_host_bin node "install Node.js"
-need_host_bin cargo "install Rust via rustup"
-need_host_bin rustc "install Rust via rustup"
-need_node_bin tsc
-need_node_bin biome
-need_node_bin vitest
+if [ "$RUN_FRONTEND" = "1" ]; then
+  need_host_bin node "install Node.js"
+  need_node_bin tsc
+  need_node_bin biome
+  need_node_bin vitest
+fi
+if [ "$RUN_RUST" = "1" ]; then
+  need_host_bin cargo "install Rust via rustup"
+  need_host_bin rustc "install Rust via rustup"
+  need_host_bin git "install Git"
+fi
 if [ "$SKIP_COMMITLINT" != "1" ]; then
   need_host_bin git "install Git"
   need_node_bin commitlint
@@ -87,11 +107,7 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
-HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
-RUNNER_SUPPORTED=1
-if [[ "$HOST_TRIPLE" == *-windows-* ]]; then
-  RUNNER_SUPPORTED=0
-fi
+if [ "$RUN_FRONTEND" = "1" ]; then
 
 step "TypeScript type-check (tsc --noEmit)"
 "$BIN/tsc" --noEmit
@@ -115,6 +131,16 @@ node scripts/check-classes.mjs
 
 step "Frontend tests (vitest run)"
 "$BIN/vitest" run
+
+fi
+
+if [ "$RUN_RUST" = "1" ]; then
+
+HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+RUNNER_SUPPORTED=1
+if [[ "$HOST_TRIPLE" == *-windows-* ]]; then
+  RUNNER_SUPPORTED=0
+fi
 
 step "Rust format check (cargo fmt --all -- --check)"
 ( cd src-tauri && cargo fmt --all -- --check )
@@ -151,6 +177,8 @@ if [[ "$RUNNER_SUPPORTED" == 1 ]]; then
 else
   cargo test -p demeteo-core
   step "Runner tests — skipped (Linux-only binary; host: $HOST_TRIPLE)"
+fi
+
 fi
 
 if [ "$SKIP_COMMITLINT" = "1" ]; then

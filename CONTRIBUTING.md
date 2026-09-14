@@ -125,8 +125,9 @@ green run inline on the PR. It covers `tsc --noEmit`, `biome check .`, `cargo fm
 suites, the gate-feedback repro, and commitlint over `origin/master..HEAD`. Running a
 subset — `cargo test` alone, say — will not tell you whether CI is green.
 
-The `pre-push` hook runs it for you; `git push --no-verify` bypasses it for a
-deliberate WIP push.
+Nothing runs it for you: the `pre-push` hook is deliberately inert, so run it before
+pushing. `scripts/checks.sh frontend` and `scripts/checks.sh rust` are the two halves CI
+runs as separate jobs, useful while iterating; the no-argument form is the gate.
 
 If your change has UI or runtime surface, also confirm the app boots clean:
 
@@ -142,7 +143,8 @@ npm run dev:tauri   # no console errors
   limit, so keep it under about 64 characters and use the description for context
 - Reference any related issue with `Closes #N`
 - If your change touches a Gate-policy area (migrations, Tauri capabilities, agent spawn logic, worktree merge), say so explicitly in the PR description
-- Every PR runs the [`PR Checks` workflow](.github/workflows/pr-checks.yml) — the same `scripts/checks.sh` as `npm run checks` above, so any failure you see inline on the PR reproduces locally.
+- Every PR runs the [`PR Checks` workflow](.github/workflows/pr-checks.yml) — the same `scripts/checks.sh` as `npm run checks` above, so any failure you see inline on the PR reproduces locally. It runs on `master` too, after every merge, and that run is what warms the Rust caches every PR reads.
+- Commit subjects and the PR title are linted by [`Lint Commits`](.github/workflows/lint-commits.yml); the title is what a squash merge becomes, so keep it under 72 characters and conventional.
 
 ## What we won't merge
 
