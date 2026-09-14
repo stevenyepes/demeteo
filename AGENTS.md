@@ -354,6 +354,7 @@ Read the relevant doc before modifying that area.
 | Multi-client runner (designed, not built) | [docs/MULTI_CLIENT_RUNNER.md](docs/MULTI_CLIENT_RUNNER.md) |
 | Remote-runner dev workflow & triage | [docs/RUNNER_DEV.md](docs/RUNNER_DEV.md) |
 | Terminal agent activity | [docs/TERMINAL_ACTIVITY.md](docs/TERMINAL_ACTIVITY.md) |
+| Terminal sessions: feature-scoped terminals, brief, hand-back (designed, not built) | [docs/TERMINAL_SESSIONS_SPEC.md](docs/TERMINAL_SESSIONS_SPEC.md) · plan in [docs/TASKS_TERMINAL_SESSIONS.md](docs/TASKS_TERMINAL_SESSIONS.md) |
 | User stories & agent tasks | [docs/USER_STORIES.md](docs/USER_STORIES.md) |
 | UX spec & journeys | [docs/UX_JOURNEYS.md](docs/UX_JOURNEYS.md) · as-built audit in [docs/ux-audit/](docs/ux-audit/README.md) |
 | Ask Canvas design mockup | [docs/ask-canvas/](docs/ask-canvas/) |
