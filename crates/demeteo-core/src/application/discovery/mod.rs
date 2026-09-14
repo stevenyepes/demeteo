@@ -19,6 +19,7 @@ pub mod attachments;
 pub mod context;
 pub mod decompose;
 pub mod events;
+pub mod publish;
 pub mod question;
 pub mod running;
 pub mod turn;
@@ -33,6 +34,7 @@ use crate::domain::models::{
 };
 use crate::domain::ticket_graph::TicketProgress;
 use crate::ports::discovery::DiscoveryPatch;
+use crate::ports::worktree_ops::{SyncFailure, SyncOutcome};
 use crate::state::AppContext;
 use serde::{Deserialize, Serialize};
 
@@ -109,6 +111,13 @@ pub struct DiscoverySummary {
     /// dependency, so a SQL-shaped second opinion would disagree with the card
     /// the user opens — which is the one thing §9.2 refuses to allow.
     pub progress: TicketProgress,
+}
+
+/// What [`sync_base_branch`] left the adopted base branch on.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveryBaseSyncOutcome {
+    pub merge_commit_sha: Option<String>,
+    pub changed: bool,
 }
 
 pub fn list_for_project(
@@ -194,6 +203,8 @@ pub fn create(ctx: &AppContext, new: NewDiscovery) -> Result<Discovery, String> 
         resume_session_id: None,
         worktree_path: None,
         base_branch: None,
+        integration_mr_url: None,
+        integration_mr_state: None,
         attachments: Vec::new(),
         total_cost: 0.0,
         tokens: 0,
@@ -345,6 +356,80 @@ pub async fn set_base(
         crate::paths::now_ms(),
     )?;
     load(ctx, id)
+}
+
+/// Bring this Discovery's adopted base branch up to date with the project's
+/// own upstream default branch.
+///
+/// Refused before any git call — before `worktree::resolve`, before
+/// `ctx.worktree_ops` or `ctx.exec` are touched at all — when nothing has been
+/// adopted: `base_branch: None` already means the project's default, so
+/// there is no second branch to merge it into.
+pub async fn sync_base_branch(
+    ctx: &AppContext,
+    id: &DiscoveryId,
+) -> Result<DiscoveryBaseSyncOutcome, String> {
+    let discovery = load(ctx, id)?;
+    let Some(base_branch) = discovery.base_branch.clone() else {
+        return Err(
+            "This discovery has no adopted base branch to sync — it already tracks the \
+             project's default branch."
+                .to_string(),
+        );
+    };
+
+    let repo = worktree::resolve(ctx, &discovery).await?;
+    let settings = ctx
+        .projects
+        .get_settings(&discovery.project_id)?
+        .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
+    let gate = crate::adapters::step_executor::sync::sync_gate(&settings);
+
+    match ctx
+        .worktree_ops
+        .sync_feature_with_upstream(
+            repo.machine_id.as_deref(),
+            &repo.repo_dir,
+            &base_branch,
+            &repo.default_branch,
+            gate,
+        )
+        .await
+    {
+        Ok(SyncOutcome {
+            merge_commit_sha,
+            changed,
+            ..
+        }) => Ok(DiscoveryBaseSyncOutcome {
+            merge_commit_sha,
+            changed,
+        }),
+        Err(failure) => Err(sync_failure_message(failure)),
+    }
+}
+
+/// The words `sync_base_branch` reports a failed merge with — modelled on
+/// [`crate::domain::sync_failure::base_merge_refusal`], which formats the
+/// same two shapes for the workflow `sync` node.
+fn sync_failure_message(failure: SyncFailure) -> String {
+    match failure {
+        SyncFailure::Conflict { files, .. } => format!(
+            "merging the project's default branch left {count} file(s) conflicted: {paths}. \
+             Resolve the merge and sync again.",
+            count = files.len(),
+            paths = files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        SyncFailure::Blocked {
+            stage, raw_error, ..
+        } => format!(
+            "syncing the base branch failed at the {stage} stage: {raw_error}",
+            stage = stage.as_str(),
+        ),
+    }
 }
 
 /// Stop the turn in flight.

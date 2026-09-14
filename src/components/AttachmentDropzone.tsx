@@ -5,6 +5,7 @@ import {
   addAttachment,
   extractClipboardImageFiles,
   recoverClipboardImageFile,
+  removeAttachment,
   stageBrowserFilesForLaunch,
   stageAttachmentMetadata,
   type AttachedFile,
@@ -416,7 +417,6 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
         remove: async () => {
           if (!featureId) return;
           try {
-            const { removeAttachment } = await import("../lib/attachments");
             await removeAttachment(featureId, a.id);
             setDirectAttachments((prev) => prev.filter((p) => p.id !== a.id));
             onRemoved?.(a.id);

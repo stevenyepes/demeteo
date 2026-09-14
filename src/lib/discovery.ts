@@ -3,6 +3,7 @@ import type {
   DecomposeApply,
   DecomposeProposal,
   Discovery,
+  DiscoveryBaseSyncOutcome,
   DiscoveryBoard,
   DiscoveryDetail,
   DiscoveryMessage,
@@ -18,6 +19,7 @@ import {
   type AttachmentInput,
   type StagedAttachmentInput,
 } from "./attachments";
+import type { MrInfo } from "./featureDetail";
 
 /**
  * Typed IPC wrappers for Discovery and its Tickets — the commands in
@@ -237,6 +239,29 @@ export async function setDiscoveryBase(
   branch: string | null,
 ): Promise<Discovery> {
   return invoke<Discovery>("discovery_set_base", { discoveryId, branch });
+}
+
+/**
+ * Mirrors `discovery_publish_integration_mr`. Opens a PR from the Discovery's
+ * integration branch into the project's default branch, composed from its
+ * tickets. Calling it again after a PR is already open returns the stored
+ * url/state rather than opening a second one.
+ */
+export async function publishIntegrationMr(discoveryId: string): Promise<MrInfo> {
+  return invoke<MrInfo>("discovery_publish_integration_mr", { discoveryId });
+}
+
+/**
+ * Mirrors `discovery_sync_base`. Brings the adopted base branch up to date
+ * with the project's own upstream default branch.
+ *
+ * Rejections are a plain string here too, now possibly carrying
+ * structured-but-stringified conflict or blocked detail rather than a short
+ * refusal — `sync_failure_message` is what renders a `SyncFailure` down to
+ * this one string.
+ */
+export async function syncDiscoveryBase(discoveryId: string): Promise<DiscoveryBaseSyncOutcome> {
+  return invoke<DiscoveryBaseSyncOutcome>("discovery_sync_base", { discoveryId });
 }
 
 /**

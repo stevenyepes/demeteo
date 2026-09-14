@@ -21,6 +21,7 @@ jobs:
   lint:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Only check commits added since the last successful run on the same ref.
     # fetch-depth: 50 grandfathers older non-conventional commits.
     steps:
@@ -42,6 +43,32 @@ jobs:
           # emit a warning until history is clean.
           failOnWarnings: false
 
+  # The commits of a PR, linted as a range. This used to be the last step of
+  # pr-checks' 14-minute verify job, so a body line over 100 chars was reported
+  # at minute 15 and — because a failed job saves no Rust cache — cost the next
+  # run its warm start too. Here it answers in under a minute. fetch-depth 0 is
+  # what the action needs to see every commit of the range.
+  commits:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Lint commits
+        uses: wagoid/commitlint-github-action@v6
+        with:
+          configFile: .commitlintrc.json
+          failOnWarnings: false
+
   # The subject a squash merge writes is the *pull request title* — the repo is
   # set to COMMIT_OR_PR_TITLE, so a PR of more than one commit lands under its
   # title and none of its own subjects. Nothing checked that until it was on
@@ -57,6 +84,7 @@ jobs:
   title:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5

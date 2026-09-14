@@ -14,6 +14,8 @@ use crate::domain::models::{Machine, Platform, Project, Repository, TITLE_MAX_CH
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, SftpEntry};
 use crate::ports::worktree_ops::WorktreeOpsPort;
 
+mod publish;
+
 /// A local project with nothing in it, which is as much as `create` reads.
 fn fixture(tag: &str) -> (AppContext, ProjectId) {
     let dir = std::env::temp_dir().join(format!(
@@ -850,6 +852,420 @@ async fn set_base_with_no_repository_configured_is_an_error_not_a_panic() {
         .await
         .expect_err("no repository means set_base cannot resolve one");
     assert!(!refusal.is_empty());
+}
+
+/// One recorded call to [`FakeSync::sync_feature_with_upstream`] — enough to
+/// prove which branches and which gate actually reached the port, without
+/// pulling in the whole `MergeGate` type (which derives no `PartialEq`).
+struct SyncCall {
+    machine_id: Option<String>,
+    repo_dir: String,
+    feature_branch: String,
+    base_branch: String,
+    gate_prepare: Option<String>,
+    gate_harness: Option<String>,
+}
+
+/// A [`WorktreeOpsPort`] double for [`sync_base_branch`] alone: it answers
+/// only `sync_feature_with_upstream`, with a fixed result handed to it up
+/// front, and panics on any other call — the same convention [`FakeBranches`]
+/// uses, narrowed to the one method this ticket's function calls.
+struct FakeSync {
+    result: Mutex<
+        Option<
+            Result<
+                crate::ports::worktree_ops::SyncOutcome,
+                crate::ports::worktree_ops::SyncFailure,
+            >,
+        >,
+    >,
+    calls: Mutex<Vec<SyncCall>>,
+}
+
+impl FakeSync {
+    fn returning(
+        result: Result<
+            crate::ports::worktree_ops::SyncOutcome,
+            crate::ports::worktree_ops::SyncFailure,
+        >,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            result: Mutex::new(Some(result)),
+            calls: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn calls(&self) -> Vec<SyncCall> {
+        self.calls
+            .lock()
+            .expect("the mutex is not poisoned")
+            .drain(..)
+            .collect()
+    }
+}
+
+#[async_trait]
+impl WorktreeOpsPort for FakeSync {
+    async fn check_repo_dirty(&self, _: Option<&str>, _: &str) -> Result<(bool, bool), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn get_head_branch(&self, _: Option<&str>, _: &str) -> Option<String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn list_worktrees(
+        &self,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<Vec<crate::domain::models::WorktreeInfo>, String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn create_terminal_worktree(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &crate::ports::worktree_ops::TerminalWorktreeRequest,
+    ) -> Result<crate::ports::worktree_ops::TerminalWorktreeCreated, String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn remove_terminal_worktree(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: bool,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn list_terminal_branches(
+        &self,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<Vec<BranchOption>, String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn list_terminal_worktrees(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<crate::domain::models::WorktreeInfo>, String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn cleanup_legacy_terminal_worktrees(
+        &self,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<usize, String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn detect_worktree_strategy(
+        &self,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<crate::domain::models::WorktreeStrategy, String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn clone_repository(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn create_feature_branch(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn create_and_push_branch(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn fetch_origin_refspec(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &crate::domain::feature_origin::Refspec,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn cut_branch_at(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn provision_subtask_worktree(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<String, String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn cleanup_subtask_worktree(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn branch_delete(&self, _: Option<&str>, _: &str, _: &str) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn merge_subtask(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn sync_feature_with_upstream(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        feature_branch: &str,
+        base_branch: &str,
+        gate: crate::ports::worktree_ops::MergeGate<'_>,
+    ) -> Result<crate::ports::worktree_ops::SyncOutcome, crate::ports::worktree_ops::SyncFailure>
+    {
+        self.calls
+            .lock()
+            .expect("the mutex is not poisoned")
+            .push(SyncCall {
+                machine_id: machine_id.map(str::to_string),
+                repo_dir: repo_dir.to_string(),
+                feature_branch: feature_branch.to_string(),
+                base_branch: base_branch.to_string(),
+                gate_prepare: gate.prepare.map(str::to_string),
+                gate_harness: gate.harness.map(str::to_string),
+            });
+        self.result
+            .lock()
+            .expect("the mutex is not poisoned")
+            .take()
+            .expect("sync_feature_with_upstream is called at most once per test")
+    }
+    async fn validate_commit_message(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+    ) -> Result<(), crate::ports::worktree_ops::CommitMessageRejected> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn squash_feature_branch(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<crate::ports::worktree_ops::SquashOutcome, String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn restore_pre_squash(&self, _: Option<&str>, _: &str, _: &str) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+}
+
+/// A Discovery with an adopted base branch, ready for [`sync_base_branch`] to
+/// act on — the fixture every test below but the `None` case shares.
+async fn discovery_with_adopted_base(tag: &str) -> (AppContext, DiscoveryId) {
+    let (mut ctx, project_id) = fixture(tag);
+    add_repo(&ctx, &project_id, tag);
+    ctx.worktree_ops = FakeBranches::with(vec![remote_branch("feat/payments")]);
+    let discovery = create(&ctx, opening(&project_id, tag)).expect("the discovery opens");
+    set_base(&ctx, &discovery.id, Some("feat/payments".to_string()))
+        .await
+        .expect("the branch adopts");
+    (ctx, discovery.id)
+}
+
+/// `base_branch: None` already means the project's default, so there is a
+/// second branch to sync against only once one has been adopted —
+/// `sync_base_branch` refuses before it ever reaches git.
+#[tokio::test]
+async fn sync_base_branch_with_no_adopted_branch_is_refused_before_any_git_call() {
+    let (mut ctx, project_id) = fixture("sync-none");
+    let discovery = create(&ctx, opening(&project_id, "sync-none")).expect("the discovery opens");
+    assert_eq!(discovery.base_branch, None);
+
+    let sync = FakeSync::returning(Ok(crate::ports::worktree_ops::SyncOutcome {
+        merge_commit_sha: None,
+        changed: false,
+        head_before: None,
+    }));
+    ctx.worktree_ops = sync.clone();
+
+    let refusal = sync_base_branch(&ctx, &discovery.id)
+        .await
+        .expect_err("no adopted base branch means nothing to sync");
+    assert!(!refusal.is_empty());
+    assert!(
+        sync.calls().is_empty(),
+        "no port call should have been made"
+    );
+}
+
+/// A merge that lands with unmerged paths reports the actual conflicted file,
+/// never a Debug dump of the failure enum.
+#[tokio::test]
+async fn sync_base_branch_reports_the_conflicted_file_not_a_debug_dump() {
+    let (mut ctx, discovery_id) = discovery_with_adopted_base("sync-conflict").await;
+    ctx.worktree_ops =
+        FakeSync::returning(Err(crate::ports::worktree_ops::SyncFailure::Conflict {
+            files: vec![crate::domain::models::ConflictFile {
+                path: "src/foo.rs".to_string(),
+                kind: "both modified".to_string(),
+            }],
+            raw_error: "CONFLICT (content): Merge conflict in src/foo.rs".to_string(),
+            worktree_path: Some("/tmp/sync-wt".to_string()),
+            head_before: Some("deadbeef".to_string()),
+            resolves_the_base_merge: true,
+        }));
+
+    let err = sync_base_branch(&ctx, &discovery_id)
+        .await
+        .expect_err("a conflicted merge is an error");
+    assert!(err.contains("src/foo.rs"), "{err}");
+    assert!(!err.contains("SyncFailure"), "{err}");
+    assert!(!err.contains("Conflict {"), "{err}");
+}
+
+/// A harness that failed on the merged tree reports the harness's own words.
+#[tokio::test]
+async fn sync_base_branch_reports_the_raw_error_for_a_blocked_verify() {
+    let (mut ctx, discovery_id) = discovery_with_adopted_base("sync-verify").await;
+    ctx.worktree_ops = FakeSync::returning(Err(crate::ports::worktree_ops::SyncFailure::Blocked {
+        stage: crate::domain::sync_failure::SyncBlockedStage::Verify,
+        raw_error: "harness failed".to_string(),
+        worktree_path: Some("/tmp/sync-wt".to_string()),
+        head_before: Some("deadbeef".to_string()),
+        merge_commit_sha: Some("cafef00d".to_string()),
+    }));
+
+    let err = sync_base_branch(&ctx, &discovery_id)
+        .await
+        .expect_err("a red harness withholds the merge");
+    assert!(err.contains("harness failed"), "{err}");
+}
+
+/// The same match arm handles every `Blocked` stage, not only `Verify` — a
+/// second stage proves the match is exhaustive over the family rather than
+/// special-cased.
+#[tokio::test]
+async fn sync_base_branch_reports_the_raw_error_for_any_blocked_stage() {
+    let (mut ctx, discovery_id) = discovery_with_adopted_base("sync-fetch").await;
+    ctx.worktree_ops = FakeSync::returning(Err(crate::ports::worktree_ops::SyncFailure::Blocked {
+        stage: crate::domain::sync_failure::SyncBlockedStage::Fetch,
+        raw_error: "could not reach origin".to_string(),
+        worktree_path: None,
+        head_before: None,
+        merge_commit_sha: None,
+    }));
+
+    let err = sync_base_branch(&ctx, &discovery_id)
+        .await
+        .expect_err("an unreachable remote blocks the sync");
+    assert!(err.contains("could not reach origin"), "{err}");
+}
+
+/// A sync with nothing new upstream still answers `Ok`, `changed: false`.
+#[tokio::test]
+async fn sync_base_branch_a_no_op_merge_is_ok_and_unchanged() {
+    let (mut ctx, discovery_id) = discovery_with_adopted_base("sync-noop").await;
+    ctx.worktree_ops = FakeSync::returning(Ok(crate::ports::worktree_ops::SyncOutcome {
+        merge_commit_sha: None,
+        changed: false,
+        head_before: Some("deadbeef".to_string()),
+    }));
+
+    let outcome = sync_base_branch(&ctx, &discovery_id)
+        .await
+        .expect("a no-op merge still succeeds");
+    assert_eq!(outcome.merge_commit_sha, None);
+    assert!(!outcome.changed);
+}
+
+/// A real merge passes its commit sha and `changed: true` through unchanged.
+#[tokio::test]
+async fn sync_base_branch_a_real_merge_passes_the_fields_through() {
+    let (mut ctx, discovery_id) = discovery_with_adopted_base("sync-real").await;
+    ctx.worktree_ops = FakeSync::returning(Ok(crate::ports::worktree_ops::SyncOutcome {
+        merge_commit_sha: Some("cafef00d".to_string()),
+        changed: true,
+        head_before: Some("deadbeef".to_string()),
+    }));
+
+    let outcome = sync_base_branch(&ctx, &discovery_id)
+        .await
+        .expect("a real merge succeeds");
+    assert_eq!(outcome.merge_commit_sha.as_deref(), Some("cafef00d"));
+    assert!(outcome.changed);
+}
+
+/// The gate handed to the port is exactly [`sync_gate`]'s answer for this
+/// project's settings — never a hand-built `MergeGate`.
+#[tokio::test]
+async fn sync_base_branch_passes_through_the_settings_derived_gate() {
+    let (mut ctx, project_id) = fixture("sync-gate");
+    add_repo(&ctx, &project_id, "sync-gate");
+    ctx.worktree_ops = FakeBranches::with(vec![remote_branch("feat/payments")]);
+    let discovery = create(&ctx, opening(&project_id, "sync-gate")).expect("the discovery opens");
+    set_base(&ctx, &discovery.id, Some("feat/payments".to_string()))
+        .await
+        .expect("the branch adopts");
+
+    let mut settings = crate::adapters::step_executor::setup::fetch_default_settings();
+    settings.project_id = project_id.clone();
+    settings.worktree_strategy.prepare_command = Some("npm ci".to_string());
+    settings.worktree_strategy.test_command = Some("npm test".to_string());
+    ctx.projects
+        .save_settings(settings.clone())
+        .expect("the settings are stored");
+    let expected_gate = crate::adapters::step_executor::sync::sync_gate(&settings);
+
+    let sync = FakeSync::returning(Ok(crate::ports::worktree_ops::SyncOutcome {
+        merge_commit_sha: None,
+        changed: false,
+        head_before: None,
+    }));
+    ctx.worktree_ops = sync.clone();
+
+    sync_base_branch(&ctx, &discovery.id)
+        .await
+        .expect("the sync succeeds");
+
+    let calls = sync.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].gate_prepare.as_deref(), expected_gate.prepare);
+    assert_eq!(calls[0].gate_harness.as_deref(), expected_gate.harness);
+    assert_eq!(calls[0].feature_branch, "feat/payments");
+    assert_eq!(calls[0].base_branch, "main");
+    assert_eq!(calls[0].machine_id, None);
+    assert!(!calls[0].repo_dir.is_empty());
 }
 
 /// Re-adopting the currently-stored branch succeeds like any other `Some`.

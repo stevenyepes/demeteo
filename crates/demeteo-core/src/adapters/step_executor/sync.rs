@@ -88,11 +88,12 @@ pub(crate) fn sync_base(
 
 /// What a sync of this project must prove before it publishes.
 ///
-/// Beside [`sync_base`] and for the same reason: the "Sync with main" button
-/// and the workflow's own `sync` node both have to answer it, and two
-/// derivations are two chances for one project's syncs to gate on different
-/// commands — the shape `diff_base::resolve` was centralised to prevent for the
-/// base branch.
+/// Beside [`sync_base`] and for the same reason: the "Sync with main" button,
+/// the workflow's own `sync` node, and a Discovery's own base-branch sync
+/// (`application::discovery::sync_base_branch`) all have to answer it, and
+/// two derivations are two chances for one project's syncs to gate on
+/// different commands — the shape `diff_base::resolve` was centralised to
+/// prevent for the base branch.
 pub(crate) fn sync_gate(
     settings: &crate::domain::models::ProjectSettings,
 ) -> crate::ports::worktree_ops::MergeGate<'_> {

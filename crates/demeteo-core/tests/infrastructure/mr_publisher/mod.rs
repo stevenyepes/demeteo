@@ -1,5 +1,6 @@
 use super::*;
 
+mod branch_publish;
 mod comment;
 mod detail;
 mod list;

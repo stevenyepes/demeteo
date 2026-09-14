@@ -4,6 +4,7 @@ use super::*;
 
 use crate::domain::agent_event::{StopReason, ToolCallStatus};
 use crate::domain::ids::{DiscoveryId, TicketId};
+use crate::domain::ticket_graph::TicketNodeState;
 
 fn ticket(seq: i64, state: TicketState) -> Ticket {
     Ticket {
@@ -241,4 +242,93 @@ fn a_new_branch_name_with_embedded_dotdot_is_refused() {
 #[test]
 fn a_normal_new_branch_name_is_accepted() {
     assert!(validate_new_branch_name("release/2.1").is_ok());
+}
+
+fn bare_discovery(base_branch: Option<String>) -> Discovery {
+    Discovery {
+        id: DiscoveryId::from("d-1".to_string()),
+        project_id: crate::domain::ids::ProjectId::from("p-1".to_string()),
+        title: "rework the sync surface".to_string(),
+        status: DiscoveryStatus::Open,
+        machine_id: crate::domain::ids::MachineId::from("local".to_string()),
+        agent_kind: "claude-code".to_string(),
+        model: None,
+        effort: None,
+        resume_session_id: None,
+        worktree_path: None,
+        base_branch,
+        integration_mr_url: None,
+        integration_mr_state: None,
+        attachments: Vec::new(),
+        total_cost: 0.0,
+        tokens: 0,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+fn node(id: &str, mr_state: Option<&str>) -> TicketNode {
+    TicketNode {
+        id: id.to_string(),
+        state: TicketNodeState::Unstarted,
+        blocked_by: Vec::new(),
+        mr_state: mr_state.map(str::to_string),
+        force_started: false,
+    }
+}
+
+#[test]
+fn a_discovery_with_a_base_branch_has_something_to_publish_from() {
+    assert!(missing_base_branch_refusal(&bare_discovery(Some("develop".to_string()))).is_none());
+}
+
+#[test]
+fn a_discovery_with_no_base_branch_has_nothing_to_publish_from() {
+    assert!(missing_base_branch_refusal(&bare_discovery(None)).is_some());
+}
+
+#[test]
+fn an_empty_node_list_has_no_merged_ticket() {
+    assert!(no_merged_ticket_refusal(&[]).is_some());
+}
+
+#[test]
+fn no_open_or_closed_or_unattempted_node_counts_as_merged() {
+    let nodes = vec![
+        node("t-1", None),
+        node("t-2", Some("open")),
+        node("t-3", Some("closed")),
+    ];
+    assert!(no_merged_ticket_refusal(&nodes).is_some());
+}
+
+#[test]
+fn one_merged_node_is_enough() {
+    let nodes = vec![node("t-1", Some("open")), node("t-2", Some("merged"))];
+    assert!(no_merged_ticket_refusal(&nodes).is_none());
+}
+
+#[test]
+fn the_pr_body_names_every_ticket_and_leaks_nothing_else() {
+    let mut secret = ticket(1, TicketState::Unstarted);
+    secret.description = "top-secret-rationale".to_string();
+    secret.acceptance = vec!["top-secret-acceptance".to_string()];
+    secret.files = vec!["top/secret/file.rs".to_string()];
+
+    let mut merged = ticket(2, TicketState::Unstarted);
+    merged.id = TicketId::from("t-2".to_string());
+
+    let never_started = ticket(3, TicketState::Unstarted);
+
+    let tickets = vec![secret.clone(), merged.clone(), never_started.clone()];
+    let nodes = vec![node(merged.id.as_str(), Some("merged"))];
+
+    let body = integration_pr_body(&tickets, &nodes);
+
+    assert!(body.contains(&secret.title));
+    assert!(body.contains(&merged.title));
+    assert!(body.contains(&never_started.title));
+    assert!(!body.contains("top-secret-rationale"));
+    assert!(!body.contains("top-secret-acceptance"));
+    assert!(!body.contains("top/secret/file.rs"));
 }
