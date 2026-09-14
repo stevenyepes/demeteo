@@ -880,6 +880,12 @@ export interface FeatureDivergence {
   next_move: DivergenceMove;
 }
 
+/** Return shape for `discovery_sync_base`. */
+export interface DiscoveryBaseSyncOutcome {
+  merge_commit_sha: string | null;
+  changed: boolean;
+}
+
 /** Return shape for `feature_sync` and `feature_resolve_sync_conflicts`. */
 export type SyncOutcomeView =
   | {

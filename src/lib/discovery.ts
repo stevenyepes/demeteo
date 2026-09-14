@@ -3,6 +3,7 @@ import type {
   DecomposeApply,
   DecomposeProposal,
   Discovery,
+  DiscoveryBaseSyncOutcome,
   DiscoveryBoard,
   DiscoveryDetail,
   DiscoveryMessage,
@@ -248,6 +249,19 @@ export async function setDiscoveryBase(
  */
 export async function publishIntegrationMr(discoveryId: string): Promise<MrInfo> {
   return invoke<MrInfo>("discovery_publish_integration_mr", { discoveryId });
+}
+
+/**
+ * Mirrors `discovery_sync_base`. Brings the adopted base branch up to date
+ * with the project's own upstream default branch.
+ *
+ * Rejections are a plain string here too, now possibly carrying
+ * structured-but-stringified conflict or blocked detail rather than a short
+ * refusal — `sync_failure_message` is what renders a `SyncFailure` down to
+ * this one string.
+ */
+export async function syncDiscoveryBase(discoveryId: string): Promise<DiscoveryBaseSyncOutcome> {
+  return invoke<DiscoveryBaseSyncOutcome>("discovery_sync_base", { discoveryId });
 }
 
 /**
