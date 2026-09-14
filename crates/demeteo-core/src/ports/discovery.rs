@@ -37,6 +37,8 @@ pub struct DiscoveryPatch {
     pub resume_session_id: Option<Option<String>>,
     pub worktree_path: Option<Option<String>>,
     pub base_branch: Option<Option<String>>,
+    pub integration_mr_url: Option<Option<String>>,
+    pub integration_mr_state: Option<Option<String>>,
     /// The whole manifest, as [`TicketPatch::attachments`] takes it:
     /// `Some(vec![])` is the clear.
     pub attachments: Option<Vec<AttachedFile>>,

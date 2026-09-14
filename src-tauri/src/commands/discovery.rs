@@ -12,7 +12,7 @@
 
 use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{DiscoveryId, ProjectId};
-use crate::domain::models::{Discovery, DiscoveryMessage};
+use crate::domain::models::{Discovery, DiscoveryMessage, MrInfo};
 use crate::state::AppContext;
 use demeteo_core::application::attachments::StagedAttachmentInput;
 use demeteo_core::application::discovery::decompose::{
@@ -193,6 +193,14 @@ pub async fn discovery_set_base(
     branch: Option<String>,
 ) -> Result<Discovery, String> {
     discovery::set_base(&ctx, &DiscoveryId::from(discovery_id), branch).await
+}
+
+#[tauri::command]
+pub async fn discovery_publish_integration_mr(
+    ctx: State<'_, AppContext>,
+    discovery_id: String,
+) -> Result<MrInfo, String> {
+    discovery::publish::publish_integration_mr(&ctx, &DiscoveryId::from(discovery_id)).await
 }
 
 /// Bring this Discovery's adopted base branch up to date with the project's default.

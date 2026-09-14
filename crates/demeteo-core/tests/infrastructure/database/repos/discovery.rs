@@ -50,6 +50,8 @@ fn discovery() -> Discovery {
         resume_session_id: Some("sess-abc".to_string()),
         worktree_path: Some("/repos/demeteo_wt_discovery_d-1".to_string()),
         base_branch: Some("develop".to_string()),
+        integration_mr_url: None,
+        integration_mr_state: None,
         attachments: vec![attached("spec.md")],
         total_cost: 1.25,
         tokens: 4096,
@@ -138,6 +140,57 @@ fn a_patch_sets_and_clears_the_base_branch() {
     .unwrap();
     let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
     assert_eq!(read.base_branch, None);
+}
+
+/// Unlike `base_branch`, NULL here is a genuine third state — "no MR opened
+/// yet" — so a patch that sets both fields and one that clears them back to
+/// NULL must both round-trip (AC7).
+#[test]
+fn a_patch_sets_and_clears_the_integration_mr() {
+    let db = db();
+    db.create(&discovery()).unwrap();
+    let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
+    assert_eq!(read.integration_mr_url, None);
+    assert_eq!(read.integration_mr_state, None);
+
+    db.update(
+        &did(),
+        &DiscoveryPatch {
+            integration_mr_url: Some(Some("https://github.com/o/r/pull/9".to_string())),
+            integration_mr_state: Some(Some("open".to_string())),
+            ..Default::default()
+        },
+        200,
+    )
+    .unwrap();
+    let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
+    assert_eq!(
+        read.integration_mr_url.as_deref(),
+        Some("https://github.com/o/r/pull/9")
+    );
+    assert_eq!(read.integration_mr_state.as_deref(), Some("open"));
+
+    db.update(&did(), &DiscoveryPatch::default(), 300).unwrap();
+    let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
+    assert_eq!(
+        read.integration_mr_url.as_deref(),
+        Some("https://github.com/o/r/pull/9"),
+        "a patch that named no MR must not clear the one set"
+    );
+
+    db.update(
+        &did(),
+        &DiscoveryPatch {
+            integration_mr_url: Some(None),
+            integration_mr_state: Some(None),
+            ..Default::default()
+        },
+        400,
+    )
+    .unwrap();
+    let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
+    assert_eq!(read.integration_mr_url, None);
+    assert_eq!(read.integration_mr_state, None);
 }
 
 #[test]

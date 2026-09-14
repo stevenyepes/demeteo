@@ -14,6 +14,8 @@ use crate::domain::models::{Machine, Platform, Project, Repository, TITLE_MAX_CH
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, SftpEntry};
 use crate::ports::worktree_ops::WorktreeOpsPort;
 
+mod publish;
+
 /// A local project with nothing in it, which is as much as `create` reads.
 fn fixture(tag: &str) -> (AppContext, ProjectId) {
     let dir = std::env::temp_dir().join(format!(

@@ -19,6 +19,7 @@ import {
   type AttachmentInput,
   type StagedAttachmentInput,
 } from "./attachments";
+import type { MrInfo } from "./featureDetail";
 
 /**
  * Typed IPC wrappers for Discovery and its Tickets — the commands in
@@ -238,6 +239,16 @@ export async function setDiscoveryBase(
   branch: string | null,
 ): Promise<Discovery> {
   return invoke<Discovery>("discovery_set_base", { discoveryId, branch });
+}
+
+/**
+ * Mirrors `discovery_publish_integration_mr`. Opens a PR from the Discovery's
+ * integration branch into the project's default branch, composed from its
+ * tickets. Calling it again after a PR is already open returns the stored
+ * url/state rather than opening a second one.
+ */
+export async function publishIntegrationMr(discoveryId: string): Promise<MrInfo> {
+  return invoke<MrInfo>("discovery_publish_integration_mr", { discoveryId });
 }
 
 /**
