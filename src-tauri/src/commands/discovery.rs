@@ -19,7 +19,7 @@ use demeteo_core::application::discovery::decompose::{
     self, proposal::DecomposeProposal, DecomposeApply,
 };
 use demeteo_core::application::discovery::{
-    self, turn, DiscoveryDetail, DiscoverySummary, NewDiscovery,
+    self, turn, DiscoveryBaseSyncOutcome, DiscoveryDetail, DiscoverySummary, NewDiscovery,
 };
 use demeteo_core::application::tickets::DiscoveryBoard;
 use tauri::{Emitter, State};
@@ -193,4 +193,13 @@ pub async fn discovery_set_base(
     branch: Option<String>,
 ) -> Result<Discovery, String> {
     discovery::set_base(&ctx, &DiscoveryId::from(discovery_id), branch).await
+}
+
+/// Bring this Discovery's adopted base branch up to date with the project's default.
+#[tauri::command]
+pub async fn discovery_sync_base(
+    ctx: State<'_, AppContext>,
+    discovery_id: String,
+) -> Result<DiscoveryBaseSyncOutcome, String> {
+    discovery::sync_base_branch(&ctx, &DiscoveryId::from(discovery_id)).await
 }

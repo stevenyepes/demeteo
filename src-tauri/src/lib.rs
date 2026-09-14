@@ -571,6 +571,7 @@ pub fn run() {
             commands::discovery::discovery_discard_proposal,
             commands::discovery::discovery_apply_decomposition,
             commands::discovery::discovery_set_base,
+            commands::discovery::discovery_sync_base,
             commands::tickets::discovery_board,
             commands::tickets::discovery_delete,
             commands::tickets::ticket_briefing,
