@@ -127,10 +127,13 @@ The desktop app ships on **Linux x86_64, macOS aarch64, and Windows x86_64**
 (the `build.yml` matrix). The remote runner is always Linux. So: host-side code
 must work on all three; only remote-side code may assume Linux and systemd.
 
-PR checks run on `ubuntu-22.04` only — **green locally and in CI does not prove
-macOS or Windows even compiles.** That breakage surfaces on master or a tag,
-after merge. When you touch host-side paths, shells, or process handling, reason
-about all three targets before you finish, and say which ones you couldn't verify.
+The full gate (`scripts/checks.sh`) runs on `ubuntu-22.04` only; the `cross-os`
+job in `pr-checks.yml` type-checks and runs the core tests on macOS and Windows,
+which is where three of the last six real PR failures were caught — an import
+only used behind a `cfg`, dead on Linux, fatal under `-D warnings` elsewhere.
+**Green locally does not prove macOS or Windows even compiles.** When you touch
+host-side paths, shells, or process handling, reason about all three targets
+before you finish, and say which ones you couldn't verify.
 
 - Build paths with `Path`/`PathBuf::join` — never string-concatenate separators
 - Resolve data/config/cache dirs through the platform API — never hard-code `~/.local/share`, `$TMPDIR`, or `/tmp`
@@ -209,8 +212,10 @@ pinned in `rust-toolchain.toml` (so local clippy == CI clippy), `cargo doc` for
 intra-doc links, `scripts/check-doc-refs.sh`, the demeteo + core + runner test suites,
 the gate-feedback repro, and commitlint on `origin/master..HEAD`.
 Fails fast. "`cargo test` passed" is **not** "CI is green" — run the whole script, not
-a subset. The `pre-push` hook runs it automatically (`git push --no-verify` for a
-deliberate WIP).
+a subset. Nothing runs it for you: the `pre-push` hook is deliberately inert
+(`.githooks/pre-push`), so run it yourself before pushing. `scripts/checks.sh frontend`
+and `scripts/checks.sh rust` run the two halves CI splits into separate jobs; the
+no-argument form is the one that means done.
 
 ### Comments are gated too
 
@@ -241,7 +246,8 @@ holds only orchestrator plumbing (one commit per ticket, plus subtask merges) th
 finalize step squashes away, having validated the surviving message against the real
 `commit-msg` hook. A ticket agent cannot fix a message it never wrote, so the verdict
 feeds a rework cycle that closes nothing. That is what `ProjectSettings.default_test_command`
-should point at; `pre-push` and CI keep running the full `checks`.
+should point at; CI keeps running every gate, with commitlint in its own
+`Lint Commits` job so a bad subject is reported in seconds, not after the Rust build.
 
 **A new test does not count until you have watched it fail.** Break the code it
 covers, confirm that test — and ideally only that test — goes red, then revert.
@@ -267,9 +273,10 @@ catches it. §4 has the mechanism that makes it silent.
 
 ### The parity gates are not in `npm run checks`
 
-`pr-checks.yml` runs **three** jobs: `scripts/checks.sh`, plus two conformance suites
-that `checks.sh` does not invoke. Both need Docker, and both are the only thing standing
-between you and a local/remote divergence:
+`pr-checks.yml` runs `scripts/checks.sh` as two jobs (`frontend`, `rust`), the
+`cross-os` compile-and-core-test job, and a `conformance` job holding two suites
+that `checks.sh` does not invoke. Both suites need Docker, and both are the only
+thing standing between you and a local/remote divergence:
 
 ```bash
 crates/demeteo-core/tests/conformance/run-ssh-conformance.sh       # C2.2 — same exec_contract, local vs loopback sshd
