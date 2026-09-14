@@ -1,12 +1,22 @@
 name: PR Checks
 
+# Also runs on master pushes, for two reasons neither of which is "test master
+# twice". (1) A squash merge lands a commit no PR run ever saw — build.yml only
+# bundles it, so a merge onto a moved master could ship broken and stay that way
+# until the next PR opened. (2) Actions cache scoping: a PR run can read only
+# its own ref's caches and the base branch's, never a sibling PR's. The Rust
+# caches below are saved on master only, so every PR starts warm from the last
+# master run instead of cold in every job (~5 min per PR run, and ~3.6 GB of
+# cache per PR that used to push the repo into eviction at the 10 GB cap).
 on:
+  push:
+    branches: [master]
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
     branches: [master]
 
 concurrency:
-  group: pr-${{ github.event.pull_request.number }}
+  group: pr-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -16,19 +26,39 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  # The build/test gate is a single shared script (scripts/checks.sh) that
+  # developers and agents run locally before pushing, so "green locally" means
+  # "green in CI" — no drift between an ad-hoc local run and these jobs. It is
+  # split here by toolchain, not by gate: `frontend` needs no Rust and no
+  # webkit packages, so a type error is reported in ~2 minutes rather than at
+  # the end of a 14-minute step; `rust` carries fmt, clippy -D warnings (on the
+  # pinned toolchain, rust-toolchain.toml), cargo doc, doc-refs and the demeteo
+  # + core + runner tests. Commitlint lives in lint-commits.yml.
+  frontend:
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Frontend checks (tsc, biome, class names, vitest)
+        run: ./scripts/checks.sh frontend
+
+  rust:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
 
       - name: Install Linux dependencies
         run: |
@@ -42,49 +72,52 @@ jobs:
             libdbus-1-dev \
             pkg-config
 
+      # Installing `@stable` and letting rust-toolchain.toml override it at the
+      # first cargo call downloads two toolchains. Reading the channel out of the
+      # file installs exactly the one that will run, and keeps the bump in one
+      # place (§7: local clippy must be CI clippy).
+      - name: Resolve pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: clippy, rustfmt
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: ". -> src-tauri/target"
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+          cache-on-failure: true
 
-      - name: Install frontend dependencies
-        run: npm ci
-
-      # The build/test gate is a single shared script (scripts/checks.sh) that
-      # developers and agents run locally before pushing, so "green locally"
-      # means "green in CI" — no drift between an ad-hoc local run and this
-      # job. It runs tsc, Biome, the Vitest frontend suite, fmt --check, clippy
-      # -D warnings (on the pinned toolchain, rust-toolchain.toml), and the
-      # demeteo + core + runner tests. Commitlint is skipped here because the
-      # dedicated `wagoid` step below is the canonical PR-range gate.
-      - name: PR checks (tsc, biome, vitest, fmt, clippy, tests)
-        env:
-          CHECKS_SKIP_COMMITLINT: "1"
-        run: ./scripts/checks.sh
-
-      - name: Lint commits
-        uses: wagoid/commitlint-github-action@v6
-        with:
-          configFile: .commitlintrc.json
-          failOnWarnings: false
+      - name: Rust checks (fmt, clippy, doc, doc-refs, tests)
+        run: ./scripts/checks.sh rust
 
   # The other two targets the desktop app ships on (build.yml's matrix). The
-  # `verify` job runs on ubuntu only, so every `#[cfg(windows)]` item — and the
+  # `rust` job runs on ubuntu only, so every `#[cfg(windows)]` item — and the
   # whole macOS half of every `cfg` — is unreachable from it, and the breakage
   # surfaces on master or a tag instead of on the PR. Compile coverage is the
   # point: clippy `--all-targets` type-checks the test targets too, so a
   # Windows-only test module that no ubuntu job can build fails here.
   # (AGENTS.md §3 "Cross-OS", docs/WINDOWS_PARITY.md "Gates")
+  #
+  # macos-14 is pinned to the image build.yml releases from, so a PR compiles
+  # on the same SDK the shipped .app is built with.
   cross-os:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest, macos-latest]
+        platform: [windows-latest, macos-14]
 
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -96,12 +129,6 @@ jobs:
           node-version: 24
           cache: npm
 
-      # The other jobs reach the pinned toolchain indirectly — they install
-      # `@stable`, and rust-toolchain.toml then overrides it at every cargo
-      # invocation. Installing the pinned channel directly means the toolchain
-      # rustup resolves is the one that was downloaded, and reading the channel
-      # out of the file keeps the bump in exactly one place (§7: local clippy
-      # must be CI clippy).
       - name: Resolve pinned toolchain
         id: toolchain
         shell: bash
@@ -119,7 +146,9 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: ". -> src-tauri/target"
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+          cache-on-failure: true
 
       - name: Install frontend dependencies
         run: npm ci
@@ -137,13 +166,23 @@ jobs:
       - name: Core tests
         run: cargo test -p demeteo-core
 
-  # C2.2 — proves local/SSH parity by running the byte-identical
-  # `exec_contract` against `SshClientAdapter` pointed at a throwaway
-  # loopback sshd. Separate job: it needs Docker but none of the Tauri/
-  # webkit toolchain the `verify` job installs.
-  # (docs/EXECUTION_PARITY.md)
-  ssh-conformance:
+  # The two parity gates, in one job because they share everything expensive:
+  # the same loopback sshd image (each script builds it; the second build is a
+  # layer-cache hit) and the same demeteo-core test build with the
+  # `ssh-conformance` feature. As two jobs they compiled that build twice into
+  # two ~470 MB caches. Separate from `rust` because they need Docker but none
+  # of the Tauri/webkit toolchain.
+  #
+  # C2.2 — proves local/SSH parity by running the byte-identical `exec_contract`
+  # against `SshClientAdapter` pointed at a throwaway loopback sshd.
+  # C5 — topology-equivalence gate: one workflow run through local and
+  # desktop-over-SSH must render an equivalent RunView (the runner leg lives in
+  # the separate runner-conformance script because it additionally needs an
+  # in-container git host). Uses the deterministic `stub` agent so a run reaches
+  # a terminal state with no real LLM CLI. (docs/EXECUTION_PARITY.md)
+  conformance:
     runs-on: ubuntu-22.04
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -153,42 +192,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config
 
+      - name: Resolve pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: ". -> src-tauri/target"
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+          cache-on-failure: true
 
       - name: Run ExecutionPort SSH conformance suite
         run: crates/demeteo-core/tests/conformance/run-ssh-conformance.sh
-
-  # C5 — topology-equivalence gate: one workflow run through local and
-  # desktop-over-SSH must render an equivalent RunView (the runner leg lives in
-  # the separate runner-conformance job because it additionally needs an
-  # in-container git host). Uses the deterministic `stub` agent so a run
-  # reaches a terminal state with no real LLM CLI. Separate job for the same
-  # reason as ssh-conformance: it needs Docker, not the Tauri toolchain.
-  # (docs/EXECUTION_PARITY.md)
-  topology-conformance:
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
       - name: Run topology equivalence suite (local + SSH)
         run: crates/demeteo-core/tests/conformance/run-topology-conformance.sh
