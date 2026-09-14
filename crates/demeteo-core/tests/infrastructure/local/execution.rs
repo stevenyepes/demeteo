@@ -28,24 +28,51 @@ fn harness_opts(timeout: Option<Duration>) -> ShellOptions {
     }
 }
 
-/// The pid the script recorded, waited for rather than assumed.
+/// The pid the script recorded, read after the run has already ended.
 ///
-/// One fixed window does not cover every host: the body runs under the
-/// account's own login shell (`shared::shell::posix_login_shell`), and an rc
-/// file with plugins in it can spend a tenth of a second before the first
-/// command of the body executes — which under a loaded suite is the
-/// difference between the file being there and the read panicking.
+/// Only for the deadline test, where the kill has landed by the time this is
+/// called: the file is either there or never will be, so a short grace for
+/// the write to flush is all it needs.
 #[cfg(unix)]
 fn recorded_pid(pidfile: &std::path::Path) -> u32 {
     for _ in 0..100 {
-        if let Ok(text) = std::fs::read_to_string(pidfile) {
-            if let Ok(pid) = text.trim().parse() {
-                return pid;
-            }
+        if let Some(pid) = read_pid(pidfile) {
+            return pid;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
     panic!("the script never recorded its grandchild pid at {pidfile:?}");
+}
+
+#[cfg(unix)]
+fn read_pid(pidfile: &std::path::Path) -> Option<u32> {
+    std::fs::read_to_string(pidfile).ok()?.trim().parse().ok()
+}
+
+/// The pid the script recorded, waited for while the run is still alive.
+///
+/// The body runs under the account's own login shell
+/// (`shared::shell::posix_login_shell`), and how long that takes to reach the
+/// first command of the body is the host's business, not the test's: a tenth
+/// of a second on a bare rc file, three seconds on a loaded CI runner. A test
+/// that abandons the run after a fixed window is therefore racing shell
+/// startup, and loses whenever the machine is slow — the kill lands before
+/// the `sleep` exists, the pidfile is never written, and the failure reads as
+/// a missing file rather than the timing it is. Waiting for the file *before*
+/// letting go is the only window that fits every host.
+#[cfg(unix)]
+async fn pid_once_recorded(pidfile: &std::path::Path) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(pid) = read_pid(pidfile) {
+            return pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the script never recorded its grandchild pid at {pidfile:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 /// Is `pid` still alive? `kill(pid, 0)` is the standard liveness probe.
@@ -282,8 +309,16 @@ async fn the_timeout_kills_the_whole_process_tree_not_just_the_shell() {
     let pidfile = dir.join("grandchild.pid");
 
     let script = format!("sleep 60 & echo $! > {}; wait", pidfile.display());
+    // The deadline runs from spawn, so login-shell startup eats into it and a
+    // ceiling the shell cannot start inside kills the tree before the body
+    // has written the pidfile (see `pid_once_recorded`). Ten seconds is three
+    // times what a loaded ubuntu-22.04 runner was measured to take.
     let err = adapter
-        .run_command_with("local", &script, harness_opts(Some(Duration::from_secs(2))))
+        .run_command_with(
+            "local",
+            &script,
+            harness_opts(Some(Duration::from_secs(10))),
+        )
         .await
         .expect_err("the ceiling is exceeded");
     assert!(err.starts_with(TIMEOUT_ERROR_PREFIX));
@@ -322,15 +357,15 @@ async fn abandoning_the_future_kills_the_tree_too() {
     let pidfile = dir.join("grandchild.pid");
     let script = format!("sleep 60 & echo $! > {}; wait", pidfile.display());
 
-    {
+    let pid = {
         let run = adapter.run_command_with("local", &script, harness_opts(None));
-        // Long enough for the script to have written the pidfile, shell
-        // startup included — `recorded_pid` waits out the rest.
-        let _ = tokio::time::timeout(Duration::from_secs(2), run).await;
-        // `run` is dropped here.
-    }
-
-    let pid = recorded_pid(&pidfile);
+        tokio::pin!(run);
+        tokio::select! {
+            outcome = &mut run => panic!("the script returned before it was abandoned: {outcome:?}"),
+            pid = pid_once_recorded(&pidfile) => pid,
+        }
+        // `run` is dropped here, with the grandchild known to exist.
+    };
 
     for _ in 0..50 {
         if !alive(pid) {
