@@ -269,6 +269,8 @@ describe('the turn count, across both surfaces', () => {
         onDecompose={() => {}}
         decomposing={false}
         busy={false}
+        onUpdateBase={() => {}}
+        onPublishIntegration={() => {}}
       />,
     );
     expect(screen.getByText('2')).toBeTruthy();
