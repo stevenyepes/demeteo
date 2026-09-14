@@ -10,9 +10,11 @@ import {
   forceStartTicket,
   getDiscovery,
   getDiscoveryBoard,
+  publishIntegrationMr,
   reopenDiscovery,
   sendDiscoveryTurn,
   startTicket,
+  syncDiscoveryBase,
   type DiscoveryTurnCompletedPayload,
   type DiscoveryTurnStatusPayload,
 } from '../../lib/discovery';
@@ -364,6 +366,8 @@ export function DiscoveryView({
         }
         onDecompose={() => void decompose()}
         decomposing={decomposing}
+        onUpdateBase={() => void runAction(() => syncDiscoveryBase(discoveryId))}
+        onPublishIntegration={() => void runAction(() => publishIntegrationMr(discoveryId))}
       />
 
       {actionError && (
