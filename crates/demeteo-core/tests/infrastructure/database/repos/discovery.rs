@@ -49,6 +49,7 @@ fn discovery() -> Discovery {
         effort: Some(EffortLevel::XHigh),
         resume_session_id: Some("sess-abc".to_string()),
         worktree_path: Some("/repos/demeteo_wt_discovery_d-1".to_string()),
+        base_branch: Some("develop".to_string()),
         attachments: vec![attached("spec.md")],
         total_cost: 1.25,
         tokens: 4096,
@@ -74,11 +75,69 @@ fn a_discovery_round_trips_every_column() {
         read.worktree_path.as_deref(),
         Some("/repos/demeteo_wt_discovery_d-1")
     );
+    assert_eq!(read.base_branch.as_deref(), Some("develop"));
     assert_eq!(read.total_cost, 1.25);
     assert_eq!(read.tokens, 4096);
     assert_eq!(read.attachments, vec![attached("spec.md")]);
     assert_eq!(read.created_at, 100);
     assert_eq!(read.updated_at, 100);
+}
+
+/// A row written before V54 has no `base_branch`, and it reads back as the
+/// project's default branch rather than as a third "unknown" state — see the
+/// migration's header.
+#[test]
+fn a_discovery_stored_before_the_column_reads_as_the_default_branch() {
+    let db = db();
+    db.create(&discovery()).unwrap();
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute("UPDATE discoveries SET base_branch = NULL", [])
+            .unwrap();
+    }
+
+    let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
+    assert_eq!(read.base_branch, None);
+}
+
+/// The same three-state patch every nullable column here takes: leaving it
+/// alone, setting it, and clearing it back to the default branch.
+#[test]
+fn a_patch_sets_and_clears_the_base_branch() {
+    let db = db();
+    db.create(&discovery()).unwrap();
+
+    db.update(
+        &did(),
+        &DiscoveryPatch {
+            base_branch: Some(Some("release/1.2".to_string())),
+            ..Default::default()
+        },
+        200,
+    )
+    .unwrap();
+    let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
+    assert_eq!(read.base_branch.as_deref(), Some("release/1.2"));
+
+    db.update(&did(), &DiscoveryPatch::default(), 300).unwrap();
+    let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
+    assert_eq!(
+        read.base_branch.as_deref(),
+        Some("release/1.2"),
+        "a patch that named no base branch must not clear the one set"
+    );
+
+    db.update(
+        &did(),
+        &DiscoveryPatch {
+            base_branch: Some(None),
+            ..Default::default()
+        },
+        400,
+    )
+    .unwrap();
+    let read = DiscoveryPort::get(&db, &did()).unwrap().unwrap();
+    assert_eq!(read.base_branch, None);
 }
 
 #[test]

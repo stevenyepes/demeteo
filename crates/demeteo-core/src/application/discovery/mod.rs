@@ -28,7 +28,8 @@ use crate::application::attachments::StagedAttachmentInput;
 use crate::domain::discovery_question::{parse_interview_turn, InterviewTurn};
 use crate::domain::ids::{DiscoveryId, MachineId, ProjectId};
 use crate::domain::models::{
-    Discovery, DiscoveryMessage, DiscoveryStatus, EffortLevel, MessageRole,
+    base_branch_lock_refusal, Discovery, DiscoveryMessage, DiscoveryStatus, EffortLevel,
+    MessageRole,
 };
 use crate::domain::ticket_graph::TicketProgress;
 use crate::ports::discovery::DiscoveryPatch;
@@ -192,6 +193,7 @@ pub fn create(ctx: &AppContext, new: NewDiscovery) -> Result<Discovery, String> 
         effort: new.effort,
         resume_session_id: None,
         worktree_path: None,
+        base_branch: None,
         attachments: Vec::new(),
         total_cost: 0.0,
         tokens: 0,
@@ -275,6 +277,51 @@ pub async fn delete(ctx: &AppContext, id: &DiscoveryId) -> Result<(), String> {
         }
     }
     ctx.discoveries.delete(id)
+}
+
+/// Adopt or clear the branch this Discovery's tickets cut their run from
+/// (V54, `docs/PRD_DISCOVERY.md` §4.3). `branch: None` clears it back to the
+/// project's default branch.
+///
+/// Refused the moment any ticket has left `Unstarted`
+/// ([`base_branch_lock_refusal`]) — checked before `branch` is even matched
+/// on, so clearing is refused right alongside adopting: the run a ticket
+/// already cut its branch from cannot be moved out from under it either way.
+///
+/// Adopting only ever points at a ref origin already has — this never cuts a
+/// new branch, which is why the miss is phrased as "not found" rather than as
+/// a rule against creating one.
+pub async fn set_base(
+    ctx: &AppContext,
+    id: &DiscoveryId,
+    branch: Option<String>,
+) -> Result<Discovery, String> {
+    let discovery = load(ctx, id)?;
+    let tickets = ctx.tickets.list_for_discovery(id)?;
+    if let Some(refusal) = base_branch_lock_refusal(&tickets) {
+        return Err(refusal);
+    }
+    if let Some(name) = branch.as_deref() {
+        let repo = worktree::resolve(ctx, &discovery).await?;
+        let branches = ctx
+            .worktree_ops
+            .list_terminal_branches(repo.machine_id.as_deref(), &repo.repo_dir)
+            .await?;
+        if !branches.iter().any(|b| b.name == name && b.has_remote) {
+            return Err(format!(
+                "no remote branch named '{name}' was found for this project"
+            ));
+        }
+    }
+    ctx.discoveries.update(
+        id,
+        &DiscoveryPatch {
+            base_branch: Some(branch),
+            ..Default::default()
+        },
+        crate::paths::now_ms(),
+    )?;
+    load(ctx, id)
 }
 
 /// Stop the turn in flight.

@@ -164,6 +164,7 @@ describe('discoveryLifecycle', () => {
     effort: 'high',
     resume_session_id: null,
     worktree_path: null,
+    base_branch: null,
     attachments: [],
     total_cost: 2.14,
     tokens: 486_000,

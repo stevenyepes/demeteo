@@ -3,6 +3,67 @@
 use super::*;
 
 use crate::domain::agent_event::{StopReason, ToolCallStatus};
+use crate::domain::ids::{DiscoveryId, TicketId};
+
+fn ticket(seq: i64, state: TicketState) -> Ticket {
+    Ticket {
+        id: TicketId::from(format!("t-{seq}")),
+        discovery_id: DiscoveryId::from("d-1".to_string()),
+        seq,
+        title: format!("ticket {seq}"),
+        description: String::new(),
+        acceptance: Vec::new(),
+        files: Vec::new(),
+        blocked_by: Vec::new(),
+        test_command: None,
+        workflow_id: None,
+        agent_kind: None,
+        model: None,
+        effort: None,
+        attachments: Vec::new(),
+        state,
+        drop_reason: None,
+        force_start_reason: None,
+        force_started_at: None,
+        feature_id: None,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+#[test]
+fn an_empty_ticket_list_leaves_the_base_branch_editable() {
+    assert!(base_branch_lock_refusal(&[]).is_none());
+}
+
+#[test]
+fn all_unstarted_tickets_leave_the_base_branch_editable() {
+    let tickets = vec![
+        ticket(1, TicketState::Unstarted),
+        ticket(2, TicketState::Unstarted),
+    ];
+    assert!(base_branch_lock_refusal(&tickets).is_none());
+}
+
+#[test]
+fn a_started_ticket_locks_the_base_branch() {
+    let tickets = vec![
+        ticket(1, TicketState::Unstarted),
+        ticket(2, TicketState::Started),
+    ];
+    let refusal = base_branch_lock_refusal(&tickets).expect("a started ticket locks it");
+    assert!(refusal.contains("#2"), "{refusal}");
+}
+
+#[test]
+fn a_dropped_ticket_locks_the_base_branch() {
+    let tickets = vec![
+        ticket(1, TicketState::Unstarted),
+        ticket(2, TicketState::Dropped),
+    ];
+    let refusal = base_branch_lock_refusal(&tickets).expect("a dropped ticket locks it");
+    assert!(refusal.contains("#2"), "{refusal}");
+}
 
 fn call(action: ActionKind, target: &str) -> AgentEvent {
     AgentEvent::ToolCall {

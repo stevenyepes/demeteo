@@ -358,14 +358,58 @@ base branch. Told nothing, a competent agent will assume the code is there and
 build on it. The line is mechanical to generate from `mr_state` and the Ticket's
 own state.
 
+### 7.3 Base branch
+
+`Discovery.base_branch` (V54) is the integration branch this Discovery's
+tickets are cut from and reviewed against. It is settable at any point across
+the Discovery's whole `Unstarted`-tickets lifetime via
+`application::discovery::set_base` — not fixed at creation the way agent kind,
+model and effort are (§4.5).
+
+`None` means the project's default branch, not "unknown" or "not yet decided" —
+the same encoding V41's `origin_json` `NULL` uses for
+`FeatureOrigin::DefaultBranch` (`domain/feature_origin.rs`).
+Every Discovery row written before V54 added this column behaves as if it named
+the default branch: a Discovery has no state in which its tickets start from
+nowhere.
+
+**Locked once any ticket leaves `Unstarted`.** `base_branch_lock_refusal`
+(`domain/models/discovery.rs`) is checked before `set_base` even looks at the
+requested branch, so clearing back to the default is refused exactly like
+adopting one — the run a ticket already cut its branch from cannot be moved out
+from under it either way.
+
+**Adopt-only.** `set_base` only ever points at a `refs/remotes/origin/<name>`
+ref that already exists; it does not create branches. That is scope for now,
+not a permanent limitation.
+
+On start (§7.1), `discovery.base_branch` becomes the ticket's
+`FeatureLaunch.origin`: `Some(branch)` maps to `FeatureOrigin::Branch { base }`,
+`None` falls through to `FeatureOrigin`'s own `Default` (`DefaultBranch`).
+**`Feature.diff_base_branch` is deliberately never set from it** —
+`FeatureOrigin::Branch { base }` already answers the diff base through
+`diff_base::resolve`'s existing fallthrough, and persisting a second copy would
+go stale the moment one changed without the other.
+
+Two alternatives were rejected:
+
+- **Per-ticket base.** A Discovery would then have tickets living on two
+  branches, and the integration actions that act on the whole Discovery — sync,
+  squash, PR target — would have no single well-defined subject.
+- **Fixed at creation, like `agent_kind`.** Demands the decision at the moment
+  the user knows least about the work, and the escape hatch of starting over
+  would throw away exactly the interview this PRD's own discovery-session
+  design exists to accumulate.
+
 ---
 
 ## 8. Persistence and lifecycle
 
 ### 8.1 Shape
 
-- **Discovery** — project-scoped; agent kind, model, effort, machine; status;
-  the message log; the harness resume id as a cached fast path (§4.4).
+- **Discovery** — project-scoped; agent kind, model, effort, machine; base
+  branch (§7.3); status; the message log; the harness resume id as a cached
+  fast path (§4.4).
 - **Ticket** — owned by a Discovery; the planned fields (title, description,
   acceptance, files, test command); the execution choices (workflow, agent,
   model, effort); `blocked_by` edges within the Discovery; staged attachments,
@@ -556,3 +600,4 @@ recorded because they are what the implementation will not preserve.
 | 35 | A board beside the graph, both over one derived bucket | The graph alone; a stored kanban column to drag against |
 | 36 | Progress counted as landed over live tickets | Counting started runs; counting dropped tickets as outstanding |
 | 37 | Ticket attachments staged in `launch` mode, committed on start | Interview attachments only; attaching to a Feature that does not exist yet |
+| 38 | Base branch editable while every ticket is `Unstarted` | Fixed at creation like `agent_kind`; a per-ticket base |
