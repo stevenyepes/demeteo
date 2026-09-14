@@ -134,6 +134,11 @@ impl ExecutionDriver {
             }
         }
 
+        // After reconciliation, not before: a decision that was already in
+        // the row completes the gate without waiting, and parking the
+        // feature for it would announce a "needs you" nobody can act on.
+        self.park_feature();
+
         let _ = self.notif.emit(&DomainEvent::GateRequired {
             feature_id: self.f_id.clone(),
             step_execution_id: step_exec.id.clone(),
