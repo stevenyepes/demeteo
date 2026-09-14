@@ -645,9 +645,9 @@ export interface Feature {
   /** URL of the published PR/MR, if any. Set by the `MrPublisher`. */
   mr_url?: string | null;
   /**
-   * State of the PR/MR on the provider: `none | draft | open | merged | closed`.
-   * `none` → no MR has been published. `open` is the typical "review pending"
-   * state. The UI shows this as a badge on the feature detail.
+   * State of the PR/MR on the provider: `draft | open | merged | closed`.
+   * `null` → no MR has been published yet. `open` is the typical "review
+   * pending" state. The UI shows this as a badge on the feature detail.
    */
   mr_state?: string | null;
   /**
@@ -1313,6 +1313,10 @@ export interface Discovery {
   resume_session_id: string | null;
   worktree_path: string | null;
   base_branch: string | null;
+  /** URL of the published integration PR/MR, if any. Set by `publish_integration_mr`. */
+  integration_mr_url: string | null;
+  /** State of the integration PR/MR on the provider: `draft | open | merged | closed`. `null` when no MR has been opened yet. */
+  integration_mr_state: string | null;
   /** What the user handed the interviewer. Owned by the Discovery rather than
    *  by a turn, so the composer's chip row survives the turn that added it and
    *  every later turn is prompted with the same set. */

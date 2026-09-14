@@ -45,6 +45,8 @@ function discovery(overrides: Partial<DiscoverySummary> = {}): DiscoverySummary 
     resume_session_id: null,
     worktree_path: null,
     base_branch: null,
+    integration_mr_url: null,
+    integration_mr_state: null,
     attachments: [],
     total_cost: 0,
     tokens: 0,

@@ -250,6 +250,17 @@ impl MrPublisher for HttpMrPublisher {
     ) -> Result<String, String> {
         self.post_mr_comment_impl(project_id, mr_url, body).await
     }
+
+    async fn publish_branch_mr(
+        &self,
+        project_id: &str,
+        source_branch: &str,
+        target_branch: &str,
+        options: PublishOptions,
+    ) -> Result<MrInfo, String> {
+        self.publish_branch_mr_inner(project_id, source_branch, target_branch, options)
+            .await
+    }
 }
 
 impl HttpMrPublisher {
@@ -356,11 +367,6 @@ impl HttpMrPublisher {
         )
         .await?;
 
-        let http: &dyn HttpClient = match self.http_override.as_ref() {
-            Some(arc) => arc.as_ref(),
-            None => &ReqwestHttp,
-        };
-
         let request = MrRequest {
             host: &provider.host,
             repo_path: &repo_path,
@@ -371,12 +377,7 @@ impl HttpMrPublisher {
             draft: options.draft,
             pat: &pat,
         };
-
-        let info = match provider.kind.as_str() {
-            "github" => github::publish_github(http, &request).await?,
-            "gitlab" => gitlab::publish_gitlab(http, &request).await?,
-            other => return Err(format!("Unsupported provider kind: {}", other)),
-        };
+        let info = self.dispatch_mr_request(&provider.kind, &request).await?;
 
         // Persist the URL + state on the feature so subsequent
         // publish_mr calls are idempotent and the UI can show the
@@ -395,6 +396,66 @@ impl HttpMrPublisher {
         );
 
         Ok(info)
+    }
+
+    /// The dispatch tail shared by the `FeatureId`-keyed and branch-keyed
+    /// publish paths: send the already-built, provider-agnostic
+    /// [`MrRequest`] to whichever provider `provider_kind` names. Neither
+    /// pushes nor persists — both are the caller's concern, and the two
+    /// callers disagree on whether either applies.
+    async fn dispatch_mr_request(
+        &self,
+        provider_kind: &str,
+        request: &MrRequest<'_>,
+    ) -> Result<MrInfo, String> {
+        let http: &dyn HttpClient = match self.http_override.as_ref() {
+            Some(arc) => arc.as_ref(),
+            None => &ReqwestHttp,
+        };
+
+        match provider_kind {
+            "github" => github::publish_github(http, request).await,
+            "gitlab" => gitlab::publish_gitlab(http, request).await,
+            other => Err(format!("Unsupported provider kind: {}", other)),
+        }
+    }
+
+    /// Branch-keyed publish: no `FeatureId`, no idempotency check, and never
+    /// a push — the caller's branch is already an adopted remote ref by the
+    /// time this runs (see [`MrPublisher::publish_branch_mr`]).
+    async fn publish_branch_mr_inner(
+        &self,
+        project_id: &str,
+        source_branch: &str,
+        target_branch: &str,
+        options: PublishOptions,
+    ) -> Result<MrInfo, String> {
+        let pid = crate::domain::ids::ProjectId::from(project_id.to_string());
+        let MrTarget {
+            provider,
+            repo_path,
+        } = resolve_target(self.app_settings.as_ref(), self.projects.as_ref(), &pid)?;
+        let pat = resolve_pat(&provider.id.0)?;
+
+        let non_empty = |s: &String| !s.trim().is_empty();
+        let title = options
+            .title
+            .clone()
+            .filter(non_empty)
+            .unwrap_or_else(|| format!("Merge {} into {}", source_branch, target_branch));
+        let body = options.body.clone().filter(non_empty).unwrap_or_default();
+
+        let request = MrRequest {
+            host: &provider.host,
+            repo_path: &repo_path,
+            source_branch,
+            target_branch,
+            title: &title,
+            body: &body,
+            draft: options.draft,
+            pat: &pat,
+        };
+        self.dispatch_mr_request(&provider.kind, &request).await
     }
 
     async fn post_mr_comment_impl(

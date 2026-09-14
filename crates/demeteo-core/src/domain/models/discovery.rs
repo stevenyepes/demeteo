@@ -14,6 +14,7 @@ use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{DiscoveryId, MachineId, ProjectId};
 use crate::domain::models::ticket::{Ticket, TicketState};
 use crate::domain::models::EffortLevel;
+use crate::domain::ticket_graph::TicketNode;
 
 /// One planning conversation, as the row holds it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +51,14 @@ pub struct Discovery {
     /// nowhere.
     #[serde(default)]
     pub base_branch: Option<String>,
+    /// `None` means no MR has been opened for this Discovery's decomposition
+    /// yet — a genuine third state, not a default (see V55).
+    #[serde(default)]
+    pub integration_mr_url: Option<String>,
+    /// NULL exactly when [`Discovery::integration_mr_url`] is, and never read
+    /// on its own (see V55).
+    #[serde(default)]
+    pub integration_mr_state: Option<String>,
     /// What the user handed the interviewer (§4.6). Owned by the Discovery
     /// rather than by a turn: the composer's chip row survives the turn that
     /// added it, and every later turn is prompted with the same set.
@@ -121,6 +130,54 @@ pub fn base_branch_lock_refusal(tickets: &[Ticket]) -> Option<String> {
         locked.join(", "),
         if locked.len() == 1 { "has" } else { "have" },
     ))
+}
+
+/// `Some(reason)` when this Discovery has no base branch to publish an
+/// integration MR from — `None` means the project's default branch (see V54),
+/// which is a real branch to publish from, not an unset field.
+pub fn missing_base_branch_refusal(discovery: &Discovery) -> Option<String> {
+    if discovery.base_branch.is_some() {
+        return None;
+    }
+    Some(
+        "this discovery has no base branch, so there is nothing to publish an integration MR \
+         from."
+            .to_string(),
+    )
+}
+
+/// `Some(reason)` unless at least one ticket's current attempt has landed —
+/// an integration MR with nothing merged into it would have no diff to show.
+pub fn no_merged_ticket_refusal(nodes: &[TicketNode]) -> Option<String> {
+    let any_merged = nodes
+        .iter()
+        .any(|node| node.mr_state.as_deref() == Some("merged"));
+    if any_merged {
+        return None;
+    }
+    Some(
+        "this discovery has no merged ticket yet, so an integration MR would have nothing to \
+         show."
+            .to_string(),
+    )
+}
+
+/// The integration MR's description: one line per ticket, naming it merged or
+/// not. Reads only [`Ticket::title`] off each ticket — never `description`,
+/// `acceptance`, or `files`, which are internal to the run and not meant for
+/// a published MR body.
+pub fn integration_pr_body(tickets: &[Ticket], nodes: &[TicketNode]) -> String {
+    tickets
+        .iter()
+        .map(|ticket| {
+            let merged = nodes
+                .iter()
+                .find(|node| node.id == ticket.id.as_str())
+                .is_some_and(|node| node.mr_state.as_deref() == Some("merged"));
+            format!("- [{}] {}", if merged { "x" } else { " " }, ticket.title)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Whether the interview is still being conducted.

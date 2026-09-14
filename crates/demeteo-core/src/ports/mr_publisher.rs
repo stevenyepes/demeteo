@@ -5,12 +5,18 @@
 //! with the project instance's PAT (stored in the keyring via
 //! `AppSettingsRepository::get_provider_instances` + `Keyring`).
 //!
-//! The publisher is deliberately idempotent on re-entry: a network
-//! timeout that occurs after the provider has created the MR but
-//! before we record the URL surfaces as `Err(_)` and the user can
-//! retry — but the second call must NOT create a duplicate MR.
-//! `publish_mr` checks `features.mr_url` first and returns the
-//! existing info if found.
+//! Publishing is keyed one of two ways. [`publish_mr`](MrPublisher::publish_mr)
+//! is keyed on a `FeatureId`: it resolves the source/target branches from the
+//! feature and its workflow settings, and is deliberately idempotent on
+//! re-entry — a network timeout that occurs after the provider has created the
+//! MR but before we record the URL surfaces as `Err(_)` and the user can
+//! retry, but the second call must NOT create a duplicate MR, so it checks
+//! `features.mr_url` first and returns the existing info if found.
+//! [`publish_branch_mr`](MrPublisher::publish_branch_mr) is keyed directly on
+//! a source/target branch pair instead — for callers (Discovery) that have no
+//! `FeatureId` to resolve branches from and whose base branch is already an
+//! adopted remote ref, so it never pushes and has no feature row to make it
+//! idempotent against.
 
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{MrInfo, PublishOptions};
@@ -118,4 +124,20 @@ pub trait MrPublisher: Send + Sync {
     ) -> Result<MrInfo, String> {
         self.publish_mr(project_id, feature_id, options).await
     }
+
+    /// Publish an MR/PR from `source_branch` to `target_branch` directly,
+    /// with no `FeatureId` to resolve them from.
+    ///
+    /// **Never pushes.** Unlike [`publish_mr`](Self::publish_mr), the caller's
+    /// branch is already an adopted remote ref by the time this is called, so
+    /// pushing does not belong on this path. It also has no feature row to
+    /// check for an existing URL, so — unlike `publish_mr` — it is not
+    /// idempotent on re-entry: calling it twice opens two MRs.
+    async fn publish_branch_mr(
+        &self,
+        project_id: &str,
+        source_branch: &str,
+        target_branch: &str,
+        options: PublishOptions,
+    ) -> Result<MrInfo, String>;
 }
