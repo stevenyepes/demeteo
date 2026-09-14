@@ -1632,6 +1632,275 @@ async fn test_create_feature_branch_falls_back_to_local_without_origin() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `create_and_push_branch` cuts from the freshly-fetched `origin/<default>`
+/// exactly as `create_feature_branch` does, and then publishes the result to
+/// origin.
+#[tokio::test]
+async fn test_create_and_push_branch_cuts_from_origin_and_publishes() {
+    let (local_dir, remote_dir, helper) = make_two_repos("push_branch_from_origin").await;
+    let local = local_dir.to_string_lossy().to_string();
+    let remote = remote_dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+
+    // Advance origin/main past what the local clone has, same setup as
+    // `test_create_feature_branch_cuts_from_origin_not_stale_local`.
+    exec.write_file("local", &format!("{remote}/README.md"), "origin advanced")
+        .await
+        .unwrap();
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{remote}\" commit -am origin-advance"),
+        )
+        .await;
+    let _ = helper
+        .ensure_default_branch_updated(None, &local, "main")
+        .await;
+
+    helper
+        .create_and_push_branch(None, &local, "main", "feature/f-push-origin")
+        .await
+        .expect("create_and_push_branch should succeed");
+
+    let origin_main_sha = rev_parse(&exec, &local, "origin/main").await;
+    let feature_sha = rev_parse(&exec, &local, "feature/f-push-origin").await;
+    assert_eq!(
+        feature_sha, origin_main_sha,
+        "the branch must be cut from the freshly-fetched origin/main"
+    );
+
+    let remote_feature_sha = rev_parse(&exec, &remote, "feature/f-push-origin").await;
+    assert_eq!(
+        remote_feature_sha, feature_sha,
+        "the cut branch must have been pushed to origin"
+    );
+
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+/// `create_and_push_branch` must refresh `origin/<default>` itself — unlike
+/// [`test_create_and_push_branch_cuts_from_origin_and_publishes`], this never
+/// calls `ensure_default_branch_updated` before invoking it, so it is the one
+/// test that would catch a missing internal fetch. Reproduces the exact gap
+/// the critic review flagged: `set_base` calls `create_and_push_branch`
+/// straight after a local-only `worktree::resolve`/`list_terminal_branches`,
+/// with no intervening fetch of its own.
+#[tokio::test]
+async fn test_create_and_push_branch_refreshes_stale_origin_before_cutting() {
+    let (local_dir, remote_dir, helper) = make_two_repos("push_branch_refreshes_origin").await;
+    let local = local_dir.to_string_lossy().to_string();
+    let remote = remote_dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+
+    // Advance origin/main past what the local clone's `origin/main` ref
+    // currently resolves to, and never fetch it manually — proving
+    // `create_and_push_branch` does its own refresh.
+    exec.write_file(
+        "local",
+        &format!("{remote}/README.md"),
+        "origin advanced again",
+    )
+    .await
+    .unwrap();
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{remote}\" commit -am origin-advance-again"),
+        )
+        .await;
+    let fresh_remote_main = rev_parse(&exec, &remote, "main").await;
+    let stale_local_origin_main = rev_parse(&exec, &local, "origin/main").await;
+    assert_ne!(
+        fresh_remote_main, stale_local_origin_main,
+        "sanity: local origin/main must be stale relative to the advanced remote"
+    );
+
+    helper
+        .create_and_push_branch(None, &local, "main", "feature/f-push-refresh")
+        .await
+        .expect("create_and_push_branch should succeed");
+
+    let feature_sha = rev_parse(&exec, &local, "feature/f-push-refresh").await;
+    assert_eq!(
+        feature_sha, fresh_remote_main,
+        "the branch must be cut from the freshly-refreshed origin/main tip, \
+         not the stale ref left over from the clone"
+    );
+
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+/// With no `origin/<default>` ref to resolve, `create_and_push_branch` falls
+/// back to the local default branch — same as `create_feature_branch` — and
+/// still manages to publish the result, because falling back is about the
+/// *start point*, not about whether origin exists as a push destination.
+///
+/// The remote is reachable but has zero commits, so `main` doesn't exist
+/// there yet (a brand-new project's first push) — not merely "never
+/// fetched". `create_and_push_branch` now refreshes `origin/<default>`
+/// itself before cutting (see `ensure_default_branch_updated`), so a remote
+/// that already has a resolvable `main` would get fetched and used as the
+/// cut point instead of falling back — that's the fix working as intended,
+/// not this fallback case.
+#[tokio::test]
+async fn test_create_and_push_branch_falls_back_to_local_without_origin_ref() {
+    let remote_dir = std::env::temp_dir().join(format!(
+        "demeteo_test_remote_push_branch_fallback_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    std::fs::create_dir_all(&remote_dir).unwrap();
+    let remote = remote_dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+    let _ = exec
+        .run_command("local", &format!("git init -b main \"{remote}\""))
+        .await;
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{remote}\" config receive.denyCurrentBranch ignore"),
+        )
+        .await;
+
+    let (local_dir, helper) = make_repo("push_branch_fallback_local").await;
+    let local = local_dir.to_string_lossy().to_string();
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{local}\" remote add origin \"{remote}\""),
+        )
+        .await;
+
+    let local_main = rev_parse(&exec, &local, "main").await;
+
+    helper
+        .create_and_push_branch(None, &local, "main", "feature/f-push-local")
+        .await
+        .expect("create_and_push_branch should fall back to local main and still publish");
+
+    let feature_sha = rev_parse(&exec, &local, "feature/f-push-local").await;
+    assert_eq!(
+        feature_sha, local_main,
+        "with no origin/main ref, the branch is cut from local main"
+    );
+    let remote_feature_sha = rev_parse(&exec, &remote, "feature/f-push-local").await;
+    assert_eq!(
+        remote_feature_sha, feature_sha,
+        "the branch cut from the local fallback must still reach origin"
+    );
+
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+/// The push must never carry `--force`/`-f`: when origin already holds a
+/// branch of the same name with history the local side does not have, a
+/// forced push would happily overwrite it, but a non-forced one is rejected
+/// as a non-fast-forward. Asserting the rejection is what proves force was
+/// never on the table — a forced push here would have silently succeeded and
+/// discarded the remote-only commit.
+#[tokio::test]
+async fn test_create_and_push_branch_rejects_a_diverged_remote_branch_without_forcing() {
+    let (local_dir, remote_dir, helper) = make_two_repos("push_branch_no_force").await;
+    let local = local_dir.to_string_lossy().to_string();
+    let remote = remote_dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+
+    // Give origin a branch of the same name, advanced past anything the
+    // local clone's history contains.
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{remote}\" checkout -b feature/f-diverge"),
+        )
+        .await;
+    exec.write_file("local", &format!("{remote}/only-on-remote.txt"), "x")
+        .await
+        .unwrap();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{remote}\" add ."))
+        .await;
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{remote}\" commit -m remote-only-commit"),
+        )
+        .await;
+    let _ = exec
+        .run_command("local", &format!("git -C \"{remote}\" checkout main"))
+        .await;
+
+    let result = helper
+        .create_and_push_branch(None, &local, "main", "feature/f-diverge")
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a non-fast-forward push must surface as an error, not succeed by forcing"
+    );
+
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+/// A credential-shaped push failure is a distinct sentence from origin
+/// rejecting the push for content reasons — the whole point of §-testing it
+/// is that a caller cannot tell "no access" from "diverged history" apart
+/// without one. A fake `ssh` that always refuses the credential exchange
+/// reproduces this without any real network access.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_create_and_push_branch_credential_failure_names_push_access() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (dir, helper) = make_repo("push_branch_credential").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+
+    let script_path = dir.with_extension("fake-ssh.sh");
+    std::fs::write(
+        &script_path,
+        "#!/bin/sh\necho 'Permission denied (publickey).' >&2\nexit 1\n",
+    )
+    .expect("writes the fake ssh script");
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
+        .expect("makes the fake ssh script executable");
+
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" remote add origin ssh://git@example.invalid/o/r.git"),
+        )
+        .await;
+    let _ = exec
+        .run_command(
+            "local",
+            &format!(
+                "git -C \"{repo}\" config core.sshCommand \"{}\"",
+                script_path.to_string_lossy()
+            ),
+        )
+        .await;
+
+    let result = helper
+        .create_and_push_branch(None, &repo, "main", "feature/f-credential")
+        .await;
+
+    let error =
+        result.expect_err("a refused ssh credential exchange must not be reported as success");
+    assert!(
+        error.contains("push access"),
+        "a credential-shaped push failure must name push access, got: {error}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_file(&script_path);
+}
+
 /// Regression: `branch_delete` must remove subtask worktrees BEFORE it
 /// deletes their branches. `git branch -D` refuses to delete a branch
 /// still checked out in a worktree, so if the branch delete runs first

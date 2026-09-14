@@ -217,3 +217,28 @@ fn a_name_is_measured_in_characters_not_bytes() {
 fn a_name_of_only_whitespace_is_no_name() {
     assert!(validate_title("   \n ").is_err());
 }
+
+#[test]
+fn a_new_branch_name_starting_with_a_dash_is_refused() {
+    assert!(validate_new_branch_name("-oops").is_err());
+}
+
+#[test]
+fn a_new_branch_name_with_embedded_whitespace_is_refused() {
+    assert!(validate_new_branch_name("feature x").is_err());
+}
+
+#[test]
+fn a_new_branch_name_that_is_only_whitespace_is_refused() {
+    assert!(validate_new_branch_name("   ").is_err());
+}
+
+#[test]
+fn a_new_branch_name_with_embedded_dotdot_is_refused() {
+    assert!(validate_new_branch_name("feature..x").is_err());
+}
+
+#[test]
+fn a_normal_new_branch_name_is_accepted() {
+    assert!(validate_new_branch_name("release/2.1").is_ok());
+}

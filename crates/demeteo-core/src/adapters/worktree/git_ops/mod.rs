@@ -253,6 +253,17 @@ impl WorktreeOpsPort for GitOpsHelper {
             .await
     }
 
+    async fn create_and_push_branch(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        default_branch: &str,
+        branch_name: &str,
+    ) -> Result<(), String> {
+        self.create_and_push_branch(machine_id, repo_dir, default_branch, branch_name)
+            .await
+    }
+
     async fn provision_subtask_worktree(
         &self,
         machine_id: Option<&str>,

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::action::ActionKind;
 use crate::domain::agent_event::AgentEvent;
 use crate::domain::attachment::AttachedFile;
+use crate::domain::branch_listing::BranchOption;
 use crate::domain::ids::{DiscoveryId, MachineId, ProjectId};
 use crate::domain::models::ticket::{Ticket, TicketState};
 use crate::domain::models::EffortLevel;
@@ -121,6 +122,74 @@ pub fn base_branch_lock_refusal(tickets: &[Ticket]) -> Option<String> {
         locked.join(", "),
         if locked.len() == 1 { "has" } else { "have" },
     ))
+}
+
+/// Whether `name` is safe to hand to git as a new branch name.
+///
+/// Rejects a leading `-` and any whitespace or control character for the same
+/// reason [`Refspec`](crate::domain::feature_origin::Refspec) does: git parses
+/// argv before it parses a ref name, so a value beginning with `-` reads as an
+/// option regardless of intent, and whitespace or a control character means
+/// the value names no single ref. Also rejects `..`, which opens a revision
+/// range rather than naming one ref.
+///
+/// Deliberately narrower than
+/// `adapters::worktree::git_ops::worktree::validate_git_branch_name` — the
+/// adapter-side check that also rules out `@`, leading/trailing `/`, trailing
+/// `.`, `@{`, `//`, git's other refname metacharacters, and per-component
+/// `.`/`.lock` rules. This is not a replacement for that check, and the two
+/// are not meant to be unified: this one exists so the domain can refuse the
+/// argv- and revision-range-unsafe cases on its own, synchronously, before
+/// anything reaches an adapter.
+pub fn validate_new_branch_name(name: &str) -> Result<(), String> {
+    if name.starts_with('-') {
+        return Err(format!(
+            "git would read the branch name '{name}' as an option"
+        ));
+    }
+    if name.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(format!(
+            "the branch name '{name}' carries whitespace, so it names no single ref"
+        ));
+    }
+    if name.contains("..") {
+        return Err(format!(
+            "the branch name '{name}' contains '..', which opens a revision range instead of \
+             naming a single ref"
+        ));
+    }
+    Ok(())
+}
+
+/// What `set_base`'s create path must do about a requested `name`, given the
+/// branches [`crate::domain::branch_listing::parse`] already found — three
+/// cases, not the two `has_remote` alone would suggest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaseBranchDecision {
+    /// Origin already has this name: adopt it, no create-and-push needed.
+    Adopt,
+    /// No ref anywhere carries this name: safe to cut fresh from the default
+    /// branch.
+    Create,
+    /// A local-only ref already claims this name — routing it into
+    /// `create_and_push_branch` would `git branch -f` that ref onto the
+    /// default branch's tip, discarding whatever it pointed at except via
+    /// reflog. Most plausibly another Feature's own branch that Demeteo cut
+    /// and has not pushed yet, or one whose worktree was already cleaned up
+    /// before it was merged.
+    Refuse(String),
+}
+
+/// Classify `name` against `branches` for [`BaseBranchDecision`].
+pub fn base_branch_decision(name: &str, branches: &[BranchOption]) -> BaseBranchDecision {
+    match branches.iter().find(|b| b.name == name) {
+        Some(b) if b.has_remote => BaseBranchDecision::Adopt,
+        Some(_) => BaseBranchDecision::Refuse(format!(
+            "the branch name '{name}' is already in local use in this project's repository, \
+             so it cannot be created here — choose a different name or push it to origin first"
+        )),
+        None => BaseBranchDecision::Create,
+    }
 }
 
 /// Whether the interview is still being conducted.

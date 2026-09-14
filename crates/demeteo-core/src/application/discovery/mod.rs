@@ -28,8 +28,8 @@ use crate::application::attachments::StagedAttachmentInput;
 use crate::domain::discovery_question::{parse_interview_turn, InterviewTurn};
 use crate::domain::ids::{DiscoveryId, MachineId, ProjectId};
 use crate::domain::models::{
-    base_branch_lock_refusal, Discovery, DiscoveryMessage, DiscoveryStatus, EffortLevel,
-    MessageRole,
+    base_branch_decision, base_branch_lock_refusal, BaseBranchDecision, Discovery,
+    DiscoveryMessage, DiscoveryStatus, EffortLevel, MessageRole,
 };
 use crate::domain::ticket_graph::TicketProgress;
 use crate::ports::discovery::DiscoveryPatch;
@@ -288,9 +288,22 @@ pub async fn delete(ctx: &AppContext, id: &DiscoveryId) -> Result<(), String> {
 /// on, so clearing is refused right alongside adopting: the run a ticket
 /// already cut its branch from cannot be moved out from under it either way.
 ///
-/// Adopting only ever points at a ref origin already has — this never cuts a
-/// new branch, which is why the miss is phrased as "not found" rather than as
-/// a rule against creating one.
+/// [`base_branch_decision`] picks one of three outcomes for `name`. A name
+/// origin already has is adopted as-is. A name absent everywhere is created
+/// there — cut from the project's default branch and pushed — rather than
+/// refused, so naming the integration branch and bringing it into existence
+/// are the same step instead of two. The accepted cost, recorded rather than
+/// fixed (the way `domain/feature_origin.rs` records the alternatives it
+/// rejected for its own ref resolution): a typo in `name` silently adopts
+/// whatever real branch it happens to collide with (`release/2.1` typed for
+/// `release/2.10`, say) instead of failing. This method cannot tell a typo
+/// from a deliberate choice to reuse an existing branch, and asking for
+/// confirmation on every miss would make the common case — naming a branch
+/// that doesn't exist yet — require one too. A name that exists **only**
+/// locally is the one case that is refused rather than adopted or created:
+/// routing it into `create_and_push_branch` would force-move that ref onto
+/// the default branch's tip, and unlike the remote-typo case above, this
+/// local ref is plausibly another Feature's own branch still in use.
 pub async fn set_base(
     ctx: &AppContext,
     id: &DiscoveryId,
@@ -302,15 +315,25 @@ pub async fn set_base(
         return Err(refusal);
     }
     if let Some(name) = branch.as_deref() {
+        crate::domain::models::validate_new_branch_name(name)?;
         let repo = worktree::resolve(ctx, &discovery).await?;
         let branches = ctx
             .worktree_ops
             .list_terminal_branches(repo.machine_id.as_deref(), &repo.repo_dir)
             .await?;
-        if !branches.iter().any(|b| b.name == name && b.has_remote) {
-            return Err(format!(
-                "no remote branch named '{name}' was found for this project"
-            ));
+        match base_branch_decision(name, &branches) {
+            BaseBranchDecision::Adopt => {}
+            BaseBranchDecision::Refuse(reason) => return Err(reason),
+            BaseBranchDecision::Create => {
+                ctx.worktree_ops
+                    .create_and_push_branch(
+                        repo.machine_id.as_deref(),
+                        &repo.repo_dir,
+                        &repo.default_branch,
+                        name,
+                    )
+                    .await?;
+            }
         }
     }
     ctx.discoveries.update(
