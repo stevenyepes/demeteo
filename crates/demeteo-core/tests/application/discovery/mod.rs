@@ -183,18 +183,32 @@ fn ticket(discovery_id: &DiscoveryId, id: &str, seq: i64, state: TicketState) ->
     }
 }
 
-/// A [`WorktreeOpsPort`] spy that answers only `list_terminal_branches` with
-/// a fixed set, panicking on any other call — the same `SpyWorktreeOps`
-/// convention `tests/application/ask/worktree.rs` uses, narrowed to the one
-/// method `set_base` calls.
+/// The `(machine_id, repo_dir, default_branch, branch_name)` argument tuple
+/// of one `create_and_push_branch` call, as recorded by [`FakeBranches`].
+type CreateCall = (Option<String>, String, String, String);
+
+/// A [`WorktreeOpsPort`] spy that answers only `list_terminal_branches` and
+/// `create_and_push_branch` with fixed/configured results, panicking on any
+/// other call — the same `SpyWorktreeOps` convention
+/// `tests/application/ask/worktree.rs` uses, narrowed to the methods
+/// `set_base` calls.
 ///
 /// `calls` records the `(machine_id, repo_dir)` of every `list_terminal_branches`
 /// call, unused by most tests but read by the remote-machine test to confirm
 /// the resolved machine — not `None` from a wrongly-resolved local path —
-/// actually reached this port.
+/// actually reached this port. `create_calls` records every
+/// `create_and_push_branch` invocation's full argument tuple, and
+/// `create_result` is what it answers — configurable per test so AC4 can
+/// drive a credential-shaped failure without a second fake type.
 struct FakeBranches {
     branches: Vec<BranchOption>,
     calls: Mutex<Vec<(Option<String>, String)>>,
+    create_calls: Mutex<Vec<CreateCall>>,
+    create_result: Mutex<Result<(), String>>,
+    /// When set, even `list_terminal_branches` and `create_and_push_branch`
+    /// panic — proving a caller (AC5) never reached this port at all, rather
+    /// than merely reaching a permissive stub.
+    all_panic: bool,
 }
 
 impl FakeBranches {
@@ -202,11 +216,44 @@ impl FakeBranches {
         Arc::new(Self {
             branches,
             calls: Mutex::new(Vec::new()),
+            create_calls: Mutex::new(Vec::new()),
+            create_result: Mutex::new(Ok(())),
+            all_panic: false,
+        })
+    }
+
+    fn failing_create(branches: Vec<BranchOption>, error: String) -> Arc<Self> {
+        Arc::new(Self {
+            branches,
+            calls: Mutex::new(Vec::new()),
+            create_calls: Mutex::new(Vec::new()),
+            create_result: Mutex::new(Err(error)),
+            all_panic: false,
+        })
+    }
+
+    /// Panics on every [`WorktreeOpsPort`] method, including the two
+    /// `set_base` itself calls — for asserting a caller never reaches this
+    /// port at all.
+    fn all_panic() -> Arc<Self> {
+        Arc::new(Self {
+            branches: Vec::new(),
+            calls: Mutex::new(Vec::new()),
+            create_calls: Mutex::new(Vec::new()),
+            create_result: Mutex::new(Ok(())),
+            all_panic: true,
         })
     }
 
     fn calls(&self) -> Vec<(Option<String>, String)> {
         self.calls
+            .lock()
+            .expect("the mutex is not poisoned")
+            .clone()
+    }
+
+    fn create_calls(&self) -> Vec<CreateCall> {
+        self.create_calls
             .lock()
             .expect("the mutex is not poisoned")
             .clone()
@@ -252,6 +299,9 @@ impl WorktreeOpsPort for FakeBranches {
         machine_id: Option<&str>,
         repo_dir: &str,
     ) -> Result<Vec<BranchOption>, String> {
+        if self.all_panic {
+            panic!("unexpected WorktreeOpsPort call")
+        }
         self.calls
             .lock()
             .expect("the mutex is not poisoned")
@@ -297,6 +347,30 @@ impl WorktreeOpsPort for FakeBranches {
         _: &str,
     ) -> Result<(), String> {
         panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn create_and_push_branch(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        default_branch: &str,
+        branch_name: &str,
+    ) -> Result<(), String> {
+        if self.all_panic {
+            panic!("unexpected WorktreeOpsPort call")
+        }
+        self.create_calls
+            .lock()
+            .expect("the mutex is not poisoned")
+            .push((
+                machine_id.map(str::to_string),
+                repo_dir.to_string(),
+                default_branch.to_string(),
+                branch_name.to_string(),
+            ));
+        self.create_result
+            .lock()
+            .expect("the mutex is not poisoned")
+            .clone()
     }
     async fn fetch_origin_refspec(
         &self,
@@ -384,6 +458,14 @@ fn remote_branch(name: &str) -> BranchOption {
         name: name.to_string(),
         has_local: false,
         has_remote: true,
+    }
+}
+
+fn local_branch(name: &str) -> BranchOption {
+    BranchOption {
+        name: name.to_string(),
+        has_local: true,
+        has_remote: false,
     }
 }
 
@@ -535,12 +617,15 @@ async fn set_base_adopts_a_known_remote_branch_on_a_remote_machine() {
     );
 }
 
-/// Adopting a branch origin actually has stores it, and a later read shows it.
+/// Adopting a branch origin actually has stores it, and a later read shows
+/// it — and never reaches for `create_and_push_branch` (AC2), proven by the
+/// spy's call counter rather than by the absence of a panic.
 #[tokio::test]
 async fn set_base_adopts_a_known_remote_branch() {
     let (mut ctx, project_id) = fixture("adopt");
     add_repo(&ctx, &project_id, "adopt");
-    ctx.worktree_ops = FakeBranches::with(vec![remote_branch("feat/payments")]);
+    let branches = FakeBranches::with(vec![remote_branch("feat/payments")]);
+    ctx.worktree_ops = branches.clone();
     let discovery = create(&ctx, opening(&project_id, "adopt")).expect("the discovery opens");
 
     let updated = set_base(&ctx, &discovery.id, Some("feat/payments".to_string()))
@@ -550,21 +635,146 @@ async fn set_base_adopts_a_known_remote_branch() {
 
     let reread = load(&ctx, &discovery.id).expect("the discovery reads back");
     assert_eq!(reread.base_branch.as_deref(), Some("feat/payments"));
+
+    assert!(
+        branches.create_calls().is_empty(),
+        "an already-remote branch must not trigger a create-and-push call"
+    );
 }
 
-/// A name with no matching remote ref is refused by name, not treated as a
-/// request to cut one — branch creation is out of scope here, not forever.
+/// A name with no matching remote ref is created and pushed rather than
+/// refused (AC1): the fake observes exactly one create-and-push call cut
+/// from the project's default branch, `set_base` succeeds, and the stored
+/// `base_branch` is the requested name.
 #[tokio::test]
-async fn set_base_refuses_a_branch_with_no_remote_ref() {
-    let (mut ctx, project_id) = fixture("unknown-branch");
-    add_repo(&ctx, &project_id, "unknown-branch");
-    ctx.worktree_ops = FakeBranches::with(vec![remote_branch("main")]);
-    let discovery = create(&ctx, opening(&project_id, "unknown")).expect("the discovery opens");
+async fn set_base_creates_and_adopts_an_absent_branch() {
+    let (mut ctx, project_id) = fixture("absent-branch");
+    add_repo(&ctx, &project_id, "absent-branch");
+    let branches = FakeBranches::with(vec![remote_branch("main")]);
+    ctx.worktree_ops = branches.clone();
+    let discovery =
+        create(&ctx, opening(&project_id, "absent-branch")).expect("the discovery opens");
 
-    let refusal = set_base(&ctx, &discovery.id, Some("ghost-branch".to_string()))
+    let updated = set_base(
+        &ctx,
+        &discovery.id,
+        Some("feature/new-integration".to_string()),
+    )
+    .await
+    .expect("an absent branch is created and adopted");
+    assert_eq!(
+        updated.base_branch.as_deref(),
+        Some("feature/new-integration")
+    );
+
+    let reread = load(&ctx, &discovery.id).expect("the discovery reads back");
+    assert_eq!(
+        reread.base_branch.as_deref(),
+        Some("feature/new-integration")
+    );
+
+    assert_eq!(
+        branches.create_calls(),
+        vec![(
+            None,
+            crate::paths::repo_target_dir_local(
+                &ctx.workspace_dir,
+                project_id.as_str(),
+                "repo"
+            )
+            .to_string_lossy()
+            .to_string(),
+            "main".to_string(),
+            "feature/new-integration".to_string(),
+        )],
+        "create_and_push_branch must be called exactly once, from the default branch, with the requested name"
+    );
+}
+
+/// A name that already exists **locally-only** (`has_local: true,
+/// has_remote: false`) is refused rather than routed into
+/// `create_and_push_branch` — critic review Major #1: that path would
+/// `git branch -f` the ref onto the default branch's tip, discarding
+/// whatever it pointed at (most plausibly another Feature's own unpushed
+/// branch) except via reflog. The error must name the branch as already in
+/// local use, not reuse AC4's push-access wording, since this is refused
+/// before any push is attempted.
+#[tokio::test]
+async fn set_base_refuses_a_locally_known_branch() {
+    let (mut ctx, project_id) = fixture("local-collision");
+    add_repo(&ctx, &project_id, "local-collision");
+    let branches = FakeBranches::with(vec![local_branch("feature/x")]);
+    ctx.worktree_ops = branches.clone();
+    let discovery =
+        create(&ctx, opening(&project_id, "local-collision")).expect("the discovery opens");
+
+    let refusal = set_base(&ctx, &discovery.id, Some("feature/x".to_string()))
         .await
-        .expect_err("an unknown branch is refused");
-    assert!(refusal.contains("ghost-branch"), "{refusal}");
+        .expect_err("a locally-known branch must not be silently force-reset");
+    assert!(
+        refusal.contains("local use"),
+        "the refusal must name the branch as already in local use, not push access: {refusal}"
+    );
+    assert!(!refusal.contains("push access"), "{refusal}");
+
+    assert!(
+        branches.create_calls().is_empty(),
+        "a local-only collision must never reach create_and_push_branch"
+    );
+
+    let reread = load(&ctx, &discovery.id).expect("the discovery reads back");
+    assert_eq!(
+        reread.base_branch, None,
+        "a refused set_base must never reach discoveries.update"
+    );
+}
+
+/// A create-and-push failure shaped like a credential problem surfaces as
+/// `Err` naming push access, and never reaches `discoveries.update` (AC4) —
+/// proven by a subsequent `load` still showing no `base_branch` stored.
+#[tokio::test]
+async fn set_base_surfaces_a_push_credential_failure_without_storing() {
+    let (mut ctx, project_id) = fixture("push-fails");
+    add_repo(&ctx, &project_id, "push-fails");
+    ctx.worktree_ops = FakeBranches::failing_create(
+        vec![remote_branch("main")],
+        "this project has no usable push access to origin: authentication failed".to_string(),
+    );
+    let discovery = create(&ctx, opening(&project_id, "push-fails")).expect("the discovery opens");
+
+    let refusal = set_base(
+        &ctx,
+        &discovery.id,
+        Some("feature/new-integration".to_string()),
+    )
+    .await
+    .expect_err("a credential failure on push is surfaced, not swallowed");
+    assert!(refusal.contains("push access"), "{refusal}");
+
+    let reread = load(&ctx, &discovery.id).expect("the discovery reads back");
+    assert_eq!(
+        reread.base_branch, None,
+        "a failed create-and-push must never reach discoveries.update"
+    );
+}
+
+/// An invalid name is refused by the domain validator before any port call —
+/// proven against a `FakeBranches` whose every method panics, since even
+/// `list_terminal_branches` would fail this test if the validator ran late
+/// (AC5, application half; the validator's own unit tests live in
+/// `tests/domain/models/discovery.rs`).
+#[tokio::test]
+async fn set_base_refuses_an_invalid_name_before_any_port_call() {
+    let (mut ctx, project_id) = fixture("invalid-name");
+    add_repo(&ctx, &project_id, "invalid-name");
+    ctx.worktree_ops = FakeBranches::all_panic();
+    let discovery =
+        create(&ctx, opening(&project_id, "invalid-name")).expect("the discovery opens");
+
+    let refusal = set_base(&ctx, &discovery.id, Some("-oops".to_string()))
+        .await
+        .expect_err("a name git would read as an option is refused");
+    assert!(!refusal.is_empty());
 
     let reread = load(&ctx, &discovery.id).expect("the discovery reads back");
     assert_eq!(reread.base_branch, None);
@@ -767,6 +977,15 @@ impl WorktreeOpsPort for FakeSync {
         panic!("unexpected WorktreeOpsPort call")
     }
     async fn create_feature_branch(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<(), String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn create_and_push_branch(
         &self,
         _: Option<&str>,
         _: &str,

@@ -523,6 +523,21 @@ pub trait WorktreeOpsPort: Send + Sync {
         branch_name: &str,
     ) -> Result<(), String>;
 
+    /// Cut `branch_name` exactly as
+    /// [`create_feature_branch`](Self::create_feature_branch) does — from
+    /// `origin/<default_branch>`, falling back to the local `<default_branch>`
+    /// when there is no remote-tracking ref — and push it to `origin`.
+    ///
+    /// The push is never forced: this names a branch a caller expects to
+    /// publish for the first time, not one it may overwrite.
+    async fn create_and_push_branch(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        default_branch: &str,
+        branch_name: &str,
+    ) -> Result<(), String>;
+
     /// Provision a subtask worktree.
     async fn provision_subtask_worktree(
         &self,

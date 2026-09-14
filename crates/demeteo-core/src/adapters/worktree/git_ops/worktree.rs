@@ -504,6 +504,74 @@ impl GitOpsHelper {
         }
     }
 
+    /// [`create_feature_branch`](Self::create_feature_branch) plus a push to
+    /// `origin`, for a caller that wants the new branch published rather than
+    /// left local. See
+    /// [`WorktreeOpsPort::create_and_push_branch`](crate::ports::worktree_ops::WorktreeOpsPort::create_and_push_branch).
+    ///
+    /// Refreshes `origin/<default>` via
+    /// [`ensure_default_branch_updated`](Self::ensure_default_branch_updated)
+    /// before cutting, best-effort — an unreachable origin degrades to
+    /// whatever `origin/<default>` already resolves to locally (or the local
+    /// `<default>` fallback), matching `ensure_default_branch_updated`'s own
+    /// documented contract, rather than failing the whole call. This makes
+    /// every caller get a fresh cut point for free, instead of each one
+    /// having to remember to call `ensure_default_branch_updated` first.
+    ///
+    /// The cut step is not duplicated here — this delegates to
+    /// [`create_feature_branch`](Self::create_feature_branch) for the
+    /// tracking-ref/local-fallback branching, then pushes whatever it landed
+    /// on. A credential-shaped push failure is reworded to name push access
+    /// specifically, without touching `push_failure`'s own text — its other
+    /// call sites (sync merge push, MR publish) read differently because they
+    /// push a branch that already exists on origin, not one a caller is
+    /// naming for the first time.
+    pub async fn create_and_push_branch(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        default_branch: &str,
+        branch_name: &str,
+    ) -> Result<(), String> {
+        let _ = self
+            .ensure_default_branch_updated(machine_id, repo_dir, default_branch)
+            .await;
+
+        self.create_feature_branch(machine_id, repo_dir, default_branch, branch_name)
+            .await?;
+
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let credential = crate::adapters::git_push::credential_for_repo(
+            self.exec.as_ref(),
+            self.app_settings.as_ref(),
+            machine_str,
+            repo_dir,
+        )
+        .await;
+        self.exec
+            .run_program(
+                machine_str,
+                crate::adapters::git_push::push_request(
+                    repo_dir,
+                    branch_name,
+                    false,
+                    credential.as_ref(),
+                ),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|push_err| {
+                let credential_shaped = crate::domain::git_push::is_credential_failure(&push_err);
+                let message =
+                    crate::adapters::git_push::push_failure(&push_err, credential.as_ref());
+                if credential_shaped {
+                    format!("this project has no usable push access to origin: {message}")
+                } else {
+                    message
+                }
+            })
+    }
+
     /// Provision a linked worktree for a subtask branched off the main feature branch.
     /// Returns the absolute path to the provisioned worktree.
     ///
