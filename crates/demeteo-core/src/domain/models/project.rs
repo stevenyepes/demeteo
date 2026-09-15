@@ -204,6 +204,70 @@ fn default_artifact_subdir() -> String {
     "artifacts/".to_string()
 }
 
+/// A subset of `ProjectSettings` writable by a non-UI external caller (the
+/// `agent_surface` seam) — run shape only, never a spend or safety boundary.
+///
+/// Excluded on purpose, and not by omission:
+/// - `default_max_budget_usd`, `default_loop_iterations`: per-run cost
+///   ceilings. A caller that could raise either is raising the dollar/retry
+///   bound on every run it subsequently causes — the permission split is
+///   meaningless if the same call can both start a run and widen its own
+///   leash.
+/// - `sync_review_before_push`: switches off the human review gate before a
+///   push. Same shape of boundary as budget: a caller must not be able to
+///   remove the check on its own output.
+/// - `worktree_strategy`, `feature_lifecycle`: project topology, not run
+///   shape — set once when the project is configured, not per launch.
+///
+/// Rejected: sharing `ProjectSettings` whole with the UI's save path
+/// (`save_project_settings`). The UI is a human looking at a labelled
+/// control; this caller is not. A shared path would grant budget and
+/// review-bypass changes under a call that reads like "save my
+/// preferences."
+///
+/// A field added to `ProjectSettings` later is unreachable here until
+/// someone deliberately adds it below, having decided it is run-shape and
+/// not a boundary — that decision is the point of this being a type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunShapePatch {
+    #[serde(default)]
+    pub default_agent_kind: Option<String>,
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
+    pub default_effort: Option<EffortLevel>,
+    #[serde(default)]
+    pub default_workflow_id: Option<String>,
+    #[serde(default = "default_artifact_subdir")]
+    pub artifact_subdir: String,
+    #[serde(default)]
+    pub commit_artifacts: bool,
+    #[serde(default)]
+    pub sync_resolver_agent_kind: Option<String>,
+    #[serde(default)]
+    pub sync_resolver_model: Option<String>,
+    #[serde(default)]
+    pub sync_resolver_effort: Option<EffortLevel>,
+}
+
+/// Copies `patch`'s nine fields onto `settings`, returning every other
+/// field unchanged. See [`RunShapePatch`] for which fields those are and why.
+pub fn apply_run_shape_patch(
+    mut settings: ProjectSettings,
+    patch: RunShapePatch,
+) -> ProjectSettings {
+    settings.default_agent_kind = patch.default_agent_kind;
+    settings.default_model = patch.default_model;
+    settings.default_effort = patch.default_effort;
+    settings.default_workflow_id = patch.default_workflow_id;
+    settings.artifact_subdir = patch.artifact_subdir;
+    settings.commit_artifacts = patch.commit_artifacts;
+    settings.sync_resolver_agent_kind = patch.sync_resolver_agent_kind;
+    settings.sync_resolver_model = patch.sync_resolver_model;
+    settings.sync_resolver_effort = patch.sync_resolver_effort;
+    settings
+}
+
 /// A project-scoped override of the coding agent ("harness") and/or model
 /// for a (global) workflow — either the whole workflow or a single step.
 /// Persisted in `project_workflow_overrides` (migrations V14 / V15).
@@ -253,3 +317,7 @@ pub struct MrInfo {
     pub provider_kind: String,
     pub provider_host: String,
 }
+
+#[cfg(test)]
+#[path = "../../../tests/domain/models/project.rs"]
+mod tests;
