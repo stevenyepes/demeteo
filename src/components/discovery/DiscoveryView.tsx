@@ -364,6 +364,8 @@ export function DiscoveryView({
         }
         onDecompose={() => void decompose()}
         decomposing={decomposing}
+        projectId={detail.discovery.project_id}
+        onBaseChanged={(updated) => setDetail((d) => d && { ...d, discovery: updated })}
       />
 
       {actionError && (
