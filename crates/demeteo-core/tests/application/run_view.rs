@@ -244,3 +244,100 @@ fn sequence_state_stays_unplanned_after_a_shadow_hydrate_even_though_the_runner_
         "the mirrored checkpoint must mark the task landed"
     );
 }
+
+/// `RunView::explain_step_failure` must match `explain_failure`/`tail_log`
+/// computed directly on the same attempts/error_message, and must reach
+/// neither `ExecutionPort` (`UnusedExec` panics on every call) nor
+/// `ThreadRepository` — this test adds no call to either, so an accidental
+/// switch to the agent stream would fail loudly rather than being silently
+/// mocked.
+#[test]
+fn explain_step_failure_matches_the_domain_fns_computed_directly() {
+    let (view, adapter) = make_view();
+    let feature_id = FeatureId::from("f-1".to_string());
+    let mut step = shadow_step(&feature_id);
+    step.error_message = Some("line one\nline two\nline three\n".repeat(500));
+
+    ProjectRepository::add(
+        &*adapter,
+        Project {
+            id: ProjectId::from("p-1".to_string()),
+            name: "project".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 0,
+        },
+    )
+    .unwrap();
+    FeatureRepository::add(&*adapter, shadow_feature(&feature_id)).unwrap();
+    adapter.step_create(step.clone()).unwrap();
+
+    let attempt_no = adapter
+        .attempt_open(&step.id, 0, Some("HEAD:clean"))
+        .unwrap();
+    adapter
+        .attempt_close(
+            &step.id,
+            attempt_no,
+            "failed",
+            0.42,
+            1_234,
+            5_000,
+            Some("verdict"),
+            Some("fp-a"),
+            Some("verdict.redirect"),
+            1,
+        )
+        .unwrap();
+
+    let attempts = adapter.attempts_for_step(&step.id).unwrap();
+    let expected_verdict = explain_failure(&attempts);
+    let expected_log_tail = tail_log(
+        step.error_message.as_deref().unwrap(),
+        LOG_TAIL_BUDGET_BYTES,
+    );
+
+    let explanation = view.explain_step_failure(&step.id).unwrap();
+
+    assert_eq!(explanation.verdict, expected_verdict);
+    assert_eq!(explanation.log_tail, expected_log_tail);
+}
+
+/// A step with no attempts and no `error_message` still resolves through the
+/// same two `FeatureRepository` reads — `UnusedExec` is never touched, so a
+/// future change routing this through `ExecutionPort`/`ThreadRepository`
+/// would panic here rather than pass silently.
+#[test]
+fn explain_step_failure_with_no_attempts_reports_an_empty_verdict_and_tail() {
+    let (view, adapter) = make_view();
+    let feature_id = FeatureId::from("f-2".to_string());
+    let step = shadow_step(&feature_id);
+
+    ProjectRepository::add(
+        &*adapter,
+        Project {
+            id: ProjectId::from("p-1".to_string()),
+            name: "project".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 0,
+        },
+    )
+    .unwrap();
+    FeatureRepository::add(&*adapter, shadow_feature(&feature_id)).unwrap();
+    adapter.step_create(step.clone()).unwrap();
+
+    let explanation = view.explain_step_failure(&step.id).unwrap();
+
+    assert_eq!(explanation.verdict, explain_failure(&[]));
+    assert_eq!(explanation.log_tail, tail_log("", LOG_TAIL_BUDGET_BYTES));
+    assert!(!explanation.log_tail.truncated);
+}
