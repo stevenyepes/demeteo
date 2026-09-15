@@ -271,6 +271,8 @@ describe('the turn count, across both surfaces', () => {
         busy={false}
         projectId="p1"
         onBaseChanged={() => {}}
+        onUpdateBase={() => {}}
+        onPublishIntegration={() => {}}
       />,
     );
     expect(screen.getByText('2')).toBeTruthy();

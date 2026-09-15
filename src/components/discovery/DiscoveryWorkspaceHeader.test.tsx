@@ -106,6 +106,8 @@ function mount(props: { discovery?: Discovery; board?: DiscoveryBoard | null } =
       busy={false}
       projectId="proj-1"
       onBaseChanged={onBaseChanged}
+      onUpdateBase={() => {}}
+      onPublishIntegration={() => {}}
     />,
   );
   return { onBaseChanged };
