@@ -113,3 +113,24 @@ export function nameFieldState(title: string): NameFieldState {
     overLimit: length > TITLE_MAX_CHARS,
   };
 }
+
+const BRANCH_SLUG_MAX_CHARS = 48;
+
+/** Title → suggested branch name: lowercase, non-alphanumeric runs collapsed
+ *  to `-`, leading/trailing `-` trimmed, capped at 48 characters, falling back
+ *  to `discovery` when nothing alphanumeric survives (an all-punctuation or
+ *  all-CJK-without-latin title must not yield an empty or `branchPrefix`-only
+ *  name) — then prefixed with `branchPrefix` verbatim. The trailing-hyphen
+ *  trim is re-applied after the 48-char slice: the cap can land adjacent to a
+ *  hyphen run that the pre-slice trim never saw. Never re-validates against
+ *  `validate_new_branch_name`; the backend is the authority on rejection, and
+ *  this only has to produce a plausible starting point the user can edit. */
+export function suggestedBranchName(title: string, branchPrefix: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, BRANCH_SLUG_MAX_CHARS)
+    .replace(/-+$/g, '');
+  return branchPrefix + (slug.length > 0 ? slug : 'discovery');
+}

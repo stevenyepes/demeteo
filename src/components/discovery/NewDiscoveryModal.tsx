@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
 import { getAgentModels, modelSupportsImages } from '../../lib/agentModels';
 import { stagedAttachmentInputs } from '../../lib/attachments';
-import { createDiscovery } from '../../lib/discovery';
+import { createDiscovery, setDiscoveryBase } from '../../lib/discovery';
+import { resolveBaseBranchInput } from '../../lib/discoveryBase';
 import { DEFAULT_EFFORT, EFFORT_LABELS, type EffortLevel } from '../../lib/effortLevels';
 import { formatError } from '../../lib/errors';
 import { listMachines } from '../../lib/machines';
@@ -11,9 +12,12 @@ import {
   interviewerMachineOptions,
   nameFieldState,
   noVisionNote,
+  suggestedBranchName,
   TITLE_MAX_CHARS,
 } from '../../lib/newDiscovery';
-import type { ConfigOptionValue, Discovery, Machine } from '../../types';
+import { getProposedStrategy, getRepositoriesForProject } from '../../lib/project';
+import { listTerminalBranches } from '../../lib/terminal';
+import type { ConfigOptionValue, Discovery, Machine, TerminalBranchOption } from '../../types';
 import { AttachmentDropzone, type LaunchStageEntry } from '../AttachmentDropzone';
 import { FieldLabel } from '../ui/FieldLabel';
 import { Modal } from '../ui/Modal';
@@ -58,6 +62,13 @@ export function NewDiscoveryModal({
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [baseMode, setBaseMode] = useState<'default' | 'named'>('default');
+  const [baseName, setBaseName] = useState('');
+  const [baseNameEdited, setBaseNameEdited] = useState(false);
+  const [createdDiscovery, setCreatedDiscovery] = useState<Discovery | null>(null);
+  const [branchPrefix, setBranchPrefix] = useState('');
+  const [defaultBranchName, setDefaultBranchName] = useState<string | null>(null);
+  const [branchOptions, setBranchOptions] = useState<TerminalBranchOption[]>([]);
 
   // The catalog arrives after the first render, so the initial interviewer is
   // picked here rather than in `useState` — and only while none is chosen, so
@@ -85,6 +96,47 @@ export function NewDiscoveryModal({
     () => interviewerMachineOptions(machines, machineId),
     [machines, machineId],
   );
+
+  // Live host round trip the modal otherwise never makes — deferred until the
+  // named-branch choice is actually reached, mirroring `OriginPicker`'s
+  // load-on-open rather than this file's own eager `listMachines()`.
+  const branchDataRequested = useRef(false);
+  useEffect(() => {
+    if (baseMode !== 'named' || branchDataRequested.current) return;
+    branchDataRequested.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const repos = await getRepositoriesForProject(projectId);
+        const repositoryId = repos[0]?.id;
+        if (!repositoryId) throw new Error('no repository');
+        const [strategy, branches] = await Promise.all([
+          getProposedStrategy(projectId),
+          listTerminalBranches(projectId, repositoryId),
+        ]);
+        if (cancelled) return;
+        setBranchPrefix(strategy?.worktree_strategy.branch_prefix ?? '');
+        setDefaultBranchName(branches.defaultBranch);
+        setBranchOptions(branches.branches);
+      } catch {
+        if (cancelled) return;
+        setBranchPrefix('');
+        setDefaultBranchName(null);
+        setBranchOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [baseMode, projectId]);
+
+  // Same "seed until touched" shape as the `agentKind` effect above: a fresh
+  // suggestion arrives whenever the inputs it derives from change, but only
+  // until the user's own `onChange` marks the field as theirs.
+  useEffect(() => {
+    if (baseMode !== 'named' || baseNameEdited) return;
+    setBaseName(suggestedBranchName(title, branchPrefix));
+  }, [baseMode, baseNameEdited, title, branchPrefix]);
 
   const effortLevels = useMemo(
     () => effortLevelsFor(agents, agentKind),
@@ -136,22 +188,34 @@ export function NewDiscoveryModal({
 
   const name = nameFieldState(title);
   const canStart =
-    title.trim().length > 0 && !name.overLimit && agentKind !== '' && !submitting;
+    title.trim().length > 0 &&
+    !name.overLimit &&
+    agentKind !== '' &&
+    !submitting &&
+    (baseMode === 'default' || baseName.trim().length > 0);
 
   const start = async () => {
     if (!canStart) return;
     setSubmitting(true);
     setError(null);
     try {
-      const discovery = await createDiscovery({
-        projectId,
-        title: title.trim(),
-        agentKind,
-        model: model || null,
-        effort: effortSupported ? effort : null,
-        machineId: machine,
-        stagedAttachments: await stagedAttachmentInputs(attachments),
-      });
+      // `createdDiscovery` doubles as the retry guard: a prior press that
+      // created the Discovery but failed on `setDiscoveryBase` must not
+      // create a second row on the next press.
+      const discovery =
+        createdDiscovery ??
+        (await createDiscovery({
+          projectId,
+          title: title.trim(),
+          agentKind,
+          model: model || null,
+          effort: effortSupported ? effort : null,
+          machineId: machine,
+          stagedAttachments: await stagedAttachmentInputs(attachments),
+        }));
+      if (!createdDiscovery) setCreatedDiscovery(discovery);
+      const branch = resolveBaseBranchInput(baseMode === 'default', baseName);
+      if (branch !== null) await setDiscoveryBase(discovery.id, branch);
       onCreated(discovery);
     } catch (err) {
       setError(formatError(err));
@@ -288,6 +352,47 @@ export function NewDiscoveryModal({
           </div>
 
           <div>
+            <FieldLabel>Base branch</FieldLabel>
+            <div role="radiogroup" aria-label="Base branch" className="flex flex-wrap gap-2">
+              <OptionPill selected={baseMode === 'default'} onSelect={() => setBaseMode('default')}>
+                Project default
+              </OptionPill>
+              <OptionPill selected={baseMode === 'named'} onSelect={() => setBaseMode('named')}>
+                Named branch
+              </OptionPill>
+            </div>
+            {baseMode === 'named' && (
+              <div className="mt-2.5">
+                <input
+                  id="discovery-base-name"
+                  type="text"
+                  value={baseName}
+                  onChange={(e) => {
+                    setBaseNameEdited(true);
+                    setBaseName(e.target.value);
+                  }}
+                  list="discovery-base-branch-options"
+                  placeholder="demeteo/features/my-integration-branch"
+                  className="input-field"
+                  aria-label="Base branch name"
+                />
+                <datalist id="discovery-base-branch-options">
+                  {branchOptions.map((option) => (
+                    <option key={option.name} value={option.name} />
+                  ))}
+                </datalist>
+              </div>
+            )}
+            <p className="mt-2 text-[11px] text-slate-500">
+              {baseMode === 'default'
+                ? defaultBranchName
+                  ? `Tickets cut their branches from ${defaultBranchName}.`
+                  : "Tickets cut their branches from the project's default branch."
+                : 'Tickets cut their branches from this one and merge back into it.'}
+            </p>
+          </div>
+
+          <div>
             <FieldLabel>Attachments</FieldLabel>
             <AttachmentDropzone
               mode="launch"
@@ -328,14 +433,28 @@ export function NewDiscoveryModal({
 
           {error && (
             <p role="alert" className="font-mono text-[11px] text-ruby-200">
-              {error}
+              {createdDiscovery !== null
+                ? `Discovery created, but its base branch could not be set: ${error}`
+                : error}
             </p>
           )}
         </div>
 
         <div className="flex shrink-0 justify-end gap-2.5 border-t border-white/5 bg-[#0d0f14]/90 px-5 py-4">
-          <button type="button" onClick={onClose} className="btn-secondary text-[13px]">
-            Cancel
+          <button
+            type="button"
+            onClick={() => {
+              // A Discovery created before a failed `setDiscoveryBase` already
+              // exists server-side; closing without `onCreated` would leave it
+              // outside DiscoverySection's one-shot fetch until an unrelated
+              // refetch surfaces it. The label flips to "Close" for the same
+              // reason: "Cancel" would promise a clean walk-away this cannot give.
+              if (createdDiscovery !== null) onCreated(createdDiscovery);
+              else onClose();
+            }}
+            className="btn-secondary text-[13px]"
+          >
+            {createdDiscovery !== null ? 'Close' : 'Cancel'}
           </button>
           <button
             type="button"
@@ -343,7 +462,7 @@ export function NewDiscoveryModal({
             disabled={!canStart}
             className="btn-primary text-[13px] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Start discovery
+            {createdDiscovery !== null ? 'Retry base branch' : 'Start discovery'}
           </button>
         </div>
       </div>

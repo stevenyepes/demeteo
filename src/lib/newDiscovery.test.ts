@@ -4,6 +4,7 @@ import {
   interviewerMachineOptions,
   nameFieldState,
   noVisionNote,
+  suggestedBranchName,
   TITLE_MAX_CHARS,
 } from './newDiscovery';
 import type { Machine } from '../types';
@@ -125,5 +126,53 @@ describe('nameFieldState', () => {
     const name = '\u{1f9e0}'.repeat(TITLE_MAX_CHARS / 2 + 5);
     expect(name.length).toBeGreaterThan(TITLE_MAX_CHARS);
     expect(nameFieldState(name).overLimit).toBe(false);
+  });
+});
+
+describe('suggestedBranchName', () => {
+  it('lowercases and hyphenates the title, then prefixes it verbatim', () => {
+    expect(suggestedBranchName('Ask the repo chat', 'demeteo/features/')).toBe(
+      'demeteo/features/ask-the-repo-chat',
+    );
+  });
+
+  it('collapses runs of punctuation to one hyphen and trims the edges', () => {
+    expect(suggestedBranchName('  Fix -- the!! bug??  ', 'demeteo/features/')).toBe(
+      'demeteo/features/fix-the-bug',
+    );
+  });
+
+  // An all-punctuation title has nothing alphanumeric to survive collapsing,
+  // so it must fall back rather than produce an empty or prefix-only name.
+  it('falls back to discovery for an all-punctuation title', () => {
+    expect(suggestedBranchName('!!!???', 'demeteo/features/')).toBe(
+      'demeteo/features/discovery',
+    );
+  });
+
+  it('falls back to discovery for a title with no latin or digit characters', () => {
+    expect(suggestedBranchName('日本語のタイトル', 'demeteo/features/')).toBe(
+      'demeteo/features/discovery',
+    );
+  });
+
+  it('caps the slug at 48 characters rather than passing it through whole', () => {
+    const longTitle = 'a'.repeat(80);
+    const result = suggestedBranchName(longTitle, 'demeteo/features/');
+    expect(result).toBe(`demeteo/features/${'a'.repeat(48)}`);
+    expect(result.length).toBe('demeteo/features/'.length + 48);
+  });
+
+  // Twelve 3-letter words leave a hyphen at slug index 47 — the pre-slice
+  // trim never sees it, so the 48-char cut must strip it again afterward.
+  it('strips a trailing hyphen left by truncation at the 48-char cap', () => {
+    const title = 'aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm';
+    expect(suggestedBranchName(title, 'demeteo/features/')).toBe(
+      'demeteo/features/aaa-bbb-ccc-ddd-eee-fff-ggg-hhh-iii-jjj-kkk-lll',
+    );
+  });
+
+  it('uses the bare slug when branchPrefix has not resolved yet', () => {
+    expect(suggestedBranchName('Ask the repo chat', '')).toBe('ask-the-repo-chat');
   });
 });

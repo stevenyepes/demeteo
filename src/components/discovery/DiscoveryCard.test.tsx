@@ -269,6 +269,8 @@ describe('the turn count, across both surfaces', () => {
         onDecompose={() => {}}
         decomposing={false}
         busy={false}
+        projectId="p1"
+        onBaseChanged={() => {}}
         onUpdateBase={() => {}}
         onPublishIntegration={() => {}}
       />,
