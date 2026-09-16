@@ -18,6 +18,7 @@
 //! dependency-injection ports.
 
 use crate::adapters::agent::registry::AgentRegistry;
+use crate::adapters::mcp::consent_waiter::McpConsentWaiterRegistry;
 use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::ask::AskPort;
 use crate::ports::attachment_store::{AttachmentJsonPort, AttachmentStore};
@@ -30,6 +31,7 @@ use crate::ports::discovery::{DiscoveryPort, TicketPort};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::mr_publisher::MrPublisher;
 use crate::ports::notification::NotificationPort;
+use crate::ports::oauth::{OAuthClientRepository, OAuthGrantRepository};
 use crate::ports::pricing::PricingTable;
 use crate::ports::provider_http::ProviderHttpPort;
 use crate::ports::remote_run_mirror::RemoteRunMirrorPort;
@@ -215,6 +217,18 @@ pub struct AppContext {
     /// Shared with the step executor's own copy — Ask's pin/export path is
     /// the first consumer outside `composition::run()`'s executor wiring.
     pub artifact_store: Arc<dyn crate::ports::artifact_store::ArtifactStore>,
+
+    /// Registered MCP OAuth clients (RFC 7591 dynamic registration).
+    pub oauth_clients: Arc<dyn OAuthClientRepository>,
+
+    /// Issued MCP OAuth grants, looked up by hashed token on every request.
+    pub oauth_grants: Arc<dyn OAuthGrantRepository>,
+
+    /// In-memory rendezvous between a parked MCP `/authorize` handler and
+    /// the `mcp_consent_decide` Tauri command that resolves it. Shared
+    /// between the axum handler and the command the same way `presenter`/
+    /// `notif` are shared between the step executor and commands today.
+    pub mcp_consent: Arc<McpConsentWaiterRegistry>,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";

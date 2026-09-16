@@ -98,6 +98,9 @@ pub fn build_core_context(
     let discoveries_repo: Arc<dyn ports::discovery::DiscoveryPort> = db_adapter.clone();
     let tickets_repo: Arc<dyn ports::discovery::TicketPort> = db_adapter.clone();
     let ask_repo: Arc<dyn ports::ask::AskPort> = db_adapter.clone();
+    let oauth_clients: Arc<dyn ports::oauth::OAuthClientRepository> = db_adapter.clone();
+    let oauth_grants: Arc<dyn ports::oauth::OAuthGrantRepository> = db_adapter.clone();
+    let mcp_consent = Arc::new(adapters::mcp::consent_waiter::McpConsentWaiterRegistry::new());
 
     // Resolve the workspace directory: user-configurable base for repo
     // storage, defaults to `app_data_dir`. Takes effect on next launch
@@ -307,7 +310,7 @@ pub fn build_core_context(
         exec_inner.clone(),
     ));
 
-    AppContext {
+    let ctx = AppContext {
         machines: machines_repo,
         threads: threads_repo,
         projects: projects_repo,
@@ -347,7 +350,21 @@ pub fn build_core_context(
         run_view,
         ask: ask_repo,
         artifact_store,
+        oauth_clients,
+        oauth_grants,
+        mcp_consent,
+    };
+
+    // The MCP listener is the first background task that needs the *whole*
+    // `AppContext` (to dispatch `agent_surface` calls once `/mcp` lands), so
+    // it starts here rather than alongside the repo-scoped tasks above.
+    // Desktop only — the headless runner has no consent UI and no reason to
+    // host this (implementation-spec.md §6).
+    if matches!(execution_mode, ExecutionMode::Router) {
+        adapters::mcp::start(ctx.clone(), &runtime);
     }
+
+    ctx
 }
 
 #[cfg(test)]

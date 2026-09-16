@@ -18,6 +18,7 @@ pub mod memory;
 pub mod messages;
 pub mod mr_publisher;
 pub mod notifications;
+pub mod oauth;
 pub mod pricing;
 pub mod project;
 pub mod providers;

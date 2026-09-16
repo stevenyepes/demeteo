@@ -13,6 +13,7 @@ pub mod memory_signals;
 pub mod merge;
 pub mod mr_publisher;
 pub mod notification;
+pub mod oauth;
 pub mod pricing;
 pub mod provider_http;
 pub mod remote_run_mirror;

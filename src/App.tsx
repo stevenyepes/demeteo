@@ -23,6 +23,7 @@ import { DiscoveryView } from "./components/discovery/DiscoveryView";
 import { AskThreadView } from "./components/ask/AskThreadView";
 import { FeatureDetail } from "./components/FeatureDetail";
 import { GateView } from "./components/GateView";
+import { McpConsentView } from "./components/McpConsentView";
 import { OverlayPortal } from "./components/ui/OverlayPortal";
 import { CodeEditorView } from "./components/CodeEditorView";
 import StartFeatureModal from "./components/StartFeatureModal";
@@ -536,6 +537,13 @@ function AppInner() {
               onClose={() => navigate({ kind: 'detail', featureId: view.featureId, featureTitle: view.featureTitle }, 'replace')}
             />
           )}
+
+          {/* Consent prompt for an external MCP client — unconditional, unlike
+              the gate overlay above, since `raise_main_window` can bring the
+              app forward on any screen and the prompt has to be reachable
+              regardless of the current route. It renders nothing until its
+              own event arrives. */}
+          <McpConsentView />
 
           {/* Start Feature modal */}
           {startFeatureOpen && currentProjectId && currentProject && (

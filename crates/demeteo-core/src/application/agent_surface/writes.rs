@@ -5,8 +5,9 @@
 
 use crate::application::projects::{self, ProjectConfig};
 use crate::application::tickets;
-use crate::domain::ids::TicketId;
-use crate::domain::models::{Feature, Project};
+use crate::domain::ids::{ProjectId, TicketId};
+use crate::domain::models::project::RunShapePatch;
+use crate::domain::models::{Feature, Project, ProjectSettings};
 use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
@@ -50,3 +51,23 @@ pub async fn start_feature(
 pub async fn start_ticket(ctx: &AppContext, ticket_id: &TicketId) -> Result<Feature, String> {
     tickets::launch::start(ctx, ticket_id).await
 }
+
+/// Apply a [`RunShapePatch`] to a project's settings, persist the result, and
+/// return it.
+pub fn apply_run_shape_patch(
+    ctx: &AppContext,
+    project_id: &ProjectId,
+    patch: RunShapePatch,
+) -> Result<ProjectSettings, String> {
+    let settings = ctx
+        .projects
+        .get_settings(project_id)?
+        .ok_or_else(|| "project not found".to_string())?;
+    let settings = crate::domain::models::project::apply_run_shape_patch(settings, patch);
+    ctx.projects.save_settings(settings.clone())?;
+    Ok(settings)
+}
+
+#[cfg(test)]
+#[path = "../../../tests/application/agent_surface_writes.rs"]
+mod tests;

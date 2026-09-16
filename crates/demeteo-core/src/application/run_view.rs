@@ -32,7 +32,7 @@
 
 use std::sync::Arc;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::ids::{FeatureId, StepExecutionId, ThreadId};
 use crate::domain::models::sequence_view::{assemble_tasks, PlannedTaskRef};
@@ -113,6 +113,7 @@ impl PlanRead {
 
 /// [`FailureVerdict`] plus the log evidence backing it, assembled by
 /// [`RunView::explain_step_failure`].
+#[derive(Debug, Clone, Serialize)]
 pub struct FailureExplanation {
     pub verdict: FailureVerdict,
     pub log_tail: LogTail,

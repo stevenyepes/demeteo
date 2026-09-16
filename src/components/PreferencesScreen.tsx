@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, RotateCw, Brain, Timer, Minimize2 } from 'lucide-react';
+import { Settings, Server, Globe, Cpu, Info, Activity, FolderOpen, Check, RotateCw, Brain, Timer, Minimize2, Plug } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import MachinesView from './MachinesView';
 import MemoryAgentSettings from './MemoryAgentSettings';
+import { McpGrantsTab } from './settings/McpGrantsTab';
 import { BackButton } from './ui/BackButton';
 import { TabBar } from './ui/TabBar';
 import type { TabDef } from './ui/TabBar';
@@ -21,7 +22,7 @@ const DEFAULT_AGENT_TIMEOUTS: AgentTimeoutsType = {
   wall_cap_s: 1800,
 };
 
-type PrefTab = 'machines' | 'providers' | 'defaults' | 'memory' | 'about';
+type PrefTab = 'machines' | 'providers' | 'defaults' | 'memory' | 'mcp' | 'about';
 
 const PreferencesScreen = () => {
   const { navigate } = useNavigation();
@@ -139,6 +140,7 @@ const PreferencesScreen = () => {
     { value: 'providers', label: 'Providers', icon: <Globe className="w-4 h-4" /> },
     { value: 'defaults', label: 'Defaults', icon: <Cpu className="w-4 h-4" /> },
     { value: 'memory', label: 'Memory', icon: <Brain className="w-4 h-4" /> },
+    { value: 'mcp', label: 'MCP', icon: <Plug className="w-4 h-4" /> },
     { value: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
   ];
 
@@ -380,6 +382,7 @@ const PreferencesScreen = () => {
           </div>
         )}
         {activeTab === 'memory' && <MemoryAgentSettings />}
+        {activeTab === 'mcp' && <McpGrantsTab />}
         {activeTab === 'about' && (
           <div className="glass-panel p-6 space-y-4">
             <div className="flex items-center gap-3">

@@ -396,6 +396,46 @@ async fn run_events_since_zero_returns_everything_ascending() {
 }
 
 #[tokio::test]
+async fn get_failure_verdict_matches_run_view_explain_step_failure_directly() {
+    let ctx = fixture("failure-verdict");
+    let project_id = ProjectId::from("p-1".to_string());
+    ctx.projects.add(project(project_id.as_str())).unwrap();
+    let feature_id = FeatureId::from("f-1".to_string());
+    ctx.features.add(feature("f-1", &project_id)).unwrap();
+    let step_execution_id = StepExecutionId::from("se-1".to_string());
+    ctx.features
+        .step_create(step("se-1", &feature_id, 0))
+        .unwrap();
+
+    let attempt_no = ctx
+        .features
+        .attempt_open(&step_execution_id, 0, None)
+        .unwrap();
+    ctx.features
+        .attempt_close(
+            &step_execution_id,
+            attempt_no,
+            "failed",
+            0.0,
+            0,
+            0,
+            Some("verdict"),
+            Some("fp-a"),
+            Some("verdict.redirect"),
+            1,
+        )
+        .unwrap();
+
+    let verdict = get_failure_verdict(&ctx, &step_execution_id).unwrap();
+    let expected = ctx
+        .run_view
+        .explain_step_failure(&step_execution_id)
+        .unwrap();
+    assert_eq!(verdict.verdict, expected.verdict);
+    assert_eq!(verdict.log_tail, expected.log_tail);
+}
+
+#[tokio::test]
 async fn run_events_since_a_later_offset_excludes_events_at_or_below_it() {
     let ctx = fixture("events-since");
     let project_id = ProjectId::from("p-1".to_string());

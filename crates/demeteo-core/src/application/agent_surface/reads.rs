@@ -4,6 +4,7 @@
 
 use serde::Serialize;
 
+use crate::application::run_view::FailureExplanation;
 use crate::application::tickets;
 use crate::domain::ids::{DiscoveryId, FeatureId, ProjectId, StepExecutionId};
 use crate::domain::models::{Feature, GateDecision, Project, StepAttempt, StepExecution};
@@ -121,6 +122,14 @@ pub fn run_events_since(
     from_offset: i64,
 ) -> Result<Vec<RunEvent>, String> {
     ctx.run_view.run_events_since(feature_id, from_offset)
+}
+
+/// Why a step failed, for a coding agent asking about its own failed run.
+pub fn get_failure_verdict(
+    ctx: &AppContext,
+    step_execution_id: &StepExecutionId,
+) -> Result<FailureExplanation, String> {
+    ctx.run_view.explain_step_failure(step_execution_id)
 }
 
 #[cfg(test)]

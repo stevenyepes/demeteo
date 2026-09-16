@@ -214,6 +214,10 @@ impl NotificationPort for TauriNotificationAdapter {
                 "tickets_startable",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
+            DomainEvent::McpConsentRequested { .. } => (
+                "mcp_consent_requested",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
             // The unified-event-log live push (P1.13): re-emit the bare
             // `run_events` record shape — identical to what the remote
             // path polls via `stream_events` — under the `run_event`
@@ -288,6 +292,10 @@ impl NotificationPort for TauriNotificationAdapter {
         }
 
         emit_result
+    }
+
+    fn raise_main_window(&self) {
+        crate::tray::show_main_window(&self.app);
     }
 }
 
