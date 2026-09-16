@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::adapters::mcp::{record_canonical_uri, router};
+use crate::adapters::mcp::{canonical_uri_for, record_canonical_uri, router};
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
 use crate::state::AppContext;
@@ -28,6 +28,15 @@ fn fixture(tag: &str) -> AppContext {
         Arc::new(NoopNotificationAdapter),
         tokio::runtime::Handle::current(),
     )
+}
+
+#[test]
+fn canonical_uri_is_derived_from_the_bound_listener_address() {
+    let addr = "127.0.0.1:8765"
+        .parse()
+        .expect("a valid loopback socket address");
+
+    assert_eq!(canonical_uri_for(addr), "http://127.0.0.1:8765");
 }
 
 #[tokio::test]

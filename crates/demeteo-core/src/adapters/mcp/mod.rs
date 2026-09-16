@@ -62,8 +62,12 @@ pub fn canonical_uri() -> Option<String> {
 /// [`serve`] already recorded rather than deriving a second, divergent one.
 fn record_canonical_uri(addr: SocketAddr) -> String {
     CANONICAL_URI
-        .get_or_init(|| format!("http://{addr}"))
+        .get_or_init(|| canonical_uri_for(addr))
         .clone()
+}
+
+fn canonical_uri_for(addr: SocketAddr) -> String {
+    format!("http://{addr}")
 }
 
 /// Build the MCP HTTP router. Exposed so tests can drive it directly against
@@ -97,8 +101,7 @@ fn resolve_port(ctx: &AppContext) -> u16 {
 /// Bind the loopback listener and start serving. Spawned onto `runtime` by
 /// [`start`] rather than run inline, since binding is async and this is
 /// called from a synchronous composition-root context.
-async fn serve(ctx: AppContext) {
-    let port = resolve_port(&ctx);
+async fn serve(ctx: AppContext, port: u16) {
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
         Ok(listener) => listener,
         Err(e) => {
@@ -127,5 +130,6 @@ async fn serve(ctx: AppContext) {
 /// call this under `ExecutionMode::Router` (see `composition::mod`) — this
 /// function has no opinion on execution mode itself.
 pub fn start(ctx: AppContext, runtime: &tokio::runtime::Handle) {
-    runtime.spawn(serve(ctx));
+    let port = resolve_port(&ctx);
+    runtime.spawn(serve(ctx, port));
 }

@@ -293,6 +293,7 @@ pub enum DomainEvent {
         client_name: String,
         requested_scopes: Vec<Scope>,
         resource: String,
+        redirect_uri: String,
     },
 }
 
@@ -331,6 +332,7 @@ mod tests {
             client_name: "Claude Desktop".to_string(),
             requested_scopes: vec![Scope::Read, Scope::Spend],
             resource: "https://demeteo.local/mcp".to_string(),
+            redirect_uri: "http://127.0.0.1:9/cb".to_string(),
         };
         let value = serde_json::to_value(&event).expect("serializes");
         assert_eq!(value["kind"], "mcp_consent_requested");

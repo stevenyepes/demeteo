@@ -14,13 +14,13 @@
 //!
 //! A [`PendingAuthorization`] lives only in memory, from the moment
 //! validation passes to the moment `POST /token` (a later ticket) consumes
-//! its single-use code via [`take_pending_authorization`] — losing one on
-//! restart is cheap to retry, unlike a `Gate` a driver may already be
-//! blocked on.
+//! its single-use code via [`take_pending_authorization`] or its five-minute
+//! lifetime lapses — losing one on restart is cheap to retry, unlike a `Gate`
+//! a driver may already be blocked on.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -28,6 +28,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Json;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -42,6 +43,7 @@ use super::consent_waiter::ConsentDecision;
 /// How long a parked `/authorize` request waits for a human decision before
 /// resolving as if denied.
 const CONSENT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const AUTHORIZATION_CODE_LIFETIME: Duration = Duration::from_secs(5 * 60);
 
 /// Mounted onto the shared router by [`super::router`]. `pub(super)` — same
 /// visibility as `metadata::routes` and `register::routes`.
@@ -63,6 +65,7 @@ struct AuthorizeQuery {
     resource: String,
     #[serde(default)]
     scope: String,
+    state: Option<String>,
 }
 
 /// A validated, not-yet-decided `/authorize` request: PKCE, `resource`, the
@@ -77,6 +80,7 @@ pub struct PendingAuthorization {
     pub code_challenge: String,
     pub resource: String,
     pub scopes: Vec<Scope>,
+    issued_at: Instant,
 }
 
 fn pending_codes() -> &'static Mutex<HashMap<String, PendingAuthorization>> {
@@ -92,7 +96,12 @@ fn pending_codes() -> &'static Mutex<HashMap<String, PendingAuthorization>> {
 /// unused `pub(super)` fn is indistinguishable from dead code to
 /// `-D warnings` clippy — same reasoning as `guard::check`.
 pub fn take_pending_authorization(code: &str) -> Option<PendingAuthorization> {
-    pending_codes().lock().unwrap().remove(code)
+    let pending = pending_codes().lock().remove(code)?;
+    (!is_expired(&pending)).then_some(pending)
+}
+
+fn is_expired(pending: &PendingAuthorization) -> bool {
+    pending.issued_at.elapsed() >= AUTHORIZATION_CODE_LIFETIME
 }
 
 /// Fills 256 bits from the OS CSPRNG and base64url-encodes them — used for
@@ -108,10 +117,9 @@ pub(super) fn generate_token() -> String {
 
 fn issue_code(pending: PendingAuthorization) -> String {
     let code = generate_token();
-    pending_codes()
-        .lock()
-        .unwrap()
-        .insert(code.clone(), pending);
+    let mut codes = pending_codes().lock();
+    codes.retain(|_, pending| !is_expired(pending));
+    codes.insert(code.clone(), pending);
     code
 }
 
@@ -134,9 +142,30 @@ fn parse_scopes(raw: &str) -> Option<Vec<Scope>> {
 /// already carry — a registered `redirect_uri` is free to have its own query
 /// params, and blindly appending `?code=...` after one would build an
 /// invalid URL.
-fn append_query(uri: &str, pair: &str) -> String {
+fn append_query(uri: &str, key: &str, value: &str) -> String {
     let separator = if uri.contains('?') { '&' } else { '?' };
-    format!("{uri}{separator}{pair}")
+    format!("{uri}{separator}{key}={}", percent_encode(value))
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+fn authorization_redirect(uri: &str, key: &str, value: &str, state: Option<&str>) -> String {
+    let redirect = append_query(uri, key, value);
+    match state {
+        Some(state) => append_query(&redirect, "state", state),
+        None => redirect,
+    }
 }
 
 async fn authorize(State(ctx): State<AppContext>, Query(q): Query<AuthorizeQuery>) -> Response {
@@ -162,7 +191,13 @@ async fn authorize(State(ctx): State<AppContext>, Query(q): Query<AuthorizeQuery
     }
 
     let Some(scopes) = parse_scopes(&q.scope) else {
-        return oauth_bad_request("invalid_scope");
+        return Redirect::to(&authorization_redirect(
+            &q.redirect_uri,
+            "error",
+            "invalid_scope",
+            q.state.as_deref(),
+        ))
+        .into_response();
     };
 
     let request_id = generate_token();
@@ -173,28 +208,34 @@ async fn authorize(State(ctx): State<AppContext>, Query(q): Query<AuthorizeQuery
         code_challenge: q.code_challenge,
         resource: q.resource.clone(),
         scopes: scopes.clone(),
+        issued_at: Instant::now(),
     };
     let redirect_uri = pending.redirect_uri.clone();
+
+    let notify = ctx.mcp_consent.register(&request_id);
 
     let _ = ctx.notif.emit(&DomainEvent::McpConsentRequested {
         request_id: request_id.clone(),
         client_name: client.client_name,
         requested_scopes: scopes,
         resource: q.resource,
+        redirect_uri: redirect_uri.clone(),
     });
     ctx.notif.raise_main_window();
 
-    let notify = ctx.mcp_consent.register(&request_id);
     let _ = tokio::time::timeout(CONSENT_TIMEOUT, notify.notified()).await;
     let decision = ctx.mcp_consent.take_decision(&request_id);
 
     match decision {
         Some(ConsentDecision::Approved) => {
             let code = issue_code(pending);
-            Redirect::to(&append_query(&redirect_uri, &format!("code={code}"))).into_response()
+            let redirect = authorization_redirect(&redirect_uri, "code", &code, q.state.as_deref());
+            Redirect::to(&redirect).into_response()
         }
         Some(ConsentDecision::Denied) | None => {
-            Redirect::to(&append_query(&redirect_uri, "error=access_denied")).into_response()
+            let redirect =
+                authorization_redirect(&redirect_uri, "error", "access_denied", q.state.as_deref());
+            Redirect::to(&redirect).into_response()
         }
     }
 }

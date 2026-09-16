@@ -39,6 +39,7 @@ const CONSENT_REQUEST = {
   client_name: "Claude Desktop",
   requested_scopes: ["read", "spend", "configure"],
   resource: "https://demeteo.local/mcp",
+  redirect_uri: "http://127.0.0.1:9/cb",
 };
 
 afterEach(() => {
@@ -69,6 +70,8 @@ describe("McpConsentView", () => {
     expect(screen.getByText("read")).toBeInTheDocument();
     expect(screen.getByText("spend")).toBeInTheDocument();
     expect(screen.getByText("configure")).toBeInTheDocument();
+    expect(screen.getByText("https://demeteo.local/mcp")).toBeInTheDocument();
+    expect(screen.getByText("http://127.0.0.1:9/cb")).toBeInTheDocument();
   });
 
   it("shows the fixed 30-day expiry note", async () => {

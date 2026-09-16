@@ -8,8 +8,9 @@
 //! unlike a `Gate` mid-run, which a driver may already be blocked on.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use tokio::sync::Notify;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,8 +21,13 @@ pub enum ConsentDecision {
 
 #[derive(Default)]
 pub struct McpConsentWaiterRegistry {
-    notifiers: Mutex<HashMap<String, Arc<Notify>>>,
-    decisions: Mutex<HashMap<String, ConsentDecision>>,
+    waiters: Mutex<Waiters>,
+}
+
+#[derive(Default)]
+struct Waiters {
+    notifiers: HashMap<String, Arc<Notify>>,
+    decisions: HashMap<String, ConsentDecision>,
 }
 
 impl McpConsentWaiterRegistry {
@@ -34,9 +40,9 @@ impl McpConsentWaiterRegistry {
     /// has no opinion on how long to wait).
     pub fn register(&self, request_id: &str) -> Arc<Notify> {
         let notify = Arc::new(Notify::new());
-        self.notifiers
+        self.waiters
             .lock()
-            .unwrap()
+            .notifiers
             .insert(request_id.to_string(), Arc::clone(&notify));
         notify
     }
@@ -45,25 +51,27 @@ impl McpConsentWaiterRegistry {
     /// delivery for an id that already has a decision is a no-op — only the
     /// first consent decision is observed.
     pub fn deliver(&self, request_id: &str, decision: ConsentDecision) {
-        {
-            let mut decisions = self.decisions.lock().unwrap();
-            if decisions.contains_key(request_id) {
+        let notify = {
+            let mut waiters = self.waiters.lock();
+            let Some(notify) = waiters.notifiers.get(request_id).cloned() else {
+                return;
+            };
+            if waiters.decisions.contains_key(request_id) {
                 return;
             }
-            decisions.insert(request_id.to_string(), decision);
-        }
-        if let Some(notify) = self.notifiers.lock().unwrap().get(request_id) {
-            notify.notify_one();
-        }
+            waiters.decisions.insert(request_id.to_string(), decision);
+            notify
+        };
+        notify.notify_one();
     }
 
     /// Consume and return the decision for `request_id`, if any, removing
     /// both it and its notifier so a resolved request doesn't linger in
     /// either map for the rest of the app's lifetime.
     pub fn take_decision(&self, request_id: &str) -> Option<ConsentDecision> {
-        let decision = self.decisions.lock().unwrap().remove(request_id);
-        self.notifiers.lock().unwrap().remove(request_id);
-        decision
+        let mut waiters = self.waiters.lock();
+        waiters.notifiers.remove(request_id);
+        waiters.decisions.remove(request_id)
     }
 }
 
@@ -126,5 +134,18 @@ mod tests {
     fn take_decision_returns_none_for_unknown_id() {
         let registry = McpConsentWaiterRegistry::new();
         assert_eq!(registry.take_decision("missing"), None);
+    }
+
+    #[test]
+    fn late_delivery_for_a_resolved_request_is_discarded() {
+        let registry = McpConsentWaiterRegistry::new();
+        registry.register("req-4");
+        assert_eq!(registry.take_decision("req-4"), None);
+
+        registry.deliver("req-4", ConsentDecision::Approved);
+
+        let waiters = registry.waiters.lock();
+        assert!(!waiters.decisions.contains_key("req-4"));
+        assert!(!waiters.notifiers.contains_key("req-4"));
     }
 }

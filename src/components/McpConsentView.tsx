@@ -15,6 +15,7 @@ interface McpConsentRequestedPayload {
   client_name: string;
   requested_scopes: string[];
   resource: string;
+  redirect_uri: string;
 }
 
 /** `adapters/mcp/token.rs::GRANT_LIFETIME_MS` — fixed per grant, not carried
@@ -66,6 +67,18 @@ export function McpConsentView() {
           <div className="p-4 rounded-lg bg-white/[0.01] border border-white/5 space-y-1">
             <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Client</div>
             <div className="text-white font-semibold font-heading">{request.client_name}</div>
+          </div>
+
+          <div className="space-y-1">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Resource</div>
+            <div className="text-xs text-slate-300 font-mono break-all">{request.resource}</div>
+          </div>
+
+          <div className="space-y-1">
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
+              Redirect URI
+            </div>
+            <div className="text-xs text-slate-300 font-mono break-all">{request.redirect_uri}</div>
           </div>
 
           <div className="space-y-2">

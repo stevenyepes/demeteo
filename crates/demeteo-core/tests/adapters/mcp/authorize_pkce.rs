@@ -3,7 +3,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::adapters::mcp::consent_waiter::ConsentDecision;
 use crate::adapters::mcp::{record_canonical_uri, router};
@@ -70,6 +70,12 @@ fn register_test_client(ctx: &AppContext) {
 fn authorize_url(addr: SocketAddr, resource: &str, code_challenge: &str, method: &str) -> String {
     format!(
         "http://{addr}/authorize?client_id=client-authorize&redirect_uri={CLIENT_REDIRECT_URI}&code_challenge={code_challenge}&code_challenge_method={method}&resource={resource}&scope=read%20spend"
+    )
+}
+
+fn authorize_url_with_scope(addr: SocketAddr, resource: &str, scope: &str) -> String {
+    format!(
+        "http://{addr}/authorize?client_id=client-authorize&redirect_uri={CLIENT_REDIRECT_URI}&code_challenge=a-challenge&code_challenge_method=S256&resource={resource}&scope={scope}"
     )
 }
 
@@ -214,7 +220,10 @@ async fn approval_redirects_with_a_single_use_code() {
         .build()
         .expect("build a non-redirecting client");
     let request = tokio::spawn({
-        let url = authorize_url(addr, &resource, "a-challenge", "S256");
+        let url = format!(
+            "{}&state=request%20state%2F%3D%26%3F",
+            authorize_url(addr, &resource, "a-challenge", "S256")
+        );
         let client = client.clone();
         async move { client.get(url).send().await }
     });
@@ -240,6 +249,7 @@ async fn approval_redirects_with_a_single_use_code() {
     assert!(location.starts_with(CLIENT_REDIRECT_URI));
     assert!(location.contains("code="));
     assert!(!location.contains("error="));
+    assert!(location.contains("state=request%20state%2F%3D%26%3F"));
 }
 
 #[tokio::test]
@@ -253,7 +263,10 @@ async fn denial_redirects_with_access_denied() {
         .build()
         .expect("build a non-redirecting client");
     let request = tokio::spawn({
-        let url = authorize_url(addr, &resource, "a-challenge", "S256");
+        let url = format!(
+            "{}&state=request%20state%2F%3D%26%3F",
+            authorize_url(addr, &resource, "a-challenge", "S256")
+        );
         let client = client.clone();
         async move { client.get(url).send().await }
     });
@@ -277,4 +290,55 @@ async fn denial_redirects_with_access_denied() {
         .to_str()
         .expect("Location is ASCII");
     assert!(location.contains("error=access_denied"));
+    assert!(location.contains("state=request%20state%2F%3D%26%3F"));
+}
+
+#[tokio::test]
+async fn invalid_scope_redirects_after_the_redirect_uri_is_validated() {
+    let (addr, ctx, _captured) = spawn_mcp_router("invalid-scope").await;
+    let resource = record_canonical_uri(addr);
+    register_test_client(&ctx);
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("build a non-redirecting client");
+    let resp = client
+        .get(format!(
+            "{}&state=correlation%20value",
+            authorize_url_with_scope(addr, &resource, "unknown")
+        ))
+        .send()
+        .await
+        .expect("request /authorize");
+
+    assert_eq!(resp.status(), reqwest::StatusCode::SEE_OTHER);
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .expect("redirect carries a Location header")
+        .to_str()
+        .expect("Location is ASCII");
+    assert_eq!(
+        location,
+        "http://127.0.0.1:9/cb?error=invalid_scope&state=correlation%20value"
+    );
+}
+
+#[test]
+fn expired_authorization_codes_are_not_exchangeable() {
+    let pending = super::PendingAuthorization {
+        request_id: "request".to_string(),
+        client_id: ClientId::new("client"),
+        redirect_uri: CLIENT_REDIRECT_URI.to_string(),
+        code_challenge: "challenge".to_string(),
+        resource: "http://127.0.0.1:8765".to_string(),
+        scopes: vec![Scope::Read],
+        issued_at: Instant::now() - super::AUTHORIZATION_CODE_LIFETIME,
+    };
+
+    let code = super::generate_token();
+    super::pending_codes().lock().insert(code.clone(), pending);
+
+    assert!(super::take_pending_authorization(&code).is_none());
 }
