@@ -64,3 +64,14 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 
 [lints]
 workspace = true
+
+# A genuine standalone integration-test binary — not the `#[path]`-into-`src/`
+# mirrored-tests convention every other `tests/adapters/mcp/*.rs` file uses.
+# `adapters::mcp::LISTENER` is a process-wide static; gating.rs binds and
+# stops real listeners on it, which would otherwise race every other MCP
+# test in the shared `--lib` test binary that assumes `canonical_uri()` is
+# fixed for the run once primed (`record_canonical_uri`'s doc comment).
+# Its own OS process gives it a private copy of that static instead.
+[[test]]
+name = "mcp_gating"
+path = "tests/adapters/mcp/gating.rs"

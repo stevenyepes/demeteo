@@ -361,7 +361,7 @@ pub fn build_core_context(
     // Desktop only — the headless runner has no consent UI and no reason to
     // host this (implementation-spec.md §6).
     if matches!(execution_mode, ExecutionMode::Router) {
-        adapters::mcp::start(ctx.clone(), &runtime);
+        adapters::mcp::start_if_enabled(ctx.clone(), &runtime);
     }
 
     ctx
