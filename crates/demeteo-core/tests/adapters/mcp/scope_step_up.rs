@@ -107,6 +107,36 @@ async fn call_start_feature(addr: SocketAddr, token: &str) -> reqwest::Response 
         .expect("request /mcp")
 }
 
+/// `start_ticket` — not `ticket_start` — is the shipped name
+/// (`mcp_handler.rs::dispatch`, `domain/oauth/tools.rs::required_scope`).
+async fn call_start_ticket(addr: SocketAddr, token: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("http://{addr}/mcp"))
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "start_ticket", "arguments": {} },
+        }))
+        .send()
+        .await
+        .expect("request /mcp")
+}
+
+async fn assert_insufficient_scope_challenge(resp: reqwest::Response) {
+    assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
+    let challenge = resp
+        .headers()
+        .get(reqwest::header::WWW_AUTHENTICATE)
+        .expect("403 carries a WWW-Authenticate header")
+        .to_str()
+        .expect("header value is ASCII")
+        .to_string();
+    assert!(challenge.contains(r#"error="insufficient_scope""#));
+    assert!(challenge.contains(r#"scope="spend""#));
+}
+
 #[tokio::test]
 async fn read_only_grant_calling_a_spend_tool_returns_403_insufficient_scope() {
     let (addr, resource, ctx) = spawn_mcp_router("scope-step-up").await;
@@ -122,13 +152,60 @@ async fn read_only_grant_calling_a_spend_tool_returns_403_insufficient_scope() {
 
     let resp = call_start_feature(addr, token).await;
 
-    assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
-    let challenge = resp
-        .headers()
-        .get(reqwest::header::WWW_AUTHENTICATE)
-        .expect("403 carries a WWW-Authenticate header")
-        .to_str()
-        .expect("header value is ASCII");
-    assert!(challenge.contains(r#"error="insufficient_scope""#));
-    assert!(challenge.contains(r#"scope="spend""#));
+    assert_insufficient_scope_challenge(resp).await;
+}
+
+#[tokio::test]
+async fn read_only_grant_calling_start_ticket_returns_403_insufficient_scope() {
+    let (addr, resource, ctx) = spawn_mcp_router("scope-step-up-start-ticket").await;
+    let token = "token-read-only-start-ticket";
+    seed_grant(
+        &ctx,
+        token,
+        &[Scope::Read],
+        &resource,
+        crate::paths::now_ms() + 3_600_000,
+        None,
+    );
+
+    let resp = call_start_ticket(addr, token).await;
+
+    assert_insufficient_scope_challenge(resp).await;
+}
+
+/// AC4's catalog-shape half: no tool exists that would let a caller approve a
+/// gate, merge a worktree, reach the force-start-bypass path recorded via
+/// `TicketNode.force_started`, create a Ticket directly, or mutate Discovery
+/// state. Runs against the catalog's final shape for this feature, after the
+/// pagination and protocol-version tickets have both landed.
+#[test]
+fn tool_catalog_excludes_forbidden_tool_shapes() {
+    let names: Vec<String> = super::tool_catalog()
+        .as_array()
+        .expect("tool_catalog() returns a JSON array")
+        .iter()
+        .map(|tool| {
+            tool["name"]
+                .as_str()
+                .expect("each catalog entry has a string name")
+                .to_string()
+        })
+        .collect();
+
+    for forbidden in ["approve_gate", "merge_worktree", "create_ticket"] {
+        assert!(
+            !names.iter().any(|name| name == forbidden),
+            "tool_catalog() must not expose {forbidden:?}, found in {names:?}"
+        );
+    }
+    assert!(
+        !names.iter().any(|name| name.starts_with("force_start_")),
+        "tool_catalog() must not expose a force_start_*-shaped tool, found in {names:?}"
+    );
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.starts_with("discovery_") && name.ends_with("_mutate")),
+        "tool_catalog() must not expose a discovery_*_mutate-shaped tool, found in {names:?}"
+    );
 }

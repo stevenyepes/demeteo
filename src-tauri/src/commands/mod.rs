@@ -14,6 +14,7 @@ pub mod feature_lifecycle;
 pub mod features;
 pub mod git;
 pub mod machine;
+pub mod mcp_server;
 pub mod memory;
 pub mod messages;
 pub mod mr_publisher;
