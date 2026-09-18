@@ -237,6 +237,29 @@ async fn read_only_grant_gets_403_insufficient_scope() {
 }
 
 #[tokio::test]
+async fn the_bearer_scheme_is_case_insensitive() {
+    let (addr, resource, ctx) = spawn_guarded_route("bearer-case", Scope::Read).await;
+    let token = "token-case";
+    seed_grant(
+        &ctx,
+        token,
+        &[Scope::Read],
+        &resource,
+        crate::paths::now_ms() + 3_600_000,
+        None,
+    );
+
+    let resp = reqwest::Client::new()
+        .get(format!("http://{addr}/protected"))
+        .header(reqwest::header::AUTHORIZATION, format!("bearer {token}"))
+        .send()
+        .await
+        .expect("request the guarded route");
+
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+}
+
+#[tokio::test]
 async fn matching_grant_passes_through_to_the_handler() {
     let (addr, resource, ctx) = spawn_guarded_route("passthrough", Scope::Spend).await;
     let token = "token-valid";

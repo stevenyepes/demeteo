@@ -105,3 +105,58 @@ fn revoke_grant_sets_revoked_at_but_stays_findable_by_token_hash() {
         "a revoked grant must drop out of the active list immediately"
     );
 }
+
+#[test]
+fn a_full_client_table_prunes_abandoned_registrations_and_keeps_granted_ones() {
+    let db = db();
+    let mut old = client("c-old-unused");
+    old.created_at = 10;
+    let mut granted = client("c-old-granted");
+    granted.created_at = 10;
+    db.register_client(old).unwrap();
+    db.register_client(granted).unwrap();
+    db.insert_grant(grant("g-1", "c-old-granted"), "h").unwrap();
+
+    let mut fresh = client("c-fresh");
+    fresh.created_at = 5_000;
+
+    // Room to spare: nothing is pruned, nothing is refused.
+    assert!(db.register_client_bounded(fresh.clone(), 3, 1_000).unwrap());
+    assert!(db
+        .get_client(&ClientId::from("c-old-unused".to_string()))
+        .unwrap()
+        .is_some());
+
+    // Full: the abandoned one goes, the granted one and the fresh one stay.
+    let mut newer = client("c-newer");
+    newer.created_at = 6_000;
+    assert!(db.register_client_bounded(newer, 3, 1_000).unwrap());
+    assert!(db
+        .get_client(&ClientId::from("c-old-unused".to_string()))
+        .unwrap()
+        .is_none());
+    assert!(db
+        .get_client(&ClientId::from("c-old-granted".to_string()))
+        .unwrap()
+        .is_some());
+    assert!(db
+        .get_client(&ClientId::from("c-fresh".to_string()))
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn a_full_client_table_of_recent_registrations_refuses() {
+    let db = db();
+    let mut a = client("c-a");
+    a.created_at = 5_000;
+    assert!(db.register_client_bounded(a, 1, 1_000).unwrap());
+
+    let mut b = client("c-b");
+    b.created_at = 6_000;
+    assert!(!db.register_client_bounded(b, 1, 1_000).unwrap());
+    assert!(db
+        .get_client(&ClientId::from("c-b".to_string()))
+        .unwrap()
+        .is_none());
+}

@@ -71,7 +71,14 @@ async fn well_known_endpoints_return_rfc_shapes() {
         .expect("protected-resource metadata response is JSON");
 
     assert_eq!(prm["resource"], expected_uri);
-    assert_eq!(prm["scopes_supported"], serde_json::json!(["read"]));
+    assert_eq!(
+        prm["scopes_supported"],
+        serde_json::json!(["read", "spend", "configure"])
+    );
+    assert_eq!(
+        prm["authorization_servers"],
+        serde_json::json!([expected_uri])
+    );
 
     let asm: serde_json::Value = client
         .get(format!(
@@ -99,5 +106,18 @@ async fn well_known_endpoints_return_rfc_shapes() {
     assert_eq!(
         asm["code_challenge_methods_supported"],
         serde_json::json!(["S256"])
+    );
+    assert_eq!(asm["response_types_supported"], serde_json::json!(["code"]));
+    assert_eq!(
+        asm["grant_types_supported"],
+        serde_json::json!(["authorization_code"])
+    );
+    assert_eq!(
+        asm["token_endpoint_auth_methods_supported"],
+        serde_json::json!(["none"])
+    );
+    assert_eq!(
+        asm["scopes_supported"],
+        serde_json::json!(["read", "spend", "configure"])
     );
 }

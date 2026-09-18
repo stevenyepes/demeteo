@@ -356,10 +356,10 @@ pub fn build_core_context(
     };
 
     // The MCP listener is the first background task that needs the *whole*
-    // `AppContext` (to dispatch `agent_surface` calls once `/mcp` lands), so
+    // `AppContext` (to dispatch `agent_surface` calls from `/mcp`), so
     // it starts here rather than alongside the repo-scoped tasks above.
     // Desktop only — the headless runner has no consent UI and no reason to
-    // host this (implementation-spec.md §6).
+    // host this (`docs/MCP_INTEGRATION.md` §3).
     if matches!(execution_mode, ExecutionMode::Router) {
         adapters::mcp::start_if_enabled(ctx.clone(), &runtime);
     }

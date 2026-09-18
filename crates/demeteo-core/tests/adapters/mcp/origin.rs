@@ -96,6 +96,39 @@ async fn disallowed_origin_on_well_known_get_returns_403() {
     assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
 }
 
+/// A rebound page reaches the listener under its own hostname, and its GETs
+/// carry no `Origin` — so `Host` is the only thing that gives it away.
+#[tokio::test]
+async fn a_non_loopback_host_is_refused_even_without_an_origin() {
+    let (addr, _resource) = spawn_origin_router("foreign-host").await;
+
+    for host in [
+        "evil.example",
+        "evil.example:8765",
+        "127.0.0.1.evil.example",
+    ] {
+        let resp = reqwest::Client::new()
+            .get(format!(
+                "http://{addr}/.well-known/oauth-protected-resource"
+            ))
+            .header(reqwest::header::HOST, host)
+            .send()
+            .await
+            .expect("request the protected-resource metadata endpoint");
+        assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN, "{host}");
+    }
+
+    let ok = reqwest::Client::new()
+        .get(format!(
+            "http://{addr}/.well-known/oauth-protected-resource"
+        ))
+        .header(reqwest::header::HOST, "localhost:8765")
+        .send()
+        .await
+        .expect("request the protected-resource metadata endpoint");
+    assert_eq!(ok.status(), reqwest::StatusCode::OK);
+}
+
 #[tokio::test]
 async fn missing_origin_header_proceeds_on_mcp_and_well_known() {
     let (addr, _resource) = spawn_origin_router("missing-origin").await;

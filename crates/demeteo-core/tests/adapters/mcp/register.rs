@@ -93,3 +93,73 @@ async fn register_returns_a_client_id_and_never_a_client_secret() {
         vec!["http://127.0.0.1:5173/callback".to_string()]
     );
 }
+
+async fn post_register(addr: std::net::SocketAddr, body: serde_json::Value) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("http://{addr}/register"))
+        .json(&body)
+        .send()
+        .await
+        .expect("request /register")
+}
+
+#[tokio::test]
+async fn register_refuses_unbounded_or_unsafe_metadata() {
+    let (addr, ctx) = spawn_mcp_router("register-invalid").await;
+
+    for body in [
+        serde_json::json!({ "client_name": "c", "redirect_uris": [] }),
+        serde_json::json!({ "client_name": "c", "redirect_uris": ["javascript:alert(1)"] }),
+        serde_json::json!({ "client_name": "c", "redirect_uris": ["http://example.com/cb"] }),
+        serde_json::json!({ "client_name": "c", "redirect_uris": ["https://example.com/cb#x"] }),
+        serde_json::json!({ "client_name": "", "redirect_uris": ["http://127.0.0.1/cb"] }),
+        serde_json::json!({ "client_name": "n".repeat(1000), "redirect_uris": ["http://127.0.0.1/cb"] }),
+    ] {
+        let resp = post_register(addr, body.clone()).await;
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST, "{body}");
+    }
+    assert_eq!(
+        ctx.oauth_clients
+            .register_client_bounded(
+                crate::domain::oauth::OAuthClient {
+                    id: ClientId::from("probe".to_string()),
+                    client_name: "probe".to_string(),
+                    redirect_uris: vec![],
+                    created_at: 0,
+                },
+                1,
+                0,
+            )
+            .unwrap(),
+        true,
+        "none of the refused registrations left a row behind"
+    );
+}
+
+#[tokio::test]
+async fn register_refuses_once_the_client_table_is_full_of_recent_clients() {
+    let (addr, ctx) = spawn_mcp_router("register-full").await;
+    let now = crate::paths::now_ms();
+    for i in 0..super::MAX_CLIENTS {
+        assert!(ctx
+            .oauth_clients
+            .register_client_bounded(
+                crate::domain::oauth::OAuthClient {
+                    id: ClientId::from(format!("c-{i}")),
+                    client_name: "c".to_string(),
+                    redirect_uris: vec!["http://127.0.0.1/cb".to_string()],
+                    created_at: now,
+                },
+                super::MAX_CLIENTS,
+                0,
+            )
+            .unwrap());
+    }
+
+    let resp = post_register(
+        addr,
+        serde_json::json!({ "client_name": "late", "redirect_uris": ["http://127.0.0.1/cb"] }),
+    )
+    .await;
+    assert_eq!(resp.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+}

@@ -20,8 +20,9 @@
 //! only — never itself) here, and returned in the response body exactly
 //! once: this handler is the only place in the codebase that ever holds the
 //! plaintext token in memory. Never log it, the authorization code, or the
-//! `code_verifier` at any `tracing` level (implementation-spec.md §6).
+//! `code_verifier` at any `tracing` level.
 
+use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -36,8 +37,8 @@ use super::authorize::{generate_token, oauth_bad_request, take_pending_authoriza
 use super::canonical_uri;
 use super::guard::hash_token;
 
-/// Fixed grant lifetime from issuance — implementation-spec.md §7 Open
-/// Question 3's stated default. No refresh tokens exist in this design, so
+/// Fixed grant lifetime from issuance — a default, not a measured number
+/// (`docs/MCP_INTEGRATION.md` §5). No refresh tokens exist in this design, so
 /// expiry always means a fresh `/authorize` round trip, never a renewal.
 const GRANT_LIFETIME_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -80,7 +81,15 @@ fn encode_scope(scopes: &[Scope]) -> String {
         .join(" ")
 }
 
-async fn token(State(ctx): State<AppContext>, Form(req): Form<TokenRequest>) -> Response {
+async fn token(
+    State(ctx): State<AppContext>,
+    form: Result<Form<TokenRequest>, FormRejection>,
+) -> Response {
+    // A wrong `Content-Type` or malformed body is an OAuth error like any
+    // other, not axum's bare 415/422 (RFC 6749 §5.2).
+    let Ok(Form(req)) = form else {
+        return oauth_bad_request("invalid_request");
+    };
     if req.grant_type != "authorization_code" {
         return oauth_bad_request("unsupported_grant_type");
     }
@@ -106,7 +115,10 @@ async fn token(State(ctx): State<AppContext>, Form(req): Form<TokenRequest>) -> 
         return oauth_bad_request("invalid_grant");
     }
 
-    let access_token = generate_token();
+    let Ok(access_token) = generate_token() else {
+        tracing::error!("OS CSPRNG unavailable; cannot mint an mcp access token");
+        return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
     let token_hash = hash_token(&access_token);
     let issued_at = crate::paths::now_ms();
     let scope = encode_scope(&pending.scopes);
@@ -126,13 +138,20 @@ async fn token(State(ctx): State<AppContext>, Form(req): Form<TokenRequest>) -> 
         return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    Json(TokenResponse {
-        access_token,
-        token_type: "Bearer",
-        expires_in: GRANT_LIFETIME_MS / 1000,
-        scope,
-    })
-    .into_response()
+    // RFC 6749 §5.1: a response carrying a token must not be cached.
+    (
+        [
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+            (axum::http::header::PRAGMA, "no-cache"),
+        ],
+        Json(TokenResponse {
+            access_token,
+            token_type: "Bearer",
+            expires_in: GRANT_LIFETIME_MS / 1000,
+            scope,
+        }),
+    )
+        .into_response()
 }
 
 #[cfg(test)]

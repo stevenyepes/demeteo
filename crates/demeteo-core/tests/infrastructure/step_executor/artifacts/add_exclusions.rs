@@ -554,3 +554,59 @@ async fn a_probe_failure_still_keeps_the_artifact_exclusion() {
         "a caller committing its artifacts excludes nothing"
     );
 }
+
+/// The probe echoes the candidate back, and that echo used to be spliced
+/// between single quotes — so a subdir holding `'` closed the quote and the
+/// rest ran as shell on the host (or the remote machine). The pathspec is one
+/// shell word whatever the subdir holds.
+#[tokio::test]
+async fn a_quote_in_the_artifact_subdir_cannot_end_the_pathspec_word() {
+    let subdir = "x'; echo INJECTED-COMMAND-RAN; '";
+    let exec = ProbeOnlyExec {
+        answer: format!("{subdir}\n"),
+        seen: Mutex::new(Vec::new()),
+    };
+    let paths = resolve_add_exclusions(&exec, "local", "/wt", subdir, false).await;
+
+    assert_eq!(
+        paths,
+        format!(" -- {}", shell_esc(&format!(":!{subdir}"))),
+        "one escaped word"
+    );
+}
+
+/// The same payload against a real shell: nothing outside `git add`'s
+/// pathspec may run. The marker sits outside the worktree so only an executed
+/// `touch` can create it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_hostile_artifact_subdir_runs_nothing_through_the_commit() {
+    let temp = temp_git_repo("commit_worktree_hostile_subdir");
+    let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
+    let marker = format!("{temp}_marker");
+    let _ = std::fs::remove_file(&marker);
+
+    exec.write_file("local", &format!("{temp}/src.rs"), "fn a() {}\n")
+        .await
+        .unwrap();
+
+    commit_worktree_changes(
+        &exec,
+        "local",
+        &temp,
+        "worker: task-1",
+        &format!("x'; touch {marker}; '"),
+        false,
+        &[],
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        !std::path::Path::new(&marker).exists(),
+        "the artifact subdir was executed as shell"
+    );
+    assert!(committed_files(&exec, &temp).await.contains("src.rs"));
+
+    let _ = std::fs::remove_dir_all(&temp);
+}

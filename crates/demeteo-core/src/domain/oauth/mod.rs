@@ -18,6 +18,7 @@ use thiserror::Error;
 use crate::domain::ids::{ClientId, GrantId};
 
 pub mod pkce;
+pub mod registration;
 pub mod tools;
 
 /// A grant's authorized operations. Membership check only — no hierarchy.
@@ -30,6 +31,9 @@ pub enum Scope {
 }
 
 impl Scope {
+    /// Every scope this server can grant, in the order metadata advertises them.
+    pub const ALL: [Scope; 3] = [Scope::Read, Scope::Spend, Scope::Configure];
+
     /// The stable lowercase identifier used in the `oauth_grants.scopes`
     /// column and in RFC 8707 `scope` parameters — mirrors the serde
     /// `rename_all = "snake_case"` spelling above rather than defining a

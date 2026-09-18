@@ -294,6 +294,10 @@ pub enum DomainEvent {
         requested_scopes: Vec<Scope>,
         resource: String,
         redirect_uri: String,
+        /// How long the parked request will wait, relative to this event. The
+        /// prompt must not outlive it: past that point the client has already
+        /// been told `access_denied`, and an approval would go nowhere.
+        expires_in_ms: u64,
     },
 }
 
@@ -333,6 +337,7 @@ mod tests {
             requested_scopes: vec![Scope::Read, Scope::Spend],
             resource: "https://demeteo.local/mcp".to_string(),
             redirect_uri: "http://127.0.0.1:9/cb".to_string(),
+            expires_in_ms: 300_000,
         };
         let value = serde_json::to_value(&event).expect("serializes");
         assert_eq!(value["kind"], "mcp_consent_requested");

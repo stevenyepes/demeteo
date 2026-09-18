@@ -1,5 +1,5 @@
 //! PKCE `S256` verification — the only method this authorization server
-//! accepts. Per implementation-spec.md §6, a missing `code_challenge_method`
+//! accepts. Per `docs/MCP_INTEGRATION.md` §5, a missing `code_challenge_method`
 //! is never treated as an implicit `plain`, so the caller must always pass
 //! the method it received, even when absent from the request.
 

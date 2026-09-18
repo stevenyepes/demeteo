@@ -11,8 +11,7 @@ import {
 import { reportError } from '../../lib/errorBus';
 
 /** A grant is flagged as expiring rather than merely active once it has less
- *  than this much life left — the 30-day lifetime (§7 Open Question 3 of
- *  implementation-spec.md) makes a same-day expiry worth calling out before
+ *  than this much life left — the 30-day lifetime (`docs/MCP_INTEGRATION.md` §5) makes a same-day expiry worth calling out before
  *  the client silently loses access. */
 const EXPIRY_WARNING_MS = 24 * 60 * 60 * 1000;
 
@@ -117,10 +116,10 @@ export function McpGrantsTab() {
   };
 
   const handleInstallSkill = async () => {
-    const destination = await save({ defaultPath: 'SKILL.md' });
-    if (destination === null) return;
     setSkillSaving(true);
     try {
+      const destination = await save({ defaultPath: 'SKILL.md' });
+      if (destination === null) return;
       await installMcpSkill(destination);
     } catch (e) {
       reportError(e);
@@ -260,7 +259,11 @@ export function McpGrantsTab() {
                       <span className="text-sm font-semibold text-white font-heading">
                         {grant.client_name}
                       </span>
-                      {expiresSoon ? (
+                      {grant.audience_mismatch ? (
+                        <span className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] rounded bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono">
+                          <AlertTriangle className="w-2.5 h-2.5" /> Issued for another port
+                        </span>
+                      ) : expiresSoon ? (
                         <span className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] rounded bg-ruby-500/10 border border-ruby-500/20 text-ruby-400 font-mono">
                           <AlertTriangle className="w-2.5 h-2.5" /> Expiring soon
                         </span>

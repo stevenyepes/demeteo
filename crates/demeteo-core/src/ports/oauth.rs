@@ -13,6 +13,18 @@ use crate::error::AppError;
 pub trait OAuthClientRepository: Send + Sync {
     fn register_client(&self, client: OAuthClient) -> Result<(), AppError>;
     fn get_client(&self, id: &ClientId) -> Result<Option<OAuthClient>, AppError>;
+
+    /// Register `client` unless `max_clients` are already held. When the table
+    /// is full, first drops clients registered before `prune_before_ms` that
+    /// never received a grant — abandoned registrations, not anyone's access —
+    /// and only then refuses. Returns `false` when it refused. One call so the
+    /// count and the insert cannot be interleaved by a concurrent registration.
+    fn register_client_bounded(
+        &self,
+        client: OAuthClient,
+        max_clients: usize,
+        prune_before_ms: i64,
+    ) -> Result<bool, AppError>;
 }
 
 /// Persistence for issued `oauth_grants` rows.

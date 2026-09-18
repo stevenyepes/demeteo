@@ -148,8 +148,14 @@ pub fn explain_failure(attempts: &[StepAttempt]) -> FailureVerdict {
 }
 
 /// Cut `body` to its trailing `<= budget_bytes` bytes, moving the cut point
-/// forward to the next line boundary so the result is always a clean suffix
-/// — never a split UTF-8 character, never a partial line. Tail-only sibling
+/// forward to the next line boundary so the result is a clean suffix — never a
+/// split UTF-8 character, and a partial line only in the one case below.
+///
+/// When the last line is itself longer than the budget (minified JSON, a
+/// one-line stack trace) the next boundary is the end of the input and a clean
+/// suffix is empty — which would return no evidence for exactly the failures
+/// that produce a single long line. There the cut falls back to the nearest
+/// char boundary, so the tail is a partial line rather than nothing. Tail-only sibling
 /// of `prompt_budget::window_harness_log`'s head+tail split: this feature
 /// only ever wants the end of the log, so it doesn't reach for that budget's
 /// omission banner either.
@@ -162,7 +168,11 @@ pub fn tail_log(body: &str, budget_bytes: usize) -> LogTail {
         };
     }
 
-    let start = line_start_at_or_after(body, body.len() - budget_bytes);
+    let window_start = body.len() - budget_bytes;
+    let mut start = line_start_at_or_after(body, window_start);
+    if body[start..].trim().is_empty() {
+        start = ceil_char_boundary(body, window_start);
+    }
     LogTail {
         text: body[start..].to_string(),
         truncated: true,

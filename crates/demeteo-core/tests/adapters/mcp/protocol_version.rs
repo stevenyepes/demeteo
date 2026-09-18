@@ -193,7 +193,7 @@ async fn delete_on_mcp_returns_405() {
     assert_eq!(resp.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
 }
 
-// Regression coverage for critic review Critical Issue #1: `enforce_headers`
+// Regression coverage for the pre-auth body-size cap: `enforce_headers`
 // buffered the whole body via `to_bytes(body, usize::MAX)` ahead of
 // `mcp_handler`'s own size-limited `Json` extractor, so a body larger than
 // `super::MAX_BODY_BYTES` must still be rejected rather than fully buffered

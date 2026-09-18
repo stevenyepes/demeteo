@@ -1,6 +1,6 @@
 //! Shared bearer-token enforcement for every MCP-protected route.
-//! implementation-spec.md §3 is explicit that no route calls a tool function
-//! without going through this: [`check`] turns a request's `Authorization`
+//! `docs/MCP_INTEGRATION.md` §5: no route calls a tool function without
+//! going through this: [`check`] turns a request's `Authorization`
 //! header into a [`GrantRecord`], or into the exact `401`/`403` response the
 //! caller should return — a route never inspects the header or an
 //! [`OAuthError`] itself.
@@ -34,11 +34,13 @@ pub(super) fn hash_token(token: &str) -> String {
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    headers
+    let (scheme, token) = headers
         .get(axum::http::header::AUTHORIZATION)?
         .to_str()
         .ok()?
-        .strip_prefix("Bearer ")
+        .split_once(' ')?;
+    // RFC 7235 §2.1: the auth scheme is case-insensitive.
+    scheme.eq_ignore_ascii_case("Bearer").then_some(token)
 }
 
 fn challenge(status: StatusCode, www_authenticate: &str) -> Response {
@@ -86,11 +88,6 @@ fn insufficient_scope(required: Scope) -> Response {
 /// Every protected route funnels through this rather than reading
 /// `Authorization` or matching on [`OAuthError`] itself.
 ///
-/// `pub`, not `pub(super)`: `mcp-handler-and-tool-dispatch` (next ticket)
-/// calls this directly and hasn't landed yet, and a `pub(super)` fn with no
-/// caller anywhere in the crate is indistinguishable from dead code to
-/// `-D warnings` clippy — same reasoning as `consent_waiter`'s registry
-/// methods, which are `pub` for the same not-yet-wired reason.
 pub async fn check(
     ctx: &AppContext,
     required: Scope,

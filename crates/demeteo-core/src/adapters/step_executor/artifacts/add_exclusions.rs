@@ -59,11 +59,16 @@ pub(crate) async fn resolve_add_exclusions(
          [ $? -eq 1 ] && echo {escaped}; true",
         wt = paths::shell_escape_posix(worktree_root),
     );
+    let exclusion = format!(" {}", paths::shell_escape_posix(&format!(":!{trimmed}")));
     let mut exclusions = String::new();
     match exec.run_command(machine_id, &exclusion_probe).await {
+        // The probe's stdout only says *whether* to exclude. The candidate is
+        // never read back out of it: `echo` un-escapes what `escaped` protected,
+        // and splicing that between quotes let a `'` in `artifact_subdir` end
+        // the word and run the rest as shell.
         Ok(out) => {
-            for name in out.lines().map(str::trim).filter(|s| !s.is_empty()) {
-                exclusions.push_str(&format!(" ':!{name}'"));
+            if out.lines().any(|l| !l.trim().is_empty()) {
+                exclusions.push_str(&exclusion);
             }
         }
         Err(e) => {
@@ -77,7 +82,7 @@ pub(crate) async fn resolve_add_exclusions(
                 error = %e,
                 "commit_worktree_changes: exclusion probe failed; falling back to the artifact exclusion alone",
             );
-            exclusions.push_str(&format!(" ':!{trimmed}'"));
+            exclusions.push_str(&exclusion);
         }
     }
 

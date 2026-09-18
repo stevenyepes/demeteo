@@ -12,6 +12,9 @@ export interface McpGrantSummary {
   issued_at: number;
   expires_at: number;
   revoked: boolean;
+  /** The listener is bound elsewhere than this grant's audience, so its token
+   *  is rejected until the client re-authorizes. */
+  audience_mismatch: boolean;
 }
 
 /** Every active grant, revoked and expired rows already excluded. */

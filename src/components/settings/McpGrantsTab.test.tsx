@@ -1,4 +1,4 @@
-// implementation-spec.md AC7 first half: a vitest test renders the grants tab
+// A vitest test renders the grants tab
 // from a fixture list (client name, scopes, expiry) and asserts the revoke
 // control calls the typed `revokeMcpGrant` wrapper with the clicked row's id.
 //
@@ -35,6 +35,7 @@ function grant(over: Record<string, unknown> = {}) {
     issued_at: Date.parse('2026-08-01T00:00:00Z'),
     expires_at: Date.parse('2026-09-30T00:00:00Z'),
     revoked: false,
+    audience_mismatch: false,
     ...over,
   };
 }

@@ -1,5 +1,7 @@
 use crate::adapters::step_executor::setup::fetch_default_settings;
-use crate::domain::models::{apply_run_shape_patch, EffortLevel, RunShapePatch};
+use crate::domain::models::{
+    apply_run_shape_patch, EffortLevel, RunShapePatch, RunShapePatchError,
+};
 
 fn arbitrary_patch() -> RunShapePatch {
     RunShapePatch {
@@ -71,4 +73,62 @@ fn apply_copies_all_nine_patch_fields() {
     );
     assert_eq!(result.sync_resolver_model, patch.sync_resolver_model);
     assert_eq!(result.sync_resolver_effort, patch.sync_resolver_effort);
+}
+
+#[test]
+fn validate_accepts_an_ordinary_patch() {
+    assert_eq!(arbitrary_patch().validate(), Ok(()));
+    let mut empty_subdir = arbitrary_patch();
+    empty_subdir.artifact_subdir = String::new();
+    assert_eq!(
+        empty_subdir.validate(),
+        Ok(()),
+        "empty disables the exclusion"
+    );
+}
+
+#[test]
+fn validate_refuses_an_artifact_subdir_that_is_not_a_plain_relative_path() {
+    for bad in [
+        "x'; touch /tmp/p; '",
+        "a\"b",
+        "a`b`",
+        "$(id)",
+        "a\nb",
+        "/etc",
+        "../up",
+        "a/../b",
+        "a//b",
+        ".",
+        ":(top)x",
+        "*",
+        "a\\b",
+    ] {
+        let mut p = arbitrary_patch();
+        p.artifact_subdir = bad.to_string();
+        assert_eq!(
+            p.validate(),
+            Err(RunShapePatchError::ArtifactSubdir),
+            "{bad:?}"
+        );
+    }
+}
+
+#[test]
+fn validate_refuses_identifiers_that_would_read_as_flags_or_carry_whitespace() {
+    for bad in ["--dangerous", "a b", "a\nb", "a\u{7}b"] {
+        let mut p = arbitrary_patch();
+        p.default_model = Some(bad.to_string());
+        assert_eq!(
+            p.validate(),
+            Err(RunShapePatchError::Identifier("default_model")),
+            "{bad:?}"
+        );
+    }
+    let mut p = arbitrary_patch();
+    p.sync_resolver_agent_kind = Some("-x".to_string());
+    assert_eq!(
+        p.validate(),
+        Err(RunShapePatchError::Identifier("sync_resolver_agent_kind"))
+    );
 }

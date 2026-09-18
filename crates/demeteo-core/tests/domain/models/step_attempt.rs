@@ -1,7 +1,6 @@
 //! [`explain_failure`] and [`tail_log`] pinned directly, without a repo or
 //! an execution driver in sight — both are pure fns over data already in
-//! hand (research-report.md's "pure decision fn beside the data it decides
-//! about" pattern).
+//! hand (the "pure decision fn beside the data it decides about" pattern).
 
 use crate::domain::ids::StepExecutionId;
 use crate::domain::models::step_attempt::{
@@ -109,6 +108,23 @@ fn tail_log_truncates_at_a_line_boundary_within_budget() {
     // a newline rather than a fragment of a line.
     let prefix = &body[..tail.omitted_bytes];
     assert!(prefix.is_empty() || prefix.ends_with('\n'));
+}
+
+/// A single line longer than the budget, newline-terminated: the next line
+/// boundary is the end of the input, and the tail used to come back empty.
+#[test]
+fn tail_log_of_one_over_long_line_is_a_partial_line_not_nothing() {
+    let line = "x".repeat(10_000);
+    for body in [format!("{line}\n"), line.clone()] {
+        let tail = tail_log(&body, 4096);
+        assert!(tail.truncated);
+        assert!(
+            !tail.text.is_empty(),
+            "the failure's only evidence was dropped"
+        );
+        assert!(tail.text.len() <= 4096);
+        assert_eq!(tail.omitted_bytes, body.len() - tail.text.len());
+    }
 }
 
 #[test]

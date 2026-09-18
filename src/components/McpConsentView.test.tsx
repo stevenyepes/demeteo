@@ -40,9 +40,11 @@ const CONSENT_REQUEST = {
   requested_scopes: ["read", "spend", "configure"],
   resource: "https://demeteo.local/mcp",
   redirect_uri: "http://127.0.0.1:9/cb",
+  expires_in_ms: 300_000,
 };
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const k of Object.keys(handlers)) delete handlers[k];
   decideMcpConsent.mockReset();
   reportError.mockReset();
@@ -127,5 +129,40 @@ describe("McpConsentView", () => {
       expect(reportError).toHaveBeenCalled();
     });
     expect(screen.getByText("Claude Desktop")).toBeInTheDocument();
+  });
+
+  it("says what each scope costs and that the client's name is unverified", async () => {
+    await mountAndEmit();
+    await waitFor(() => expect(screen.getByText("Claude Desktop")).toBeInTheDocument());
+
+    expect(screen.getByText(/costs money and agent time/i)).toBeInTheDocument();
+    expect(screen.getByText(/change how later runs are set up/i)).toBeInTheDocument();
+    expect(screen.getByText(/unverified/i)).toBeInTheDocument();
+    expect(screen.getByText(/every project in this workspace/i)).toBeInTheDocument();
+  });
+
+  it("dismisses the prompt when the server-side wait has run out", async () => {
+    render(<McpConsentView />);
+    await waitFor(() => expect(handlers.mcp_consent_requested?.length).toBeGreaterThan(0));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    act(() => emit("mcp_consent_requested", { ...CONSENT_REQUEST, expires_in_ms: 1000 }));
+    expect(screen.getByText("Claude Desktop")).toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(999));
+    expect(screen.getByText("Claude Desktop")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(2));
+    expect(screen.queryByText("Claude Desktop")).not.toBeInTheDocument();
+  });
+
+  it("drops a prompt the backend says is no longer pending, and says so", async () => {
+    decideMcpConsent.mockRejectedValue({ kind: "not_found", message: "no longer pending" });
+    await mountAndEmit();
+    await waitFor(() => expect(screen.getByText("Claude Desktop")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    await waitFor(() => expect(reportError).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText("Claude Desktop")).not.toBeInTheDocument());
   });
 });

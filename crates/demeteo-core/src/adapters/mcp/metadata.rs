@@ -2,9 +2,8 @@
 //! Authorization Server Metadata) `.well-known` endpoints — the discovery
 //! surface an MCP client probes before it holds a token. Both handlers read
 //! [`canonical_uri`](super::canonical_uri) rather than re-deriving the
-//! server's address. `/authorize` and `/token` don't exist yet (later
-//! tickets); the authorization-server document names them anyway, since RFC
-//! 8414 describes capability, not what has already been dialed.
+//! server's address. The resource and the authorization server share one
+//! origin, so each document names the other's location as that same URI.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -32,12 +31,17 @@ pub(super) fn routes() -> axum::Router<AppContext> {
         )
 }
 
-/// Unreachable once [`super::serve`] has bound its listener — the canonical
-/// URI is recorded before the router ever starts accepting connections. Kept
+/// Unreachable once [`super::start_if_enabled`] has bound its listener — the
+/// canonical URI is recorded before the router ever starts accepting
+/// connections. Kept
 /// as a real response rather than a panic because a handler is not a
 /// production path that gets to assume its preconditions hold.
 fn resource_not_yet_known() -> Response {
     StatusCode::SERVICE_UNAVAILABLE.into_response()
+}
+
+fn scopes_supported() -> Vec<&'static str> {
+    Scope::ALL.iter().map(|s| s.as_str()).collect()
 }
 
 async fn protected_resource() -> Response {
@@ -46,7 +50,9 @@ async fn protected_resource() -> Response {
     };
     Json(json!({
         "resource": resource,
-        "scopes_supported": [Scope::Read.as_str()],
+        "authorization_servers": [resource],
+        "scopes_supported": scopes_supported(),
+        "bearer_methods_supported": ["header"],
     }))
     .into_response()
 }
@@ -60,7 +66,11 @@ async fn authorization_server() -> Response {
         "authorization_endpoint": format!("{issuer}/authorize"),
         "token_endpoint": format!("{issuer}/token"),
         "registration_endpoint": format!("{issuer}/register"),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "token_endpoint_auth_methods_supported": ["none"],
         "code_challenge_methods_supported": ["S256"],
+        "scopes_supported": scopes_supported(),
     }))
     .into_response()
 }

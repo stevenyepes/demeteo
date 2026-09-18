@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, ShieldAlert, X } from "lucide-react";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { decideMcpConsent } from "../lib/mcpGrants";
 import { reportError } from "../lib/errorBus";
+import { asAppError } from "../lib/errors";
 
 /** Mirrors `DomainEvent::McpConsentRequested` exactly, including field
  *  casing — Tauri event payloads are not auto-camelCased, same convention
@@ -16,7 +17,18 @@ interface McpConsentRequestedPayload {
   requested_scopes: string[];
   resource: string;
   redirect_uri: string;
+  /** Relative to receipt: after this long the parked request has already
+   *  answered the client `access_denied`, so the prompt must go too. */
+  expires_in_ms: number;
 }
+
+/** What each scope costs, in the words `docs/MCP_INTEGRATION.md` §6 uses. The
+ *  tag beside it stays the literal scope name. */
+const SCOPE_COST: Record<string, string> = {
+  read: "Can see every project, feature, run and failure. Changes nothing, costs nothing.",
+  spend: "Can start runs. Costs money and agent time until each run finishes or is stopped.",
+  configure: "Can register projects and change how later runs are set up.",
+};
 
 /** `adapters/mcp/token.rs::GRANT_LIFETIME_MS` — fixed per grant, not carried
  *  on the event, so this is static copy rather than a value read off the payload. */
@@ -34,6 +46,12 @@ export function McpConsentView() {
     setRequest(payload);
   });
 
+  useEffect(() => {
+    if (!request) return;
+    const timer = setTimeout(() => setRequest(null), request.expires_in_ms);
+    return () => clearTimeout(timer);
+  }, [request]);
+
   if (!request) return null;
 
   const decide = async (approve: boolean) => {
@@ -43,6 +61,9 @@ export function McpConsentView() {
       setRequest(null);
     } catch (err) {
       reportError(err);
+      // `not_found` is the backend saying the request is gone (its client gave
+      // up); nothing can answer it, so leaving it up would only invite a retry.
+      if (asAppError(err)?.kind === "not_found") setRequest(null);
     } finally {
       setDeciding(false);
     }
@@ -67,6 +88,9 @@ export function McpConsentView() {
           <div className="p-4 rounded-lg bg-white/[0.01] border border-white/5 space-y-1">
             <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Client</div>
             <div className="text-white font-semibold font-heading">{request.client_name}</div>
+            <div className="text-[11px] text-amber-400/90">
+              Unverified — this name was chosen by the requesting program, not confirmed by Demeteo.
+            </div>
           </div>
 
           <div className="space-y-1">
@@ -95,6 +119,17 @@ export function McpConsentView() {
                 </span>
               ))}
             </div>
+            <ul className="space-y-1">
+              {request.requested_scopes.map((scope) => (
+                <li key={scope} className="text-xs text-slate-400 leading-relaxed">
+                  {SCOPE_COST[scope] ?? "Unrecognized scope."}
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Access covers every project in this workspace, and all requested scopes are granted
+              together or not at all.
+            </p>
           </div>
 
           <p className="text-xs text-slate-400 leading-relaxed">

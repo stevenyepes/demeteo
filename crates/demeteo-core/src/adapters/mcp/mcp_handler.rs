@@ -10,7 +10,7 @@
 //! `guard::check` builds names whatever `Scope` it was asked to check, so
 //! resolving the *real* scope for `params.name` first is what makes that
 //! challenge name the actually-attempted operation instead of a fixed
-//! default (implementation-spec.md AC2). An unrecognized tool name has no
+//! default (`docs/MCP_INTEGRATION.md` §5). An unrecognized tool name has no
 //! scope to look up — [`required_scope`] returns `None` — and that short-
 //! circuits straight to a JSON-RPC "method not found" error, never reaching
 //! the guard: there is nothing to be insufficiently scoped for.
@@ -36,8 +36,10 @@ use crate::application::projects::{ProjectConfig, RepositoryConfig};
 use crate::application::tickets::TicketView;
 use crate::domain::ids::{DiscoveryId, FeatureId, ProjectId, StepExecutionId, TicketId};
 use crate::domain::models::project::RunShapePatch;
+use crate::domain::models::step_attempt::{tail_log, LOG_TAIL_BUDGET_BYTES};
 use crate::domain::oauth::tools::required_scope;
 use crate::domain::ticket_graph::TicketProgress;
+use crate::shared::secret_scrub::scrub_secrets;
 use crate::state::AppContext;
 
 use super::guard;
@@ -178,11 +180,41 @@ async fn handle_tools_call(
 
     let arguments = call.arguments.unwrap_or_else(|| json!({}));
     match dispatch(ctx, &call.name, arguments).await {
-        Ok(value) => tool_success(id, value),
+        Ok(mut value) => {
+            bound_error_messages(&mut value);
+            tool_success(id, value)
+        }
         Err(DispatchError::InvalidParams(detail)) => invalid_params(id, &detail),
         Err(DispatchError::Failed(message)) => tool_failure(id, message),
     }
 }
+
+/// Every `error_message` in a result is scrubbed of credential-shaped text and
+/// cut to its tail. `step_executions.error_message` is stored as the executor
+/// wrote it — the scrubbing in this codebase sits at the run-event and runner
+/// sinks, not on that column — and a `read` grant spans every Project, so this
+/// is the one point where that text leaves for a party the user has not seen.
+/// Bounded too, since the column has no length limit and a list of rows would
+/// otherwise carry it once per row.
+fn bound_error_messages(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, inner) in map.iter_mut() {
+                match inner {
+                    Value::String(message) if key == "error_message" => {
+                        let scrubbed = scrub_secrets(message);
+                        *message = tail_log(&scrubbed, ERROR_MESSAGE_BUDGET_BYTES).text;
+                    }
+                    other => bound_error_messages(other),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(bound_error_messages),
+        _ => {}
+    }
+}
+
+const ERROR_MESSAGE_BUDGET_BYTES: usize = 2 * LOG_TAIL_BUDGET_BYTES;
 
 fn parse<T: DeserializeOwned>(value: Value) -> Result<T, DispatchError> {
     serde_json::from_value(value).map_err(|e| DispatchError::InvalidParams(e.to_string()))
@@ -242,8 +274,8 @@ fn to_paged_json<T: Serialize>(
 
 /// Routes an already-authorized call to its backing `agent_surface`
 /// function. `name` has already passed [`required_scope`] by the time this
-/// runs, so the fallback arm is unreachable by construction rather than a
-/// real error case.
+/// runs, so the fallback arm is only reachable if that table and this `match`
+/// drift; `every_scoped_tool_has_a_dispatch_arm` pins the two together.
 async fn dispatch(ctx: &AppContext, name: &str, arguments: Value) -> Result<Value, DispatchError> {
     match name {
         "list_projects" => {
@@ -359,7 +391,9 @@ async fn dispatch(ctx: &AppContext, name: &str, arguments: Value) -> Result<Valu
             let args: TicketArgs = parse(arguments)?;
             to_json(agent_surface::start_ticket(ctx, &TicketId::from(args.ticket_id)).await)
         }
-        other => unreachable!("required_scope filtered out unknown tool name {other:?} already"),
+        other => Err(DispatchError::Failed(format!(
+            "tool {other:?} has a required scope but no dispatch arm"
+        ))),
     }
 }
 
@@ -412,7 +446,7 @@ struct GetFeatureArgs {
 }
 
 /// `get_failure_verdict`'s args — unpaginated, since its result is already
-/// bounded by `LogTail`'s own budget (implementation-spec.md §2).
+/// bounded by `LogTail`'s own budget.
 #[derive(Debug, Deserialize, JsonSchema)]
 struct StepExecutionArgs {
     step_execution_id: String,
@@ -421,8 +455,7 @@ struct StepExecutionArgs {
 /// `list_step_attempts`'s args. Kept distinct from [`StepExecutionArgs`]
 /// even though both name only a `step_execution_id`: flattening [`PageArgs`]
 /// into the shared struct would also add `limit`/`cursor` to
-/// `get_failure_verdict`'s schema, which implementation-spec.md §2
-/// explicitly excludes from pagination.
+/// `get_failure_verdict`'s schema, which is deliberately unpaginated.
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ListStepAttemptsArgs {
     step_execution_id: String,
@@ -495,7 +528,7 @@ fn tool_descriptor(name: &str, description: &str, schema: schemars::Schema) -> V
     })
 }
 
-/// The literal 12-row catalog from implementation-spec.md §4, in the same
+/// The literal 12-row catalog from `docs/MCP_INTEGRATION.md` §7, in the same
 /// order as [`crate::domain::oauth::tools::required_scope`]'s table.
 fn tool_catalog() -> Value {
     json!([
@@ -541,7 +574,7 @@ fn tool_catalog() -> Value {
         ),
         tool_descriptor(
             "create_workspace_project",
-            "Create a project and its repositories.",
+            "Register a project and its repositories. Registers rows only: it does not clone or bootstrap, so the project has no settings until it is bootstrapped and apply_run_shape_patch refuses it.",
             schemars::schema_for!(CreateWorkspaceProjectArgs),
         ),
         tool_descriptor(
@@ -581,6 +614,10 @@ mod revocation_tests;
 #[cfg(test)]
 #[path = "../../../tests/adapters/mcp/pagination.rs"]
 mod pagination_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/adapters/mcp/read_redaction.rs"]
+mod read_redaction_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/adapters/mcp/skill_catalog_parity.rs"]

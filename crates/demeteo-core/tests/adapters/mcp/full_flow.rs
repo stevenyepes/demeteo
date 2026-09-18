@@ -93,7 +93,7 @@ fn authorize_url(
     code_challenge: &str,
 ) -> String {
     format!(
-        "http://{addr}/authorize?client_id={client_id}&redirect_uri={REDIRECT_URI}&code_challenge={code_challenge}&code_challenge_method=S256&resource={resource}&scope=read%20spend"
+        "http://{addr}/authorize?response_type=code&client_id={client_id}&redirect_uri={REDIRECT_URI}&code_challenge={code_challenge}&code_challenge_method=S256&resource={resource}&scope=read%20spend"
     )
 }
 
@@ -201,7 +201,7 @@ async fn authorize_and_approve(
     code
 }
 
-/// The single ordered test implementation-spec.md AC3 requires: register ->
+/// The single ordered end-to-end test: register ->
 /// authorize (approved the same way `mcp_consent_decide` will) -> assert
 /// `McpConsentRequested` arrived before `/token` is called -> token ->
 /// assert a plaintext token comes back and an `oauth_grants` row now exists,
@@ -229,6 +229,8 @@ async fn register_authorize_consent_token_round_trips_to_a_working_grant() {
     .await;
 
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    assert_eq!(resp.headers()[reqwest::header::CACHE_CONTROL], "no-store");
+    assert_eq!(resp.headers()[reqwest::header::PRAGMA], "no-cache");
     let body: serde_json::Value = resp.json().await.expect("token response is JSON");
     let access_token = body["access_token"]
         .as_str()
@@ -253,6 +255,24 @@ async fn register_authorize_consent_token_round_trips_to_a_working_grant() {
         30 * 24 * 60 * 60 * 1000,
         "grant must carry a fixed 30-day expiry from issuance"
     );
+}
+
+/// A body that is not a form is an OAuth `invalid_request`, not axum's bare 415.
+#[tokio::test]
+async fn a_non_form_token_request_gets_an_oauth_error_body() {
+    let (addr, _ctx, _captured) = spawn_mcp_router("token-not-form").await;
+    record_canonical_uri(addr);
+
+    let resp = reqwest::Client::new()
+        .post(format!("http://{addr}/token"))
+        .json(&serde_json::json!({ "grant_type": "authorization_code" }))
+        .send()
+        .await
+        .expect("request /token");
+
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = resp.json().await.expect("error body is JSON");
+    assert_eq!(body["error"], "invalid_request");
 }
 
 #[tokio::test]

@@ -210,6 +210,19 @@ nothing to authenticate it against. `client_name` is self-asserted and is never
 checked against an allowlist. **The human consent screen is the security
 boundary**, not registration.
 
+Because that screen is the boundary, what can reach it is bounded: registration
+accepts only an `https` URL, a loopback `http` URL or a reverse-domain private-use
+scheme as a redirect (no fragment, no credentials), a name of at most 100
+characters with no control or bidi characters, and at most 100 clients at a time
+(abandoned ones are dropped once the table is full). `/authorize` parks **one**
+request at a time — the consent screen holds one prompt — and answers a second
+with `temporarily_unavailable` rather than replacing the first under the user's
+cursor. The prompt carries its own expiry and is dismissed when the wait ends, an
+authorization code's five minutes start at approval, and approving a request that
+is no longer pending reports that nothing was granted. The screen states what each
+scope costs, that the client name is self-asserted, and that access spans every
+Project.
+
 A request is checked **revoked → expired → audience → scope**, in that order, in
 one pure function (`validate_grant` in `domain/oauth/mod.rs`). An unrecognised
 tool name never reaches it — that is JSON-RPC "method not found", because there
@@ -286,7 +299,7 @@ must not drift.
 | `list_pending_gates` | `read` | Every Gate awaiting a decision, named by Project and Feature |
 | `get_discovery_board` | `read` | A Discovery's tickets and derived board |
 | `run_events_since` | `read` | Durable run events after an offset, ascending |
-| `create_workspace_project` | `configure` | Create a Project and its repositories |
+| `create_workspace_project` | `configure` | Register a Project and its repositories — **rows only**: no clone, no bootstrap, no settings row, so the Project stays `bootstrapping` and `apply_run_shape_patch` refuses it until it is bootstrapped |
 | `apply_run_shape_patch` | `configure` | Write the run-shape subset of a Project's settings (§7.1) |
 | `start_feature` | `spend` | Start a Feature run; returns a handle as soon as the executor accepts it |
 | `start_ticket` | `spend` | Start a Ticket's current attempt |
@@ -344,6 +357,16 @@ unreachable from MCP until someone adds it to `RunShapePatch` on purpose**, havi
 decided it is run shape and not a boundary. The decision is the point of it being
 a type.
 
+**"Not a boundary" is judged by where a value ends up, not by what its field is
+for.** `artifact_subdir` looks like a folder name, but it reaches a `git add`
+pathspec run through a shell, so a `configure` client that could set it to
+`x'; …` would have reached command execution outside every fence in AGENTS.md §2.
+Two things hold that line: the pathspec is escaped as one shell word where it is
+built (`resolve_add_exclusions`), and `RunShapePatch::validate` refuses an
+`artifact_subdir` that is not a plain relative path, and any agent, model or
+workflow identifier that could read as a flag or carries whitespace. A field added
+to the patch has to be traced to its sinks, not only judged by its name.
+
 ---
 
 ## 8. What is excluded, and whether permanently
@@ -391,8 +414,12 @@ audience checks depend on a canonical URI that does not move between launches.
 unauthenticated by necessity, since a client cannot ask for credentials without
 learning where to ask. Most installs will never use this surface, so
 an always-on listener would serve those documents to installs that get nothing
-from it. Loopback binding and the `Origin` check reduce the exposure; they
-do not replace the argument for default-off.
+from it. Loopback binding and the `Origin` and `Host` checks reduce the
+exposure; they do not replace the argument for default-off.
+
+A request with no `Origin` is allowed (non-browser clients send none), but its
+`Host` must be a loopback literal, which is what a DNS-rebound page cannot spell.
+A browser-based MCP client on any other origin is therefore refused, by design.
 
 ### Open questions
 

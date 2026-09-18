@@ -1,4 +1,4 @@
-// AC1 (implementation-spec.md §1.1): the MCP listener only binds when
+// The MCP listener only binds when
 // `mcp_server_enabled` is on, and the live toggle (`set_enabled`) can
 // start/stop it within one process.
 //

@@ -1,7 +1,7 @@
 // Tests extracted from `src/adapters/mcp/mcp_handler.rs` (mirrored-tests
 // convention). `super` = `adapters::mcp::mcp_handler`.
 //
-// implementation-spec.md §5's drift guard: `docs/mcp-skill/SKILL.md`'s
+// Drift guard: `docs/mcp-skill/SKILL.md`'s
 // routing table must name every tool `tool_catalog()` serves. Reads the
 // catalog's live name list rather than a hand-copied literal, so an added,
 // renamed, or removed tool fails this test instead of rotting the skill
@@ -66,7 +66,7 @@ fn every_catalog_tool_name_appears_in_the_skill() {
     }
 }
 
-/// Critic review Major #1: the "Spend vs. read" section once claimed every
+/// The "Spend vs. read" section once claimed every
 /// tool but `start_feature`/`start_ticket` "changes nothing," which is false
 /// for `create_workspace_project` and `apply_run_shape_patch` — both are free
 /// of charge but persist a real write. Guards against that overclaim
@@ -118,4 +118,41 @@ fn spend_vs_read_does_not_overclaim_free_reads() {
          with explicit side-effect language (expected the phrase \"real, \
          persisted write\")"
     );
+}
+
+/// `required_scope` (domain) and `dispatch` (adapter) are two tables over the
+/// same names. A tool in the first without an arm in the second used to
+/// panic; it now fails, and this is what catches the drift before a client does.
+/// Every name is called with `{}`, which no write tool accepts, so nothing runs.
+#[tokio::test]
+async fn every_scoped_tool_has_a_dispatch_arm() {
+    use std::sync::Arc;
+    let dir = std::env::temp_dir().join(format!(
+        "demeteo-mcp-dispatch-arms-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is after the epoch")
+            .as_nanos()
+    ));
+    let ctx = crate::composition::build_core_context(
+        crate::composition::CoreConfig {
+            app_data_dir: dir,
+            execution_mode: crate::composition::ExecutionMode::LocalOnly,
+        },
+        Arc::new(crate::adapters::notification_noop::NoopNotificationAdapter),
+        tokio::runtime::Handle::current(),
+    );
+
+    for name in catalog_tool_names() {
+        assert!(
+            crate::domain::oauth::tools::required_scope(&name).is_some(),
+            "{name} is in the catalog but has no required scope"
+        );
+        if let Err(DispatchError::Failed(message)) = dispatch(&ctx, &name, json!({})).await {
+            assert!(
+                !message.contains("no dispatch arm"),
+                "{name} has a required scope but dispatch has no arm for it"
+            );
+        }
+    }
 }

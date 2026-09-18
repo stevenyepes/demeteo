@@ -19,9 +19,17 @@ pub struct McpGrantSummary {
     pub issued_at: i64,
     pub expires_at: i64,
     pub revoked: bool,
+    /// The listener is bound to a different address than the one this grant
+    /// was issued for, so every request under it is rejected until the client
+    /// re-authorizes. `false` while no listener is running: nothing to
+    /// contradict.
+    pub audience_mismatch: bool,
 }
 
-fn grant_summary((client, grant): (OAuthClient, GrantRecord)) -> McpGrantSummary {
+fn grant_summary(
+    (client, grant): (OAuthClient, GrantRecord),
+    canonical_uri: Option<&str>,
+) -> McpGrantSummary {
     McpGrantSummary {
         id: grant.id.as_str().to_string(),
         client_name: client.client_name,
@@ -29,16 +37,18 @@ fn grant_summary((client, grant): (OAuthClient, GrantRecord)) -> McpGrantSummary
         issued_at: grant.issued_at,
         expires_at: grant.expires_at,
         revoked: grant.revoked_at.is_some(),
+        audience_mismatch: canonical_uri.is_some_and(|uri| uri != grant.resource),
     }
 }
 
 #[tauri::command]
 pub fn list_mcp_grants(ctx: State<'_, AppContext>) -> Result<Vec<McpGrantSummary>, AppError> {
+    let canonical_uri = crate::adapters::mcp::canonical_uri();
     Ok(ctx
         .oauth_grants
         .list_active_grants()?
         .into_iter()
-        .map(grant_summary)
+        .map(|pair| grant_summary(pair, canonical_uri.as_deref()))
         .collect())
 }
 
@@ -58,8 +68,14 @@ pub fn mcp_consent_decide(
     } else {
         ConsentDecision::Denied
     };
-    ctx.mcp_consent.deliver(&request_id, decision);
-    Ok(())
+    if ctx.mcp_consent.deliver(&request_id, decision) {
+        Ok(())
+    } else {
+        Err(AppError::not_found(
+            "This access request is no longer pending — it timed out or the client gave up. \
+             Nothing was granted.",
+        ))
+    }
 }
 
 #[cfg(test)]

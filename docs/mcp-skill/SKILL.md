@@ -38,7 +38,7 @@ Twelve tools, each answering one kind of question:
 | `list_pending_gates` | "What's waiting for a human decision?" — omit `project_id` for a workspace-wide answer |
 | `get_discovery_board` | "What's the state of this Discovery's tickets?" |
 | `run_events_since` | "What's happened on this Feature's run since I last checked?" |
-| `create_workspace_project` | "Register a new project (and its repos) in this workspace." |
+| `create_workspace_project` | "Register a new project (and its repos) in this workspace." — rows only: nothing is cloned or bootstrapped, so `apply_run_shape_patch` refuses the project until the app bootstraps it |
 | `apply_run_shape_patch` | "Change a project's default agent/model/effort/workflow/artifact settings." |
 | `start_feature` | "Kick off a new Feature run." — spends money, see below |
 | `start_ticket` | "Kick off a Ticket's current attempt." — spends money, see below |
@@ -86,10 +86,11 @@ means the same failure keeps recurring — stop retrying and go read the code or
 the plan, retrying again won't help. A non-repeating (or unknown) fingerprint
 points more toward a flaky environment or a transient condition.
 
-Paging the full log — `list_step_attempts` to enumerate attempts, then reading
-each attempt's log tail — is the fallback, used only when the verdict doesn't
-resolve the question. It is never the first move; it costs more round trips
-and more context for a question the verdict usually already answers.
+When the verdict doesn't resolve the question, `list_step_attempts` gives the
+attempt-by-attempt history and `get_feature` the step's `error_message`. No tool
+returns a raw log, so the verdict is the deepest failure detail this surface
+offers. Reach for the history only after the verdict, since it costs more round
+trips and more context for a question the verdict usually already answers.
 
 ## Handle/cursor semantics
 

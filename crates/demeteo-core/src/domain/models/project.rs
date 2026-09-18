@@ -250,6 +250,59 @@ pub struct RunShapePatch {
     pub sync_resolver_effort: Option<EffortLevel>,
 }
 
+/// Why a [`RunShapePatch`] was refused before it reached storage.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RunShapePatchError {
+    #[error(
+        "artifact_subdir must be a relative path of letters, digits, spaces and `_-./`, \
+         with no `.` or `..` segments"
+    )]
+    ArtifactSubdir,
+    #[error("{0} must not start with `-` or contain whitespace or control characters")]
+    Identifier(&'static str),
+}
+
+impl RunShapePatch {
+    /// A typed patch is only as safe as its field types, and these are all
+    /// `String`. `artifact_subdir` ends up inside a `git add` pathspec and an
+    /// artifact-scope path; the agent/model/workflow fields end up as argv
+    /// values of a spawned harness and as lookup keys. None of them is a shell
+    /// sink today (the sink escapes — see `resolve_add_exclusions`), so this is
+    /// the second fence, not the first: an external caller gets a refusal
+    /// instead of a value that later runs are left to survive.
+    pub fn validate(&self) -> Result<(), RunShapePatchError> {
+        let subdir =
+            crate::domain::staged_deliverable::normalize_artifact_subdir(&self.artifact_subdir);
+        let subdir_ok = subdir.is_empty()
+            || (!subdir.starts_with('/')
+                && subdir.chars().all(|c| {
+                    c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-' | '.' | '/')
+                })
+                && subdir
+                    .split('/')
+                    .all(|seg| !seg.is_empty() && seg != "." && seg != ".."));
+        if !subdir_ok {
+            return Err(RunShapePatchError::ArtifactSubdir);
+        }
+
+        let identifiers = [
+            ("default_agent_kind", &self.default_agent_kind),
+            ("default_model", &self.default_model),
+            ("default_workflow_id", &self.default_workflow_id),
+            ("sync_resolver_agent_kind", &self.sync_resolver_agent_kind),
+            ("sync_resolver_model", &self.sync_resolver_model),
+        ];
+        for (field, value) in identifiers {
+            if let Some(v) = value {
+                if v.starts_with('-') || v.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                    return Err(RunShapePatchError::Identifier(field));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Copies `patch`'s nine fields onto `settings`, returning every other
 /// field unchanged. See [`RunShapePatch`] for which fields those are and why.
 pub fn apply_run_shape_patch(

@@ -40,13 +40,23 @@ fn grant(id: &str, client_id: &str) -> GrantRecord {
 
 #[test]
 fn grant_summary_maps_client_and_grant_fields() {
-    let summary = grant_summary((client("c-1"), grant("g-1", "c-1")));
+    let summary = grant_summary((client("c-1"), grant("g-1", "c-1")), None);
     assert_eq!(summary.id, "g-1");
     assert_eq!(summary.client_name, "claude-desktop");
     assert_eq!(summary.scopes, vec![Scope::Read, Scope::Spend]);
     assert_eq!(summary.issued_at, 1_000);
     assert_eq!(summary.expires_at, 9_999_999_999_999);
     assert!(!summary.revoked);
+    assert!(!summary.audience_mismatch);
+}
+
+#[test]
+fn a_grant_for_another_address_is_flagged_only_while_a_listener_is_bound() {
+    let pair = || (client("c-1"), grant("g-1", "c-1"));
+
+    assert!(!grant_summary(pair(), None).audience_mismatch);
+    assert!(!grant_summary(pair(), Some("https://demeteo.local:9631/mcp")).audience_mismatch);
+    assert!(grant_summary(pair(), Some("http://127.0.0.1:9000")).audience_mismatch);
 }
 
 #[test]
@@ -62,7 +72,7 @@ fn revoke_mcp_grant_flips_revoked_at_and_list_mcp_grants_excludes_it_afterward()
         .list_active_grants()
         .unwrap()
         .into_iter()
-        .map(grant_summary)
+        .map(|pair| grant_summary(pair, None))
         .collect();
     assert_eq!(before.len(), 1);
     assert_eq!(before[0].id, "g-1");
@@ -75,7 +85,7 @@ fn revoke_mcp_grant_flips_revoked_at_and_list_mcp_grants_excludes_it_afterward()
         .list_active_grants()
         .unwrap()
         .into_iter()
-        .map(grant_summary)
+        .map(|pair| grant_summary(pair, None))
         .collect();
     assert!(
         after.is_empty(),

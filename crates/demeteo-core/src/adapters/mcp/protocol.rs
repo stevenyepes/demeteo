@@ -6,7 +6,7 @@
 //! whole router, so `.well-known/*` is untouched — and strictly ahead of
 //! [`super::mcp_handler`]'s scope resolution and `guard::check`: a request
 //! that fails a check here never reaches dispatch
-//! (implementation-spec.md §6).
+//! (`docs/MCP_INTEGRATION.md` §4).
 //!
 //! This revision is stateless by design: neither this module nor
 //! `mcp_handler` reads or acts on `Mcp-Session-Id` or `Last-Event-ID`.
@@ -16,8 +16,8 @@
 //! generic "method not found".
 //!
 //! `server/discover`'s exact response shape has no authoritative source in
-//! this repo (implementation-spec.md §7 Open Question 1: no vendored
-//! `2026-07-28` spec text exists here) — the shape below is a best-effort,
+//! this repo (no vendored `2026-07-28` spec text exists here; see
+//! `docs/MCP_INTEGRATION.md` §4) — the shape below is a best-effort,
 //! internally-consistent placeholder, not a verified spec contract.
 
 use axum::body::Body;
@@ -37,8 +37,7 @@ pub const ERR_UNSUPPORTED_PROTOCOL_VERSION: i64 = -32022;
 /// [`super::mcp_handler`]'s `Json` extractor, so it must carry this same cap
 /// itself — passing `usize::MAX` here would silently remove the only limit
 /// this route ever had, since the extractor downstream never gets to enforce
-/// its own (critic review, Critical Issue #1: a pre-auth memory-exhaustion
-/// regression).
+/// its own — that would be a pre-auth memory-exhaustion hole.
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 const HEADER_PROTOCOL_VERSION: &str = "mcp-protocol-version";
@@ -71,7 +70,7 @@ fn header_mismatch_response(id: Value) -> Response {
 /// this unconditionally). HTTP `200`, matching how `-32601`/`-32602` already
 /// pair with `200` elsewhere in this file's sibling `mcp_handler.rs` — the
 /// error lives in the JSON-RPC envelope, not the HTTP status
-/// (implementation-spec.md §7 Open Question 4).
+/// (`docs/MCP_INTEGRATION.md` §4).
 pub(super) fn unsupported_version_response(id: Value) -> Response {
     Json(json_rpc_error(
         id,
@@ -120,7 +119,7 @@ fn header_body_mismatch(headers: &axum::http::HeaderMap, body: &Value) -> bool {
 }
 
 /// The `/mcp`-scoped `.route_layer(...)` middleware
-/// (implementation-spec.md §3/§6): buffers the body to compare it against
+/// (`docs/MCP_INTEGRATION.md` §4): buffers the body to compare it against
 /// `Mcp-Method`/`Mcp-Name`, then restores it unchanged so
 /// [`super::mcp_handler::handle`]'s own `Json` extractor still sees the
 /// original bytes. A body that isn't valid JSON is left for that extractor

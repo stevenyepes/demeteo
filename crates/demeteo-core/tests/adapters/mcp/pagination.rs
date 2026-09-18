@@ -1,7 +1,7 @@
 // Tests extracted from `src/adapters/mcp/mcp_handler.rs` (mirrored-tests
 // convention). `super` = `adapters::mcp::mcp_handler`.
 //
-// AC5 (implementation-spec.md): each of the six list-shaped tools accepts
+// Each of the six list-shaped tools accepts
 // `limit`/`cursor` and wraps its result in `{items, truncated, next_cursor}`
 // (nested under `tickets` for `get_discovery_board`).
 

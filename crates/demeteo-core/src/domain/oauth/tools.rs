@@ -8,7 +8,7 @@
 
 use super::Scope;
 
-/// The literal 12-row table from implementation-spec.md §4.
+/// The literal 12-row table from `docs/MCP_INTEGRATION.md` §7.
 pub fn required_scope(tool_name: &str) -> Option<Scope> {
     match tool_name {
         "list_projects"

@@ -87,6 +87,48 @@ impl OAuthClientRepository for SqliteAdapter {
         Ok(())
     }
 
+    fn register_client_bounded(
+        &self,
+        client: OAuthClient,
+        max_clients: usize,
+        prune_before_ms: i64,
+    ) -> Result<bool, AppError> {
+        let redirect_uris = encode_redirect_uris(&client.redirect_uris)?;
+        let mut conn = self.conn.lock()?;
+        let tx = conn.transaction().map_err(DbError::Sqlite)?;
+        let count = |tx: &rusqlite::Transaction| -> Result<usize, DbError> {
+            let n: i64 = tx
+                .query_row("SELECT COUNT(*) FROM oauth_clients", [], |r| r.get(0))
+                .map_err(DbError::Sqlite)?;
+            Ok(usize::try_from(n).unwrap_or(usize::MAX))
+        };
+        if count(&tx)? >= max_clients {
+            tx.execute(
+                "DELETE FROM oauth_clients
+                 WHERE created_at < ?1
+                   AND id NOT IN (SELECT client_id FROM oauth_grants)",
+                params![prune_before_ms],
+            )
+            .map_err(DbError::Sqlite)?;
+            if count(&tx)? >= max_clients {
+                return Ok(false);
+            }
+        }
+        tx.execute(
+            "INSERT INTO oauth_clients (id, client_name, redirect_uris, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                client.id,
+                client.client_name,
+                redirect_uris,
+                client.created_at,
+            ],
+        )
+        .map_err(DbError::Sqlite)?;
+        tx.commit().map_err(DbError::Sqlite)?;
+        Ok(true)
+    }
+
     fn get_client(&self, id: &ClientId) -> Result<Option<OAuthClient>, AppError> {
         let conn = self.conn.lock()?;
         conn.query_row(

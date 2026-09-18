@@ -12,7 +12,7 @@
 //! Binds `127.0.0.1` only, on a fixed, app-setting-configurable port
 //! (`mcp_server_port`, default `8765`) rather than an OS-assigned ephemeral
 //! one, so an already-configured MCP client's callback/audience URL doesn't
-//! change across launches (implementation-spec.md §7 Open Question 5). A
+//! change across launches (`docs/MCP_INTEGRATION.md` §9). A
 //! bind failure disables the MCP surface for the run instead of retrying on
 //! a different port: a silently-different port would break the
 //! canonical-URI-stability property token audience checks rely on.

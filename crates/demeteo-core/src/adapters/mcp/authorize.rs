@@ -1,7 +1,7 @@
 //! `GET /authorize` — the PKCE-gated, human-consent-gated authorization
 //! request.
 //!
-//! implementation-spec.md §6 requires PKCE to be validated before any
+//! `docs/MCP_INTEGRATION.md` §5 requires PKCE to be validated before any
 //! consent UI is shown or grant is created, and AC3 requires that ordering
 //! to hold even under rejection: this handler checks PKCE first and returns
 //! before touching `ctx.oauth_clients` or `ctx.notif` at all when it fails,
@@ -10,13 +10,19 @@
 //! a PKCE failure wouldn't already have.
 //!
 //! `resource` (RFC 8707) is mandatory and must equal [`canonical_uri`]
-//! exactly — never defaulted or inferred (implementation-spec.md §6).
+//! exactly — never defaulted or inferred (`docs/MCP_INTEGRATION.md` §5).
 //!
 //! A [`PendingAuthorization`] lives only in memory, from the moment
-//! validation passes to the moment `POST /token` (a later ticket) consumes
-//! its single-use code via [`take_pending_authorization`] or its five-minute
-//! lifetime lapses — losing one on restart is cheap to retry, unlike a `Gate`
-//! a driver may already be blocked on.
+//! validation passes to the moment `POST /token` consumes its single-use code
+//! via [`take_pending_authorization`] or its five-minute lifetime lapses —
+//! losing one on restart is cheap to retry, unlike a `Gate` a driver may
+//! already be blocked on.
+//!
+//! Only [`MAX_PENDING_CONSENTS`] requests are parked at once: the consent UI
+//! holds a single prompt, so a second concurrent request would either replace
+//! the first under the user's cursor or wait behind a prompt they cannot see.
+//! `/authorize` is unauthenticated, so the cap also bounds what any local
+//! process can park.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -43,7 +49,13 @@ use super::consent_waiter::ConsentDecision;
 /// How long a parked `/authorize` request waits for a human decision before
 /// resolving as if denied.
 const CONSENT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// Counted from approval, not from the request: a human who takes four and a
+/// half minutes to approve must still hand the client a code that works.
 const AUTHORIZATION_CODE_LIFETIME: Duration = Duration::from_secs(5 * 60);
+
+/// Matches the single prompt slot in `McpConsentView`.
+const MAX_PENDING_CONSENTS: usize = 1;
 
 /// Mounted onto the shared router by [`super::router`]. `pub(super)` — same
 /// visibility as `metadata::routes` and `register::routes`.
@@ -53,6 +65,8 @@ pub(super) fn routes() -> axum::Router<AppContext> {
 
 #[derive(Debug, Deserialize)]
 struct AuthorizeQuery {
+    #[serde(default)]
+    response_type: String,
     #[serde(default)]
     client_id: String,
     #[serde(default)]
@@ -89,12 +103,7 @@ fn pending_codes() -> &'static Mutex<HashMap<String, PendingAuthorization>> {
 }
 
 /// Consume and return the single-use authorization code's pending
-/// authorization, if any — the seam `POST /token` (a later ticket) exchanges
-/// a code through.
-///
-/// `pub`, not `pub(super)`: no caller exists in this crate yet, and an
-/// unused `pub(super)` fn is indistinguishable from dead code to
-/// `-D warnings` clippy — same reasoning as `guard::check`.
+/// authorization, if any — the seam `POST /token` exchanges a code through.
 pub fn take_pending_authorization(code: &str) -> Option<PendingAuthorization> {
     let pending = pending_codes().lock().remove(code)?;
     (!is_expired(&pending)).then_some(pending)
@@ -109,18 +118,30 @@ fn is_expired(pending: &PendingAuthorization) -> bool {
 /// issued access token. Never a predictable source (timestamp, counter): a
 /// guessable code or token lets an attacker complete or hijack someone
 /// else's authorization flow.
-pub(super) fn generate_token() -> String {
+pub(super) fn generate_token() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).expect("OS CSPRNG is unavailable");
-    URL_SAFE_NO_PAD.encode(bytes)
+    getrandom::fill(&mut bytes)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-fn issue_code(pending: PendingAuthorization) -> String {
-    let code = generate_token();
+fn issue_code(pending: PendingAuthorization) -> Result<String, getrandom::Error> {
+    let code = generate_token()?;
+    let pending = PendingAuthorization {
+        issued_at: Instant::now(),
+        ..pending
+    };
     let mut codes = pending_codes().lock();
     codes.retain(|_, pending| !is_expired(pending));
     codes.insert(code.clone(), pending);
-    code
+    Ok(code)
+}
+
+fn server_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": "server_error" })),
+    )
+        .into_response()
 }
 
 /// Shared with `token.rs`: both endpoints report a rejected request the
@@ -190,6 +211,16 @@ async fn authorize(State(ctx): State<AppContext>, Query(q): Query<AuthorizeQuery
         return oauth_bad_request("invalid_request");
     }
 
+    if q.response_type != "code" {
+        return Redirect::to(&authorization_redirect(
+            &q.redirect_uri,
+            "error",
+            "unsupported_response_type",
+            q.state.as_deref(),
+        ))
+        .into_response();
+    }
+
     let Some(scopes) = parse_scopes(&q.scope) else {
         return Redirect::to(&authorization_redirect(
             &q.redirect_uri,
@@ -200,7 +231,9 @@ async fn authorize(State(ctx): State<AppContext>, Query(q): Query<AuthorizeQuery
         .into_response();
     };
 
-    let request_id = generate_token();
+    let Ok(request_id) = generate_token() else {
+        return server_error();
+    };
     let pending = PendingAuthorization {
         request_id: request_id.clone(),
         client_id,
@@ -212,7 +245,15 @@ async fn authorize(State(ctx): State<AppContext>, Query(q): Query<AuthorizeQuery
     };
     let redirect_uri = pending.redirect_uri.clone();
 
-    let notify = ctx.mcp_consent.register(&request_id);
+    let Some(parked) = ctx.mcp_consent.try_park(&request_id, MAX_PENDING_CONSENTS) else {
+        return Redirect::to(&authorization_redirect(
+            &redirect_uri,
+            "error",
+            "temporarily_unavailable",
+            q.state.as_deref(),
+        ))
+        .into_response();
+    };
 
     let _ = ctx.notif.emit(&DomainEvent::McpConsentRequested {
         request_id: request_id.clone(),
@@ -220,15 +261,17 @@ async fn authorize(State(ctx): State<AppContext>, Query(q): Query<AuthorizeQuery
         requested_scopes: scopes,
         resource: q.resource,
         redirect_uri: redirect_uri.clone(),
+        expires_in_ms: CONSENT_TIMEOUT.as_millis() as u64,
     });
     ctx.notif.raise_main_window();
 
-    let _ = tokio::time::timeout(CONSENT_TIMEOUT, notify.notified()).await;
-    let decision = ctx.mcp_consent.take_decision(&request_id);
+    let decision = parked.decision(CONSENT_TIMEOUT).await;
 
     match decision {
         Some(ConsentDecision::Approved) => {
-            let code = issue_code(pending);
+            let Ok(code) = issue_code(pending) else {
+                return server_error();
+            };
             let redirect = authorization_redirect(&redirect_uri, "code", &code, q.state.as_deref());
             Redirect::to(&redirect).into_response()
         }
