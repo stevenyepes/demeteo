@@ -74,3 +74,44 @@ fn unrecognized_enabled_value_defaults_to_disabled() {
 
     assert!(!read_mcp_server_status(&db).enabled);
 }
+
+fn unique_temp_path(label: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "demeteo_mcp_skill_test_{}_{}_{}_{}",
+        nanos,
+        std::process::id(),
+        count,
+        label,
+    ))
+}
+
+#[test]
+fn write_mcp_skill_writes_frontmatter_fenced_markdown() {
+    let dest = unique_temp_path("skill_md");
+
+    write_mcp_skill(&dest).unwrap();
+
+    let written = std::fs::read_to_string(&dest).unwrap();
+    let _ = std::fs::remove_file(&dest);
+    assert!(!written.is_empty());
+    assert!(written.starts_with("---"));
+}
+
+#[test]
+fn write_mcp_skill_errors_on_missing_parent_dir() {
+    let dest = unique_temp_path("missing_parent")
+        .join("nested")
+        .join("skill.md");
+
+    let result = write_mcp_skill(&dest);
+
+    assert!(result.is_err());
+}

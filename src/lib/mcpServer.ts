@@ -14,3 +14,7 @@ export async function getMcpServerStatus(): Promise<McpServerStatus> {
 export async function setMcpServerEnabled(enabled: boolean): Promise<void> {
   return invoke<void>("set_mcp_server_enabled", { enabled });
 }
+
+export async function installMcpSkill(destPath: string): Promise<void> {
+  return invoke<void>("install_mcp_skill", { destPath });
+}

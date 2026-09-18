@@ -6,6 +6,7 @@
 // directly per command, the same idiom as `AddressFindingsLaunch.test.tsx`.
 
 import { invoke } from '@tauri-apps/api/core';
+import { save } from '@tauri-apps/plugin-dialog';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,9 +19,12 @@ vi.mock('../../lib/errorBus', () => ({
 import { McpGrantsTab } from './McpGrantsTab';
 
 const mockedInvoke = vi.mocked(invoke);
+const mockedSave = vi.mocked(save);
 
 afterEach(() => {
   reportError.mockReset();
+  mockedSave.mockReset();
+  mockedSave.mockResolvedValue(null);
 });
 
 function grant(over: Record<string, unknown> = {}) {
@@ -202,6 +206,98 @@ describe('McpGrantsTab MCP server toggle', () => {
     expect(mockedInvoke).toHaveBeenCalledWith('set_mcp_server_enabled', { enabled: true });
     expect(await screen.findByRole('alert')).toHaveTextContent(/enabled, but not listening/i);
     expect(screen.getByRole('status')).toHaveTextContent('Not Listening');
+    await waitFor(() => expect(reportError).toHaveBeenCalled());
+  });
+});
+
+describe('McpGrantsTab install skill', () => {
+  function installBackend(
+    serverStatus: { enabled: boolean; url: string | null },
+    installResult: 'resolve' | 'reject' = 'resolve',
+  ) {
+    mockedInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === 'list_mcp_grants') return [];
+      if (cmd === 'get_mcp_server_status') return serverStatus;
+      if (cmd === 'install_mcp_skill') {
+        if (installResult === 'reject') throw new Error('write failed');
+        return undefined;
+      }
+      throw new Error(`unscripted invoke('${cmd}')`);
+    }) as typeof invoke);
+  }
+
+  it('shows the Install skill button when enabled and listening', async () => {
+    installBackend({ enabled: true, url: 'http://127.0.0.1:8765' });
+
+    render(<McpGrantsTab />);
+
+    expect(await screen.findByRole('button', { name: /install skill/i })).toBeInTheDocument();
+  });
+
+  it('shows destination guidance naming the Claude Code skill path next to the button', async () => {
+    installBackend({ enabled: true, url: 'http://127.0.0.1:8765' });
+
+    render(<McpGrantsTab />);
+    await screen.findByRole('button', { name: /install skill/i });
+
+    expect(screen.getByText(/\.claude\/skills\/demeteo-mcp\/SKILL\.md/)).toBeInTheDocument();
+    expect(screen.getByText(/opencode or\s*hermes/i)).toBeInTheDocument();
+  });
+
+  it('shows the Install skill button when enabled but not listening', async () => {
+    installBackend({ enabled: true, url: null });
+
+    render(<McpGrantsTab />);
+
+    expect(await screen.findByRole('button', { name: /install skill/i })).toBeInTheDocument();
+  });
+
+  it('hides the Install skill button when the server is disabled', async () => {
+    installBackend({ enabled: false, url: null });
+
+    render(<McpGrantsTab />);
+    await screen.findByText('Stopped');
+
+    expect(screen.queryByRole('button', { name: /install skill/i })).not.toBeInTheDocument();
+  });
+
+  it('does nothing when the save dialog is cancelled', async () => {
+    installBackend({ enabled: true, url: 'http://127.0.0.1:8765' });
+    mockedSave.mockResolvedValue(null);
+
+    render(<McpGrantsTab />);
+    const button = await screen.findByRole('button', { name: /install skill/i });
+    await userEvent.click(button);
+
+    await waitFor(() => expect(mockedSave).toHaveBeenCalledWith({ defaultPath: 'SKILL.md' }));
+    expect(mockedInvoke).not.toHaveBeenCalledWith('install_mcp_skill', expect.anything());
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('installs the skill at the chosen destination', async () => {
+    installBackend({ enabled: true, url: 'http://127.0.0.1:8765' });
+    mockedSave.mockResolvedValue('/Users/dev/Desktop/SKILL.md');
+
+    render(<McpGrantsTab />);
+    const button = await screen.findByRole('button', { name: /install skill/i });
+    await userEvent.click(button);
+
+    await waitFor(() =>
+      expect(mockedInvoke).toHaveBeenCalledWith('install_mcp_skill', {
+        destPath: '/Users/dev/Desktop/SKILL.md',
+      }),
+    );
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('reports an error when the write fails', async () => {
+    installBackend({ enabled: true, url: 'http://127.0.0.1:8765' }, 'reject');
+    mockedSave.mockResolvedValue('/Users/dev/Desktop/SKILL.md');
+
+    render(<McpGrantsTab />);
+    const button = await screen.findByRole('button', { name: /install skill/i });
+    await userEvent.click(button);
+
     await waitFor(() => expect(reportError).toHaveBeenCalled());
   });
 });
