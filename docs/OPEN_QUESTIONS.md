@@ -42,7 +42,7 @@ Plus the budget and scheduling machinery that was always part of this: per-proje
 
 **The question:** How does the user *write* a workflow?
 
-**The answer now:** The visual DAG builder (`PRD_DAG_WORKFLOWS.md`) supersedes the form editor entirely, and [decision 42](DECISIONS.md#1-the-42-decisions) ships a **read-only Monaco JSON source tab** in builder Phase 3. See the superseded entry for [decision 19](DECISIONS.md#2-superseded-decisions).
+**The answer now:** The visual DAG builder (`PRD_DAG_WORKFLOWS.md`) supersedes the form editor entirely, and [decision 42](DECISIONS.md#1-the-locked-decisions) ships a **read-only Monaco JSON source tab** in builder Phase 3. See the superseded entry for [decision 19](DECISIONS.md#2-superseded-decisions).
 
 **Still deferred:** the *editable* source view with two-way canvas ↔ source binding, autocompletion against the published JSON Schema, inline validation. Requires a new decision record before it's picked up.
 
@@ -239,3 +239,17 @@ When picking up a deferred item:
 3. When the item ships, mark it as shipped and link to the doc section that describes the implementation.
 
 If a deferred item's premise has changed (e.g., multi-feature concurrency becomes critical because the user base grows fast), promote it to the active plan and re-evaluate the placement.
+
+---
+
+## 19. Must an MCP write name a project listed on the grant?
+
+**The question:** An MCP grant (`read` / `spend` / `configure`) is issued to a client through the consent screen. *Reads* span every Project — that was settled. Must a **write** that names a Project (`start_feature`, `start_ticket`, `apply_run_shape_patch`) name one that is **listed on the grant**, or may a `spend` / `configure` grant write to any Project? Under the assumption, `create_workspace_project` names no existing Project and would need a rule of its own — a grant cannot list a Project that does not exist yet.
+
+**Never settled.** The design conversation covered reads spanning every project and did not decide the write side. The assumption carried in [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) is **writes name a project the grant lists**.
+
+**Not built — nothing enforces the assumption.** `GrantRecord` has no project list, `oauth_grants` (migration V56) has no column for one, the guard and `POST /mcp` dispatch never compare a tool's `project_id` to anything on the grant, and neither `McpConsentView.tsx` nor `McpGrantsTab.tsx` mentions Projects. As built, a `configure` or `spend` grant can write to **any** Project. Treat the assumption as intent, not behaviour.
+
+**Status: unresolved.** Settling it would need a decision record, a grant-schema migration, a consent-screen control and a guard check. Until then, do not describe the surface as project-scoped.
+
+**Why open:** It was assumed rather than decided, so there is no recorded rationale for leaving it unenforced — only the fact that it is. Which way it lands is a user decision, not an implementation detail.

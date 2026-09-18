@@ -1,11 +1,11 @@
 # Demeteo: Locked Decisions Reference
 
-> **Standalone reference for the 44 locked design decisions** that emerged
+> **Standalone reference for the locked design decisions** that emerged
 > from the multi-agent orchestrator design. This is the same
 > table that guides the project. If any conflicts ever arise, this
 > doc should be considered a source of truth; flag the conflict and re-align.
 
-## 1. The 44 Decisions
+## 1. The Locked Decisions
 
 | #  | Decision                           | Locked answer                                                                  | Source           |
 |----|------------------------------------|--------------------------------------------------------------------------------|------------------|
@@ -27,7 +27,7 @@
 | 16 | Repo merge model                   | `feature/<slug>` branch from canonical; subtasks merge into it; optional MR    | Interview Q17    |
 | 17 | PAT scope                          | Per-provider global, keyed by `(kind, host)` for multi-instance support        | Interview Q17a   |
 | 18 | Multi-feature concurrency          | **Concurrent — N features per project.** Features on one project run at the same time, each on its own `feature/<slug>` branch and its own feature-scoped worktree. ⚠️ **Supersedes the original "strict serial (A)" answer** — see [§2](#2-superseded-decisions). | 2026-07-12 (was Interview Q18) |
-| 19 | Workflow authoring UX              | **Visual DAG builder** (`WorkflowCanvas` design mode) replaces the form-first editor; read-only Monaco source tab per [decision 42](#1-the-44-decisions); "save run as template" still v1.2. ⚠️ **Supersedes the form-first (v1.0) / YAML-view (v1.1) answer** — see [§2](#2-superseded-decisions). | 2026-07-23 (was Interview Q19) |
+| 19 | Workflow authoring UX              | **Visual DAG builder** (`WorkflowCanvas` design mode) replaces the form-first editor; read-only Monaco source tab per [decision 42](#1-the-locked-decisions); "save run as template" still v1.2. ⚠️ **Supersedes the form-first (v1.0) / YAML-view (v1.1) answer** — see [§2](#2-superseded-decisions). | 2026-07-23 (was Interview Q19) |
 | 20 | Conflict resolution UX             | **Inline, at the point of conflict — no cascade layer.** A step's task-branch merge that conflicts costs one agent turn in the step's own worktree and session (`steps/conflict_pass`); an upstream-sync conflict is surfaced to the user, who triggers `feature_resolve_sync_conflicts` ("Resolve with agent") from the UI. No dedicated Monaco 3-way component. ⚠️ **Supersedes the original "smart cascade" answer** — the `ConflictResolver` port, its stub adapter, and the `subtask_merges` audit table were deleted as never-called; see [§2](#2-superseded-decisions). | 2026-07-12 (was Interview Q20) |
 | 21 | Project overview                   | Running features (plural) + queue + lazy-loaded repo map. Revised with [decision 18](#2-superseded-decisions): there is no single "current feature" slot, because a project may have several features in flight. | 2026-07-12 (was Interview Q21) |
 | 22 | "Start a feature" entry point      | Slim modal with description + inferred chips; "Customize…" expands              | Interview Q22    |
@@ -53,6 +53,14 @@
 | 42 | Workflow source view               | The DAG builder ships a **read-only Monaco JSON source tab in Phase 3** (fulfilling decision 19's deferred source-view promise in v2 form). Editable source with two-way canvas binding stays deferred — a later decision record is required to add it. Resolves PRD DAG §11 Q5. | PRD DAG §11 (2026-07-23) |
 | 43 | Rework is a decomposition, not a re-run | A verdict failure downstream of a `sequence` step redirects to the step that **produces** its task list, not the step that executes it. That producer, seeing it is in a rework cycle (`domain/rework.rs` — the failing step is a descendant of the consumer), renders its `rework_prompt_template` and emits a **delta**: one ticket per defect the verdict named. The sequence step runs that list whole against the branch the previous cycle already landed, and reports the earlier cycles as `already_landed`. The file-overlap `select_targeted_tasks` heuristic survives only where there is no producer to ask (legacy `parallel` workflows). Corollary: the decomposition step must come **after** the spec step, so a rework redirect cannot rewind the spec and move the acceptance criteria the validator judges against. | 2026-07-28 |
 | 44 | Validate judges a delta, not an absolute | A harness failure is retryable **iff** the harness was proven runnable **and** the failure is *new relative to a measured baseline*; everything else is terminal with remediation. The baseline is an engine **measurement** — exit status plus a normalized failure fingerprint per named harness, taken against the run's base commit — never an agent's reading of its own test run. Persisted as one JSON column, `features.harness_baseline_json` (migration V37). See the detail block below and [docs/HARNESS_BASELINE.md](HARNESS_BASELINE.md). | 2026-07-28 |
+| 45 | MCP transport and seam | Demeteo **serves MCP itself over Streamable HTTP**, in-process; the operation surface lives in `demeteo-core` (`application/agent_surface`) as a **transport-free seam**, so the deferred CLI epic is a second adapter, not a rewrite. **Rejected:** a stdio shim proxying to a local socket — it needs a Windows named-pipe branch no Linux gate compiles; and a standalone headless binary opening the SQLite database directly — two writers, and the DAG driver is not in that process, so it could only enqueue. Detail: [MCP_INTEGRATION.md §3](MCP_INTEGRATION.md#3-transport-and-the-seam). | 2026-09-18 |
+| 46 | MCP protocol revision | **`2026-07-28` only.** **Rejected:** dual-era support — the surface is stateless by design, so the legacy handshake-and-session era would be a path only legacy clients exercised. **Accepted cost:** a legacy-only client fails, with no fall-forward. Detail: [MCP_INTEGRATION.md §4](MCP_INTEGRATION.md#4-protocol-revision). | 2026-09-18 |
+| 47 | MCP authorization | **Demeteo is its own OAuth 2.1 authorization server** (PKCE `S256`, RFC 8707 `resource`, public clients, human consent). **Rejected:** static bearer tokens — sessions were removed from the protocol, which leaves the credential as the only place per-client state can live, and a static token carries none. Detail: [MCP_INTEGRATION.md §5](MCP_INTEGRATION.md#5-authorization). | 2026-09-18 |
+| 48 | MCP scope vocabulary | Three scopes split **by consequence**: `read` (observe) / `spend` (start a run) / `configure` (change how runs are shaped). Flat set — `spend` does not imply `read`. **Rejected:** splitting by resource — a consent dialog has to tell a user what an action *costs*, not what it *touches*. Detail: [MCP_INTEGRATION.md §6](MCP_INTEGRATION.md#6-scopes). | 2026-09-18 |
+| 49 | MCP settings write | The external write is a **typed `RunShapePatch`** — nine run-shape fields, none of them a spend or safety boundary. **Rejected:** whole-`ProjectSettings` writes — `configure` would then transitively grant unbounded `spend` through `default_max_budget_usd` and could disable `sync_review_before_push`. A field added to `ProjectSettings` later is unreachable from MCP until deliberately added to the type. Detail: [MCP_INTEGRATION.md §7.1](MCP_INTEGRATION.md#71-the-settings-write). | 2026-09-18 |
+| 50 | MCP surface exclusions | **Gate approval and worktree merges are excluded permanently — not deferred**; a Gate is the one real-time human-in-the-loop surface ([decision 35](#1-the-locked-decisions)). Ticket creation stays with decomposition. Discovery interviews are out of scope **for this phase only**. `list_pending_gates` and `get_discovery_board` are reads and stay. **Rejected:** exposing any of these. Detail: [MCP_INTEGRATION.md §8](MCP_INTEGRATION.md#8-what-is-excluded-and-whether-permanently). | 2026-09-18 |
+| 51 | `ticket_force_start` is not exposed over MCP | **Rejected:** exposing it — its required `reason` is fed to the started agent as its prerequisite context, so an agent-authored reason would corrupt the run, not merely the audit record. Detail: [MCP_INTEGRATION.md §8](MCP_INTEGRATION.md#ticket_force_start). | 2026-09-18 |
+| 52 | MCP listener default | **Off until enabled in Settings** (`mcp_server_enabled`, default `false`). **Rejected:** always listening — OAuth discovery documents are unauthenticated by necessity, and most installs will never use this. Detail: [MCP_INTEGRATION.md §9](MCP_INTEGRATION.md#9-the-listener-and-what-is-open). | 2026-09-18 |
 
 ### 44 — Harness baseline (detail)
 
@@ -73,7 +81,7 @@ thing being judged would then control the evidence: an agent can report a pass
 through a subset, a `--no-fail-fast`, a misread, or plain optimism. Three
 supporting reasons — the `Verify` capability's write fence is `ArtifactsOnly`, so
 `cargo test`/`npm test` would need the fence widened, which [decision
-35](#1-the-44-decisions) and AGENTS.md §2 forbid; build output streamed into
+35](#1-the-locked-decisions) and AGENTS.md §2 forbid; build output streamed into
 context is the cost `run_harness_first` exists to avoid; and an agent-chosen
 command breaks the attempt-to-attempt comparability that
 `normalize_failure_fingerprint` and `should_triage` depend on. The agent keeps a
@@ -480,5 +488,6 @@ schema v2, and the project-settings dropdown is removed.
 - **Architecture** (hexagon, port surface, file layout, Tauri commands, frontend state): [`ARCHITECTURE.md`](ARCHITECTURE.md)
 - **Open / deferred questions**: [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
 - **Reliability plan**: [`RELIABILITY_PLAN.md`](RELIABILITY_PLAN.md)
+- **MCP integration** (decisions 45–52 in full): [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md)
 - **Agent runtime spec**: [`AGENT_INTEGRATION.md`](../AGENT_INTEGRATION.md)
 - **Known platform issues**: [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md)

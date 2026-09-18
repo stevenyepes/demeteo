@@ -341,9 +341,10 @@ Read the relevant doc before modifying that area.
 |------|----------|
 | Ports, adapters, hexagon, directory layout | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Domain model, ubiquitous language | [docs/DDD_MODEL.md](docs/DDD_MODEL.md) |
-| 43 locked decisions (+ superseded) | [docs/DECISIONS.md](docs/DECISIONS.md) |
+| Locked decisions (+ superseded) | [docs/DECISIONS.md](docs/DECISIONS.md) |
 | Open & deferred questions | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) |
 | Agent CLI integration spec | [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md) |
+| MCP endpoint: transport, OAuth, scopes, tool surface, exclusions | [docs/MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) |
 | Workflow DAG model, registry, canvas | [docs/PRD_DAG_WORKFLOWS.md](docs/PRD_DAG_WORKFLOWS.md) · remaining work in [docs/TASKS_DAG_WORKFLOWS.md](docs/TASKS_DAG_WORKFLOWS.md) |
 | Discovery sessions & dependency-gated tickets | [docs/PRD_DISCOVERY.md](docs/PRD_DISCOVERY.md) · surface in [docs/DISCOVERY_UI_SPEC.md](docs/DISCOVERY_UI_SPEC.md) · implementation notes in [docs/TASKS_DISCOVERY.md](docs/TASKS_DISCOVERY.md) |
 | Local/remote execution parity | [docs/EXECUTION_PARITY.md](docs/EXECUTION_PARITY.md) |
