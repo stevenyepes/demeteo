@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, Plug, RotateCw, Server, ShieldCheck, Trash2 } from 'lucide-react';
+import { save } from '@tauri-apps/plugin-dialog';
+import { AlertTriangle, Download, Plug, RotateCw, Server, ShieldCheck, Trash2 } from 'lucide-react';
 import { listMcpGrants, revokeMcpGrant, type McpGrantSummary } from '../../lib/mcpGrants';
 import {
   getMcpServerStatus,
+  installMcpSkill,
   setMcpServerEnabled,
   type McpServerStatus,
 } from '../../lib/mcpServer';
@@ -35,6 +37,7 @@ export function McpGrantsTab() {
   const [serverUrl, setServerUrl] = useState<string | null>(null);
   const [serverLoading, setServerLoading] = useState(true);
   const [serverSaving, setServerSaving] = useState(false);
+  const [skillSaving, setSkillSaving] = useState(false);
   const serverState = mcpServerState(serverEnabled, serverUrl);
 
   useEffect(() => {
@@ -113,6 +116,19 @@ export function McpGrantsTab() {
     }
   };
 
+  const handleInstallSkill = async () => {
+    const destination = await save({ defaultPath: 'SKILL.md' });
+    if (destination === null) return;
+    setSkillSaving(true);
+    try {
+      await installMcpSkill(destination);
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setSkillSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="glass-panel p-6 rounded-xl space-y-4">
@@ -178,6 +194,31 @@ export function McpGrantsTab() {
             <span className="text-xs text-amber-300">
               Enabled, but not listening — the configured port may already be in use.
             </span>
+          </div>
+        )}
+
+        {serverEnabled && (
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={handleInstallSkill}
+              disabled={skillSaving}
+              title="For Claude Code, save into .claude/skills/demeteo-mcp/ in your project"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-violet-500/10 hover:border-violet-500/30 hover:text-violet-400 text-slate-300 transition-all disabled:opacity-50"
+            >
+              {skillSaving ? (
+                <RotateCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              Install skill
+            </button>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              For Claude Code, save into{' '}
+              <code className="font-mono text-slate-400">.claude/skills/demeteo-mcp/SKILL.md</code>{' '}
+              in your project — check your harness's docs for the equivalent for opencode or
+              hermes.
+            </p>
           </div>
         )}
       </div>

@@ -2,6 +2,11 @@ use crate::ports::db::AppSettingsRepository;
 use crate::state::AppContext;
 use tauri::State;
 
+/// The skill's own markdown, embedded at compile time so "Install skill" has
+/// no runtime dependency on the docs tree being present alongside the built
+/// app.
+const MCP_SKILL_MARKDOWN: &str = include_str!("../../../docs/mcp-skill/SKILL.md");
+
 /// Mirrors `demeteo_core::adapters::mcp::MCP_SERVER_ENABLED_KEY` — private
 /// to that crate and not reachable across the crate boundary, the same
 /// reason `tests/adapters/mcp/gating.rs` mirrors the key constant directly
@@ -60,6 +65,20 @@ pub fn set_mcp_server_enabled(ctx: State<'_, AppContext>, enabled: bool) -> Resu
         enabled,
     );
     Ok(())
+}
+
+/// Command core for [`install_mcp_skill`]: writes the bundled skill markdown
+/// to `dest_path`. The webview cannot write a file itself, so the frontend
+/// resolves `dest_path` via the OS save dialog and this only writes to
+/// wherever the user pointed it — same division as
+/// `ask::ask_export_canvas_to_file`.
+pub fn write_mcp_skill(dest_path: &std::path::Path) -> std::io::Result<()> {
+    std::fs::write(dest_path, MCP_SKILL_MARKDOWN)
+}
+
+#[tauri::command]
+pub fn install_mcp_skill(dest_path: String) -> Result<(), String> {
+    write_mcp_skill(std::path::Path::new(&dest_path)).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

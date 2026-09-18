@@ -588,7 +588,8 @@ pub fn run() {
             commands::oauth::revoke_mcp_grant,
             commands::oauth::mcp_consent_decide,
             commands::mcp_server::get_mcp_server_status,
-            commands::mcp_server::set_mcp_server_enabled
+            commands::mcp_server::set_mcp_server_enabled,
+            commands::mcp_server::install_mcp_skill
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

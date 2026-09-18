@@ -581,3 +581,7 @@ mod revocation_tests;
 #[cfg(test)]
 #[path = "../../../tests/adapters/mcp/pagination.rs"]
 mod pagination_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/adapters/mcp/skill_catalog_parity.rs"]
+mod skill_catalog_parity_tests;
