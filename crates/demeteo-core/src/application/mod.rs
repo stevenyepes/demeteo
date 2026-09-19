@@ -1,4 +1,5 @@
 pub mod agent_probe;
+pub mod agent_surface;
 pub mod agents;
 pub mod ask;
 pub mod attachments;

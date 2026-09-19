@@ -1,0 +1,493 @@
+// Tests extracted from `src/adapters/mcp/authorize.rs` (mirrored-tests
+// convention). `super` = `adapters::mcp::authorize`.
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use crate::adapters::mcp::consent_waiter::ConsentDecision;
+use crate::adapters::mcp::{record_canonical_uri, router};
+use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::ids::ClientId;
+use crate::domain::oauth::{OAuthClient, Scope};
+use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::state::AppContext;
+use crate::support::notification_capture::CapturingNotificationPort;
+
+const CLIENT_REDIRECT_URI: &str = "http://127.0.0.1:9/cb";
+
+/// Same shape as `tests/adapters/mcp/register.rs`'s `fixture()`, wired to a
+/// capturing double instead of the no-op adapter: this file's whole point is
+/// asserting what did — and, more importantly, did not — get emitted.
+fn fixture(tag: &str) -> (AppContext, Arc<CapturingNotificationPort>) {
+    let dir = std::env::temp_dir().join(format!(
+        "demeteo-mcp-authorize-{tag}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is after the epoch")
+            .as_nanos()
+    ));
+    let captured = Arc::new(CapturingNotificationPort::new());
+    let ctx = build_core_context(
+        CoreConfig {
+            app_data_dir: dir,
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        captured.clone() as Arc<dyn NotificationPort>,
+        tokio::runtime::Handle::current(),
+    );
+    (ctx, captured)
+}
+
+async fn spawn_mcp_router(tag: &str) -> (SocketAddr, AppContext, Arc<CapturingNotificationPort>) {
+    let (ctx, captured) = fixture(tag);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind an ephemeral loopback port");
+    let addr = listener
+        .local_addr()
+        .expect("bound listener has a local address");
+
+    let router_ctx = ctx.clone();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router(router_ctx)).await;
+    });
+
+    (addr, ctx, captured)
+}
+
+fn register_test_client(ctx: &AppContext) {
+    ctx.oauth_clients
+        .register_client(OAuthClient {
+            id: ClientId::new("client-authorize"),
+            client_name: "claude-desktop".to_string(),
+            redirect_uris: vec![CLIENT_REDIRECT_URI.to_string()],
+            created_at: crate::paths::now_ms(),
+        })
+        .expect("register test client");
+}
+
+fn authorize_url(addr: SocketAddr, resource: &str, code_challenge: &str, method: &str) -> String {
+    format!(
+        "http://{addr}/authorize?response_type=code&client_id=client-authorize&redirect_uri={CLIENT_REDIRECT_URI}&code_challenge={code_challenge}&code_challenge_method={method}&resource={resource}&scope=read%20spend"
+    )
+}
+
+fn authorize_url_with_scope(addr: SocketAddr, resource: &str, scope: &str) -> String {
+    format!(
+        "http://{addr}/authorize?response_type=code&client_id=client-authorize&redirect_uri={CLIENT_REDIRECT_URI}&code_challenge=a-challenge&code_challenge_method=S256&resource={resource}&scope={scope}"
+    )
+}
+
+/// Waits (bounded) until `captured` has recorded at least one event.
+/// `/authorize`'s success path emits `McpConsentRequested` synchronously
+/// before it ever parks, but reaching that point still crosses a real
+/// loopback TCP round trip, so this polls rather than assuming a single
+/// `yield_now` schedules the whole hop.
+async fn wait_for_event(captured: &CapturingNotificationPort) -> DomainEvent {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(event) = captured.events().into_iter().next() {
+            return event;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for /authorize to emit McpConsentRequested"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn missing_code_challenge_is_rejected_before_any_consent_event() {
+    let (addr, _ctx, captured) = spawn_mcp_router("missing-code-challenge").await;
+
+    let resp = reqwest::Client::new()
+        .get(authorize_url(addr, "http://example.invalid", "", "S256"))
+        .send()
+        .await
+        .expect("request /authorize");
+
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(
+        captured.events().is_empty(),
+        "a PKCE-rejected /authorize request must emit zero DomainEvents, got {:?}",
+        captured.events()
+    );
+}
+
+#[tokio::test]
+async fn non_s256_method_is_rejected_before_any_consent_event() {
+    let (addr, _ctx, captured) = spawn_mcp_router("non-s256-method").await;
+
+    let resp = reqwest::Client::new()
+        .get(authorize_url(
+            addr,
+            "http://example.invalid",
+            "a-challenge",
+            "plain",
+        ))
+        .send()
+        .await
+        .expect("request /authorize");
+
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(
+        captured.events().is_empty(),
+        "a PKCE-rejected /authorize request must emit zero DomainEvents, got {:?}",
+        captured.events()
+    );
+}
+
+#[tokio::test]
+async fn resource_mismatch_is_rejected_with_no_events() {
+    let (addr, ctx, captured) = spawn_mcp_router("resource-mismatch").await;
+    record_canonical_uri(addr);
+    register_test_client(&ctx);
+
+    let resp = reqwest::Client::new()
+        .get(authorize_url(
+            addr,
+            "https://not-this-server.example",
+            "a-challenge",
+            "S256",
+        ))
+        .send()
+        .await
+        .expect("request /authorize");
+
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(captured.events().is_empty());
+}
+
+#[tokio::test]
+async fn unknown_client_id_is_rejected_after_pkce_and_resource_pass() {
+    let (addr, _ctx, captured) = spawn_mcp_router("unknown-client").await;
+    let resource = record_canonical_uri(addr);
+    // Deliberately no client registered — client_id will not resolve.
+
+    let resp = reqwest::Client::new()
+        .get(authorize_url(addr, &resource, "a-challenge", "S256"))
+        .send()
+        .await
+        .expect("request /authorize");
+
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(captured.events().is_empty());
+}
+
+#[tokio::test]
+async fn valid_request_emits_consent_requested_and_raises_the_window_before_parking() {
+    let (addr, ctx, captured) = spawn_mcp_router("valid-request").await;
+    let resource = record_canonical_uri(addr);
+    register_test_client(&ctx);
+
+    tokio::spawn({
+        let url = authorize_url(addr, &resource, "a-challenge", "S256");
+        async move {
+            let _ = reqwest::Client::new().get(url).send().await;
+        }
+    });
+
+    let event = wait_for_event(&captured).await;
+    match event {
+        DomainEvent::McpConsentRequested {
+            client_name,
+            requested_scopes,
+            resource: got_resource,
+            ..
+        } => {
+            assert_eq!(client_name, "claude-desktop");
+            assert_eq!(requested_scopes, vec![Scope::Read, Scope::Spend]);
+            assert_eq!(got_resource, resource);
+        }
+        other => panic!("expected McpConsentRequested, got {other:?}"),
+    }
+    assert!(
+        captured.window_raised(),
+        "a valid /authorize request must raise the main window"
+    );
+}
+
+#[tokio::test]
+async fn approval_redirects_with_a_single_use_code() {
+    let (addr, ctx, captured) = spawn_mcp_router("approval").await;
+    let resource = record_canonical_uri(addr);
+    register_test_client(&ctx);
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("build a non-redirecting client");
+    let request = tokio::spawn({
+        let url = format!(
+            "{}&state=request%20state%2F%3D%26%3F",
+            authorize_url(addr, &resource, "a-challenge", "S256")
+        );
+        let client = client.clone();
+        async move { client.get(url).send().await }
+    });
+
+    let event = wait_for_event(&captured).await;
+    let DomainEvent::McpConsentRequested { request_id, .. } = event else {
+        panic!("expected McpConsentRequested");
+    };
+    ctx.mcp_consent
+        .deliver(&request_id, ConsentDecision::Approved);
+
+    let resp = request
+        .await
+        .expect("request task panicked")
+        .expect("request /authorize");
+    assert_eq!(resp.status(), reqwest::StatusCode::SEE_OTHER);
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .expect("redirect carries a Location header")
+        .to_str()
+        .expect("Location is ASCII");
+    assert!(location.starts_with(CLIENT_REDIRECT_URI));
+    assert!(location.contains("code="));
+    assert!(!location.contains("error="));
+    assert!(location.contains("state=request%20state%2F%3D%26%3F"));
+}
+
+#[tokio::test]
+async fn denial_redirects_with_access_denied() {
+    let (addr, ctx, captured) = spawn_mcp_router("denial").await;
+    let resource = record_canonical_uri(addr);
+    register_test_client(&ctx);
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("build a non-redirecting client");
+    let request = tokio::spawn({
+        let url = format!(
+            "{}&state=request%20state%2F%3D%26%3F",
+            authorize_url(addr, &resource, "a-challenge", "S256")
+        );
+        let client = client.clone();
+        async move { client.get(url).send().await }
+    });
+
+    let event = wait_for_event(&captured).await;
+    let DomainEvent::McpConsentRequested { request_id, .. } = event else {
+        panic!("expected McpConsentRequested");
+    };
+    ctx.mcp_consent
+        .deliver(&request_id, ConsentDecision::Denied);
+
+    let resp = request
+        .await
+        .expect("request task panicked")
+        .expect("request /authorize");
+    assert_eq!(resp.status(), reqwest::StatusCode::SEE_OTHER);
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .expect("redirect carries a Location header")
+        .to_str()
+        .expect("Location is ASCII");
+    assert!(location.contains("error=access_denied"));
+    assert!(location.contains("state=request%20state%2F%3D%26%3F"));
+}
+
+#[tokio::test]
+async fn invalid_scope_redirects_after_the_redirect_uri_is_validated() {
+    let (addr, ctx, _captured) = spawn_mcp_router("invalid-scope").await;
+    let resource = record_canonical_uri(addr);
+    register_test_client(&ctx);
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("build a non-redirecting client");
+    let resp = client
+        .get(format!(
+            "{}&state=correlation%20value",
+            authorize_url_with_scope(addr, &resource, "unknown")
+        ))
+        .send()
+        .await
+        .expect("request /authorize");
+
+    assert_eq!(resp.status(), reqwest::StatusCode::SEE_OTHER);
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .expect("redirect carries a Location header")
+        .to_str()
+        .expect("Location is ASCII");
+    assert_eq!(
+        location,
+        "http://127.0.0.1:9/cb?error=invalid_scope&state=correlation%20value"
+    );
+}
+
+#[test]
+fn expired_authorization_codes_are_not_exchangeable() {
+    let pending = super::PendingAuthorization {
+        request_id: "request".to_string(),
+        client_id: ClientId::new("client"),
+        redirect_uri: CLIENT_REDIRECT_URI.to_string(),
+        code_challenge: "challenge".to_string(),
+        resource: "http://127.0.0.1:8765".to_string(),
+        scopes: vec![Scope::Read],
+        issued_at: Instant::now() - super::AUTHORIZATION_CODE_LIFETIME,
+    };
+
+    let code = super::generate_token().unwrap();
+    super::pending_codes().lock().insert(code.clone(), pending);
+
+    assert!(super::take_pending_authorization(&code).is_none());
+}
+
+/// The lifetime is the client's window to exchange the code, so it starts when
+/// the code is issued. A human who approves with seconds to spare on the
+/// consent timeout must not hand over a code that is already dead.
+#[test]
+fn a_slow_approval_still_yields_a_usable_code() {
+    let request_started =
+        Instant::now() - (super::AUTHORIZATION_CODE_LIFETIME - Duration::from_secs(1));
+    let pending = super::PendingAuthorization {
+        request_id: "request".to_string(),
+        client_id: ClientId::new("client"),
+        redirect_uri: CLIENT_REDIRECT_URI.to_string(),
+        code_challenge: "challenge".to_string(),
+        resource: "http://127.0.0.1:8765".to_string(),
+        scopes: vec![Scope::Read],
+        issued_at: request_started,
+    };
+
+    let code = super::issue_code(pending).unwrap();
+    std::thread::sleep(Duration::from_millis(1100));
+
+    assert!(
+        super::take_pending_authorization(&code).is_some(),
+        "the code's clock must start at approval, not at the request"
+    );
+}
+
+#[tokio::test]
+async fn a_response_type_other_than_code_is_refused_before_any_prompt() {
+    let (addr, ctx, captured) = spawn_mcp_router("response-type").await;
+    let resource = record_canonical_uri(addr);
+    register_test_client(&ctx);
+
+    for url in [
+        authorize_url(addr, &resource, "a-challenge", "S256")
+            .replace("response_type=code", "response_type=token"),
+        authorize_url(addr, &resource, "a-challenge", "S256").replace("response_type=code&", ""),
+    ] {
+        let resp = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .expect("request /authorize");
+        assert_eq!(resp.status(), reqwest::StatusCode::SEE_OTHER);
+        assert!(resp.headers()[reqwest::header::LOCATION]
+            .to_str()
+            .unwrap()
+            .contains("error=unsupported_response_type"));
+    }
+    assert!(captured.events().is_empty());
+}
+
+fn no_redirect_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("build a non-redirecting client")
+}
+
+/// The consent UI holds one prompt. A second `/authorize` while one is parked
+/// must be refused rather than replace it, and must not reach the UI at all.
+#[tokio::test]
+async fn a_second_authorize_while_one_is_parked_is_refused_and_never_prompts() {
+    let (addr, ctx, captured) = spawn_mcp_router("second-authorize").await;
+    let resource = record_canonical_uri(addr);
+    register_test_client(&ctx);
+    let client = no_redirect_client();
+
+    let first = tokio::spawn({
+        let url = authorize_url(addr, &resource, "a-challenge", "S256");
+        let client = client.clone();
+        async move { client.get(url).send().await }
+    });
+    let DomainEvent::McpConsentRequested { request_id, .. } = wait_for_event(&captured).await
+    else {
+        panic!("expected McpConsentRequested");
+    };
+
+    let second = client
+        .get(format!(
+            "{}&state=s2",
+            authorize_url(addr, &resource, "another-challenge", "S256")
+        ))
+        .send()
+        .await
+        .expect("request /authorize");
+    assert_eq!(second.status(), reqwest::StatusCode::SEE_OTHER);
+    let location = second.headers()[reqwest::header::LOCATION]
+        .to_str()
+        .unwrap();
+    assert!(
+        location.contains("error=temporarily_unavailable"),
+        "{location}"
+    );
+    assert_eq!(
+        captured.events().len(),
+        1,
+        "the refused request must not prompt"
+    );
+
+    // The first prompt is untouched and still answerable.
+    assert!(ctx
+        .mcp_consent
+        .deliver(&request_id, ConsentDecision::Denied));
+    let first = first.await.unwrap().unwrap();
+    assert!(first.headers()[reqwest::header::LOCATION]
+        .to_str()
+        .unwrap()
+        .contains("error=access_denied"));
+}
+
+/// A client that disconnects while parked must not keep the slot (or a
+/// deliverable request) alive for the rest of the five minutes.
+#[tokio::test]
+async fn an_abandoned_authorize_frees_its_slot_and_cannot_be_approved() {
+    let (addr, ctx, captured) = spawn_mcp_router("abandoned-authorize").await;
+    let resource = record_canonical_uri(addr);
+    register_test_client(&ctx);
+
+    let first = tokio::spawn({
+        let url = authorize_url(addr, &resource, "a-challenge", "S256");
+        let client = no_redirect_client();
+        async move { client.get(url).send().await }
+    });
+    let DomainEvent::McpConsentRequested { request_id, .. } = wait_for_event(&captured).await
+    else {
+        panic!("expected McpConsentRequested");
+    };
+
+    first.abort();
+    let _ = first.await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while ctx.mcp_consent.try_park("probe", 1).is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the abandoned request still holds the consent slot"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        !ctx.mcp_consent
+            .deliver(&request_id, ConsentDecision::Approved),
+        "approving an abandoned request must report that nothing was waiting"
+    );
+}

@@ -1,0 +1,211 @@
+// Tests extracted from `src/adapters/mcp/mcp_handler.rs` (mirrored-tests
+// convention). `super` = `adapters::mcp::mcp_handler`.
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use sha2::{Digest, Sha256};
+
+use crate::adapters::mcp::{record_canonical_uri, router};
+use crate::adapters::notification_noop::NoopNotificationAdapter;
+use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::ids::{ClientId, GrantId};
+use crate::domain::oauth::{GrantRecord, OAuthClient, Scope};
+use crate::state::AppContext;
+
+/// Same shape as `tests/adapters/mcp/guard.rs`'s `fixture()`.
+fn fixture(tag: &str) -> AppContext {
+    let dir = std::env::temp_dir().join(format!(
+        "demeteo-mcp-handler-{tag}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is after the epoch")
+            .as_nanos()
+    ));
+    build_core_context(
+        CoreConfig {
+            app_data_dir: dir,
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotificationAdapter),
+        tokio::runtime::Handle::current(),
+    )
+}
+
+fn hash_token(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
+}
+
+/// Boots the real `/mcp` router on its own ephemeral loopback listener.
+/// Returns that listener's address alongside the canonical resource URI
+/// every seeded grant in this file must match — see `tests/adapters/mcp/
+/// guard.rs`'s `spawn_guarded_route` for why `canonical_uri()`'s
+/// process-wide `OnceLock` makes this the authoritative value, not
+/// necessarily this listener's own address.
+async fn spawn_mcp_router(tag: &str) -> (SocketAddr, String, AppContext) {
+    let ctx = fixture(tag);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind an ephemeral loopback port");
+    let addr = listener
+        .local_addr()
+        .expect("bound listener has a local address");
+    let resource = record_canonical_uri(addr);
+
+    let app = router(ctx.clone());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    (addr, resource, ctx)
+}
+
+fn seed_grant(
+    ctx: &AppContext,
+    token: &str,
+    scopes: &[Scope],
+    resource: &str,
+    expires_at: i64,
+    revoked_at: Option<i64>,
+) {
+    let client = OAuthClient {
+        id: ClientId::new("client-1"),
+        client_name: "test-client".to_string(),
+        redirect_uris: vec![],
+        created_at: crate::paths::now_ms(),
+    };
+    ctx.oauth_clients
+        .register_client(client.clone())
+        .expect("register test client");
+
+    let grant = GrantRecord {
+        id: GrantId::new("grant-1"),
+        client_id: client.id,
+        scopes: scopes.to_vec(),
+        resource: resource.to_string(),
+        issued_at: crate::paths::now_ms(),
+        expires_at,
+        revoked_at,
+    };
+    ctx.oauth_grants
+        .insert_grant(grant, &hash_token(token))
+        .expect("insert test grant");
+}
+
+async fn call_start_feature(addr: SocketAddr, token: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("http://{addr}/mcp"))
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "start_feature", "arguments": {} },
+        }))
+        .send()
+        .await
+        .expect("request /mcp")
+}
+
+/// `start_ticket` — not `ticket_start` — is the shipped name
+/// (`mcp_handler.rs::dispatch`, `domain/oauth/tools.rs::required_scope`).
+async fn call_start_ticket(addr: SocketAddr, token: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("http://{addr}/mcp"))
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "start_ticket", "arguments": {} },
+        }))
+        .send()
+        .await
+        .expect("request /mcp")
+}
+
+async fn assert_insufficient_scope_challenge(resp: reqwest::Response) {
+    assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
+    let challenge = resp
+        .headers()
+        .get(reqwest::header::WWW_AUTHENTICATE)
+        .expect("403 carries a WWW-Authenticate header")
+        .to_str()
+        .expect("header value is ASCII")
+        .to_string();
+    assert!(challenge.contains(r#"error="insufficient_scope""#));
+    assert!(challenge.contains(r#"scope="spend""#));
+}
+
+#[tokio::test]
+async fn read_only_grant_calling_a_spend_tool_returns_403_insufficient_scope() {
+    let (addr, resource, ctx) = spawn_mcp_router("scope-step-up").await;
+    let token = "token-read-only";
+    seed_grant(
+        &ctx,
+        token,
+        &[Scope::Read],
+        &resource,
+        crate::paths::now_ms() + 3_600_000,
+        None,
+    );
+
+    let resp = call_start_feature(addr, token).await;
+
+    assert_insufficient_scope_challenge(resp).await;
+}
+
+#[tokio::test]
+async fn read_only_grant_calling_start_ticket_returns_403_insufficient_scope() {
+    let (addr, resource, ctx) = spawn_mcp_router("scope-step-up-start-ticket").await;
+    let token = "token-read-only-start-ticket";
+    seed_grant(
+        &ctx,
+        token,
+        &[Scope::Read],
+        &resource,
+        crate::paths::now_ms() + 3_600_000,
+        None,
+    );
+
+    let resp = call_start_ticket(addr, token).await;
+
+    assert_insufficient_scope_challenge(resp).await;
+}
+
+/// AC4's catalog-shape half: no tool exists that would let a caller approve a
+/// gate, merge a worktree, reach the force-start-bypass path recorded via
+/// `TicketNode.force_started`, create a Ticket directly, or mutate Discovery
+/// state. Runs against the catalog's final shape for this feature, after the
+/// pagination and protocol-version tickets have both landed.
+#[test]
+fn tool_catalog_excludes_forbidden_tool_shapes() {
+    let names: Vec<String> = super::tool_catalog()
+        .as_array()
+        .expect("tool_catalog() returns a JSON array")
+        .iter()
+        .map(|tool| {
+            tool["name"]
+                .as_str()
+                .expect("each catalog entry has a string name")
+                .to_string()
+        })
+        .collect();
+
+    for forbidden in ["approve_gate", "merge_worktree", "create_ticket"] {
+        assert!(
+            !names.iter().any(|name| name == forbidden),
+            "tool_catalog() must not expose {forbidden:?}, found in {names:?}"
+        );
+    }
+    assert!(
+        !names.iter().any(|name| name.starts_with("force_start_")),
+        "tool_catalog() must not expose a force_start_*-shaped tool, found in {names:?}"
+    );
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.starts_with("discovery_") && name.ends_with("_mutate")),
+        "tool_catalog() must not expose a discovery_*_mutate-shaped tool, found in {names:?}"
+    );
+}

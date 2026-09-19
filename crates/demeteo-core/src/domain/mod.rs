@@ -55,6 +55,7 @@ pub mod mr_comment;
 pub mod mr_list_error;
 pub mod mr_route;
 pub mod mr_summary;
+pub mod oauth;
 pub mod permission;
 pub mod platform_context;
 pub mod prompt_budget;

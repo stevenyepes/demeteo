@@ -9,6 +9,7 @@ pub mod memory;
 pub mod memory_signals;
 pub mod merge_audit;
 pub mod notification;
+pub mod oauth;
 pub mod project;
 pub mod remote_run_mirror;
 pub mod run_events;

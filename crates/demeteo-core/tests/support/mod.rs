@@ -5,4 +5,5 @@
 //! more than one module, and it is right to — three copies of a fixture are
 //! three types the compiler will not let a helper cross between.
 
+pub mod notification_capture;
 pub mod preflight_strategy;

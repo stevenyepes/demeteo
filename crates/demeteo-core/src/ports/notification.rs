@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::intercept::{ExecutionResult, InterceptPayload};
 use crate::domain::models::EffortLevel;
+use crate::domain::oauth::Scope;
 use crate::domain::sync_session::SyncSessionStatus;
 
 /// The set of events the orchestrator emits to the UI.
@@ -281,6 +282,23 @@ pub enum DomainEvent {
         payload_json: String,
         created_at: i64,
     },
+
+    /// Emitted when an external MCP client hits `GET /authorize` and needs a
+    /// human to approve or deny the grant it is requesting. The handler parks
+    /// the HTTP response on a waiter until the decision resolves (or a
+    /// 5-minute timeout lapses), so this is the only signal the UI gets that
+    /// a request is pending.
+    McpConsentRequested {
+        request_id: String,
+        client_name: String,
+        requested_scopes: Vec<Scope>,
+        resource: String,
+        redirect_uri: String,
+        /// How long the parked request will wait, relative to this event. The
+        /// prompt must not outlive it: past that point the client has already
+        /// been told `access_denied`, and an approval would go nowhere.
+        expires_in_ms: u64,
+    },
 }
 
 /// The single deep interface for orchestrator → UI event emission.
@@ -290,4 +308,50 @@ pub enum DomainEvent {
 /// [`DomainEvent`]; the wire format is unchanged.
 pub trait NotificationPort: Send + Sync {
     fn emit(&self, event: &DomainEvent) -> Result<(), String>;
+
+    /// Bring the main window to the front, e.g. so a human notices a pending
+    /// [`DomainEvent::McpConsentRequested`]. No-op by default: only the
+    /// desktop UI adapter has a window to raise.
+    fn raise_main_window(&self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct RecordingPort;
+
+    impl NotificationPort for RecordingPort {
+        fn emit(&self, _event: &DomainEvent) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// `McpConsentRequested` follows the enum's existing `#[serde(tag =
+    /// "kind", rename_all = "snake_case")]` convention.
+    #[test]
+    fn mcp_consent_requested_serializes_with_snake_case_kind() {
+        let event = DomainEvent::McpConsentRequested {
+            request_id: "req-1".to_string(),
+            client_name: "Claude Desktop".to_string(),
+            requested_scopes: vec![Scope::Read, Scope::Spend],
+            resource: "https://demeteo.local/mcp".to_string(),
+            redirect_uri: "http://127.0.0.1:9/cb".to_string(),
+            expires_in_ms: 300_000,
+        };
+        let value = serde_json::to_value(&event).expect("serializes");
+        assert_eq!(value["kind"], "mcp_consent_requested");
+        assert_eq!(value["request_id"], "req-1");
+        assert_eq!(
+            value["requested_scopes"],
+            serde_json::json!(["read", "spend"])
+        );
+    }
+
+    /// A port that does not override `raise_main_window` gets the no-op
+    /// default rather than a compile error or a panic.
+    #[test]
+    fn raise_main_window_default_is_a_no_op() {
+        RecordingPort.raise_main_window();
+    }
 }

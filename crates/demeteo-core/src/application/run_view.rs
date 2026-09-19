@@ -32,11 +32,14 @@
 
 use std::sync::Arc;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::ids::{FeatureId, StepExecutionId, ThreadId};
 use crate::domain::models::sequence_view::{assemble_tasks, PlannedTaskRef};
-use crate::domain::models::{Feature, Message, SequenceState, StepAttempt, StepExecution};
+use crate::domain::models::{
+    explain_failure, tail_log, FailureVerdict, Feature, LogTail, Message, SequenceState,
+    StepAttempt, StepExecution, LOG_TAIL_BUDGET_BYTES,
+};
 use crate::ports::db::{FeatureRepository, SequenceResumeRepository, ThreadRepository};
 use crate::ports::execution::ExecutionPort;
 use crate::ports::run_events::{RunEvent, RunEventsPort};
@@ -108,6 +111,14 @@ impl PlanRead {
     }
 }
 
+/// [`FailureVerdict`] plus the log evidence backing it, assembled by
+/// [`RunView::explain_step_failure`].
+#[derive(Debug, Clone, Serialize)]
+pub struct FailureExplanation {
+    pub verdict: FailureVerdict,
+    pub log_tail: LogTail,
+}
+
 /// Read model over a run's rendered surface. Cheap to clone (five `Arc`s);
 /// construct one per `AppContext` and share it.
 pub struct RunView {
@@ -160,6 +171,24 @@ impl RunView {
     /// show class/cost/duration/applied-rule for every attempt.
     pub fn step_attempts(&self, id: &StepExecutionId) -> Result<Vec<StepAttempt>, String> {
         self.features.attempts_for_step(id)
+    }
+
+    /// Why a step failed (P2.3's node drill-down), computed from its attempt
+    /// history plus the trailing slice of `StepExecution.error_message` — not
+    /// the persisted agent stream: `StepAttempt` carries no `ThreadId`, and
+    /// `error_message` is already the synchronous field `StepExecution` uses
+    /// to carry "what went wrong" today, so this stays a thin delegation with
+    /// no new port method.
+    pub fn explain_step_failure(&self, id: &StepExecutionId) -> Result<FailureExplanation, String> {
+        let attempts = self.features.attempts_for_step(id)?;
+        let verdict = explain_failure(&attempts);
+        let error_message = self
+            .features
+            .step_get(id)?
+            .and_then(|s| s.error_message)
+            .unwrap_or_default();
+        let log_tail = tail_log(&error_message, LOG_TAIL_BUDGET_BYTES);
+        Ok(FailureExplanation { verdict, log_tail })
     }
 
     /// A `sequence` node's task list, merged for the drill-down accordion

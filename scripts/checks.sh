@@ -145,8 +145,15 @@ fi
 step "Rust format check (cargo fmt --all -- --check)"
 ( cd src-tauri && cargo fmt --all -- --check )
 
-step "Rust clippy (--all-targets -D warnings)"
-( cd src-tauri && cargo clippy --all-targets -- -D warnings )
+# `--workspace` is load-bearing, and matches the `cross-os` job verbatim. Run
+# from src-tauri without it and cargo selects only the `demeteo` package, so
+# demeteo-core's own test targets are linted as a dependency's lib and never as
+# tests -- a lint in crates/demeteo-core/tests/ was green here and failed the
+# PR on both macOS and Windows. demeteo-runner is excluded for the reason
+# pr-checks.yml gives: selecting it unifies `vendored-openssl` into
+# demeteo-core and builds OpenSSL from source.
+step "Rust clippy (--workspace --all-targets -D warnings)"
+( cd src-tauri && cargo clippy --workspace --exclude demeteo-runner --all-targets -- -D warnings )
 
 # Comment rot, in the two forms a machine can see. `cargo doc` resolves every
 # `[`Foo`]` intra-doc link (denied via `[workspace.lints.rustdoc]`), catching a
