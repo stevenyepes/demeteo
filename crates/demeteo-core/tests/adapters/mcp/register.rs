@@ -118,7 +118,7 @@ async fn register_refuses_unbounded_or_unsafe_metadata() {
         let resp = post_register(addr, body.clone()).await;
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST, "{body}");
     }
-    assert_eq!(
+    assert!(
         ctx.oauth_clients
             .register_client_bounded(
                 crate::domain::oauth::OAuthClient {
@@ -131,7 +131,6 @@ async fn register_refuses_unbounded_or_unsafe_metadata() {
                 0,
             )
             .unwrap(),
-        true,
         "none of the refused registrations left a row behind"
     );
 }
