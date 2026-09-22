@@ -13,7 +13,11 @@ use crate::domain::models::StepConfig;
 ///      (e.g. ticket decomposition followed by a spec step); a reviewer who
 ///      names the one they mean should land there even without typing
 ///      nothing else, rather than falling through to a fallback that may
-///      guess the other one.
+///      guess the other one. **Subject to the same producer hop as
+///      priority 3**: naming a `task_list_from` step directly is not an
+///      escape hatch from it — entering that step without its producer
+///      having regenerated the list replays the stale whole decomposition
+///      regardless of how the redirect was addressed.
 ///   2. `on_failure` on the gate's step config.
 ///   3. The nearest preceding step whose effective capability is
 ///      `Implement` — **or, when that step reads its task list from a
@@ -80,23 +84,25 @@ pub(crate) fn resolve_redirect_target(
         }
     };
 
+    let explicit = explicit.map(|idx| rework_producer_for(steps, idx).unwrap_or(idx));
+
     explicit
         .or_else(|| on_failure.and_then(|id| steps.iter().position(|s| s.id == *id)))
         .or_else(|| implement_fallback(gate_step_index as usize))
         .or_else(|| predecessor_fallback(gate_step_index))
 }
 
-/// The index of the step that produces `implementer`'s task list, when that
+/// The index of the step that produces `from_index`'s task list, when that
 /// producer can turn free-text feedback into a delta.
 ///
-/// `None` — meaning "keep targeting the implementer" — for a step with no
+/// `None` — meaning "keep targeting `from_index`" — for a step with no
 /// `task_list_from` binding, a binding naming a step this workflow does not
 /// contain, or a producer that declares no `rework_prompt_template`. That
 /// last one is the opt-in: without a rework template the producer would
 /// answer with a whole fresh decomposition, so redirecting through it would
 /// re-run the entire feature *and* pay for a planning turn to decide to.
-fn rework_producer_for(steps: &[StepConfig], implementer: usize) -> Option<usize> {
-    let source = steps[implementer]
+fn rework_producer_for(steps: &[StepConfig], from_index: usize) -> Option<usize> {
+    let source = steps[from_index]
         .task_list_from
         .as_ref()
         .filter(|s| !s.0.is_empty())?;

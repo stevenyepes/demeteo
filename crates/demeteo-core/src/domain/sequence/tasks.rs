@@ -494,6 +494,40 @@ pub fn is_rework_plan(incoming: &TaskPlan, previous: Option<&TaskPlan>) -> bool 
     !incoming.tasks.iter().any(|t| prior.contains(t.id.trim()))
 }
 
+/// What happens when a rework cycle's freshly-read plan isn't the delta it
+/// should be — the pure sibling of [`is_rework_plan`], which only answers
+/// *is this a delta*. Split out for the same reason [`reject_unexecutable_plan`]
+/// is: the call site is an `async fn` that also does I/O.
+///
+/// `producer_declares_rework_template` is the opt-in gate: a producer that
+/// never wired a `rework_prompt_template` has no way to answer with a delta
+/// in the first place, so a whole re-decomposition there is the accepted,
+/// budgeted-for cost ([`crate::domain::gate::redirect`] applies the same
+/// gate to its own producer hop) — not a defect to send back. `producer`
+/// being `None` (a planner-sourced step) answers the same way: nobody to
+/// fault.
+pub(crate) fn reject_stale_rework_plan(
+    in_rework_cycle: bool,
+    is_delta: bool,
+    producer: Option<&crate::domain::ids::StepId>,
+    producer_declares_rework_template: bool,
+) -> Option<PlanRejection> {
+    if is_delta || !in_rework_cycle || !producer_declares_rework_template {
+        return None;
+    }
+    let producer = producer?;
+    Some(PlanRejection::ProducerMustFix {
+        producer: producer.clone(),
+        reason: format!(
+            "sequence step: this is a rework cycle — a verdict downstream of me sent the run \
+             back, and the previous cycle's implementation is already on the feature branch — \
+             but the task list from '{}' is a whole decomposition, not a delta against it. \
+             Write only the tickets that close the current verdict.",
+            producer.0
+        ),
+    })
+}
+
 /// Drop the tasks a mid-list checkpoint already landed on the feature branch.
 ///
 /// When a task fails partway through the list, the step merges the completed
