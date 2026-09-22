@@ -7,11 +7,21 @@
 //! binds.
 //!
 //! Both of those are free functions over the one input each actually
-//! reads, not methods on [`ExecutionDriver`]. Only [`ExecutionDriver::rework_mode`]
-//! is a method, because only it needs the live graph, step list and retry
-//! context — and it is a four-line forward to the domain function that is
-//! already covered without a single port double.
+//! reads, not methods on [`ExecutionDriver`]. [`ExecutionDriver::rework_mode`]
+//! and [`ExecutionDriver::producer_rework_mode`] are the two exceptions,
+//! because only they need the live graph, step list and retry context — and
+//! each is a few-line forward to the domain function that is already
+//! covered without a single port double. They answer the question from
+//! opposite ends of the same `task_list_from` edge: `rework_mode` is a
+//! producer asking about itself (e.g. `s-tickets` picking its own prompt
+//! template); `producer_rework_mode` is a consumer asking about its
+//! producer (e.g. the `sequence` step deciding whether the list it just
+//! read from `s-tickets` is supposed to be a delta). Calling `rework_mode`
+//! with a consumer's own `step_conf` answers neither question — nothing
+//! consumes a `sequence` step's own task list, so it always reads `None`
+//! and returns [`ReworkMode::Revision`].
 
+use crate::domain::ids::StepId;
 use crate::domain::models::StepConfig;
 use crate::domain::prompt_context::PromptContext;
 use crate::domain::rework::{self, RetryOrigin, ReworkMode};
@@ -24,9 +34,29 @@ impl ExecutionDriver {
     /// branch.
     pub(crate) fn rework_mode(&self, step_conf: &StepConfig) -> ReworkMode {
         let consumer = rework::task_list_consumer(&self.steps, &step_conf.id);
+        self.classify_rework(&step_conf.id, consumer)
+    }
+
+    /// Why `step_conf`'s *producer* is running, from `step_conf`'s own
+    /// point of view as the consumer — the mirror of [`Self::rework_mode`].
+    /// [`ReworkMode::Revision`] for a step with no `task_list_from`,
+    /// matching [`rework::classify`]'s own answer when there is no consumer
+    /// to reason about.
+    pub(crate) fn producer_rework_mode(&self, step_conf: &StepConfig) -> ReworkMode {
+        let Some(producer) = step_conf
+            .task_list_from
+            .as_ref()
+            .filter(|s| !s.0.is_empty())
+        else {
+            return ReworkMode::Revision;
+        };
+        self.classify_rework(producer, Some(&step_conf.id))
+    }
+
+    fn classify_rework(&self, this_node: &StepId, consumer: Option<&StepId>) -> ReworkMode {
         rework::classify(
             &self.graph,
-            &step_conf.id,
+            this_node,
             consumer,
             self.retry_ctx.as_ref().map(|rc| RetryOrigin {
                 failing_step_id: rc.failing_step_id.as_str(),

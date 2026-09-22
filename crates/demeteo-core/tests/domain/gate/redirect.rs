@@ -416,11 +416,34 @@ fn a_dangling_task_list_binding_falls_back_rather_than_dropping_the_redirect() {
 }
 
 #[test]
-fn an_explicitly_named_step_still_beats_the_producer_hop() {
-    // Priority 1 is untouched: a reviewer who names a step means it.
+fn an_explicitly_named_sequence_step_still_hops_to_its_producer() {
+    // Naming the sequence step directly is not exempt from the producer
+    // hop: entering it without its producer having regenerated the list
+    // replays the stale whole decomposition, which is the bug this rule
+    // exists to prevent regardless of how the redirect was addressed.
     let steps = pipeline_with_producer(Some("delta only"));
     let target = resolve_redirect_target(&steps, None, 4, Some("s-implement, just rerun it"));
-    assert_eq!(target, Some(2));
+    assert_eq!(
+        target,
+        Some(1),
+        "expected s-tickets (index 1), the producer"
+    );
+}
+
+#[test]
+fn explicit_naming_of_an_unrelated_step_is_unaffected_by_the_hop() {
+    // A reviewer naming a step with no `task_list_from` binding of its own
+    // (and that isn't itself hopped from) still lands exactly there.
+    let steps = pipeline_with_producer(Some("delta only"));
+    let target = resolve_redirect_target(&steps, None, 4, Some("s-spec needs another pass"));
+    assert_eq!(target, Some(0));
+}
+
+#[test]
+fn explicitly_naming_the_producer_itself_does_not_double_hop() {
+    let steps = pipeline_with_producer(Some("delta only"));
+    let target = resolve_redirect_target(&steps, None, 4, Some("s-tickets got the split wrong"));
+    assert_eq!(target, Some(1));
 }
 
 #[test]

@@ -730,3 +730,53 @@ fn an_executable_list_is_not_rejected_at_all() {
     let producer = crate::domain::ids::StepId::from("s-tickets");
     assert!(reject_unexecutable_plan(&plan_of(&["a", "b"]), Some(&producer)).is_none());
 }
+
+// ---------- reject_stale_rework_plan ----------
+//
+// A different question again: not "is this list executable" but "is this
+// list the delta a rework cycle demands". A producer that opted into
+// `rework_prompt_template` and still hands back a whole decomposition under
+// rework conditions is a defect — it either wasn't actually re-run before
+// this step was re-entered, or ignored its own rework instructions — and
+// the fix always lives with the producer, never with re-running it here.
+
+#[test]
+fn a_stale_whole_plan_under_rework_is_sent_back_to_the_producer() {
+    let producer = crate::domain::ids::StepId::from("s-tickets");
+    match reject_stale_rework_plan(true, false, Some(&producer), true) {
+        Some(PlanRejection::ProducerMustFix { producer, reason }) => {
+            assert_eq!(producer.0, "s-tickets");
+            assert!(reason.contains("delta"), "{reason}");
+        }
+        other => panic!("expected ProducerMustFix, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_healthy_delta_is_not_rejected() {
+    let producer = crate::domain::ids::StepId::from("s-tickets");
+    assert!(reject_stale_rework_plan(true, true, Some(&producer), true).is_none());
+}
+
+#[test]
+fn outside_a_rework_cycle_nothing_is_rejected() {
+    // A gate revision re-reading a fresh, whole list is supposed to look
+    // exactly like this — greenfield, not a delta — and must not be faulted.
+    let producer = crate::domain::ids::StepId::from("s-tickets");
+    assert!(reject_stale_rework_plan(false, false, Some(&producer), true).is_none());
+}
+
+#[test]
+fn a_planner_sourced_step_is_never_faulted() {
+    assert!(reject_stale_rework_plan(true, false, None, false).is_none());
+}
+
+#[test]
+fn a_producer_with_no_rework_template_keeps_the_old_accepted_cost() {
+    // The opt-in gate this shares with the redirect controller's own
+    // producer hop: without a `rework_prompt_template` the producer has no
+    // way to answer with a delta, so a whole re-decomposition here is the
+    // accepted cost, not a defect to send back.
+    let producer = crate::domain::ids::StepId::from("s-tickets");
+    assert!(reject_stale_rework_plan(true, false, Some(&producer), false).is_none());
+}

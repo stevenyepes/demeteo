@@ -17,8 +17,9 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::models::StepExecution;
 use crate::domain::sequence::tasks::{
-    apply_landed_checkpoint, extract_task_plan, is_rework_plan, reject_unexecutable_plan,
-    select_targeted_tasks, task_list_json_shape_example, PlanKind, PlanRejection, TaskPlan,
+    apply_landed_checkpoint, extract_task_plan, is_rework_plan, reject_stale_rework_plan,
+    reject_unexecutable_plan, select_targeted_tasks, task_list_json_shape_example, PlanKind,
+    PlanRejection, TaskPlan,
 };
 
 impl ExecutionDriver {
@@ -200,7 +201,7 @@ impl ExecutionDriver {
         // back — because that is the only way a producer could have written
         // one. A gate revision reaching here re-reads a *greenfield* list
         // and must keep being treated as one, however its ids compare.
-        let in_rework_cycle = self.rework_mode(step_conf).is_rework();
+        let in_rework_cycle = self.producer_rework_mode(step_conf).is_rework();
 
         // Nothing to run. Two very different situations wear the same shape,
         // and they must not end the same way — so this is decided here,
@@ -244,22 +245,50 @@ impl ExecutionDriver {
                 "sequence step: rework cycle — running the producer's delta"
             );
         } else if !planner_sourced && in_rework_cycle {
-            // A rework cycle whose producer handed back a whole list
-            // anyway: it declared no `rework_prompt_template`, or the agent
-            // ignored it. Running it is correct — every task re-runs over
-            // its own committed output, which is what happened before this
-            // change existed — but it is the expensive shape, so it says so
-            // rather than looking like a healthy delta in the log.
+            let producer_id = step_conf
+                .task_list_from
+                .as_ref()
+                .filter(|s| !s.0.is_empty());
+            let producer_declares_rework_template = producer_id
+                .and_then(|id| self.steps.iter().find(|s| s.id == *id))
+                .is_some_and(|p| {
+                    p.rework_prompt_template
+                        .as_deref()
+                        .is_some_and(|t| !t.trim().is_empty())
+                });
+
+            // A producer that never wired a `rework_prompt_template` has no
+            // way to answer with a delta — that's the accepted, budgeted
+            // cost this workflow opted into (same gate as the redirect
+            // controller's own producer hop), so it only gets a visibility
+            // warning. A producer that *did* opt in but still handed back a
+            // whole decomposition is a defect: either it was never actually
+            // re-run before this step was re-entered, or it ignored its own
+            // rework instructions — either way, `reject_stale_rework_plan`
+            // sends it back rather than silently re-running every task over
+            // work that is already committed.
+            if let Some(rejection) = reject_stale_rework_plan(
+                in_rework_cycle,
+                is_delta,
+                producer_id,
+                producer_declares_rework_template,
+            ) {
+                return Err(match rejection {
+                    PlanRejection::ProducerMustFix { producer, reason } => {
+                        StepOutcome::ProducerFault { producer, reason }
+                    }
+                    PlanRejection::Terminal { reason } => StepOutcome::NonRetryable(reason),
+                });
+            }
+
             tracing::warn!(
                 feature_id = %self.f_id,
                 step_id = %step_exec.step_id.0,
                 tasks = plan.tasks.len(),
-                producer = %step_conf
-                    .task_list_from
-                    .as_ref()
-                    .map(|s| s.0.as_str())
-                    .unwrap_or_default(),
-                "sequence step: rework cycle, but the task list is a whole decomposition, not a                  delta — every task will re-run over work already on the branch. The producer                  likely declares no `rework_prompt_template`."
+                producer = %producer_id.map(|s| s.0.as_str()).unwrap_or_default(),
+                "sequence step: rework cycle, but the task list is a whole decomposition, not a \
+                 delta — every task will re-run over work already on the branch. The producer \
+                 declares no `rework_prompt_template`."
             );
         }
 
