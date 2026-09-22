@@ -189,13 +189,22 @@ fn bind_loopback(port: u16) -> std::io::Result<tokio::net::TcpListener> {
 /// canonical-URI-stability property token audience checks rely on.
 fn bind_listener(ctx: AppContext, runtime: &tokio::runtime::Handle) -> Option<RunningListener> {
     let port = resolve_port(&ctx);
-    let listener = match bind_loopback(port) {
-        Ok(listener) => listener,
-        Err(e) => {
-            eprintln!(
-                "[Mcp] failed to bind 127.0.0.1:{port}: {e} — MCP surface disabled for this run"
-            );
-            return None;
+    // `bind_loopback` promotes a std socket via `TcpListener::from_std`,
+    // which registers with the tokio reactor and panics without a thread-
+    // local runtime context — `runtime.spawn` below needs no such guard, but
+    // this synchronous conversion does. Both callers (`start_if_enabled` from
+    // Tauri's `.setup()`, `set_enabled` from the command handler thread) run
+    // outside any entered runtime, so this must enter one explicitly.
+    let listener = {
+        let _guard = runtime.enter();
+        match bind_loopback(port) {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!(
+                    "[Mcp] failed to bind 127.0.0.1:{port}: {e} — MCP surface disabled for this run"
+                );
+                return None;
+            }
         }
     };
     let addr: SocketAddr = match listener.local_addr() {

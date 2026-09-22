@@ -75,3 +75,9 @@ workspace = true
 [[test]]
 name = "mcp_gating"
 path = "tests/adapters/mcp/gating.rs"
+
+# Same private-process rationale as `mcp_gating` above: this one also binds
+# a real listener on the `adapters::mcp::LISTENER` static.
+[[test]]
+name = "mcp_bind_off_runtime_thread"
+path = "tests/adapters/mcp/bind_off_runtime_thread.rs"
