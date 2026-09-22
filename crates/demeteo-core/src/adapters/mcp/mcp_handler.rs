@@ -137,12 +137,13 @@ async fn handle(
         "tools/list" => success(req.id, json!({ "tools": tool_catalog() })),
         "tools/call" => handle_tools_call(&ctx, &headers, req.id, req.params).await,
         "server/discover" => protocol::discover(req.id),
-        // No real handshake, sessions, or capability negotiation — this
-        // revision is stateless. The arm exists only so a legacy client
-        // gets a correctly-named diagnostic naming the versions this server
-        // understands, rather than a generic "method not found" (this may
-        // be the only diagnostic such a client ever surfaces to a user).
-        "initialize" => protocol::unsupported_version_response(req.id),
+        // No session or persisted capability negotiation — this revision is
+        // stateless. A real client always opens with `initialize` regardless
+        // of revision, so it is answered for real: the `protocolVersion` the
+        // client itself declared is echoed back (Demeteo's tool surface
+        // doesn't vary by revision), and the client's own negotiation logic
+        // is what decides whether to proceed (`docs/MCP_INTEGRATION.md` §4).
+        "initialize" => protocol::initialize_response(req.id, &req.params),
         other => method_not_found(req.id, other),
     }
 }

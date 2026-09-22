@@ -54,7 +54,7 @@
 | 43 | Rework is a decomposition, not a re-run | A verdict failure downstream of a `sequence` step redirects to the step that **produces** its task list, not the step that executes it. That producer, seeing it is in a rework cycle (`domain/rework.rs` — the failing step is a descendant of the consumer), renders its `rework_prompt_template` and emits a **delta**: one ticket per defect the verdict named. The sequence step runs that list whole against the branch the previous cycle already landed, and reports the earlier cycles as `already_landed`. The file-overlap `select_targeted_tasks` heuristic survives only where there is no producer to ask (legacy `parallel` workflows). Corollary: the decomposition step must come **after** the spec step, so a rework redirect cannot rewind the spec and move the acceptance criteria the validator judges against. | 2026-07-28 |
 | 44 | Validate judges a delta, not an absolute | A harness failure is retryable **iff** the harness was proven runnable **and** the failure is *new relative to a measured baseline*; everything else is terminal with remediation. The baseline is an engine **measurement** — exit status plus a normalized failure fingerprint per named harness, taken against the run's base commit — never an agent's reading of its own test run. Persisted as one JSON column, `features.harness_baseline_json` (migration V37). See the detail block below and [docs/HARNESS_BASELINE.md](HARNESS_BASELINE.md). | 2026-07-28 |
 | 45 | MCP transport and seam | Demeteo **serves MCP itself over Streamable HTTP**, in-process; the operation surface lives in `demeteo-core` (`application/agent_surface`) as a **transport-free seam**, so the deferred CLI epic is a second adapter, not a rewrite. **Rejected:** a stdio shim proxying to a local socket — it needs a Windows named-pipe branch no Linux gate compiles; and a standalone headless binary opening the SQLite database directly — two writers, and the DAG driver is not in that process, so it could only enqueue. Detail: [MCP_INTEGRATION.md §3](MCP_INTEGRATION.md#3-transport-and-the-seam). | 2026-09-18 |
-| 46 | MCP protocol revision | **`2026-07-28` only.** **Rejected:** dual-era support — the surface is stateless by design, so the legacy handshake-and-session era would be a path only legacy clients exercised. **Accepted cost:** a legacy-only client fails, with no fall-forward. Detail: [MCP_INTEGRATION.md §4](MCP_INTEGRATION.md#4-protocol-revision). | 2026-09-18 |
+| 46 | MCP protocol revision | `server/discover` still names exactly one revision, `2026-07-28`, but `initialize` **negotiates**: it echoes back whatever `protocolVersion` the client itself declares (falling back to `2026-07-28` when absent/malformed), and a declared `MCP-Protocol-Version` header is no longer checked for exact equality on later requests. Superseded 2026-09-22 — see [§2](#2-superseded-decisions). Detail: [MCP_INTEGRATION.md §4](MCP_INTEGRATION.md#4-protocol-revision). | 2026-09-22 |
 | 47 | MCP authorization | **Demeteo is its own OAuth 2.1 authorization server** (PKCE `S256`, RFC 8707 `resource`, public clients, human consent). **Rejected:** static bearer tokens — sessions were removed from the protocol, which leaves the credential as the only place per-client state can live, and a static token carries none. Detail: [MCP_INTEGRATION.md §5](MCP_INTEGRATION.md#5-authorization). | 2026-09-18 |
 | 48 | MCP scope vocabulary | Three scopes split **by consequence**: `read` (observe) / `spend` (start a run) / `configure` (change how runs are shaped). Flat set — `spend` does not imply `read`. **Rejected:** splitting by resource — a consent dialog has to tell a user what an action *costs*, not what it *touches*. Detail: [MCP_INTEGRATION.md §6](MCP_INTEGRATION.md#6-scopes). | 2026-09-18 |
 | 49 | MCP settings write | The external write is a **typed `RunShapePatch`** — nine run-shape fields, none of them a spend or safety boundary. **Rejected:** whole-`ProjectSettings` writes — `configure` would then transitively grant unbounded `spend` through `default_max_budget_usd` and could disable `sync_review_before_push`. A field added to `ProjectSettings` later is unreachable from MCP until deliberately added to the type. Detail: [MCP_INTEGRATION.md §7.1](MCP_INTEGRATION.md#71-the-settings-write). | 2026-09-18 |
@@ -335,6 +335,36 @@ A decision you silently overwrite stops being a decision *record*. When a
 locked answer changes, the row above is updated **and** the original is kept
 here with the reason it moved, so the next reader can tell "we thought hard and
 changed our minds" from "nobody ever considered this".
+
+### 46 — MCP protocol revision
+
+| | |
+|---|---|
+| **Was** | `2026-07-28` only, enforced everywhere: every `initialize` call answered `-32022` unconditionally, and any request declaring a different `MCP-Protocol-Version` header was rejected the same way — rejected on the premise that the target revision is handshake-free, so no real client would ever send `initialize`. |
+| **Now** | `initialize` is answered for real: it echoes back the `protocolVersion` the client declared (falling back to `2026-07-28` when the field is absent or not shaped like a revision), with minimal `capabilities: {"tools": {}}`. The `MCP-Protocol-Version` header is no longer checked for exact equality on any request — Demeteo has nowhere to remember what a prior request negotiated (the transport is genuinely stateless; HTTP requests here aren't guaranteed to share a connection), so pinning every request to one literal string was never enforceable correctly once a client is allowed to negotiate at all. `server/discover` is unchanged — it still names exactly one revision for a client that wants to know before committing. |
+| **Changed** | 2026-09-22 |
+
+**Why it changed.** Live-tested against the installed Claude Code CLI
+(2.1.280) via an isolated `$HOME` and a local proxy inspecting the exchange:
+the client always opens with a standard `initialize` call, regardless of
+revision — the "stateless, handshake-free" premise the original decision
+rested on does not hold for any real, currently-shipping MCP client. With
+`initialize` unconditionally rejected, **no standard MCP client could
+complete a handshake with Demeteo's server at all.** Naming Demeteo's own
+`2026-07-28` back in `initialize` doesn't work either — the client explicitly
+rejects it as a revision it doesn't recognize ("Server's protocol version is
+not supported: 2026-07-28"), confirming `2026-07-28` has no real-world
+adoption (consistent with `MCP_INTEGRATION.md` §4's own disclaimer that no
+`2026-07-28` spec text is vendored here). Echoing the client's own requested
+version back, and dropping the per-request header equality check, produced a
+clean `✔ Connected` against the real CLI with a full `tools/list` round
+trip. This is the standard MCP negotiation contract working as intended: a
+server states a version, and the client's own logic decides whether to
+proceed — which is exactly the diagnostic value the original decision wanted
+"in case of a legacy client," just implemented at the layer the protocol
+already provides for it instead of a preemptive server-side guess. Demeteo's
+twelve-tool surface doesn't vary across recent revisions, so there is nothing
+for the server to gate on in the first place.
 
 ### 19 — Workflow authoring UX
 

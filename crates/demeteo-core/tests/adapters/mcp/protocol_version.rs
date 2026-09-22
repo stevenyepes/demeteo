@@ -87,9 +87,16 @@ async fn mcp_method_header_mismatching_body_returns_400_with_header_mismatch_cod
     assert_eq!(body["error"]["code"], -32020);
 }
 
+// A client's post-handshake requests carry whatever version `initialize`
+// negotiated — which may not be `2026-07-28` (see the two `initialize`
+// tests below). Demeteo cannot remember what a prior request on the same
+// TCP connection negotiated (this transport is genuinely stateless), so a
+// declared `MCP-Protocol-Version` header is no longer checked for exact
+// equality; only its absence-vs-presence ever mattered for the header-body
+// mismatch checks, which this test is not exercising.
 #[tokio::test]
-async fn unsupported_protocol_version_header_returns_unsupported_version_code() {
-    let addr = spawn_protocol_router("unsupported-version").await;
+async fn declared_protocol_version_header_does_not_block_dispatch() {
+    let addr = spawn_protocol_router("declared-version").await;
 
     let resp = reqwest::Client::new()
         .post(format!("http://{addr}/mcp"))
@@ -104,30 +111,22 @@ async fn unsupported_protocol_version_header_returns_unsupported_version_code() 
         .await
         .expect("request /mcp");
 
-    // -32022 pairs with HTTP 200, same convention as -32601/-32602
-    // elsewhere in mcp_handler.rs — the error lives in the JSON-RPC
-    // envelope, not the HTTP status.
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     let body: serde_json::Value = resp.json().await.expect("JSON body");
-    assert_eq!(body["error"]["code"], -32022);
-    assert_eq!(
-        body["error"]["data"]["supported"],
-        serde_json::json!(["2026-07-28"])
-    );
+    assert!(body["result"]["tools"].is_array());
 }
 
 #[tokio::test]
-async fn initialize_under_any_protocol_version_returns_unsupported_version_code() {
-    let addr = spawn_protocol_router("initialize").await;
+async fn initialize_echoes_the_clients_declared_protocol_version() {
+    let addr = spawn_protocol_router("initialize-echo").await;
 
     let resp = reqwest::Client::new()
         .post(format!("http://{addr}/mcp"))
-        .header("MCP-Protocol-Version", "2026-07-28")
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": 7,
             "method": "initialize",
-            "params": {},
+            "params": { "protocolVersion": "2025-11-25" },
         }))
         .send()
         .await
@@ -135,11 +134,49 @@ async fn initialize_under_any_protocol_version_returns_unsupported_version_code(
 
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     let body: serde_json::Value = resp.json().await.expect("JSON body");
-    assert_eq!(body["error"]["code"], -32022);
+    assert_eq!(body["result"]["protocolVersion"], "2025-11-25");
     assert_eq!(
-        body["error"]["data"]["supported"],
-        serde_json::json!(["2026-07-28"])
+        body["result"]["capabilities"]["tools"],
+        serde_json::json!({})
     );
+}
+
+#[tokio::test]
+async fn initialize_falls_back_to_the_supported_version_when_absent_or_malformed() {
+    let addr = spawn_protocol_router("initialize-fallback").await;
+    let client = reqwest::Client::new();
+
+    let absent = client
+        .post(format!("http://{addr}/mcp"))
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {},
+        }))
+        .send()
+        .await
+        .expect("request /mcp")
+        .json::<serde_json::Value>()
+        .await
+        .expect("JSON body");
+    assert_eq!(absent["result"]["protocolVersion"], "2026-07-28");
+
+    let malformed = client
+        .post(format!("http://{addr}/mcp"))
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "initialize",
+            "params": { "protocolVersion": "not-a-version" },
+        }))
+        .send()
+        .await
+        .expect("request /mcp")
+        .json::<serde_json::Value>()
+        .await
+        .expect("JSON body");
+    assert_eq!(malformed["result"]["protocolVersion"], "2026-07-28");
 }
 
 #[tokio::test]
