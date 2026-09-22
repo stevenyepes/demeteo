@@ -41,11 +41,11 @@ fn empty_config_yields_nothing() {
 }
 
 #[test]
-fn fallback_codex_uses_current_gpt_5_6_variants_only() {
+fn fallback_codex_uses_current_gpt_6_variants_only() {
     let models = fallback_models("codex");
     let values: Vec<_> = models.iter().map(|model| model.value.as_str()).collect();
 
-    assert_eq!(values, ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"]);
+    assert_eq!(values, ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
     assert!(models.iter().all(|model| model.supports_images));
 }
 
