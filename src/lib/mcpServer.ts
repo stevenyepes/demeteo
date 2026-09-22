@@ -18,3 +18,13 @@ export async function setMcpServerEnabled(enabled: boolean): Promise<void> {
 export async function installMcpSkill(destPath: string): Promise<void> {
   return invoke<void>("install_mcp_skill", { destPath });
 }
+
+/** Mirrors the Rust `McpConnectionTest` (`commands/mcp_server.rs`) — a
+ *  failed probe is a meaningful answer to render, not a thrown error. */
+export type McpConnectionTest =
+  | { status: "reachable"; tool_count: number }
+  | { status: "unreachable"; reason: string };
+
+export async function testMcpConnection(): Promise<McpConnectionTest> {
+  return invoke<McpConnectionTest>("test_mcp_connection");
+}
