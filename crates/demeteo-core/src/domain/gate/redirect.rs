@@ -3,21 +3,34 @@
 use crate::domain::ids::StepId;
 use crate::domain::models::StepConfig;
 
+/// Free text longer than this reads as a report a reviewer attached, not an
+/// address they typed. Long enough for a real instruction ("redo
+/// s-tickets, the split is missing the delete case and the empty-state
+/// copy"); short enough that a critic report — which routinely runs to
+/// thousands of characters and, while explaining a finding, can quote a
+/// step id belonging to a workflow it is merely *discussing* — never
+/// qualifies the whole-word scan below. Below this bound a reviewer's
+/// deliberate one-liner still wins; above it, a mention is coincidence,
+/// not an address, and priority 1 falls through instead of matching.
+const MAX_ADDRESSED_FEEDBACK_LEN: usize = 300;
+
 /// Resolve the redirect target for a `redirect` gate decision.
 ///
 /// Priority:
 ///   1. Step ID in `feedback` (if it matches one of `steps`) — either the
 ///      whole trimmed feedback, or a whole word within a longer free-text
-///      note (e.g. "redo s-tickets, the split is too coarse"). A pipeline
-///      can have more than one artifact-only predecessor ahead of a gate
-///      (e.g. ticket decomposition followed by a spec step); a reviewer who
-///      names the one they mean should land there even without typing
-///      nothing else, rather than falling through to a fallback that may
-///      guess the other one. **Subject to the same producer hop as
-///      priority 3**: naming a `task_list_from` step directly is not an
-///      escape hatch from it — entering that step without its producer
-///      having regenerated the list replays the stale whole decomposition
-///      regardless of how the redirect was addressed.
+///      note (e.g. "redo s-tickets, the split is too coarse"), **so long as
+///      the feedback is no longer than [`MAX_ADDRESSED_FEEDBACK_LEN`]**. A
+///      pipeline can have more than one artifact-only predecessor ahead of
+///      a gate (e.g. ticket decomposition followed by a spec step); a
+///      reviewer who names the one they mean should land there even
+///      without typing nothing else, rather than falling through to a
+///      fallback that may guess the other one. **Subject to the same
+///      producer hop as priority 3**: naming a `task_list_from` step
+///      directly is not an escape hatch from it — entering that step
+///      without its producer having regenerated the list replays the
+///      stale whole decomposition regardless of how the redirect was
+///      addressed.
 ///   2. `on_failure` on the gate's step config.
 ///   3. The nearest preceding step whose effective capability is
 ///      `Implement` — **or, when that step reads its task list from a
@@ -55,6 +68,9 @@ pub(crate) fn resolve_redirect_target(
         .filter(|s| !s.is_empty())
         .and_then(|cleaned| {
             steps.iter().position(|s| s.id.0 == cleaned).or_else(|| {
+                if cleaned.len() > MAX_ADDRESSED_FEEDBACK_LEN {
+                    return None;
+                }
                 // Whole-word search: a bare substring match would also fire
                 // on "s-tickets2" or a step id that is a prefix of another,
                 // so split on anything that isn't part of a kebab-case id.

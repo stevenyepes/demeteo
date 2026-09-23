@@ -66,6 +66,36 @@ fn step_id_named_within_free_text_feedback_wins() {
 }
 
 #[test]
+fn a_long_report_that_merely_mentions_a_step_id_does_not_match() {
+    // The regression this guards: a critic report can run to thousands of
+    // characters and, while reviewing an *unrelated* workflow file, quote a
+    // step id that also happens to name a step in the running pipeline
+    // (e.g. "Spec Constraint 8 refuses `s-research` on `code-review.json`
+    // on cost grounds"). That's the report discussing a string, not the
+    // reviewer addressing a step — treating it as priority 1 sent a real
+    // feature's ship-gate rejection all the way back to the pipeline's
+    // first step instead of the intended producer hop.
+    let steps = vec![
+        step("s-research"),
+        step("s-tickets"),
+        step("s-spec"),
+        step("s-gate-review"),
+    ];
+    let long_report = format!(
+        "{}`s-research`{}",
+        "# Critic review\n\n".repeat(10),
+        " is mentioned here while discussing a different workflow file entirely, at length, well past the bound that would make this an address rather than a report.",
+    );
+    assert!(long_report.len() > 300);
+    let target = resolve_redirect_target(&steps, None, 3, Some(&long_report));
+    assert_eq!(
+        target,
+        Some(2),
+        "a long report must fall through to the predecessor fallback (s-spec), not match the incidental s-research mention"
+    );
+}
+
+#[test]
 fn step_id_substring_within_a_word_does_not_match() {
     // "s-tickets2" (or any id that merely contains a step id as a
     // substring) must not be mistaken for "s-tickets" — matching is by
