@@ -90,6 +90,19 @@ fn context_window_gpt_family() {
 }
 
 #[test]
+fn context_window_and_price_gpt_6_family() {
+    let t = HardcodedPricingTable::new();
+    // Astra/Sol/Luna price far enough apart that they can't share the `gpt-5`
+    // prefix row's catch-all price — each needs its own exact-match entry.
+    assert_eq!(t.context_window("gpt-6-astra"), Some(1_000_000));
+    assert_eq!(t.context_window("gpt-6-sol"), Some(1_000_000));
+    assert_eq!(t.context_window("gpt-6-luna"), Some(1_000_000));
+    assert_eq!(t.price_for("gpt-6-astra").unwrap().input_per_million, 10.00);
+    assert_eq!(t.price_for("gpt-6-sol").unwrap().input_per_million, 2.00);
+    assert_eq!(t.price_for("gpt-6-luna").unwrap().input_per_million, 0.10);
+}
+
+#[test]
 fn context_window_gemini_family() {
     let t = HardcodedPricingTable::new();
     assert_eq!(t.context_window("gemini-2.5-pro"), Some(200_000));

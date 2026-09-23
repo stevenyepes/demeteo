@@ -320,28 +320,29 @@ pub fn fallback_models(agent_kind: &str) -> Vec<ConfigOptionValue> {
         // --model`. Slugs must match codex's bundled model-metadata registry,
         // or the CLI emits a per-turn "Model metadata for `<slug>` not found.
         // Defaulting to fallback metadata" warning and mis-accounts tokens.
-        // The GPT-5.3/5.2 Codex and GPT-5.4 model ids were retired from that
-        // registry. These GPT-5.6 variants are the current metadata-backed
-        // set. A user pointing Codex at a custom provider (e.g. a MiniMax
-        // endpoint in ~/.codex/config.toml) types their model id in the
-        // custom-override field instead. All GPT-5 Codex models are
+        // GPT-5.3/5.2 Codex, GPT-5.4, and the GPT-5.6 trio (Terra/Sol/Luna)
+        // were all retired from that registry when GPT-6 shipped (Astra on
+        // 2026-09-03, Sol and Luna on 2026-09-22). GPT-6 has no Terra tier.
+        // A user pointing Codex at a custom provider (e.g. a MiniMax endpoint
+        // in ~/.codex/config.toml) types their model id in the
+        // custom-override field instead. All GPT-6 Codex models are
         // vision-capable.
         "codex" => vec![
             ConfigOptionValue {
-                value: "gpt-5.6-terra".into(),
-                name: "GPT-5.6 Terra".into(),
+                value: "gpt-6-astra".into(),
+                name: "GPT-6 Astra".into(),
                 description: None,
                 supports_images: true,
             },
             ConfigOptionValue {
-                value: "gpt-5.6-sol".into(),
-                name: "GPT-5.6 Sol".into(),
+                value: "gpt-6-sol".into(),
+                name: "GPT-6 Sol".into(),
                 description: None,
                 supports_images: true,
             },
             ConfigOptionValue {
-                value: "gpt-5.6-luna".into(),
-                name: "GPT-5.6 Luna".into(),
+                value: "gpt-6-luna".into(),
+                name: "GPT-6 Luna".into(),
                 description: None,
                 supports_images: true,
             },
