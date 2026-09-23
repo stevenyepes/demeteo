@@ -1,14 +1,25 @@
 import { useCallback, useEffect, useState } from 'react';
-import { save } from '@tauri-apps/plugin-dialog';
-import { AlertTriangle, Download, Plug, RotateCw, Server, ShieldCheck, Trash2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  Copy,
+  Plug,
+  Plug2,
+  RotateCw,
+  Server,
+  ShieldCheck,
+  Trash2,
+} from 'lucide-react';
 import { listMcpGrants, revokeMcpGrant, type McpGrantSummary } from '../../lib/mcpGrants';
 import {
   getMcpServerStatus,
-  installMcpSkill,
   setMcpServerEnabled,
+  testMcpConnection,
+  type McpConnectionTest,
   type McpServerStatus,
 } from '../../lib/mcpServer';
 import { reportError } from '../../lib/errorBus';
+import { McpConnectAgentPanel } from './McpConnectAgentPanel';
 
 /** A grant is flagged as expiring rather than merely active once it has less
  *  than this much life left — the 30-day lifetime (`docs/MCP_INTEGRATION.md` §5) makes a same-day expiry worth calling out before
@@ -36,7 +47,9 @@ export function McpGrantsTab() {
   const [serverUrl, setServerUrl] = useState<string | null>(null);
   const [serverLoading, setServerLoading] = useState(true);
   const [serverSaving, setServerSaving] = useState(false);
-  const [skillSaving, setSkillSaving] = useState(false);
+  const [urlCopied, setUrlCopied] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<McpConnectionTest | null>(null);
   const serverState = mcpServerState(serverEnabled, serverUrl);
 
   useEffect(() => {
@@ -115,16 +128,26 @@ export function McpGrantsTab() {
     }
   };
 
-  const handleInstallSkill = async () => {
-    setSkillSaving(true);
+  const handleCopyUrl = async () => {
+    if (!serverUrl) return;
     try {
-      const destination = await save({ defaultPath: 'SKILL.md' });
-      if (destination === null) return;
-      await installMcpSkill(destination);
+      await navigator.clipboard.writeText(serverUrl);
+      setUrlCopied(true);
+      setTimeout(() => setUrlCopied(false), 1500);
+    } catch {
+      // Clipboard access denied (e.g. devtools focus) — fail silently.
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      setTestResult(await testMcpConnection());
     } catch (e) {
       reportError(e);
     } finally {
-      setSkillSaving(false);
+      setTesting(false);
     }
   };
 
@@ -179,9 +202,46 @@ export function McpGrantsTab() {
         </div>
 
         {serverState === 'listening' && (
-          <p className="font-mono text-xs text-slate-300 bg-black/40 border border-white/5 rounded-lg px-3 py-2 break-all">
-            {serverUrl}
-          </p>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <code className="flex-1 font-mono text-xs text-slate-300 bg-black/40 border border-white/5 rounded-lg px-3 py-2 break-all">
+                {serverUrl}
+              </code>
+              <button
+                type="button"
+                onClick={handleCopyUrl}
+                aria-label="Copy MCP server URL"
+                className="shrink-0 p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-violet-500/10 hover:border-violet-500/30 hover:text-violet-400 text-slate-400 transition-all"
+              >
+                {urlCopied ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={handleTestConnection}
+                disabled={testing}
+                className="shrink-0 flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-cyan-500/10 hover:border-cyan-500/30 hover:text-cyan-400 text-slate-300 transition-all disabled:opacity-50"
+              >
+                {testing ? (
+                  <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Plug2 className="w-3.5 h-3.5" />
+                )}
+                Test connection
+              </button>
+            </div>
+            {testResult?.status === 'reachable' && (
+              <p className="text-xs text-emerald-400">
+                Reachable — {testResult.tool_count} tools available.
+              </p>
+            )}
+            {testResult?.status === 'unreachable' && (
+              <p className="text-xs text-ruby-400">Unreachable — {testResult.reason}</p>
+            )}
+          </div>
         )}
 
         {serverState === 'not_listening' && (
@@ -195,32 +255,9 @@ export function McpGrantsTab() {
             </span>
           </div>
         )}
-
-        {serverEnabled && (
-          <div className="space-y-2">
-            <button
-              type="button"
-              onClick={handleInstallSkill}
-              disabled={skillSaving}
-              title="For Claude Code, save into .claude/skills/demeteo-mcp/ in your project"
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-violet-500/10 hover:border-violet-500/30 hover:text-violet-400 text-slate-300 transition-all disabled:opacity-50"
-            >
-              {skillSaving ? (
-                <RotateCw className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Download className="w-3.5 h-3.5" />
-              )}
-              Install skill
-            </button>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              For Claude Code, save into{' '}
-              <code className="font-mono text-slate-400">.claude/skills/demeteo-mcp/SKILL.md</code>{' '}
-              in your project — check your harness's docs for the equivalent for opencode or
-              hermes.
-            </p>
-          </div>
-        )}
       </div>
+
+      {serverState === 'listening' && serverUrl && <McpConnectAgentPanel serverUrl={serverUrl} />}
 
       <div className="glass-panel p-6 rounded-xl space-y-4">
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
@@ -244,7 +281,11 @@ export function McpGrantsTab() {
             <RotateCw className="w-5 h-5 text-cyan-400 animate-spin" />
           </div>
         ) : grants.length === 0 ? (
-          <p className="text-xs text-slate-500 italic py-2">No active MCP client grants.</p>
+          <p className="text-xs text-slate-500 italic py-2">
+            No active MCP client grants.
+            {serverState === 'listening' &&
+              ' Waiting for a client to connect — once one requests access, approve it in the window that pops up here.'}
+          </p>
         ) : (
           <div className="space-y-2">
             {grants.map((grant) => {

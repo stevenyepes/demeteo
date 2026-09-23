@@ -81,6 +81,84 @@ pub fn install_mcp_skill(dest_path: String) -> Result<(), String> {
     write_mcp_skill(std::path::Path::new(&dest_path)).map_err(|e| e.to_string())
 }
 
+/// Preferences-screen "Test connection" result. A failed probe is not a
+/// command error — it is a meaningful answer the UI renders — so it lives in
+/// this `Ok` variant rather than the command's `Err` string, the same split
+/// `mcp_handler.rs`'s own `tool_success`/`tool_failure` draws between a
+/// protocol failure and an operation that ran and reported failure.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum McpConnectionTest {
+    Reachable { tool_count: usize },
+    Unreachable { reason: String },
+}
+
+/// Command core for [`test_mcp_connection`]: a same-machine `tools/list`
+/// probe. Sent with no `Origin` header — like any non-browser MCP client —
+/// because `demeteo_core::adapters::mcp::origin`'s DNS-rebinding guard
+/// refuses even this app's own webview: a `fetch()` from the frontend
+/// carries an `Origin` (`tauri://localhost` / `http://tauri.localhost`) that
+/// never equals the listener's canonical URI, so it gets a 403 same as a
+/// rebinding page would. `reqwest` sends no such header, matching a real
+/// client. `tools/list` is unauthenticated by design
+/// (`docs/MCP_INTEGRATION.md` §5), so this needs no bearer token.
+pub async fn probe_mcp_connection(client: &reqwest::Client, url: &str) -> McpConnectionTest {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {},
+    });
+
+    let response = match client.post(url).json(&body).send().await {
+        Ok(response) => response,
+        Err(e) => {
+            return McpConnectionTest::Unreachable {
+                reason: e.to_string(),
+            }
+        }
+    };
+    if !response.status().is_success() {
+        return McpConnectionTest::Unreachable {
+            reason: format!("server responded with {}", response.status()),
+        };
+    }
+    let parsed: serde_json::Value = match response.json().await {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return McpConnectionTest::Unreachable {
+                reason: e.to_string(),
+            }
+        }
+    };
+    match parsed
+        .pointer("/result/tools")
+        .and_then(serde_json::Value::as_array)
+    {
+        Some(tools) => McpConnectionTest::Reachable {
+            tool_count: tools.len(),
+        },
+        None => McpConnectionTest::Unreachable {
+            reason: "unexpected response shape".to_string(),
+        },
+    }
+}
+
+#[tauri::command]
+pub async fn test_mcp_connection(ctx: State<'_, AppContext>) -> Result<McpConnectionTest, String> {
+    let status = read_mcp_server_status(ctx.app_settings.as_ref());
+    let Some(url) = status.url else {
+        return Ok(McpConnectionTest::Unreachable {
+            reason: "MCP server is not listening".to_string(),
+        });
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(probe_mcp_connection(&client, &url).await)
+}
+
 #[cfg(test)]
 #[path = "../../tests/infrastructure/mcp_server.rs"]
 mod tests;
