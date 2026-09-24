@@ -5,7 +5,7 @@ use crate::adapters::database::SqliteAdapter;
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{ProjectId, StepId};
 use crate::domain::models::{Feature, Project, StepExecution};
-use crate::ports::db::{FeatureRepository, ProjectRepository};
+use crate::ports::db::{FeatureRepository, ProjectRepository, SubtaskRunOpen};
 use rusqlite::Connection;
 
 /// Minimal parent rows: `subtask_runs` carries enforced foreign keys to both
@@ -102,16 +102,18 @@ fn count_with_status(db: &SqliteAdapter, status: &str) -> i64 {
 #[test]
 fn a_task_run_opens_running_and_closes_completed() {
     let (db, fid, sid) = seed();
-    db.subtask_run_start(
-        "sr-1",
-        &fid,
-        &sid,
-        "task-1",
-        "f-1-s-impl-task-1",
-        "/tmp/wt",
-        "feature/x_subtask_f-1-step-s-impl",
-        100,
-    )
+    db.subtask_run_start(&SubtaskRunOpen {
+        id: "sr-1",
+        feature_id: &fid,
+        step_execution_id: &sid,
+        subtask_id: "task-1",
+        agent_id: "f-1-s-impl-task-1",
+        worktree_path: "/tmp/wt",
+        branch: "feature/x_subtask_f-1-step-s-impl",
+        plan_epoch: None,
+        plan_cycle: 0,
+        now: 100,
+    })
     .unwrap();
     assert_eq!(count_with_status(&db, "running"), 1);
 
@@ -136,16 +138,18 @@ fn a_task_run_opens_running_and_closes_completed() {
 #[test]
 fn a_failed_task_records_its_error() {
     let (db, fid, sid) = seed();
-    db.subtask_run_start(
-        "sr-2",
-        &fid,
-        &sid,
-        "task-2",
-        "agent-2",
-        "/tmp/wt",
-        "feature/x_subtask_y",
-        100,
-    )
+    db.subtask_run_start(&SubtaskRunOpen {
+        id: "sr-2",
+        feature_id: &fid,
+        step_execution_id: &sid,
+        subtask_id: "task-2",
+        agent_id: "agent-2",
+        worktree_path: "/tmp/wt",
+        branch: "feature/x_subtask_y",
+        plan_epoch: None,
+        plan_cycle: 0,
+        now: 100,
+    })
     .unwrap();
     db.subtask_run_finish("sr-2", "failed", 0.1, 50, Some("agent error: timeout"), 300)
         .unwrap();
@@ -193,17 +197,48 @@ fn interrupt_stale_closes_only_this_steps_running_rows() {
     .unwrap();
 
     // The crash victim: opened, never closed.
-    db.subtask_run_start("sr-stale", &fid, &sid, "task-1", "a-1", "/tmp/wt", "b", 100)
-        .unwrap();
+    db.subtask_run_start(&SubtaskRunOpen {
+        id: "sr-stale",
+        feature_id: &fid,
+        step_execution_id: &sid,
+        subtask_id: "task-1",
+        agent_id: "a-1",
+        worktree_path: "/tmp/wt",
+        branch: "b",
+        plan_epoch: None,
+        plan_cycle: 0,
+        now: 100,
+    })
+    .unwrap();
     // A row the same step already closed — its record must survive the sweep.
-    db.subtask_run_start("sr-done", &fid, &sid, "task-0", "a-0", "/tmp/wt", "b", 90)
-        .unwrap();
+    db.subtask_run_start(&SubtaskRunOpen {
+        id: "sr-done",
+        feature_id: &fid,
+        step_execution_id: &sid,
+        subtask_id: "task-0",
+        agent_id: "a-0",
+        worktree_path: "/tmp/wt",
+        branch: "b",
+        plan_epoch: None,
+        plan_cycle: 0,
+        now: 90,
+    })
+    .unwrap();
     db.subtask_run_finish("sr-done", "completed", 0.2, 500, None, 95)
         .unwrap();
     // Another step's live row — not this sweep's to touch.
-    db.subtask_run_start(
-        "sr-other", &fid, &other_sid, "task-1", "a-2", "/tmp/wt2", "b2", 100,
-    )
+    db.subtask_run_start(&SubtaskRunOpen {
+        id: "sr-other",
+        feature_id: &fid,
+        step_execution_id: &other_sid,
+        subtask_id: "task-1",
+        agent_id: "a-2",
+        worktree_path: "/tmp/wt2",
+        branch: "b2",
+        plan_epoch: None,
+        plan_cycle: 0,
+        now: 100,
+    })
     .unwrap();
 
     db.subtask_runs_interrupt_stale(&sid, 400).unwrap();
@@ -272,16 +307,47 @@ fn subtask_runs_for_step_returns_rows_in_start_order() {
     .unwrap();
 
     // task-1 started first (earlier `started_at`) and finished; task-2 running.
-    db.subtask_run_start("sr-1", &fid, &sid, "task-1", "a-1", "/tmp/wt", "b", 100)
-        .unwrap();
+    db.subtask_run_start(&SubtaskRunOpen {
+        id: "sr-1",
+        feature_id: &fid,
+        step_execution_id: &sid,
+        subtask_id: "task-1",
+        agent_id: "a-1",
+        worktree_path: "/tmp/wt",
+        branch: "b",
+        plan_epoch: None,
+        plan_cycle: 0,
+        now: 100,
+    })
+    .unwrap();
     db.subtask_run_finish("sr-1", "completed", 0.3, 400, None, 150)
         .unwrap();
-    db.subtask_run_start("sr-2", &fid, &sid, "task-2", "a-2", "/tmp/wt", "b", 200)
-        .unwrap();
+    db.subtask_run_start(&SubtaskRunOpen {
+        id: "sr-2",
+        feature_id: &fid,
+        step_execution_id: &sid,
+        subtask_id: "task-2",
+        agent_id: "a-2",
+        worktree_path: "/tmp/wt",
+        branch: "b",
+        plan_epoch: None,
+        plan_cycle: 0,
+        now: 200,
+    })
+    .unwrap();
     // Another step's row — must not leak into this step's list.
-    db.subtask_run_start(
-        "sr-x", &fid, &other_sid, "task-9", "a-9", "/tmp/wt2", "b2", 120,
-    )
+    db.subtask_run_start(&SubtaskRunOpen {
+        id: "sr-x",
+        feature_id: &fid,
+        step_execution_id: &other_sid,
+        subtask_id: "task-9",
+        agent_id: "a-9",
+        worktree_path: "/tmp/wt2",
+        branch: "b2",
+        plan_epoch: None,
+        plan_cycle: 0,
+        now: 120,
+    })
     .unwrap();
 
     let rows = subtask_runs_for_step(&db, &sid).unwrap();
@@ -299,8 +365,19 @@ fn subtask_runs_for_step_returns_rows_in_start_order() {
 #[test]
 fn interrupt_stale_is_idempotent_and_repeatable() {
     let (db, fid, sid) = seed();
-    db.subtask_run_start("sr-1", &fid, &sid, "task-1", "a-1", "/tmp/wt", "b", 100)
-        .unwrap();
+    db.subtask_run_start(&SubtaskRunOpen {
+        id: "sr-1",
+        feature_id: &fid,
+        step_execution_id: &sid,
+        subtask_id: "task-1",
+        agent_id: "a-1",
+        worktree_path: "/tmp/wt",
+        branch: "b",
+        plan_epoch: None,
+        plan_cycle: 0,
+        now: 100,
+    })
+    .unwrap();
     db.subtask_runs_interrupt_stale(&sid, 200).unwrap();
     // Nothing running any more: a second sweep is a no-op, not an error.
     db.subtask_runs_interrupt_stale(&sid, 300).unwrap();

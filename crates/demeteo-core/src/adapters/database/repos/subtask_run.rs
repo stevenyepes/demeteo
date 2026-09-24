@@ -2,7 +2,7 @@ use rusqlite::params;
 
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::models::{SubtaskRunMirrorRow, SubtaskRunRow};
-use crate::ports::db::SubtaskRunRepository;
+use crate::ports::db::{SubtaskRunOpen, SubtaskRunRepository};
 
 use super::super::SqliteAdapter;
 
@@ -18,7 +18,7 @@ pub fn subtask_runs_for_step(
     let conn = adapter.conn.lock()?;
     let mut stmt = conn
         .prepare(
-            "SELECT subtask_id, status, cost_usd, tokens, error_message
+            "SELECT subtask_id, status, cost_usd, tokens, error_message, plan_epoch, plan_cycle
              FROM subtask_runs
              WHERE step_execution_id = ?1
              ORDER BY started_at ASC",
@@ -32,6 +32,8 @@ pub fn subtask_runs_for_step(
                 cost_usd: row.get(2)?,
                 tokens: row.get(3)?,
                 error_message: row.get(4)?,
+                plan_epoch: row.get(5)?,
+                plan_cycle: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -51,7 +53,7 @@ pub fn subtask_runs_mirror_for_step(
     let mut stmt = conn
         .prepare(
             "SELECT id, subtask_id, agent_id, worktree_path, branch, status, cost_usd,
-                    tokens, error_message, started_at, ended_at
+                    tokens, error_message, started_at, ended_at, plan_epoch, plan_cycle
              FROM subtask_runs
              WHERE step_execution_id = ?1
              ORDER BY started_at ASC",
@@ -71,6 +73,8 @@ pub fn subtask_runs_mirror_for_step(
                 error_message: row.get(8)?,
                 started_at: row.get(9)?,
                 ended_at: row.get(10)?,
+                plan_epoch: row.get(11)?,
+                plan_cycle: row.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -100,8 +104,9 @@ pub fn subtask_runs_replace_for_step(
         tx.execute(
             "INSERT INTO subtask_runs
              (id, feature_id, step_execution_id, subtask_id, agent_id, worktree_path,
-              branch, status, cost_usd, tokens, error_message, started_at, ended_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+              branch, status, cost_usd, tokens, error_message, started_at, ended_at,
+              plan_epoch, plan_cycle)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 row.id,
                 feature_id.0,
@@ -116,6 +121,8 @@ pub fn subtask_runs_replace_for_step(
                 row.error_message,
                 row.started_at,
                 row.ended_at,
+                row.plan_epoch,
+                row.plan_cycle,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -125,33 +132,24 @@ pub fn subtask_runs_replace_for_step(
 }
 
 impl SubtaskRunRepository for SqliteAdapter {
-    #[allow(clippy::too_many_arguments)]
-    fn subtask_run_start(
-        &self,
-        id: &str,
-        feature_id: &FeatureId,
-        step_execution_id: &StepExecutionId,
-        subtask_id: &str,
-        agent_id: &str,
-        worktree_path: &str,
-        branch: &str,
-        now: i64,
-    ) -> Result<(), String> {
+    fn subtask_run_start(&self, run: &SubtaskRunOpen<'_>) -> Result<(), String> {
         let conn = self.conn.lock()?;
         conn.execute(
             "INSERT INTO subtask_runs
              (id, feature_id, step_execution_id, subtask_id, agent_id, worktree_path,
-              branch, status, cost_usd, started_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', 0.0, ?8)",
+              branch, status, cost_usd, started_at, plan_epoch, plan_cycle)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', 0.0, ?8, ?9, ?10)",
             params![
-                id,
-                feature_id.0,
-                step_execution_id.0,
-                subtask_id,
-                agent_id,
-                worktree_path,
-                branch,
-                now
+                run.id,
+                run.feature_id.0,
+                run.step_execution_id.0,
+                run.subtask_id,
+                run.agent_id,
+                run.worktree_path,
+                run.branch,
+                run.now,
+                run.plan_epoch,
+                run.plan_cycle
             ],
         )
         .map_err(|e| e.to_string())?;

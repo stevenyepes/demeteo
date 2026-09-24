@@ -225,6 +225,8 @@ fn sequence_state_stays_unplanned_after_a_shadow_hydrate_even_though_the_runner_
                 error_message: None,
                 started_at: 0,
                 ended_at: Some(30_000),
+                plan_epoch: None,
+                plan_cycle: None,
             }],
         )
         .unwrap();
@@ -243,6 +245,80 @@ fn sequence_state_stays_unplanned_after_a_shadow_hydrate_even_though_the_runner_
         state.tasks[0].landed,
         "the mirrored checkpoint must mark the task landed"
     );
+}
+
+/// A re-run reuses the step execution id, so a detached run's mirror still
+/// carries the abandoned plan's rows — and a fresh decomposition reused six
+/// of their ids. Read through the same mirror write the hydrate uses, the
+/// new plan's list must show one running ticket and the rest pending, not
+/// the old plan's "completed" results beside it.
+#[test]
+fn a_mirrored_replan_does_not_inherit_the_abandoned_plans_rows() {
+    let (view, adapter) = make_view();
+    let feature_id = FeatureId::from("f-detached".to_string());
+    let step = shadow_step(&feature_id);
+    let node_id = step.step_id.as_str();
+
+    ProjectRepository::add(
+        &*adapter,
+        Project {
+            id: ProjectId::from("p-1".to_string()),
+            name: "detached project".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 0,
+        },
+    )
+    .unwrap();
+    FeatureRepository::add(&*adapter, shadow_feature(&feature_id)).unwrap();
+    adapter.step_create(step.clone()).unwrap();
+
+    adapter
+        .plan_cache_put(
+            &feature_id,
+            node_id,
+            r#"{"tasks":[{"id":"t1","title":"First"},{"id":"t2","title":"Second"}],"cycle":0,"epoch":"new"}"#,
+            None,
+            0,
+        )
+        .unwrap();
+    let row =
+        |id: &str, subtask: &str, status: &str, epoch: Option<&str>, at: i64| SubtaskRunMirrorRow {
+            id: id.to_string(),
+            subtask_id: subtask.to_string(),
+            agent_id: None,
+            worktree_path: "/work/f-detached".to_string(),
+            branch: "feature/f-detached".to_string(),
+            status: status.to_string(),
+            cost_usd: 1.0,
+            tokens: 10,
+            error_message: None,
+            started_at: at,
+            ended_at: None,
+            plan_epoch: epoch.map(str::to_string),
+            plan_cycle: epoch.map(|_| 0),
+        };
+    adapter
+        .subtask_runs_replace_for_step(
+            &feature_id,
+            &step.id,
+            &[
+                row("sr-1", "t1", "completed", Some("old"), 1),
+                row("sr-2", "t2", "completed", Some("old"), 2),
+                row("sr-3", "t2", "completed", None, 3),
+                row("sr-4", "t1", "running", Some("new"), 4),
+            ],
+        )
+        .unwrap();
+
+    let state = view.sequence_state(&feature_id, node_id, &step.id).unwrap();
+
+    let statuses: Vec<&str> = state.tasks.iter().map(|t| t.status.as_str()).collect();
+    assert_eq!(statuses, ["running", "pending"]);
 }
 
 /// `RunView::explain_step_failure` must match `explain_failure`/`tail_log`

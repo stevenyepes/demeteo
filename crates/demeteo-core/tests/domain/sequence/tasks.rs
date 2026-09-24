@@ -961,6 +961,76 @@ fn a_first_rework_cycle_over_a_greenfield_cache_starts_at_cycle_one() {
     assert!(none.history.is_empty());
 }
 
+// --- plan_epoch --------------------------------------------------------------
+//
+// The epoch is what the drill-down joins run rows on, so the one thing it
+// must get right is which plans are the same lineage.
+
+fn with_epoch(mut plan: TaskPlan, epoch: &str) -> TaskPlan {
+    plan.epoch = Some(epoch.into());
+    plan
+}
+
+fn fresh() -> String {
+    "fresh".into()
+}
+
+#[test]
+fn a_retry_of_the_same_list_keeps_the_epoch() {
+    let cached = with_epoch(plan_of(&["a", "b"]), "e1");
+    assert_eq!(
+        plan_epoch(&plan_of(&["a", "b"]), Some(&cached), fresh),
+        "e1"
+    );
+}
+
+/// The bug this exists for: a re-run from an upstream step re-decomposed
+/// into a new list that reused some of the old ids.
+#[test]
+fn a_new_decomposition_starts_a_new_epoch_even_when_ids_overlap() {
+    let cached = with_epoch(
+        cycle_of(
+            PlanKind::Rework,
+            3,
+            &["fix-1"],
+            vec![greenfield_cycle(&["a"])],
+        ),
+        "e1",
+    );
+    assert_eq!(
+        plan_epoch(&plan_of(&["a", "b"]), Some(&cached), fresh),
+        "fresh"
+    );
+
+    let cached = with_epoch(plan_of(&["a", "b"]), "e1");
+    assert_eq!(
+        plan_epoch(&plan_of(&["a", "c"]), Some(&cached), fresh),
+        "fresh"
+    );
+    assert_eq!(
+        plan_epoch(&plan_of(&["b", "a"]), Some(&cached), fresh),
+        "fresh"
+    );
+}
+
+/// A rework cycle is shown beside the cycles it is a delta against, so
+/// their rows must stay joinable.
+#[test]
+fn a_rework_cycle_inherits_the_epoch() {
+    let cached = with_epoch(plan_of(&["a", "b"]), "e1");
+    let delta = plan_cache_entry(plan_of(&["fix-1"]), Some(&cached), true, true);
+    assert_eq!(plan_epoch(&delta, Some(&cached), fresh), "e1");
+}
+
+#[test]
+fn nothing_to_inherit_is_a_fresh_epoch() {
+    assert_eq!(plan_epoch(&plan_of(&["a"]), None, fresh), "fresh");
+    assert_eq!(
+        plan_epoch(&plan_of(&["a"]), Some(&plan_of(&["a"])), fresh),
+        "fresh"
+    );
+}
+
 /// A restart mid-rework, end to end over the pure pieces: the consumer's
 /// cycle-1 attempt cached its list and was interrupted, the restored retry
 /// context puts it back in the rework cycle, and it re-reads that list.

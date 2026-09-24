@@ -18,7 +18,7 @@ use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::models::step_attempt::cached_cycle_standing;
 use crate::domain::models::StepExecution;
 use crate::domain::sequence::tasks::{
-    apply_landed_checkpoint, extract_task_plan, is_rework_plan, plan_cache_entry,
+    apply_landed_checkpoint, extract_task_plan, is_rework_plan, plan_cache_entry, plan_epoch,
     reject_stale_rework_plan, reject_unexecutable_plan, replays_a_judged_cycle,
     select_targeted_tasks, task_list_json_shape_example, PlanKind, PlanRejection, TaskPlan,
 };
@@ -313,6 +313,9 @@ impl ExecutionDriver {
         if !is_delta {
             plan = plan_cache_entry(plan, cached.as_ref(), cycle_was_judged, false);
         }
+        plan.epoch = Some(plan_epoch(&plan, cached.as_ref(), || {
+            format!("{}-{}", step_exec.step_id.0, crate::paths::now_ms())
+        }));
         let attempt_no = attempts.and_then(|rows| rows.last().map(|a| a.attempt_no));
         match serde_json::to_string(&plan) {
             Ok(json) => {
