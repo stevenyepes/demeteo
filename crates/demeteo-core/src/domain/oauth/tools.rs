@@ -25,6 +25,29 @@ pub fn required_scope(tool_name: &str) -> Option<Scope> {
     }
 }
 
+/// What a `POST /mcp` JSON-RPC method needs before it is answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MethodAuth {
+    /// Answered without a grant.
+    Open,
+    /// Any live grant bound to this server, whatever its scopes.
+    Session,
+    /// Scoped per tool by [`required_scope`] on `params.name`.
+    PerTool,
+}
+
+/// `server/discover` names the protocol revision and nothing else, so it
+/// stays open. Everything else — `initialize` included — needs a grant: a
+/// client whose MCP SDK authorizes only on a connect-time 401 never signs in
+/// otherwise (`docs/MCP_INTEGRATION.md` §5).
+pub fn method_auth(method: &str) -> MethodAuth {
+    match method {
+        "server/discover" => MethodAuth::Open,
+        "tools/call" => MethodAuth::PerTool,
+        _ => MethodAuth::Session,
+    }
+}
+
 #[cfg(test)]
 #[path = "../../../tests/domain/oauth/tools.rs"]
 mod tools_tests;

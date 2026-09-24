@@ -61,6 +61,7 @@
 | 50 | MCP surface exclusions | **Gate approval and worktree merges are excluded permanently — not deferred**; a Gate is the one real-time human-in-the-loop surface ([decision 35](#1-the-locked-decisions)). Ticket creation stays with decomposition. Discovery interviews are out of scope **for this phase only**. `list_pending_gates` and `get_discovery_board` are reads and stay. **Rejected:** exposing any of these. Detail: [MCP_INTEGRATION.md §8](MCP_INTEGRATION.md#8-what-is-excluded-and-whether-permanently). | 2026-09-18 |
 | 51 | `ticket_force_start` is not exposed over MCP | **Rejected:** exposing it — its required `reason` is fed to the started agent as its prerequisite context, so an agent-authored reason would corrupt the run, not merely the audit record. Detail: [MCP_INTEGRATION.md §8](MCP_INTEGRATION.md#ticket_force_start). | 2026-09-18 |
 | 52 | MCP listener default | **Off until enabled in Settings** (`mcp_server_enabled`, default `false`). **Rejected:** always listening — OAuth discovery documents are unauthenticated by necessity, and most installs will never use this. Detail: [MCP_INTEGRATION.md §9](MCP_INTEGRATION.md#9-the-listener-and-what-is-open). | 2026-09-18 |
+| 53 | MCP handshake authentication | **`initialize` and `tools/list` need a live grant of any scope**; only `server/discover` and the `.well-known` metadata stay open, and the handshake `401` names no scope. **Rejected:** an open handshake — clients whose SDK starts OAuth only on a connect-time `401` (OpenCode, Hermes) never signed in. Detail: [MCP_INTEGRATION.md §5](MCP_INTEGRATION.md#5-authorization). | 2026-09-24 |
 
 ### 44 — Harness baseline (detail)
 
@@ -533,6 +534,6 @@ schema v2, and the project-settings dropdown is removed.
 - **Architecture** (hexagon, port surface, file layout, Tauri commands, frontend state): [`ARCHITECTURE.md`](ARCHITECTURE.md)
 - **Open / deferred questions**: [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
 - **Reliability plan**: [`RELIABILITY_PLAN.md`](RELIABILITY_PLAN.md)
-- **MCP integration** (decisions 45–52 in full): [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md)
+- **MCP integration** (decisions 45–53 in full): [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md)
 - **Agent runtime spec**: [`AGENT_INTEGRATION.md`](../AGENT_INTEGRATION.md)
 - **Known platform issues**: [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md)

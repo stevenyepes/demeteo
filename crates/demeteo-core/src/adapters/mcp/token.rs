@@ -11,8 +11,8 @@
 //! consumed by being looked up, not by succeeding, so an attacker cannot use
 //! a stolen code to probe multiple verifier guesses against it.
 //!
-//! `resource` (RFC 8707) is mandatory and must equal [`canonical_uri`]
-//! exactly, checked before the code is ever looked up — the same
+//! `resource` (RFC 8707) is mandatory and must name [`canonical_uri`] per
+//! [`resource_matches`], checked before the code is ever looked up — the same
 //! `invalid_target` rule `authorize.rs` applies, and structural mistakes
 //! that don't need the code should never burn it.
 //!
@@ -30,7 +30,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::ids::GrantId;
-use crate::domain::oauth::{pkce, GrantRecord, Scope};
+use crate::domain::oauth::{pkce, resource_matches, GrantRecord, Scope};
 use crate::state::AppContext;
 
 use super::authorize::{generate_token, oauth_bad_request, take_pending_authorization};
@@ -97,7 +97,7 @@ async fn token(
     let Some(canonical) = canonical_uri() else {
         return oauth_bad_request("invalid_target");
     };
-    if req.resource != canonical {
+    if !resource_matches(&req.resource, &canonical) {
         return oauth_bad_request("invalid_target");
     }
 
