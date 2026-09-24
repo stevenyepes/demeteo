@@ -19,9 +19,7 @@ fn broadcast_to_multiple_channels() {
     let state = SessionState::default();
     app.manage(state);
 
-    let (session, handles) = TestSessionBuilder::new().live_drain().build();
-    let writer_arc = handles.writer.expect("live drain writer");
-    let _drain_handle = handles.drain;
+    let (session, handles) = TestSessionBuilder::new().build();
 
     let session_id = "sess_broadcast".to_string();
     {
@@ -30,25 +28,13 @@ fn broadcast_to_multiple_channels() {
         sessions.insert(session_id.clone(), session);
     }
 
-    // Appending, not replacing: the PTY is free to deliver `hello\r\n` in more
-    // than one chunk, and each side has to be judged on everything it received
-    // rather than on whichever fragment landed last.
     let (channel_a, captured_a) = appending_capturing_channel();
     let (channel_b, captured_b) = appending_capturing_channel();
     let state_ref: tauri::State<'_, SessionState> = app.state::<SessionState>();
     attach_terminal_session(state_ref.clone(), session_id.clone(), channel_a).expect("attach A");
     attach_terminal_session(state_ref.clone(), session_id.clone(), channel_b).expect("attach B");
 
-    {
-        let mut w = writer_arc.lock().expect("writer lock");
-        w.write_all(b"hello\n").expect("write hello");
-        w.flush().expect("flush hello");
-    }
-
-    // Wait for the whole payload, not merely for the first byte of it. Waiting
-    // on `!is_empty()` and then asserting the full contents is a race the test
-    // lost under load: a chunk boundary after "he" satisfies "not empty", and
-    // the assertion then compared a half-delivered buffer.
+    super::send_chunk(&handles.broadcast, b"hello\r\n".to_vec());
     assert!(
         wait_until(|| captured_a.lock().expect("a lock").as_slice() == b"hello\r\n"),
         "channel A never received the full chunk, got {:?}",
@@ -67,9 +53,7 @@ fn attach_after_detach_rebinds_channel() {
     let state = SessionState::default();
     app.manage(state);
 
-    let (session, handles) = TestSessionBuilder::new().live_drain().build();
-    let writer_arc = handles.writer.expect("live drain writer");
-    let _drain_handle = handles.drain;
+    let (session, handles) = TestSessionBuilder::new().build();
 
     let session_id = "sess_rebind".to_string();
     {
@@ -83,11 +67,7 @@ fn attach_after_detach_rebinds_channel() {
     let (channel_a, captured_a) = capturing_channel();
     attach_terminal_session(state_ref.clone(), session_id.clone(), channel_a).expect("attach A");
 
-    {
-        let mut w = writer_arc.lock().expect("writer lock");
-        w.write_all(b"a\n").expect("write a");
-        w.flush().expect("flush a");
-    }
+    super::send_chunk(&handles.broadcast, b"a\r\n".to_vec());
     assert!(
         wait_until(|| captured_a.lock().expect("a lock").as_slice() == b"a\r\n"),
         "channel A didn't receive the pre-detach byte"
@@ -98,11 +78,7 @@ fn attach_after_detach_rebinds_channel() {
     let (channel_b, captured_b) = capturing_channel();
     attach_terminal_session(state_ref.clone(), session_id.clone(), channel_b).expect("attach B");
 
-    {
-        let mut w = writer_arc.lock().expect("writer lock");
-        w.write_all(b"b\n").expect("write b");
-        w.flush().expect("flush b");
-    }
+    super::send_chunk(&handles.broadcast, b"b\r\n".to_vec());
 
     assert!(
         wait_until(|| captured_b.lock().expect("b lock").as_slice() == b"b\r\n"),
@@ -202,9 +178,7 @@ fn detach_only_removes_last_attached_subscriber() {
     let state = SessionState::default();
     app.manage(state);
 
-    let (session, handles) = TestSessionBuilder::new().live_drain().build();
-    let writer_arc = handles.writer.expect("live drain writer");
-    let _drain_handle = handles.drain;
+    let (session, handles) = TestSessionBuilder::new().build();
 
     let session_id = "sess_lifo_detach".to_string();
     {
@@ -223,11 +197,7 @@ fn detach_only_removes_last_attached_subscriber() {
     attach_terminal_session(state_ref.clone(), session_id.clone(), channel_a).expect("attach A");
     attach_terminal_session(state_ref.clone(), session_id.clone(), channel_b).expect("attach B");
 
-    {
-        let mut w = writer_arc.lock().expect("writer lock");
-        w.write_all(b"pre\n").expect("write pre");
-        w.flush().expect("flush pre");
-    }
+    super::send_chunk(&handles.broadcast, b"pre\r\n".to_vec());
     assert!(
         wait_until(|| captured_a.lock().expect("a lock").as_slice() == b"pre\r\n"),
         "channel A didn't receive the pre-detach byte"
@@ -239,11 +209,7 @@ fn detach_only_removes_last_attached_subscriber() {
 
     detach_terminal_session(state_ref.clone(), session_id.clone(), None).expect("detach 1");
 
-    {
-        let mut w = writer_arc.lock().expect("writer lock");
-        w.write_all(b"post\n").expect("write post");
-        w.flush().expect("flush post");
-    }
+    super::send_chunk(&handles.broadcast, b"post\r\n".to_vec());
     assert!(
         wait_until(|| { captured_a.lock().expect("a lock").as_slice() == b"pre\r\npost\r\n" }),
         "channel A should still receive post-detach output"
@@ -256,12 +222,7 @@ fn detach_only_removes_last_attached_subscriber() {
 
     detach_terminal_session(state_ref.clone(), session_id.clone(), None).expect("detach 2");
 
-    {
-        let mut w = writer_arc.lock().expect("writer lock");
-        w.write_all(b"final\n").expect("write final");
-        w.flush().expect("flush final");
-    }
-    thread::sleep(Duration::from_millis(50));
+    super::send_chunk(&handles.broadcast, b"final\r\n".to_vec());
     assert_eq!(
         *captured_a.lock().expect("a lock"),
         b"pre\r\npost\r\n".to_vec(),
@@ -325,9 +286,7 @@ fn detach_with_channel_id_removes_only_matching() {
     let state = SessionState::default();
     app.manage(state);
 
-    let (session, handles) = TestSessionBuilder::new().live_drain().build();
-    let writer_arc = handles.writer.expect("live drain writer");
-    let _drain_handle = handles.drain;
+    let (session, handles) = TestSessionBuilder::new().build();
 
     let session_id = "sess_targeted_detach".to_string();
     {
@@ -348,11 +307,7 @@ fn detach_with_channel_id_removes_only_matching() {
 
     detach_terminal_session(state_ref.clone(), session_id.clone(), Some(id_b)).expect("detach B");
 
-    {
-        let mut w = writer_arc.lock().expect("writer lock");
-        w.write_all(b"only-a\n").expect("write");
-        w.flush().expect("flush");
-    }
+    super::send_chunk(&handles.broadcast, b"only-a\r\n".to_vec());
     assert!(
         wait_until(|| captured_a.lock().expect("a lock").as_slice() == b"only-a\r\n"),
         "channel A should still receive output after channel B was detached"
@@ -365,12 +320,7 @@ fn detach_with_channel_id_removes_only_matching() {
 
     detach_terminal_session(state_ref.clone(), session_id.clone(), Some(id_a)).expect("detach A");
 
-    {
-        let mut w = writer_arc.lock().expect("writer lock");
-        w.write_all(b"nobody\n").expect("write");
-        w.flush().expect("flush");
-    }
-    thread::sleep(Duration::from_millis(50));
+    super::send_chunk(&handles.broadcast, b"nobody\r\n".to_vec());
     assert_eq!(
         *captured_a.lock().expect("a lock"),
         b"only-a\r\n".to_vec(),

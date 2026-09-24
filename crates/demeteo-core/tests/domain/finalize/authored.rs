@@ -137,7 +137,10 @@ fn fallback_body_discloses_stacked_commits() {
     let body = a.published_pr_body(false, Some(&notice));
     assert!(body.contains("reviewed request #40"), "{body}");
     assert!(body.contains("into `main`"), "{body}");
-    assert!(body.contains("also merges that reviewed request's commits"), "{body}");
+    assert!(
+        body.contains("also merges that reviewed request's commits"),
+        "{body}"
+    );
 }
 
 #[test]
