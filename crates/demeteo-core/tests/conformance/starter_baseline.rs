@@ -1,4 +1,4 @@
-//! Baseline behavioral harness for the seven bundled starter workflows
+//! Baseline behavioral harness for the nine bundled starter workflows
 //! (P0.2, `docs/TASKS_DAG_WORKFLOWS.md`).
 //!
 //! Every starter is *executed* through the engine with the deterministic
@@ -163,25 +163,27 @@ fn augment_starter(mut wf: serde_json::Value) -> serde_json::Value {
     wf
 }
 
+/// Run `git` in `dir`, failing the test on a non-zero exit.
+fn git_in(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("run git");
+    assert!(
+        out.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// Seed a real local git repo at the project's expected repo dir so
 /// `bootstrap_project` skips its (network) clone — the same "already
 /// cloned" shortcut the topology and triage gates use.
-fn init_local_repo(workspace_dir: &Path, project_id: &str, repo_path: &str) {
-    let dir = paths::repo_target_dir_local(workspace_dir, project_id, repo_path);
-    std::fs::create_dir_all(&dir).expect("create repo dir");
-    let git = |args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&dir)
-            .output()
-            .expect("run git");
-        assert!(
-            out.status.success(),
-            "git {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&out.stderr)
-        );
-    };
+fn init_local_repo(dir: &Path) {
+    std::fs::create_dir_all(dir).expect("create repo dir");
+    let git = |args: &[&str]| git_in(dir, args);
     git(&["init", "-b", "main"]);
     git(&["config", "user.email", "demeteo@local"]);
     git(&["config", "user.name", "demeteo"]);
@@ -264,6 +266,40 @@ fn normalize(text: &str, volatile: &[(String, &str)]) -> String {
 /// Execute one starter end-to-end under the stub agent and reduce it to its
 /// [`StarterSnapshot`].
 async fn run_starter(name: &str) -> StarterSnapshot {
+    run_starter_with(name, |_| {}).await
+}
+
+/// [`run_starter`], with `configure` applied to the project settings after the
+/// harness's own defaults and before they are saved.
+async fn run_starter_with(
+    name: &str,
+    configure: impl FnOnce(&mut crate::domain::models::ProjectSettings),
+) -> StarterSnapshot {
+    run_starter_launched(name, configure, init_local_repo, |_| {})
+        .await
+        .snapshot
+}
+
+/// A launched starter's snapshot, plus the stored baseline record the snapshot
+/// leaves out: which commit it names is run-specific, so it cannot be golden.
+struct LaunchedStarter {
+    snapshot: StarterSnapshot,
+    harness_baseline: Option<crate::domain::harness_baseline::HarnessBaseline>,
+    /// Checkouts the baseline node provisioned and did not tear down.
+    node_worktrees: Vec<String>,
+    /// Every environment-not-ready notification the run raised.
+    environment_not_ready: Vec<String>,
+}
+
+/// [`run_starter_with`], with the fixture repo built by `seed_repo` at the
+/// project's repo dir instead of [`init_local_repo`], and `launch` applied to
+/// the [`FeatureLaunch`] before it starts.
+async fn run_starter_launched(
+    name: &str,
+    configure: impl FnOnce(&mut crate::domain::models::ProjectSettings),
+    seed_repo: impl FnOnce(&Path),
+    launch: impl FnOnce(&mut FeatureLaunch),
+) -> LaunchedStarter {
     std::env::set_var(STUB_AGENT_ENV, "1");
     let tmp = std::env::temp_dir().join(format!(
         "demeteo-starter-{name}-{}",
@@ -318,9 +354,14 @@ async fn run_starter(name: &str) -> StarterSnapshot {
     let mut settings = crate::adapters::step_executor::setup::fetch_default_settings();
     settings.project_id = project.id.clone();
     settings.worktree_strategy.test_command = Some("true".to_string());
+    configure(&mut settings);
     ctx.projects.save_settings(settings).expect("save settings");
 
-    init_local_repo(&ctx.workspace_dir, project.id.as_str(), REPO_PATH);
+    seed_repo(&paths::repo_target_dir_local(
+        &ctx.workspace_dir,
+        project.id.as_str(),
+        REPO_PATH,
+    ));
     bootstrap::bootstrap_project(&ctx, project.id.0.clone())
         .await
         .expect("bootstrap project");
@@ -329,20 +370,49 @@ async fn run_starter(name: &str) -> StarterSnapshot {
     let workflow_id =
         workflows::create_from_json(&ctx.workflows, &workflow).expect("ingest starter");
 
+    let mut feature_launch = FeatureLaunch {
+        project_id: project.id.0.clone(),
+        workflow_id: workflow_id.0.clone(),
+        title: format!("Baseline {name}").clone(),
+        description: "Deterministic starter-baseline run under the stub agent.".to_string(),
+        agent_kind: Some("stub".to_string()),
+        ..Default::default()
+    };
+    launch(&mut feature_launch);
     let feature = ctx
         .executor
-        .feature_start(FeatureLaunch {
-            project_id: project.id.0.clone(),
-            workflow_id: workflow_id.0.clone(),
-            title: format!("Baseline {name}").clone(),
-            description: "Deterministic starter-baseline run under the stub agent.".to_string(),
-            agent_kind: Some("stub".to_string()),
-            ..Default::default()
-        })
+        .feature_start(feature_launch)
         .await
         .expect("feature_start");
 
     let terminal_status = poll_terminal_approving_gates(&ctx, &feature.id).await;
+    let harness_baseline = ctx
+        .features
+        .get(&feature.id)
+        .expect("feature read")
+        .and_then(|f| f.harness_baseline);
+    // Linked worktrees are siblings of the clone (`<repo>_wt_<id>`).
+    let repo_dir = paths::repo_target_dir_local(&ctx.workspace_dir, project.id.as_str(), REPO_PATH);
+    let node_worktrees = repo_dir
+        .parent()
+        .and_then(|parent| std::fs::read_dir(parent).ok())
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with("-baseline-node"))
+        .collect();
+    let environment_not_ready = ctx
+        .notifications
+        .list(None, 100)
+        .expect("notifications read")
+        .into_iter()
+        .filter(|n| {
+            n.kind == crate::domain::models::NotificationKind::EnvironmentNotReady
+                && n.feature_id == feature.id.0
+        })
+        .map(|n| n.message)
+        .collect();
 
     // Everything run-specific that can leak into error messages or
     // artifact bodies, longest first so path prefixes don't shadow ids.
@@ -389,11 +459,16 @@ async fn run_starter(name: &str) -> StarterSnapshot {
     artifacts.sort();
 
     let _ = std::fs::remove_dir_all(&tmp);
-    StarterSnapshot {
-        starter: name.to_string(),
-        terminal_status,
-        steps: step_snaps,
-        artifacts,
+    LaunchedStarter {
+        snapshot: StarterSnapshot {
+            starter: name.to_string(),
+            terminal_status,
+            steps: step_snaps,
+            artifacts,
+        },
+        harness_baseline,
+        node_worktrees,
+        environment_not_ready,
     }
 }
 
@@ -465,4 +540,421 @@ async fn starter_baseline_code_review() {
 #[tokio::test]
 async fn starter_baseline_standard_feature_pipeline() {
     assert_starter_baseline("standard-feature-pipeline").await;
+}
+
+#[tokio::test]
+async fn starter_baseline_address_review() {
+    assert_starter_baseline("address-review").await;
+}
+
+/// A red branch ends `code-review`'s `s-validate-branch` before its agent
+/// turn: `run_harness_first` fails the step, so `branch-validation.md` is never
+/// written and the gate's output survives only in the step's `error_message`.
+/// `s-review`'s report is already written by then — that is what the fix
+/// launch reads the red gate out of.
+///
+/// The *prepare* is reddened, not the test command. A constant-red
+/// `test_command` fails identically at the merge-base, so
+/// `adjudicate_red_gates` subtracts it as pre-existing and the turn runs:
+/// observed with `test_command = "echo …; exit 1"` and no prepare, both steps
+/// complete, both reports are written and the run ends `awaiting_mr`. A
+/// failing prepare is never subtracted, and triage is not consulted on a first
+/// attempt.
+#[tokio::test]
+async fn a_red_branch_ends_the_review_gate_step_without_its_report() {
+    const MARKER: &str = "starter-baseline-red-prepare";
+    let run = run_starter_with("code-review", |settings| {
+        settings.worktree_strategy.prepare_command = Some(format!("echo {MARKER}; exit 1"));
+    })
+    .await;
+
+    let step = |id: &str| {
+        run.steps
+            .iter()
+            .find(|s| s.step_id == id)
+            .unwrap_or_else(|| panic!("no step {id} in {run:#?}"))
+    };
+    let has_artifact = |id: &str, file: &str| {
+        run.artifacts
+            .iter()
+            .any(|(step_id, base, _)| step_id == id && base == file)
+    };
+
+    assert_eq!(step("s-review").status, "completed", "{run:#?}");
+    assert!(has_artifact("s-review", "code-review.md"), "{run:#?}");
+
+    let gate = step("s-validate-branch");
+    assert_eq!(gate.status, "failed", "{run:#?}");
+    assert!(
+        !has_artifact("s-validate-branch", "branch-validation.md"),
+        "{run:#?}"
+    );
+    assert!(
+        gate.error.as_deref().is_some_and(|e| e.contains(MARKER)),
+        "the gate step's error_message must carry the prepare's output: {run:#?}"
+    );
+
+    assert_eq!(run.terminal_status, "failed", "{run:#?}");
+}
+
+/// A project with no `prepare_command` and no `test_command` gives
+/// `s-validate-branch` nothing to run, and that branch is unjudged, not red.
+/// The run has to complete and keep both reports. An `environment` verdict
+/// here maps to `VerdictDisposition::Unjudgeable`, which ends the step without
+/// recording its artifact and fails the feature, so every review of an
+/// unconfigured project would end `failed` and lose `branch-validation.md`.
+///
+/// This proves the engine half only: the stub agent always answers `pass`, so
+/// what is asserted is that a pass with nothing configured completes and
+/// records the report. That the starter asks its verifier for that pass is
+/// held by `the_review_starter_passes_a_branch_no_gate_was_configured_for`
+/// in `src-tauri/tests/infrastructure/workflows.rs`.
+#[tokio::test]
+async fn a_review_with_no_gate_configured_completes_with_both_reports() {
+    let run = run_starter_with("code-review", |settings| {
+        settings.worktree_strategy.test_command = None;
+        settings.worktree_strategy.prepare_command = None;
+    })
+    .await;
+
+    let step = |id: &str| {
+        run.steps
+            .iter()
+            .find(|s| s.step_id == id)
+            .unwrap_or_else(|| panic!("no step {id} in {run:#?}"))
+    };
+
+    assert_eq!(step("s-review").status, "completed", "{run:#?}");
+    assert_eq!(step("s-validate-branch").status, "completed", "{run:#?}");
+    assert!(
+        run.artifacts
+            .iter()
+            .any(|(step_id, base, _)| step_id == "s-validate-branch"
+                && base == "branch-validation.md"),
+        "{run:#?}"
+    );
+    assert_ne!(run.terminal_status, "failed", "{run:#?}");
+}
+
+/// A same-repo fix run is measured against what the reviewed pull request
+/// targets, so a gate the pull request broke stays the run's to close.
+///
+/// `main` carries `HEALTHY` and `pr-head` removes it, so the gate is green at
+/// the target and red on the head the fix branch is cut from. The stub
+/// addresses nothing, so `s-confirm`'s harness-first pass is red, and
+/// `adjudicate_red_gates` measures that at `merge_base(main, fix branch)`,
+/// where the gate is green: the failure is the run's, and the run fails before
+/// `s-finalize` can publish.
+///
+/// Watched red with `diff_base_branch: Some("pr-head")`, which is what
+/// `planFixLaunch` used to send. The merge-base is then the head itself, where
+/// the gate is equally red, so it is subtracted as pre-existing. The verifier
+/// passes, `s-finalize` completes, and the run ends `awaiting_mr` with the
+/// gate still failing.
+#[tokio::test]
+async fn a_fix_run_on_a_red_pr_head_does_not_publish_its_red_gate() {
+    const GATE: &str = "git grep -q HEALTHY -- README.md";
+    let run = run_starter_launched(
+        "address-review",
+        |settings| {
+            settings.worktree_strategy.test_command = Some(GATE.to_string());
+        },
+        seed_red_pr_head,
+        |launch| {
+            launch.origin = crate::domain::feature_origin::FeatureOrigin::Branch {
+                base: "pr-head".to_string(),
+            };
+            launch.diff_base_branch = Some("main".to_string());
+        },
+    )
+    .await
+    .snapshot;
+
+    let step = |id: &str| {
+        run.steps
+            .iter()
+            .find(|s| s.step_id == id)
+            .unwrap_or_else(|| panic!("no step {id} in {run:#?}"))
+    };
+
+    assert_eq!(run.terminal_status, "failed", "{run:#?}");
+    let confirm = step("s-confirm");
+    assert_eq!(confirm.status, "failed", "{run:#?}");
+    assert!(
+        confirm.error.as_deref().is_some_and(|e| e.contains(GATE)),
+        "s-confirm must fail on the gate itself, not on the fixture: {run:#?}"
+    );
+    assert_ne!(step("s-finalize").status, "completed", "{run:#?}");
+}
+
+/// `main` green and `pr-head` red for `git grep -q HEALTHY -- README.md`,
+/// both pushed to a local bare `origin` so a `Branch` origin can fetch them.
+fn seed_red_pr_head(dir: &Path) {
+    let parent = dir.parent().expect("repo dir has a parent");
+    let origin = parent.join("starter-origin.git");
+    std::fs::create_dir_all(&origin).expect("create origin dir");
+    git_in(&origin, &["init", "--bare", "-b", "main"]);
+
+    std::fs::create_dir_all(dir).expect("create repo dir");
+    let git = |args: &[&str]| git_in(dir, args);
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "demeteo@local"]);
+    git(&["config", "user.name", "demeteo"]);
+    std::fs::write(dir.join("README.md"), "# fixture\n\nHEALTHY\n").expect("seed README");
+    git(&["add", "-A"]);
+    git(&["commit", "-m", "seed"]);
+    let origin_url = origin.to_string_lossy().into_owned();
+    git(&["remote", "add", "origin", &origin_url]);
+    git(&["push", "origin", "main"]);
+
+    git(&["checkout", "-b", "pr-head"]);
+    std::fs::write(dir.join("README.md"), "# fixture\n").expect("break README");
+    git(&["commit", "-am", "break the gate"]);
+    git(&["push", "origin", "pr-head"]);
+    git(&["checkout", "main"]);
+}
+
+/// A fix run launched with a workflow that carries the eager
+/// `s-baseline-harness` node measures that node at the fork point the
+/// subtraction reads, not at the pull request's head its worktree is cut from.
+///
+/// `main` is the fork point, and the gate is green there. Every later
+/// harness-first pass on the red head then finds a record that covers the fork
+/// point and names the gate under the same command, so the lazy fallback never
+/// runs and the stored gate stays the node's.
+///
+/// Watched red with the node measuring its head again: it records `pr-head`'s
+/// sha with the gate red, the subtraction's fork point is `main`, and the lazy
+/// fallback replaces that record with its own measurement of `main` — so the
+/// stored `base_sha` is the same, but its gate says `Fallback`.
+#[tokio::test]
+async fn a_fix_run_measures_its_baseline_node_at_the_fork_point() {
+    let main_sha = std::sync::OnceLock::new();
+    let run = run_starter_launched(
+        "simple-task",
+        |settings| {
+            settings.worktree_strategy.test_command =
+                Some("git grep -q HEALTHY -- README.md".to_string());
+        },
+        |dir| {
+            seed_red_pr_head(dir);
+            let out = std::process::Command::new("git")
+                .args(["rev-parse", "main"])
+                .current_dir(dir)
+                .output()
+                .expect("run git");
+            let _ = main_sha.set(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        },
+        |launch| {
+            launch.origin = crate::domain::feature_origin::FeatureOrigin::Branch {
+                base: "pr-head".to_string(),
+            };
+            launch.diff_base_branch = Some("main".to_string());
+        },
+    )
+    .await;
+    let snapshot = &run.snapshot;
+
+    let node = snapshot
+        .steps
+        .iter()
+        .find(|s| s.step_id == "s-baseline-harness")
+        .unwrap_or_else(|| panic!("no baseline node in {snapshot:#?}"));
+    assert_eq!(node.status, "completed", "{snapshot:#?}");
+
+    let baseline = run
+        .harness_baseline
+        .as_ref()
+        .unwrap_or_else(|| panic!("the node must write a baseline record: {snapshot:#?}"));
+    assert_eq!(
+        Some(&baseline.base_sha),
+        main_sha.get(),
+        "the record must name the fork point, not the head the fix branch was cut from"
+    );
+    let gate = baseline
+        .harness("default")
+        .expect("the project's test_command is measured under the default gate name");
+    assert_eq!(
+        gate.producer,
+        crate::domain::harness_baseline::BaselineProducer::Node,
+        "the node's measurement must be the one the subtraction read: {baseline:#?}"
+    );
+    assert!(
+        gate.exit_ok,
+        "the gate is green at the fork point: {baseline:#?}"
+    );
+    assert!(
+        run.node_worktrees.is_empty(),
+        "the node's fork-point checkout must be torn down: {:?}",
+        run.node_worktrees
+    );
+}
+
+/// A fix run's baseline node measures the pull request's target, and a target
+/// that cannot prepare on this machine is no statement about the head the run
+/// validates. The node completes with no base to subtract and the run goes on.
+///
+/// `prepare_command` passes only where `pr-head` added its marker, so it fails
+/// at the fork point and succeeds everywhere the run itself works.
+///
+/// Watched red with the node reading `baseline_node_verdict` directly: the
+/// empty fork-point measurement is `Unmeasurable`, and the node ends
+/// `Environmental` before any agent runs — refusing to fix a pull request
+/// because `main` cannot install here.
+#[tokio::test]
+async fn a_fix_run_whose_target_cannot_prepare_still_runs() {
+    let main_sha = std::sync::OnceLock::new();
+    let run = run_starter_launched(
+        "simple-task",
+        |settings| {
+            settings.worktree_strategy.prepare_command =
+                Some("git grep -q PREPARED -- README.md".to_string());
+        },
+        |dir| {
+            seed_prepared_pr_head(dir);
+            let out = std::process::Command::new("git")
+                .args(["rev-parse", "main"])
+                .current_dir(dir)
+                .output()
+                .expect("run git");
+            let _ = main_sha.set(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        },
+        |launch| {
+            launch.origin = crate::domain::feature_origin::FeatureOrigin::Branch {
+                base: "pr-head".to_string(),
+            };
+            launch.diff_base_branch = Some("main".to_string());
+        },
+    )
+    .await;
+    let snapshot = &run.snapshot;
+
+    let node = snapshot
+        .steps
+        .iter()
+        .find(|s| s.step_id == "s-baseline-harness")
+        .unwrap_or_else(|| panic!("no baseline node in {snapshot:#?}"));
+    assert_eq!(node.status, "completed", "{snapshot:#?}");
+    assert_ne!(snapshot.terminal_status, "failed", "{snapshot:#?}");
+    assert!(
+        run.environment_not_ready.is_empty(),
+        "the target's health is not this machine's verdict on the head: {:?}",
+        run.environment_not_ready
+    );
+    assert!(
+        run.harness_baseline
+            .as_ref()
+            .is_none_or(|b| Some(&b.base_sha) != main_sha.get()),
+        "nothing was measured at the fork point, so no record may claim to cover it: {:#?}",
+        run.harness_baseline
+    );
+    assert!(
+        snapshot
+            .artifacts
+            .iter()
+            .any(|(step, _, body)| step == "s-baseline-harness" && body.contains("fork point")),
+        "the node's Output tab must say why there is no base: {snapshot:#?}"
+    );
+    assert!(
+        run.node_worktrees.is_empty(),
+        "the node's fork-point checkout must be torn down: {:?}",
+        run.node_worktrees
+    );
+}
+
+/// The required filter lives only in `main`'s attributes, so Git can provision
+/// the head worktree but cannot provision the detached fork-point checkout.
+#[tokio::test]
+async fn a_fork_point_checkout_failure_measures_the_head_in_place() {
+    let run = run_starter_launched(
+        "simple-task",
+        |settings| {
+            settings.worktree_strategy.prepare_command =
+                Some("git grep -q PREPARED -- README.md".to_string());
+        },
+        seed_fork_point_with_unavailable_filter,
+        |launch| {
+            launch.origin = crate::domain::feature_origin::FeatureOrigin::Branch {
+                base: "pr-head".to_string(),
+            };
+            launch.diff_base_branch = Some("main".to_string());
+        },
+    )
+    .await;
+    let snapshot = &run.snapshot;
+    let node = snapshot
+        .steps
+        .iter()
+        .find(|s| s.step_id == "s-baseline-harness")
+        .unwrap_or_else(|| panic!("no baseline node in {snapshot:#?}"));
+
+    assert_eq!(node.status, "failed", "{snapshot:#?}");
+    assert_eq!(snapshot.terminal_status, "failed", "{snapshot:#?}");
+    assert!(
+        node.error.as_deref().is_some_and(|e| e.contains("prepare")),
+        "the in-place measurement must keep its terminal answer: {snapshot:#?}"
+    );
+    assert!(run.harness_baseline.is_none(), "{snapshot:#?}");
+    assert!(run.node_worktrees.is_empty(), "{:?}", run.node_worktrees);
+}
+
+fn seed_fork_point_with_unavailable_filter(dir: &Path) {
+    let parent = dir.parent().expect("repo dir has a parent");
+    let origin = parent.join("starter-origin.git");
+    std::fs::create_dir_all(&origin).expect("create origin dir");
+    git_in(&origin, &["init", "--bare", "-b", "main"]);
+
+    std::fs::create_dir_all(dir).expect("create repo dir");
+    let git = |args: &[&str]| git_in(dir, args);
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "demeteo@local"]);
+    git(&["config", "user.name", "demeteo"]);
+    std::fs::write(dir.join("README.md"), "# fixture\n").expect("seed README");
+    std::fs::write(dir.join(".gitattributes"), "README.md filter=unavailable\n")
+        .expect("seed filter attribute");
+    git(&["add", "-A"]);
+    git(&["commit", "-m", "seed"]);
+    let origin_url = origin.to_string_lossy().into_owned();
+    git(&["remote", "add", "origin", &origin_url]);
+    git(&["push", "origin", "main"]);
+
+    git(&["checkout", "-b", "pr-head"]);
+    std::fs::write(dir.join(".gitattributes"), "").expect("remove filter attribute at head");
+    git(&["add", "-A"]);
+    git(&["commit", "-m", "make head check out without filter"]);
+    git(&["push", "origin", "pr-head"]);
+    git(&["checkout", "main"]);
+    git(&[
+        "config",
+        "filter.unavailable.smudge",
+        "git rev-parse --verify refs/heads/missing-filter-ref",
+    ]);
+    git(&["config", "filter.unavailable.required", "true"]);
+}
+
+/// `main` without and `pr-head` with a `PREPARED` marker in `README.md`, both
+/// pushed to a local bare `origin` so a `Branch` origin can fetch them.
+fn seed_prepared_pr_head(dir: &Path) {
+    let parent = dir.parent().expect("repo dir has a parent");
+    let origin = parent.join("starter-origin.git");
+    std::fs::create_dir_all(&origin).expect("create origin dir");
+    git_in(&origin, &["init", "--bare", "-b", "main"]);
+
+    std::fs::create_dir_all(dir).expect("create repo dir");
+    let git = |args: &[&str]| git_in(dir, args);
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.email", "demeteo@local"]);
+    git(&["config", "user.name", "demeteo"]);
+    std::fs::write(dir.join("README.md"), "# fixture\n").expect("seed README");
+    git(&["add", "-A"]);
+    git(&["commit", "-m", "seed"]);
+    let origin_url = origin.to_string_lossy().into_owned();
+    git(&["remote", "add", "origin", &origin_url]);
+    git(&["push", "origin", "main"]);
+
+    git(&["checkout", "-b", "pr-head"]);
+    std::fs::write(dir.join("README.md"), "# fixture\n\nPREPARED\n").expect("mark README");
+    git(&["commit", "-am", "make the checkout preparable"]);
+    git(&["push", "origin", "pr-head"]);
+    git(&["checkout", "main"]);
 }

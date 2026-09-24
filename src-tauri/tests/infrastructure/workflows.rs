@@ -1,6 +1,7 @@
 // Tests extracted from `src-tauri/src/commands/workflows.rs` (mirrored-tests convention). `super` = that module.
 
 use crate::domain::models::StepConfig;
+use crate::domain::permission::StepCapability;
 
 use crate::adapters::database::SqliteAdapter;
 use crate::domain::ids::{WorkflowId, WorkflowVersionId};
@@ -91,6 +92,250 @@ fn the_review_starter_imposes_no_method_of_its_own() {
             "the review prompt says '{phrase}' — Demeteo is imposing a review method"
         );
     }
+}
+
+/// `s-review` told the reviewer the workflow had one step and that nothing
+/// would follow it. That stopped being true when `s-validate-branch` landed,
+/// and the audience it misinformed is the one that cannot check it: a
+/// reviewer reads the prompt as the description of the run it is inside.
+/// Nothing compiles a `prompt_template` — a prompt describing a graph that
+/// does not exist parses, lints and runs exactly as well as one describing
+/// the real one — so the sentence survived every full `npm run checks` there
+/// has been. What the assertion rejects is the *count* and the claim that the
+/// run ends there, not any mention of what comes next: a reviewer who knows
+/// the project's own gates run after it does not have to guess at build state,
+/// and that sentence stays true however long the list grows.
+#[test]
+fn the_review_starter_does_not_describe_its_own_step_list() {
+    let prompts = prompt_text(CODE_REVIEW);
+
+    for claim in [
+        "one step and nothing after it",
+        "this workflow has one step",
+    ] {
+        assert!(
+            !prompts.contains(claim),
+            "the review prompt says '{claim}' — it is describing a graph it does not hold"
+        );
+    }
+}
+
+/// The engine already subtracts a gate that was red at the base commit with the
+/// identical output, and says so in the Harness Results block this step reads
+/// (`build_exclusion_reason`). Neither of this step's two prose fields had a
+/// word for that subtraction, and a judge with no word for it has only one
+/// thing left to call a red gate: a defect in the change under review. That is
+/// how a branch which arrived red is written up as the pull request's fault.
+///
+/// Both fields are read because they are two different audiences — the step
+/// writes the artifact, the verifier grades it — and a term present in only one
+/// of them leaves the other free to contradict it. `prompt_text` reads
+/// `prompt_template` alone, so it cannot serve here.
+#[test]
+fn the_review_starter_can_name_a_failure_it_did_not_cause() {
+    let steps = parse(CODE_REVIEW);
+    let gate = steps
+        .iter()
+        .find(|s| s.verifier.is_some())
+        .expect("the review starter has a step the engine runs the project's gates for");
+
+    let fields = [
+        ("prompt_template", gate.prompt_template.clone()),
+        (
+            "verifier.instructions",
+            gate.verifier.as_ref().map(|v| v.instructions.clone()),
+        ),
+    ];
+    for (field, text) in fields {
+        let text = text.unwrap_or_default().to_lowercase();
+        assert!(
+            text.contains("pre-existing"),
+            "'{}' has no term in its {field} for a failure that pre-dates the branch, \
+             so a gate that was already red is reported as this change's defect",
+            gate.id.0
+        );
+    }
+}
+
+/// A review whose report can come back clean on a branch that does not build
+/// is the bug this step exists to close. `run_harness_first` — the only code
+/// that executes a project's `prepare_command` / `test_command` — is gated on
+/// the step declaring a `verifier`, so that block is not decoration: it is the
+/// whole of what makes the engine run this project's own gates before the turn.
+/// Delete it from the starter and the file still parses, still lints, still
+/// runs, and silently stops measuring anything.
+#[test]
+fn the_review_starter_runs_the_projects_own_gates() {
+    let steps = parse(CODE_REVIEW);
+    assert!(
+        steps
+            .iter()
+            .any(|s| s.verifier.is_some() && s.effective_capability() == StepCapability::Verify),
+        "no step asks the engine to run the project's gates, so a clean report \
+         says nothing about whether the branch builds"
+    );
+}
+
+fn sentences(text: &str) -> impl Iterator<Item = &str> {
+    text.lines().flat_map(|line| line.split(". "))
+}
+
+/// A step's two prose fields, labelled for an assertion message. A step with
+/// no verifier has no second one.
+fn prose_fields(step: &StepConfig) -> [(&'static str, Option<&str>); 2] {
+    [
+        ("prompt_template", step.prompt_template.as_deref()),
+        (
+            "verifier.instructions",
+            step.verifier.as_ref().map(|v| v.instructions.as_str()),
+        ),
+    ]
+}
+
+/// The gates run before `s-validate-branch`'s turn, not during it (see
+/// `the_review_starter_runs_the_projects_own_gates`), and a gate this branch
+/// turned red fails the step right there: no agent runs, `branch-validation.md`
+/// is never written, and what survives is the failing command's output as the
+/// step's failure reason. All three prose fields once promised that report
+/// regardless, and told the verifier to grade a red gate it is never shown —
+/// so a reviewer counted on an artifact the run could not produce, and nothing
+/// but prose disagreed with the engine.
+///
+/// Every field of every step is read, because the promise was spread across
+/// both audiences and either one alone would reinstate it.
+#[test]
+fn the_review_starter_does_not_promise_a_gate_report_on_a_red_branch() {
+    let steps = parse(CODE_REVIEW);
+
+    for step in &steps {
+        for (field, text) in prose_fields(step) {
+            let text = text.unwrap_or_default().to_lowercase();
+            for promise in [
+                "writes their output to",
+                "when a listed command exited non-zero",
+            ] {
+                assert!(
+                    !text.contains(promise),
+                    "'{}' says '{promise}' in its {field} — a red gate ends the step \
+                     before any agent turn, so nothing is there to write or grade it",
+                    step.id.0
+                );
+            }
+        }
+    }
+
+    for (id, field) in [
+        ("s-review", "prompt_template"),
+        ("s-validate-branch", "prompt_template"),
+        ("s-validate-branch", "verifier.instructions"),
+    ] {
+        let step = steps
+            .iter()
+            .find(|s| s.id.0 == id)
+            .unwrap_or_else(|| panic!("the review starter has no step '{id}'"));
+        let text = prose_fields(step)
+            .into_iter()
+            .find(|(name, _)| *name == field)
+            .and_then(|(_, text)| text)
+            .unwrap_or_else(|| panic!("'{id}' has no {field}"))
+            .to_lowercase();
+        assert!(
+            text.contains("ends the step before"),
+            "'{id}' never says in its {field} that a red gate ends the step before \
+             any agent turn, so its reader expects a report a red branch cannot produce"
+        );
+    }
+}
+
+/// A project that configures no gate leaves `s-validate-branch` with nothing
+/// to run, and no review step may ask for `environment` there. The engine
+/// reads that verdict as `VerdictDisposition::Unjudgeable`, which ends the step
+/// without recording its artifact and fails the feature: every review of an
+/// unconfigured project would end `failed`, its `branch-validation.md` written
+/// but shown nowhere, and a fix launched from it would be told a gate failed
+/// when none ran. The honest answer is `pass` with a report that leaves the
+/// branch unjudged, which is what the step's own prompt asks the turn to write.
+///
+/// The starter still has to *name* `environment`, because the engine advises
+/// it for this case and the override must say which advice it cancels. So the
+/// ban is on asking, not on mentioning: the double-quoted literal — the value
+/// a verdict JSON would carry — never appears, and every sentence that
+/// mentions `` `environment` `` also negates it. Whether the override actually
+/// lands after the engine's advice in the prompt the turn receives is held in
+/// `crates/demeteo-core/tests/infrastructure/step_executor/steps/agent/prompt.rs`,
+/// which renders it; this test only sees the JSON.
+///
+/// A gate that cannot start (exit 127, a dead transport, a timeout) never
+/// reaches the verifier — harness-first ends it as a terminal `Environment`
+/// before the turn — so no case is left for which `environment` is right here.
+/// That the engine completes a `pass` with nothing configured is proved in
+/// `crates/demeteo-core/tests/conformance/starter_baseline.rs`.
+#[test]
+fn the_review_starter_passes_a_branch_no_gate_was_configured_for() {
+    let steps = parse(CODE_REVIEW);
+
+    for step in &steps {
+        for (field, text) in prose_fields(step) {
+            let text = text.unwrap_or_default().to_lowercase();
+            assert!(
+                !text.contains("\"environment\""),
+                "'{}' names the verdict \"environment\" in its {field}; for a review \
+                 step it fails the feature and drops the step's report",
+                step.id.0
+            );
+            for sentence in sentences(&text).filter(|s| s.contains("`environment`")) {
+                assert!(
+                    sentence
+                        .split(|c: char| !c.is_alphanumeric())
+                        .any(|word| word == "not" || word == "never"),
+                    "'{}' mentions `environment` in its {field} without negating it, \
+                     so it reads as asking for the verdict that fails a review: {sentence}",
+                    step.id.0
+                );
+            }
+        }
+    }
+
+    let instructions = steps
+        .iter()
+        .find(|s| s.id.0 == "s-validate-branch")
+        .and_then(|s| s.verifier.as_ref())
+        .map(|v| v.instructions.to_lowercase())
+        .expect("the review starter's gate step has verifier instructions");
+    assert!(
+        sentences(&instructions)
+            .any(|sentence| sentence.contains("\"pass\"") && sentence.contains("no command")),
+        "s-validate-branch's verifier is never told to return \"pass\" when no \
+         command ran, so an unconfigured project's review has no verdict that completes"
+    );
+}
+
+/// Every test-gated starter not cut from a pull request opens on
+/// `s-baseline-harness`, and the two that are not read as an oversight to
+/// anyone who counts them. It is the opposite. `run_baseline_node` states its own precondition: the head of the
+/// graph is the one position where the feature branch still points at the base
+/// commit, because nothing has been implemented yet. That is true of a run cut
+/// from a default branch or from a branch, and false of a review — a review is
+/// cut at the pull request's head, so a measurement taken there records the sha
+/// of the tree under review, while the subtraction resolves its base through
+/// `merge_base`. `HarnessBaseline::covers` is sha-exact, so those two never
+/// meet: the record would be written, never matched, and the lazy fallback
+/// would measure again anyway — one extra `prepare_command` and gate run per
+/// review, for a record nothing reads.
+///
+/// Teaching the node to resolve its own base would close that, and it changes a
+/// documented invariant across all nine starters, so it is a decision rather
+/// than a detail. Until it is taken, the absence here is the configuration that
+/// is correct, and nothing but this assertion says so.
+#[test]
+fn the_review_starter_measures_no_baseline_of_its_own() {
+    let steps = parse(CODE_REVIEW);
+    assert!(
+        steps.iter().all(|s| s.measure_baseline != Some(true)),
+        "a review branch is cut at the pull request's head, so a baseline taken \
+         at the head of this graph names the tree under review rather than the \
+         base it is judged against, and no subtraction can ever match it"
+    );
 }
 
 /// `finalize` squashes the branch and hands it to the publisher, so a review
@@ -205,6 +450,33 @@ fn the_fix_starter_checks_the_work_before_publishing_it() {
             .iter()
             .any(|s| s.kind == "gate" || s.verifier.is_some()),
         "nothing judges the run before it opens a pull request"
+    );
+}
+
+/// The fix run inherits the review starter's premise failure — for the reason
+/// [`the_review_starter_measures_no_baseline_of_its_own`] gives — on one of its
+/// two launch paths. Launched with `origin: {kind:'branch'}`, the pull
+/// request's branch is the base, and a node at the head of this graph measures
+/// it correctly. Launched with `kind:'ref'` — every fork pull request, and every
+/// one whose head repository cannot be pushed to — the run is cut at the pull
+/// request's head while `resolve_base_sha` resolves the merge-base, so the node
+/// records a sha no subtraction ever matches. The lazy fallback measures the
+/// right merge-base on the red path of both launch paths, so dropping the node
+/// loses nothing on a red run and saves a full gate run on every green one. A
+/// node conditional on the launch origin would need engine support that does
+/// not exist.
+#[test]
+fn the_fix_starter_measures_no_baseline_of_its_own() {
+    let steps = parse(ADDRESS_REVIEW);
+    assert!(
+        steps.iter().all(|s| s.measure_baseline != Some(true)),
+        "a fix launched from a pull request's head records that head as its \
+         baseline, which the merge-base subtraction never matches"
+    );
+    assert_eq!(
+        steps.first().map(|s| s.id.0.as_str()),
+        Some("s-address"),
+        "the fix run opens on the work, not on a measurement"
     );
 }
 

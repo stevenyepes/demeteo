@@ -1,12 +1,11 @@
-use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use tauri::ipc::{Channel, InvokeResponseBody};
 
-use super::{ActiveSession, Broadcast, ReadSource, SessionState, WriteSink};
+use super::{ActiveSession, Broadcast, SessionState};
 
 pub const DRAIN_WAIT_MS: u64 = 2_000;
 
@@ -72,8 +71,6 @@ pub fn wait_until(predicate: impl Fn() -> bool) -> bool {
 
 pub struct TestSessionHandles {
     pub broadcast: Arc<Mutex<Broadcast>>,
-    pub writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
-    pub drain: Option<JoinHandle<()>>,
 }
 
 pub struct TestSessionBuilder {
@@ -81,7 +78,6 @@ pub struct TestSessionBuilder {
     activity_nonce: Option<String>,
     connected: bool,
     scrollback_seed: Vec<u8>,
-    live_drain: bool,
 }
 
 impl Default for TestSessionBuilder {
@@ -97,7 +93,6 @@ impl TestSessionBuilder {
             activity_nonce: None,
             connected: true,
             scrollback_seed: Vec::new(),
-            live_drain: false,
         }
     }
 
@@ -121,11 +116,6 @@ impl TestSessionBuilder {
         self
     }
 
-    pub fn live_drain(mut self) -> Self {
-        self.live_drain = true;
-        self
-    }
-
     pub fn build(self) -> (ActiveSession, TestSessionHandles) {
         let broadcast: Arc<Mutex<Broadcast>> = Arc::new(Mutex::new(Broadcast::new()));
         let frontend_channel = broadcast.clone();
@@ -134,36 +124,6 @@ impl TestSessionBuilder {
         }
         let (read_source, write_sink, keepalive, _child_pid, _settings) =
             super::start_local_pty("local", &None, &None, 80, 24).expect("start_local_pty");
-
-        let (writer, drain) = if self.live_drain {
-            let reader = match &read_source {
-                ReadSource::LocalPty(r) => r.clone(),
-                ReadSource::Ssh(_) => unreachable!("local pty path"),
-            };
-            let writer_handle: Arc<Mutex<Box<dyn Write + Send>>> = match &write_sink {
-                WriteSink::LocalPty(w) => w.clone(),
-                WriteSink::Ssh(_) => unreachable!("local pty path"),
-            };
-            let keepalive_for_thread = keepalive.clone();
-            let frontend_channel_for_thread = frontend_channel.clone();
-            let drain_handle = thread::spawn(move || {
-                let mut buffer = [0u8; 8192];
-                loop {
-                    let read_result = reader.lock().expect("reader lock").read(&mut buffer);
-                    match read_result {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            let chunk = buffer[..n].to_vec();
-                            super::send_chunk(&frontend_channel_for_thread, chunk);
-                        }
-                    }
-                }
-                drop(keepalive_for_thread);
-            });
-            (Some(writer_handle), Some(drain_handle))
-        } else {
-            (None, None)
-        };
 
         let session = ActiveSession {
             read_source,
@@ -184,14 +144,7 @@ impl TestSessionBuilder {
             connected: Arc::new(AtomicBool::new(self.connected)),
         };
 
-        (
-            session,
-            TestSessionHandles {
-                broadcast,
-                writer,
-                drain,
-            },
-        )
+        (session, TestSessionHandles { broadcast })
     }
 
     pub fn install(self, state: &SessionState, id: &str) -> TestSessionHandles {

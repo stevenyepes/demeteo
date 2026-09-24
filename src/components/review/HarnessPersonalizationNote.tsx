@@ -38,9 +38,12 @@ const NOTE: Record<PersonalizationSupport, (label: string) => string> = {
   native: (label) =>
     `${label} starts with whatever it normally loads on this machine — Demeteo passes it ` +
     `no personalization flags either way.`,
-  // Names the project's harness setting rather than "pick another harness":
-  // this surface has no picker, and copy that asks for an action the screen
-  // cannot perform reads as a broken control the user failed to find.
+  // Names the project's harness setting rather than the picker beside it: a
+  // per-launch choice lasts one run, and a user who reads this is being told
+  // that Demeteo strips their setup on every review until the stored default
+  // changes. The note is also rendered where no picker exists, and copy asking
+  // for an action the screen cannot perform reads as a broken control the user
+  // failed to find.
   suppressed: (label) =>
     `Demeteo starts ${label} with its own skills and prompt templates switched off, so ` +
     `this review runs on your conventions alone. Change the project's default harness in ` +

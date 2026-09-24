@@ -96,7 +96,7 @@ fn empty_subject_and_title_is_not_an_answer() {
     assert!(parse_authored(r#"{"pr_title": "  ", "commit_subject": ""}"#).is_none());
 }
 
-// ── pr_body_with_hook_warning ────────────────────────────────────────────
+// ── published_pr_body ─────────────────────────────────────────────────────
 
 #[test]
 fn an_unflagged_body_is_published_verbatim() {
@@ -106,7 +106,7 @@ fn an_unflagged_body_is_published_verbatim() {
         pr_title: "t".to_string(),
         pr_body: "## Why\nIt flakes.".to_string(),
     };
-    assert_eq!(a.pr_body_with_hook_warning(false), "## Why\nIt flakes.");
+    assert_eq!(a.published_pr_body(false, None), "## Why\nIt flakes.");
 }
 
 /// A message the repo's own hook rejected must not be published as though it
@@ -119,8 +119,46 @@ fn a_bypassed_hook_is_declared_in_the_body() {
         pr_title: "t".to_string(),
         pr_body: "## Why\nIt flakes.".to_string(),
     };
-    let body = a.pr_body_with_hook_warning(true);
+    let body = a.published_pr_body(true, None);
     assert!(body.starts_with("## Why\nIt flakes.\n\n---\n> \u{26a0}\u{fe0f} "));
     assert!(body.contains("`commit-msg` hook rejected every commit message Demeteo proposed"));
     assert!(body.ends_with("Its message may not satisfy your commit lint."));
+}
+
+#[test]
+fn fallback_body_discloses_stacked_commits() {
+    let origin = crate::domain::feature_origin::FeatureOrigin::Ref {
+        fetch_spec: "refs/pull/40/head".to_string(),
+        label: "main".to_string(),
+    };
+    let notice = crate::domain::finalize::stacked_on::stacked_on_note(&origin, "main")
+        .expect("a ref origin carries inherited commits");
+    let a = Authored::fallback("Address review findings — PR #40");
+    let body = a.published_pr_body(false, Some(&notice));
+    assert!(body.contains("reviewed request #40"), "{body}");
+    assert!(body.contains("into `main`"), "{body}");
+    assert!(
+        body.contains("also merges that reviewed request's commits"),
+        "{body}"
+    );
+}
+
+#[test]
+fn stacked_notice_survives_an_agent_body_and_hook_warning() {
+    let a = Authored {
+        commit_subject: "s".to_string(),
+        commit_body: String::new(),
+        pr_title: "t".to_string(),
+        pr_body: "## Why\nFix the review findings.".to_string(),
+    };
+    let body = a.published_pr_body(
+        true,
+        Some("Stacked on reviewed request #40; merging into `main` also merges its commits."),
+    );
+    assert!(
+        body.starts_with("Stacked on reviewed request #40"),
+        "{body}"
+    );
+    assert!(body.contains("## Why\nFix the review findings."), "{body}");
+    assert!(body.contains("`commit-msg` hook rejected"), "{body}");
 }

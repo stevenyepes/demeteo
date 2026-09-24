@@ -14,7 +14,7 @@
  * launched it, where the user can still read which pull request it was about.
  */
 
-import type { FeatureOrigin } from '../types';
+import type { EffortLevel, FeatureOrigin, WorkflowWithSteps } from '../types';
 import type { PullRequestSummary } from './pullRequests';
 
 /** The bundled review starter (`src-tauri/workflows/code-review.json`). Its id
@@ -22,12 +22,54 @@ import type { PullRequestSummary } from './pullRequests';
  *  same row — which is what lets this name one workflow outright. */
 export const REVIEW_STARTER_WORKFLOW_ID = 'wf-starter-code-review';
 
-/** Whether that starter's review step runs on the harness's own skills and
- *  prompt templates (`uses_agent_skills` in the shipped JSON). Mirrored here
- *  because the launch surface states what the run will do before any workflow
- *  has been fetched; `reviewLaunch.test.ts` reads the shipped file and fails
- *  when the two disagree, which is the only thing keeping the promise true. */
+/** Whether the starter's `s-review` step — the one that writes the report, not
+ *  the `s-validate-branch` gate beside it — runs on the harness's own skills
+ *  and prompt templates (`uses_agent_skills` in the shipped JSON). Mirrored
+ *  here because the launch surface states what the run will do before any
+ *  workflow has been fetched; `reviewLaunch.test.ts` looks that step up by id
+ *  in the shipped file and fails when the two disagree, which is the only
+ *  thing keeping the promise true. */
 export const REVIEW_STARTER_KEEPS_PERSONALIZATION = true;
+
+/**
+ * What a launch surface's pickers chose, as far as a plan is concerned.
+ *
+ * Every field is optional and an unset one means *inherit* — the project
+ * default, then the engine's. So an untouched `<select>`, whose value is `''`,
+ * must not reach a launch as `agentKind: ''`: that is a harness named the empty
+ * string, which inherits nothing. {@link planReviewLaunch} normalises it.
+ *
+ * `fixLaunch.ts` reads the same shape, which is why it is declared here rather
+ * than beside either caller.
+ */
+export interface RunChoice {
+  workflowId?: string;
+  agentKind?: string;
+  model?: string;
+  effort?: EffortLevel;
+}
+
+/**
+ * Why a choice may not launch as it stands, or `null` when it may.
+ *
+ * The engine resolves the harness and the model independently
+ * (`resolve_agent_model`), so a harness chosen here with the model left
+ * inherited runs with the *project's* model id — one picked for the project's
+ * harness, which the chosen one may not accept at all. Inheriting both is
+ * sound, and so is choosing both; only the split is refused.
+ *
+ * Not a {@link ReviewLaunchPlan} refusal: a plan refusal hides the pickers on
+ * the fix surface, and this is the one refusal the user resolves in them.
+ */
+export function runChoiceGap(choice: RunChoice): string | null {
+  const agentKind = chosen(choice.agentKind);
+  if (agentKind === undefined || chosen(choice.model) !== undefined) return null;
+  const harness = agentKind.replace(/-/g, ' ');
+  return (
+    `Choose a model for ${harness}, or set Harness back to Project default. ` +
+    `The project's default model belongs to the project's harness and may not run on ${harness}.`
+  );
+}
 
 /** A subset of `LaunchRunParams`, so a plan reaches `useLaunchRun` unchanged
  *  rather than being copied field by field into it. */
@@ -37,6 +79,9 @@ export interface ReviewLaunchParams {
   description: string;
   origin: FeatureOrigin;
   diffBaseBranch: string;
+  agentKind?: string;
+  model?: string;
+  effort?: EffortLevel;
 }
 
 export type ReviewLaunchPlan =
@@ -48,6 +93,7 @@ const TITLE_LIMIT = 72;
 export function planReviewLaunch(
   pullRequest: PullRequestSummary,
   instructions = '',
+  choice?: RunChoice,
 ): ReviewLaunchPlan {
   const fetchSpec = usableFetchSpec(pullRequest.head_fetch_spec);
   if (fetchSpec === null) {
@@ -72,7 +118,7 @@ export function planReviewLaunch(
   return {
     ok: true,
     launch: {
-      workflowId: REVIEW_STARTER_WORKFLOW_ID,
+      workflowId: chosen(choice?.workflowId) ?? REVIEW_STARTER_WORKFLOW_ID,
       title: reviewTitle(pullRequest),
       description: reviewDescription(pullRequest, instructions),
       origin: {
@@ -81,8 +127,44 @@ export function planReviewLaunch(
         label: named(pullRequest.source_branch) ?? `PR #${pullRequest.number}`,
       },
       diffBaseBranch,
+      agentKind: chosen(choice?.agentKind),
+      model: chosen(choice?.model),
+      effort: chosen(choice?.effort),
     },
   };
+}
+
+/**
+ * The workflows a review may be launched with: the ones with no `finalize`
+ * step, and with a verifier on at least one step.
+ *
+ * A pull request's title and branch name are written by a stranger and land in
+ * the prompt this module composes. Offering a workflow that commits, pushes or
+ * opens a pull request would widen what that text can reach — the reader of a
+ * chooser labelled "review" has no reason to check whether the entry they
+ * picked publishes. `the_review_starter_has_no_step_that_publishes`
+ * (`src-tauri/tests/infrastructure/workflows.rs`) asserts exactly this of the
+ * bundled starter; this is the same property applied to whatever else the user
+ * may select instead of it.
+ *
+ * The verifier requirement is `fixWorkflowChoices`'s (`fixLaunch.ts`), for its
+ * reason: only a verifier step runs the project's prepare and gate commands.
+ * The launch surface tells the user, before any workflow is chosen, that the
+ * review runs them on the branch — a workflow without a verifier would run a
+ * prose review under that sentence and leave the fix surface no gate evidence.
+ */
+export function reviewWorkflowChoices(workflows: WorkflowWithSteps[]): WorkflowWithSteps[] {
+  return workflows.filter(
+    (workflow) =>
+      workflow.steps.every((step) => step.kind !== 'finalize') &&
+      workflow.steps.some((step) => step.verifier != null),
+  );
+}
+
+/** `''` is what an untouched `<select>` yields, and it is not a choice — see
+ *  {@link RunChoice}. */
+function chosen<T extends string>(value: T | null | undefined): T | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
 /** The `refs/` prefix subsumes the leading-`-` half of the Rust `Refspec`

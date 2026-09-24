@@ -11,7 +11,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
 import { NavigationProvider, ProjectProvider, useProject } from '../../context';
-import type { Project } from '../../types';
+import { REVIEW_STARTER_WORKFLOW_ID } from '../../lib/reviewLaunch';
+import type { Project, WorkflowWithSteps } from '../../types';
 import { CodeReviewView } from './CodeReviewView';
 
 const PROJECT: Project = {
@@ -54,9 +55,66 @@ function backend(answer: () => Promise<unknown>) {
   });
 }
 
-/** The three commands the launch surface reads before it can state what a
- *  review will load, and nothing else — so a view that reached for a fourth
- *  fails here rather than passing against a stub that answers everything. */
+/** Three rows, so one read per row shows up as three calls. Keyed apart by URL
+ *  the way the view keys them. */
+const THREE_PULL_REQUESTS = [412, 413, 414].map((number) => ({
+  ...PULL_REQUEST,
+  number,
+  web_url: `https://github.com/acme/app/pull/${number}`,
+  head_fetch_spec: `refs/pull/${number}/head`,
+}));
+
+const WORKFLOW: WorkflowWithSteps = {
+  id: 'wf-deep-review',
+  name: 'Deep review',
+  description: '',
+  is_starter: false,
+  created_at: 0,
+  updated_at: 0,
+  version: 1,
+  version_id: 'wf-deep-review-v1',
+  steps: [{ id: 's-review', kind: 'agent', title: 'Review' }],
+};
+
+/** Answers a three-row queue and every read a row's launch surface makes,
+ *  counting the commands so a per-row read is visible as a count of three.
+ *  `workflows: 'rejected'` is the registry read failing. */
+function queueBackend(input: { workflows: 'ok' | 'rejected' }) {
+  const calls: string[] = [];
+  const launches: Record<string, unknown>[] = [];
+  vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
+    calls.push(cmd);
+    if (cmd === 'list_open_pull_requests') return Promise.resolve(THREE_PULL_REQUESTS);
+    if (cmd === 'get_project_by_id') return Promise.resolve(PROJECT);
+    if (cmd === 'workflow_list') {
+      return input.workflows === 'ok'
+        ? Promise.resolve([WORKFLOW])
+        : Promise.reject(new Error('workflow registry unavailable'));
+    }
+    if (cmd === 'get_agent_configs') {
+      return Promise.resolve([{ kind: 'claude-code', enabled: true, available: true }]);
+    }
+    if (cmd === 'get_proposed_strategy') {
+      return Promise.resolve({ default_agent_kind: 'claude-code' });
+    }
+    if (cmd === 'list_agents') return Promise.resolve([]);
+    if (cmd === 'start_feature') {
+      launches.push(typeof args === 'object' && args !== null ? { ...args } : {});
+      return Promise.resolve({ id: 'feat-1', title: 'Review', status: 'running' });
+    }
+    return Promise.reject(new Error(`unexpected command: ${cmd}`));
+  });
+  return {
+    launches,
+    timesCalled: (cmd: string) => calls.filter((c) => c === cmd).length,
+  };
+}
+
+/** The commands the launch surface reads before it can state what a review will
+ *  load, and nothing else — so a view that reached for one more fails here
+ *  rather than passing against a stub that answers everything. The run-shape
+ *  reads are left rejecting on purpose: the note under test must stand whether
+ *  or not a picker was fetched. */
 function reviewBackend(input: {
   defaultAgentKind: string | null;
   personalization: string;
@@ -214,6 +272,7 @@ describe('CodeReviewView', () => {
       screen.getByLabelText('Extra instructions (optional)'),
       'Concentrate on the fence.',
     );
+    await userEvent.click(screen.getByTestId('review-fork-consent'));
     await userEvent.click(screen.getByTestId('review-this-pr'));
 
     await waitFor(() => expect(launches).toHaveLength(1));
@@ -230,10 +289,12 @@ describe('CodeReviewView', () => {
   it('launches in one click, with no instructions section in the description', async () => {
     // The headline promise: click once, a review runs. Every other launch test
     // opens the panel first, which would let a regression that made the button
-    // depend on it pass unnoticed.
+    // depend on it pass unnoticed. A fork asks for an acknowledgement first, so
+    // the promise is a same-repo pull request's.
     const launches: Record<string, unknown>[] = [];
     vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
-      if (cmd === 'list_open_pull_requests') return Promise.resolve([PULL_REQUEST]);
+      if (cmd === 'list_open_pull_requests')
+        return Promise.resolve([{ ...PULL_REQUEST, from_fork: false }]);
       if (cmd === 'start_feature') {
         launches.push(typeof args === 'object' && args !== null ? { ...args } : {});
         return Promise.resolve({ id: 'feat-1', title: 'Review PR #412', status: 'running' });
@@ -381,5 +442,51 @@ describe('CodeReviewView', () => {
     const notice = await screen.findByTestId('code-review-detail-failure');
     expect(notice).toHaveTextContent('api.github.com');
     expect(notice).toHaveTextContent('in about 2 min');
+  });
+
+  /**
+   * The same incident the enrichment tests above guard, one tier up: the
+   * workflows and the machine's harness probe are fetched for the queue, not
+   * for the row. Per row, a hundred-row listing is a hundred `get_agent_configs`
+   * — and on a remote project, a hundred SSH round trips before the user has
+   * clicked anything.
+   */
+  it('reads the workflows and the harness probe once for the whole queue', async () => {
+    const backend = queueBackend({ workflows: 'ok' });
+    mount();
+
+    // The label is `Options` only once the run-shape object has reached the
+    // rows, so this waits for the reads to land rather than racing them.
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: 'Options' })).toHaveLength(3),
+    );
+
+    expect(backend.timesCalled('workflow_list')).toBe(1);
+    expect(backend.timesCalled('get_agent_configs')).toBe(1);
+  });
+
+  it('keeps every row and its starter default when the workflow read fails', async () => {
+    // A picker that could not be fetched is a picker missing, not a queue
+    // missing — and not a banner either: nothing the user asked for failed.
+    const backend = queueBackend({ workflows: 'rejected' });
+    mount();
+
+    expect(await screen.findAllByTestId('pull-request-row')).toHaveLength(3);
+    expect(screen.queryByTestId('code-review-failure')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('code-review-detail-failure')).not.toBeInTheDocument();
+
+    for (const consent of screen.getAllByTestId('review-fork-consent')) {
+      await userEvent.click(consent);
+    }
+    for (const button of screen.getAllByTestId('review-this-pr')) {
+      await userEvent.click(button);
+    }
+
+    await waitFor(() => expect(backend.launches).toHaveLength(3));
+    expect(backend.launches.map((launch) => launch.workflowId)).toEqual([
+      REVIEW_STARTER_WORKFLOW_ID,
+      REVIEW_STARTER_WORKFLOW_ID,
+      REVIEW_STARTER_WORKFLOW_ID,
+    ]);
   });
 });

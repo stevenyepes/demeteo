@@ -317,3 +317,73 @@ fn all_three_verdicts_are_offered_s13() {
         );
     }
 }
+
+/// The review starter's gate step judges nothing a project must configure: it
+/// reports what the gates said. With no gate configured, the verdict that
+/// completes it is `pass`, and `environment` ends the review `failed` with its
+/// report discarded. Yet two engine blocks bracket the starter's instructions
+/// and advise `environment` for exactly that case — `NotConfigured`'s section
+/// above them, the verdict contract below. The starter can only win that by
+/// naming the block and overriding it after it, so this renders the prompt the
+/// turn really receives rather than reading the starter's JSON alone, where
+/// the conflict is invisible.
+///
+/// Prose is the only lever while the engine offers `environment` under
+/// `NotConfigured` to every step; the `domain/` fix is the follow-up recorded
+/// under `docs/OPEN_QUESTIONS.md` §21a.
+#[test]
+fn the_review_gate_step_overrides_the_engines_environment_advice_when_nothing_ran() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../src-tauri/workflows/code-review.json");
+    let raw = std::fs::read_to_string(path).expect("the code-review starter ships in-tree");
+    let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let verifier_json = doc["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == "s-validate-branch")
+        .expect("the shipped starter carries its gate step, s-validate-branch")["verifier"]
+        .clone();
+    let cfg: VerifierConfig = serde_json::from_value(verifier_json).unwrap();
+
+    let out = append_verdict_contract(
+        "body".into(),
+        Some(&cfg),
+        Some(&HarnessOutcome::NotConfigured),
+    );
+
+    let block = out
+        .find("## Harness Results — NOTHING RAN")
+        .expect("the engine's NotConfigured section must render");
+    let contract = out
+        .find("Use `environment`")
+        .expect("the verdict contract's environment advice must render");
+    let (at, sentence) = out
+        .match_indices(". ")
+        .map(|(i, _)| i + 2)
+        .chain(out.match_indices('\n').map(|(i, _)| i + 1))
+        .chain(std::iter::once(0))
+        .map(|start| {
+            let rest = &out[start..];
+            let end = [rest.find(". "), rest.find('\n')]
+                .into_iter()
+                .flatten()
+                .min()
+                .unwrap_or(rest.len());
+            (start, &rest[..end])
+        })
+        .filter(|(_, s)| s.contains("\"pass\"") && s.contains("NOTHING RAN"))
+        .min_by_key(|&(start, _)| start)
+        .expect("no sentence asks for \"pass\" and names the NOTHING RAN block it overrides");
+
+    assert!(
+        block < at && at < contract,
+        "the override must sit after the block it overrides and before the \
+         contract's `environment` advice, or the turn meets it out of order"
+    );
+    assert!(
+        sentence.contains("does not apply"),
+        "the override names the block but never says its `environment` advice \
+         does not apply to this step: {sentence}"
+    );
+}

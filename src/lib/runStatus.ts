@@ -49,6 +49,21 @@ const META: Record<string, RunStatusMeta> = {
 /** Every status string the vocabulary knows, for tests that must hold for all of them. */
 export const RUN_STATUSES: readonly string[] = Object.keys(META);
 
+/**
+ * The label for a `failed` run that `reviewEndedOnFailedGate` recognises as a
+ * finished review. It is kept out of `META` because it is not a status a run
+ * can persist: it is read off step rows, which only the detail view holds.
+ * Adding it to `RUN_STATUSES` would claim otherwise to every surface that
+ * iterates the vocabulary. Amber, because the report is waiting on a human.
+ * "Review ready" rather than "gates red": the gate step also fails on a
+ * timeout or configuration error that ran no gate.
+ */
+export const REVIEW_READY_META: RunStatusMeta = {
+  label: 'Review ready',
+  tone: 'amber',
+  active: false,
+};
+
 export function runStatusMeta(status: string): RunStatusMeta {
   return (
     META[status.toLowerCase()] ?? {

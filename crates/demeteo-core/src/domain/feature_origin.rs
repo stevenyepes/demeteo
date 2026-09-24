@@ -94,7 +94,8 @@ pub enum FeatureOrigin {
     /// pull request's branch usually is: `refs/pull/<n>/head` and
     /// `refs/merge-requests/<iid>/head` resolve against the *upstream*
     /// remote whether or not the contributor's remote is reachable at all.
-    /// `label` is what a person called it; nothing derives from it.
+    /// `label` is display text; finalize derives a reviewed request's identity
+    /// from `fetch_spec`, which remains valid for runs stored with a branch label.
     Ref {
         fetch_spec: String,
         label: String,

@@ -18,7 +18,7 @@ fn starter_template() -> String {
         .unwrap()
         .iter()
         .find(|step| step["id"] == "s-review")
-        .expect("the review step is the whole workflow");
+        .expect("the shipped starter carries a step with id s-review, whose prompt_template is the template under test");
     step["prompt_template"].as_str().unwrap().to_string()
 }
 

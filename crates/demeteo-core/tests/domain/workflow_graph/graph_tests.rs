@@ -376,6 +376,7 @@ fn build_failure_short_circuits_but_reports_node_local_rules() {
 #[test]
 fn migrated_starters_lint_clean() {
     for (name, tolerated) in [
+        ("address-review", &[][..]),
         ("bugfix-pipeline", &[][..]),
         ("ci-fix", &[][..]),
         ("code-review", &["no-finalize"][..]),
