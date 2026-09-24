@@ -21,9 +21,30 @@ export function useWorktreeRouting(input: {
    *  request — it does NOT own session teardown. */
   const { open: openTerminalTab } = useTerminalPanel();
 
+  // Resolve the feature's worktree path + branch for every route out of the
+  // run view — editor and terminal alike. A detached
+  // (runner) run's code lives in the *runner's* workspace, not where
+  // `feature_get_worktree` would compute from the shadow's re-homed local
+  // project — so route those through `remote_get_worktree`, which asks the
+  // runner for its real path and re-homes `machine_id` onto the mirror's box
+  // (reachable over the SSH the laptop already holds). Local/SSH runs keep
+  // the direct path.
+  const resolveWorktreeInfo = useCallback(async () => {
+    if (remoteRun) {
+      return getRemoteWorktree({
+        machineId: remoteRun.machine_id,
+        runId: remoteRun.run_id,
+      });
+    }
+    return getFeatureWorktree(featureId);
+  }, [remoteRun, featureId]);
+
+  // Never call `getFeatureWorktree` directly here: for a detached run it names
+  // a path under the shadow's local project, and the shell opens somewhere
+  // that is not the runner's worktree.
   const handleOpenTerminalTab = async () => {
     try {
-      const info = await getFeatureWorktree(featureId);
+      const info = await resolveWorktreeInfo();
       // Pass the absolute worktree path as `workDir` so the panel
       // bypasses `resolve_repo_dir` and the shell actually starts
       // inside the feature worktree, not a basename-derived clone.
@@ -42,23 +63,6 @@ export function useWorktreeRouting(input: {
       reportError(err);
     }
   };
-
-  // Resolve the feature's worktree path + branch for Browse Code. A detached
-  // (runner) run's code lives in the *runner's* workspace, not where
-  // `feature_get_worktree` would compute from the shadow's re-homed local
-  // project — so route those through `remote_get_worktree`, which asks the
-  // runner for its real path and re-homes `machine_id` onto the mirror's box
-  // (reachable over the SSH the laptop already holds). Local/SSH runs keep
-  // the direct path.
-  const resolveWorktreeInfo = useCallback(async () => {
-    if (remoteRun) {
-      return getRemoteWorktree({
-        machineId: remoteRun.machine_id,
-        runId: remoteRun.run_id,
-      });
-    }
-    return getFeatureWorktree(featureId);
-  }, [remoteRun, featureId]);
 
   const openEditor = async () => {
     try {
