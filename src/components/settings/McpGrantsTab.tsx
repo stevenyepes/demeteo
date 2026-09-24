@@ -235,7 +235,7 @@ export function McpGrantsTab() {
             </div>
             {testResult?.status === 'reachable' && (
               <p className="text-xs text-emerald-400">
-                Reachable — {testResult.tool_count} tools available.
+                Reachable — asking clients to sign in, as expected.
               </p>
             )}
             {testResult?.status === 'unreachable' && (

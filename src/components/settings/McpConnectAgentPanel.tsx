@@ -144,17 +144,10 @@ function AgentSetup({ setup, label, serverUrl }: { setup: McpAgentSetup | undefi
       return (
         <div className="space-y-3">
           <p className="text-xs text-amber-300/90 leading-relaxed">
-            Checked against Demeteo up to the approval prompt — a full {label} sign-in hasn't been
-            confirmed yet.
+            {setup.caveat ??
+              `Checked against Demeteo up to the approval prompt — a full ${label} sign-in hasn't been confirmed yet.`}
           </p>
           <SetupSteps steps={setup.steps} serverUrl={serverUrl} />
-        </div>
-      );
-    case 'incompatible':
-      return (
-        <div className="space-y-2">
-          <p className="text-xs font-medium text-ruby-400">{label} can't connect to Demeteo yet.</p>
-          <p className="text-xs text-slate-400 leading-relaxed">{setup.reason}</p>
         </div>
       );
     default:

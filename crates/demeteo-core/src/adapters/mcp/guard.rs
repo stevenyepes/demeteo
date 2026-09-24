@@ -21,7 +21,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use sha2::{Digest, Sha256};
 
-use crate::domain::oauth::{validate_grant, GrantRecord, OAuthError, Scope};
+use crate::domain::oauth::{validate_grant, validate_session, GrantRecord, OAuthError, Scope};
 use crate::state::AppContext;
 
 use super::canonical_uri;
@@ -56,18 +56,21 @@ fn challenge(status: StatusCode, www_authenticate: &str) -> Response {
 /// `401` — no, or no longer valid, grant. `resource_metadata` points at the
 /// RFC 9728 discovery document; `scope` names the operation that was
 /// actually attempted, never a fixed default, so a client can tell what to
-/// request on its next `/authorize` round trip.
-fn unauthorized(required: Scope) -> Response {
+/// request on its next `/authorize` round trip. A request that attempted no
+/// operation ([`authenticate`]) names no scope, and the client falls back to
+/// `scopes_supported` — the MCP spec's scope-selection order.
+fn unauthorized(required: Option<Scope>) -> Response {
     let resource_metadata = canonical_uri()
         .map(|uri| format!("{uri}/.well-known/oauth-protected-resource"))
         .unwrap_or_default();
-    challenge(
-        StatusCode::UNAUTHORIZED,
-        &format!(
+    let header = match required {
+        Some(scope) => format!(
             r#"Bearer resource_metadata="{resource_metadata}", scope="{}""#,
-            required.as_str()
+            scope.as_str()
         ),
-    )
+        None => format!(r#"Bearer resource_metadata="{resource_metadata}""#),
+    };
+    challenge(StatusCode::UNAUTHORIZED, &header)
 }
 
 /// `403` — a real, unexpired, unrevoked grant that simply doesn't carry
@@ -83,32 +86,51 @@ fn insufficient_scope(required: Scope) -> Response {
     )
 }
 
+fn lookup_grant(ctx: &AppContext, headers: &HeaderMap) -> Option<GrantRecord> {
+    bearer_token(headers).and_then(|token| {
+        ctx.oauth_grants
+            .find_grant_by_token_hash(&hash_token(token))
+            .ok()
+            .flatten()
+    })
+}
+
 /// Resolves a request's bearer token to the [`GrantRecord`] it authorizes
 /// `required` for, or to the exact response the caller should return.
-/// Every protected route funnels through this rather than reading
-/// `Authorization` or matching on [`OAuthError`] itself.
+/// Every protected route funnels through this or [`authenticate`] rather
+/// than reading `Authorization` or matching on [`OAuthError`] itself.
 ///
 pub async fn check(
     ctx: &AppContext,
     required: Scope,
     headers: &HeaderMap,
 ) -> Result<GrantRecord, Response> {
-    let grant = bearer_token(headers).and_then(|token| {
-        ctx.oauth_grants
-            .find_grant_by_token_hash(&hash_token(token))
-            .ok()
-            .flatten()
-    });
-
-    let Some(grant) = grant else {
-        return Err(unauthorized(required));
+    let Some(grant) = lookup_grant(ctx, headers) else {
+        return Err(unauthorized(Some(required)));
     };
 
     let resource = canonical_uri().unwrap_or_default();
     match validate_grant(&grant, crate::paths::now_ms(), &resource, required) {
         Ok(()) => Ok(grant),
         Err(OAuthError::InsufficientScope { required }) => Err(insufficient_scope(required)),
-        Err(_) => Err(unauthorized(required)),
+        Err(_) => Err(unauthorized(Some(required))),
+    }
+}
+
+/// [`check`] for a request that names no operation: any live grant bound to
+/// this server passes, whatever its scopes. The `401` it answers otherwise
+/// is what starts sign-in for a client whose MCP SDK authorizes only when
+/// connecting is refused (OpenCode, Hermes) — see `docs/MCP_INTEGRATION.md`
+/// §5 for why the handshake is not left open.
+pub async fn authenticate(ctx: &AppContext, headers: &HeaderMap) -> Result<GrantRecord, Response> {
+    let Some(grant) = lookup_grant(ctx, headers) else {
+        return Err(unauthorized(None));
+    };
+
+    let resource = canonical_uri().unwrap_or_default();
+    match validate_session(&grant, crate::paths::now_ms(), &resource) {
+        Ok(()) => Ok(grant),
+        Err(_) => Err(unauthorized(None)),
     }
 }
 

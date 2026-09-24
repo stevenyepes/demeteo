@@ -21,7 +21,7 @@
 
 ## 1. Summary
 
-Decisions [45–52](DECISIONS.md#1-the-locked-decisions) are the short form of
+Decisions [45–53](DECISIONS.md#1-the-locked-decisions) are the short form of
 what follows. Each row here has a section below that states the rejected
 alternative in full.
 
@@ -35,6 +35,7 @@ alternative in full.
 | 50 | Gate approval and worktree merges are excluded; ticket creation stays with decomposition; discovery interviews are out of scope this phase | exposing them | see §8 — the first two are *permanent*, the last is *this phase* |
 | 51 | `ticket_force_start` is excluded | exposing it | its `reason` is fed to the agent as prerequisite context |
 | 52 | The listener is off until enabled in Settings | always listening | discovery documents are unauthenticated by necessity |
+| 53 | `initialize` and `tools/list` need a grant; only `server/discover` is open on `/mcp` | an open handshake | clients that sign in only when connecting is refused never got a token — see §5 |
 
 ---
 
@@ -206,7 +207,7 @@ GET  /.well-known/*    metadata (RFC 9728 resource, RFC 8414 server)   — unaut
 POST /register         dynamic client registration (RFC 7591)          — unauthenticated
 GET  /authorize        PKCE S256 + resource (RFC 8707) → human consent
 POST /token            single-use code + code_verifier → bearer token
-POST /mcp              Authorization: Bearer <token>
+POST /mcp              Authorization: Bearer <token>   — except `server/discover`
 ```
 
 | Property | Value |
@@ -219,8 +220,21 @@ POST /mcp              Authorization: Bearer <token>
 | Token storage | `SHA-256(token)` only; the plaintext is held once, in `/token`'s response |
 | Revocation | read from the grant row on **every** request, so it takes effect immediately |
 
-`tools/list` and the `.well-known` metadata are unauthenticated: a client cannot
-learn what to ask for without them. `POST /register` is unauthenticated because
+The `.well-known` metadata is unauthenticated: a client cannot learn what to ask
+for without it. On `/mcp` only `server/discover` is; `initialize` and `tools/list`
+need a live grant of any scope, and `tools/call` the scope its tool names. An
+unauthenticated handshake is answered `401` with a `resource_metadata` challenge
+naming no scope, so the client requests `scopes_supported`.
+
+> **Do not reopen the handshake.** It was open until 2026-09-24, on the reasoning
+> that the tool catalog is not secret. That left every client whose MCP SDK starts
+> OAuth only when *connecting* is refused — OpenCode, Hermes — "connected" with no
+> token: OpenCode's `mcp auth` even reported success, and every tool call then
+> failed. Claude Code and Codex, which read the metadata up front, never showed it.
+> The catalog was never the reason to leave it open; `scopes_supported` already
+> says what to ask for.
+
+`POST /register` is unauthenticated because
 an MCP client has no prior credential relationship with Demeteo, so there is
 nothing to authenticate it against. `client_name` is self-asserted and is never
 checked against an allowlist. **The human consent screen is the security
@@ -426,8 +440,8 @@ listener in-process; turning it off stops it. A bind failure **disables the
 surface for the run** — it does not retry on another port, because token
 audience checks depend on a canonical URI that does not move between launches.
 
-**Rejected: always listening.** The `.well-known` documents and `tools/list` are
-unauthenticated by necessity, since a client cannot ask for credentials without
+**Rejected: always listening.** The `.well-known` documents and `server/discover`
+are unauthenticated by necessity, since a client cannot ask for credentials without
 learning where to ask. Most installs will never use this surface, so
 an always-on listener would serve those documents to installs that get nothing
 from it. Loopback binding and the `Origin` and `Host` checks reduce the
@@ -462,7 +476,7 @@ Open means unresolved. Nothing below is decided.
 
 ## 10. Related
 
-- [`DECISIONS.md`](DECISIONS.md) — decisions 45–52, the short form of this document
+- [`DECISIONS.md`](DECISIONS.md) — decisions 45–53, the short form of this document
 - [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) — §19, the project-list question
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the hexagon the seam sits in
 - [`EXECUTION_PARITY.md`](EXECUTION_PARITY.md) — transport parity for agent processes

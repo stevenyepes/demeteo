@@ -113,6 +113,22 @@ pub fn validate_grant(
     expected_resource: &str,
     required: Scope,
 ) -> Result<(), OAuthError> {
+    validate_session(grant, now, expected_resource)?;
+    if !grant.scopes.contains(&required) {
+        return Err(OAuthError::InsufficientScope { required });
+    }
+    Ok(())
+}
+
+/// [`validate_grant`] minus the scope check: the grant is live and bound to
+/// this server, whatever it authorizes. What `/mcp` asks of a request that
+/// names no tool — `initialize`, `tools/list` — since there is no operation
+/// to scope it to.
+pub fn validate_session(
+    grant: &GrantRecord,
+    now: i64,
+    expected_resource: &str,
+) -> Result<(), OAuthError> {
     if grant.revoked_at.is_some() {
         return Err(OAuthError::TokenRevoked);
     }
@@ -121,9 +137,6 @@ pub fn validate_grant(
     }
     if grant.resource != expected_resource {
         return Err(OAuthError::AudienceMismatch);
-    }
-    if !grant.scopes.contains(&required) {
-        return Err(OAuthError::InsufficientScope { required });
     }
     Ok(())
 }

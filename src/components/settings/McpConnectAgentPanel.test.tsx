@@ -13,15 +13,16 @@ describe('McpConnectAgentPanel', () => {
     ).toBeInTheDocument();
   });
 
-  it('explains why an incompatible agent cannot connect, and hands it no URL or steps', async () => {
+  it('shows an entry\'s own caveat when its evidence is weaker than a live run', async () => {
     render(<McpConnectAgentPanel serverUrl="http://127.0.0.1:9999" />);
 
-    await userEvent.click(screen.getByRole('tab', { name: /opencode/i }));
+    await userEvent.click(screen.getByRole('tab', { name: /hermes/i }));
 
-    expect(screen.getByText(/OpenCode can't connect to Demeteo yet/i)).toBeInTheDocument();
-    expect(screen.getByText(/starts sign-in only when connecting is refused/i)).toBeInTheDocument();
-    expect(screen.queryByText(/127\.0\.0\.1:9999/)).not.toBeInTheDocument();
-    expect(screen.queryByRole('list')).not.toBeInTheDocument();
+    expect(screen.getByText(/not yet run against Demeteo/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Checked against Demeteo up to the approval prompt/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText('hermes mcp add demeteo --url http://127.0.0.1:9999 --auth oauth'),
+    ).toBeInTheDocument();
   });
 
   it('templates the URL into an unconfirmed agent\'s steps under a caveat', async () => {

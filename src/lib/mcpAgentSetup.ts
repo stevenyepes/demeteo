@@ -3,12 +3,9 @@
 // that renders it, since the branching content is the bulk of what grew
 // this feature past a single generic panel.
 //
-// How far each kind's steps have been checked is its `status`; the evidence
-// lives with each entry. `unconfirmed` entries were run against a live
-// Demeteo in an isolated config home up to — not through — the consent
-// prompt. `incompatible` entries give no steps at all: handing a user a
-// walkthrough that ends in a silent failure is worse than saying so
-// (AGENTS.md's harness-truthfulness stance, docs/HARNESS_BASELINE.md).
+// How far each kind's steps have been checked is its `status`, and the
+// evidence lives with each entry — never claim more than that evidence
+// carries (AGENTS.md's harness-truthfulness stance, docs/HARNESS_BASELINE.md).
 
 export interface McpSetupStep {
   /** Plain instruction text. */
@@ -24,25 +21,15 @@ export interface McpSetupStep {
 }
 
 /** `verified`: a human completed the whole flow, consent included.
- *  `unconfirmed`: every step up to the consent prompt ran against a live
- *  Demeteo; rendered with a caveat. `incompatible`: the client cannot
- *  complete sign-in against this server; `reason` says why, no steps. */
-export type McpSetupStatus = 'verified' | 'unconfirmed' | 'incompatible';
+ *  `unconfirmed`: rendered under a caveat — by default that the steps ran
+ *  against a live Demeteo in an isolated config home up to, not through,
+ *  the consent prompt; `caveat` replaces it when the evidence is less. */
+export type McpSetupStatus = 'verified' | 'unconfirmed';
 
 export interface McpAgentSetup {
   status: McpSetupStatus;
   steps: McpSetupStep[];
-  /** Required for `incompatible`: what breaks, in the user's terms. */
-  reason?: string;
-}
-
-/** Demeteo answers `initialize` and `tools/list` without a token and first
- *  says 401 on `tools/call` (docs/MCP_INTEGRATION.md §5). A client whose MCP
- *  SDK starts OAuth only on a connect-time 401 therefore never starts it.
- *  Claude Code and Codex start it from the `.well-known` metadata instead,
- *  and Pi's adapter on `"auth": "oauth"`. */
-function noConnectTimeChallenge(label: string): string {
-  return `Demeteo lets clients connect and list tools without signing in, and asks for sign-in only when a tool is called. ${label} starts sign-in only when connecting is refused, so it never gets a token: it shows Demeteo as connected, and every tool call then fails as unauthorized.`;
+  caveat?: string;
 }
 
 export const MCP_AGENT_SETUP: Record<string, McpAgentSetup> = {
@@ -98,10 +85,8 @@ export const MCP_AGENT_SETUP: Record<string, McpAgentSetup> = {
       },
     ],
   },
-  // pi 0.85.1 has no MCP by design; pi-mcp-adapter supplies it. `"auth":
-  // "oauth"` is load-bearing: without it the adapter signs in only on a
-  // connect-time 401, which Demeteo never sends (see noConnectTimeChallenge).
-  // It reports "connected" before sign-in, so step 3 is not optional.
+  // pi 0.85.1 has no MCP by design; pi-mcp-adapter supplies it, and
+  // `"auth": "oauth"` makes it sign in instead of waiting to be refused.
   pi: {
     status: 'unconfirmed',
     steps: [
@@ -114,7 +99,7 @@ export const MCP_AGENT_SETUP: Record<string, McpAgentSetup> = {
         command: '{ "mcpServers": { "demeteo": { "url": "{{url}}", "auth": "oauth" } } }',
       },
       {
-        text: 'In a Pi session, sign in — Pi lists Demeteo as connected before this, but tool calls fail until it is done. Approve the prompt in this Demeteo window; a browser tab may also open and completes once you do.',
+        text: 'In a Pi session, sign in. Approve the prompt that appears in this Demeteo window; a browser tab may also open and completes once you do.',
         command: '/mcp-auth demeteo',
       },
       {
@@ -123,18 +108,53 @@ export const MCP_AGENT_SETUP: Record<string, McpAgentSetup> = {
       },
     ],
   },
-  // opencode 1.18.7: `mcp list` says "connected", and `mcp auth` prints
-  // "Authentication successful!" having stored no token.
+  // opencode 1.18.7, against a mock that refuses an unauthenticated
+  // `initialize` as Demeteo does: `mcp list` reported "needs authentication"
+  // and `mcp auth` registered, then opened /authorize.
   opencode: {
-    status: 'incompatible',
-    steps: [],
-    reason: noConnectTimeChallenge('OpenCode'),
+    status: 'unconfirmed',
+    steps: [
+      {
+        text: 'Add Demeteo to OpenCode\'s global config:',
+        command: 'opencode mcp add demeteo --url {{url}}',
+      },
+      {
+        text: 'Check it registered — this will show "needs authentication":',
+        command: 'opencode mcp list',
+      },
+      {
+        text: 'Sign in. Approve the prompt that appears in this Demeteo window; a browser tab may also open and completes once you do. OpenCode listens on port 19876 for the callback — if that port is taken, set oauth.callbackPort on the demeteo entry in its config.',
+        command: 'opencode mcp auth demeteo',
+      },
+      {
+        text: 'Confirm it signed in:',
+        command: 'opencode mcp auth list',
+      },
+    ],
   },
-  // Source-read only (hermes-agent via mcp==2.0.0); not installed where this
-  // was researched. `hermes mcp login` warns that no token was obtained.
+  // Read from hermes-agent's source (mcp==2.0.0), never run: it signs in on
+  // a connect-time 401 through the SDK's OAuthClientProvider.
   hermes: {
-    status: 'incompatible',
-    steps: [],
-    reason: noConnectTimeChallenge('Hermes'),
+    status: 'unconfirmed',
+    caveat:
+      'Taken from Hermes\'s own source, not yet run against Demeteo — a full Hermes sign-in hasn\'t been confirmed.',
+    steps: [
+      {
+        text: 'Add Demeteo as a sign-in protected server. Hermes connects and asks which tools to enable:',
+        command: 'hermes mcp add demeteo --url {{url}} --auth oauth',
+      },
+      {
+        text: 'Sign in from a terminal. Approve the prompt that appears in this Demeteo window; a browser tab may also open and completes once you do.',
+        command: 'hermes mcp login demeteo',
+      },
+      {
+        text: 'Check the connection and list the tools:',
+        command: 'hermes mcp test demeteo',
+      },
+      {
+        text: 'Start a new Hermes session, or run /reload-mcp in an open one.',
+        command: '/reload-mcp',
+      },
+    ],
   },
 };
