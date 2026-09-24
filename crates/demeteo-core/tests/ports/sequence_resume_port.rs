@@ -25,6 +25,7 @@ use super::*;
 
 use crate::adapters::database::SqliteAdapter;
 use crate::domain::models::{CheckpointProduced, SequenceCheckpoint};
+use crate::domain::rework::RetryContext;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -36,10 +37,14 @@ use std::sync::Mutex;
 /// than a simplification — a double that only approximates the real
 /// merge rules is worse than none, because the sequence step would test
 /// green against semantics production does not have.
+/// A cached plan's JSON and the attempt that wrote it.
+type CachedPlan = (String, Option<u32>);
+
 #[derive(Default)]
 struct InMemorySequenceResume {
     checkpoints: Mutex<HashMap<(String, String), SequenceCheckpoint>>,
-    plans: Mutex<HashMap<(String, String), String>>,
+    plans: Mutex<HashMap<(String, String), CachedPlan>>,
+    retry_contexts: Mutex<HashMap<String, RetryContext>>,
 }
 
 fn key(feature_id: &FeatureId, step_id: &str) -> (String, String) {
@@ -170,7 +175,7 @@ impl SequenceResumeRepository for InMemorySequenceResume {
             .lock()
             .unwrap()
             .get(&key(feature_id, step_id))
-            .cloned())
+            .map(|(json, _)| json.clone()))
     }
 
     fn plan_cache_put(
@@ -178,13 +183,53 @@ impl SequenceResumeRepository for InMemorySequenceResume {
         feature_id: &FeatureId,
         step_id: &str,
         plan_json: &str,
-        _attempt_no: Option<u32>,
+        attempt_no: Option<u32>,
         _now: i64,
     ) -> Result<(), String> {
-        self.plans
+        self.plans.lock().unwrap().insert(
+            key(feature_id, step_id),
+            (plan_json.to_string(), attempt_no),
+        );
+        Ok(())
+    }
+
+    fn plan_cache_attempt_no(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<Option<u32>, String> {
+        Ok(self
+            .plans
             .lock()
             .unwrap()
-            .insert(key(feature_id, step_id), plan_json.to_string());
+            .get(&key(feature_id, step_id))
+            .and_then(|(_, attempt_no)| *attempt_no))
+    }
+
+    fn retry_context_load(&self, feature_id: &FeatureId) -> Result<Option<RetryContext>, String> {
+        Ok(self
+            .retry_contexts
+            .lock()
+            .unwrap()
+            .get(&feature_id.0)
+            .cloned())
+    }
+
+    fn retry_context_save(
+        &self,
+        feature_id: &FeatureId,
+        ctx: &RetryContext,
+        _now: i64,
+    ) -> Result<(), String> {
+        self.retry_contexts
+            .lock()
+            .unwrap()
+            .insert(feature_id.0.clone(), ctx.clone());
+        Ok(())
+    }
+
+    fn retry_context_clear(&self, feature_id: &FeatureId) -> Result<(), String> {
+        self.retry_contexts.lock().unwrap().remove(&feature_id.0);
         Ok(())
     }
 }
@@ -196,6 +241,17 @@ impl SequenceResumeRepository for InMemorySequenceResume {
 /// a failure says *which* side of the contract broke.
 fn against_every_impl(body: impl Fn(&dyn SequenceResumeRepository, &str)) {
     let sqlite = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+    {
+        // `retry_contexts` is keyed by a real feature (FK enforced); the
+        // sequence tables are not, so this seeding changes nothing for them.
+        let conn = sqlite.conn.lock().unwrap();
+        conn.execute_batch(
+            "INSERT INTO projects (id, name, created_at) VALUES ('p-1', 'demeteo', 0);
+             INSERT INTO features (id, project_id, title, created_at)
+             VALUES ('f-1', 'p-1', 'resume me', 0);",
+        )
+        .unwrap();
+    }
     body(&sqlite, "SqliteAdapter");
 
     let double = InMemorySequenceResume::default();
@@ -541,5 +597,71 @@ fn the_plan_cache_round_trips_and_overwrites() {
             Some(r#"{"tasks":[{"id":"t"}]}"#),
             "{who}: the re-plan replaces, it does not merge"
         );
+        assert_eq!(
+            repo.plan_cache_attempt_no(&f, "s-impl").unwrap(),
+            Some(2),
+            "{who}: the writer is replaced with the plan"
+        );
+
+        repo.plan_cache_put(&f, "s-impl", r#"{"tasks":[]}"#, None, 300)
+            .unwrap();
+        assert_eq!(
+            repo.plan_cache_attempt_no(&f, "s-impl").unwrap(),
+            None,
+            "{who}: an unrecorded writer reads as none"
+        );
+        assert_eq!(
+            repo.plan_cache_attempt_no(&f, "s-other").unwrap(),
+            None,
+            "{who}: no plan, no writer"
+        );
+    });
+}
+
+fn retry_ctx(failing_step_id: &str, iteration: u32) -> RetryContext {
+    RetryContext {
+        feedback: format!("verdict from {failing_step_id}"),
+        iteration,
+        max: 3,
+        failing_tests: ids(&["tests::a", "tests::b"]),
+        implicated_files: ids(&["src/lib.rs"]),
+        failing_step_id: failing_step_id.to_string(),
+    }
+}
+
+/// The retry context is one row per feature, replaced whole: a second
+/// redirect's context is the loop now in flight, and nothing of the first
+/// may leak into it.
+#[test]
+fn the_retry_context_round_trips_overwrites_and_clears() {
+    against_every_impl(|repo, who| {
+        let f = fid("f-1");
+        assert_eq!(
+            repo.retry_context_load(&f).unwrap(),
+            None,
+            "{who}: never redirected"
+        );
+
+        repo.retry_context_save(&f, &retry_ctx("s-validate", 2), 100)
+            .unwrap();
+        assert_eq!(
+            repo.retry_context_load(&f).unwrap(),
+            Some(retry_ctx("s-validate", 2)),
+            "{who}: every field round-trips, lists included"
+        );
+
+        let mut second = retry_ctx("s-critic", 3);
+        second.failing_tests.clear();
+        repo.retry_context_save(&f, &second, 200).unwrap();
+        assert_eq!(
+            repo.retry_context_load(&f).unwrap(),
+            Some(second),
+            "{who}: a save replaces the row outright"
+        );
+
+        repo.retry_context_clear(&f).unwrap();
+        assert_eq!(repo.retry_context_load(&f).unwrap(), None, "{who}: cleared");
+        repo.retry_context_clear(&f)
+            .expect("clearing nothing is not an error");
     });
 }

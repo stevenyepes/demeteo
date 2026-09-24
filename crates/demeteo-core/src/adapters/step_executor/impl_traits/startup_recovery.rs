@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use crate::domain::models::GateDecision;
+use crate::adapters::step_executor::gate_park::pose_synthetic_gate;
 use crate::domain::restart_reconcile::{
     abandoned_out_of_band, interrupted_by_restart, orphaned_by_feature_end,
 };
@@ -84,17 +84,14 @@ impl DagStepExecutor {
                                     },
                                 );
                                 if reconciled.synthesise_gate_decision {
-                                    let gate_dec_id = crate::domain::ids::GateDecisionId::from(
-                                        format!("gd-syn-{}", s.id.0),
-                                    );
-                                    let gate_dec = GateDecision {
-                                        id: gate_dec_id,
-                                        step_execution_id: s.id.clone(),
-                                        decision: None,
-                                        feedback: None,
-                                        created_at: paths::now_ms(),
-                                    };
-                                    let _ = self.gates.create(gate_dec);
+                                    if let Err(e) = pose_synthetic_gate(self.gates.as_ref(), &s.id)
+                                    {
+                                        tracing::warn!(
+                                            step_execution_id = %s.id.0,
+                                            error = %e,
+                                            "startup watchdog: could not pose the synthetic gate"
+                                        );
+                                    }
                                 }
                                 let _ = self.notif.emit(&DomainEvent::GateRequired {
                                     feature_id: f.id.clone(),

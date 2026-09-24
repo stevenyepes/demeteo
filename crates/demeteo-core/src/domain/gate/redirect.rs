@@ -30,7 +30,9 @@ const MAX_ADDRESSED_FEEDBACK_LEN: usize = 300;
 ///      directly is not an escape hatch from it — entering that step
 ///      without its producer having regenerated the list replays the
 ///      stale whole decomposition regardless of how the redirect was
-///      addressed.
+///      addressed. The same holds for any step *between* the producer and
+///      its consumer (a review gate): landing there runs the consumer on
+///      the list the producer wrote last cycle, so it hops too.
 ///   2. `on_failure` on the gate's step config.
 ///   3. The nearest preceding step whose effective capability is
 ///      `Implement` — **or, when that step reads its task list from a
@@ -100,7 +102,12 @@ pub(crate) fn resolve_redirect_target(
         }
     };
 
-    let explicit = explicit.map(|idx| rework_producer_for(steps, idx).unwrap_or(idx));
+    let gate_idx = gate_step_index as usize;
+    let explicit = explicit.map(|idx| {
+        rework_producer_for(steps, idx)
+            .or_else(|| rework_producer_spanning(steps, idx, gate_idx))
+            .unwrap_or(idx)
+    });
 
     explicit
         .or_else(|| on_failure.and_then(|id| steps.iter().position(|s| s.id == *id)))
@@ -128,6 +135,31 @@ fn rework_producer_for(steps: &[StepConfig], from_index: usize) -> Option<usize>
         .as_deref()
         .filter(|t| !t.trim().is_empty())?;
     Some(producer)
+}
+
+/// Whether `gate_idx` sits strictly between a rework-opted producer and the
+/// step that consumes its list — the position where a redirect landing
+/// mid-cycle would otherwise replace the verdict that opened the cycle.
+pub(crate) fn gate_in_rework_span(steps: &[StepConfig], gate_idx: usize) -> bool {
+    (gate_idx + 1..steps.len())
+        .filter_map(|consumer| rework_producer_for(steps, consumer))
+        .any(|producer| producer < gate_idx)
+}
+
+/// The producer whose `task_list_from` edge spans `target`: some consumer
+/// `c` before the gate reads its list from producer `p`, with
+/// `p < target <= c`. Everything in that span re-runs the consumer without
+/// re-running the producer, which replays last cycle's list. Where spans
+/// nest, the consumer closest to the gate wins — it is the one whose
+/// output the gate was judging.
+fn rework_producer_spanning(steps: &[StepConfig], target: usize, gate_idx: usize) -> Option<usize> {
+    (0..gate_idx.min(steps.len()))
+        .rev()
+        .filter_map(|consumer| {
+            let producer = rework_producer_for(steps, consumer)?;
+            (producer < target && target <= consumer).then_some(producer)
+        })
+        .next()
 }
 
 #[cfg(test)]

@@ -30,6 +30,11 @@ pub(crate) struct DispatchResult {
     /// aside after normalization so the redirect path can carry
     /// `failing_tests` / `implicated_files` into the retry context.
     pub verdict_failure: Option<VerdictFailure>,
+    /// `Some` when the outcome was a `ProducerFault`, holding whether this
+    /// consumer was in a rework cycle — read here, before the redirect
+    /// replaces the retry context that answers it. See
+    /// [`crate::domain::rework::producer_fault_retry`].
+    pub producer_fault_in_rework: Option<bool>,
     pub accumulated_cost: f64,
     pub accumulated_tokens: i64,
     pub step_start: Instant,
@@ -228,10 +233,14 @@ impl ExecutionDriver {
             failure_decision.as_ref().map(|d| d.rule_id.as_str()),
         );
 
+        let producer_fault_in_rework = producer_fault
+            .is_some()
+            .then(|| self.producer_rework_mode(step_conf).is_rework());
         Some(DispatchResult {
             outcome,
             failure_decision,
             verdict_failure,
+            producer_fault_in_rework,
             accumulated_cost: totals.cost,
             accumulated_tokens: totals.tokens,
             step_start,

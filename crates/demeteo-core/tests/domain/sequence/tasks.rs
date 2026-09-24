@@ -743,7 +743,7 @@ fn an_executable_list_is_not_rejected_at_all() {
 #[test]
 fn a_stale_whole_plan_under_rework_is_sent_back_to_the_producer() {
     let producer = crate::domain::ids::StepId::from("s-tickets");
-    match reject_stale_rework_plan(true, false, Some(&producer), true) {
+    match reject_stale_rework_plan(true, false, Some(&producer), true, false) {
         Some(PlanRejection::ProducerMustFix { producer, reason }) => {
             assert_eq!(producer.0, "s-tickets");
             assert!(reason.contains("delta"), "{reason}");
@@ -755,7 +755,7 @@ fn a_stale_whole_plan_under_rework_is_sent_back_to_the_producer() {
 #[test]
 fn a_healthy_delta_is_not_rejected() {
     let producer = crate::domain::ids::StepId::from("s-tickets");
-    assert!(reject_stale_rework_plan(true, true, Some(&producer), true).is_none());
+    assert!(reject_stale_rework_plan(true, true, Some(&producer), true, false).is_none());
 }
 
 #[test]
@@ -763,12 +763,12 @@ fn outside_a_rework_cycle_nothing_is_rejected() {
     // A gate revision re-reading a fresh, whole list is supposed to look
     // exactly like this — greenfield, not a delta — and must not be faulted.
     let producer = crate::domain::ids::StepId::from("s-tickets");
-    assert!(reject_stale_rework_plan(false, false, Some(&producer), true).is_none());
+    assert!(reject_stale_rework_plan(false, false, Some(&producer), true, false).is_none());
 }
 
 #[test]
 fn a_planner_sourced_step_is_never_faulted() {
-    assert!(reject_stale_rework_plan(true, false, None, false).is_none());
+    assert!(reject_stale_rework_plan(true, false, None, false, false).is_none());
 }
 
 #[test]
@@ -778,5 +778,302 @@ fn a_producer_with_no_rework_template_keeps_the_old_accepted_cost() {
     // way to answer with a delta, so a whole re-decomposition here is the
     // accepted cost, not a defect to send back.
     let producer = crate::domain::ids::StepId::from("s-tickets");
-    assert!(reject_stale_rework_plan(true, false, Some(&producer), false).is_none());
+    assert!(reject_stale_rework_plan(true, false, Some(&producer), false, false).is_none());
+}
+
+#[test]
+fn a_replayed_list_is_sent_back_naming_the_replay() {
+    let producer = crate::domain::ids::StepId::from("s-tickets");
+    match reject_stale_rework_plan(true, false, Some(&producer), true, true) {
+        Some(PlanRejection::ProducerMustFix { reason, .. }) => {
+            assert!(reason.contains("already ran last cycle"), "{reason}");
+            assert!(!reason.contains("whole decomposition"), "{reason}");
+        }
+        other => panic!("expected ProducerMustFix, got {other:?}"),
+    }
+}
+
+// ---------- replays_a_judged_cycle ----------
+//
+// `kind: rework` survives on disk after the cycle that wrote it, so a
+// consumer re-entered without its producer re-running reads last cycle's
+// delta as this cycle's. The declaration cannot tell them apart; the
+// tickets can.
+
+/// The cache after one rework cycle: `g0` was the greenfield list, `d1`
+/// the delta that ran on top of it.
+fn cache_after_one_rework() -> TaskPlan {
+    let g0 = plan_of(&["a", "b", "c"]);
+    let mut d1 = plan_of(&["fix-1", "fix-2"]);
+    d1.kind = PlanKind::Rework;
+    d1.cycle = 1;
+    d1.history = g0.close_cycle();
+    d1
+}
+
+fn rework_list(ids: &[&str]) -> TaskPlan {
+    let mut p = plan_of(ids);
+    p.kind = PlanKind::Rework;
+    p
+}
+
+#[test]
+fn a_list_identical_to_a_judged_cycle_is_a_replay() {
+    let cached = cache_after_one_rework();
+    let incoming = rework_list(&["fix-2", "fix-1"]);
+    assert!(is_rework_plan(&incoming, Some(&cached)));
+    assert!(replays_a_judged_cycle(&incoming, Some(&cached), true));
+
+    let greenfield_again = plan_of(&["a", "b", "c"]);
+    assert!(replays_a_judged_cycle(
+        &greenfield_again,
+        Some(&cached),
+        true
+    ));
+}
+
+#[test]
+fn a_retry_note_does_not_make_a_list_new() {
+    let cached = cache_after_one_rework();
+    let mut incoming = rework_list(&["fix-1", "fix-2"]);
+    incoming.tasks[0].retry_note = Some("from the verdict".into());
+    assert!(replays_a_judged_cycle(&incoming, Some(&cached), true));
+}
+
+#[test]
+fn an_unjudged_cycle_is_never_a_replay() {
+    let cached = cache_after_one_rework();
+    let incoming = rework_list(&["fix-1", "fix-2"]);
+    assert!(!replays_a_judged_cycle(&incoming, Some(&cached), false));
+    assert!(!replays_a_judged_cycle(&incoming, None, true));
+    assert!(!replays_a_judged_cycle(
+        &rework_list(&[]),
+        Some(&cached),
+        true
+    ));
+}
+
+#[test]
+fn a_revisited_ticket_with_a_new_body_is_not_a_replay() {
+    let cached = cache_after_one_rework();
+
+    let mut rewritten = rework_list(&["fix-1", "fix-2"]);
+    rewritten.tasks[1].description = "close the empty-state finding".into();
+    assert!(!replays_a_judged_cycle(&rewritten, Some(&cached), true));
+
+    let mut new_acceptance = rework_list(&["fix-1", "fix-2"]);
+    new_acceptance.tasks[0].acceptance = vec!["renders the empty state".into()];
+    assert!(!replays_a_judged_cycle(
+        &new_acceptance,
+        Some(&cached),
+        true
+    ));
+
+    let subset = rework_list(&["fix-1"]);
+    assert!(!replays_a_judged_cycle(&subset, Some(&cached), true));
+
+    let superset = rework_list(&["fix-1", "fix-2", "fix-3"]);
+    assert!(!replays_a_judged_cycle(&superset, Some(&cached), true));
+
+    let fresh = rework_list(&["fix-3", "fix-4"]);
+    assert!(!replays_a_judged_cycle(&fresh, Some(&cached), true));
+}
+
+fn cycle_of(kind: PlanKind, cycle: u32, ids: &[&str], history: Vec<PlanCycle>) -> TaskPlan {
+    TaskPlan {
+        kind,
+        cycle,
+        history,
+        ..plan_of(ids)
+    }
+}
+
+fn greenfield_cycle(ids: &[&str]) -> PlanCycle {
+    PlanCycle {
+        cycle: 0,
+        kind: PlanKind::Greenfield,
+        tasks: plan_of(ids).tasks,
+    }
+}
+
+fn ids(tasks: &[PlannedTask]) -> Vec<&str> {
+    tasks.iter().map(|t| t.id.as_str()).collect()
+}
+
+#[test]
+fn re_entering_an_unjudged_rework_cycle_keeps_its_cycle_and_history() {
+    let cached = cycle_of(
+        PlanKind::Rework,
+        1,
+        &["fix-1"],
+        vec![greenfield_cycle(&["a", "b"])],
+    );
+    let out = plan_cache_entry(plan_of(&["fix-1"]), Some(&cached), false, true);
+    assert_eq!(out.cycle, 1);
+    assert_eq!(out.history.len(), 1);
+    assert_eq!(ids(&out.history[0].tasks), ["a", "b"]);
+    assert_eq!(ids(&out.already_landed), ["a", "b"]);
+    assert!(out.resumes_landed_work);
+    assert_eq!(out.kind, PlanKind::Rework);
+}
+
+#[test]
+fn a_judged_rework_cycle_advances_the_cycle_and_closes_history() {
+    let cached = cycle_of(
+        PlanKind::Rework,
+        1,
+        &["fix-1"],
+        vec![greenfield_cycle(&["a", "b"])],
+    );
+    let out = plan_cache_entry(plan_of(&["fix-2"]), Some(&cached), true, true);
+    assert_eq!(out.cycle, 2);
+    assert_eq!(out.history.len(), 2);
+    assert_eq!(ids(&out.already_landed), ["a", "b", "fix-1"]);
+    assert!(out.resumes_landed_work);
+}
+
+#[test]
+fn a_rework_declaration_that_is_not_a_delta_never_loses_cached_history() {
+    let cached = cycle_of(
+        PlanKind::Rework,
+        2,
+        &["fix-2"],
+        vec![greenfield_cycle(&["a"]), greenfield_cycle(&["fix-1"])],
+    );
+    let mut incoming = plan_of(&["x"]);
+    incoming.kind = PlanKind::Rework;
+    let out = plan_cache_entry(incoming, Some(&cached), true, false);
+    assert_eq!(out.cycle, 2);
+    assert_eq!(out.history.len(), 2);
+    assert_eq!(ids(&out.tasks), ["x"]);
+}
+
+#[test]
+fn a_first_rework_cycle_over_a_greenfield_cache_starts_at_cycle_one() {
+    let cached = plan_of(&["a", "b"]);
+    let out = plan_cache_entry(plan_of(&["fix-1"]), Some(&cached), true, true);
+    assert_eq!(out.cycle, 1);
+    assert_eq!(out.history.len(), 1);
+    assert_eq!(ids(&out.already_landed), ["a", "b"]);
+
+    let none = plan_cache_entry(plan_of(&["fix-1"]), None, false, true);
+    assert_eq!(none.cycle, 1);
+    assert!(none.history.is_empty());
+}
+
+/// A restart mid-rework, end to end over the pure pieces: the consumer's
+/// cycle-1 attempt cached its list and was interrupted, the restored retry
+/// context puts it back in the rework cycle, and it re-reads that list.
+/// Opening the resumed attempt closed the stale `running` row as
+/// `interrupted`, so the cycle reads as unjudged — the same list is its
+/// own cycle re-entered, not a replay, and the counter stays put.
+#[test]
+fn a_resumed_rework_cycle_is_neither_a_replay_nor_a_new_cycle() {
+    use crate::domain::ids::StepExecutionId;
+    use crate::domain::models::step_attempt::{cached_cycle_standing, StepAttempt};
+    let attempt = |attempt_no: u32, status: &str| StepAttempt {
+        step_execution_id: StepExecutionId::from("se-implement".to_string()),
+        attempt_no,
+        status: status.to_string(),
+        cost_usd: None,
+        tokens: None,
+        wall_clock_ms: None,
+        error_class: None,
+        failure_fingerprint: None,
+        applied_rule: None,
+        workspace_fingerprint: None,
+        idempotency_key: None,
+        started_at: 0,
+        ended_at: None,
+    };
+    let attempts = [
+        attempt(1, "completed"),
+        attempt(2, "interrupted"),
+        attempt(3, "running"),
+    ];
+    let standing = cached_cycle_standing(&attempts, Some(2));
+    assert!(!standing.judged);
+    let judged = standing.judged;
+
+    let cached = cache_after_one_rework();
+    let incoming = rework_list(&["fix-1", "fix-2"]);
+    assert!(!replays_a_judged_cycle(&incoming, Some(&cached), judged));
+    assert!(is_rework_plan(&incoming, Some(&cached)));
+
+    let out = plan_cache_entry(incoming, Some(&cached), judged, true);
+    assert_eq!(out.cycle, 1);
+    assert_eq!(out.history.len(), 1);
+    assert_eq!(ids(&out.already_landed), ["a", "b", "c"]);
+}
+
+fn attempt_row(attempt_no: u32, status: &str) -> crate::domain::models::StepAttempt {
+    crate::domain::models::StepAttempt {
+        step_execution_id: crate::domain::ids::StepExecutionId::from("se-implement".to_string()),
+        attempt_no,
+        status: status.to_string(),
+        cost_usd: None,
+        tokens: None,
+        wall_clock_ms: None,
+        error_class: None,
+        failure_fingerprint: None,
+        applied_rule: None,
+        workspace_fingerprint: None,
+        idempotency_key: None,
+        started_at: 0,
+        ended_at: None,
+    }
+}
+
+/// A replay refused between two cycles: attempt 1 ran cycle 1 to a
+/// verdict, attempt 2 read the stale list and was sent back before it
+/// cached anything, and the producer's corrected delta now arrives on
+/// attempt 3. That delta is cycle 2, and cycle 1's tickets are landed work.
+#[test]
+fn a_delta_after_a_refused_replay_closes_the_judged_cycle() {
+    use crate::domain::models::step_attempt::cached_cycle_standing;
+    let attempts = [
+        attempt_row(1, "completed"),
+        attempt_row(2, "failed"),
+        attempt_row(3, "running"),
+    ];
+    let standing = cached_cycle_standing(&attempts, Some(1));
+
+    let cached = cache_after_one_rework();
+    let incoming = rework_list(&["fix-3"]);
+    assert!(!replays_a_judged_cycle(
+        &incoming,
+        Some(&cached),
+        standing.replay_checkable
+    ));
+    let out = plan_cache_entry(incoming, Some(&cached), standing.judged, true);
+    assert_eq!(out.cycle, 2);
+    assert_eq!(out.history.len(), 2);
+    assert_eq!(ids(&out.already_landed), ["a", "b", "c", "fix-1", "fix-2"]);
+}
+
+/// The producer, sent back once for a replay, hands the same list again.
+/// That is its answer: it runs, rather than spending another redirect.
+#[test]
+fn a_replay_is_refused_only_once() {
+    use crate::domain::models::step_attempt::cached_cycle_standing;
+    let attempts = [
+        attempt_row(1, "completed"),
+        attempt_row(2, "failed"),
+        attempt_row(3, "running"),
+    ];
+    let standing = cached_cycle_standing(&attempts, Some(1));
+    let cached = cache_after_one_rework();
+    let same = rework_list(&["fix-1", "fix-2"]);
+    assert!(!replays_a_judged_cycle(
+        &same,
+        Some(&cached),
+        standing.replay_checkable
+    ));
+
+    let first_time = cached_cycle_standing(&attempts[..1], Some(1));
+    assert!(replays_a_judged_cycle(
+        &same,
+        Some(&cached),
+        first_time.replay_checkable
+    ));
 }

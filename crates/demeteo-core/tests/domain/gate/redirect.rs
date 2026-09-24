@@ -488,3 +488,79 @@ fn an_explicit_on_failure_still_beats_the_producer_hop() {
     );
     assert_eq!(target, Some(0));
 }
+
+// --- naming a step inside the producer→consumer span --------------------------
+//
+// A review gate between the producer and its consumer is downstream of the
+// one and upstream of the other. Landing a ship-gate redirect there re-runs
+// the consumer on the list the producer wrote last cycle — which still
+// declares `kind: rework` — so the whole previous delta runs again.
+
+/// The shipped shape: a review gate between `s-tickets` and `s-implement`.
+fn pipeline_with_review_gate(rework_template: Option<&str>) -> Vec<StepConfig> {
+    let mut tickets = step("s-tickets");
+    tickets.rework_prompt_template = rework_template.map(str::to_string);
+
+    let mut implement = step("s-implement");
+    implement.kind = "sequence".to_string();
+    implement.capability = Some(crate::domain::permission::StepCapability::Implement);
+    implement.task_list_from = Some(StepId::from("s-tickets"));
+
+    vec![
+        step("s-spec"),
+        tickets,
+        step("s-gate-review"),
+        implement,
+        step("s-validate"),
+        step("s-gate-ship"),
+    ]
+}
+
+#[test]
+fn a_named_step_between_producer_and_consumer_hops_to_the_producer() {
+    let steps = pipeline_with_review_gate(Some("delta only"));
+    let target = resolve_redirect_target(
+        &steps,
+        None,
+        5,
+        Some("see s-gate-review: the empty state still looks wrong"),
+    );
+    assert_eq!(
+        target,
+        Some(1),
+        "expected s-tickets (index 1), the producer"
+    );
+}
+
+#[test]
+fn a_named_step_past_the_consumer_does_not_hop() {
+    let steps = pipeline_with_review_gate(Some("delta only"));
+    let target = resolve_redirect_target(&steps, None, 5, Some("s-validate missed a case"));
+    assert_eq!(target, Some(4));
+}
+
+#[test]
+fn the_span_hop_needs_a_rework_template() {
+    let steps = pipeline_with_review_gate(None);
+    let target = resolve_redirect_target(&steps, None, 5, Some("back to s-gate-review"));
+    assert_eq!(target, Some(2));
+}
+
+#[test]
+fn a_gate_before_the_consumer_does_not_hop() {
+    // The consumer sits past this gate, so its list has not run yet: a step
+    // in the span named here is a plain target, not a replay.
+    let steps = pipeline_with_review_gate(Some("delta only"));
+    let target = resolve_redirect_target(&steps, None, 2, Some("s-gate-review"));
+    assert_eq!(target, Some(2));
+}
+
+#[test]
+fn only_a_gate_between_an_opted_in_producer_and_its_consumer_is_in_the_span() {
+    let steps = pipeline_with_review_gate(Some("delta only"));
+    assert!(gate_in_rework_span(&steps, 2));
+    assert!(!gate_in_rework_span(&steps, 5));
+    assert!(!gate_in_rework_span(&steps, 0));
+    let steps = pipeline_with_review_gate(None);
+    assert!(!gate_in_rework_span(&steps, 2));
+}

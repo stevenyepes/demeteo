@@ -19,7 +19,7 @@
 //!   (partial agent writes, landed sequence prefixes, or a human's
 //!   edits — indistinguishable from here). Decision 14 says a mid-step
 //!   interrupt surfaces as a **synthetic gate**; the guard makes that
-//!   gate real by parking on the same `gd-syn-*` row + [`GateWaiter`]
+//!   gate real by parking on the same `gd-resume-*` row + [`GateWaiter`]
 //!   rendezvous the watchdog already surfaced in the UI, instead of
 //!   re-executing while the prompt is still on screen.
 //! * **unknown** (no recorded fingerprint / probe failed) — proceed;

@@ -1,9 +1,11 @@
 //! Parking a *non-gate* node on the synthetic gate and waiting for a human.
 //!
 //! A synthetic gate is not a new mechanism or a new type: it is an ordinary
-//! `gate_decisions` row (id `gd-syn-<step execution>`) hung off a node whose
-//! kind is not `gate`, answered by the same `gate_decide` the real gates
-//! use. Nothing reads the `gd-syn-` prefix; it is documentation.
+//! `gate_decisions` row hung off a node whose kind is not `gate`, answered
+//! by the same `gate_decide` the real gates use. Its id names the question:
+//! `gd-resume-<step execution>` is the startup watchdog's "may this resume?",
+//! `gd-syn-<step execution>` a park's own. [`void_resume_question`] reads
+//! that difference; nothing else does.
 //!
 //! This module is the part that has nothing to do with *why* the run
 //! stopped — create the row, surface it, wait, clean up. The reason and the
@@ -57,6 +59,68 @@ pub(crate) struct SyntheticGate<'a> {
     pub f_id: &'a FeatureId,
 }
 
+fn park_question_id(step_exec_id: &StepExecutionId) -> GateDecisionId {
+    GateDecisionId::from(format!("gd-syn-{}", step_exec_id.0))
+}
+
+fn resume_question_id(step_exec_id: &StepExecutionId) -> GateDecisionId {
+    GateDecisionId::from(format!("gd-resume-{}", step_exec_id.0))
+}
+
+fn undecided_row(id: GateDecisionId, step_exec_id: &StepExecutionId) -> GateDecision {
+    GateDecision {
+        id,
+        step_execution_id: step_exec_id.clone(),
+        decision: None,
+        feedback: None,
+        created_at: paths::now_ms(),
+    }
+}
+
+/// Ask afresh whether `step_exec_id` may resume, discarding any answer its
+/// row already holds.
+///
+/// The row id is derived from the step execution, which outlives any one
+/// question: a restart that interrupts the same node twice poses two
+/// questions on one row. An answer left from the first — given to a
+/// watchdog prompt the fingerprint guard then proceeded past without
+/// consuming — would otherwise be read by [`park_for_human`]'s fast path as
+/// the answer to the second, and the run resumes over a moved workspace
+/// with no human in it.
+pub(crate) fn pose_synthetic_gate(
+    gates: &dyn GateRepository,
+    step_exec_id: &StepExecutionId,
+) -> Result<(), String> {
+    gates.reopen(undecided_row(
+        resume_question_id(step_exec_id),
+        step_exec_id,
+    ))
+}
+
+/// Withdraw the watchdog's "may this resume?" from a node about to run.
+///
+/// Once the node runs the question is moot, but its row stays answerable
+/// (`gate_decision_refusal` admits any non-terminal step), and an answer
+/// given to it then would be consumed, unasked, by the next park on this
+/// step execution — [`park_for_human`] keeps its fast path only because
+/// that cannot happen.
+///
+/// A park's own question is left alone. A node parked when the process
+/// died keeps that row across the restart, and the answer the human gives
+/// it is what the re-run's identical park reads on its fast path; voiding
+/// it would ask the same question again and lose a `redirect`.
+pub(crate) fn void_resume_question(
+    gates: &dyn GateRepository,
+    step_exec_id: &StepExecutionId,
+) -> Result<(), String> {
+    match gates.latest_for_step(step_exec_id)? {
+        Some(row) if row.id == resume_question_id(step_exec_id) => {
+            gates.reset_for_step_execution(step_exec_id)
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Park `step_exec_id` on a synthetic gate and wait.
 ///
 /// Returns the decision, or `None` when the run was cancelled while parked.
@@ -71,15 +135,14 @@ pub(crate) async fn park_for_human(
     step_exec_id: &StepExecutionId,
     mut cancel: watch::Receiver<bool>,
 ) -> Option<GateDecision> {
-    // The watchdog usually created the row at boot; `create` is a no-op
-    // when it exists (unique per step execution).
-    let _ = g.gates.create(GateDecision {
-        id: GateDecisionId::from(format!("gd-syn-{}", step_exec_id.0)),
-        step_execution_id: step_exec_id.clone(),
-        decision: None,
-        feedback: None,
-        created_at: paths::now_ms(),
-    });
+    // `create`, not `reopen`: the watchdog, or this park before a restart,
+    // posed this question and the answer may already be in the row. Keeping
+    // it is only sound because nothing older can be — the watchdog reopens
+    // rather than creates, and dispatching a non-gate step voids its
+    // question (`void_resume_question`).
+    let _ = g
+        .gates
+        .create(undecided_row(park_question_id(step_exec_id), step_exec_id));
 
     if let Ok(Some(rec)) = g.gates.latest_for_step(step_exec_id) {
         if rec.decision.is_some() {
@@ -115,3 +178,7 @@ pub(crate) async fn park_for_human(
     let _ = g.gates.reset_for_step_execution(step_exec_id);
     decision
 }
+
+#[cfg(test)]
+#[path = "../../../tests/adapters/step_executor/gate_park.rs"]
+mod tests;
