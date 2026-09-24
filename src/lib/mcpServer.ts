@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 /** Mirrors the Rust `McpServerStatus` (`commands/mcp_server.rs`). `url` is
+ *  the `/mcp` endpoint a client is configured with, not the bare origin, and
  *  `null` whenever the listener is disabled or not yet bound. */
 export interface McpServerStatus {
   enabled: boolean;

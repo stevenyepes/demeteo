@@ -14,7 +14,9 @@ const MCP_SKILL_MARKDOWN: &str = include_str!("../../../docs/mcp-skill/SKILL.md"
 const MCP_SERVER_ENABLED_KEY: &str = "mcp_server_enabled";
 
 /// The Preferences-screen shape: whether the MCP listener is enabled, and
-/// the URL to show once it is.
+/// the endpoint URL (`demeteo_core::adapters::mcp::endpoint_url`) to show
+/// once it is — what a client is configured with and "Test connection"
+/// probes, never the bare canonical origin.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct McpServerStatus {
     pub enabled: bool,
@@ -32,13 +34,13 @@ fn resolve_enabled(store: &dyn AppSettingsRepository) -> bool {
 /// settings store directly per `commands/app_session.rs`'s split
 /// (`State<'_, AppContext>` cannot be built in a test — see
 /// `tests/infrastructure/oauth.rs`). `enabled` reflects persisted intent;
-/// `url` reflects the live `demeteo_core::adapters::mcp::canonical_uri`
+/// `url` reflects the live `demeteo_core::adapters::mcp::endpoint_url`
 /// state, so a failed or not-yet-attempted bind reports `url: None` even
 /// when `enabled` is `true`.
 pub fn read_mcp_server_status(store: &dyn AppSettingsRepository) -> McpServerStatus {
     McpServerStatus {
         enabled: resolve_enabled(store),
-        url: crate::adapters::mcp::canonical_uri(),
+        url: crate::adapters::mcp::endpoint_url(),
     }
 }
 

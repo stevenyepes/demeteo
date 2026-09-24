@@ -48,7 +48,7 @@ use super::protocol;
 /// Mounted onto the shared router by [`super::router`]. `pub(super)` — same
 /// visibility as `metadata::routes`.
 pub(super) fn routes() -> axum::Router<AppContext> {
-    axum::Router::new().route("/mcp", post(handle))
+    axum::Router::new().route(super::MCP_PATH, post(handle))
 }
 
 #[derive(Debug, Deserialize)]

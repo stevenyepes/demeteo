@@ -80,6 +80,19 @@ pub fn canonical_uri() -> Option<String> {
         .map(|listener| listener.canonical_uri.clone())
 }
 
+/// Where `mcp_handler` mounts the JSON-RPC endpoint on the listener.
+pub const MCP_PATH: &str = "/mcp";
+
+/// The URL an MCP client is configured with: [`canonical_uri`] plus
+/// [`MCP_PATH`]. The two are deliberately different — the canonical URI is
+/// the bare origin because the `Origin` guard, the OAuth `issuer` and the
+/// `resource` checks all compare against it, while the origin itself serves
+/// nothing but `.well-known/*` and the OAuth routes, so a client pointed at
+/// it gets a 404 on its first `tools/list`.
+pub fn endpoint_url() -> Option<String> {
+    canonical_uri().map(|origin| format!("{origin}{MCP_PATH}"))
+}
+
 /// Test-only priming hook: some MCP tests drive their own ad hoc router on a
 /// listener they bind themselves, without going through [`start_if_enabled`]
 /// / [`set_enabled`], and need [`canonical_uri`] to agree with that
