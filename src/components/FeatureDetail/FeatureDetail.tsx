@@ -532,13 +532,16 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       <GateStrip steps={run.steps} onDecideGate={decideGate} className="mx-6 mt-4" />
 
       {/* Renders itself away unless this run wrote a review report *and* the
-          pull request it reviewed is still open — see the component. Placed
-          beside the gate strip because it is the same kind of thing: the run
-          finished, and there is a decision waiting on a human. */}
+          pull request it reviewed is still open — see the component. That can
+          be mid-run: the report lands before the gate step finishes, and while
+          the run is live the component holds the fix until it has. Placed
+          beside the gate strip because it is the same kind of thing: a decision
+          waiting on a human. */}
       <AddressFindingsLaunch
         featureId={featureId}
         projectId={currentProjectId}
         steps={run.steps}
+        runStatus={run.status}
         onLaunch={launchFixRun}
       />
 

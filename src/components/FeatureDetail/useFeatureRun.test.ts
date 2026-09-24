@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { StepExecution } from '../../types';
 import type { HarnessOverrides } from './useHarnessOverrides';
+import { runStatusMeta } from '../../lib/runStatus';
 import { useFeatureRun } from './useFeatureRun';
 
 const FEATURE_ID = 'f-1';
@@ -430,5 +431,50 @@ describe('useFeatureRun reload contract', () => {
     expect(result.current.status).toBe('completed');
     // The dollars are the feature's either way, so the spend still counts it.
     expect(result.current.totalCost).toBe(2.5);
+  });
+});
+
+// A review on a red branch writes its report and then fails its gate step, so
+// the rollup above calls the run `failed` — the case the fix action on the
+// same screen exists for. Only the label moves: `status` is what retry and the
+// terminal-state checks read, and it must stay what the run persisted.
+describe('useFeatureRun status label for a review', () => {
+  it('reads a review whose gate step failed as ready, not failed', async () => {
+    vi.useFakeTimers();
+    backend.status = 'failed';
+    backend.steps = [
+      stepRow({
+        id: 'se-1',
+        step_id: 's-review',
+        status: 'completed',
+        artifact_paths: ['artifacts/code-review.md'],
+      }),
+      stepRow({
+        id: 'se-2',
+        step_id: 's-validate-branch',
+        status: 'failed',
+        error_message: 'gate `test` failed (exit 1)',
+      }),
+    ];
+
+    const { result } = mountRun();
+    await settle();
+
+    expect(result.current.status).toBe('failed');
+    expect(result.current.statusMeta).toMatchObject({ label: 'Review ready', tone: 'amber' });
+  });
+
+  it('keeps an ordinary failed run labelled failed', async () => {
+    vi.useFakeTimers();
+    backend.status = 'failed';
+    backend.steps = [
+      stepRow({ id: 'se-1', step_id: 'implement', status: 'failed', error_message: 'exit 1' }),
+    ];
+
+    const { result } = mountRun();
+    await settle();
+
+    expect(result.current.status).toBe('failed');
+    expect(result.current.statusMeta).toEqual(runStatusMeta('failed'));
   });
 });

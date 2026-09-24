@@ -864,3 +864,83 @@ fn the_selected_gate_carries_its_resolved_command_not_just_its_name() {
     assert_eq!(selected[0].command, "npm run checks:code");
     assert_eq!(selected[0].deadline_s, resolved[0].deadline_s);
 }
+
+// ── baseline_node_site ───────────────────────────────────────────────────────
+
+#[test]
+fn a_node_whose_head_is_the_fork_point_measures_in_place() {
+    assert_eq!(
+        baseline_node_site("abc123", Some("abc123")),
+        NodeSite::InPlace
+    );
+}
+
+#[test]
+fn a_node_with_no_fork_point_measures_in_place() {
+    assert_eq!(baseline_node_site("abc123", None), NodeSite::InPlace);
+    assert_eq!(baseline_node_site("abc123", Some("  ")), NodeSite::InPlace);
+}
+
+#[test]
+fn a_node_cut_past_its_fork_point_measures_the_fork_point() {
+    assert_eq!(
+        baseline_node_site("pr-head-sha", Some("fork-sha")),
+        NodeSite::ForkPoint("fork-sha".to_string()),
+        "a record taken at the head is never covered, so the fallback would measure again"
+    );
+}
+
+// ── baseline_node_answer ─────────────────────────────────────────────────────
+
+fn fork_point() -> NodeSite {
+    NodeSite::ForkPoint("fork-sha".to_string())
+}
+
+#[test]
+fn an_unmeasurable_head_ends_the_run() {
+    assert_eq!(
+        baseline_node_answer(&NodeSite::InPlace, BaselineNodeVerdict::Unmeasurable),
+        BaselineNodeAnswer::EndUnmeasurable,
+        "the head is what validate judges, so a prepare that fails there fails there too"
+    );
+}
+
+#[test]
+fn an_unrunnable_gate_at_the_head_ends_the_run() {
+    let measured = [unrunnable("unit")];
+    let verdict = baseline_node_verdict(&measured);
+    let BaselineNodeAnswer::EndUnrunnable(gate) = baseline_node_answer(&NodeSite::InPlace, verdict)
+    else {
+        panic!("validate would reach the same answer after the implement budget");
+    };
+    assert_eq!(gate.name, "unit");
+}
+
+#[test]
+fn an_unmeasurable_fork_point_continues_without_a_base() {
+    assert_eq!(
+        baseline_node_answer(&fork_point(), BaselineNodeVerdict::Unmeasurable),
+        BaselineNodeAnswer::CompletedWithoutBase,
+        "a target branch that cannot prepare says nothing about the head the run validates"
+    );
+}
+
+#[test]
+fn an_unrunnable_gate_at_the_fork_point_preserves_the_other_gate_measurements() {
+    let measured = [unrunnable("unit")];
+    assert_eq!(
+        baseline_node_answer(&fork_point(), baseline_node_verdict(&measured)),
+        BaselineNodeAnswer::CompletedWithUnrunnableGate,
+    );
+}
+
+#[test]
+fn a_measurement_completes_the_node_at_either_site() {
+    for site in [NodeSite::InPlace, fork_point()] {
+        assert_eq!(
+            baseline_node_answer(&site, BaselineNodeVerdict::Measured),
+            BaselineNodeAnswer::Completed,
+            "{site:?}"
+        );
+    }
+}

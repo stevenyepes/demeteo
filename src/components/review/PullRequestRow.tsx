@@ -3,6 +3,7 @@ import { ChevronRight } from 'lucide-react';
 
 import { Chip } from '../ui/Chip';
 import { PullRequestLaunch } from './PullRequestLaunch';
+import type { ReviewRunInputs } from './ReviewRunOptions';
 import { describePullRequestRow } from '../../lib/pullRequestRow';
 import type { PullRequestSummary } from '../../lib/pullRequests';
 import type { ReviewLaunchParams } from '../../lib/reviewLaunch';
@@ -14,6 +15,15 @@ export interface PullRequestRowProps {
    *  actually runs on. Empty until the settings read lands, or when the project
    *  has stored none. */
   agentKind: string;
+  /**
+   * The workflows and the machine probe the view fetched once for the whole
+   * queue, for this row's run-shape controls to be offered from. Must be the
+   * parent's stable reference and never a fresh literal, for the reason the
+   * `now` doc below gives: it is a prop of every row in a `memo`ized list, so
+   * one rebuilt per render re-renders the whole queue on every listing update
+   * and every enrichment landing.
+   */
+  runOptions?: ReviewRunInputs;
   /**
    * Ask for this row's review tier — mergeability and the diffstat, which no
    * list endpoint carries for GitHub. Called when the user points at the row
@@ -47,6 +57,7 @@ function PullRequestRowImpl({
   pullRequest,
   onReview,
   agentKind,
+  runOptions,
   onRequestDetail,
   now,
 }: PullRequestRowProps): React.ReactElement {
@@ -108,7 +119,12 @@ function PullRequestRowImpl({
         </div>
       </a>
 
-      <PullRequestLaunch pullRequest={pullRequest} onReview={onReview} agentKind={agentKind} />
+      <PullRequestLaunch
+        pullRequest={pullRequest}
+        onReview={onReview}
+        agentKind={agentKind}
+        runOptions={runOptions}
+      />
     </div>
   );
 }

@@ -7,7 +7,9 @@ import { PullRequestRow } from './PullRequestRow';
 import { ReviewFailureCard } from './ReviewFailureCard';
 import { useNavigation, useProject } from '../../context';
 import { useLaunchRun } from '../../hooks/useLaunchRun';
+import { getProjectById, listAgentConfigs } from '../../lib/featureDetail';
 import { getProposedStrategy } from '../../lib/project';
+import { listWorkflows } from '../../lib/workflows';
 import {
   asPullRequestListFailure,
   describeDetailFailure,
@@ -17,6 +19,7 @@ import {
   type PullRequestSummary,
 } from '../../lib/pullRequests';
 import type { ReviewLaunchParams } from '../../lib/reviewLaunch';
+import type { ReviewRunInputs } from './ReviewRunOptions';
 import { BackButton } from '../ui/BackButton';
 
 type ListState =
@@ -39,6 +42,11 @@ export function CodeReviewView(): React.ReactElement {
   const { navigate } = useNavigation();
   const [state, setState] = useState<ListState>({ status: 'loading' });
   const [defaultAgentKind, setDefaultAgentKind] = useState('');
+  /** What every row's run-shape controls are offered from, held as one state
+   *  object rather than assembled per render: the rows are `memo`ized and this
+   *  view re-renders on every listing refresh and every enrichment landing, so
+   *  a value rebuilt per render re-renders the whole queue. */
+  const [runOptions, setRunOptions] = useState<ReviewRunInputs | undefined>(undefined);
   /** Why the tier stopped filling in, once one row's enrichment has failed. Not
    *  a `ListState`: the listing succeeded and its rows are all still true. */
   const [detailFailure, setDetailFailure] = useState<PullRequestListFailure | null>(null);
@@ -90,6 +98,45 @@ export function CodeReviewView(): React.ReactElement {
       .catch(() => {
         if (alive) setDefaultAgentKind('');
       });
+    return () => {
+      alive = false;
+    };
+  }, [currentProjectId]);
+
+  // The same rate-limit reasoning as the enrichment below, in the shape a
+  // picker takes: what a row may offer — the workflows, and the harnesses this
+  // project's machine has both installed and switched on — is one answer for
+  // the whole queue. Read per row, a hundred-row listing is a hundred
+  // `get_agent_configs`, which for a remote project is a hundred SSH round
+  // trips before the user has clicked anything.
+  //
+  // Either read failing leaves its own list empty rather than the object
+  // absent: a rejected workflow registry still leaves the harnesses choosable.
+  // Neither failure gets a banner — same convention as the harness read above,
+  // and nothing here was asked for. Both empty is `undefined`, because there is
+  // then nothing to choose and `PullRequestLaunch` renders no panel for it
+  // rather than one whose every control offers only its own placeholder.
+  //
+  // A project switch drops the previous answer before asking for the next one,
+  // rather than only refusing to let the old one land: `machineId` and the
+  // harnesses are the *other* project's machine, and a launch that reached the
+  // picker in the gap would pin a harness chosen for a machine this run will
+  // not touch.
+  useEffect(() => {
+    setRunOptions(undefined);
+    if (!currentProjectId) return;
+    let alive = true;
+    void (async () => {
+      const project = await getProjectById(currentProjectId).catch(() => null);
+      const machineId = project?.remote_host || 'local';
+      const [workflows, machineAgents] = await Promise.all([
+        listWorkflows().catch(() => []),
+        listAgentConfigs({ machineId, refresh: false }).catch(() => []),
+      ]);
+      if (!alive) return;
+      const offersSomething = workflows.length > 0 || machineAgents.length > 0;
+      setRunOptions(offersSomething ? { workflows, machineAgents, machineId } : undefined);
+    })();
     return () => {
       alive = false;
     };
@@ -204,6 +251,7 @@ export function CodeReviewView(): React.ReactElement {
                   pullRequest={pullRequest}
                   onReview={startReview}
                   agentKind={defaultAgentKind}
+                  runOptions={runOptions}
                   onRequestDetail={requestDetail}
                 />
               ))}

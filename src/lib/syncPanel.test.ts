@@ -628,6 +628,54 @@ describe('describeSyncPanel', () => {
     }
   });
 
+  /**
+   * A fix run launched from a same-repo review is measured against the pull
+   * request's target, so its Sync merges that target into a branch whose own
+   * request points somewhere else — a write into someone else's pull request.
+   * The press has to say which branch it brings in before it is made.
+   */
+  describe('the sync names the branch it merges', () => {
+    const main = (behind: number | null): FeatureDrift => ({ ...drift(behind), base_ref: 'origin/main' });
+    const syncOf = (model: ReturnType<typeof describeSyncPanel>) =>
+      model.actions.find((action) => action.intent === 'sync');
+    const resolved = session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 });
+
+    it.each([
+      ['a behind branch', panel({ session: null, drift: main(3), canSync: true })],
+      ['an unmeasured branch', panel({ session: null, drift: main(null), canSync: true })],
+      ['an unverified zero', panel({ session: null, drift: { ...main(0), fetched: false }, canSync: true })],
+      ['a published resolution the base moved past', panel({ session: resolved, drift: main(4), canSync: true })],
+      [
+        'a published resolution with an unverified zero',
+        panel({ session: resolved, drift: { ...main(0), fetched: false }, canSync: true }),
+      ],
+    ])('on %s', (_, model) => {
+      expect(syncOf(model)?.title).toContain('origin/main');
+      expect(syncOf(model)?.desc).toContain('origin/main');
+    });
+
+    it("retries a blocked sync against the session's own base", () => {
+      const model = panel({
+        session: session({ status: 'blocked', base_branch: 'origin/main', raw_error: 'fatal: no remote' }),
+        drift: null,
+        canSync: true,
+      });
+
+      expect(syncOf(model)?.label).toBe('Retry sync');
+      expect(syncOf(model)?.title).toContain('origin/main');
+    });
+
+    it('falls back to the generic wording when no base is known', () => {
+      const model = panel({
+        session: session({ status: 'blocked', base_branch: '', raw_error: 'fatal: no remote' }),
+        drift: null,
+        canSync: true,
+      });
+
+      expect(syncOf(model)?.title).toBe('Merge the base branch into this feature branch');
+    });
+  });
+
   describe('a sync something else is driving', () => {
     const owned: SyncSessionState[] = ['conflicted', 'resolving', 'resolved', 'resolution_failed'];
 

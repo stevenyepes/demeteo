@@ -1048,6 +1048,35 @@ impl GitOpsHelper {
         self.merge_base(machine_id, repo_dir, base_branch, branch)
             .await
     }
+
+    /// [`merge_base`](Self::merge_base), falling back to
+    /// [`fork_point`](Self::fork_point) only when no local ref resolves.
+    ///
+    /// For a caller on a path every run takes, where
+    /// [`fork_point`](Self::fork_point)'s unconditional fetch would put a
+    /// network round trip on every call, but where `None` is not a harmless
+    /// answer: a same-repo PR's target (`release/2.x`) is a branch this clone
+    /// may never have fetched, and the baseline reads a missing fork point as
+    /// *no evidence*, so every gate already red on the target counts against
+    /// the run.
+    pub async fn merge_base_fetching_on_miss(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        base_branch: &str,
+        branch: &str,
+    ) -> Option<String> {
+        match self
+            .merge_base(machine_id, repo_dir, base_branch, branch)
+            .await
+        {
+            Some(sha) => Some(sha),
+            None => {
+                self.fork_point(machine_id, repo_dir, base_branch, branch)
+                    .await
+            }
+        }
+    }
 }
 
 /// Where a linked worktree for `worktree_id` lives: a **sibling of the repo

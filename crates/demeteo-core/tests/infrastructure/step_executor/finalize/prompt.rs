@@ -19,7 +19,7 @@ fn work() -> BranchWork {
 /// that burns a turn discovering it.
 #[test]
 fn the_authoring_prompt_states_that_demeteo_opens_the_pr() {
-    let p = build_authoring_prompt("Add retries", "desc", "feature/f-1", "main", &work());
+    let p = build_authoring_prompt("Add retries", "desc", "feature/f-1", "main", None, &work());
     assert!(p.contains("no shell and no network"));
     assert!(p.contains("Demeteo squashes the branch and opens the pull request itself"));
     assert!(
@@ -35,6 +35,7 @@ fn the_authoring_prompt_carries_the_work_and_the_repo_conventions() {
         "the description",
         "feature/f-1",
         "main",
+        None,
         &work(),
     );
     assert!(p.contains("the description"));
@@ -49,11 +50,34 @@ fn the_authoring_prompt_carries_the_work_and_the_repo_conventions() {
     }
 }
 
+/// The label names where the PR opens, which on a run fixing a same-repo pull
+/// request is that request's head — not the target its review measured from.
+#[test]
+fn the_authoring_prompt_names_the_branch_the_commit_lands_on() {
+    let p = build_authoring_prompt("t", "d", "feature/f-1", "patch-1", None, &work());
+    assert!(p.contains("the single commit that will land on `patch-1`"));
+}
+
+/// On a fork fix the PR carries the reviewed request's commits too, so the
+/// prompt may not call the one commit it shows "what will land".
+#[test]
+fn a_stacked_prompt_discloses_what_lies_under_the_range() {
+    let note = "stacked on the commits of reviewed request #40";
+    let p = build_authoring_prompt("t", "d", "feature/f-1", "main", Some(note), &work());
+    assert!(p.contains(note));
+    assert!(p.contains("State this plainly near the top of the PR body"));
+    assert!(p.contains("Every commit this run added to `feature/f-1`"));
+    assert!(
+        !p.contains("the single commit that will land on"),
+        "the unqualified claim is false when N+1 commits land: {p}"
+    );
+}
+
 #[test]
 fn the_authoring_prompt_flags_a_truncated_diff() {
     let mut w = work();
     w.diff_truncated = true;
-    let p = build_authoring_prompt("t", "d", "feature/f-1", "main", &w);
+    let p = build_authoring_prompt("t", "d", "feature/f-1", "main", None, &w);
     assert!(p.contains("truncated"));
 }
 
@@ -62,7 +86,7 @@ fn prior_step_reports_are_included_when_present() {
     let mut w = work();
     w.prior_work = "\n--- implementation-spec.md (from step `s-spec`) ---\nthe intended approach\n"
         .to_string();
-    let p = build_authoring_prompt("t", "d", "feature/f-1", "main", &w);
+    let p = build_authoring_prompt("t", "d", "feature/f-1", "main", None, &w);
     assert!(p.contains("Reports from earlier steps"));
     assert!(p.contains("the intended approach"));
 }
@@ -71,7 +95,7 @@ fn prior_step_reports_are_included_when_present() {
 fn prior_step_reports_section_is_omitted_when_empty() {
     // A workflow with no report-producing steps (or uncaptured artifacts)
     // degrades to diff-only — the section header must not appear.
-    let p = build_authoring_prompt("t", "d", "feature/f-1", "main", &work());
+    let p = build_authoring_prompt("t", "d", "feature/f-1", "main", None, &work());
     assert!(!p.contains("Reports from earlier steps"));
 }
 

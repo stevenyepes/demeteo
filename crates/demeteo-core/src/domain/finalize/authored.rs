@@ -26,21 +26,33 @@ impl Authored {
 
     /// The PR body as it should be published.
     ///
+    /// A `Ref` origin's stacked-commit notice is placed before agent prose,
+    /// including when the agent returned no usable answer.
+    ///
     /// When the repo's `commit-msg` hook rejected every message Demeteo
     /// proposed, the squash went in without its approval — so the PR says so
     /// rather than presenting an unvetted message as though it passed. An
     /// unsatisfiable hook degrades to "the PR opens with a flagged message",
     /// never to "the run is stuck".
-    pub(crate) fn pr_body_with_hook_warning(&self, hook_bypassed: bool) -> String {
+    pub(crate) fn published_pr_body(
+        &self,
+        hook_bypassed: bool,
+        stacked_on: Option<&str>,
+    ) -> String {
+        let body = match stacked_on {
+            Some(notice) if self.pr_body.trim().is_empty() => notice.to_string(),
+            Some(notice) => format!("{notice}\n\n{}", self.pr_body),
+            None => self.pr_body.clone(),
+        };
         if hook_bypassed {
             format!(
                 "{}\n\n---\n> ⚠️ This repository's `commit-msg` hook rejected every commit \
                  message Demeteo proposed, so the squashed commit was written without its \
                  approval. Its message may not satisfy your commit lint.",
-                self.pr_body
+                body
             )
         } else {
-            self.pr_body.clone()
+            body
         }
     }
 

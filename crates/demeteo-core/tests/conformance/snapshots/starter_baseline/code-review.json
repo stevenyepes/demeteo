@@ -8,6 +8,13 @@
       "status": "completed",
       "iterations": 0,
       "error": null
+    },
+    {
+      "step_id": "s-validate-branch",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
     }
   ],
   "artifacts": [
@@ -15,6 +22,11 @@
       "s-review",
       "code-review.md",
       "# stub artifact\n\npath: artifacts/code-review.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-validate-branch",
+      "branch-validation.md",
+      "# stub artifact\n\npath: artifacts/branch-validation.md\ngenerated-by: demeteo stub agent\n"
     ]
   ]
 }
