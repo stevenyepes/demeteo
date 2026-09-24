@@ -392,6 +392,8 @@ async fn hydrate_shadow_feature_mirrors_sequence_state_for_a_sequence_step() {
         error_message: None,
         started_at: 0,
         ended_at: Some(30_000),
+        plan_epoch: None,
+        plan_cycle: None,
     };
     let sequence_state = SequenceStateMirror {
         plan_json: Some(

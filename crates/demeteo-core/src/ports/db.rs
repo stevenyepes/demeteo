@@ -710,6 +710,24 @@ pub trait MergeAuditRepository: Send + Sync {
 // 8b. SubtaskRunRepository
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// A `subtask_runs` row as the task loop opens it.
+#[derive(Debug, Clone)]
+pub struct SubtaskRunOpen<'a> {
+    pub id: &'a str,
+    pub feature_id: &'a FeatureId,
+    pub step_execution_id: &'a StepExecutionId,
+    pub subtask_id: &'a str,
+    pub agent_id: &'a str,
+    pub worktree_path: &'a str,
+    pub branch: &'a str,
+    /// The running plan's [`TaskPlan::epoch`](crate::domain::sequence::tasks::TaskPlan::epoch)
+    /// and cycle — what lets the drill-down tell this row from one an
+    /// earlier plan ran under the same task id.
+    pub plan_epoch: Option<&'a str>,
+    pub plan_cycle: u32,
+    pub now: i64,
+}
+
 /// Persistence for per-task agent runs inside a `sequence` step.
 ///
 /// One row per (task, attempt): opened `running` when the task's agent
@@ -723,18 +741,7 @@ pub trait MergeAuditRepository: Send + Sync {
 ///   feature branch) is auditable from these rows after the fact.
 pub trait SubtaskRunRepository: Send + Sync {
     /// Open a `running` row as the task's agent session spawns.
-    #[allow(clippy::too_many_arguments)]
-    fn subtask_run_start(
-        &self,
-        id: &str,
-        feature_id: &FeatureId,
-        step_execution_id: &StepExecutionId,
-        subtask_id: &str,
-        agent_id: &str,
-        worktree_path: &str,
-        branch: &str,
-        now: i64,
-    ) -> Result<(), String>;
+    fn subtask_run_start(&self, run: &SubtaskRunOpen<'_>) -> Result<(), String>;
 
     /// Close the row: `status` is `completed` or `failed`, `cost_usd` /
     /// `tokens` are this task's own spend (not the step's running total).

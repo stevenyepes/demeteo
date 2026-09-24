@@ -61,6 +61,8 @@ struct PlanRead {
     cycle: u32,
     #[serde(default)]
     history: Vec<PlanCycleRead>,
+    #[serde(default)]
+    epoch: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -233,16 +235,12 @@ impl RunView {
             .into_iter()
             .collect();
 
-        let runs: std::collections::HashMap<String, _> = self
-            .features
-            .subtask_runs_for_step(execution_id)?
-            .into_iter()
-            .map(|r| (r.subtask_id.clone(), r))
-            .collect();
+        let runs = self.features.subtask_runs_for_step(execution_id)?;
+        let epoch = plan.epoch.clone();
 
         Ok(SequenceState {
             planned: true,
-            tasks: assemble_tasks(&plan.ordered_tasks(), &landed, &runs),
+            tasks: assemble_tasks(&plan.ordered_tasks(), epoch.as_deref(), &landed, &runs),
         })
     }
 

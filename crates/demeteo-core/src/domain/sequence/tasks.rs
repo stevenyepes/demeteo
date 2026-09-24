@@ -103,6 +103,20 @@ pub struct TaskPlan {
     /// was before this field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<PlanCycle>,
+    /// Which decomposition lineage this plan belongs to — assigned by
+    /// [`plan_epoch`], never by the producer.
+    ///
+    /// Stamped onto every `subtask_runs` row the plan's tasks open, because
+    /// a task id alone cannot say which plan a row ran under: the step
+    /// execution id is the same across every re-run of the step, and a
+    /// fresh decomposition happily reuses ids an abandoned one ran. Joining
+    /// on id alone showed a new plan's first ticket running beside five
+    /// "completed" tickets that were the previous plan's.
+    ///
+    /// `None` on a row cached before this field existed, which reads the
+    /// way it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<String>,
     /// Tasks a targeted retry is deliberately *not* re-running because their
     /// work is already committed on the feature branch (see
     /// [`select_targeted_tasks`]).
@@ -600,6 +614,38 @@ pub(crate) fn plan_cache_entry(
         }
     }
     incoming
+}
+
+/// The [`TaskPlan::epoch`] for `plan` — already resolved by
+/// [`plan_cache_entry`] — given the cached plan it replaces.
+///
+/// A plan continues the cached lineage when it is a rework of it (its
+/// cycle and history came from the cache, so its earlier cycles' rows are
+/// its own) or the same list re-read at the same cycle (a retry or resume,
+/// whose earlier attempts' rows are this plan's too). Anything else is a new
+/// decomposition, and every row before it belongs to a plan no longer shown.
+///
+/// Identity is by ordered task ids: a re-decomposition that emits exactly
+/// the previous list's ids is indistinguishable from a retry, and inherits
+/// its rows.
+pub(crate) fn plan_epoch(
+    plan: &TaskPlan,
+    cached: Option<&TaskPlan>,
+    fresh: impl FnOnce() -> String,
+) -> String {
+    let continues = |c: &TaskPlan| {
+        plan.kind == PlanKind::Rework
+            || (plan.cycle == c.cycle
+                && plan
+                    .tasks
+                    .iter()
+                    .map(|t| &t.id)
+                    .eq(c.tasks.iter().map(|t| &t.id)))
+    };
+    match cached {
+        Some(c) if continues(c) => c.epoch.clone().unwrap_or_else(fresh),
+        _ => fresh(),
+    }
 }
 
 /// What happens when a rework cycle's freshly-read plan isn't the delta it
