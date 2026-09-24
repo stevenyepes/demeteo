@@ -213,7 +213,7 @@ POST /mcp              Authorization: Bearer <token>
 |---|---|
 | Client type | **public** — no `client_secret` is generated, stored or returned; PKCE is the only proof of possession |
 | PKCE | `S256`, mandatory |
-| `resource` (RFC 8707) | mandatory on `/authorize` and `/token`; must equal the listener's canonical URI |
+| `resource` (RFC 8707) | mandatory on `/authorize` and `/token`; must equal the listener's canonical URI, or that URI plus the empty-path `/` a `new URL()` client appends — grants always record the canonical spelling |
 | Token lifetime | **30 days, fixed** |
 | Refresh tokens | **none** — an expired grant is replaced by a new consent |
 | Token storage | `SHA-256(token)` only; the plaintext is held once, in `/token`'s response |

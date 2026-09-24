@@ -128,6 +128,21 @@ pub fn validate_grant(
     Ok(())
 }
 
+/// Whether a client's RFC 8707 `resource` names this server. `canonical` is
+/// always a path-less origin, and RFC 3986 §6.2.3 makes an empty path and
+/// `/` the same URI — the one spelling allowed besides byte equality. The
+/// MCP TypeScript SDK (OpenCode, Pi) builds `resource` through `new URL()`,
+/// which always adds that `/`; exact comparison refused every such client at
+/// `/authorize` with `invalid_target`. Nothing else is accepted: no other
+/// path, no host-only form, no default when absent.
+pub fn resource_matches(requested: &str, canonical: &str) -> bool {
+    requested == canonical || requested.strip_suffix('/') == Some(canonical)
+}
+
 #[cfg(test)]
 #[path = "../../../tests/domain/oauth/validate_grant.rs"]
 mod validate_grant;
+
+#[cfg(test)]
+#[path = "../../../tests/domain/oauth/resource_matches.rs"]
+mod resource_matches_tests;
