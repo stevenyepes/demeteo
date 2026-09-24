@@ -312,7 +312,12 @@ fallback.** The producer declares it; a producer that forgets is caught by id
 overlap (a delta names work that did not exist before; a revision reissues the
 same ticket ids). The fallback only runs when the graph already says this is a
 rework cycle, so the worst a wrong answer does is re-run a list — never the
-reverse.
+reverse. **Except for a replay:** the artifact outlives its cycle still saying
+`rework`, so a list that reproduces one this step already ran and had judged
+(the attempt that cached it completed, and nothing has closed since) is sent
+back to the producer instead — once; the same list again is its answer. A producer fault raised inside a
+rework cycle keeps the verdict that opened it, or the producer would read the
+consumer as the failing step and re-decompose everything.
 
 **Cycles accumulate in `plan_json`, not in a new column.** `sequence_plan_cache`
 keeps `(feature_id, step_id)`; the row's JSON grows `kind`, `cycle` and a
@@ -320,6 +325,16 @@ keeps `(feature_id, step_id)`; the row's JSON grows `kind`, `cycle` and a
 unchanged and new rows parse in older builds — no migration, and the drill-down
 can show "Original decomposition · 25 tickets / Rework 1 · 4 tickets" instead of
 silently replacing one with the other.
+
+**The retry context survives a restart (V57 `retry_contexts`), as a mirror.**
+It was in-memory only, so every restart resumed a step inside a loop as a
+first pass — Greenfield, no verdict, stale-plan guards off. One row per
+feature, written wherever the driver assigns or clears its context, dropped by
+a replay. It is not the budget: `step_executions.iteration_count` still is, so
+a resumed attempt is never counted twice. A write that fails is logged and the
+redirect proceeds; the read side (`restore_retry_context`) drops a row whose
+origin has completed, left the graph, or is blank, so a lost clear cannot
+reopen a closed loop.
 
 **The loop still has to be able to converge.** A spec whose acceptance criteria
 demand a command the project harness does not run can never be satisfied, and

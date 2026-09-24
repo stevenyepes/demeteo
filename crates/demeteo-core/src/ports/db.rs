@@ -14,7 +14,7 @@
 //! | [`ThreadRepository`]      | threads         | `ThreadSession`, `Message`, `AgentConfig`, `WorkingMemoryEntry` |
 //! | [`ProjectRepository`]     | projects        | `Project`, `Repository`, `ProjectSettings`   |
 //! | [`FeatureRepository`]     | features        | `Feature`, `StepExecution`                   |
-//! | [`SequenceResumeRepository`] | sequence resume | `SequenceCheckpoint`, the sequence plan cache |
+//! | [`SequenceResumeRepository`] | sequence resume | `SequenceCheckpoint`, the sequence plan cache, the driver's `RetryContext` |
 //! | [`WorkflowRepository`]    | workflows       | `Workflow`, `WorkflowVersion`                |
 //! | [`GateRepository`]        | gates           | `GateDecision`                               |
 //! | [`AppSettingsRepository`] | app settings    | provider instances, app-session KV, first-launch flags |
@@ -429,10 +429,16 @@ pub trait FeatureRepository: Send + Sync {
 /// `cached_plans` maps so a restart resumes a sequence step from the
 /// exact task instead of the step head.
 ///
-/// Split off [`FeatureRepository`] rather than added to it: these six
-/// methods are one self-contained bounded context — *where a sequence
-/// step got to* — with a single writer (the sequence step handler) and a
-/// single reader beyond it (`RunView`'s task drill-down). Folded in, they
+/// V57 adds the driver's retry context, keyed per feature: the same
+/// question — *where in its loop a resumed run is* — one level up, and
+/// the reason a restart could resume a sequence step inside a rework
+/// cycle and still read it as a first pass.
+///
+/// Split off [`FeatureRepository`] rather than added to it: the six
+/// sequence methods are one self-contained bounded context — *where a
+/// sequence step got to* — with a single writer (the sequence step
+/// handler) and a single reader beyond it (`RunView`'s task drill-down).
+/// Folded in, they
 /// pushed `FeatureRepository` to 21 methods, past the ≤ 12-method budget
 /// the sub-port split exists to hold (`docs/ARCHITECTURE.md` §2), and
 /// made a test double for the sequence step cost twenty-odd irrelevant
@@ -522,6 +528,35 @@ pub trait SequenceResumeRepository: Send + Sync {
         attempt_no: Option<u32>,
         now: i64,
     ) -> Result<(), String>;
+
+    /// The `attempt_no` [`plan_cache_put`](Self::plan_cache_put) recorded
+    /// with the cached plan; `None` when there is no plan or it was stored
+    /// without one.
+    fn plan_cache_attempt_no(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<Option<u32>, String>;
+
+    /// The retry context last saved for `feature_id`, as written — whether
+    /// it still describes an open loop is
+    /// [`restore_retry_context`](crate::domain::rework::restore_retry_context)'s
+    /// question, not this one's.
+    fn retry_context_load(
+        &self,
+        feature_id: &FeatureId,
+    ) -> Result<Option<crate::domain::rework::RetryContext>, String>;
+
+    /// Replace the feature's retry context outright.
+    fn retry_context_save(
+        &self,
+        feature_id: &FeatureId,
+        ctx: &crate::domain::rework::RetryContext,
+        now: i64,
+    ) -> Result<(), String>;
+
+    /// Forget the feature's retry context; a no-op when there is none.
+    fn retry_context_clear(&self, feature_id: &FeatureId) -> Result<(), String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -568,7 +603,18 @@ pub trait WorkflowRepository: Send + Sync {
 /// Persistence for human-in-the-loop gate decisions (one row per
 /// `gate` step execution).
 pub trait GateRepository: Send + Sync {
+    /// Insert `g`. Fails when the step execution already has a row, and
+    /// every caller discards that error, so a leftover row — decided or
+    /// not — survives it untouched.
     fn create(&self, g: GateDecision) -> Result<(), String>;
+    /// Replace whatever row the step execution holds with `g`, decision
+    /// and feedback included.
+    ///
+    /// For a caller posing a *new* question on a step execution whose id
+    /// it reuses. [`create`](Self::create) there keeps an answer given to
+    /// an earlier question, and a park that finds an answered row consumes
+    /// it without waiting — an approval nobody gave to this question.
+    fn reopen(&self, g: GateDecision) -> Result<(), String>;
     /// Insert or update a decision for a step execution. Idempotent: the
     /// row is keyed on `step_execution_id` (UNIQUE), so re-deliveries
     /// overwrite cleanly. Use this whenever the caller can't guarantee
@@ -760,3 +806,9 @@ type _DocIdAliases = (MessageId, StepId, WorkflowVersionId, RepositoryId);
 #[cfg(test)]
 #[path = "../../tests/ports/sequence_resume_port.rs"]
 mod sequence_resume_port;
+
+/// Contract test for [`GateRepository`]'s `create` / `reopen` split, run
+/// against the real `SqliteAdapter` and an in-memory double.
+#[cfg(test)]
+#[path = "../../tests/ports/gate_port.rs"]
+mod gate_port;

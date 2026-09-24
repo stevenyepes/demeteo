@@ -225,7 +225,9 @@ re-running is merely expensive, skipping is wrong.
 gate targets the producer rather than the sequence node whenever the producer
 declares a rework template (`resolve_redirect_target` priority 3) — turning
 "the empty state looks wrong" into two tickets instead of a full re-run.
-Explicitly naming a step, or a declared `on_failure`, still wins.
+Explicitly naming a step, or a declared `on_failure`, still wins — except
+that naming a step between a rework-opted producer and its consumer (a review
+gate) hops to the producer, since landing there replays last cycle's list.
 
 **Cycle history** lives inside `sequence_plan_cache.plan_json` (`kind`,
 `cycle`, `history[]`) rather than a new column, so no migration is needed and

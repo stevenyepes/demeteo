@@ -1,3 +1,4 @@
+use super::super::driver::rework::persist_retry_context;
 use super::super::DagStepExecutor;
 use crate::domain::ids::StepExecutionId;
 use crate::domain::models::{StepAttempt, StepConfig, StepExecution};
@@ -92,6 +93,11 @@ impl DagStepExecutor {
     /// callers are a human asking for another go, and a node that carried
     /// its spent budget across the rewind would get exactly one attempt and
     /// then exhaust, never reaching its `on_failure` target.
+    ///
+    /// The feature's durable retry context (V57) is dropped for the same
+    /// reason: the driver this starts would otherwise restore the replaced
+    /// run's verdict and treat the redo as a cycle of a loop nobody asked
+    /// to continue. A failed start puts it back with the step rows.
     pub(crate) async fn replay_steps_from(
         &self,
         execution_id: &str,
@@ -334,6 +340,13 @@ impl DagStepExecutor {
             status: "running".into(),
         });
 
+        let prior_retry_ctx = self
+            .sequence_resume
+            .retry_context_load(feature_id)
+            .ok()
+            .flatten();
+        persist_retry_context(&*self.sequence_resume, feature_id, None);
+
         if let Err(e) = self
             .start_execution_loop(
                 feature_id.as_str(),
@@ -347,6 +360,9 @@ impl DagStepExecutor {
                 let _ = self
                     .features
                     .step_update(sid, &unwind_patch(original_status, *original_iterations));
+            }
+            if prior_retry_ctx.is_some() {
+                persist_retry_context(&*self.sequence_resume, feature_id, prior_retry_ctx.as_ref());
             }
             let _ = self.features.update(
                 feature_id,

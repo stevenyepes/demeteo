@@ -21,10 +21,11 @@
 //! consumes a `sequence` step's own task list, so it always reads `None`
 //! and returns [`ReworkMode::Revision`].
 
-use crate::domain::ids::StepId;
+use crate::domain::ids::{FeatureId, StepId};
 use crate::domain::models::StepConfig;
 use crate::domain::prompt_context::PromptContext;
 use crate::domain::rework::{self, RetryOrigin, ReworkMode};
+use crate::ports::db::SequenceResumeRepository;
 
 use super::{ExecutionDriver, RetryContext};
 
@@ -63,6 +64,44 @@ impl ExecutionDriver {
                 iteration: rc.iteration,
             }),
         )
+    }
+}
+
+impl ExecutionDriver {
+    /// Mirror `retry_ctx` to its durable row — see [`persist_retry_context`].
+    pub(crate) fn persist_retry_ctx(&self) {
+        persist_retry_context(&*self.sequence_resume, &self.f_id, self.retry_ctx.as_ref());
+    }
+}
+
+/// Save `ctx` as the feature's durable retry context, or clear the row when
+/// no loop is open.
+///
+/// Never fails the caller. A lost write degrades to a restart that resumes
+/// outside the loop, which is what every restart did before V57; failing a
+/// redirect over it would trade a worse prompt for a dead run. A lost
+/// *clear* is caught on the read side by
+/// [`rework::restore_retry_context`], which drops a row whose origin has
+/// since completed.
+pub(crate) fn persist_retry_context(
+    repo: &dyn SequenceResumeRepository,
+    f_id: &FeatureId,
+    ctx: Option<&RetryContext>,
+) {
+    let (op, result) = match ctx {
+        Some(rc) => (
+            "save",
+            repo.retry_context_save(f_id, rc, crate::paths::now_ms()),
+        ),
+        None => ("clear", repo.retry_context_clear(f_id)),
+    };
+    if let Err(e) = result {
+        tracing::warn!(
+            feature_id = %f_id,
+            op,
+            error = %e,
+            "retry context: durable write failed; a restart will resume outside the loop"
+        );
     }
 }
 
