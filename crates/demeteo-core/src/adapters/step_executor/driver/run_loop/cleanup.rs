@@ -32,6 +32,8 @@ impl ExecutionDriver {
             target_status,
             self.start_time,
         );
+        self.retry_ctx = None;
+        self.persist_retry_ctx();
 
         // The pipeline is done. Agent-step sessions are killed inline
         // on every non-success outcome (see `handle_agent_step`), but

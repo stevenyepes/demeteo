@@ -75,7 +75,7 @@ fn seeded(kind: &str, host: &str) -> Arc<SqliteAdapter> {
     adapter
 }
 
-fn add_feature(adapter: &SqliteAdapter, origin: FeatureOrigin) {
+fn add_feature(adapter: &SqliteAdapter, origin: FeatureOrigin, diff_base: Option<&str>) {
     let mut feature: Feature = serde_json::from_value(serde_json::json!({
         "id": FEATURE,
         "project_id": PROJECT,
@@ -89,6 +89,7 @@ fn add_feature(adapter: &SqliteAdapter, origin: FeatureOrigin) {
     }))
     .expect("the seed names every field Feature requires");
     feature.origin = origin;
+    feature.diff_base_branch = diff_base.map(str::to_string);
     FeatureRepository::add(adapter, feature).unwrap();
 }
 
@@ -179,7 +180,7 @@ fn field(http: &FakeHttpClient, url: &str, key: &str) -> String {
 #[tokio::test]
 async fn a_github_pr_targets_the_branch_the_caller_named() {
     let adapter = seeded("github", "github.com");
-    add_feature(&adapter, FeatureOrigin::DefaultBranch);
+    add_feature(&adapter, FeatureOrigin::DefaultBranch, None);
     let http = github_http();
 
     publish(
@@ -197,7 +198,7 @@ async fn a_github_pr_targets_the_branch_the_caller_named() {
 #[tokio::test]
 async fn a_gitlab_mr_targets_the_branch_the_caller_named() {
     let adapter = seeded("gitlab", "gitlab.com");
-    add_feature(&adapter, FeatureOrigin::DefaultBranch);
+    add_feature(&adapter, FeatureOrigin::DefaultBranch, None);
     let http = gitlab_http();
 
     publish(
@@ -221,6 +222,7 @@ async fn a_run_cut_from_a_named_base_targets_that_base() {
         FeatureOrigin::Branch {
             base: "release/1.0".to_string(),
         },
+        None,
     );
     let http = github_http();
 
@@ -233,4 +235,31 @@ async fn a_run_cut_from_a_named_base_targets_that_base() {
     .await;
 
     assert_eq!(field(&http, GITHUB_URL, "base"), "release/1.0");
+}
+
+/// The shape a review-launched fix run is seeded with: cut from the reviewed
+/// PR's head, measured against that PR's target. The diff base decides what
+/// the run's changes are counted against, never where they are proposed — a
+/// fix PR opened against `main` would carry the whole reviewed PR with it.
+#[tokio::test]
+async fn a_fix_run_measured_against_another_branch_still_targets_its_head() {
+    let adapter = seeded("github", "github.com");
+    add_feature(
+        &adapter,
+        FeatureOrigin::Branch {
+            base: "pr-head".to_string(),
+        },
+        Some("main"),
+    );
+    let http = github_http();
+
+    publish(
+        adapter,
+        push_exec("x-access-token", "github.com"),
+        http.clone(),
+        options(None),
+    )
+    .await;
+
+    assert_eq!(field(&http, GITHUB_URL, "base"), "pr-head");
 }

@@ -258,10 +258,14 @@ pub struct StepConfig {
     ///
     /// `command` becomes optional when this is set, and is ignored if present.
     ///
-    /// Only valid at the **head** of a graph. The node provisions its worktree
-    /// off the feature branch, which is the base commit only while nothing has
-    /// been implemented yet; the record carries the sha actually measured, so a
-    /// baseline taken from the wrong position is detectable
+    /// Belongs at the **head** of a graph. The node provisions its worktree off
+    /// the feature branch and measures the run's fork point, in place when that
+    /// is the worktree's head and in a detached checkout when it is not
+    /// ([`baseline_node_site`](crate::domain::harness_baseline::baseline_node_site)).
+    /// A node that cannot resolve a fork point measures its head, which is the
+    /// base commit only while nothing has been implemented yet; the record
+    /// carries the sha actually measured, so a baseline taken from the wrong
+    /// position is detectable
     /// ([`HarnessBaseline::covers`](crate::domain::harness_baseline::HarnessBaseline::covers))
     /// rather than silently trusted.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,13 +1,13 @@
 //! The finalize step's policy, with no I/O in it.
 //!
 //! Finalize is mostly choreography — run git reads, ask an agent, validate
-//! against the repo's own hook, squash, record — but three things it does are
+//! against the repo's own hook, squash, record — but five things it does are
 //! decisions: what counts as a usable answer from the agent, what to write
-//! when there was none, and which commits on the branch actually describe the
-//! work. All three used to be spelled inside `async fn`s in
-//! `adapters/step_executor/steps/finalize`, one of them 250 lines long, which
-//! is why the ⚠️ hook-bypass warning the PR body carries had never been
-//! asserted anywhere.
+//! when there was none, where the range it summarises starts, which commits
+//! in that range actually describe the work, and what the PR carries beyond
+//! that range. The first four used to be spelled inside `async fn`s in `adapters/step_executor/steps/finalize`, one
+//! of them 250 lines long, which is why the ⚠️ hook-bypass warning the PR body
+//! carries had never been asserted anywhere.
 //!
 //! Synchronous and total, per the [`domain`](crate::domain) rule.
 //!
@@ -16,3 +16,5 @@
 
 pub(crate) mod authored;
 pub(crate) mod commit_log;
+pub(crate) mod stacked_on;
+pub(crate) mod summary_base;

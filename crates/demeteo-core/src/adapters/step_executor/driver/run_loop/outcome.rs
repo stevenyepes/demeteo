@@ -246,14 +246,23 @@ impl ExecutionDriver {
             ),
         );
         if let Some((failing_tests, implicated_files)) = structured {
-            self.retry_ctx = Some(crate::adapters::step_executor::driver::RetryContext {
+            let own = crate::adapters::step_executor::driver::RetryContext {
                 feedback: feedback.to_string(),
                 iteration: budget.attempt,
                 max: budget.max,
                 failing_step_id: step_exec.step_id.0.clone(),
                 failing_tests,
                 implicated_files,
+            };
+            self.retry_ctx = Some(match dr.producer_fault_in_rework {
+                Some(consumer_in_rework) => crate::domain::rework::producer_fault_retry(
+                    self.retry_ctx.take(),
+                    consumer_in_rework,
+                    own,
+                ),
+                None => own,
             });
+            self.persist_retry_ctx();
         }
         Some(RunAction::RedirectTo(redirect_idx))
     }
@@ -317,6 +326,7 @@ impl ExecutionDriver {
             &step_exec.step_id.0,
         ) {
             self.retry_ctx = None;
+            self.persist_retry_ctx();
         }
     }
 

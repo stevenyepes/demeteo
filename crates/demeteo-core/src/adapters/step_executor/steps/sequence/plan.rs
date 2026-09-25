@@ -15,11 +15,12 @@ use super::context::{RunTarget, StepCtx, StepSpend};
 use super::CheckpointResume;
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::steps::StepOutcome;
+use crate::domain::models::step_attempt::cached_cycle_standing;
 use crate::domain::models::StepExecution;
 use crate::domain::sequence::tasks::{
-    apply_landed_checkpoint, extract_task_plan, is_rework_plan, reject_stale_rework_plan,
-    reject_unexecutable_plan, select_targeted_tasks, task_list_json_shape_example, PlanKind,
-    PlanRejection, TaskPlan,
+    apply_landed_checkpoint, extract_task_plan, is_rework_plan, plan_cache_entry, plan_epoch,
+    reject_stale_rework_plan, reject_unexecutable_plan, replays_a_judged_cycle,
+    select_targeted_tasks, task_list_json_shape_example, PlanKind, PlanRejection, TaskPlan,
 };
 
 impl ExecutionDriver {
@@ -220,8 +221,22 @@ impl ExecutionDriver {
             ));
         }
 
-        let is_delta =
-            in_rework_cycle && !planner_sourced && is_rework_plan(&plan, cached.as_ref());
+        let attempts = self.features.attempts_for_step(&step_exec.id).ok();
+        let standing = cached_cycle_standing(
+            attempts.as_deref().unwrap_or_default(),
+            self.sequence_resume
+                .plan_cache_attempt_no(&self.f_id, step_exec.step_id.0.as_str())
+                .ok()
+                .flatten(),
+        );
+        let cycle_was_judged = standing.judged;
+        let replayed = in_rework_cycle
+            && !planner_sourced
+            && replays_a_judged_cycle(&plan, cached.as_ref(), standing.replay_checkable);
+        let is_delta = in_rework_cycle
+            && !planner_sourced
+            && !replayed
+            && is_rework_plan(&plan, cached.as_ref());
 
         if is_delta {
             // Every task runs. The producer already chose which four of the
@@ -230,12 +245,7 @@ impl ExecutionDriver {
             // that. `already_landed` carries the cycles it is a delta
             // against so each running agent's `{{completed_tasks}}` names
             // the work sitting in the worktree it opens.
-            let previous = cached.as_ref();
-            plan.kind = PlanKind::Rework;
-            plan.cycle = previous.map(|c| c.cycle + 1).unwrap_or(1);
-            plan.history = previous.map(|c| c.close_cycle()).unwrap_or_default();
-            plan.already_landed = plan.all_prior_tasks();
-            plan.resumes_landed_work = true;
+            plan = plan_cache_entry(plan, cached.as_ref(), cycle_was_judged, true);
             tracing::info!(
                 feature_id = %self.f_id,
                 step_id = %step_exec.step_id.0,
@@ -272,6 +282,7 @@ impl ExecutionDriver {
                 is_delta,
                 producer_id,
                 producer_declares_rework_template,
+                replayed,
             ) {
                 return Err(match rejection {
                     PlanRejection::ProducerMustFix { producer, reason } => {
@@ -299,11 +310,13 @@ impl ExecutionDriver {
         // stored with the attempt that produced it (the step's latest V31
         // row). Telemetry-grade write: failure degrades to a re-plan on the
         // next retry.
-        let attempt_no = self
-            .features
-            .attempts_for_step(&step_exec.id)
-            .ok()
-            .and_then(|rows| rows.last().map(|a| a.attempt_no));
+        if !is_delta {
+            plan = plan_cache_entry(plan, cached.as_ref(), cycle_was_judged, false);
+        }
+        plan.epoch = Some(plan_epoch(&plan, cached.as_ref(), || {
+            format!("{}-{}", step_exec.step_id.0, crate::paths::now_ms())
+        }));
+        let attempt_no = attempts.and_then(|rows| rows.last().map(|a| a.attempt_no));
         match serde_json::to_string(&plan) {
             Ok(json) => {
                 if let Err(e) = self.sequence_resume.plan_cache_put(

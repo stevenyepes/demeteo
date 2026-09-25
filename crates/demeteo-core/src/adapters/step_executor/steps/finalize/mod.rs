@@ -26,6 +26,8 @@ use std::time::Instant;
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::finalize::authored::Authored;
+use crate::domain::finalize::stacked_on::stacked_on_note;
+use crate::domain::finalize::summary_base::summary_base;
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::permission::StepCapability;
 use crate::ports::db::StepExecutionPatch;
@@ -99,13 +101,14 @@ impl ExecutionDriver {
                 step_start,
             );
         };
-        let base_branch = crate::domain::diff_base::resolve(
-            feature.diff_base_branch.as_deref(),
-            &feature.origin,
-            &settings.worktree_strategy.default_branch,
-        )
-        .unwrap_or_default()
-        .to_string();
+        let default_branch = &settings.worktree_strategy.default_branch;
+        // One binding for the summary range and the squash, so what the agent
+        // describes and what is published cannot drift apart.
+        let squash_base = summary_base(&feature, default_branch);
+        // `None` because no `PublishOptions` site passes a `target_branch`, so
+        // this is the branch the PR opens against.
+        let lands_on = feature.origin.publish_target(None, default_branch);
+        let stacked_on = stacked_on_note(&feature.origin, &lands_on);
         let feature_branch = self.branch_name.clone();
 
         // ── Gather. The agent has no shell, so we run the git reads for it,
@@ -123,7 +126,7 @@ impl ExecutionDriver {
             },
             context::BranchRange {
                 feature_branch: &feature_branch,
-                base_branch: &base_branch,
+                squash_base: &squash_base,
             },
             context::PriorWork {
                 artifacts: self.artifacts.as_ref(),
@@ -150,7 +153,8 @@ impl ExecutionDriver {
                     &feature.title,
                     &feature.description,
                     &feature_branch,
-                    &base_branch,
+                    &lands_on,
+                    stacked_on.as_deref(),
                     &work,
                 ),
             };
@@ -233,17 +237,13 @@ impl ExecutionDriver {
 
         let authored = authored.unwrap_or_else(|| Authored::fallback(&feature.title));
 
-        // Onto where the run started, not onto `base_branch` — where the two
-        // differ, and why it matters, is `FeatureOrigin::squash_base`.
         let squash = self
             .git_ops
             .squash_feature_branch(
                 self.machine_id_opt.as_deref(),
                 &repo_dir,
                 &feature_branch,
-                &feature
-                    .origin
-                    .squash_base(&settings.worktree_strategy.default_branch),
+                &squash_base,
                 &authored.commit_message(),
             )
             .await;
@@ -298,7 +298,7 @@ impl ExecutionDriver {
         // terminal publish (the driver on the desktop, `demeteo-runner` when
         // headless) picks it up. Both paths therefore open an identically
         // titled PR without either holding a secret it doesn't need.
-        let body = authored.pr_body_with_hook_warning(hook_bypassed);
+        let body = authored.published_pr_body(hook_bypassed, stacked_on.as_deref());
 
         if let Err(e) = self.features.update(
             &self.f_id,

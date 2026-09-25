@@ -235,22 +235,27 @@ describe('McpGrantsTab install skill', () => {
     expect(await screen.findByRole('button', { name: /install skill/i })).toBeInTheDocument();
   });
 
-  it('shows destination guidance naming the Claude Code skill path next to the button', async () => {
+  it('names the Claude Code skill destination on the button itself', async () => {
     installBackend({ enabled: true, url: 'http://127.0.0.1:8765' });
 
     render(<McpGrantsTab />);
-    await screen.findByRole('button', { name: /install skill/i });
+    const button = await screen.findByRole('button', { name: /install skill/i });
 
-    expect(screen.getByText(/\.claude\/skills\/demeteo-mcp\/SKILL\.md/)).toBeInTheDocument();
-    expect(screen.getByText(/opencode or\s*hermes/i)).toBeInTheDocument();
+    expect(button).toHaveAttribute('title', expect.stringContaining('.claude/skills/demeteo-mcp/'));
   });
 
-  it('shows the Install skill button when enabled but not listening', async () => {
+  // The whole per-agent guided panel (Install skill included) now needs a
+  // live URL to build working steps against — a bind failure is shown as
+  // its own warning instead (`McpGrantsTab.tsx`'s `not_listening` branch),
+  // so guiding someone to connect a client before the listener even works
+  // would be premature.
+  it('hides the Install skill button when enabled but not listening', async () => {
     installBackend({ enabled: true, url: null });
 
     render(<McpGrantsTab />);
+    await screen.findByText('Not Listening');
 
-    expect(await screen.findByRole('button', { name: /install skill/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /install skill/i })).not.toBeInTheDocument();
   });
 
   it('hides the Install skill button when the server is disabled', async () => {

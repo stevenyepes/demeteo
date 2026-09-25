@@ -468,7 +468,40 @@ pub fn nothing_to_measure(
     harnesses.is_empty() && prepare.is_none_or(str::is_empty)
 }
 
-/// What a completed baseline measurement means for the run.
+/// Where a `baseline-harness` node takes its measurement: see
+/// [`baseline_node_site`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeSite {
+    /// In the node's own worktree, at the head it was cut from.
+    InPlace,
+    /// In a detached checkout of this commit — the run's fork point.
+    ForkPoint(String),
+}
+
+/// Where a `baseline-harness` node measures, given the head its worktree was
+/// cut from and the fork point the subtraction will ask about.
+///
+/// The record is only read when it [`covers`](HarnessBaseline::covers) the
+/// fork point, and `covers` is sha-exact. On an ordinary run the feature branch
+/// is cut from its base and nothing has been implemented at the head of the
+/// graph, so the two are the same commit and the node's own worktree is the
+/// right place — no second checkout. A review-launched fix run is cut from the
+/// pull request's head but measured against the branch that request targets,
+/// so its head is not the fork point: a record taken there is never read, and
+/// the lazy fallback spends a second full gate run measuring what the node
+/// should have.
+///
+/// An unknown fork point measures in place and records the head. The
+/// subtraction has no base to match it against either, and a guessed base is
+/// the one thing a baseline must never name.
+pub fn baseline_node_site(head_sha: &str, fork_point: Option<&str>) -> NodeSite {
+    match fork_point.map(str::trim).filter(|sha| !sha.is_empty()) {
+        Some(sha) if sha != head_sha.trim() => NodeSite::ForkPoint(sha.to_string()),
+        _ => NodeSite::InPlace,
+    }
+}
+
+/// What a completed baseline measurement says about the commit it measured.
 ///
 /// # It records a verdict; it does not judge one
 ///
@@ -478,18 +511,15 @@ pub fn nothing_to_measure(
 /// its first node would restate exactly the misattribution HB2 exists to remove
 /// — before a single line has been written.
 ///
-/// Two things do end the run, and both are the same statement: **this machine
-/// cannot produce evidence about this project.**
+/// The other two both say **this machine cannot produce evidence about the
+/// measured commit.** Whether that ends the run depends on which commit it was,
+/// and that is [`baseline_node_answer`]'s question, not this one's:
 ///
 /// * [`Unmeasurable`](Self::Unmeasurable) — a `prepare_command` that fails, or
-///   gates that never reach an exit status. The worktree can never be made
-///   runnable.
+///   gates that never reach an exit status.
 /// * [`Unrunnable`](Self::Unrunnable) — a measurement whose classifier said the
 ///   gate was red *because it could not run here* (HB9). That gate reached an
-///   exit status but proved nothing, and it will prove nothing at validate
-///   either — where the same answer already terminates the run, after the entire
-///   implement budget. Asking here costs **zero implement budget**, which is the
-///   point.
+///   exit status but proved nothing.
 ///
 /// It carries no rendered text. The two terminal wordings are the adapter's,
 /// because both are built from things this decision never sees — the machine
@@ -500,19 +530,14 @@ pub enum BaselineNodeVerdict<'a> {
     /// for.
     Measured,
     /// Nothing was recorded at all. `measure_gates` records nothing when the
-    /// prepare command fails or when no gate reached an exit status; both are
-    /// the same terminal answer, and no amount of implementing changes either
-    /// (HB2c's `prepare` row).
+    /// prepare command fails or when no gate reached an exit status.
     ///
-    /// **An empty measurement is terminal, not a pass.** Reading it as a pass is
-    /// the exact inversion the module header warns about: a fabricated green
-    /// base excuses a real regression.
+    /// **An empty measurement is never a pass.** Reading it as one is the exact
+    /// inversion the module header warns about: a fabricated green base excuses
+    /// a real regression.
     Unmeasurable,
     /// A gate could not run on this machine. The record already knows it — the
-    /// classifier answered when the gate was measured, moments ago — and
-    /// validate would reach the identical conclusion from the identical field,
-    /// only after the whole implement budget has been spent. So say it here,
-    /// where nothing has been spent at all.
+    /// classifier answered when the gate was measured, moments ago.
     Unrunnable(UnrunnableBaselineGate<'a>),
 }
 
@@ -533,6 +558,75 @@ pub fn baseline_node_verdict(measured: &[HarnessBaselineRun]) -> BaselineNodeVer
     match unrunnable_baseline_gate(measured) {
         Some(gate) => BaselineNodeVerdict::Unrunnable(gate),
         None => BaselineNodeVerdict::Measured,
+    }
+}
+
+/// What the node does with a [`BaselineNodeVerdict`], given the
+/// [`NodeSite`] the measurement was **actually** taken at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaselineNodeAnswer<'a> {
+    /// Complete the step: the record is evidence about the base.
+    Completed,
+    /// Complete the step with no base to subtract. The fork point could not be
+    /// measured here; that says nothing about the branch the run validates.
+    CompletedWithoutBase,
+    /// Complete the step with a partial base. The unrunnable gate cannot be
+    /// subtracted, but measurements of the other gates remain usable.
+    CompletedWithUnrunnableGate,
+    /// End the run: the commit the run validates cannot be made runnable here.
+    EndUnmeasurable,
+    /// End the run: a gate validation depends on cannot run on this machine.
+    EndUnrunnable(UnrunnableBaselineGate<'a>),
+}
+
+/// Whether a baseline verdict ends the run, which turns on whether the node
+/// measured the commit the run will validate.
+///
+/// # In place, both failures are terminal
+///
+/// [`NodeSite::InPlace`] is the head the feature branch was cut from, so it is
+/// the commit validate will judge before any line is written. A prepare that
+/// fails there fails at validate too (HB2c's `prepare` row), and an unrunnable
+/// gate is one validate reaches the identical conclusion about from the
+/// identical field — only after the whole implement budget. Saying it here costs
+/// **zero implement budget**, which is invariant I1 of
+/// `docs/HARNESS_BASELINE.md`.
+///
+/// # At the fork point, neither is
+///
+/// [`NodeSite::ForkPoint`] is another commit: on a review-launched fix run it is
+/// the merge-base with the branch the pull request targets, while the run
+/// validates the pull request's head. A `main` that cannot prepare or whose gate
+/// cannot run here is no statement about that head, and ending the run on it
+/// would refuse to fix a pull request because of its target's health. The lazy
+/// fallback measures the same commit and reads an empty measurement as "no
+/// subtraction", so this answers the same: continue with no base. An
+/// unrunnable gate's record stays as written: it is never subtracted, and
+/// [`compare_gate`](crate::domain::harness_delta::compare_gate) reads its fault
+/// only against a head that fails identically, which is then a statement about
+/// that head too. Other gates in the record remain usable for subtraction.
+///
+/// The site is where the gates *ran*, not where the node wanted them to: a
+/// fork-point checkout that could not be provisioned measures the head in
+/// place, and keeps the terminal answers.
+pub fn baseline_node_answer<'a>(
+    site: &NodeSite,
+    verdict: BaselineNodeVerdict<'a>,
+) -> BaselineNodeAnswer<'a> {
+    match (site, verdict) {
+        (_, BaselineNodeVerdict::Measured) => BaselineNodeAnswer::Completed,
+        (NodeSite::ForkPoint(_), BaselineNodeVerdict::Unmeasurable) => {
+            BaselineNodeAnswer::CompletedWithoutBase
+        }
+        (NodeSite::ForkPoint(_), BaselineNodeVerdict::Unrunnable(_)) => {
+            BaselineNodeAnswer::CompletedWithUnrunnableGate
+        }
+        (NodeSite::InPlace, BaselineNodeVerdict::Unmeasurable) => {
+            BaselineNodeAnswer::EndUnmeasurable
+        }
+        (NodeSite::InPlace, BaselineNodeVerdict::Unrunnable(gate)) => {
+            BaselineNodeAnswer::EndUnrunnable(gate)
+        }
     }
 }
 

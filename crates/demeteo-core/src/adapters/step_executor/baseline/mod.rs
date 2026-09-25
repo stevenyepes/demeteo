@@ -10,8 +10,8 @@
 //! # Two producers, one shape
 //!
 //! 1. **The in-graph node** — `baseline-harness`, a zero-token `command` node at
-//!    the head of the Standard and Refactor starters (P4.2a). Cheap and the
-//!    default: its wall-clock hides behind research.
+//!    the head of the Standard and Refactor starters (P4.2a), in `node.rs`.
+//!    Cheap and the default: its wall-clock hides behind research.
 //! 2. **The lazy fallback** — fired from `run_harness_first`'s *failure* path
 //!    when no stored record covers the run's base. This is what makes the
 //!    subtraction unconditional instead of a privilege of the two starters that
@@ -45,11 +45,11 @@
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::adapters::step_executor::failing_tests::{DriverExtractor, FailingTestExtractor};
-use crate::adapters::step_executor::harness_shell::{harness_ceiling_s, harness_shell_options};
+use crate::adapters::step_executor::harness_shell::harness_shell_options;
 use crate::domain::artifact::{Artifact, ArtifactSource};
 use crate::domain::harness_baseline::{
-    fallback_baseline_needed, fallback_gates, BaselineEnvironmentFault, BaselineNodeVerdict,
-    BaselineProducer, HarnessBaseline, HarnessBaselineRun,
+    fallback_baseline_needed, fallback_gates, BaselineEnvironmentFault, BaselineProducer,
+    HarnessBaseline, HarnessBaselineRun,
 };
 use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
 use crate::domain::harness_outcome::{harness_block, merge_stderr_into_stdout, HarnessRun};
@@ -58,6 +58,7 @@ use crate::domain::verifier::ResolvedHarness;
 use crate::ports::execution::{ExecutionPort, ShellOptions};
 
 pub(crate) mod briefing;
+mod node;
 
 /// One gate as measured: the record to persist, plus the output that record
 /// only *references*.
@@ -370,9 +371,13 @@ impl ExecutionDriver {
     /// the producer that measures a fallback and the subtraction that checks
     /// [`HarnessBaseline::covers`] — because two resolutions that could
     /// disagree would silently disable the subtraction rather than fail.
+    /// The baseline node resolves it separately, at the head of the graph; if
+    /// a sync has moved the fork point since, its record stops covering and
+    /// the fallback measures again, which is the safe direction.
     ///
     /// `None` on any failure (no settings, no base branch named, no
-    /// merge-base, dead transport).
+    /// merge-base even after fetching a base this clone had no ref for, dead
+    /// transport).
     /// Callers treat that as *no baseline evidence*, which is today's
     /// behaviour — never as a green base.
     pub(crate) async fn resolve_base_sha(&self) -> Option<String> {
@@ -389,7 +394,7 @@ impl ExecutionDriver {
         )?;
         let sha = self
             .git_ops
-            .merge_base(
+            .merge_base_fetching_on_miss(
                 self.machine_id_opt.as_deref(),
                 &self.target_dir,
                 base_branch,
@@ -495,174 +500,6 @@ impl ExecutionDriver {
                 None
             }
         }
-    }
-
-    /// The in-graph producer: the `baseline-harness` node's body (P4.2a).
-    ///
-    /// The caller has already provisioned a worktree off the **feature
-    /// branch** and owns its teardown. At the head of the graph that branch
-    /// still points at the base commit, because nothing has been implemented
-    /// yet — which is exactly why the node is only valid in that position. We
-    /// record the sha we **actually measured** rather than assuming it, so a
-    /// node someone later drags halfway down the graph produces a record whose
-    /// `base_sha` visibly does not cover the run's base instead of a plausible
-    /// lie.
-    ///
-    /// # It records a verdict; it does not judge one
-    ///
-    /// What a measurement means for the run is
-    /// [`BaselineNodeVerdict`](crate::domain::harness_baseline::BaselineNodeVerdict)
-    /// — pure, in `domain/`, reachable from a test with no port doubles
-    /// (AGENTS.md §3), and where the reasoning for all three answers lives. What
-    /// is left here is the notification, the terminal wordings, and the
-    /// [`StepOutcome`](super::steps::StepOutcome) each verdict maps onto.
-    ///
-    /// Returns the same `(outcome, artifact refs)` pair the authored-command
-    /// path does, so `handle_command_step` treats the two identically.
-    pub(crate) async fn run_baseline_node(
-        &self,
-        step_exec: &crate::domain::models::StepExecution,
-        step_conf: &crate::domain::models::StepConfig,
-        machine_str: &str,
-        wt_path: &str,
-    ) -> (super::steps::StepOutcome, Vec<String>) {
-        use super::steps::StepOutcome;
-
-        if *self.cancel_watch.borrow() {
-            return (StepOutcome::Cancelled, Vec::new());
-        }
-
-        let Some(base_sha) = self
-            .git_ops
-            .head_sha(self.machine_id_opt.as_deref(), wt_path)
-            .await
-        else {
-            return (
-                StepOutcome::Environmental(format!(
-                    "baseline node could not resolve the commit it was measuring \
-                     (`git rev-parse HEAD` in {wt_path} produced nothing). A measurement \
-                     that cannot name its commit is not evidence, so none was recorded."
-                )),
-                Vec::new(),
-            );
-        };
-
-        let Some(settings) = self
-            .features
-            .get(&self.f_id)
-            .ok()
-            .flatten()
-            .and_then(|f| self.projects.get_settings(&f.project_id).ok().flatten())
-        else {
-            return (
-                StepOutcome::Environmental(
-                    "baseline node could not read the project's settings, so it does not \
-                     know which harnesses to measure."
-                        .to_string(),
-                ),
-                Vec::new(),
-            );
-        };
-
-        // The same chain validate resolves through, fed the same way: a node
-        // may declare `verifier.harness_names` to pin its gates, and otherwise
-        // falls through to the project's selection and then its `test_command`
-        // — which is what every shipped starter does, and is what keeps the two
-        // measuring the same set.
-        let declared: &[String] = step_conf
-            .verifier
-            .as_ref()
-            .map(|v| v.harness_names.as_slice())
-            .unwrap_or(&[]);
-        let harnesses = crate::domain::verifier::resolve_harnesses(
-            declared,
-            &settings.worktree_strategy,
-            harness_ceiling_s(self.app_settings.as_ref()),
-        );
-
-        let prepare = settings.worktree_strategy.prepare_command.as_deref();
-        if crate::domain::harness_baseline::nothing_to_measure(&harnesses, prepare) {
-            let refs = self
-                .store_baseline_note(
-                    &step_exec.step_id.0,
-                    "No harness is configured for this project, so nothing was measured. \
-                     This is an absence of evidence, not a passing result.",
-                )
-                .into_iter()
-                .collect();
-            return (StepOutcome::Completed, refs);
-        }
-
-        let runs = self
-            .record_harness_baseline(
-                &BaselineSite {
-                    machine: machine_str,
-                    wt_path,
-                    step_id: &step_exec.step_id.0,
-                    base_sha: &base_sha,
-                    producer: BaselineProducer::Node,
-                },
-                prepare,
-                &harnesses,
-            )
-            .await;
-
-        if *self.cancel_watch.borrow() {
-            return (StepOutcome::Cancelled, Vec::new());
-        }
-
-        let refs: Vec<String> = runs.iter().filter_map(|r| r.output_ref.clone()).collect();
-
-        match crate::domain::harness_baseline::baseline_node_verdict(&runs) {
-            BaselineNodeVerdict::Unmeasurable => (
-                StepOutcome::Environmental(build_unmeasurable_message(
-                    machine_str,
-                    wt_path,
-                    prepare,
-                    &harnesses,
-                )),
-                Vec::new(),
-            ),
-            // The artifact references survive into the failure: the gate's
-            // output is the evidence for the remediation, and a terminal step
-            // whose Output tab is blank is the opposite of what it is for.
-            BaselineNodeVerdict::Unrunnable(gate) => {
-                let msg = crate::domain::harness_remediation::build_environment_message(
-                    machine_str,
-                    wt_path,
-                    gate.command,
-                    gate.reason,
-                    gate.remediation,
-                );
-                crate::adapters::step_executor::driver::verifier::environment::notify_environment_not_ready(
-                    &self.environment_signal(),
-                    step_exec,
-                    &msg,
-                );
-                tracing::warn!(
-                    feature_id = %self.f_id,
-                    step_id = %step_exec.step_id.0,
-                    harness = %gate.name,
-                    base_sha = %base_sha,
-                    "a gate that validation depends on cannot run on this machine — ending the run \
-                     at the head of the graph rather than after the implement budget"
-                );
-                (StepOutcome::Environmental(msg), refs)
-            }
-            BaselineNodeVerdict::Measured => (StepOutcome::Completed, refs),
-        }
-    }
-
-    /// Store a short human-readable note as the node's output artifact, so the
-    /// node panel's Output tab is never blank for an attempt that ran.
-    fn store_baseline_note(&self, step_id: &str, body: &str) -> Option<String> {
-        let artifact = Artifact {
-            name: "baseline-summary".to_string(),
-            mime: "text/plain".to_string(),
-            content: body.to_string(),
-            source: ArtifactSource::AgentText,
-        };
-        self.artifacts.put(&self.f_id_str, step_id, &artifact).ok()
     }
 
     /// The lazy fallback: validate's harness just went red and nothing on
@@ -779,39 +616,6 @@ impl ExecutionDriver {
             )
             .await;
     }
-}
-
-/// The message a baseline node fails with when the project's commands cannot
-/// be measured at all — a `prepare_command` that exits non-zero, or gates that
-/// never reached an exit status.
-///
-/// Reuses `build_environment_message` so the reproduce line, the machine, and
-/// the shape of the text are identical to every other terminal environment
-/// failure the engine produces (C6.3). Authoring a parallel wording here would
-/// drift out of agreement with the one the user has already learned to read.
-fn build_unmeasurable_message(
-    machine: &str,
-    wt_path: &str,
-    prepare: Option<&str>,
-    harnesses: &[ResolvedHarness],
-) -> String {
-    let cmd = prepare
-        .map(str::to_string)
-        .or_else(|| harnesses.first().map(|h| h.command.clone()))
-        .unwrap_or_default();
-    crate::domain::harness_remediation::build_environment_message(
-        machine,
-        wt_path,
-        &cmd,
-        "The project's configured commands could not be measured on this machine: either \
-         the prepare command failed, or no harness produced an exit status. Nothing was \
-         recorded, because a suite measured without its install step is not evidence about \
-         the base commit.",
-        // The settings panel (HB6) states the same two facts before a run is
-        // ever paid for, so the sentence lives in one place and both sites read
-        // it — a second copy would drift out of agreement with this one.
-        crate::domain::harness_preflight::verdict::FRESH_CHECKOUT_REMEDIATION,
-    )
 }
 
 #[cfg(test)]

@@ -24,6 +24,28 @@ impl GateRepository for SqliteAdapter {
         Ok(())
     }
 
+    fn reopen(&self, g: GateDecision) -> Result<(), String> {
+        let conn = self.conn.lock()?;
+        conn.execute(
+            "INSERT INTO gate_decisions (id,step_execution_id,decision,feedback,created_at)
+             VALUES (?1,?2,?3,?4,?5)
+             ON CONFLICT(step_execution_id) DO UPDATE SET
+                 id = excluded.id,
+                 decision = excluded.decision,
+                 feedback = excluded.feedback,
+                 created_at = excluded.created_at",
+            params![
+                g.id,
+                g.step_execution_id,
+                g.decision,
+                g.feedback,
+                g.created_at
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     fn decide(
         &self,
         step_execution_id: &StepExecutionId,

@@ -6,6 +6,7 @@ use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::sequence::outcome::SequenceError;
 use crate::domain::sequence::progress::{LandedTask, StepTally};
 use crate::domain::sequence::tasks::TaskPlan;
+use crate::ports::db::SubtaskRunOpen;
 
 use super::context::{RunTarget, StepCtx, StepSpend, StepWorktree, TaskRun};
 use super::prompt::CompletedTask;
@@ -110,16 +111,18 @@ impl ExecutionDriver {
             );
             let subtask_branch =
                 crate::adapters::worktree::git_ops::subtask_branch_name(&self.branch_name, wt.id);
-            if let Err(e) = self.subtask_runs.subtask_run_start(
-                &run_id,
-                &self.f_id,
-                &step_exec.id,
-                &task.id,
-                &thread_id,
-                wt.path,
-                &subtask_branch,
-                crate::paths::now_ms(),
-            ) {
+            if let Err(e) = self.subtask_runs.subtask_run_start(&SubtaskRunOpen {
+                id: &run_id,
+                feature_id: &self.f_id,
+                step_execution_id: &step_exec.id,
+                subtask_id: &task.id,
+                agent_id: &thread_id,
+                worktree_path: wt.path,
+                branch: &subtask_branch,
+                plan_epoch: plan.epoch.as_deref(),
+                plan_cycle: plan.cycle,
+                now: crate::paths::now_ms(),
+            }) {
                 tracing::warn!(
                     feature_id = %self.f_id,
                     task_id = %task.id,

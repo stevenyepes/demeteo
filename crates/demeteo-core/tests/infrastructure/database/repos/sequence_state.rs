@@ -433,3 +433,36 @@ fn set_replaces_the_produced_payload_too() {
         Some(kept)
     );
 }
+
+/// The row belongs to its feature: deleting the feature takes it along,
+/// and a context for a feature that does not exist is refused.
+#[test]
+fn a_retry_context_cascades_off_its_feature() {
+    let db = db();
+    let f = fid("f-1");
+    let ctx = RetryContext {
+        failing_step_id: "s-validate".to_string(),
+        ..RetryContext::default()
+    };
+    assert!(
+        retry_context_save(&db, &f, &ctx, 100).is_err(),
+        "no feature row yet: the foreign key refuses the orphan"
+    );
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute_batch(
+            "INSERT INTO projects (id, name, created_at) VALUES ('p-1', 'demeteo', 0);
+             INSERT INTO features (id, project_id, title, created_at)
+             VALUES ('f-1', 'p-1', 'resume me', 0);",
+        )
+        .unwrap();
+    }
+    retry_context_save(&db, &f, &ctx, 100).unwrap();
+    assert_eq!(retry_context_load(&db, &f).unwrap(), Some(ctx));
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute("DELETE FROM features WHERE id = 'f-1'", [])
+            .unwrap();
+    }
+    assert_eq!(retry_context_load(&db, &f).unwrap(), None);
+}

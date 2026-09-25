@@ -21,20 +21,21 @@
 
 ## 1. Summary
 
-Decisions [45–52](DECISIONS.md#1-the-locked-decisions) are the short form of
+Decisions [45–53](DECISIONS.md#1-the-locked-decisions) are the short form of
 what follows. Each row here has a section below that states the rejected
 alternative in full.
 
 | # | Decision | Rejected | Why |
 |---|----------|----------|-----|
 | 45 | Demeteo serves Streamable HTTP itself; operations are a transport-free seam in `demeteo-core` | stdio shim over a local socket; standalone headless binary on the SQLite file | a Windows named-pipe branch no Linux gate compiles; two writers, and no DAG driver in that process |
-| 46 | Protocol revision `2026-07-28` only | dual-era support | the surface is stateless by design |
+| 46 | `server/discover` names `2026-07-28`; `initialize` negotiates, echoing the client's declared version | pinning every request to one literal version | no real client sends a handshake-free `initialize` — see [§4](#4-protocol-revision), [decision 46](DECISIONS.md#46--mcp-protocol-revision) |
 | 47 | Demeteo is its own OAuth 2.1 authorization server | static bearer tokens | sessions left the protocol, so the credential is the only place per-client state lives |
 | 48 | Scopes `read` / `spend` / `configure`, split by consequence | split by resource | a consent dialog must say what an action *costs*, not what it *touches* |
 | 49 | The external settings write is a typed `RunShapePatch` | whole-`ProjectSettings` writes | `configure` would transitively grant unbounded `spend` and could disable review |
 | 50 | Gate approval and worktree merges are excluded; ticket creation stays with decomposition; discovery interviews are out of scope this phase | exposing them | see §8 — the first two are *permanent*, the last is *this phase* |
 | 51 | `ticket_force_start` is excluded | exposing it | its `reason` is fed to the agent as prerequisite context |
 | 52 | The listener is off until enabled in Settings | always listening | discovery documents are unauthenticated by necessity |
+| 54 | `initialize` and `tools/list` need a grant; only `server/discover` is open on `/mcp` | an open handshake | clients that sign in only when connecting is refused never got a token — see §5 |
 
 ---
 
@@ -131,41 +132,57 @@ rewrite.
 
 ## 4. Protocol revision
 
-**Revision `2026-07-28` only.** A transport header that is *declared* must agree
-with the body; an absent header is not a mismatch. These checks run ahead of scope
-resolution and the bearer-token guard, so a request that fails one never reaches
-dispatch.
+**`server/discover` names exactly one revision, `2026-07-28`; `initialize`
+negotiates.** A transport header that is *declared* must agree with the
+body; an absent header is not a mismatch. These checks run ahead of scope
+resolution and the bearer-token guard, so a request that fails one never
+reaches dispatch.
 
 | Header | Must match | On mismatch |
 |---|---|---|
-| `MCP-Protocol-Version` | `2026-07-28` | JSON-RPC `-32022`, HTTP **200**, `data.supported` lists the accepted versions |
 | `Mcp-Method` | the body's `method` | JSON-RPC `-32020`, HTTP **400** |
 | `Mcp-Name` | the body's `params.name` | JSON-RPC `-32020`, HTTP **400** |
 
+`MCP-Protocol-Version` is no longer in this table: it is read nowhere on
+`/mcp` and never compared against anything (see "Why negotiate" below).
+
 The body is buffered up to 2 MiB to make the comparison; a larger one is `413`.
 
-The `-32022` answer travels on HTTP `200` because the error lives in the
-JSON-RPC envelope, as `-32601` and `-32602` already do elsewhere in the handler.
+`initialize` answers with a real `result`: `protocolVersion` is whatever the
+client declared in `params.protocolVersion` (falling back to `2026-07-28`
+when absent or not shaped like `YYYY-MM-DD`), plus `capabilities: {"tools":
+{}}` — the only capability this server has — and the same `serverInfo` shape
+`server/discover` returns. No session is created and nothing is persisted;
+the echoed version is not remembered anywhere, so it carries no obligation
+for later requests to repeat it.
 
-`initialize` is answered with that same `-32022` **and nothing else** — no
-session, no capability negotiation. It exists so a legacy client receives a
-diagnostic that names the versions this server understands, which may be the
-only message such a client ever shows its user, rather than a generic "method
-not found".
+### Why negotiate instead of pinning one revision everywhere
 
-### Why one revision and not two
+The original design pinned every request — including `initialize` — to
+`2026-07-28`, on the premise that the surface is stateless by design and no
+real client speaking that revision would ever send a handshake at all.
 
-The alternative was to accept the legacy handshake-and-session revision as well
-as the stateless one.
+**That premise doesn't hold.** Verified live against the installed Claude
+Code CLI (2.1.280): it always opens with `initialize` regardless of
+revision. Unconditionally rejecting it (the original behavior) meant no
+standard MCP client could complete a handshake with Demeteo at all — not a
+version mismatch, a hard wall. Naming Demeteo's own `2026-07-28` back
+doesn't work either; the client explicitly disconnects, reporting it as an
+unrecognized revision. Echoing the client's own requested version back, and
+no longer requiring later requests to repeat one exact string (this
+transport has nowhere to remember what was negotiated — it is genuinely
+stateless, and HTTP requests here aren't guaranteed to share a connection),
+is what a real client accepts: this is the standard MCP negotiation
+contract, where the server states a version and the client's own logic
+decides whether to proceed and disconnects if it can't. Demeteo's
+twelve-tool surface doesn't vary across recent revisions, so there is
+nothing to gate on server-side in the first place. Full reproduction and
+decision history: [decision 46](DECISIONS.md#46--mcp-protocol-revision).
 
-**Rejected because the surface is stateless by design.** Serving the older era
-means holding a session — an `initialize` handshake, a session identifier, and
-somewhere to keep what was negotiated. None of that exists here, and each piece
-would be a path only legacy clients exercised.
-
-**Accepted cost:** a client that speaks only the legacy revision fails against
-Demeteo, and there is no fall-forward. The `-32022` diagnostic is the whole
-courtesy extended to it.
+**What's still true from the original decision:** the surface is still
+stateless — no `Mcp-Session-Id`, no SSE, one JSON response per request — and
+`server/discover` still advertises exactly one revision for a client that
+wants to know before committing to `initialize`.
 
 ### `server/discover` is a placeholder
 
@@ -190,21 +207,34 @@ GET  /.well-known/*    metadata (RFC 9728 resource, RFC 8414 server)   — unaut
 POST /register         dynamic client registration (RFC 7591)          — unauthenticated
 GET  /authorize        PKCE S256 + resource (RFC 8707) → human consent
 POST /token            single-use code + code_verifier → bearer token
-POST /mcp              Authorization: Bearer <token>
+POST /mcp              Authorization: Bearer <token>   — except `server/discover`
 ```
 
 | Property | Value |
 |---|---|
 | Client type | **public** — no `client_secret` is generated, stored or returned; PKCE is the only proof of possession |
 | PKCE | `S256`, mandatory |
-| `resource` (RFC 8707) | mandatory on `/authorize` and `/token`; must equal the listener's canonical URI |
+| `resource` (RFC 8707) | mandatory on `/authorize` and `/token`; must equal the listener's canonical URI, or that URI plus the empty-path `/` a `new URL()` client appends — grants always record the canonical spelling |
 | Token lifetime | **30 days, fixed** |
 | Refresh tokens | **none** — an expired grant is replaced by a new consent |
 | Token storage | `SHA-256(token)` only; the plaintext is held once, in `/token`'s response |
 | Revocation | read from the grant row on **every** request, so it takes effect immediately |
 
-`tools/list` and the `.well-known` metadata are unauthenticated: a client cannot
-learn what to ask for without them. `POST /register` is unauthenticated because
+The `.well-known` metadata is unauthenticated: a client cannot learn what to ask
+for without it. On `/mcp` only `server/discover` is; `initialize` and `tools/list`
+need a live grant of any scope, and `tools/call` the scope its tool names. An
+unauthenticated handshake is answered `401` with a `resource_metadata` challenge
+naming no scope, so the client requests `scopes_supported`.
+
+> **Do not reopen the handshake.** It was open until 2026-09-24, on the reasoning
+> that the tool catalog is not secret. That left every client whose MCP SDK starts
+> OAuth only when *connecting* is refused — OpenCode, Hermes — "connected" with no
+> token: OpenCode's `mcp auth` even reported success, and every tool call then
+> failed. Claude Code and Codex, which read the metadata up front, never showed it.
+> The catalog was never the reason to leave it open; `scopes_supported` already
+> says what to ask for.
+
+`POST /register` is unauthenticated because
 an MCP client has no prior credential relationship with Demeteo, so there is
 nothing to authenticate it against. `client_name` is self-asserted and is never
 checked against an allowlist. **The human consent screen is the security
@@ -410,8 +440,8 @@ listener in-process; turning it off stops it. A bind failure **disables the
 surface for the run** — it does not retry on another port, because token
 audience checks depend on a canonical URI that does not move between launches.
 
-**Rejected: always listening.** The `.well-known` documents and `tools/list` are
-unauthenticated by necessity, since a client cannot ask for credentials without
+**Rejected: always listening.** The `.well-known` documents and `server/discover`
+are unauthenticated by necessity, since a client cannot ask for credentials without
 learning where to ask. Most installs will never use this surface, so
 an always-on listener would serve those documents to installs that get nothing
 from it. Loopback binding and the `Origin` and `Host` checks reduce the
@@ -446,7 +476,7 @@ Open means unresolved. Nothing below is decided.
 
 ## 10. Related
 
-- [`DECISIONS.md`](DECISIONS.md) — decisions 45–52, the short form of this document
+- [`DECISIONS.md`](DECISIONS.md) — decisions 45–53, the short form of this document
 - [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) — §19, the project-list question
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the hexagon the seam sits in
 - [`EXECUTION_PARITY.md`](EXECUTION_PARITY.md) — transport parity for agent processes

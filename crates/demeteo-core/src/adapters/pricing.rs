@@ -233,6 +233,42 @@ fn default_prices() -> HashMap<String, PricingRow> {
         },
     );
 
+    // OpenAI GPT-6 family — Codex CLI's current default model line as of
+    // 2026-09-22 (Astra shipped 2026-09-03; Sol and Luna followed, with no
+    // GPT-6 Terra tier). Unlike `gpt-5`, these three price far enough apart
+    // ($10/$50, $2/$10, $0.10/$0.50 per million) that a shared prefix row
+    // would misprice two of them, so each gets its own exact-match entry.
+    m.insert(
+        "gpt-6-astra".to_string(),
+        PricingRow {
+            price: ModelPrice {
+                input_per_million: 10.00,
+                output_per_million: 50.00,
+            },
+            context_window: CONTEXT_1M,
+        },
+    );
+    m.insert(
+        "gpt-6-sol".to_string(),
+        PricingRow {
+            price: ModelPrice {
+                input_per_million: 2.00,
+                output_per_million: 10.00,
+            },
+            context_window: CONTEXT_1M,
+        },
+    );
+    m.insert(
+        "gpt-6-luna".to_string(),
+        PricingRow {
+            price: ModelPrice {
+                input_per_million: 0.10,
+                output_per_million: 0.50,
+            },
+            context_window: CONTEXT_1M,
+        },
+    );
+
     // Google Gemini.
     m.insert(
         "gemini-2.5-pro".to_string(),

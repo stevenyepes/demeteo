@@ -3022,12 +3022,23 @@ fn baseline_suffix(repo: &str) -> String {
 /// successful while asking git for nothing at all — the whole failure this
 /// suite is about is a review that reads as finished. Refusing also drives
 /// `merge_base` through its entire candidate list in one call.
+///
+/// A line given to [`answering`](Self::answering) is the one exception, so a
+/// test can say what git resolves and still have anything else it did not
+/// expect fail rather than pass.
 #[derive(Default)]
 struct RefusingExec {
     seen: Mutex<Vec<String>>,
+    answers: Vec<(String, String)>,
 }
 
 impl RefusingExec {
+    fn answering(line: &str, output: &str) -> Self {
+        Self {
+            answers: vec![(line.to_string(), output.to_string())],
+            ..Self::default()
+        }
+    }
     fn seen(&self) -> Vec<String> {
         self.seen.lock().unwrap().clone()
     }
@@ -3039,12 +3050,13 @@ impl ExecutionPort for RefusingExec {
         Err("unscripted test_connection".into())
     }
     async fn run_program(&self, _m: &str, request: ProgramRequest) -> Result<String, String> {
-        self.seen.lock().unwrap().push(format!(
-            "{} {}",
-            request.executable,
-            request.args.join(" ")
-        ));
-        Err("refused".into())
+        let line = format!("{} {}", request.executable, request.args.join(" "));
+        self.seen.lock().unwrap().push(line.clone());
+        self.answers
+            .iter()
+            .find(|(scripted, _)| *scripted == line)
+            .map(|(_, output)| output.clone())
+            .ok_or_else(|| "refused".into())
     }
     async fn run_command(&self, _m: &str, cmd: &str) -> Result<String, String> {
         self.seen.lock().unwrap().push(format!("sh: {cmd}"));
@@ -3124,6 +3136,82 @@ async fn the_fork_point_fetches_its_base_before_asking_for_a_merge_base() {
             "git -C /repo merge-base refs/remotes/origin/release/2.1 feature/f-1".to_string(),
             "git -C /repo merge-base release/2.1 feature/f-1".to_string(),
         ]
+    );
+}
+
+/// A same-repo PR may target a branch this clone has never fetched: the fix
+/// branch carries the target's commits, but no ref names them, so
+/// `merge_base` has nothing to ask about. The fallback fetches the target by
+/// name and finds the fork point it was missing.
+#[tokio::test]
+async fn an_unfetched_base_is_fetched_before_the_merge_base_gives_up() {
+    let (local_dir, remote_dir, helper) = make_two_repos("merge_base_fetching_on_miss").await;
+    let local = local_dir.to_string_lossy().to_string();
+    let remote = remote_dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+    let git = |dir: &str, args: &str| format!("git -C \"{dir}\" {args}");
+
+    // Created on origin after the clone, so the clone has no ref for either.
+    for (branch, file) in [("release/2.x", "release.txt"), ("patch-1", "patch.txt")] {
+        let _ = exec
+            .run_command("local", &git(&remote, &format!("checkout -b {branch}")))
+            .await;
+        exec.write_file("local", &format!("{remote}/{file}"), branch)
+            .await
+            .unwrap();
+        let _ = exec.run_command("local", &git(&remote, "add .")).await;
+        let _ = exec
+            .run_command("local", &git(&remote, &format!("commit -m {file}")))
+            .await;
+    }
+    let target_tip = rev_parse(&exec, &remote, "release/2.x").await;
+
+    // The fix branch is cut from the PR head alone, as a review-launched fix is.
+    let _ = exec
+        .run_command("local", &git(&local, "fetch origin patch-1"))
+        .await;
+    let _ = exec
+        .run_command("local", &git(&local, "checkout -b fix FETCH_HEAD"))
+        .await;
+
+    assert_eq!(
+        helper.merge_base(None, &local, "release/2.x", "fix").await,
+        None,
+        "sanity: without a fetch, no ref names the target"
+    );
+    assert_eq!(
+        helper
+            .merge_base_fetching_on_miss(None, &local, "release/2.x", "fix")
+            .await,
+        Some(target_tip),
+        "the fork point is the target's tip the PR was cut from"
+    );
+
+    let _ = std::fs::remove_dir_all(&local_dir);
+    let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+/// The fetch is the fallback, not a toll: a base that already resolves locally
+/// costs one `merge-base` and no network round trip. The double refuses
+/// anything else, so a fetch would show up in `seen` and the answer would not.
+#[tokio::test]
+async fn a_base_that_resolves_locally_is_not_fetched() {
+    let conn = Connection::open_in_memory().unwrap();
+    let db = Arc::new(SqliteAdapter::new(conn).unwrap()) as Arc<dyn AppSettingsRepository>;
+    let exec = Arc::new(RefusingExec::answering(
+        "git -C /repo merge-base refs/remotes/origin/main feature/f-1",
+        "abc123\n",
+    ));
+    let helper = GitOpsHelper::new(db, exec.clone() as Arc<dyn ExecutionPort>);
+
+    let resolved = helper
+        .merge_base_fetching_on_miss(None, "/repo", "main", "feature/f-1")
+        .await;
+
+    assert_eq!(resolved.as_deref(), Some("abc123"));
+    assert_eq!(
+        exec.seen(),
+        vec!["git -C /repo merge-base refs/remotes/origin/main feature/f-1".to_string()]
     );
 }
 

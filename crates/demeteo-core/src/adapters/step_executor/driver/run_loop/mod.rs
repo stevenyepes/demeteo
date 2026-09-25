@@ -215,6 +215,10 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
         // their own status, so leave those to `handle_gate_step`.
         if step_conf.kind != "gate" {
             driver.ensure_feature_running();
+            let _ = crate::adapters::step_executor::gate_park::void_resume_question(
+                driver.gates.as_ref(),
+                &step_exec.id,
+            );
         }
 
         update_step_status(

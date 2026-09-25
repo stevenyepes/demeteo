@@ -115,3 +115,73 @@ fn write_mcp_skill_errors_on_missing_parent_dir() {
 
     assert!(result.is_err());
 }
+
+/// Binds an ephemeral port, reads a raw HTTP/1.1 request, writes back
+/// `status_line` plus `extra_headers` verbatim as the response, then drops
+/// the listener — a minimal hand-rolled responder rather than pulling in a
+/// mock-HTTP dev-dependency for a handful of cases.
+async fn respond_once(status_line: &str, extra_headers: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind an ephemeral loopback port");
+    let addr = listener.local_addr().expect("listener has a local addr");
+    let response = format!("{status_line}\r\n{extra_headers}Content-Length: 0\r\n\r\n");
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept one connection");
+        let mut buf = [0u8; 4096];
+        let _ = socket.read(&mut buf).await;
+        let _ = socket.write_all(response.as_bytes()).await;
+        let _ = socket.shutdown().await;
+    });
+    format!("http://{addr}/mcp")
+}
+
+#[tokio::test]
+async fn unreachable_connection_reports_the_error_reason() {
+    // Bind then immediately drop: the port is very likely still free, so a
+    // connection attempt gets refused rather than accepted.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind an ephemeral loopback port");
+    let addr = listener.local_addr().expect("listener has a local addr");
+    drop(listener);
+
+    let client = reqwest::Client::new();
+    let result = probe_mcp_connection(&client, &format!("http://{addr}/mcp")).await;
+
+    assert!(matches!(result, McpConnectionTest::Unreachable { .. }));
+}
+
+#[tokio::test]
+async fn a_sign_in_challenge_is_reachable() {
+    let url = respond_once(
+        "HTTP/1.1 401 Unauthorized",
+        "WWW-Authenticate: Bearer resource_metadata=\"http://127.0.0.1:1/.well-known/oauth-protected-resource\"\r\n",
+    )
+    .await;
+
+    let result = probe_mcp_connection(&reqwest::Client::new(), &url).await;
+
+    assert_eq!(result, McpConnectionTest::Reachable);
+}
+
+/// The 404 the probe used to get from the bare origin, and an open handshake
+/// that would leave OpenCode and Hermes never signing in, are both failures.
+#[tokio::test]
+async fn anything_but_a_sign_in_challenge_is_unreachable() {
+    for (status_line, headers) in [
+        ("HTTP/1.1 404 Not Found", ""),
+        ("HTTP/1.1 200 OK", "Content-Type: application/json\r\n"),
+        ("HTTP/1.1 401 Unauthorized", ""),
+    ] {
+        let url = respond_once(status_line, headers).await;
+
+        let result = probe_mcp_connection(&reqwest::Client::new(), &url).await;
+
+        assert!(
+            matches!(result, McpConnectionTest::Unreachable { .. }),
+            "{status_line}: {result:?}"
+        );
+    }
+}

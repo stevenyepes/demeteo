@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
 import type { Feature, HarnessBaseline, StepExecution, StepOverride } from '../../types';
-import { runStatusMeta } from '../../lib/runStatus';
+import { REVIEW_READY_META, runStatusMeta } from '../../lib/runStatus';
 import { useErrorBus } from '../../lib/errorBus';
 import { formatError } from '../../lib/errors';
 import { formatDuration } from '../../lib/utils';
 import { getFeature, isOutOfBandStep } from '../../lib/featureSync';
 import { listStepsForRun } from '../../lib/featureDetail';
 import { readHarnessBaseline, readHarnessEvidence } from '../../lib/harnessVerdict';
+import { reviewEndedOnFailedGate } from '../../lib/reviewEvidence';
 import { reconcileSteps } from '../../lib/stepReconcile';
 import type { HarnessOverrides } from './useHarnessOverrides';
 
@@ -209,7 +210,11 @@ export function useFeatureRun(input: {
     if (runSteps.length > 0 && runSteps.every(s => s.status === 'completed')) return 'completed';
     return featureStatus;
   }, [runSteps, featureStatus]);
-  const statusMeta = runStatusMeta(status);
+  // Only the label moves. `status` stays `failed` because retry and the
+  // terminal-state checks read it, and it is what the run persisted.
+  const statusMeta = reviewEndedOnFailedGate(runSteps, status)
+    ? REVIEW_READY_META
+    : runStatusMeta(status);
   const anyStepStarted = steps.some((s) => s.status !== 'pending');
   // What this run's persisted step failures say about the same gates the
   // baseline measured — the *now* half of HB7's table. Read off the last step

@@ -80,6 +80,19 @@ pub fn canonical_uri() -> Option<String> {
         .map(|listener| listener.canonical_uri.clone())
 }
 
+/// Where `mcp_handler` mounts the JSON-RPC endpoint on the listener.
+pub const MCP_PATH: &str = "/mcp";
+
+/// The URL an MCP client is configured with: [`canonical_uri`] plus
+/// [`MCP_PATH`]. The two are deliberately different — the canonical URI is
+/// the bare origin because the `Origin` guard, the OAuth `issuer` and the
+/// `resource` checks all compare against it, while the origin itself serves
+/// nothing but `.well-known/*` and the OAuth routes, so a client pointed at
+/// it gets a 404 on its first `tools/list`.
+pub fn endpoint_url() -> Option<String> {
+    canonical_uri().map(|origin| format!("{origin}{MCP_PATH}"))
+}
+
 /// Test-only priming hook: some MCP tests drive their own ad hoc router on a
 /// listener they bind themselves, without going through [`start_if_enabled`]
 /// / [`set_enabled`], and need [`canonical_uri`] to agree with that
@@ -189,13 +202,22 @@ fn bind_loopback(port: u16) -> std::io::Result<tokio::net::TcpListener> {
 /// canonical-URI-stability property token audience checks rely on.
 fn bind_listener(ctx: AppContext, runtime: &tokio::runtime::Handle) -> Option<RunningListener> {
     let port = resolve_port(&ctx);
-    let listener = match bind_loopback(port) {
-        Ok(listener) => listener,
-        Err(e) => {
-            eprintln!(
-                "[Mcp] failed to bind 127.0.0.1:{port}: {e} — MCP surface disabled for this run"
-            );
-            return None;
+    // `bind_loopback` promotes a std socket via `TcpListener::from_std`,
+    // which registers with the tokio reactor and panics without a thread-
+    // local runtime context — `runtime.spawn` below needs no such guard, but
+    // this synchronous conversion does. Both callers (`start_if_enabled` from
+    // Tauri's `.setup()`, `set_enabled` from the command handler thread) run
+    // outside any entered runtime, so this must enter one explicitly.
+    let listener = {
+        let _guard = runtime.enter();
+        match bind_loopback(port) {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!(
+                    "[Mcp] failed to bind 127.0.0.1:{port}: {e} — MCP surface disabled for this run"
+                );
+                return None;
+            }
         }
     };
     let addr: SocketAddr = match listener.local_addr() {

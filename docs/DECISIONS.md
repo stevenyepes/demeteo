@@ -54,7 +54,7 @@
 | 43 | Rework is a decomposition, not a re-run | A verdict failure downstream of a `sequence` step redirects to the step that **produces** its task list, not the step that executes it. That producer, seeing it is in a rework cycle (`domain/rework.rs` — the failing step is a descendant of the consumer), renders its `rework_prompt_template` and emits a **delta**: one ticket per defect the verdict named. The sequence step runs that list whole against the branch the previous cycle already landed, and reports the earlier cycles as `already_landed`. The file-overlap `select_targeted_tasks` heuristic survives only where there is no producer to ask (legacy `parallel` workflows). Corollary: the decomposition step must come **after** the spec step, so a rework redirect cannot rewind the spec and move the acceptance criteria the validator judges against. | 2026-07-28 |
 | 44 | Validate judges a delta, not an absolute | A harness failure is retryable **iff** the harness was proven runnable **and** the failure is *new relative to a measured baseline*; everything else is terminal with remediation. The baseline is an engine **measurement** — exit status plus a normalized failure fingerprint per named harness, taken against the run's base commit — never an agent's reading of its own test run. Persisted as one JSON column, `features.harness_baseline_json` (migration V37). See the detail block below and [docs/HARNESS_BASELINE.md](HARNESS_BASELINE.md). | 2026-07-28 |
 | 45 | MCP transport and seam | Demeteo **serves MCP itself over Streamable HTTP**, in-process; the operation surface lives in `demeteo-core` (`application/agent_surface`) as a **transport-free seam**, so the deferred CLI epic is a second adapter, not a rewrite. **Rejected:** a stdio shim proxying to a local socket — it needs a Windows named-pipe branch no Linux gate compiles; and a standalone headless binary opening the SQLite database directly — two writers, and the DAG driver is not in that process, so it could only enqueue. Detail: [MCP_INTEGRATION.md §3](MCP_INTEGRATION.md#3-transport-and-the-seam). | 2026-09-18 |
-| 46 | MCP protocol revision | **`2026-07-28` only.** **Rejected:** dual-era support — the surface is stateless by design, so the legacy handshake-and-session era would be a path only legacy clients exercised. **Accepted cost:** a legacy-only client fails, with no fall-forward. Detail: [MCP_INTEGRATION.md §4](MCP_INTEGRATION.md#4-protocol-revision). | 2026-09-18 |
+| 46 | MCP protocol revision | `server/discover` still names exactly one revision, `2026-07-28`, but `initialize` **negotiates**: it echoes back whatever `protocolVersion` the client itself declares (falling back to `2026-07-28` when absent/malformed), and a declared `MCP-Protocol-Version` header is no longer checked for exact equality on later requests. Superseded 2026-09-22 — see [§2](#2-superseded-decisions). Detail: [MCP_INTEGRATION.md §4](MCP_INTEGRATION.md#4-protocol-revision). | 2026-09-22 |
 | 47 | MCP authorization | **Demeteo is its own OAuth 2.1 authorization server** (PKCE `S256`, RFC 8707 `resource`, public clients, human consent). **Rejected:** static bearer tokens — sessions were removed from the protocol, which leaves the credential as the only place per-client state can live, and a static token carries none. Detail: [MCP_INTEGRATION.md §5](MCP_INTEGRATION.md#5-authorization). | 2026-09-18 |
 | 48 | MCP scope vocabulary | Three scopes split **by consequence**: `read` (observe) / `spend` (start a run) / `configure` (change how runs are shaped). Flat set — `spend` does not imply `read`. **Rejected:** splitting by resource — a consent dialog has to tell a user what an action *costs*, not what it *touches*. Detail: [MCP_INTEGRATION.md §6](MCP_INTEGRATION.md#6-scopes). | 2026-09-18 |
 | 49 | MCP settings write | The external write is a **typed `RunShapePatch`** — nine run-shape fields, none of them a spend or safety boundary. **Rejected:** whole-`ProjectSettings` writes — `configure` would then transitively grant unbounded `spend` through `default_max_budget_usd` and could disable `sync_review_before_push`. A field added to `ProjectSettings` later is unreachable from MCP until deliberately added to the type. Detail: [MCP_INTEGRATION.md §7.1](MCP_INTEGRATION.md#71-the-settings-write). | 2026-09-18 |
@@ -62,6 +62,7 @@
 | 51 | `ticket_force_start` is not exposed over MCP | **Rejected:** exposing it — its required `reason` is fed to the started agent as its prerequisite context, so an agent-authored reason would corrupt the run, not merely the audit record. Detail: [MCP_INTEGRATION.md §8](MCP_INTEGRATION.md#ticket_force_start). | 2026-09-18 |
 | 52 | MCP listener default | **Off until enabled in Settings** (`mcp_server_enabled`, default `false`). **Rejected:** always listening — OAuth discovery documents are unauthenticated by necessity, and most installs will never use this. Detail: [MCP_INTEGRATION.md §9](MCP_INTEGRATION.md#9-the-listener-and-what-is-open). | 2026-09-18 |
 | 53 | Per-step assignment is editable mid-run | A step's agent / model / effort may be re-pointed while the run is alive, not only at launch or through Retry. The write is **tier 1 and only tier 1** — one `StepOverride` on `features.step_overrides_json` — never the feature-wide tier-2 columns ([decision 37](#37--effort-level-detail)'s chain); Retry and Replay stopped writing tier 2 from their per-node controls in the same change. It performs no rewind, and it **survives** one: see the detail block below. Local surface `step_set_assignment`, detached-run surface the `set_step_assignment` RPC ([EXECUTION_PARITY.md](EXECUTION_PARITY.md#the-control-rpcs-are-part-of-the-contract)). | 2026-09-22 |
+| 54 | MCP handshake authentication | **`initialize` and `tools/list` need a live grant of any scope**; only `server/discover` and the `.well-known` metadata stay open, and the handshake `401` names no scope. **Rejected:** an open handshake — clients whose SDK starts OAuth only on a connect-time `401` (OpenCode, Hermes) never signed in. Detail: [MCP_INTEGRATION.md §5](MCP_INTEGRATION.md#5-authorization). | 2026-09-24 |
 
 ### 44 — Harness baseline (detail)
 
@@ -358,7 +359,12 @@ fallback.** The producer declares it; a producer that forgets is caught by id
 overlap (a delta names work that did not exist before; a revision reissues the
 same ticket ids). The fallback only runs when the graph already says this is a
 rework cycle, so the worst a wrong answer does is re-run a list — never the
-reverse.
+reverse. **Except for a replay:** the artifact outlives its cycle still saying
+`rework`, so a list that reproduces one this step already ran and had judged
+(the attempt that cached it completed, and nothing has closed since) is sent
+back to the producer instead — once; the same list again is its answer. A producer fault raised inside a
+rework cycle keeps the verdict that opened it, or the producer would read the
+consumer as the failing step and re-decompose everything.
 
 **Cycles accumulate in `plan_json`, not in a new column.** `sequence_plan_cache`
 keeps `(feature_id, step_id)`; the row's JSON grows `kind`, `cycle` and a
@@ -366,6 +372,16 @@ keeps `(feature_id, step_id)`; the row's JSON grows `kind`, `cycle` and a
 unchanged and new rows parse in older builds — no migration, and the drill-down
 can show "Original decomposition · 25 tickets / Rework 1 · 4 tickets" instead of
 silently replacing one with the other.
+
+**The retry context survives a restart (V57 `retry_contexts`), as a mirror.**
+It was in-memory only, so every restart resumed a step inside a loop as a
+first pass — Greenfield, no verdict, stale-plan guards off. One row per
+feature, written wherever the driver assigns or clears its context, dropped by
+a replay. It is not the budget: `step_executions.iteration_count` still is, so
+a resumed attempt is never counted twice. A write that fails is logged and the
+redirect proceeds; the read side (`restore_retry_context`) drops a row whose
+origin has completed, left the graph, or is blank, so a lost clear cannot
+reopen a closed loop.
 
 **The loop still has to be able to converge.** A spec whose acceptance criteria
 demand a command the project harness does not run can never be satisfied, and
@@ -381,6 +397,36 @@ A decision you silently overwrite stops being a decision *record*. When a
 locked answer changes, the row above is updated **and** the original is kept
 here with the reason it moved, so the next reader can tell "we thought hard and
 changed our minds" from "nobody ever considered this".
+
+### 46 — MCP protocol revision
+
+| | |
+|---|---|
+| **Was** | `2026-07-28` only, enforced everywhere: every `initialize` call answered `-32022` unconditionally, and any request declaring a different `MCP-Protocol-Version` header was rejected the same way — rejected on the premise that the target revision is handshake-free, so no real client would ever send `initialize`. |
+| **Now** | `initialize` is answered for real: it echoes back the `protocolVersion` the client declared (falling back to `2026-07-28` when the field is absent or not shaped like a revision), with minimal `capabilities: {"tools": {}}`. The `MCP-Protocol-Version` header is no longer checked for exact equality on any request — Demeteo has nowhere to remember what a prior request negotiated (the transport is genuinely stateless; HTTP requests here aren't guaranteed to share a connection), so pinning every request to one literal string was never enforceable correctly once a client is allowed to negotiate at all. `server/discover` is unchanged — it still names exactly one revision for a client that wants to know before committing. |
+| **Changed** | 2026-09-22 |
+
+**Why it changed.** Live-tested against the installed Claude Code CLI
+(2.1.280) via an isolated `$HOME` and a local proxy inspecting the exchange:
+the client always opens with a standard `initialize` call, regardless of
+revision — the "stateless, handshake-free" premise the original decision
+rested on does not hold for any real, currently-shipping MCP client. With
+`initialize` unconditionally rejected, **no standard MCP client could
+complete a handshake with Demeteo's server at all.** Naming Demeteo's own
+`2026-07-28` back in `initialize` doesn't work either — the client explicitly
+rejects it as a revision it doesn't recognize ("Server's protocol version is
+not supported: 2026-07-28"), confirming `2026-07-28` has no real-world
+adoption (consistent with `MCP_INTEGRATION.md` §4's own disclaimer that no
+`2026-07-28` spec text is vendored here). Echoing the client's own requested
+version back, and dropping the per-request header equality check, produced a
+clean `✔ Connected` against the real CLI with a full `tools/list` round
+trip. This is the standard MCP negotiation contract working as intended: a
+server states a version, and the client's own logic decides whether to
+proceed — which is exactly the diagnostic value the original decision wanted
+"in case of a legacy client," just implemented at the layer the protocol
+already provides for it instead of a preemptive server-side guess. Demeteo's
+twelve-tool surface doesn't vary across recent revisions, so there is nothing
+for the server to gate on in the first place.
 
 ### 19 — Workflow authoring UX
 
@@ -534,6 +580,6 @@ schema v2, and the project-settings dropdown is removed.
 - **Architecture** (hexagon, port surface, file layout, Tauri commands, frontend state): [`ARCHITECTURE.md`](ARCHITECTURE.md)
 - **Open / deferred questions**: [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
 - **Reliability plan**: [`RELIABILITY_PLAN.md`](RELIABILITY_PLAN.md)
-- **MCP integration** (decisions 45–52 in full): [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md)
+- **MCP integration** (decisions 45–53 in full): [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md)
 - **Agent runtime spec**: [`AGENT_INTEGRATION.md`](../AGENT_INTEGRATION.md)
 - **Known platform issues**: [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md)

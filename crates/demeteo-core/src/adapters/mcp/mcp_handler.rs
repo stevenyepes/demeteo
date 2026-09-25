@@ -1,9 +1,11 @@
 //! `POST /mcp` — JSON-RPC 2.0 dispatch over the `agent_surface` tool catalog.
 //!
-//! `tools/list` is unauthenticated, the same discovery posture as the
-//! `.well-known` metadata routes: it hands out names, descriptions, and
-//! argument schemas, none of which are secret, and an MCP client needs it to
-//! know what to ask an eventual `/authorize` grant for.
+//! Only `server/discover` answers without a grant. `initialize` and
+//! `tools/list` need a live one of any scope ([`guard::authenticate`]):
+//! OpenCode and Hermes start OAuth only when *connecting* is refused, so an
+//! open handshake left them "connected" with no token and every call failing
+//! (`docs/MCP_INTEGRATION.md` §5). The catalog is not secret — what a client
+//! should request is in the `.well-known` metadata's `scopes_supported`.
 //!
 //! `tools/call` is the enforcement boundary. [`required_scope`] is looked up
 //! **before** [`guard::check`] runs, on purpose: the 401/403 challenge that
@@ -37,7 +39,7 @@ use crate::application::tickets::TicketView;
 use crate::domain::ids::{DiscoveryId, FeatureId, ProjectId, StepExecutionId, TicketId};
 use crate::domain::models::project::RunShapePatch;
 use crate::domain::models::step_attempt::{tail_log, LOG_TAIL_BUDGET_BYTES};
-use crate::domain::oauth::tools::required_scope;
+use crate::domain::oauth::tools::{method_auth, required_scope, MethodAuth};
 use crate::domain::ticket_graph::TicketProgress;
 use crate::shared::secret_scrub::scrub_secrets;
 use crate::state::AppContext;
@@ -48,7 +50,7 @@ use super::protocol;
 /// Mounted onto the shared router by [`super::router`]. `pub(super)` — same
 /// visibility as `metadata::routes`.
 pub(super) fn routes() -> axum::Router<AppContext> {
-    axum::Router::new().route("/mcp", post(handle))
+    axum::Router::new().route(super::MCP_PATH, post(handle))
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,16 +135,24 @@ async fn handle(
     headers: HeaderMap,
     Json(req): Json<JsonRpcRequest>,
 ) -> Response {
+    match method_auth(&req.method) {
+        MethodAuth::Open => return protocol::discover(req.id),
+        MethodAuth::PerTool => return handle_tools_call(&ctx, &headers, req.id, req.params).await,
+        MethodAuth::Session => {
+            if let Err(response) = guard::authenticate(&ctx, &headers).await {
+                return response;
+            }
+        }
+    }
     match req.method.as_str() {
         "tools/list" => success(req.id, json!({ "tools": tool_catalog() })),
-        "tools/call" => handle_tools_call(&ctx, &headers, req.id, req.params).await,
-        "server/discover" => protocol::discover(req.id),
-        // No real handshake, sessions, or capability negotiation — this
-        // revision is stateless. The arm exists only so a legacy client
-        // gets a correctly-named diagnostic naming the versions this server
-        // understands, rather than a generic "method not found" (this may
-        // be the only diagnostic such a client ever surfaces to a user).
-        "initialize" => protocol::unsupported_version_response(req.id),
+        // No session or persisted capability negotiation — this revision is
+        // stateless. A real client always opens with `initialize` regardless
+        // of revision, so it is answered for real: the `protocolVersion` the
+        // client itself declared is echoed back (Demeteo's tool surface
+        // doesn't vary by revision), and the client's own negotiation logic
+        // is what decides whether to proceed (`docs/MCP_INTEGRATION.md` §4).
+        "initialize" => protocol::initialize_response(req.id, &req.params),
         other => method_not_found(req.id, other),
     }
 }

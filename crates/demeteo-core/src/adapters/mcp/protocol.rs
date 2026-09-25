@@ -1,24 +1,34 @@
 //! The `2026-07-28` stateless-revision transport surface layered on top of
-//! the existing `POST /mcp` JSON-RPC dispatch: the `MCP-Protocol-Version` /
-//! `Mcp-Method` / `Mcp-Name` header-vs-body consistency check, and the
-//! `server/discover` response body. Mounted by [`super::mod`]'s `router()`
-//! via `.route_layer(...)` scoped to the `/mcp` route alone — never the
-//! whole router, so `.well-known/*` is untouched — and strictly ahead of
+//! the existing `POST /mcp` JSON-RPC dispatch: the `Mcp-Method` / `Mcp-Name`
+//! header-vs-body consistency check, and the `server/discover` and
+//! `initialize` response bodies. Mounted by [`super::mod`]'s `router()` via
+//! `.route_layer(...)` scoped to the `/mcp` route alone — never the whole
+//! router, so `.well-known/*` is untouched — and strictly ahead of
 //! [`super::mcp_handler`]'s scope resolution and `guard::check`: a request
 //! that fails a check here never reaches dispatch
 //! (`docs/MCP_INTEGRATION.md` §4).
 //!
 //! This revision is stateless by design: neither this module nor
-//! `mcp_handler` reads or acts on `Mcp-Session-Id` or `Last-Event-ID`.
-//! `initialize` is answered but not implemented — no session, no capability
-//! negotiation — solely so a legacy client gets a correctly-named diagnostic
-//! naming the versions this server actually understands, rather than a
-//! generic "method not found".
+//! `mcp_handler` reads or acts on `Mcp-Session-Id` or `Last-Event-ID`, and no
+//! per-connection state is kept anywhere. That statelessness is also why
+//! `MCP-Protocol-Version` is no longer checked against one pinned string: a
+//! real client (verified against Claude Code) always opens with `initialize`
+//! regardless of revision, and Demeteo has nowhere to remember what a prior
+//! request on the same TCP connection negotiated — HTTP requests here are
+//! not guaranteed to share one. `initialize` answers with whatever
+//! `protocolVersion` the client itself declared (falling back to
+//! [`SUPPORTED_PROTOCOL_VERSION`] when absent or malformed): Demeteo's tool
+//! surface doesn't vary across recent revisions, so there is nothing to gate
+//! on, and the real MCP negotiation contract already puts the compatibility
+//! decision on the client — it disconnects on its own if it can't cope with
+//! the version a server names. `server/discover` still advertises exactly
+//! one revision for a client that wants to know before committing.
 //!
 //! `server/discover`'s exact response shape has no authoritative source in
 //! this repo (no vendored `2026-07-28` spec text exists here; see
 //! `docs/MCP_INTEGRATION.md` §4) — the shape below is a best-effort,
-//! internally-consistent placeholder, not a verified spec contract.
+//! internally-consistent placeholder, not a verified spec contract. The same
+//! caveat applies to `initialize`'s `capabilities` object.
 
 use axum::body::Body;
 use axum::extract::Request;
@@ -30,7 +40,6 @@ use serde_json::{json, Value};
 
 pub const SUPPORTED_PROTOCOL_VERSION: &str = "2026-07-28";
 pub const ERR_HEADER_MISMATCH: i64 = -32020;
-pub const ERR_UNSUPPORTED_PROTOCOL_VERSION: i64 = -32022;
 
 /// Matches `axum_core`'s own default `Bytes`/`Json` extractor body-size
 /// limit. [`enforce_headers`] reads the whole body ahead of
@@ -40,7 +49,6 @@ pub const ERR_UNSUPPORTED_PROTOCOL_VERSION: i64 = -32022;
 /// its own — that would be a pre-auth memory-exhaustion hole.
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 
-const HEADER_PROTOCOL_VERSION: &str = "mcp-protocol-version";
 const HEADER_METHOD: &str = "mcp-method";
 const HEADER_NAME: &str = "mcp-name";
 
@@ -65,19 +73,47 @@ fn header_mismatch_response(id: Value) -> Response {
         .into_response()
 }
 
-/// Shared by the header-vs-body check below (an unsupported declared
-/// version) and [`super::mcp_handler`]'s `"initialize"` arm (which answers
-/// this unconditionally). HTTP `200`, matching how `-32601`/`-32602` already
-/// pair with `200` elsewhere in this file's sibling `mcp_handler.rs` — the
-/// error lives in the JSON-RPC envelope, not the HTTP status
-/// (`docs/MCP_INTEGRATION.md` §4).
-pub(super) fn unsupported_version_response(id: Value) -> Response {
-    Json(json_rpc_error(
-        id,
-        ERR_UNSUPPORTED_PROTOCOL_VERSION,
-        "unsupported MCP-Protocol-Version",
-        Some(json!({ "supported": [SUPPORTED_PROTOCOL_VERSION] })),
-    ))
+/// `true` when `version` is shaped like an ISO date (`YYYY-MM-DD`) — cheap
+/// sanity check before echoing a client-declared `protocolVersion` back in
+/// [`initialize_response`], so a malformed value doesn't round-trip into
+/// Demeteo's own response. Not a calendar validation; `format!` on the
+/// digits is enough to catch garbage without pulling in a date crate for one
+/// shape check.
+fn looks_like_protocol_version(version: &str) -> bool {
+    let bytes = version.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes.iter().enumerate().all(|(i, b)| match i {
+            4 | 7 => true,
+            _ => b.is_ascii_digit(),
+        })
+}
+
+/// `initialize`: answers with whatever `protocolVersion` the client itself
+/// declared in `params`, falling back to [`SUPPORTED_PROTOCOL_VERSION`] when
+/// absent or not shaped like a revision. See this module's doc comment for
+/// why echoing rather than gatekeeping is correct here — verified against a
+/// real client (`docs/MCP_INTEGRATION.md` §4).
+pub(super) fn initialize_response(id: Value, params: &Value) -> Response {
+    let protocol_version = params
+        .get("protocolVersion")
+        .and_then(Value::as_str)
+        .filter(|v| looks_like_protocol_version(v))
+        .unwrap_or(SUPPORTED_PROTOCOL_VERSION);
+
+    Json(json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": {
+            "protocolVersion": protocol_version,
+            "capabilities": { "tools": {} },
+            "serverInfo": {
+                "name": "demeteo",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+        },
+    }))
     .into_response()
 }
 
@@ -143,16 +179,6 @@ pub(super) async fn enforce_headers(request: Request, next: Next) -> Response {
     if let Some(body) = &parsed_body {
         if header_body_mismatch(&parts.headers, body) {
             return header_mismatch_response(id);
-        }
-    }
-
-    if let Some(declared_version) = parts
-        .headers
-        .get(HEADER_PROTOCOL_VERSION)
-        .and_then(|v| v.to_str().ok())
-    {
-        if declared_version != SUPPORTED_PROTOCOL_VERSION {
-            return unsupported_version_response(id);
         }
     }
 

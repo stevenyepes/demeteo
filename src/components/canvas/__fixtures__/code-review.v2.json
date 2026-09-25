@@ -25,7 +25,7 @@
         ],
         "capability": "verify",
         "max_iterations": 1,
-        "prompt_template": "You are reviewing a change you did not write.\n\nUnder review: {{feature_description}}\nBranch: {{feature_branch}}\nRepositories in scope: {{repo_list}}\nProject conventions: {{project_conventions}}\n\n## How to review\n\nThat is yours to decide, not Demeteo's. Use your own review capability — a built-in review command, a skill, a subagent, or simply reading — and judge the change against what this project has written down about itself: the conventions above, and whatever `AGENTS.md`, `CLAUDE.md` or contributing guide the repository carries.\n\n{{review_entrypoint}}\n\n## Where the report goes\n\n`artifacts/code-review.md`. That file is the whole deliverable, and it is also the only path you may write to — the source tree is read-only for this step.\n\nThis workflow has one step and nothing after it: no commit, no push, no squash, no pull request. A human reads the report and decides what happens to the change.\n\n## Stop condition\nYou are done when `artifacts/code-review.md` exists and speaks to the range above.",
+        "prompt_template": "You are reviewing a change you did not write.\n\nUnder review: {{feature_description}}\nBranch: {{feature_branch}}\nRepositories in scope: {{repo_list}}\nProject conventions: {{project_conventions}}\n\n## How to review\n\nThat is yours to decide, not Demeteo's. Use your own review capability — a built-in review command, a skill, a subagent, or simply reading — and judge the change against what this project has written down about itself: the conventions above, and whatever `AGENTS.md`, `CLAUDE.md` or contributing guide the repository carries.\n\n{{review_entrypoint}}\n\n## Where the report goes\n\n`artifacts/code-review.md`. That file is the whole deliverable, and it is also the only path you may write to — the source tree is read-only for this step.\n\nA second step follows yours: the orchestrator runs this project's own preparation and gate commands on this branch, so whether the branch builds is answered beside your report rather than in it. Where those gates pass, none is configured, or every failure among them pre-dates the branch, that step writes what they said to `artifacts/branch-validation.md`. A gate this branch turned red ends the step before any agent turn in `s-validate-branch`: no `branch-validation.md` is written, and the failing command's output is recorded as the step's failure reason instead. Neither step commits, pushes, squashes or opens a pull request. A human reads what both leave behind and decides what happens to the change.\n\n## Stop condition\nYou are done when `artifacts/code-review.md` exists and speaks to the range above.",
         "uses_agent_skills": true,
         "verifier": null
       },
@@ -33,7 +33,46 @@
         "x": 0.0,
         "y": 0.0
       }
+    },
+    {
+      "id": "s-validate-branch",
+      "type": "agent",
+      "type_version": 1,
+      "title": "Run the project's own gates on this branch",
+      "config": {
+        "agent_kind": null,
+        "allow_network": false,
+        "allow_shell": false,
+        "artifacts": [
+          {
+            "capture": {
+              "kind": "last_write_to",
+              "path": "artifacts/branch-validation.md"
+            },
+            "inline": false,
+            "mode": "full",
+            "name": "branch-validation"
+          }
+        ],
+        "capability": "verify",
+        "max_iterations": 1,
+        "prompt_template": "You are reading what this project's own tooling said about this branch.\n\nUnder review: {{feature_description}}\nBranch: {{feature_branch}}\nRepositories in scope: {{repo_list}}\nProject conventions: {{project_conventions}}\nThe report written before you: [attached — s-review]\n\n## The evidence, and where it came from\n\nThe orchestrator has already run this project's configured preparation and gate commands in this worktree, and appended their output below under 'Harness Results'. That block names every command that executed, and there were no others. You do not run any of them again, and you could not: the source tree is read-only for this step, so an attempt would end on a permission bit instead of an answer.\n\nYour turn exists only because no gate this branch turned red. A gate this branch turned red ends the step before any agent turn: you would not be reading this, no `branch-validation.md` would be written, and the failing command's output would be recorded as the step's failure reason instead. So you are here in one of three cases — every gate passed, every failing gate was subtracted as pre-existing, or no gate is configured.\n\n## What to write down\n\nWhen the gates passed, or every red one among them is marked pre-existing:\n\n1. **Each command that ran, and what it said** — quote a failing gate's own output rather than paraphrasing it. The words the tool printed are what the next person acts on.\n2. **Each failure, named** — the gate, the failing test, and the file its output points at. Nobody can act on 'the suite is red'.\n3. **Whether the branch stands on that evidence.** A branch whose configured gates all passed stands; one with a failing gate does not, whatever the report above concluded about the code.\n\nThose are two separate questions, and the report above answers only the first. A change can be well written and still fail to build, and whoever reads these two artifacts together is entitled to know which of the two happened.\n\n## A failure this branch did not cause\n\nSome red gates pre-date the branch. Where the orchestrator established that a gate was already failing at the base commit — with the identical output — it marks that gate as excluded in the Harness Results block and names the commit it measured against. Such a gate is **pre-existing**: the change under review did not cause it, and writing it up as this change's defect sends the next person to fix code this branch never touched.\n\nName each one in your report as pre-existing, with the base commit the block cites. Leaving it out is the other way to get this wrong — a reader who sees a red gate in the output and no mention of it in your report cannot tell a deliberate subtraction from an oversight. A branch whose only failing gates are pre-existing still does not stand on point 3 above: it is red, and what the reader is owed is why it is red and since when.\n\n## When nothing ran\n\nA project that configures no gate command is not a failing branch. In that case the block below is headed `Harness Results — NOTHING RAN` and lists no command, and its advice to answer `environment` does not apply here: the verdict for this step is set under Required Verdict below. The honest answer is to say in the report that nothing ran: an absent gate is evidence of nothing, and it is not a defect in this change. Name the project setting that is missing and leave the branch unjudged on that point.\n\n## Where the report goes\n\n`artifacts/branch-validation.md`. That file is the whole deliverable, and it is also the only path you may write to.\n\n## Stop condition\nYou are done when that file names every command that ran and every failure it produced, and your reply ends with the required verdict JSON described below.",
+        "verifier": {
+          "agent_kind": null,
+          "instructions": "Decide one thing: whether this project's own gates passed on this branch.\n\nThe Harness Results block is the evidence, and it is the only evidence. It lists each command the orchestrator ran in this worktree and what that command returned. Read it before the artifact the step wrote — that artifact is a description of the block, and where the two disagree the block wins.\n\nReturn \"pass\" when every command listed there succeeded and the artifact names them. Clean gates are a pass even when the review report raised points about the code: this step answers whether the branch builds and its tests hold, and a human decides what the review itself is worth.\n\nA gate this branch turned red ends the step before any agent turn, and so before you: no `branch-validation.md` is written, and the failing command's output is recorded as the step's failure reason instead. Any red gate you can see in the block is therefore one the orchestrator subtracted as pre-existing — it marks that gate excluded and names the base commit it measured against.\n\nA pre-existing failure is a \"fail\" — the gates did not pass, and this step reports the state of the branch rather than who put it there. Say so in the reason: name the command and the failing test, call the gate pre-existing, and cite the base commit the Harness Results block excluded it against, so the failure reaches the person reading the run instead of living only in the log. The person reading the run is deciding between two different situations, a change that broke something and a branch that arrived red, and a reason that does not separate them hands them the wrong one.\n\nReturn \"pass\" when the Harness Results block is headed `Harness Results — NOTHING RAN` and lists no command at all, even though that block and the verdict menu that follows these instructions both advise `environment` for this case — that advice does not apply to this step, because this step judges nothing the project must configure but reports what the gates said, and an `environment` answer here ends the review `failed` and discards its report. No command in the block means the project configures no preparation step and no gate command, so nothing ran. That pass says the step did its job, not that the branch was judged — the artifact has to say that nothing ran, name the project setting that is missing, and leave the branch unjudged on that point. An absent gate is evidence of nothing: it is not a defect in this change, and it is not a red branch.\n\nIf the orchestrator then asks again for the verdict JSON alone, the answer for a `Harness Results — NOTHING RAN` block is still \"pass\", whatever that re-ask lists or advises.",
+          "verdict_key": "verdict"
+        }
+      },
+      "position": {
+        "x": 0.0,
+        "y": 160.0
+      }
     }
   ],
-  "edges": []
+  "edges": [
+    {
+      "from": "s-review",
+      "to": "s-validate-branch"
+    }
+  ]
 }

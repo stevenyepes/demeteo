@@ -4,7 +4,8 @@
 
 use crate::domain::ids::StepExecutionId;
 use crate::domain::models::step_attempt::{
-    error_class, explain_failure, tail_log, LOG_TAIL_BUDGET_BYTES,
+    cached_cycle_standing, error_class, explain_failure, tail_log, CachedCycleStanding,
+    LOG_TAIL_BUDGET_BYTES,
 };
 use crate::domain::models::StepAttempt;
 
@@ -134,4 +135,90 @@ fn tail_log_leaves_a_short_body_untouched() {
     assert!(!tail.truncated);
     assert_eq!(tail.omitted_bytes, 0);
     assert_eq!(tail.text, body);
+}
+
+fn attempt_with_status(attempt_no: u32, status: &str) -> StepAttempt {
+    StepAttempt {
+        status: status.to_string(),
+        error_class: None,
+        failure_fingerprint: None,
+        applied_rule: None,
+        ..failed_attempt(attempt_no, "fp")
+    }
+}
+
+fn standing(judged: bool, replay_checkable: bool) -> CachedCycleStanding {
+    CachedCycleStanding {
+        judged,
+        replay_checkable,
+    }
+}
+
+#[test]
+fn the_attempt_that_wrote_the_cache_decides_judgement() {
+    let judged = [
+        attempt_with_status(1, "completed"),
+        attempt_with_status(2, "running"),
+    ];
+    assert_eq!(
+        cached_cycle_standing(&judged, Some(1)),
+        standing(true, true)
+    );
+
+    // Attempt 2 refused a replay before writing the cache: cycle 1 is still
+    // judged, but the same list again is the producer's answer.
+    let refused_since = [
+        attempt_with_status(1, "completed"),
+        attempt_with_status(2, "failed"),
+        attempt_with_status(3, "running"),
+    ];
+    assert_eq!(
+        cached_cycle_standing(&refused_since, Some(1)),
+        standing(true, false)
+    );
+
+    let parked_since = [
+        attempt_with_status(1, "completed"),
+        attempt_with_status(2, "parked"),
+        attempt_with_status(3, "running"),
+    ];
+    assert_eq!(
+        cached_cycle_standing(&parked_since, Some(1)),
+        standing(true, false)
+    );
+
+    // The writer itself failed or was interrupted: its cycle is being
+    // re-entered, not judged.
+    let resumed = [
+        attempt_with_status(1, "completed"),
+        attempt_with_status(2, "interrupted"),
+        attempt_with_status(3, "running"),
+    ];
+    assert_eq!(
+        cached_cycle_standing(&resumed, Some(2)),
+        standing(false, false)
+    );
+
+    assert_eq!(cached_cycle_standing(&[], Some(1)), standing(false, false));
+}
+
+#[test]
+fn an_unrecorded_cache_writer_falls_back_to_the_last_closed_attempt() {
+    let judged = [
+        attempt_with_status(1, "completed"),
+        attempt_with_status(2, "running"),
+    ];
+    assert_eq!(cached_cycle_standing(&judged, None), standing(true, true));
+
+    let failed_since = [
+        attempt_with_status(1, "completed"),
+        attempt_with_status(2, "failed"),
+        attempt_with_status(3, "running"),
+    ];
+    assert_eq!(
+        cached_cycle_standing(&failed_since, None),
+        standing(false, false)
+    );
+
+    assert_eq!(cached_cycle_standing(&[], None), standing(false, false));
 }

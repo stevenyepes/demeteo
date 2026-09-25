@@ -82,6 +82,10 @@ pub struct SubtaskRunRow {
     pub cost_usd: f64,
     pub tokens: i64,
     pub error_message: Option<String>,
+    /// The plan and cycle this row ran under — see [`assemble_tasks`].
+    /// `None` on a row written before V58.
+    pub plan_epoch: Option<String>,
+    pub plan_cycle: Option<u32>,
 }
 
 /// Full-fidelity `subtask_runs` row for mirroring a detached run's per-task
@@ -106,6 +110,12 @@ pub struct SubtaskRunMirrorRow {
     pub error_message: Option<String>,
     pub started_at: i64,
     pub ended_at: Option<i64>,
+    /// Absent from an older runner's response, which mirrors as a pre-V58
+    /// row.
+    #[serde(default)]
+    pub plan_epoch: Option<String>,
+    #[serde(default)]
+    pub plan_cycle: Option<u32>,
 }
 
 /// Wire shape of the runner's `get_sequence_state` RPC (C4.1): one
@@ -204,15 +214,38 @@ pub struct PlannedTaskRef {
 /// left — yet its commits are demonstrably on the branch, because the rework
 /// cycle is running against them. Reading those rows as `pending` would show
 /// twenty-five never-started tickets beside four running ones.
+///
+/// `runs` is every row the step execution holds, in start order, and a row
+/// belongs to a task only when it ran under this plan's `epoch` *and* the
+/// task's cycle — the latest such row wins. The step execution outlives any
+/// one plan, so matching on task id alone hands a fresh decomposition the
+/// results of an abandoned one wherever their ids coincide, and hands one
+/// rework cycle's `rework-1` the row of the next cycle's. A plan with no
+/// epoch predates the tag and keeps the id-only match, as do its rows.
 pub fn assemble_tasks(
     plan: &[PlannedTaskRef],
+    epoch: Option<&str>,
     landed: &std::collections::HashSet<String>,
-    runs: &std::collections::HashMap<String, SubtaskRunRow>,
+    runs: &[SubtaskRunRow],
 ) -> Vec<SequenceTaskView> {
+    let mut latest: std::collections::HashMap<(&str, Option<u32>), &SubtaskRunRow> =
+        std::collections::HashMap::new();
+    for row in runs {
+        match epoch {
+            Some(e) if row.plan_epoch.as_deref() == Some(e) => {
+                latest.insert((row.subtask_id.as_str(), row.plan_cycle), row);
+            }
+            Some(_) => {}
+            None => {
+                latest.insert((row.subtask_id.as_str(), None), row);
+            }
+        }
+    }
     plan.iter()
         .map(|planned| {
             let is_landed = planned.prior_cycle || landed.contains(&planned.id);
-            let run = runs.get(&planned.id);
+            let cycle = epoch.map(|_| planned.cycle);
+            let run = latest.get(&(planned.id.as_str(), cycle)).copied();
             let status = if is_landed {
                 "landed".to_string()
             } else {
@@ -237,7 +270,7 @@ pub fn assemble_tasks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
 
     /// A task planned by the current cycle.
     fn planned(id: &str, title: &str) -> PlannedTaskRef {
@@ -256,6 +289,8 @@ mod tests {
             cost_usd: cost,
             tokens: 10,
             error_message: None,
+            plan_epoch: None,
+            plan_cycle: None,
         }
     }
 
@@ -269,14 +304,9 @@ mod tests {
         // t1 committed (landed) though its run row still says completed; t2 is
         // the live task; t3 never started.
         let landed: HashSet<String> = ["t1".to_string()].into_iter().collect();
-        let runs: HashMap<String, SubtaskRunRow> = [
-            ("t1".to_string(), run("t1", "completed", 0.5)),
-            ("t2".to_string(), run("t2", "running", 0.2)),
-        ]
-        .into_iter()
-        .collect();
+        let runs = vec![run("t1", "completed", 0.5), run("t2", "running", 0.2)];
 
-        let out = assemble_tasks(&plan, &landed, &runs);
+        let out = assemble_tasks(&plan, None, &landed, &runs);
         assert_eq!(out.len(), 3);
 
         assert_eq!(out[0].status, "landed");
@@ -299,9 +329,7 @@ mod tests {
         let landed = HashSet::new();
         let mut row = run("t1", "failed", 0.9);
         row.error_message = Some("boom".into());
-        let runs: HashMap<String, SubtaskRunRow> = [("t1".to_string(), row)].into_iter().collect();
-
-        let out = assemble_tasks(&plan, &landed, &runs);
+        let out = assemble_tasks(&plan, None, &landed, &[row]);
         assert_eq!(out[0].status, "failed");
         assert!(!out[0].landed);
         assert_eq!(out[0].error_message.as_deref(), Some("boom"));
@@ -324,12 +352,9 @@ mod tests {
         ];
         // Deliberately empty: the step completed, so the checkpoint is gone.
         let landed = HashSet::new();
-        let runs: HashMap<String, SubtaskRunRow> =
-            [("fix-1".to_string(), run("fix-1", "running", 0.1))]
-                .into_iter()
-                .collect();
+        let runs = vec![run("fix-1", "running", 0.1)];
 
-        let out = assemble_tasks(&plan, &landed, &runs);
+        let out = assemble_tasks(&plan, None, &landed, &runs);
         assert_eq!(out[0].status, "landed");
         assert!(out[0].landed);
         assert!(out[0].prior_cycle);
@@ -364,8 +389,65 @@ mod tests {
                 prior_cycle: false,
             },
         ];
-        let out = assemble_tasks(&plan, &HashSet::new(), &HashMap::new());
+        let out = assemble_tasks(&plan, None, &HashSet::new(), &[]);
         let cycles: Vec<u32> = out.iter().map(|t| t.cycle).collect();
         assert_eq!(cycles, [0, 1, 2]);
+    }
+
+    fn tagged(id: &str, status: &str, cost: f64, epoch: &str, cycle: u32) -> SubtaskRunRow {
+        SubtaskRunRow {
+            plan_epoch: Some(epoch.into()),
+            plan_cycle: Some(cycle),
+            ..run(id, status, cost)
+        }
+    }
+
+    /// The step execution is reused across re-runs, so it still holds the
+    /// abandoned plan's rows when a fresh decomposition reuses their ids.
+    /// Only the running ticket is this plan's; the rest have not started.
+    #[test]
+    fn a_fresh_plan_ignores_rows_an_earlier_plan_ran_under_the_same_ids() {
+        let plan = vec![planned("t1", "First"), planned("t2", "Second")];
+        let runs = vec![
+            tagged("t1", "completed", 19.0, "old", 0),
+            tagged("t2", "completed", 2.0, "old", 0),
+            run("t2", "completed", 3.0),
+            tagged("t1", "running", 0.0, "new", 0),
+        ];
+
+        let out = assemble_tasks(&plan, Some("new"), &HashSet::new(), &runs);
+        assert_eq!(out[0].status, "running");
+        assert_eq!(out[0].cost_usd, Some(0.0));
+        assert_eq!(out[1].status, "pending");
+        assert_eq!(out[1].cost_usd, None);
+    }
+
+    /// Rework producers number their tickets per cycle, so `rework-1`
+    /// recurs; each cycle's row has to stay with its own cycle.
+    #[test]
+    fn a_reused_id_keeps_each_cycles_own_row() {
+        let plan = vec![
+            PlannedTaskRef {
+                id: "rework-1".into(),
+                title: "Earlier".into(),
+                cycle: 1,
+                prior_cycle: true,
+            },
+            PlannedTaskRef {
+                id: "rework-1".into(),
+                title: "Current".into(),
+                cycle: 2,
+                prior_cycle: false,
+            },
+        ];
+        let mut failed = tagged("rework-1", "failed", 0.3, "e", 2);
+        failed.error_message = Some("boom".into());
+        let runs = vec![tagged("rework-1", "completed", 1.7, "e", 1), failed];
+
+        let out = assemble_tasks(&plan, Some("e"), &HashSet::new(), &runs);
+        assert_eq!(out[0].cost_usd, Some(1.7));
+        assert_eq!(out[0].error_message, None);
+        assert_eq!(out[1].status, "failed");
+        assert_eq!(out[1].cost_usd, Some(0.3));
     }
 }

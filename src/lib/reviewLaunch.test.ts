@@ -12,8 +12,12 @@ import {
   planReviewLaunch,
   REVIEW_STARTER_KEEPS_PERSONALIZATION,
   REVIEW_STARTER_WORKFLOW_ID,
+  reviewWorkflowChoices,
+  runChoiceGap,
+  type RunChoice,
 } from './reviewLaunch';
 import type { PullRequestSummary } from './pullRequests';
+import type { StepConfig, WorkflowWithSteps } from '../types';
 
 function summary(overrides: Partial<PullRequestSummary> = {}): PullRequestSummary {
   return {
@@ -35,10 +39,27 @@ function summary(overrides: Partial<PullRequestSummary> = {}): PullRequestSummar
   };
 }
 
-function launchOf(pullRequest: PullRequestSummary, instructions?: string) {
-  const plan = planReviewLaunch(pullRequest, instructions);
+function launchOf(pullRequest: PullRequestSummary, instructions?: string, choice?: RunChoice) {
+  const plan = planReviewLaunch(pullRequest, instructions, choice);
   if (!plan.ok) throw new Error(`refused: ${plan.reason}`);
   return plan.launch;
+}
+
+function workflow(
+  id: string,
+  steps: Pick<StepConfig, 'id' | 'kind' | 'verifier'>[],
+): WorkflowWithSteps {
+  return {
+    id,
+    name: id,
+    description: '',
+    is_starter: false,
+    created_at: 0,
+    updated_at: 0,
+    version: 1,
+    version_id: `${id}-v1`,
+    steps: steps.map((step) => ({ ...step, title: step.id })),
+  };
 }
 
 describe('planReviewLaunch', () => {
@@ -170,13 +191,137 @@ describe('planReviewLaunch', () => {
   });
 });
 
+describe('planReviewLaunch run choice', () => {
+  it('carries a chosen workflow, harness, model and effort through field for field', () => {
+    const launch = launchOf(summary(), '', {
+      workflowId: 'wf-custom-review',
+      agentKind: 'claude-code',
+      model: 'claude-opus-5',
+      effort: 'xhigh',
+    });
+
+    expect(launch.workflowId).toBe('wf-custom-review');
+    expect(launch.agentKind).toBe('claude-code');
+    expect(launch.model).toBe('claude-opus-5');
+    expect(launch.effort).toBe('xhigh');
+  });
+
+  it('leaves every unchosen field undefined so the project default is inherited', () => {
+    const launch = launchOf(summary());
+
+    expect(launch.workflowId).toBe(REVIEW_STARTER_WORKFLOW_ID);
+    expect(launch.agentKind).toBeUndefined();
+    expect(launch.model).toBeUndefined();
+    expect(launch.effort).toBeUndefined();
+  });
+
+  it('reads an untouched picker as no choice, never as a harness named ""', () => {
+    // `''` is what a `<select>` with no selection yields. Passed through, it
+    // names the empty harness rather than inheriting one.
+    const launch = launchOf(summary(), '', { workflowId: '', agentKind: '', model: '   ' });
+
+    expect(launch.workflowId).toBe(REVIEW_STARTER_WORKFLOW_ID);
+    expect(launch.agentKind).toBeUndefined();
+    expect(launch.model).toBeUndefined();
+  });
+
+  it('refuses an unlaunchable request whatever the pickers say', () => {
+    // A refusal is about the pull request. Touching a picker must not turn one
+    // into a run that has no commit to review, or no range to measure.
+    const choice: RunChoice = { workflowId: 'wf-custom-review', agentKind: 'claude-code' };
+
+    const noHead = planReviewLaunch(summary({ head_fetch_spec: 'patch-1' }), '', choice);
+    expect(noHead.ok).toBe(false);
+    if (!noHead.ok) expect(noHead.reason).toBe('no-head-ref');
+
+    const noBase = planReviewLaunch(summary({ target_branch: '  ' }), '', choice);
+    expect(noBase.ok).toBe(false);
+    if (!noBase.ok) expect(noBase.reason).toBe('no-base-branch');
+  });
+});
+
+describe('runChoiceGap', () => {
+  // The engine resolves harness and model apart, so a harness with no model
+  // runs on the project's model — chosen for a different harness.
+  it('refuses a chosen harness whose model is left to inherit', () => {
+    for (const choice of [{ agentKind: 'codex' }, { agentKind: 'codex', model: '  ' }]) {
+      const gap = runChoiceGap(choice);
+      expect(gap).toMatch(/codex/);
+      expect(gap).toMatch(/Project default/);
+    }
+  });
+
+  it('accepts inheriting both, and choosing both', () => {
+    expect(runChoiceGap({})).toBeNull();
+    expect(runChoiceGap({ model: 'x' })).toBeNull();
+    expect(runChoiceGap({ agentKind: '', model: '' })).toBeNull();
+    expect(runChoiceGap({ agentKind: 'codex', model: 'gpt-5-codex' })).toBeNull();
+  });
+});
+
+describe('reviewWorkflowChoices', () => {
+  const VERIFIER = { instructions: '' };
+
+  it('offers no workflow that can commit, push or open a pull request', () => {
+    const reviewOnly = workflow('wf-review-only', [
+      { id: 's-review', kind: 'agent' },
+      { id: 's-validate', kind: 'agent', verifier: VERIFIER },
+    ]);
+    const publishes = workflow('wf-pipeline', [
+      { id: 's-implement', kind: 'agent' },
+      { id: 's-finalize', kind: 'finalize' },
+    ]);
+
+    expect(reviewWorkflowChoices([reviewOnly, publishes])).toEqual([reviewOnly]);
+  });
+
+  it('offers no workflow that publishes, even one that gates before it does', () => {
+    const gatedPipeline = workflow('wf-gated-pipeline', [
+      { id: 's-implement', kind: 'agent', verifier: VERIFIER },
+      { id: 's-finalize', kind: 'finalize' },
+    ]);
+
+    expect(reviewWorkflowChoices([gatedPipeline])).toEqual([]);
+  });
+
+  it('offers no workflow that would skip the project’s gates', () => {
+    // No verifier means no prepare or gate command runs, while the launch
+    // surface says both do.
+    const ungated = workflow('wf-prose-review', [
+      { id: 's-review', kind: 'agent' },
+      { id: 's-approve', kind: 'gate' },
+    ]);
+    const nullVerifier = workflow('wf-null-verifier', [
+      { id: 's-review', kind: 'agent', verifier: null },
+    ]);
+    const empty = workflow('wf-empty', []);
+
+    expect(reviewWorkflowChoices([ungated, nullVerifier, empty])).toEqual([]);
+  });
+
+  it('offers the bundled review starter', () => {
+    const shipped = workflow(
+      REVIEW_STARTER_WORKFLOW_ID,
+      starter.steps.map((step) => ({
+        id: step.id,
+        kind: step.kind as StepConfig['kind'],
+        verifier: step.verifier ?? null,
+      })),
+    );
+
+    expect(reviewWorkflowChoices([shipped])).toEqual([shipped]);
+  });
+});
+
 describe('REVIEW_STARTER_KEEPS_PERSONALIZATION', () => {
   it('says what the shipped starter actually asks for', () => {
     // The launch surface promises the user, before the run exists, that the
     // harness keeps their skills. Nothing else compares the promise to the
     // workflow that will be executed, and an edit to either file alone is
     // invisible to every other gate.
-    expect(starter.steps).toHaveLength(1);
-    expect(starter.steps[0].uses_agent_skills).toBe(REVIEW_STARTER_KEEPS_PERSONALIZATION);
+    const reviewStep = starter.steps.find((step) => step.id === 's-review');
+
+    expect(reviewStep, 'the starter has no step with id s-review').toBeDefined();
+    expect(reviewStep?.uses_agent_skills).toBe(REVIEW_STARTER_KEEPS_PERSONALIZATION);
   });
 });
