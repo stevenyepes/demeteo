@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { offerableAgentKinds } from '../../lib/agentAvailability';
 import { getAgentModels } from '../../lib/agentModels';
 import { useErrorBus } from '../../lib/errorBus';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
@@ -103,12 +104,7 @@ export function useHarnessOverrides(input?: HarnessOverridesInput): HarnessOverr
   const addressed = input !== undefined && 'selectedStepId' in input;
   const inheritedAgentKind = addressed ? featureWideAgentKind : featureAgentKind;
 
-  // Installed *and* enabled: a picker offering a harness the machine does not
-  // have fails at spawn instead.
-  const availableAgents = useMemo(
-    () => machineAgents.filter((a) => a.enabled && a.available).map((a) => a.kind),
-    [machineAgents],
-  );
+  const availableAgents = useMemo(() => offerableAgentKinds(machineAgents), [machineAgents]);
 
   // The effort levels the harness this selection will actually run under
   // accepts. Empty (hermes) disables the control rather than offering a level

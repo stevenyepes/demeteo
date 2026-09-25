@@ -621,6 +621,25 @@ openai-codex  gpt-5.6-luna         272K     128K     yes       yes
     );
 }
 
+/// The probe runs through a login-interactive shell, so a shell integration
+/// (iTerm2, VS Code) can prepend an OSC sequence to the first line pi prints.
+/// Keyed on its first token, the header would then pass as a model row.
+#[test]
+fn model_table_header_behind_escape_noise_yields_no_model() {
+    let output = "\
+\x1b]1337;RemoteHost=u@h\x07provider      model                context  max-out  thinking  images
+openai-codex  gpt-5.3-codex-spark  128K     128K     yes       no
+openai-codex  gpt-5.6-luna         272K     128K     yes       yes
+";
+    assert_eq!(
+        parse_pi_model_table(output),
+        vec![
+            "openai-codex/gpt-5.3-codex-spark".to_string(),
+            "openai-codex/gpt-5.6-luna".to_string()
+        ]
+    );
+}
+
 /// The probe is the one pi invocation `build_pi_args` does not build, so it is
 /// the one that can quietly lose the flag. pi executes a project extension on
 /// load, which would make reading a model table a code-execution path for any

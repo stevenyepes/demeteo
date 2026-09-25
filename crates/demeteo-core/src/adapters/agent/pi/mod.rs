@@ -429,10 +429,14 @@ fn build_pi_args(
 /// prints prose on this channel ("No models available. Use /login …" plus two
 /// doc paths); none of those lines is six fields wide, so none survives.
 fn parse_pi_model_table(output: &str) -> Vec<String> {
+    // The header is recognised by its trailing columns, never `cols[0]`: the
+    // probe runs in a login-interactive shell, whose integration may glue an
+    // OSC escape onto the first token pi prints.
+    const HEADER_TAIL: [&str; 5] = ["model", "context", "max-out", "thinking", "images"];
     output
         .lines()
         .map(|l| l.split_whitespace().collect::<Vec<_>>())
-        .filter(|cols| cols.len() == 6 && !(cols[0] == "provider" && cols[1] == "model"))
+        .filter(|cols| cols.len() == 6 && cols[1..] != HEADER_TAIL)
         .map(|cols| format!("{}/{}", cols[0], cols[1]))
         .collect()
 }
