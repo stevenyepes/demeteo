@@ -28,8 +28,12 @@ impl ExecutionDriver {
         thread_id: &str,
         title: &str,
     ) -> Result<std::sync::Arc<dyn crate::ports::agent_runtime::AgentSession>, SequenceError> {
-        let env =
-            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), target.machine).await;
+        let env = crate::ports::agent_runtime::pipeline_agent_env(
+            self.exec.as_ref(),
+            target.machine,
+            target.agent_kind,
+        )
+        .await;
         let binary = self
             .registry
             .runtime_for(target.agent_kind)

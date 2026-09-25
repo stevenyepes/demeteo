@@ -419,8 +419,12 @@ impl ExecutionDriver {
 
         // Every supported agent is a CLI runtime that takes its model via the
         // `--model` flag in `build_args` from `ctx.model` below.
-        let agent_env =
-            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+        let agent_env = crate::ports::agent_runtime::pipeline_agent_env(
+            self.exec.as_ref(),
+            machine_str,
+            &agent_kind,
+        )
+        .await;
         let platform =
             crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), machine_str)
                 .await;

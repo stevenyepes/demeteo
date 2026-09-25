@@ -51,6 +51,8 @@ impl GitOpsHelper {
                         [
                             "-c",
                             "core.hooksPath=/dev/null",
+                            "-c",
+                            crate::paths::GIT_NO_SIGNING,
                             "merge",
                             &subtask_branch,
                             "-m",
@@ -77,6 +79,8 @@ impl GitOpsHelper {
                         [
                             "-c",
                             "core.hooksPath=/dev/null",
+                            "-c",
+                            crate::paths::GIT_NO_SIGNING,
                             "merge",
                             &subtask_branch,
                             "-m",

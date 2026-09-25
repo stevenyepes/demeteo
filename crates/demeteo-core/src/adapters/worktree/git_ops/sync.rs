@@ -538,9 +538,17 @@ impl GitOpsHelper {
                 DivergenceReconcile::ResetOntoOrigin => {
                     git_request(&wt_path, ["reset", "--keep", &feat_tracking])
                 }
-                DivergenceReconcile::MergeOrigin => {
-                    git_request(&wt_path, ["merge", &feat_tracking, "-m", &message])
-                }
+                DivergenceReconcile::MergeOrigin => git_request(
+                    &wt_path,
+                    [
+                        "-c",
+                        crate::paths::GIT_NO_SIGNING,
+                        "merge",
+                        &feat_tracking,
+                        "-m",
+                        &message,
+                    ],
+                ),
             };
             if let Err(raw) = self.exec.run_program(machine_str, attempt).await {
                 return Err(
@@ -584,6 +592,8 @@ impl GitOpsHelper {
                 git_request(
                     &wt_path,
                     [
+                        "-c",
+                        crate::paths::GIT_NO_SIGNING,
                         "merge",
                         &tracking,
                         "-m",

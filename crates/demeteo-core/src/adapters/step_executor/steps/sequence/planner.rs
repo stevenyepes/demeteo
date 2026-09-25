@@ -140,8 +140,12 @@ impl ExecutionDriver {
             planner_prompt
         );
 
-        let planner_env =
-            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), target.machine).await;
+        let planner_env = crate::ports::agent_runtime::pipeline_agent_env(
+            self.exec.as_ref(),
+            target.machine,
+            target.agent_kind,
+        )
+        .await;
         let planner_binary = self
             .registry
             .runtime_for(target.agent_kind)

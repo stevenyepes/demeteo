@@ -446,12 +446,20 @@ pub fn shell_escape_posix(s: &str) -> String {
 /// Pointing `core.hooksPath` at a directory that cannot contain hooks
 /// disables every hook on every git version — unlike `--no-verify`, which
 /// git only honours for `merge` as of 2.36 and which skips only some hooks.
+///
+/// Signing is off for the same commits, see [`GIT_NO_SIGNING`].
 pub fn git_no_hooks(dir: &str) -> String {
     format!(
-        "git -c core.hooksPath=/dev/null -C {}",
+        "git -c core.hooksPath=/dev/null -c {GIT_NO_SIGNING} -C {}",
         shell_escape_posix(dir)
     )
 }
+
+/// The `-c` value every commit or merge Demeteo itself creates carries. A
+/// user's `commit.gpgsign=true` would otherwise sign Demeteo's bookkeeping
+/// with their key, or park an unattended run on a pinentry prompt. Not needed
+/// on `commit-tree`, which never reads `commit.gpgsign`.
+pub const GIT_NO_SIGNING: &str = "commit.gpgsign=false";
 
 /// Well-known gitignored dependency directories that a fresh
 /// `git worktree add` doesn't carry over — they're gitignored, so no

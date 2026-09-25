@@ -169,7 +169,7 @@ fn full_run(repo: &str, wt: &str) -> Vec<(String, Result<String, String>)> {
         ),
         (
             format!(
-                "git -C {wt} merge origin/master -m chore(sync): sync feature with origin/master"
+                "git -C {wt} -c commit.gpgsign=false merge origin/master -m chore(sync): sync feature with origin/master"
             ),
             ok(""),
         ),

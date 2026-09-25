@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 
@@ -21,7 +22,9 @@ use crate::domain::action::AgentAction;
 use crate::domain::intercept::ExecutionResult;
 use crate::domain::models::Platform;
 use crate::ports::agent_execution::{ActionError, AgentExecutionPort, CommandOutcome};
-use crate::ports::agent_runtime::{agent_base_env, resolve_agent_home, resolve_agent_platform};
+use crate::ports::agent_runtime::{
+    agent_base_env, pipeline_agent_env, resolve_agent_home, resolve_agent_platform,
+};
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, SftpEntry};
 
 /// `ExecutionPort` stub whose `resolve_home`, `resolve_user` and
@@ -367,4 +370,127 @@ async fn resolve_agent_platform_degrades_to_unknown_rather_than_to_the_desktop()
             .failing_for("m-flaky"),
     );
     assert_eq!(resolve_agent_platform(exec.as_ref(), "m-flaky").await, None);
+}
+
+fn git_config_block(env: &HashMap<String, String>) -> Vec<(&String, &String)> {
+    let mut block: Vec<_> = env
+        .iter()
+        .filter(|(k, _)| k.starts_with("GIT_CONFIG_"))
+        .collect();
+    block.sort();
+    block
+}
+
+/// A pipeline turn carries the agent identity; the user's own sessions (Ask,
+/// Discovery, the probe), which build from `agent_base_env`, do not.
+#[tokio::test]
+async fn only_a_pipeline_turn_commits_as_the_agent() {
+    let exec = Arc::new(FakeExec::new().with_home("local", GUI_HOME));
+
+    let pipeline = pipeline_agent_env(exec.as_ref(), "local", "codex").await;
+    let expected = crate::domain::agent_env::agent_git_config_env("codex", &HashMap::new());
+    assert_eq!(
+        git_config_block(&pipeline),
+        git_config_block(&expected.into_iter().collect()),
+    );
+    assert_eq!(pipeline.get("HOME").map(String::as_str), Some(GUI_HOME));
+
+    let base = agent_base_env(exec.as_ref(), "local").await;
+    assert!(git_config_block(&base).is_empty(), "{base:?}");
+}
+
+/// A scratch directory holding a user config that signs every commit with a
+/// key no machine has, through a `gpg.program` no machine has — so an attempt
+/// to sign fails on every OS rather than prompting.
+fn signing_user(label: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let root = std::env::temp_dir().join(format!(
+        "demeteo_agent_git_{label}_{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    let repo = root.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let config = root.join("user.gitconfig");
+    std::fs::write(
+        &config,
+        "[user]\n\tname = Human\n\temail = human@example.invalid\n\tsigningkey = DEADBEEF\n\
+         [commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n\
+         [gpg]\n\tprogram = demeteo-no-such-gpg\n",
+    )
+    .unwrap();
+    (repo, config)
+}
+
+fn git_as_user(
+    repo: &std::path::Path,
+    config: &std::path::Path,
+    env: &[(String, String)],
+    args: &[&str],
+) -> std::process::Output {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C").arg(repo).args(args);
+    for key in [
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+    ] {
+        cmd.env_remove(key);
+    }
+    cmd.env("GIT_CONFIG_GLOBAL", config)
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd.envs(env.iter().map(|(k, v)| (k, v)));
+    cmd.output().unwrap()
+}
+
+/// The regression itself, against a real git: an agent running `git commit`
+/// in a repo whose user signs everything.
+#[test]
+fn an_agent_commit_under_a_signing_user_is_the_agents_and_unsigned() {
+    let (repo, config) = signing_user("commit");
+    assert!(git_as_user(&repo, &config, &[], &["init", "-q"])
+        .status
+        .success());
+    std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+    assert!(git_as_user(&repo, &config, &[], &["add", "-A"])
+        .status
+        .success());
+
+    let unguarded = git_as_user(&repo, &config, &[], &["commit", "-qm", "x"]);
+    assert!(
+        !unguarded.status.success(),
+        "the fixture must sign, or this test proves nothing"
+    );
+
+    let env = crate::domain::agent_env::agent_git_config_env("claude-code", &HashMap::new());
+    let commit = git_as_user(&repo, &config, &env, &["commit", "-qm", "x"]);
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+    let log = git_as_user(
+        &repo,
+        &config,
+        &[],
+        &["log", "-1", "--format=%an|%ae|%cn|%ce"],
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&log.stdout).trim(),
+        "demeteo-agent (claude-code)|demeteo-agent@local|demeteo-agent (claude-code)|demeteo-agent@local"
+    );
+
+    let tag = git_as_user(&repo, &config, &env, &["tag", "-a", "v0", "-m", "v0"]);
+    assert!(
+        tag.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tag.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(repo.parent().unwrap_or(&repo));
 }

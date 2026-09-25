@@ -1,4 +1,6 @@
-use crate::domain::agent_env::inherited_agent_env;
+use std::collections::HashMap;
+
+use crate::domain::agent_env::{agent_git_config_env, inherited_agent_env};
 use crate::domain::models::Platform;
 
 /// The environment the leak was actually found in: a desktop started from a
@@ -91,4 +93,87 @@ fn a_shell_pin_reaches_windows_and_no_other_platform() {
             "{elsewhere:?} has no declaration to defend"
         );
     }
+}
+
+/// What git itself would read out of `env`: the `GIT_CONFIG_*` block walked
+/// the way git walks it, so a gap or an unread index fails here the way it
+/// would fail there.
+fn git_config_of(env: &HashMap<String, String>) -> Vec<(String, String)> {
+    let count: usize = env
+        .get("GIT_CONFIG_COUNT")
+        .map(|count| count.parse().expect("GIT_CONFIG_COUNT is a number"))
+        .unwrap_or(0);
+    (0..count)
+        .map(|i| {
+            let key = env.get(&format!("GIT_CONFIG_KEY_{i}"));
+            let value = env.get(&format!("GIT_CONFIG_VALUE_{i}"));
+            match (key, value) {
+                (Some(key), Some(value)) => (key.clone(), value.clone()),
+                _ => panic!("git fatals on a missing GIT_CONFIG_KEY/VALUE_{i}"),
+            }
+        })
+        .collect()
+}
+
+fn merged(agent_kind: &str, mut env: HashMap<String, String>) -> HashMap<String, String> {
+    let git = agent_git_config_env(agent_kind, &env);
+    env.extend(git);
+    env
+}
+
+fn pairs(entries: &[(&str, &str)]) -> Vec<(String, String)> {
+    entries
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+#[test]
+fn an_agent_commits_as_demeteo_agent_and_never_signs() {
+    assert_eq!(
+        git_config_of(&merged("claude-code", HashMap::new())),
+        pairs(&[
+            ("user.name", "demeteo-agent (claude-code)"),
+            ("user.email", "demeteo-agent@local"),
+            ("commit.gpgsign", "false"),
+            ("tag.gpgsign", "false"),
+        ])
+    );
+}
+
+#[test]
+fn the_committing_agent_is_named_in_the_identity() {
+    for kind in ["opencode", "codex", "hermes"] {
+        let config = git_config_of(&merged(kind, HashMap::new()));
+        assert!(
+            config.contains(&("user.name".to_string(), format!("demeteo-agent ({kind})"))),
+            "{kind}: {config:?}"
+        );
+    }
+}
+
+/// A block the caller already built keeps its indices; ours is appended.
+#[test]
+fn an_existing_git_config_block_is_extended_not_overwritten() {
+    let env: HashMap<String, String> = pairs(&[
+        ("GIT_CONFIG_COUNT", "2"),
+        ("GIT_CONFIG_KEY_0", "safe.directory"),
+        ("GIT_CONFIG_VALUE_0", "*"),
+        ("GIT_CONFIG_KEY_1", "core.autocrlf"),
+        ("GIT_CONFIG_VALUE_1", "false"),
+    ])
+    .into_iter()
+    .collect();
+
+    let config = git_config_of(&merged("pi", env));
+
+    assert_eq!(config.len(), 6, "{config:?}");
+    assert_eq!(
+        config[..3],
+        pairs(&[
+            ("safe.directory", "*"),
+            ("core.autocrlf", "false"),
+            ("user.name", "demeteo-agent (pi)"),
+        ])
+    );
 }
