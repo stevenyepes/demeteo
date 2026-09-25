@@ -8,8 +8,8 @@ use super::{
     hook_transport_supported, is_hooked_agent_kind, list_terminal_sessions, reconnect_with_machine,
     remote_activity_settings_path, rename_terminal_session, resolve, select_local_shell,
     send_chunk, shell_single_quote, should_clear_activity_on_agent_exit, start_local_pty,
-    sweep_activity_once, write_activity_settings_file, ActiveSession, Broadcast, ReadSource,
-    SessionActivity, SessionState, WriteSink, CADENCE_WINDOW, SCROLLBACK_MAX_BYTES,
+    sweep_activity_once, write_activity_settings_file, ActiveSession, Broadcast, SessionActivity,
+    SessionState, CADENCE_WINDOW, SCROLLBACK_MAX_BYTES,
 };
 
 #[cfg(test)]

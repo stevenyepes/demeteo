@@ -4,10 +4,17 @@
 
 use std::sync::Arc;
 
-use crate::adapters::mcp::router;
+use crate::adapters::mcp::guard::hash_token;
+use crate::adapters::mcp::{record_canonical_uri, router};
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::ids::{ClientId, GrantId};
+use crate::domain::oauth::{GrantRecord, OAuthClient, Scope};
 use crate::state::AppContext;
+
+/// `initialize` needs a live grant; this one is seeded straight into the
+/// fixture's store, bound to whatever `record_canonical_uri` settled on.
+const TOKEN: &str = "protocol-test-token";
 
 fn fixture(tag: &str) -> AppContext {
     let dir = std::env::temp_dir().join(format!(
@@ -35,12 +42,37 @@ async fn spawn_protocol_router(tag: &str) -> std::net::SocketAddr {
     let addr = listener
         .local_addr()
         .expect("bound listener has a local address");
+    seed_grant(&ctx, &record_canonical_uri(addr));
 
     tokio::spawn(async move {
         let _ = axum::serve(listener, router(ctx)).await;
     });
 
     addr
+}
+
+fn seed_grant(ctx: &AppContext, resource: &str) {
+    let client = OAuthClient {
+        id: ClientId::new("client-1"),
+        client_name: "test-client".to_string(),
+        redirect_uris: vec![],
+        created_at: crate::paths::now_ms(),
+    };
+    ctx.oauth_clients
+        .register_client(client.clone())
+        .expect("register test client");
+    let grant = GrantRecord {
+        id: GrantId::new("grant-1"),
+        client_id: client.id,
+        scopes: vec![Scope::Read],
+        resource: resource.to_string(),
+        issued_at: crate::paths::now_ms(),
+        expires_at: crate::paths::now_ms() + 3_600_000,
+        revoked_at: None,
+    };
+    ctx.oauth_grants
+        .insert_grant(grant, &hash_token(TOKEN))
+        .expect("insert test grant");
 }
 
 #[tokio::test]
@@ -104,7 +136,7 @@ async fn declared_protocol_version_header_does_not_block_dispatch() {
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "tools/list",
+            "method": "server/discover",
             "params": {},
         }))
         .send()
@@ -113,7 +145,7 @@ async fn declared_protocol_version_header_does_not_block_dispatch() {
 
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     let body: serde_json::Value = resp.json().await.expect("JSON body");
-    assert!(body["result"]["tools"].is_array());
+    assert_eq!(body["result"]["protocolVersion"], "2026-07-28");
 }
 
 #[tokio::test]
@@ -122,6 +154,7 @@ async fn initialize_echoes_the_clients_declared_protocol_version() {
 
     let resp = reqwest::Client::new()
         .post(format!("http://{addr}/mcp"))
+        .bearer_auth(TOKEN)
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": 7,
@@ -148,6 +181,7 @@ async fn initialize_falls_back_to_the_supported_version_when_absent_or_malformed
 
     let absent = client
         .post(format!("http://{addr}/mcp"))
+        .bearer_auth(TOKEN)
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -164,6 +198,7 @@ async fn initialize_falls_back_to_the_supported_version_when_absent_or_malformed
 
     let malformed = client
         .post(format!("http://{addr}/mcp"))
+        .bearer_auth(TOKEN)
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -248,4 +283,37 @@ async fn oversized_body_on_mcp_is_rejected_with_payload_too_large() {
         .expect("request /mcp");
 
     assert_eq!(resp.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// Listing needs a session, not a scope: a `read`-only grant sees the spend
+/// and configure tools too, so a client can learn what to step up for.
+#[tokio::test]
+async fn a_read_only_grant_lists_the_full_catalog() {
+    let addr = spawn_protocol_router("catalog").await;
+
+    let body: serde_json::Value = reqwest::Client::new()
+        .post(format!("http://{addr}/mcp"))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {},
+        }))
+        .send()
+        .await
+        .expect("request /mcp")
+        .error_for_status()
+        .expect("tools/list returns 200 with a live grant")
+        .json()
+        .await
+        .expect("tools/list response is JSON");
+
+    let tools = body["result"]["tools"]
+        .as_array()
+        .expect("result.tools is an array");
+    assert_eq!(tools.len(), 12);
+    assert!(tools
+        .iter()
+        .any(|t| t["name"] == "start_feature" && t["inputSchema"].is_object()));
 }

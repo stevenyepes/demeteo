@@ -179,7 +179,7 @@ Failure classes map 1:1 onto the existing `StepOutcome`/`VerifierError` taxonomy
 - `sequence_checkpoints` → persisted per (feature, node) so a crash mid-list resumes from the exact task, not the step (closes the documented re-run-committed-tasks waste).
 - `cached_plans` → persisted with the attempt that produced them.
 - `env_retried` → derivable from `step_attempts.error_class`, so it's deleted.
-- Workspace fingerprint (repo HEAD + dirty flag) recorded at node start; on resume, a mismatch surfaces as the existing synthetic gate rather than blind re-execution (extends Decision 14).
+- Workspace fingerprint (feature-branch tip + a dirty flag over the feature's own checkouts) recorded at node start; on resume, a mismatch surfaces as the existing synthetic gate rather than blind re-execution (extends Decision 14).
 
 **Idempotency rule:** every side-effecting node records an idempotency key (node id + attempt + workspace fingerprint); `command` nodes must declare `idempotent: true|false` — non-idempotent interrupted commands always go to synthetic gate, never auto-rerun.
 
@@ -225,7 +225,9 @@ re-running is merely expensive, skipping is wrong.
 gate targets the producer rather than the sequence node whenever the producer
 declares a rework template (`resolve_redirect_target` priority 3) — turning
 "the empty state looks wrong" into two tickets instead of a full re-run.
-Explicitly naming a step, or a declared `on_failure`, still wins.
+Explicitly naming a step, or a declared `on_failure`, still wins — except
+that naming a step between a rework-opted producer and its consumer (a review
+gate) hops to the producer, since landing there replays last cycle's list.
 
 **Cycle history** lives inside `sequence_plan_cache.plan_json` (`kind`,
 `cycle`, `history[]`) rather than a new column, so no migration is needed and
@@ -271,7 +273,7 @@ Clicking a node opens a right side panel (same split-panel pattern as `ArtifactV
 - **Overview:** status, attempt count, per-attempt table (class, cost, duration, outcome) from `step_attempts`.
 - **Live:** the existing `agent_stream` transcript for a running node (moves here from the inline toggle).
 - **Output:** artifacts (Monaco viewer), harness output, verifier verdict with failing tests/implicated files.
-- **Actions:** Retry (policy-aware: shows which rule will apply), Replay-from-node (existing `replayFromStep`, now graph-aware: highlights the downstream subgraph that will re-run before confirming), Stop node, Decide gate.
+- **Actions:** the node's **Assignment** (agent / model / effort), then Retry (policy-aware: shows which rule will apply), Replay-from-node (existing `replayFromStep`, now graph-aware: highlights the downstream subgraph that will re-run before confirming), Stop node, Decide gate. Assignment is offered for *any* node, not only a failed one — which is what makes the tab reachable for a queued node that has no other control — and it is read-only while the node is `running` or `verifying`. It pins this node alone ([decision 54](DECISIONS.md#54--mid-run-assignment-detail)); Retry and Replay no longer carry an agent/model/effort of their own, so nothing here re-points a node the user did not select.
 
 Sequence nodes expand in-place (accordion inside the node or panel) to show the task list with per-task status/cost — the landed-prefix is visually distinct from pending tasks, making Decision 13's semantics legible for the first time.
 

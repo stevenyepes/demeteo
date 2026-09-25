@@ -94,6 +94,34 @@ pub trait StepExecutor: Send + Sync {
         new_agent: Option<&str>,
         new_effort: Option<EffortLevel>,
     ) -> Result<(), AppError>;
+    /// Pin which agent, model and effort one step runs as — resolution tier 1,
+    /// the `StepOverride` on the feature row. An all-`None` `assignment` is the
+    /// *reset to inherited* request and removes the pin; it is never read as a
+    /// partial patch, and never as a no-op. What the change means in full is
+    /// [`apply_step_assignment`](crate::domain::step_assignment::apply_step_assignment).
+    ///
+    /// **Precondition:** a step in `running` or `verifying` is refused
+    /// ([`assignment_refusal`](crate::domain::step_assignment::assignment_refusal)) —
+    /// that attempt's agent was spawned against the old assignment, so the
+    /// write would report a change this attempt cannot honour. So is a step
+    /// whose kind reads no agent
+    /// ([`kind_refusal`](crate::domain::step_assignment::kind_refusal)) and a
+    /// harness this build has not registered
+    /// ([`harness_refusal`](crate::domain::step_assignment::harness_refusal)).
+    ///
+    /// **Performs no rewind.** Nothing is reset, re-armed or re-run: the pin
+    /// applies the next time the scheduler dispatches that node, which for a
+    /// queued step is its first run and for a stopped one is its next retry.
+    ///
+    /// The write is best-effort against a live run loop, which may already
+    /// have read the old value for the tick in flight. `Ok` says the row now
+    /// carries the pin — not that the next dispatch saw it. No repository
+    /// here offers a transaction spanning both, so none is promised.
+    async fn step_set_assignment(
+        &self,
+        execution_id: &str,
+        assignment: crate::domain::step_assignment::StepAssignment,
+    ) -> Result<(), AppError>;
     /// Replay from the given step execution — reset the target step and
     /// all subsequent steps to `pending`, clear their artifacts and gate
     /// decisions, then restart the execution loop. Works for any step

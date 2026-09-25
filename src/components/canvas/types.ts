@@ -108,6 +108,19 @@ export interface NodeRunStatus {
   model?: string | null;
   /** `null` means the launch injected no effort; absence means no launch evidence. */
   effort?: EffortLevel | null;
+  /** What the node is *pinned to* — its `Feature.step_overrides` row, joined in
+   *  by `useRunGraph`. A separate field rather than a fallback into the three
+   *  above, because a pin is not evidence: a queued node draws it, and a node
+   *  that spawned draws what it spawned with. */
+  planned?: PlannedAssignment;
+}
+
+/** One `StepOverride` in the canvas's own vocabulary: each dimension is
+ *  independently `null`/absent for "inherit", never a value. */
+export interface PlannedAssignment {
+  agentKind?: string | null;
+  model?: string | null;
+  effort?: EffortLevel | null;
 }
 
 /** Display metadata for a node type: card icon, label, and accent tone drawn

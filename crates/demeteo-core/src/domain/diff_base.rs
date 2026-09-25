@@ -1,17 +1,20 @@
 //! Which branch a run is measured against. See [`crate::domain`].
 //!
-//! Four call sites answer this independently — the review diff's fork point,
-//! the finalize step's branch summary, the harness baseline's `base_sha`, and
-//! the "view diff" deep link — and before this module each of them read
+//! Three call sites answer this independently — the review diff's fork point,
+//! the harness baseline's `base_sha`, and the "view diff" deep link — and
+//! before this module each of them read
 //! `ProjectSettings.worktree_strategy.default_branch` directly. That is one
 //! answer while every run starts at the default branch; the moment a run
-//! declares its own base (`features.diff_base_branch`, V41) the four have to
-//! agree, and four independent `settings.worktree_strategy` reads cannot be
+//! declares its own base (`features.diff_base_branch`, V41) the three have to
+//! agree, and three independent `settings.worktree_strategy` reads cannot be
 //! made to.
 //!
 //! The squash is deliberately not among them: it parents onto the commit the
 //! branch was cut from, which is [`FeatureOrigin::squash_base`] and, for a run
 //! launched on a pull request, a different revision from the one resolved here.
+//! Nor is the finalize step's branch summary, which describes the one commit
+//! the squash publishes and so starts where the squash does
+//! ([`summary_base`](crate::domain::finalize::summary_base::summary_base)).
 //!
 //! ## Why the declared base outranks the origin here
 //!
@@ -26,7 +29,7 @@
 use crate::domain::feature_origin::FeatureOrigin;
 
 /// The branch this run is measured against: the left side of the range each of
-/// the four call sites above computes.
+/// the three call sites above computes.
 ///
 /// `None` means nothing named a branch at all — no declared base, an origin
 /// with no base of its own, and a project whose default branch is unset. The

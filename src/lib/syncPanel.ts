@@ -166,13 +166,22 @@ const REFRESH: SyncAction = {
   desc: 'Nothing else in the app moves that ref for a finished feature, so the count only changes when you ask.',
 };
 
-const SYNC: SyncAction = {
-  intent: 'sync',
-  label: 'Sync',
-  tone: 'violet',
-  title: 'Merge the base branch into this feature branch',
-  desc: 'Merges the base branch in. A clean merge finishes here; a conflicted one comes back to this pane.',
-};
+/**
+ * Named, because the base is not always the branch the feature was cut from: a
+ * fix run launched from a same-repo review measures — and therefore merges —
+ * the pull request's target, which lands in a request that points at the
+ * contributor's own branch. The generic wording is for a base nobody knows.
+ */
+function syncAction(baseRef: string | null | undefined): SyncAction {
+  const base = baseRef || 'the base branch';
+  return {
+    intent: 'sync',
+    label: 'Sync',
+    tone: 'violet',
+    title: `Merge ${base} into this feature branch`,
+    desc: `Merges ${base} in. A clean merge finishes here; a conflicted one comes back to this pane.`,
+  };
+}
 
 const ABORT: SyncAction = {
   intent: 'abort',
@@ -405,7 +414,7 @@ function publishedArm(
     chipLabel: chip.label,
     headline: behind === null ? 'The count could not be taken' : missingHeadline(behind),
     body: `${landed} ${chip.title}`,
-    actions: [SYNC, REFRESH],
+    actions: [syncAction(drift?.base_ref), REFRESH],
     badge: behind ?? 0,
   };
 }
@@ -558,7 +567,7 @@ function blockedArm(
   // reads as the recommended one.
   const retry: SyncAction[] =
     !held && canSync && reconcile.length === 0
-      ? [{ ...SYNC, label: 'Retry sync', tone: 'amber' as const }]
+      ? [{ ...syncAction(session.base_branch), label: 'Retry sync', tone: 'amber' as const }]
       : [];
   // A sha this row does not carry is the whole of what stands between Publish
   // and a press that cannot succeed: `publish` refuses without one, and the
@@ -759,7 +768,7 @@ function quiet(drift: FeatureDrift | null, canSync: boolean): Quiet {
       chipLabel: chip.label,
       headline: 'The count could not be taken',
       body: `${chip.title} Syncing is still offered — a merge answers the question the count could not.`,
-      actions: [SYNC, REFRESH],
+      actions: [syncAction(drift?.base_ref), REFRESH],
       badge: 0,
     };
   }
@@ -782,7 +791,7 @@ function quiet(drift: FeatureDrift | null, canSync: boolean): Quiet {
     chipLabel: chip.label,
     headline: missingHeadline(behind),
     body: chip.title,
-    actions: [SYNC, REFRESH],
+    actions: [syncAction(drift?.base_ref), REFRESH],
     badge: behind,
   };
 }
@@ -814,7 +823,7 @@ function unverifiedArm(baseRef: string | undefined): Quiet {
     chipLabel: 'Not verified',
     headline: `${base} could not be re-read`,
     body: `This branch was level with ${base} the last time origin answered, and origin did not answer this time — so nothing here has seen the base branch since. Syncing is still offered: it fetches before it merges, and says what it could not reach.`,
-    actions: [SYNC, REFRESH],
+    actions: [syncAction(baseRef), REFRESH],
     badge: 0,
   };
 }

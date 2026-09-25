@@ -14,7 +14,9 @@ const MCP_SKILL_MARKDOWN: &str = include_str!("../../../docs/mcp-skill/SKILL.md"
 const MCP_SERVER_ENABLED_KEY: &str = "mcp_server_enabled";
 
 /// The Preferences-screen shape: whether the MCP listener is enabled, and
-/// the URL to show once it is.
+/// the endpoint URL (`demeteo_core::adapters::mcp::endpoint_url`) to show
+/// once it is — what a client is configured with and "Test connection"
+/// probes, never the bare canonical origin.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct McpServerStatus {
     pub enabled: bool,
@@ -32,13 +34,13 @@ fn resolve_enabled(store: &dyn AppSettingsRepository) -> bool {
 /// settings store directly per `commands/app_session.rs`'s split
 /// (`State<'_, AppContext>` cannot be built in a test — see
 /// `tests/infrastructure/oauth.rs`). `enabled` reflects persisted intent;
-/// `url` reflects the live `demeteo_core::adapters::mcp::canonical_uri`
+/// `url` reflects the live `demeteo_core::adapters::mcp::endpoint_url`
 /// state, so a failed or not-yet-attempted bind reports `url: None` even
 /// when `enabled` is `true`.
 pub fn read_mcp_server_status(store: &dyn AppSettingsRepository) -> McpServerStatus {
     McpServerStatus {
         enabled: resolve_enabled(store),
-        url: crate::adapters::mcp::canonical_uri(),
+        url: crate::adapters::mcp::endpoint_url(),
     }
 }
 
@@ -89,19 +91,18 @@ pub fn install_mcp_skill(dest_path: String) -> Result<(), String> {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum McpConnectionTest {
-    Reachable { tool_count: usize },
+    Reachable,
     Unreachable { reason: String },
 }
 
 /// Command core for [`test_mcp_connection`]: a same-machine `tools/list`
-/// probe. Sent with no `Origin` header — like any non-browser MCP client —
-/// because `demeteo_core::adapters::mcp::origin`'s DNS-rebinding guard
-/// refuses even this app's own webview: a `fetch()` from the frontend
-/// carries an `Origin` (`tauri://localhost` / `http://tauri.localhost`) that
-/// never equals the listener's canonical URI, so it gets a 403 same as a
-/// rebinding page would. `reqwest` sends no such header, matching a real
-/// client. `tools/list` is unauthenticated by design
-/// (`docs/MCP_INTEGRATION.md` §5), so this needs no bearer token.
+/// probe, sent the way a client's first request arrives — no bearer token,
+/// and no `Origin` header, because `demeteo_core::adapters::mcp::origin`'s
+/// DNS-rebinding guard refuses even this app's own webview (its `Origin`
+/// never equals the listener's canonical URI), which is why this runs in
+/// Rust and not as a frontend `fetch()`. Healthy is therefore the `401`
+/// whose `resource_metadata` challenge is what starts a client's sign-in
+/// (`docs/MCP_INTEGRATION.md` §5); anything else means a client would stall.
 pub async fn probe_mcp_connection(client: &reqwest::Client, url: &str) -> McpConnectionTest {
     let body = serde_json::json!({
         "jsonrpc": "2.0",
@@ -118,29 +119,22 @@ pub async fn probe_mcp_connection(client: &reqwest::Client, url: &str) -> McpCon
             }
         }
     };
-    if !response.status().is_success() {
+    if response.status() != reqwest::StatusCode::UNAUTHORIZED {
         return McpConnectionTest::Unreachable {
             reason: format!("server responded with {}", response.status()),
         };
     }
-    let parsed: serde_json::Value = match response.json().await {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            return McpConnectionTest::Unreachable {
-                reason: e.to_string(),
-            }
+    let challenges_for_sign_in = response
+        .headers()
+        .get(reqwest::header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("Bearer ") && value.contains("resource_metadata="));
+    if challenges_for_sign_in {
+        McpConnectionTest::Reachable
+    } else {
+        McpConnectionTest::Unreachable {
+            reason: "server responded with 401 but no sign-in challenge".to_string(),
         }
-    };
-    match parsed
-        .pointer("/result/tools")
-        .and_then(serde_json::Value::as_array)
-    {
-        Some(tools) => McpConnectionTest::Reachable {
-            tool_count: tools.len(),
-        },
-        None => McpConnectionTest::Unreachable {
-            reason: "unexpected response shape".to_string(),
-        },
     }
 }
 

@@ -137,9 +137,9 @@ Plus the budget and scheduling machinery that was always part of this: per-proje
 
 **The question:** Can the user configure an agent's model, working directory, and environment variables per machine?
 
-**The v1.0 answer:** *Partial.* Per-project defaults live on `ProjectSettings::default_agent_kind` and `default_model`. Per-workflow overrides live on `ProjectWorkflowOverride` rows (`step_id = None` for workflow-level, `Some(step_id)` for step-level). Per-feature overrides are snapshotted onto the feature row (`Feature::agent_kind`, `Feature::model`, `Feature::step_overrides`). A `WorkingMemoryEntry` shape exists for thread-scoped working memory. The per-machine `AgentProfile` rows exist for the legacy shell / custom-http agent kinds (ollama, openai, cli, custom_http) and are still managed in `Machine` / `AgentProfile`. Demeteo does **not** read, store, or inject the LLM API key itself; the user configures the agent on the host (decision 4).
+**The v1.0 answer:** *Partial.* Per-project defaults live on `ProjectSettings::default_agent_kind` and `default_model`. Per-workflow overrides live on `ProjectWorkflowOverride` rows (`step_id = None` for workflow-level, `Some(step_id)` for step-level). Per-feature overrides live on the feature row (`Feature::agent_kind`, `Feature::model`, `Feature::step_overrides`); `step_overrides` is no longer a launch-time snapshot — a step's agent/model/effort is re-pointable while the run is alive, locally and on a detached runner ([decision 54](DECISIONS.md#54--mid-run-assignment-detail)). A `WorkingMemoryEntry` shape exists for thread-scoped working memory. The per-machine `AgentProfile` rows exist for the legacy shell / custom-http agent kinds (ollama, openai, cli, custom_http) and are still managed in `Machine` / `AgentProfile`. Demeteo does **not** read, store, or inject the LLM API key itself; the user configures the agent on the host (decision 4).
 
-**The deferred work:** A first-class structured `AgentConfig { kind, model, workdir, env_refs, model_pricing_override }` per machine, editable from `EnvModal` (or its successor). Per-step override of the default beyond the current `StepOverride` snapshot.
+**The deferred work:** A first-class structured `AgentConfig { kind, model, workdir, env_refs, model_pricing_override }` per machine, editable from `EnvModal` (or its successor). The per-step half of this closed with decision 54; what remains of it is **cross-surface live refresh** — an assignment changed in one window does not reach another open inspector on the same run until that inspector reloads. Deliberately deferred rather than overlooked: the fix is a `DomainEvent` variant plus a `useRunEvents` subscription, which costs an exhaustive-match arm, a notifier category and a run-event vocabulary entry for a refresh nobody has asked for. Additive, so it can land on its own.
 
 **Why deferred:** Users already configure their agents. Demeteo managing this duplicates the agent's own config UX. Defer until there's a clear reason.
 
@@ -253,3 +253,77 @@ If a deferred item's premise has changed (e.g., multi-feature concurrency become
 **Status: unresolved.** Settling it would need a decision record, a grant-schema migration, a consent-screen control and a guard check. Until then, do not describe the surface as project-scoped.
 
 **Why open:** It was assumed rather than decided, so there is no recorded rationale for leaving it unenforced — only the fact that it is. Which way it lands is a user decision, not an implementation detail.
+
+---
+
+## 20. Should reviewing a fork's pull request run the fork's code?
+
+**The question:** The code-review starter's second step, `s-validate-branch`, runs the Project's `prepare_command` and gate commands in a worktree checked out at the pull request's head. For a pull request opened from a fork, that head was written by someone outside the Project: a `postinstall` hook in its `package.json`, or a test file it adds, executes on the machine the Project runs on — the desktop, or its remote host — under the user's login shell and outside `PermissionPolicyPort`, before anyone has read the diff. The fix run started from a fork's pull request begins from the same code. Should Demeteo do that at all, and behind what consent?
+
+**Never settled.** The first implementation shipped the behaviour without asking; a review caught it. What exists now is a stopgap chosen to keep fork reviews working, not an answer.
+
+**What runs today (interim, provisional):**
+- For a pull request flagged `from_fork`, the review launch shows a notice naming what will run and where, and "Review this PR" stays inert until the user ticks an acknowledgement. The tick covers one launch: it clears once that launch has been attempted, whether it started or failed, and selecting another pull request also clears it. So a later launch — including one after the fork pushed again — asks again.
+- The confirm dialog of the fix run shows the same exposure for a fork's pull request.
+- A pull request from the Project's own repository still reviews in one click, with no notice.
+
+**The alternatives on the table:**
+- **(b)** Skip the gate step for forks, and have the report say that no gate ran and why.
+- **(c)** Put a new gate step with `gate_class: "dangerous"` ahead of `s-validate-branch`, so a human approves before anything executes — which also parks any unattended run at that point.
+- **(d)** Ask for the acknowledgement on every pull request, forks or not.
+- **(e)** A per-project "trust fork gates" setting that decides once instead of per launch.
+
+(c) touches the workflow engine's step definitions and (e) touches `ProjectSettings`, so either is a larger change than the current stopgap, and adjacent to what AGENTS.md §6 already reserves for human approval.
+
+**Status: open.** Closing it takes the user's choice among the interim behaviour and (b)–(e), and then an entry in [DECISIONS.md](DECISIONS.md) recording the rationale. Until then, do not describe the interim acknowledgement as the settled policy.
+
+---
+
+## 21. Should a gate this branch turned red still yield `branch-validation.md`?
+
+**The question:** When a gate the branch under review broke goes red, `s-validate-branch` ends before its agent turn, so no `branch-validation.md` is written; the failing command and its output tail are kept as the step's recorded failure reason, and the fix run is seeded from that. Should the turn run anyway and write the report on a red branch too?
+
+**What it would take:** a pure decision in `domain/verifier/` (possibly a per-step `StepConfig` flag, no migration), a change to the error arm of the agent step, and a pass of the two Docker conformance suites, which `npm run checks` does not run. It changes the harness-first contract, so it is a policy call rather than a fix.
+
+**Status: open.** No one has asked for it yet; the recorded failure reason already names each red gate. It is written down so a later change to the review starter does not quietly decide it.
+
+### 21a. Should the engine offer `environment` to a step that has nothing to configure?
+
+**The question:** When a project configures no gate command, the verifier turn receives `HarnessOutcome::NotConfigured`'s `Harness Results — NOTHING RAN` section and the verdict contract, and both advise `environment` for exactly that case. So does a third source: when the turn ends without a verdict object, `read_step_verdict` resumes the session with `correction_prompt` (`steps/agent/verdict.rs`), whose menu advises `environment` for "something this project is not configured to run", and that re-ask is the last thing the model reads before it answers. On a review step that verdict maps to `Unjudgeable`: the step fails, its report is never recorded, and the review ends `failed`. The review starter's `s-validate-branch` judges nothing the project must configure, so `pass` is its right answer there, and today it gets it only by overriding both blocks by name in its own instructions and by saying, in advance, that a re-ask for the verdict alone still takes `pass`. The outcome rests on the model preferring the step-level sentences to three engine prompts, one of which arrives a turn after them.
+
+**What closing it would take:** either no `environment` advice under `NotConfigured` for a step that declares nothing to configure, or a non-failing disposition for `environment` on a review step. Both are policy changes in `domain/` (`harness_outcome.rs`, `verifier/`), which is why the starter only overrides the advice in prose. Either must cover the correction re-ask too. A non-failing disposition does so by construction; withdrawing the advice does not, because the re-ask offers `environment` from its own menu, independent of the `NotConfigured` block, and a change that stops at the first turn fixes two sources of three and leaves the re-ask able to end the review `failed`.
+
+**Status: open.** The test that renders the verifier prompt pins the override on the first turn only, where it cannot silently drift out of order. The re-ask is a separate turn that test never renders; a test beside `correction_prompt` pins that the re-ask still advises `environment` and that the starter still carries the sentence pre-empting it. Both are requests to the model, not a guarantee.
+
+---
+
+## 22. Should gate evidence reach the step that writes a published pull request body?
+
+**The question:** A fix run started from a review is seeded with the review's findings and, below them, the gate evidence: the agent's `branch-validation.md`, or the gate step's recorded failure reason, which can quote the tail of the branch's own test and build output. All of it becomes the run's `feature_description`. The address-review starter ends in `s-finalize`, whose engine prompt interpolates that description and asks for a `pr_body` that is published on the remote. Gate output can carry home paths, hostnames and dumped environment variables. Should that text ever reach the finalize step?
+
+**What runs today (interim):** two layers, neither of them a boundary.
+
+- *The instruction (advisory).* The opening line of the gate fence tells the reader that the fenced text is for the run alone and must not be quoted into a commit message or the pull request's title or description. The finalize step reads the same description, so that line is the only route by which the instruction reaches it. Nothing enforces it.
+- *The floor (mechanical).* Before the gate body is fenced, `sanitizedGateBody` (`src/lib/gateRedaction.ts`) redacts it and caps it, for both the report and the failure source. A private key block (`-----BEGIN … PRIVATE KEY-----` through its `END` line, or to the end of the body when the `END` line is missing) becomes one `[redacted private key]` line. Home directories become `~` (`/home/<name>`, `/Users/<name>`, `/root`, `<drive>:\Users\<name>`). These assignment values become `[redacted]`: an upper-case `NAME=value` line; an upper-case `NAME: value` or `"NAME": "value"` as YAML, JSON and Node's `console.log(process.env)` print it (a quoted value always, an unquoted one only when the name has a `_` and does not open with `ERR_`, so `ERROR: …`, `TS2345: …` and `ERR_MODULE_NOT_FOUND: …` lines stay whole); an upper-case `NAME_WITH_UNDERSCORE=value` inside a line, such as a command line; and any key, in any case, whose name contains `secret`, `password`, `passwd`, `token`, `api_key`, `access_key` or `private_key`, followed by `=` or `:`, unless its value is one complete backtick token, or its separator is `:` and its name's last `.`-segment holds no keyword and the value is a numeric source location, so `token.ts:12:5` stays a file and a line. A credential assignment inside a grep-style `path:line:content` hit is redacted. GitHub, GitLab, OpenAI/Anthropic, Slack and AWS access-key token shapes, `Bearer` tokens and `user:pass@` URL credentials also become `[redacted]`. RFC 1918 IPv4 addresses become `[redacted-ip]`. The body is then cut to its last 200 lines and 12,000 characters, behind one line that says how much was omitted. So an agent that quotes the fence anyway publishes the redacted excerpt, not the raw output.
+
+The floor does **not** catch hostnames (internal or public), public IP addresses, IPv6, usernames outside a home-directory path, a home directory nested under another prefix (`/mnt/data/home/<name>`), a lower-case assignment whose name is not credential-shaped, a value quoted as one backtick token, or secrets in any shape it does not recognise: a bare password, a JWT outside a `Bearer` header, the body of a private key block whose `BEGIN` line was already cut off upstream, a vendor token with no fixed prefix. A fork's author controls the output and can print a secret in any of those shapes. Nor does the floor stop the gate body reaching the finalize prompt; it only changes what arrives there.
+
+The review comment is the same concern handled the other way: `PostReviewComment` is handed the review report alone, and the gate evidence never reaches it.
+
+**What closing it would take:** keeping gate evidence out of the finalize prompt — for example, passing it to the run's agent steps and not to `s-finalize` — which is a change to the engine's finalize prompt, not to the starter or the seed.
+
+**Status: open.** The fence instruction and the redaction are mitigations, not a boundary. Until the engine change lands, do not describe gate evidence as kept out of what a fix run publishes.
+
+---
+
+## 23. Should a review whose gate step failed end the run `failed`?
+
+**The question:** The code-review starter writes `code-review.md` in `s-review`, then runs the project's gates in `s-validate-branch`. On a red branch the gate step fails after the report is already written, so the engine ends the run `failed`. That is the case the review exists for, and the fix action reads that run's report and gate failure reason. The run did its job, yet every status surface says it failed. The gate step also fails on a harness timeout or a configuration error that ran no gate. So "failed" cannot simply be replaced with "gates red".
+
+**What runs today (interim):** the feature detail view reads the run's step rows. When the review report was declared, the gate step failed with a recorded reason and no other step failed, its header chip reads **Review ready** in amber instead of **Failed** in ruby. `reviewEndedOnFailedGate` (`src/lib/reviewEvidence.ts`) decides this, and `REVIEW_READY_META` (`src/lib/runStatus.ts`) supplies the label. Only the label changes. The run's status stays `failed`, so retry, polling and every terminal-state check behave as they do for any failed run.
+
+**The residual:** surfaces that hold a run's status string but not its step rows still show **Failed**. These are the pull-request list's review chip, the project home's run list and pipeline cards, ProjectTelemetry, and the Runs inbox. `REVIEW_READY_META` is deliberately not in `RUN_STATUSES`, because no run can persist it.
+
+**What closing it would take:** an engine-side terminal status for a review that completed with its gate step failed. It would be persisted like `awaiting_mr` and would carry a label that every surface resolves through `runStatusMeta`. That touches the terminal-status set (`TERMINAL_STATUSES`, the engine's run finalisation) and every consumer that treats `failed` as the only unhappy ending. Once it lands, the detail-view predicate can go. A related issue sits on the same status model: a green review ends `awaiting_mr`, which reads "PR ready" on a workflow that cannot open a pull request.
+
+**Status: open.** Until the engine change lands, do not describe a red review as distinguishable from a broken run anywhere except the feature detail header.

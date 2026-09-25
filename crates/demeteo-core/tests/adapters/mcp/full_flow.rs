@@ -257,6 +257,54 @@ async fn register_authorize_consent_token_round_trips_to_a_working_grant() {
     );
 }
 
+/// The MCP TypeScript SDK (OpenCode, Pi) sends `resource` as the origin plus
+/// the `/` that `new URL()` always appends. It must complete the flow, and the
+/// grant must record the canonical spelling — `guard.rs` compares that
+/// stored value to `canonical_uri()` byte for byte on every request.
+#[tokio::test]
+async fn a_trailing_slash_resource_completes_and_the_grant_records_the_canonical_uri() {
+    let (addr, ctx, captured) = spawn_mcp_router("trailing-slash-resource").await;
+    let canonical = record_canonical_uri(addr);
+    let client_resource = format!("{canonical}/");
+    let client_id = register_client(addr).await;
+    let (verifier, challenge) = pkce_pair();
+
+    let code = authorize_and_approve(
+        addr,
+        &ctx,
+        &captured,
+        &client_id,
+        &client_resource,
+        &challenge,
+    )
+    .await;
+
+    let resp = post_token(
+        addr,
+        &[
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("code_verifier", verifier),
+            ("redirect_uri", REDIRECT_URI),
+            ("resource", client_resource.as_str()),
+        ],
+    )
+    .await;
+
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.expect("token response is JSON");
+    let access_token = body["access_token"]
+        .as_str()
+        .expect("response carries a plaintext access_token");
+    let token_hash = format!("{:x}", Sha256::digest(access_token.as_bytes()));
+    let grant = ctx
+        .oauth_grants
+        .find_grant_by_token_hash(&token_hash)
+        .expect("find_grant_by_token_hash does not error")
+        .expect("an oauth_grants row now exists for the issued token's hash");
+    assert_eq!(grant.resource, canonical);
+}
+
 /// A body that is not a form is an OAuth `invalid_request`, not axum's bare 415.
 #[tokio::test]
 async fn a_non_form_token_request_gets_an_oauth_error_body() {

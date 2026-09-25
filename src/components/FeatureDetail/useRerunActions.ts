@@ -10,7 +10,6 @@ import {
   isBlockingError,
 } from '../../lib/features';
 import { cancelFeature, remoteCancelRun } from '../../lib/featureDetail';
-import type { HarnessOverrides } from './useHarnessOverrides';
 
 export interface ReplayTarget {
   id: string;
@@ -27,6 +26,12 @@ export interface ReplayTarget {
  * and `refreshRemoteRun` are rebuilt by their own hooks on every render, so a
  * dependency array naming them would stabilize nothing. They are read at call
  * time through a ref instead, the shape `useStepSelection` uses for `navigate`.
+ *
+ * None of these rewinds carries a harness, model or effort. The three override
+ * params of `step_retry` / `replay_from_step` write the *feature* row, which
+ * every later step then resolves against, so sending them from one node would
+ * re-point the rest of the run. A single node is re-pointed through the
+ * Assignment control instead, which writes only that node's entry.
  */
 export function useRerunActions(input: {
   featureId: string;
@@ -34,7 +39,6 @@ export function useRerunActions(input: {
   refreshRemoteRun: () => void;
   reload: () => void;
   setFeatureStatus: (status: string) => void;
-  overrides: HarnessOverrides;
 }) {
   const latest = useRef(input);
   latest.current = input;
@@ -103,11 +107,8 @@ export function useRerunActions(input: {
   }, [cancelRun]);
 
   const handleRetryStep = useCallback(async (stepExecutionId: string) => {
-    const { remoteRun, refreshRemoteRun, reload, overrides } = latest.current;
+    const { remoteRun, refreshRemoteRun, reload } = latest.current;
     try {
-      const modelParam = overrides.selectedModel || null;
-      const agentParam = overrides.selectedAgent || null;
-      const effortParam = overrides.selectedEffort || null;
       if (remoteRun) {
         // A detached run is retried on the runner: this machine has no
         // driver for it and no worktree to replay into. The shadow mirrors
@@ -118,13 +119,13 @@ export function useRerunActions(input: {
           machineId: remoteRun.machine_id,
           runId: remoteRun.run_id,
           stepExecutionId,
-          model: modelParam,
-          agentKind: agentParam,
-          effort: effortParam,
+          model: null,
+          agentKind: null,
+          effort: null,
         });
         refreshRemoteRun();
       } else {
-        await retryStep({ stepExecutionId, newModel: modelParam, newAgent: agentParam, newEffort: effortParam });
+        await retryStep({ stepExecutionId, newModel: null, newAgent: null, newEffort: null });
       }
       reload();
     } catch (err) {
@@ -140,11 +141,8 @@ export function useRerunActions(input: {
 
   const handleReplayFromStep = useCallback(async () => {
     if (!replayTarget) return;
-    const { remoteRun, refreshRemoteRun, reload, overrides } = latest.current;
+    const { remoteRun, refreshRemoteRun, reload } = latest.current;
     try {
-      const modelParam = overrides.selectedModel || null;
-      const agentParam = overrides.selectedAgent || null;
-      const effortParam = overrides.selectedEffort || null;
       if (remoteRun) {
         // Deliberately the *replay* RPC, not `remoteRetryStep`. They are
         // not one rewind wearing two labels: retry refuses a step that
@@ -155,13 +153,13 @@ export function useRerunActions(input: {
           machineId: remoteRun.machine_id,
           runId: remoteRun.run_id,
           stepExecutionId: replayTarget.id,
-          model: modelParam,
-          agentKind: agentParam,
-          effort: effortParam,
+          model: null,
+          agentKind: null,
+          effort: null,
         });
         refreshRemoteRun();
       } else {
-        await replayFromStep({ stepExecutionId: replayTarget.id, newModel: modelParam, newAgent: agentParam, newEffort: effortParam });
+        await replayFromStep({ stepExecutionId: replayTarget.id, newModel: null, newAgent: null, newEffort: null });
       }
       setReplayTarget(null);
       setReplayPreviewNodes(null);

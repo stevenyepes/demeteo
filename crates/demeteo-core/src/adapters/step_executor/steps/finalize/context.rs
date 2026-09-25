@@ -49,15 +49,15 @@ pub(crate) struct BranchWork {
     pub prior_work: String,
 }
 
-/// The two ends of the range finalize summarises. `base_branch` is what the
-/// run declared itself measured against
-/// ([`diff_base::resolve`](crate::domain::diff_base::resolve)), not the
-/// project's default branch: a run based on anything else would otherwise be
-/// summarised against a range holding every commit its base is missing — the
-/// agent writing the PR title and body from a diff that is not the PR's.
+/// The two ends of the range finalize summarises. `squash_base` is the
+/// revision the squash collapses the branch onto
+/// ([`summary_base`](crate::domain::finalize::summary_base::summary_base)), so
+/// the range holds exactly the commit that is published — not the run's
+/// review diff base, which on a run launched to fix a pull request would add
+/// every commit of that request to what the agent summarises.
 pub(crate) struct BranchRange<'a> {
     pub feature_branch: &'a str,
-    pub base_branch: &'a str,
+    pub squash_base: &'a str,
 }
 
 /// What earlier steps left behind, and where to read it from.
@@ -80,7 +80,7 @@ pub(crate) async fn gather_branch_work(
     } = site;
     let BranchRange {
         feature_branch,
-        base_branch,
+        squash_base,
     } = range;
     let safe_dir = paths::shell_escape_posix(repo_dir);
     let git = |args: String| format!("git -C {} {}", safe_dir, args);
@@ -90,22 +90,23 @@ pub(crate) async fn gather_branch_work(
             .unwrap_or_default()
     };
 
-    // Diff against the pushed base branch when we have it — that is what
-    // the PR itself will be diffed against.
+    // The remote-tracking ref first and the bare name second — the order the
+    // squash resolves the same base in. A fetched `refs/demeteo/origins/...`
+    // ref has no remote-tracking twin and resolves through the bare name.
     let base_ref = if exec
         .run_command(
             machine_str,
             &git(format!(
                 "rev-parse --verify -q refs/remotes/origin/{}",
-                paths::shell_escape_posix(base_branch)
+                paths::shell_escape_posix(squash_base)
             )),
         )
         .await
         .is_ok()
     {
-        format!("origin/{}", base_branch)
+        format!("origin/{}", squash_base)
     } else {
-        base_branch.to_string()
+        squash_base.to_string()
     };
     let safe_base = paths::shell_escape_posix(&base_ref);
     let safe_fb = paths::shell_escape_posix(feature_branch);

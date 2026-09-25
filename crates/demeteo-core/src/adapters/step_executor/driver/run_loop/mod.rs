@@ -1,6 +1,8 @@
 //! The `ExecutionDriver::run` main loop, decomposed by concern.
 //!
 //! Each submodule owns one slice:
+//! - `assignment` — the per-tick re-read of the run's tier-1 assignment
+//!   pins
 //! - `schedule` — DB-row → `NodeState` derivation, skip persistence,
 //!   redirect rewinds (the P1.12 scheduler glue)
 //! - `dispatch` — single-step dispatch via NodeTypeRegistry
@@ -53,6 +55,7 @@ use crate::adapters::step_executor::step_status::{
 use crate::adapters::step_executor::updates;
 use crate::domain::expr::ExprValue;
 
+mod assignment;
 mod attempt;
 mod cleanup;
 mod dispatch;
@@ -75,6 +78,14 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
         if *driver.cancel_watch.borrow() {
             driver.cancel_feature().await;
             return;
+        }
+
+        // The tier-1 pins are re-read here, ahead of every state derivation
+        // and every agent resolution below, so an assignment edited after
+        // this driver armed applies to the very next node it dispatches
+        // rather than to the next launch.
+        if let Some(pins) = assignment::refresh_step_overrides(&*driver.features, &driver.f_id) {
+            driver.step_overrides = pins;
         }
 
         let step_execs = match driver.features.steps_for_feature(&driver.f_id) {
@@ -204,6 +215,10 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
         // their own status, so leave those to `handle_gate_step`.
         if step_conf.kind != "gate" {
             driver.ensure_feature_running();
+            let _ = crate::adapters::step_executor::gate_park::void_resume_question(
+                driver.gates.as_ref(),
+                &step_exec.id,
+            );
         }
 
         update_step_status(

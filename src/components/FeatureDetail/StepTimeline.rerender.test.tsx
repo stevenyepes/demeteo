@@ -29,7 +29,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { loadAgentCatalog } from '../../lib/agentCatalog';
 import { DEFAULT_DENSITY } from '../../lib/density';
 import type { RunEventAssignments } from '../../lib/runEventAssignments';
-import type { StepExecution } from '../../types';
+import type { StepExecution, StepOverride } from '../../types';
 
 const handlers: Record<string, Array<(e: { payload: unknown }) => void>> = {};
 vi.mock('@tauri-apps/api/event', () => ({
@@ -94,6 +94,11 @@ const INITIAL_ASSIGNMENTS: RunEventAssignments = {
   },
 };
 
+/** One queued row is pinned and one is not, which is the pair AC-7 separates. */
+const PINS: StepOverride[] = [
+  { step_id: 's-review', agent_kind: 'codex', model: null, effort: 'high' },
+];
+
 const noop = () => {};
 
 /**
@@ -110,6 +115,7 @@ function Harness() {
   const stepCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [assignments, setAssignments] = useState(INITIAL_ASSIGNMENTS);
+  const [stepOverrides, setStepOverrides] = useState(PINS);
   const onSelect = useCallback((id: string) => setSelectedStepId(id), []);
 
   return (
@@ -129,9 +135,13 @@ function Harness() {
       >
         Update assignment
       </button>
+      <button type="button" onClick={() => setStepOverrides(PINS.map((pin) => ({ ...pin })))}>
+        Re-read the feature
+      </button>
       <StepTimeline
         steps={STEPS}
         assignments={assignments}
+        stepOverrides={stepOverrides}
         remoteRun={null}
         remoteMachineName={null}
         hasBootstrapPhases={false}
@@ -264,6 +274,43 @@ describe('StepTimeline assignments', () => {
     );
     for (const [id, renders] of Object.entries(cardRenders)) {
       expect(renders - (before[id] ?? 0)).toBe(id === STREAMING_ID ? 1 : 0);
+    }
+  });
+});
+
+describe('StepTimeline pinned assignments', () => {
+  it('draws a planned trio on a queued row that is pinned, and none on one that is not', async () => {
+    const { container } = render(<Harness />);
+    await waitFor(() => expect(handlers.agent_stream?.length).toBeGreaterThan(0));
+
+    const label = (id: string, kind: 'Planned' | 'Actual') =>
+      container
+        .querySelector(`[data-step-id="${id}"]`)
+        ?.querySelector(`[aria-label^="${kind} assignment for "]`)
+        ?.getAttribute('aria-label');
+
+    expect(label('se-4', 'Planned')).toBe(
+      'Planned assignment for Review: Agent: codex; Effort: High',
+    );
+    expect(label('se-5', 'Planned')).toBeUndefined();
+    // The pin never outranks what a spawn actually recorded.
+    expect(label(STREAMING_ID, 'Planned')).toBeUndefined();
+    expect(label(STREAMING_ID, 'Actual')).toBe(
+      'Actual assignment for Implement: Agent: claude-code; Effective effort: High',
+    );
+  });
+
+  it('re-renders no card when a poll re-reads an unchanged pin', async () => {
+    const { getByRole } = render(<Harness />);
+    await waitFor(() => expect(handlers.agent_stream?.length).toBeGreaterThan(0));
+
+    // Every reload rebuilds `Feature.step_overrides` from JSON, so the array and
+    // every row in it arrive as fresh identities even when nothing moved.
+    const before = { ...cardRenders };
+    await userEvent.click(getByRole('button', { name: 'Re-read the feature' }));
+
+    for (const [id, renders] of Object.entries(cardRenders)) {
+      expect(renders - (before[id] ?? 0)).toBe(0);
     }
   });
 });

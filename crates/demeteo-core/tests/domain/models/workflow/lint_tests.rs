@@ -483,7 +483,8 @@ fn a_verify_step_reading_the_harness_output_is_clean() {
 
 #[test]
 fn every_shipped_starter_lints_clean() {
-    const STARTERS: [&str; 8] = [
+    const STARTERS: [&str; 9] = [
+        "address-review",
         "bugfix-pipeline",
         "ci-fix",
         "code-review",

@@ -57,7 +57,7 @@ detection no longer produces confidently wrong commands in the first place.
 | Sequence prompt binding | `.../step_executor/steps/sequence/prompt.rs` |
 | Phase order (frontend) | `src/types.ts` (`BOOTSTRAP_PHASE_ORDER`), rendered by `src/components/BootstrapStepper.tsx` |
 | Run-event bridge | `.../adapters/run_event_log.rs`, `crates/demeteo-runner/src/notify_bridge.rs` |
-| Starters (7 JSON files) | `src-tauri/workflows/*.json` |
+| Starters (9 JSON files) | `src-tauri/workflows/*.json` |
 
 ---
 
@@ -72,8 +72,36 @@ These are the claims the tasks below exist to restore. Each was verified by
 `prepare_command` / `test_command`. It has two call sites — the single-turn
 validate path in `steps/agent/mod.rs` and the dedicated verifier path in
 `driver/verifier.rs` — and **both are gated on the step declaring a `verifier`
-block**. Across the seven starters that is one node in most, and in
+block**. Across the nine starters that is one node in most, and in
 `standard-feature-pipeline.json` it is `s-validate` alone.
+
+`code-review.json` used to be the starter where this bit hardest: one `verify`
+step, no `verifier`, so a review run executed *no* project command at all and a
+clean report was compatible with a red branch. It now carries `s-validate-branch`
+after `s-review` — the same single-turn validate path in `steps/agent/mod.rs`,
+reached because that step declares a `verifier`. When no command is configured
+the starter *asks* its verifier for `pass`, with a report that names the missing
+setting and leaves the branch unjudged. It deliberately does not ask for
+`environment`: `steps/agent/verdict.rs` maps that verdict to `Unjudgeable`,
+which ends the step without recording its artifact and fails the feature, so
+every review of an unconfigured project would end `failed` and lose its report.
+The engine advises the opposite for that case from three places — the generic
+`Harness Results — NOTHING RAN` block and the verdict menu both steer an
+unconfigured run towards `environment`, and so does the strict-JSON re-ask
+(`correction_prompt` in `steps/agent/verdict.rs`) that resumes the session when
+the turn ends without a verdict object, arriving *after* everything the starter
+says. The starter overrides the first two by name in its own instructions, and
+pre-empts the third: its instructions say a re-ask for the verdict alone still
+takes `pass` when nothing ran. The outcome therefore still rests on the model
+following the step-level instruction over the engine's generic advice; the
+engine-side fix is open under [OPEN_QUESTIONS §21a](OPEN_QUESTIONS.md). A gate
+that cannot start never reaches the verifier anyway — harness-first ends it as a
+terminal `Environment` first.
+
+The gates run *before* that step's turn, not during it, so a gate the branch
+turned red ends `s-validate-branch` at harness-first: no agent turn runs, no
+`branch-validation.md` is written, and the failing gate's output survives only
+as the step's recorded failure reason.
 
 `s-implement` (a `sequence` node) declares no verifier. The per-ticket
 `test_command` a ticket carries is bound into the prompt in
@@ -93,7 +121,33 @@ rework loop for a defect it did not introduce. `refactor.json` had an
 `s-baseline` step that addressed this — but it was an `agent` step reading its
 own test run and writing prose, not an engine measurement, and the standard
 pipeline had no equivalent at all. (Deleted by [F2](#f2--refactorjson-had-two-baselines--done-2026-07-29);
-every test-gated starter now opens on the `s-baseline-harness` measurement.)
+every test-gated starter not cut from a pull request now opens on the
+`s-baseline-harness` measurement.)
+
+**The exceptions are the two review-origin starters,
+`src-tauri/workflows/code-review.json` and
+`src-tauri/workflows/address-review.json`, and they are a decision.** A review
+run's branch is cut at the pull request's head, and a fix run's from the pull
+request's own branch or its head ref, but a fix run is measured against the
+branch the pull request targets (`src/lib/fixLaunch.ts`), so the fork point the
+subtraction resolves through `merge_base` is not the commit its worktree starts
+on. Measuring the fix run against its head instead was rejected: the merge-base
+would then be the tree the review reported red, and every gate the pull request
+broke would be subtracted as pre-existing. That run finishes green and
+publishes a branch CI still rejects, which
+`a_fix_run_on_a_red_pr_head_does_not_publish_its_red_gate`
+(`crates/demeteo-core/tests/conformance/starter_baseline.rs`) holds against.
+`run_baseline_node` therefore measures where the subtraction will look: when the
+fork point is not the head its worktree was cut from, it checks the fork point
+out detached and measures there (`baseline_node_site`), so the other workflows
+a fix may be launched with open on an eager node whose record is the one read,
+which `a_fix_run_measures_its_baseline_node_at_the_fork_point` holds. The two
+review starters still carry none. The lazy fallback measures the same
+merge-base, so nothing is lost on a red run, and a green one skips a full gate
+run. `the_review_starter_measures_no_baseline_of_its_own` and
+`the_fix_starter_measures_no_baseline_of_its_own`
+(`src-tauri/tests/infrastructure/workflows.rs`) are what hold the absence in
+place against the next reader who counts the starters.
 
 ### I3. A misconfigured command is indistinguishable from a broken feature
 
@@ -244,7 +298,9 @@ deterministic rather than agentic:
   minutes before implement started, and once P4.1 lands the node goes parallel
   with research for free. The two halves also sit at the right altitudes —
 probes guard *every* launch whatever workflow was chosen; the node guards every
-test-gated starter and produces the durable baseline HB2 consumes.
+test-gated starter that can hold one — see the review starter's exception in
+[I2](#i2-a-pre-existing-red-harness-is-attributed-to-the-feature) — and produces
+the durable baseline HB2 consumes.
 
   The cost of the split, stated plainly: a **custom** workflow with no
   `baseline-harness` node gets probes but no baseline, so HB2's pre-existing-red
@@ -662,6 +718,21 @@ test-gated starter and produces the durable baseline HB2 consumes.
   probed binary of several fails to resolve. The fail-safe direction is
   unchanged: only a *positive* classification halts, so a broken classifier
   withholds the halt and can never manufacture one.
+
+  **Both halts hold only in place.** They are statements about the commit the
+  run validates, and a node that measured a detached checkout of the fork point
+  (a fix run measured against the pull request's target) measured another one.
+  There, neither ends the run: a failed prepare leaves no base to subtract,
+  while an unrunnable gate leaves a partial record whose other gates can still
+  be compared. The Output note distinguishes the two. A red or uninstallable
+  `main` is no reason to refuse to fix a pull request whose head prepares fine.
+  This trades an early halt for the possibility of spending the implement
+  budget before finding that the head has the same environment fault; whether
+  the fork point's fault applies to the head is not established by that
+  measurement. A fork-point checkout that cannot be provisioned measures the
+  head in place and keeps both halts.
+  That is `baseline_node_answer`, held end to end by
+  `a_fix_run_whose_target_cannot_prepare_still_runs`.
 
   The decision is
   `unrunnable_baseline_gate` in `domain/harness_baseline.rs` — pure, reachable

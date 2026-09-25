@@ -59,76 +59,7 @@ pub(crate) use super::driver_registry::DriverRegistry;
 /// `max_iterations` is set.
 pub(crate) const DEFAULT_LOOP_ITERATIONS: u32 = 3;
 
-/// Feedback captured when a step fails and the loop redirects back to an
-/// earlier step. Injected into the retried step's prompt as
-/// `{{retry_feedback}}` / `{{iteration}}` / `{{max_iterations}}` so the
-/// retry isn't blind. Held in-memory for the lifetime of a single run.
-#[derive(Clone)]
-pub(crate) struct RetryContext {
-    /// Raw failure / verifier reason from the step that triggered the loop.
-    pub feedback: String,
-    /// 1-based attempt number we're now starting.
-    pub iteration: u32,
-    /// Effective max iterations for this loop.
-    pub max: u32,
-    /// Failing test identifiers from a structured verdict (empty for
-    /// plain failures).
-    ///
-    /// Reaches a prompt twice, and the two are not redundant: as *prose*
-    /// inside `feedback` (rendered by
-    /// [`VerdictFailure`](crate::domain::verifier::VerdictFailure), which
-    /// a template can only quote) and as the structured
-    /// `{{failing_tests}}` bullets a rework template acts on — see
-    /// [`bind_rework_context`](super::driver::rework::bind_rework_context).
-    pub failing_tests: Vec<String>,
-    /// Repo-relative files a structured verdict implicated (empty for
-    /// plain failures). Bound as `{{implicated_files}}` for a rework
-    /// template, and — on the legacy planner-sourced path only — used to
-    /// select which of a cached plan's tasks re-run.
-    pub implicated_files: Vec<String>,
-    /// Step id of the step whose failure opened this loop iteration.
-    /// The feedback stays alive for *every* step between the redirect
-    /// target and this step, and is cleared only when this step finally
-    /// completes — so e.g. a re-run of `s-validate` still knows what it
-    /// failed on last time instead of re-checking blind. Empty string
-    /// means "clear after the next completed step" (legacy behavior,
-    /// used by synthesized per-subtask contexts).
-    pub failing_step_id: String,
-}
-
-impl Default for RetryContext {
-    /// A context that is *not* a retry: no prior failure, one attempt.
-    ///
-    /// `iteration`/`max` are 1 rather than 0 because they are rendered
-    /// straight into a prompt as "attempt {iteration} of {max}", and
-    /// "attempt 0 of 0" describes a run that never happened.
-    fn default() -> Self {
-        Self {
-            feedback: String::new(),
-            iteration: 1,
-            max: 1,
-            failing_tests: Vec::new(),
-            implicated_files: Vec::new(),
-            failing_step_id: String::new(),
-        }
-    }
-}
-
-impl RetryContext {
-    /// This context with its `feedback` replaced.
-    ///
-    /// For a task-scoped `retry_note`, which overrides the step-wide
-    /// verdict for one task's prompt. Everything else in the context
-    /// describes the *attempt*, not the feedback, and has to survive
-    /// verbatim — a functional update so a field added to this struct
-    /// cannot silently arrive empty at the call site.
-    pub(crate) fn with_feedback(&self, feedback: String) -> Self {
-        Self {
-            feedback,
-            ..self.clone()
-        }
-    }
-}
+pub(crate) use crate::domain::rework::RetryContext;
 
 /// Holds all shared state for a single feature execution run.
 pub(crate) struct ExecutionDriver {
@@ -246,8 +177,16 @@ pub(crate) struct ExecutionDriver {
     /// Feature-wide run override of the reasoning effort. Same precedence as
     /// `feature_model`. `None` = inherit (never "default").
     pub feature_effort: Option<EffortLevel>,
-    /// Per-step agent/model/effort overrides chosen at launch (highest
-    /// precedence).
+    /// Per-step agent/model/effort pins (highest precedence). Seeded when
+    /// the driver arms and then **re-read from the `features` row at the top
+    /// of every run-loop tick** by
+    /// [`run_loop::assignment::refresh_step_overrides`] — not a snapshot.
+    ///
+    /// They are re-read because they are editable mid-run: a driver holding
+    /// the list it armed with would resolve every remaining node from a
+    /// version of the pins the user has already replaced, and nothing would
+    /// say so. Treat a write to this field as valid only until the next
+    /// tick.
     pub step_overrides: Vec<crate::domain::models::StepOverride>,
     /// Project default agent kind (`ProjectSettings::default_agent_kind`).
     pub default_agent_kind: Option<String>,
@@ -269,7 +208,9 @@ pub(crate) struct ExecutionDriver {
     pub project_default_max_budget_usd: Option<f64>,
 
     /// Set when a step fails and the loop redirects to an earlier step;
-    /// consumed by the next step's prompt build, then cleared.
+    /// consumed by the next step's prompt build, then cleared. Every
+    /// assignment is mirrored with [`Self::persist_retry_ctx`]; one that is
+    /// not is a verdict a restart silently forgets.
     pub retry_ctx: Option<RetryContext>,
 
     /// Whether this driver life already ran the P1.14 resume fingerprint

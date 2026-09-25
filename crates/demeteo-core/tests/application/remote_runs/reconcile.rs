@@ -9,7 +9,8 @@ use crate::domain::harness_baseline::{BaselineProducer, HarnessBaseline, Harness
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, StepId};
 use crate::domain::models::feature::{Feature, StepExecution};
 use crate::domain::models::{
-    Platform, Project, SequenceCheckpoint, SequenceStateMirror, SubtaskRunMirrorRow,
+    EffortLevel, Platform, Project, SequenceCheckpoint, SequenceStateMirror, StepOverride,
+    SubtaskRunMirrorRow,
 };
 use crate::ports::execution::{ExecutionPort, InteractiveHandle, SftpEntry};
 use crate::state::AppContext;
@@ -187,6 +188,21 @@ fn the_shadow_patch_mirrors_an_unmeasured_baseline_as_absent() {
         Some(None),
         "an unmeasured run must clear the shadow, not leave a stale record"
     );
+}
+
+#[test]
+fn the_shadow_patch_mirrors_the_assignment_pins_the_runner_holds() {
+    // Pins are editable mid-run on the runner, so the launch-input reasoning
+    // above is inverted here: following is what keeps the desktop honest.
+    let mut feature = runner_feature(None);
+    feature.step_overrides = vec![StepOverride {
+        step_id: "s-implement".to_string(),
+        agent_kind: Some("claude-code".to_string()),
+        model: Some("opus".to_string()),
+        effort: Some(EffortLevel::High),
+    }];
+    let patch = shadow_feature_patch(&feature);
+    assert_eq!(patch.step_overrides, Some(feature.step_overrides));
 }
 
 // ── Sequence-state mirror (task list not shown for detached runs) ────────────
@@ -392,6 +408,8 @@ async fn hydrate_shadow_feature_mirrors_sequence_state_for_a_sequence_step() {
         error_message: None,
         started_at: 0,
         ended_at: Some(30_000),
+        plan_epoch: None,
+        plan_cycle: None,
     };
     let sequence_state = SequenceStateMirror {
         plan_json: Some(

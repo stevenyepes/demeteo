@@ -39,6 +39,7 @@ impl GateRepository for GateDouble {
 
     unscripted! {
         create(GateDecision) -> Result<(), String>;
+        reopen(GateDecision) -> Result<(), String>;
         pending_for_feature(&FeatureId) -> Result<Option<GateDecision>, String>;
         latest_decided_for_feature(&FeatureId) -> Result<Option<GateDecision>, String>;
         latest_for_step(&StepExecutionId) -> Result<Option<GateDecision>, String>;

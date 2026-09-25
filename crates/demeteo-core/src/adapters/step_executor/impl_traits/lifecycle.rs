@@ -60,6 +60,8 @@ impl DagStepExecutor {
                 )
             })?;
 
+        let retry_ctx = self.restored_retry_context(&f_id, &graph);
+
         self.driver_registry.register(f_id.clone());
 
         let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -131,7 +133,7 @@ impl DagStepExecutor {
             project_default_loop_iterations,
             max_budget_usd_override,
             project_default_max_budget_usd,
-            retry_ctx: None,
+            retry_ctx,
             resume_guard_done: false,
             current_model: feature_model_for_budget.clone(),
             context_budget_tokens: feature_model_for_budget
@@ -160,6 +162,55 @@ impl DagStepExecutor {
         });
 
         Ok(())
+    }
+
+    /// The retry context a new driver for `f_id` starts with: the persisted
+    /// row, if [`restore_retry_context`](crate::domain::rework::restore_retry_context)
+    /// still trusts it. A row it refuses is deleted, so a later rewind that
+    /// reopens its origin cannot bring a dead verdict back. Any read failure
+    /// starts outside the loop, as every driver did before V57.
+    fn restored_retry_context(
+        &self,
+        f_id: &FeatureId,
+        graph: &crate::domain::workflow_graph::WorkflowGraph,
+    ) -> Option<crate::domain::rework::RetryContext> {
+        let persisted = match self.sequence_resume.retry_context_load(f_id) {
+            Ok(row) => row?,
+            Err(e) => {
+                tracing::warn!(feature_id = %f_id, error = %e, "retry context: load failed");
+                return None;
+            }
+        };
+        let rows = match self.features.steps_for_feature(f_id) {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(feature_id = %f_id, error = %e, "retry context: step rows unreadable");
+                return None;
+            }
+        };
+        let failing_step_id = persisted.failing_step_id.clone();
+        let restored = crate::domain::rework::restore_retry_context(Some(persisted), &rows, graph);
+        match &restored {
+            Some(rc) => tracing::info!(
+                feature_id = %f_id,
+                failing_step_id = %rc.failing_step_id,
+                iteration = rc.iteration,
+                "retry context: resumed inside the loop"
+            ),
+            None => {
+                tracing::info!(
+                    feature_id = %f_id,
+                    failing_step_id = %failing_step_id,
+                    "retry context: persisted row no longer describes an open loop; dropped"
+                );
+                super::super::driver::rework::persist_retry_context(
+                    &*self.sequence_resume,
+                    f_id,
+                    None,
+                );
+            }
+        }
+        restored
     }
 
     /// Idempotently make sure a driver is running for `feature_id`. If

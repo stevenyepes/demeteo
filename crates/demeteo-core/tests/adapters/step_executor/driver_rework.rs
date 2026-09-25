@@ -136,3 +136,49 @@ fn blank_entries_are_dropped_but_real_ones_survive() {
     assert!(out.contains("- src/a.rs"), "{out}");
     assert_eq!(out.matches("- ").count(), 1, "{out}");
 }
+
+// ---------- persist_retry_context ----------
+
+fn seeded_db() -> crate::adapters::database::SqliteAdapter {
+    let db = crate::adapters::database::SqliteAdapter::new(
+        rusqlite::Connection::open_in_memory().unwrap(),
+    )
+    .unwrap();
+    db.conn
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO projects (id, name, created_at) VALUES ('p-1', 'demeteo', 0);
+             INSERT INTO features (id, project_id, title, created_at)
+             VALUES ('f-1', 'p-1', 'resume me', 0);",
+        )
+        .unwrap();
+    db
+}
+
+/// An open loop is saved; closing it clears the row, so a restart after
+/// the loop closed cannot reopen it.
+#[test]
+fn an_open_loop_is_saved_and_a_closed_one_cleared() {
+    let db = seeded_db();
+    let f = FeatureId::from("f-1".to_string());
+    let rc = retry(&["src/lib.rs"], &["tests::a"]);
+
+    persist_retry_context(&db, &f, Some(&rc));
+    assert_eq!(db.retry_context_load(&f).unwrap(), Some(rc));
+
+    persist_retry_context(&db, &f, None);
+    assert_eq!(db.retry_context_load(&f).unwrap(), None);
+}
+
+/// A write the store refuses — here the foreign key, for a feature with no
+/// row — is logged, not raised: the redirect it rides on must still happen.
+#[test]
+fn a_refused_write_does_not_fail_the_caller() {
+    let db = seeded_db();
+    let orphan = FeatureId::from("f-missing".to_string());
+    assert!(db
+        .retry_context_save(&orphan, &RetryContext::default(), 0)
+        .is_err());
+    persist_retry_context(&db, &orphan, Some(&RetryContext::default()));
+}

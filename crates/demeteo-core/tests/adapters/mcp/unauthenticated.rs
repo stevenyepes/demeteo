@@ -72,34 +72,37 @@ async fn unauthenticated_tools_call_for_a_spend_tier_tool_returns_401_naming_spe
     );
 }
 
-/// `tools/list` needs no grant — it is discovery, the same posture as the
-/// `.well-known` metadata routes (see `mcp_handler.rs` module docs).
+/// The handshake needs a grant too: OpenCode and Hermes start OAuth only when
+/// connecting is refused. The challenge names no scope, since nothing was
+/// attempted — the client falls back to `scopes_supported`.
 #[tokio::test]
-async fn unauthenticated_tools_list_returns_the_full_catalog() {
-    let addr = spawn_mcp_router("unauthenticated-tools-list").await;
+async fn unauthenticated_handshake_is_refused_with_a_scopeless_challenge() {
+    let addr = spawn_mcp_router("unauthenticated-handshake").await;
 
-    let body: serde_json::Value = reqwest::Client::new()
-        .post(format!("http://{addr}/mcp"))
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/list",
-            "params": {},
-        }))
-        .send()
-        .await
-        .expect("request /mcp")
-        .error_for_status()
-        .expect("tools/list returns 200 without a grant")
-        .json()
-        .await
-        .expect("tools/list response is JSON");
+    for method in ["initialize", "tools/list"] {
+        let resp = reqwest::Client::new()
+            .post(format!("http://{addr}/mcp"))
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+                "params": {},
+            }))
+            .send()
+            .await
+            .expect("request /mcp");
 
-    let tools = body["result"]["tools"]
-        .as_array()
-        .expect("result.tools is an array");
-    assert_eq!(tools.len(), 12);
-    assert!(tools
-        .iter()
-        .any(|t| t["name"] == "start_feature" && t["inputSchema"].is_object()));
+        assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED, "{method}");
+        let challenge = resp
+            .headers()
+            .get(reqwest::header::WWW_AUTHENTICATE)
+            .expect("401 carries a WWW-Authenticate header")
+            .to_str()
+            .expect("header value is ASCII");
+        assert!(
+            challenge.starts_with("Bearer resource_metadata="),
+            "{method}: {challenge:?}"
+        );
+        assert!(!challenge.contains("scope="), "{method}: {challenge:?}");
+    }
 }

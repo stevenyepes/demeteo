@@ -2,6 +2,7 @@ use super::credentials::inject_pat_for_run;
 use super::reconcile::{reconcile_one_run, NOTIFY_ON};
 use super::rpc::{json_str, remote_rpc};
 use crate::domain::models::EffortLevel;
+use crate::domain::step_assignment::StepAssignment;
 use crate::error::AppError;
 use crate::ports::remote_run_mirror::RemoteRunMirror;
 use crate::state::AppContext;
@@ -117,6 +118,60 @@ pub async fn retry_remote_step(
             crate::paths::now_ms(),
         )
         .map_err(AppError::from)?;
+    reconcile_one_run(ctx, &row).await;
+    Ok(())
+}
+
+/// Pin one step's agent / model / effort on the runner that owns the run.
+///
+/// The twin of [`retry_remote_step`], deliberately down to the order of its
+/// three stages: the mirror lookup is what proves the run is still ours to
+/// address, `inject_pat_for_run` refreshes the credential the next spawn of
+/// that node will need, and the single `reconcile_one_run` afterwards is how
+/// the shadow row learns the pin — the runner is authoritative for a detached
+/// run's `step_overrides`, so the desktop reads it back rather than writing a
+/// local copy the next hydration would clobber.
+///
+/// What it does **not** borrow is the `update_status` call. A pin re-opens
+/// nothing: the run keeps whatever status it had, so there is no transition to
+/// mirror, and `retry_step`'s `unwrap_or("running")` default would report a
+/// parked or awaiting-gate run as live.
+///
+/// A runner older than this method answers `unknown method:
+/// set_step_assignment`. That arrives here as the RPC's `Err` and is returned
+/// verbatim, because the pin did not land: nothing in this path may turn an
+/// unapplied assignment into an `Ok`.
+pub async fn set_remote_step_assignment(
+    ctx: &AppContext,
+    machine_id: String,
+    run_id: String,
+    step_execution_id: String,
+    assignment: StepAssignment,
+) -> Result<(), AppError> {
+    let Some(row) = ctx
+        .remote_run_mirror
+        .get(&machine_id, &run_id)
+        .map_err(AppError::from)?
+    else {
+        return Err(AppError::not_found(format!(
+            "No detached run {run_id} on machine {machine_id}"
+        )));
+    };
+    inject_pat_for_run(ctx, &machine_id, &run_id, &row).await?;
+    remote_rpc(
+        ctx,
+        &machine_id,
+        "set_step_assignment",
+        serde_json::json!({
+            "run_id": run_id,
+            "step_execution_id": step_execution_id,
+            "agent_kind": assignment.agent_kind,
+            "model": assignment.model,
+            "effort": assignment.effort,
+        }),
+    )
+    .await
+    .map_err(AppError::from)?;
     reconcile_one_run(ctx, &row).await;
     Ok(())
 }

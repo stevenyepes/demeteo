@@ -27,7 +27,7 @@
 - **Artifact Mode** — per-workflow setting for how much step output to persist (`full` / `summary_only` / `none`).
 - **Workflow Schedule** — optional schedule attached to a workflow (`workflow_save_schedule`); the scheduler adapter (`adapters/scheduler.rs`) fires it on cadence.
 - **Project Workflow Override** — project-scoped override of agent/model for a workflow or step (`step_id = None` for workflow-level, `Some(...)` for step-level). Persisted in `project_workflow_overrides`.
-- **Step Override** — per-step agent/model override chosen when launching a feature; snapshotted on the feature row.
+- **Step Override** — one step's pinned agent/model/effort, held on the feature row. It is the run's highest-precedence tier, and it is writable for as long as the run is alive: chosen in `StartFeatureModal` at launch, then re-pointed from the step inspector's Assignment control (`step_set_assignment`). A step with no entry inherits down the chain ([decision 54](DECISIONS.md#54--mid-run-assignment-detail)).
 - **Memory** — typed project-level knowledge captured by the Memory Agent (`conventions | lessons | decisions | preferences | facts`).
 - **Notification** — UI-side cache row for the in-app notification bell.
 
@@ -57,7 +57,7 @@ The user's "workspace" — what they're working on and where it lives.
 - **Adapters:** `SqliteProjectRepository`, `SshRepositoryCloner`, `LocalFsRepositoryCloner`, `GitWorkflowDetector`
 - **Key invariants:**
   - A Project has exactly one host (either a local folder or a remote SSH target).
-  - `ProjectSettings::default_agent_kind` / `default_model` define the per-project planner. Per-workflow overrides (`ProjectWorkflowOverride` with `step_id = None`) win at workflow scope; per-step overrides win at step scope. Both lose to a run-time override chosen in `StartFeatureModal`.
+  - `ProjectSettings::default_agent_kind` / `default_model` define the per-project planner. Per-workflow overrides (`ProjectWorkflowOverride` with `step_id = None`) win at workflow scope; per-step overrides win at step scope. Both lose to a run-time override on the feature row — the feature-wide pair set at launch, and above it the per-step `StepOverride`, which the user may still change once the run has started.
   - A Project's repos are bound to a Provider Instance at creation; PAT lookup is by `(kind, host)`.
   - `WorktreeStrategy` is detected at bootstrap and stored; user can edit.
   - `WorktreeStrategy::extra_writable_paths` adds repo-relative paths to the chmod fence for tool side-effects (`target/`, `node_modules/`, `.venv/`); each entry must be relative and `..` is rejected.

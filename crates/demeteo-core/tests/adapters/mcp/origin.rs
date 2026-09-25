@@ -56,11 +56,13 @@ async fn spawn_origin_router(tag: &str) -> (std::net::SocketAddr, String) {
     (addr, resource)
 }
 
-fn tools_list_body() -> serde_json::Value {
+/// `server/discover` because it is the one `/mcp` method answered without a
+/// grant, so "proceeds" can mean 200 here without seeding one.
+fn discover_body() -> serde_json::Value {
     serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
-        "method": "tools/list",
+        "method": "server/discover",
         "params": {},
     })
 }
@@ -72,7 +74,7 @@ async fn disallowed_origin_on_mcp_post_returns_403() {
     let resp = reqwest::Client::new()
         .post(format!("http://{addr}/mcp"))
         .header(reqwest::header::ORIGIN, DISALLOWED_ORIGIN)
-        .json(&tools_list_body())
+        .json(&discover_body())
         .send()
         .await
         .expect("request /mcp");
@@ -135,7 +137,7 @@ async fn missing_origin_header_proceeds_on_mcp_and_well_known() {
 
     let mcp_resp = reqwest::Client::new()
         .post(format!("http://{addr}/mcp"))
-        .json(&tools_list_body())
+        .json(&discover_body())
         .send()
         .await
         .expect("request /mcp");
@@ -158,7 +160,7 @@ async fn origin_matching_canonical_uri_proceeds_on_mcp_and_well_known() {
     let mcp_resp = reqwest::Client::new()
         .post(format!("http://{addr}/mcp"))
         .header(reqwest::header::ORIGIN, &resource)
-        .json(&tools_list_body())
+        .json(&discover_body())
         .send()
         .await
         .expect("request /mcp");

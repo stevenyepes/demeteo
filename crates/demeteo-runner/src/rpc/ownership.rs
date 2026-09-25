@@ -1,6 +1,7 @@
 use crate::services::RunnerServices;
 use demeteo_core::domain::ids::StepExecutionId;
-use demeteo_core::ports::runner_run::RunnerRun;
+use demeteo_core::ports::db::FeatureRepository;
+use demeteo_core::ports::runner_run::{RunnerRun, RunnerRunPort};
 use std::sync::Arc;
 
 /// MC-D2/D3 ownership choke point: load `run_id` and confirm `client_id`
@@ -41,33 +42,44 @@ fn no_such_run(run_id: &str) -> String {
     format!("no such run: {}", run_id)
 }
 
-/// Resolve a bare step_execution_id — a `gate_id` (M5.3) or a retry
-/// target — to the run that owns its feature and confirm `client_id` owns
-/// *that* run (MC-D2 / P0.4). Before multi-client, such an id was a bearer
-/// capability: any tunnelled caller who learned one could clear another
-/// client's parked gate. This closes it: resolve step → feature → run, then
-/// owner-check the run. Every failure to resolve (unknown step, orphan step,
-/// no run behind the feature, or a non-owner) collapses to the *same* "no
-/// such step" error, so it leaks neither the step's existence nor its
-/// ownership. Returns the owning run, which `retry_step` needs to re-open.
+/// Resolve a bare step_execution_id — a `gate_id` (M5.3), a retry target
+/// or an assignment target — to the run that owns its feature and confirm
+/// `client_id` owns *that* run (MC-D2 / P0.4). Before multi-client, such an
+/// id was a bearer capability: any tunnelled caller who learned one could
+/// clear another client's parked gate. This closes it: resolve step →
+/// feature → run, then owner-check the run. Every failure to resolve
+/// (unknown step, orphan step, no run behind the feature, or a non-owner)
+/// collapses to the *same* [`no_such_step`] error, so it leaks neither the
+/// step's existence nor its ownership. Returns the owning run, which
+/// `retry_step` needs to re-open.
+///
+/// Free over the two repositories it reads rather than taking
+/// [`RunnerServices`], so every one of those refusals is reachable from a
+/// test against a seeded database instead of an `AppContext`'s twenty-odd
+/// ports (AGENTS.md §3).
 pub(super) fn require_owner_of_step(
-    svc: &Arc<RunnerServices>,
+    features: &dyn FeatureRepository,
+    runs: &dyn RunnerRunPort,
     step_execution_id: &str,
     client_id: &str,
 ) -> Result<RunnerRun, String> {
-    let not_found = || format!("no such step: {}", step_execution_id);
-    let step = svc
-        .ctx
-        .features
+    let step = features
         .step_get(&StepExecutionId::from(step_execution_id.to_string()))?
-        .ok_or_else(not_found)?;
+        .ok_or_else(|| no_such_step(step_execution_id))?;
     let feature_id = step.feature_id.as_str();
-    svc.ctx
-        .runner_runs
-        .list()?
+    runs.list()?
         .into_iter()
         .find(|r| r.feature_id.as_deref() == Some(feature_id) && r.owner_client_id == client_id)
-        .ok_or_else(not_found)
+        .ok_or_else(|| no_such_step(step_execution_id))
+}
+
+/// The uniform "not here / not yours" error for a step id, kept as one
+/// function for the reason [`no_such_run`] is: the absent-step, orphan-step
+/// and wrong-owner paths — and a caller naming the wrong run for a step it
+/// does own — must stay byte-identical, or the existence probe MC-D2 closes
+/// re-opens.
+pub(super) fn no_such_step(step_execution_id: &str) -> String {
+    format!("no such step: {}", step_execution_id)
 }
 
 #[cfg(test)]

@@ -12,6 +12,30 @@ function chips(): HTMLElement[] {
   return Array.from(group().children) as HTMLElement[];
 }
 
+/**
+ * The markup with each icon's vector collapsed to its class. The paths are
+ * lucide's to redraw, so pinning them would fail this on a dependency bump
+ * rather than on a change to what this component decides.
+ */
+function shape(container: HTMLElement): string {
+  const clone = container.cloneNode(true) as HTMLElement;
+  for (const svg of Array.from(clone.querySelectorAll('svg'))) {
+    const icon = clone.ownerDocument.createElement('icon');
+    icon.setAttribute('class', svg.getAttribute('class') ?? '');
+    svg.replaceWith(icon);
+  }
+  return clone.innerHTML;
+}
+
+/**
+ * What an executed step drew before the planned variant existed, captured from
+ * that implementation. The planned rendering shares this component, and a chip
+ * that quietly restyles or renames an observed reading is the failure C-10
+ * names: it would claim a run spawned something it did not.
+ */
+const OBSERVED_SHAPE =
+  '<span role="img" aria-label="Actual assignment for Implement: Agent: codex; Model: gpt-5.6-codex; Effective effort: High" class="flex min-w-0 flex-nowrap items-center gap-1 font-mono text-[9px] "><span class="max-w-[160px] flex min-w-0 items-center gap-1 rounded border border-slate-600/40 bg-slate-700/20 px-1.5 py-0.5 text-slate-300" title="Agent: codex"><icon class="lucide lucide-bot h-2.5 w-2.5 shrink-0 text-slate-400"></icon><span class="truncate">codex</span></span><span class="grow basis-0 max-w-max overflow-hidden flex min-w-0 items-center gap-1 rounded border border-slate-600/40 bg-slate-700/20 px-1.5 py-0.5 text-slate-300" title="Model: gpt-5.6-codex"><icon class="lucide lucide-zap h-2.5 w-2.5 shrink-0 text-slate-400"></icon><span class="max-w-[132px] truncate">gpt-5.6-codex</span></span><span class="max-w-[160px] flex min-w-0 items-center gap-1 rounded border border-slate-600/40 bg-slate-700/20 px-1.5 py-0.5 text-slate-300" title="Effective effort: High"><icon class="lucide lucide-gauge h-2.5 w-2.5 shrink-0 text-slate-400"></icon><span class="truncate">High</span></span></span>';
+
 describe('AssignmentChips', () => {
   it('draws agent, model and effort in that order with titles and value text', () => {
     render(
@@ -133,5 +157,94 @@ describe('AssignmentChips', () => {
     expect(group()).toHaveAccessibleName(
       `Actual assignment for Implement: Agent: codex; Model: ${longModel}; Effective effort: High`,
     );
+  });
+  it('draws the pinned trio where a node with no spawn evidence drew nothing', () => {
+    const unrun = render(<AssignmentChips subject="Implement" />);
+    expect(unrun.container).toBeEmptyDOMElement();
+    unrun.unmount();
+
+    render(
+      <AssignmentChips
+        subject="Implement"
+        variant="planned"
+        agentKind="codex"
+        model="gpt-5.6-codex"
+        effort="high"
+      />,
+    );
+
+    const [agent, model, effort, ...rest] = chips();
+    expect(rest).toHaveLength(0);
+    expect(agent).toHaveAttribute('title', 'Agent (planned): codex');
+    expect(agent).toHaveTextContent(/^codex$/);
+    expect(model).toHaveAttribute('title', 'Model (planned): gpt-5.6-codex');
+    expect(effort).toHaveAttribute('title', 'Effort (planned): High');
+    expect(group()).toHaveAccessibleName(
+      'Planned assignment for Implement: Agent: codex; Model: gpt-5.6-codex; Effort: High',
+    );
+  });
+
+  it('marks the planned chips as not-yet-observed rather than restyling nothing', () => {
+    const observed = render(
+      <AssignmentChips subject="Implement" agentKind="codex" model="gpt-5.6-codex" effort="high" />,
+    );
+    const observedChip = observed.getByTitle('Agent: codex');
+    expect(observedChip).not.toHaveClass('border-dashed');
+    observed.unmount();
+
+    render(<AssignmentChips subject="Implement" variant="planned" agentKind="codex" />);
+
+    expect(screen.getByTitle('Agent (planned): codex')).toHaveClass('border-dashed');
+  });
+
+  it('leaves an executed step\'s markup and accessible name byte-identical', () => {
+    const { container } = render(
+      <AssignmentChips subject="Implement" agentKind="codex" model="gpt-5.6-codex" effort="high" />,
+    );
+
+    expect(shape(container)).toBe(OBSERVED_SHAPE);
+  });
+
+  it('names the planned reading differently from the observed one', () => {
+    const observed = render(
+      <AssignmentChips subject="Implement" agentKind="codex" model="gpt-5.6-codex" effort="high" />,
+    );
+    const observedName = observed.getByRole('img').getAttribute('aria-label');
+    observed.unmount();
+
+    render(
+      <AssignmentChips
+        subject="Implement"
+        variant="planned"
+        agentKind="codex"
+        model="gpt-5.6-codex"
+        effort="high"
+      />,
+    );
+    const plannedName = group().getAttribute('aria-label');
+
+    expect(plannedName).not.toBe(observedName);
+    expect(plannedName).not.toMatch(/Actual/);
+    expect(observedName).not.toMatch(/Planned/);
+  });
+
+  it('draws only the dimensions the pin actually set', () => {
+    render(<AssignmentChips subject="Implement" variant="planned" agentKind="codex" model={null} />);
+
+    expect(chips()).toHaveLength(1);
+    expect(screen.queryByTitle(/model/i)).toBeNull();
+    expect(group()).toHaveAccessibleName('Planned assignment for Implement: Agent: codex');
+  });
+
+  it.each([
+    ['nothing pinned', {}],
+    ['every dimension left to inherit', { agentKind: null, model: null, effort: null }],
+    ['a blank agent and nothing else', { agentKind: '   ' }],
+  ])('renders nothing for a planned assignment with %s', (_case, props) => {
+    const { container } = render(
+      <AssignmentChips subject="Implement" variant="planned" {...props} />,
+    );
+
+    expect(container).toBeEmptyDOMElement();
   });
 });

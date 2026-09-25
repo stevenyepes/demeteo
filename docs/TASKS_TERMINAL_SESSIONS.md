@@ -295,9 +295,9 @@ Dependency order: `T1.1 ─▶ T1.2, T1.3, T1.4, T1.6, T1.8` · `T1.2 ─▶ T1.
   open the drawer on it. Esc starts without a brief. "Recreating from the
   branch" note when the worktree was missing.
 - **Size:** medium.
-- **Context:** spec §4.5, §4.3 header table; `RerunOptions.tsx` (harness/model/
-  effort picker to reuse); `src/lib/harnessVerdict.ts` (error parsing for the
-  failed-step context); `useWorktreeRouting.ts` (to replace `handleOpenTerminal
+- **Context:** spec §4.5, §4.3 header table; `src/components/ui/HarnessModelPicker.tsx`
+  (harness/model/effort picker to reuse); `src/lib/harnessVerdict.ts` (error parsing
+  for the failed-step context); `useWorktreeRouting.ts` (to replace `handleOpenTerminal
   Tab`); `StepInspector.tsx` for where the critic verdict is already rendered.
 - **Touch:** new `src/components/sessions/BriefCard.tsx` + a
   `useStartSession.ts` hook; `useWorktreeRouting.ts` (delete the main-clone

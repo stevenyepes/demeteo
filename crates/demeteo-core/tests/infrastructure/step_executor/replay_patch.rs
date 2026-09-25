@@ -10,6 +10,7 @@
 use super::{can_restore_successful_ancestor, rewind_patch, unwind_patch};
 use crate::domain::ids::{FeatureId, StepExecutionId, StepId};
 use crate::domain::models::{StepAttempt, StepExecution};
+use crate::ports::db::{FeaturePatch, StepExecutionPatch};
 
 fn step_with(status: &str, iteration_count: u32) -> StepExecution {
     StepExecution {
@@ -90,6 +91,62 @@ fn a_failed_arm_puts_the_spent_budget_back() {
     // the way out either.
     assert_eq!(patch.cost_usd, None);
     assert_eq!(patch.tokens, None);
+}
+
+/// A step's assignment pin ([`crate::domain::step_assignment`]) has to
+/// survive the node being re-entered — a human pressing Retry after
+/// swapping the agent must get the agent they swapped to, not the one that
+/// just failed. It does, because the pin is a tier-1 entry on the
+/// `features` row and this patch reaches only `step_executions`. This is
+/// what says so out loud, so that opening a route appears here as a failure
+/// rather than as a Retry that quietly reverts the user's choice. The
+/// rewind's own writes to the `features` row are the test below.
+///
+/// The assertion is over the whole patch, not over the fields the rewind is
+/// known to set, because the claim is about what it does *not* set:
+/// `expected` spells the seven writes and leaves the rest to `Default`, so
+/// a write to any other field — an assignment-bearing one added later
+/// included — renders on one side only. `StepExecutionPatch` derives
+/// `Debug` but not `PartialEq`; the rendering is the structural comparison.
+#[test]
+fn a_rewind_writes_no_assignment_bearing_field() {
+    let expected = StepExecutionPatch {
+        status: Some("pending".to_string()),
+        iteration_count: Some(0),
+        cost_usd: Some(Some(10.76)),
+        tokens: Some(Some(110_846)),
+        wall_clock_secs: Some(Some(42)),
+        artifact_paths: Some(Vec::new()),
+        error_message: Some(None),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        format!("{:?}", rewind_patch(&step_with("failed", 5))),
+        format!("{:?}", expected),
+        "a rewind writes these `step_executions` fields and no others; anything \
+         further is either assignment-bearing — and then a re-entry discards the \
+         user's pin — or a deliberate widening that belongs in `expected` too"
+    );
+}
+
+/// The other half of that claim, and the half with a real route to the pin:
+/// the rewind writes the `features` row too — three times, for the tier-2
+/// re-pin and for the status either side of arming the driver — and every
+/// one of them spells `..Default::default()`. The repo emits
+/// `step_overrides_json=?` only for a `Some`, so a `Default` that grew a
+/// `Some(vec![])` would turn all three into a silent wipe of the user's
+/// pins without a single call site being edited — and an empty vec *is*
+/// this field's cleared state, which is what makes that edit look
+/// reasonable.
+#[test]
+fn the_feature_row_writes_on_the_rewind_path_carry_no_assignment() {
+    assert!(
+        FeaturePatch::default().step_overrides.is_none(),
+        "`replay_steps_from` keeps the pin only by leaving `step_overrides` to \
+         `Default`; anything but `None` here writes the column from every \
+         `..Default::default()` on the rewind path"
+    );
 }
 
 fn attempt(status: &str) -> StepAttempt {

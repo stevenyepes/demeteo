@@ -14,7 +14,7 @@
 //! | [`ThreadRepository`]      | threads         | `ThreadSession`, `Message`, `AgentConfig`, `WorkingMemoryEntry` |
 //! | [`ProjectRepository`]     | projects        | `Project`, `Repository`, `ProjectSettings`   |
 //! | [`FeatureRepository`]     | features        | `Feature`, `StepExecution`                   |
-//! | [`SequenceResumeRepository`] | sequence resume | `SequenceCheckpoint`, the sequence plan cache |
+//! | [`SequenceResumeRepository`] | sequence resume | `SequenceCheckpoint`, the sequence plan cache, the driver's `RetryContext` |
 //! | [`WorkflowRepository`]    | workflows       | `Workflow`, `WorkflowVersion`                |
 //! | [`GateRepository`]        | gates           | `GateDecision`                               |
 //! | [`AppSettingsRepository`] | app settings    | provider instances, app-session KV, first-launch flags |
@@ -113,6 +113,11 @@ pub struct FeaturePatch {
     /// Record the run's actual branch name once it is cut, so the sites
     /// that re-derive it from `branch_prefix` can read it instead.
     pub resolved_branch: Option<Option<String>>,
+    /// Replace the run's per-step assignment pins — the highest-precedence
+    /// resolution tier. Flat `Option`, like `origin`: an empty vec *is* the
+    /// cleared state, so there is nothing a `Some(None)` here could mean that
+    /// `Some(vec![])` does not already say.
+    pub step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
 }
 
 /// Patch for [`FeatureRepository::step_update`].
@@ -343,7 +348,7 @@ pub trait FeatureRepository: Send + Sync {
     /// Open a `running` attempt row as the driver dispatches the step.
     /// Returns the 1-based `attempt_no` assigned (dense per step).
     /// `workspace_fingerprint` is the workspace state at node start
-    /// (P1.14, `<HEAD>:<dirty|clean>`; `None` = probe failed) — stored
+    /// (P1.14; `None` = probe failed) — stored
     /// on the row along with the derived idempotency key.
     fn attempt_open(
         &self,
@@ -429,10 +434,16 @@ pub trait FeatureRepository: Send + Sync {
 /// `cached_plans` maps so a restart resumes a sequence step from the
 /// exact task instead of the step head.
 ///
-/// Split off [`FeatureRepository`] rather than added to it: these six
-/// methods are one self-contained bounded context — *where a sequence
-/// step got to* — with a single writer (the sequence step handler) and a
-/// single reader beyond it (`RunView`'s task drill-down). Folded in, they
+/// V57 adds the driver's retry context, keyed per feature: the same
+/// question — *where in its loop a resumed run is* — one level up, and
+/// the reason a restart could resume a sequence step inside a rework
+/// cycle and still read it as a first pass.
+///
+/// Split off [`FeatureRepository`] rather than added to it: the six
+/// sequence methods are one self-contained bounded context — *where a
+/// sequence step got to* — with a single writer (the sequence step
+/// handler) and a single reader beyond it (`RunView`'s task drill-down).
+/// Folded in, they
 /// pushed `FeatureRepository` to 21 methods, past the ≤ 12-method budget
 /// the sub-port split exists to hold (`docs/ARCHITECTURE.md` §2), and
 /// made a test double for the sequence step cost twenty-odd irrelevant
@@ -522,6 +533,35 @@ pub trait SequenceResumeRepository: Send + Sync {
         attempt_no: Option<u32>,
         now: i64,
     ) -> Result<(), String>;
+
+    /// The `attempt_no` [`plan_cache_put`](Self::plan_cache_put) recorded
+    /// with the cached plan; `None` when there is no plan or it was stored
+    /// without one.
+    fn plan_cache_attempt_no(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<Option<u32>, String>;
+
+    /// The retry context last saved for `feature_id`, as written — whether
+    /// it still describes an open loop is
+    /// [`restore_retry_context`](crate::domain::rework::restore_retry_context)'s
+    /// question, not this one's.
+    fn retry_context_load(
+        &self,
+        feature_id: &FeatureId,
+    ) -> Result<Option<crate::domain::rework::RetryContext>, String>;
+
+    /// Replace the feature's retry context outright.
+    fn retry_context_save(
+        &self,
+        feature_id: &FeatureId,
+        ctx: &crate::domain::rework::RetryContext,
+        now: i64,
+    ) -> Result<(), String>;
+
+    /// Forget the feature's retry context; a no-op when there is none.
+    fn retry_context_clear(&self, feature_id: &FeatureId) -> Result<(), String>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -568,7 +608,18 @@ pub trait WorkflowRepository: Send + Sync {
 /// Persistence for human-in-the-loop gate decisions (one row per
 /// `gate` step execution).
 pub trait GateRepository: Send + Sync {
+    /// Insert `g`. Fails when the step execution already has a row, and
+    /// every caller discards that error, so a leftover row — decided or
+    /// not — survives it untouched.
     fn create(&self, g: GateDecision) -> Result<(), String>;
+    /// Replace whatever row the step execution holds with `g`, decision
+    /// and feedback included.
+    ///
+    /// For a caller posing a *new* question on a step execution whose id
+    /// it reuses. [`create`](Self::create) there keeps an answer given to
+    /// an earlier question, and a park that finds an answered row consumes
+    /// it without waiting — an approval nobody gave to this question.
+    fn reopen(&self, g: GateDecision) -> Result<(), String>;
     /// Insert or update a decision for a step execution. Idempotent: the
     /// row is keyed on `step_execution_id` (UNIQUE), so re-deliveries
     /// overwrite cleanly. Use this whenever the caller can't guarantee
@@ -664,6 +715,24 @@ pub trait MergeAuditRepository: Send + Sync {
 // 8b. SubtaskRunRepository
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// A `subtask_runs` row as the task loop opens it.
+#[derive(Debug, Clone)]
+pub struct SubtaskRunOpen<'a> {
+    pub id: &'a str,
+    pub feature_id: &'a FeatureId,
+    pub step_execution_id: &'a StepExecutionId,
+    pub subtask_id: &'a str,
+    pub agent_id: &'a str,
+    pub worktree_path: &'a str,
+    pub branch: &'a str,
+    /// The running plan's [`TaskPlan::epoch`](crate::domain::sequence::tasks::TaskPlan::epoch)
+    /// and cycle — what lets the drill-down tell this row from one an
+    /// earlier plan ran under the same task id.
+    pub plan_epoch: Option<&'a str>,
+    pub plan_cycle: u32,
+    pub now: i64,
+}
+
 /// Persistence for per-task agent runs inside a `sequence` step.
 ///
 /// One row per (task, attempt): opened `running` when the task's agent
@@ -677,18 +746,7 @@ pub trait MergeAuditRepository: Send + Sync {
 ///   feature branch) is auditable from these rows after the fact.
 pub trait SubtaskRunRepository: Send + Sync {
     /// Open a `running` row as the task's agent session spawns.
-    #[allow(clippy::too_many_arguments)]
-    fn subtask_run_start(
-        &self,
-        id: &str,
-        feature_id: &FeatureId,
-        step_execution_id: &StepExecutionId,
-        subtask_id: &str,
-        agent_id: &str,
-        worktree_path: &str,
-        branch: &str,
-        now: i64,
-    ) -> Result<(), String>;
+    fn subtask_run_start(&self, run: &SubtaskRunOpen<'_>) -> Result<(), String>;
 
     /// Close the row: `status` is `completed` or `failed`, `cost_usd` /
     /// `tokens` are this task's own spend (not the step's running total).
@@ -760,3 +818,9 @@ type _DocIdAliases = (MessageId, StepId, WorkflowVersionId, RepositoryId);
 #[cfg(test)]
 #[path = "../../tests/ports/sequence_resume_port.rs"]
 mod sequence_resume_port;
+
+/// Contract test for [`GateRepository`]'s `create` / `reopen` split, run
+/// against the real `SqliteAdapter` and an in-memory double.
+#[cfg(test)]
+#[path = "../../tests/ports/gate_port.rs"]
+mod gate_port;

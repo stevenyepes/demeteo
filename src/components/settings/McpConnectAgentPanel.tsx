@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { AGENTS } from '../../lib/agents';
 import { installMcpSkill } from '../../lib/mcpServer';
-import { MCP_AGENT_SETUP, type McpSetupStep } from '../../lib/mcpAgentSetup';
+import { MCP_AGENT_SETUP, type McpAgentSetup, type McpSetupStep } from '../../lib/mcpAgentSetup';
 import { reportError } from '../../lib/errorBus';
 import { TabBar } from '../ui/TabBar';
 import type { TabDef } from '../ui/TabBar';
@@ -126,6 +126,35 @@ function UnverifiedAgentNotice({ label, serverUrl }: { label: string; serverUrl:
   );
 }
 
+function SetupSteps({ steps, serverUrl }: { steps: McpSetupStep[]; serverUrl: string }) {
+  return (
+    <ol className="space-y-3">
+      {steps.map((step, index) => (
+        <SetupStepRow key={step.text} step={step} index={index} serverUrl={serverUrl} />
+      ))}
+    </ol>
+  );
+}
+
+function AgentSetup({ setup, label, serverUrl }: { setup: McpAgentSetup | undefined; label: string; serverUrl: string }) {
+  switch (setup?.status) {
+    case 'verified':
+      return <SetupSteps steps={setup.steps} serverUrl={serverUrl} />;
+    case 'unconfirmed':
+      return (
+        <div className="space-y-3">
+          <p className="text-xs text-amber-300/90 leading-relaxed">
+            {setup.caveat ??
+              `Checked against Demeteo up to the approval prompt — a full ${label} sign-in hasn't been confirmed yet.`}
+          </p>
+          <SetupSteps steps={setup.steps} serverUrl={serverUrl} />
+        </div>
+      );
+    default:
+      return <UnverifiedAgentNotice label={label} serverUrl={serverUrl} />;
+  }
+}
+
 export function McpConnectAgentPanel({ serverUrl }: { serverUrl: string }) {
   const [selected, setSelected] = useState<string>('claude-code');
   const setup = MCP_AGENT_SETUP[selected];
@@ -143,17 +172,9 @@ export function McpConnectAgentPanel({ serverUrl }: { serverUrl: string }) {
         Connect an agent
       </h4>
       <TabBar tabs={tabs} activeTab={selected} onChange={setSelected} ariaLabel="Agent to set up" size="sm" />
-      {setup?.verified ? (
-        <ol className="space-y-3 pt-1">
-          {setup.steps.map((step, index) => (
-            <SetupStepRow key={step.text} step={step} index={index} serverUrl={serverUrl} />
-          ))}
-        </ol>
-      ) : (
-        <div className="pt-1">
-          <UnverifiedAgentNotice label={label} serverUrl={serverUrl} />
-        </div>
-      )}
+      <div className="pt-1">
+        <AgentSetup setup={setup} label={label} serverUrl={serverUrl} />
+      </div>
     </div>
   );
 }

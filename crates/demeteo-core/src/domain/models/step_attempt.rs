@@ -57,9 +57,9 @@ pub struct StepAttempt {
     /// `environment.in_place`. `None` for non-failure outcomes and for
     /// failures preempted by a cancel (no rule was applied).
     pub applied_rule: Option<String>,
-    /// Workspace state at attempt start (P1.14):
-    /// `<repo HEAD>:<dirty|clean>`. `None` when the probe failed or the
-    /// row predates the column. On resume of an interrupted node, a
+    /// Workspace state at attempt start (P1.14), as
+    /// [`crate::domain::workspace_fingerprint`] renders it. `None` when the
+    /// probe failed or the row predates the column. On resume of an interrupted node, a
     /// mismatch against the live workspace surfaces as the Decision-14
     /// synthetic gate instead of blind re-execution.
     pub workspace_fingerprint: Option<String>,
@@ -144,6 +144,55 @@ pub fn explain_failure(attempts: &[StepAttempt]) -> FailureVerdict {
         cost_usd: last.and_then(|a| a.cost_usd),
         tokens: last.and_then(|a| a.tokens),
         wall_clock_ms: last.and_then(|a| a.wall_clock_ms),
+    }
+}
+
+/// Where the cycle a `sequence` step last cached stands, read from the
+/// attempt that cached it — see [`cached_cycle_standing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CachedCycleStanding {
+    /// The attempt that cached the plan completed: its tickets landed and
+    /// the steps behind it judged them.
+    pub judged: bool,
+    /// `judged`, and no attempt has closed on this step since. Only then
+    /// is an identical list a replay; after one was sent back, the same
+    /// list again is the producer's answer.
+    pub replay_checkable: bool,
+}
+
+/// [`CachedCycleStanding`] for a step whose plan cache was written by
+/// attempt `cache_writer`.
+///
+/// Keyed on the writer, not on whichever attempt closed last: an attempt
+/// that ended before its cache write — a refused replay, an approved
+/// zero-ticket park — says nothing about the cycle the cache holds, and
+/// reading it as the verdict loses that cycle from `history`. `running`
+/// rows never count as closed; the caller is usually that open row.
+///
+/// `cache_writer` is `None` when attempt accounting was unavailable at the
+/// write (or the row came from a remote reconcile); that falls back to the
+/// last closed attempt, which errs toward "unjudged" — re-entering a cycle
+/// rather than listing the tickets about to run as already landed.
+///
+/// `rows` must be in `attempt_no` order, as `attempts_for_step` returns them.
+pub fn cached_cycle_standing(
+    rows: &[StepAttempt],
+    cache_writer: Option<u32>,
+) -> CachedCycleStanding {
+    let last_closed = rows.iter().rev().find(|a| a.status != "running");
+    let Some(writer) = cache_writer else {
+        let judged = last_closed.is_some_and(|a| a.status == "completed");
+        return CachedCycleStanding {
+            judged,
+            replay_checkable: judged,
+        };
+    };
+    let judged = rows
+        .iter()
+        .any(|a| a.attempt_no == writer && a.status == "completed");
+    CachedCycleStanding {
+        judged,
+        replay_checkable: judged && last_closed.is_some_and(|a| a.attempt_no == writer),
     }
 }
 

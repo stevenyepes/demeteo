@@ -31,7 +31,9 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => invoke(
 import { StepInspector } from './StepInspector';
 import type { AgentStreamStore } from './useAgentStream';
 import type { InspectorTarget } from '../../lib/inspectorTarget';
+import type { RunEventAssignments } from '../../lib/runEventAssignments';
 import type { HarnessOverrides } from './useHarnessOverrides';
+import type { StepAssignment } from './useStepAssignment';
 import type { WorkflowDefinitionV2 } from '../canvas/types';
 import type { HarnessBaseline, StepExecution } from '../../types';
 
@@ -134,25 +136,57 @@ const OVERRIDES: HarnessOverrides = {
   selectedAgent: '',
   selectedEffort: '',
   setSelectedEffort: () => {},
+  seededEffort: '',
   featureAgentKind: 'opencode',
+  inheritedAgentKind: 'opencode',
   retryEffortLevels: ['low', 'high'],
   onAgentChange: () => {},
   adoptFeatureModel: () => {},
   probeForFeature: () => {},
 };
 
-function mount(
+/** What `FeatureDetail` seeds the one picker with for the node the inspector
+ *  is on — the hook's job, reproduced here as a value so a retarget is
+ *  expressible as the prop change it actually is. */
+const seededFor = (agentKind: string): HarnessOverrides => ({
+  ...OVERRIDES,
+  availableAgents: ['opencode', 'claude-code'],
+  selectedAgent: agentKind,
+});
+
+function fakeAssignment(over: Partial<StepAssignment> = {}): StepAssignment {
+  return {
+    dirty: true,
+    pinned: true,
+    applying: false,
+    error: null,
+    clearError: vi.fn(),
+    apply: vi.fn(async () => {}),
+    reset: vi.fn(async () => {}),
+    ...over,
+  };
+}
+
+type Extra = {
+  harnessBaseline?: HarnessBaseline | null;
+  overrides?: HarnessOverrides;
+  assignment?: StepAssignment;
+  assignments?: RunEventAssignments;
+};
+
+function inspector(
   target: InspectorTarget,
   graphDef: WorkflowDefinitionV2 | null = GRAPH,
   streamStore: AgentStreamStore = STREAM,
-  extra: { harnessBaseline?: HarnessBaseline | null; overrides?: HarnessOverrides } = {},
+  extra: Extra = {},
 ) {
-  return render(
+  return (
     <StepInspector
       featureId="f-1"
       target={target}
       graphDef={graphDef}
       statusByNode={{ 's-implement': { status: 'failed', errorClass: 'environment' } }}
+      assignments={{}}
       streamStore={streamStore}
       onDeselect={() => {}}
       onOpenEditorForPath={() => {}}
@@ -162,8 +196,17 @@ function mount(
       onStop={() => {}}
       onDecideGate={() => {}}
       {...extra}
-    />,
+    />
   );
+}
+
+function mount(
+  target: InspectorTarget,
+  graphDef: WorkflowDefinitionV2 | null = GRAPH,
+  streamStore: AgentStreamStore = STREAM,
+  extra: Extra = {},
+) {
+  return render(inspector(target, graphDef, streamStore, extra));
 }
 
 afterEach(() => {
@@ -266,9 +309,9 @@ describe('StepInspector — a step', () => {
   });
 
   /**
-   * Both of these are pass-throughs, and both are the sort a wiring change
-   * drops silently: the panel renders a complete, plausible tab without either
-   * of them, so nothing but an assertion notices they never arrived.
+   * A pass-through of the sort a wiring change drops silently: the panel
+   * renders a complete, plausible tab without it, so nothing but an assertion
+   * notices it never arrived.
    */
   it('hands the baseline down, so the panel can say the run stopped at it', async () => {
     invoke.mockResolvedValue([]);
@@ -285,14 +328,93 @@ describe('StepInspector — a step', () => {
     );
   });
 
-  it('hands the rerun overrides down to the retry', async () => {
+  it('withholds the picker from overrides that arrive without a writer', async () => {
+    // The picker moved out of the retry block and into the Assignment
+    // control, which renders only when it has somewhere to submit a choice
+    // to. Forwarding `overrides` alone therefore offers no select — and this
+    // is what turns the day `StepInspector` starts forwarding the assignment
+    // as well into a deliberate edit here rather than a silent one.
     invoke.mockResolvedValue([]);
     const user = (await import('@testing-library/user-event')).default;
     mount({ kind: 'step', step: step({ status: 'failed' }), blockedBy: null }, GRAPH, STREAM, {
       overrides: OVERRIDES,
     });
     await user.click(await screen.findByRole('tab', { name: 'Actions' }));
-    expect(screen.getByLabelText('Harness')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Harness')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The pane held the picker long before it held anywhere to submit it, so
+   * "the control is on screen" is not the claim: the claim is that *this*
+   * component's own `assignment` prop is what Apply reaches. A panel wired to
+   * anything else renders identically.
+   */
+  it('hands the Assignment control the writer it was given', async () => {
+    invoke.mockResolvedValue([]);
+    const user = (await import('@testing-library/user-event')).default;
+    const assignment = fakeAssignment();
+    mount({ kind: 'step', step: step({ status: 'pending' }), blockedBy: null }, GRAPH, STREAM, {
+      overrides: seededFor('claude-code'),
+      assignment,
+    });
+    await user.click(await screen.findByRole('tab', { name: 'Actions' }));
+
+    expect(screen.getByLabelText('Harness')).toHaveValue('claude-code');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(assignment.apply).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'Reset to inherited' }));
+    expect(assignment.reset).toHaveBeenCalledTimes(1);
+
+    // AGENTS.md §3: the write leaves through `useStepAssignment` and the
+    // `lib/features.ts` wrappers, so nothing here reaches the command surface.
+    const commands = invoke.mock.calls.map(([command]) => command);
+    expect(commands).not.toContain('step_set_assignment');
+    expect(commands).not.toContain('remote_set_step_assignment');
+  });
+
+  /**
+   * The failure this pins is silent by construction: a control seeded once at
+   * mount goes on showing the *previous* node's pin, and Apply then writes it
+   * onto the node the user has since moved to.
+   */
+  it('retargets the control when the selection moves', async () => {
+    invoke.mockResolvedValue([]);
+    const user = (await import('@testing-library/user-event')).default;
+    const implement = { kind: 'step', step: step({ status: 'pending' }), blockedBy: null } as const;
+    const validate = {
+      kind: 'step',
+      step: step({ id: 'se-2', step_id: 's-validate', step_index: 2, status: 'running' }),
+      blockedBy: null,
+    } as const;
+
+    const { rerender } = mount(implement, GRAPH, STREAM, {
+      overrides: seededFor('claude-code'),
+      assignment: fakeAssignment(),
+    });
+    await user.click(await screen.findByRole('tab', { name: 'Actions' }));
+    expect(screen.getByLabelText('Harness')).toHaveValue('claude-code');
+
+    rerender(
+      inspector(validate, GRAPH, STREAM, {
+        overrides: seededFor('claude-code'),
+        assignment: fakeAssignment(),
+        assignments: {
+          'se-2': { stepExecutionId: 'se-2', agentKind: 'opencode', effort: 'low', offset: 3 },
+        },
+      }),
+    );
+    await user.click(await screen.findByRole('tab', { name: 'Actions' }));
+
+    // The node in flight cannot be re-pointed — the spawn already happened —
+    // so the retarget is visible twice over: what that execution actually
+    // spawned with, and a control that has stopped being one. The picker's
+    // `claude-code` is deliberately still the *first* node's seed here: a
+    // read-only panel that echoed it would report an assignment the running
+    // node never had.
+    expect(screen.queryByLabelText('Harness')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Harness')).toHaveTextContent(/^opencode$/);
+    expect(screen.getByTestId('inspector')).toHaveTextContent(/this node is running/i);
   });
 
   /**

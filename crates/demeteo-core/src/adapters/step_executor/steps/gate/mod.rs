@@ -284,18 +284,25 @@ impl ExecutionDriver {
                 // Feedback" section automatically when retry_ctx is
                 // Some).
                 if let Some(cleaned) = retry_feedback {
-                    self.retry_ctx = Some(RetryContext {
+                    let own = RetryContext {
                         feedback: cleaned,
                         iteration: 1,
                         max: 1,
                         failing_tests: Vec::new(),
                         implicated_files: Vec::new(),
-                        // The user's guidance stays visible to every step
-                        // between the redirect target and this gate; it is
-                        // cleared when the gate itself completes (i.e. the
-                        // user approves the redone work).
                         failing_step_id: ctx.step_exec.step_id.0.clone(),
-                    });
+                    };
+                    // The user's guidance stays visible to every step
+                    // between the redirect target and the origin; it is
+                    // cleared when the origin completes.
+                    self.retry_ctx = Some(crate::domain::rework::gate_redirect_retry(
+                        self.retry_ctx.take(),
+                        crate::domain::gate::redirect::gate_in_rework_span(
+                            &self.steps,
+                            ctx.step_exec.step_index as usize,
+                        ),
+                        own,
+                    ));
                 }
 
                 let target_idx = resolve_redirect_target(
@@ -329,6 +336,7 @@ impl ExecutionDriver {
                                 gate_step_execution_id: &ctx.step_exec.id,
                             },
                         );
+                        self.persist_retry_ctx();
                         StepOutcome::RedirectTo(idx)
                     }
                     None => StepOutcome::Cancelled,

@@ -32,3 +32,17 @@ fn every_declared_tool_maps_to_its_exact_tier() {
 fn unrecognized_tool_name_has_no_scope() {
     assert_eq!(required_scope("delete_everything"), None);
 }
+
+#[test]
+fn only_server_discover_is_open_and_the_handshake_needs_a_session() {
+    assert_eq!(method_auth("server/discover"), MethodAuth::Open);
+    assert_eq!(method_auth("tools/call"), MethodAuth::PerTool);
+    for method in [
+        "initialize",
+        "tools/list",
+        "notifications/initialized",
+        "unknown/method",
+    ] {
+        assert_eq!(method_auth(method), MethodAuth::Session, "{method}");
+    }
+}

@@ -50,7 +50,7 @@ impl GitOpsHelper {
 /// The line-ending answer is instead written **once**, persistently, into the
 /// clone's own config (`git_ops::clone`), where the index and the working tree
 /// are created agreeing with it and every linked worktree inherits it.
-pub(super) fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> ProgramRequest {
+pub(crate) fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> ProgramRequest {
     git_request_vec(repo_dir, args.into_iter().map(str::to_string).collect())
 }
 
@@ -62,7 +62,7 @@ pub(super) fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> Pr
 /// subcommands that talk to `origin` because the set of those is not stable —
 /// `fetch` and `ls-remote` are obvious, `merge` and `submodule` are not — and a
 /// call site that forgets it does not fail, it hangs.
-pub(super) fn git_request_vec(repo_dir: &str, args: Vec<String>) -> ProgramRequest {
+pub(crate) fn git_request_vec(repo_dir: &str, args: Vec<String>) -> ProgramRequest {
     ProgramRequest {
         executable: "git".to_string(),
         args: [vec!["-C".to_string(), repo_dir.to_string()], args].concat(),

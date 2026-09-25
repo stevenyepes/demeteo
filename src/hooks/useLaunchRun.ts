@@ -5,7 +5,7 @@ import { useNavigation, useProject } from '../context';
 import { useErrorBus } from '../lib/errorBus';
 import { stagedAttachmentInputs } from '../lib/attachments';
 import type { LaunchStageEntry } from '../components/AttachmentDropzone';
-import type { EffortLevel, Feature, FeatureOrigin } from '../types';
+import type { EffortLevel, Feature, FeatureOrigin, StepOverride } from '../types';
 
 /** Launch parameters — the union of what `StartFeatureModal` and the
  * ProjectHome composer collect. Matches the modal's `onLaunch` shape. */
@@ -24,7 +24,7 @@ export interface LaunchRunParams {
   /** Per-run override of the per-turn dollar budget (`--max-budget-usd`).
    *  Unset = inherit the project default, then the engine default ($20). */
   maxBudgetUsd?: number;
-  stepOverrides?: { step_id: string; agent_kind?: string | null; model?: string | null; effort?: EffortLevel | null }[];
+  stepOverrides?: StepOverride[];
   attachments?: LaunchStageEntry[];
   /** Run detached on this machine via `remote_submit_run`; unset/empty
    * means the local `start_feature` path (which is also the

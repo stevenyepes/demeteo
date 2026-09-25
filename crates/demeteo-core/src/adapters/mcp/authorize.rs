@@ -9,8 +9,11 @@
 //! only after PKCE passes, so an unknown `client_id` never reveals anything
 //! a PKCE failure wouldn't already have.
 //!
-//! `resource` (RFC 8707) is mandatory and must equal [`canonical_uri`]
-//! exactly — never defaulted or inferred (`docs/MCP_INTEGRATION.md` §5).
+//! `resource` (RFC 8707) is mandatory and must name [`canonical_uri`] per
+//! [`resource_matches`] — never defaulted or inferred
+//! (`docs/MCP_INTEGRATION.md` §5). The pending authorization, and so the
+//! grant, records the canonical spelling rather than the client's: audience
+//! checks compare the stored grant to [`canonical_uri`] byte for byte.
 //!
 //! A [`PendingAuthorization`] lives only in memory, from the moment
 //! validation passes to the moment `POST /token` consumes its single-use code
@@ -39,7 +42,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::domain::ids::ClientId;
-use crate::domain::oauth::{pkce, Scope};
+use crate::domain::oauth::{pkce, resource_matches, Scope};
 use crate::ports::notification::DomainEvent;
 use crate::state::AppContext;
 
@@ -197,7 +200,7 @@ async fn authorize(State(ctx): State<AppContext>, Query(q): Query<AuthorizeQuery
     let Some(canonical) = canonical_uri() else {
         return oauth_bad_request("invalid_target");
     };
-    if q.resource != canonical {
+    if !resource_matches(&q.resource, &canonical) {
         return oauth_bad_request("invalid_target");
     }
 
@@ -239,7 +242,7 @@ async fn authorize(State(ctx): State<AppContext>, Query(q): Query<AuthorizeQuery
         client_id,
         redirect_uri: q.redirect_uri.clone(),
         code_challenge: q.code_challenge,
-        resource: q.resource.clone(),
+        resource: canonical.clone(),
         scopes: scopes.clone(),
         issued_at: Instant::now(),
     };
@@ -259,7 +262,7 @@ async fn authorize(State(ctx): State<AppContext>, Query(q): Query<AuthorizeQuery
         request_id: request_id.clone(),
         client_name: client.client_name,
         requested_scopes: scopes,
-        resource: q.resource,
+        resource: canonical,
         redirect_uri: redirect_uri.clone(),
         expires_in_ms: CONSENT_TIMEOUT.as_millis() as u64,
     });

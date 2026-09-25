@@ -19,11 +19,12 @@
 //!   (partial agent writes, landed sequence prefixes, or a human's
 //!   edits — indistinguishable from here). Decision 14 says a mid-step
 //!   interrupt surfaces as a **synthetic gate**; the guard makes that
-//!   gate real by parking on the same `gd-syn-*` row + [`GateWaiter`]
+//!   gate real by parking on the same `gd-resume-*` row + [`GateWaiter`]
 //!   rendezvous the watchdog already surfaced in the UI, instead of
 //!   re-executing while the prompt is still on screen.
-//! * **unknown** (no recorded fingerprint / probe failed) — proceed;
-//!   missing telemetry must never block a run.
+//! * **unknown** (no recorded fingerprint, one recorded under an older
+//!   scheme, or a failed probe) — proceed; missing telemetry must never
+//!   block a run.
 //!
 //! The comparison is only *sound* for a node whose entire effect is the
 //! worktree, so the node type gets a say first: a handler answering
@@ -93,6 +94,9 @@ impl ExecutionDriver {
             let Some(recorded) = recorded else {
                 return GuardVerdict::Proceed;
             };
+            if !crate::domain::workspace_fingerprint::is_comparable(&recorded) {
+                return GuardVerdict::Proceed;
+            }
             let Some(current) = self.current_workspace_fingerprint().await else {
                 return GuardVerdict::Proceed;
             };

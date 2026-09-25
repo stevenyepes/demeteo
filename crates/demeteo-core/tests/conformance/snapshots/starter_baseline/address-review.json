@@ -1,0 +1,39 @@
+{
+  "starter": "address-review",
+  "terminal_status": "awaiting_mr",
+  "steps": [
+    {
+      "step_id": "s-address",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-confirm",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-finalize",
+      "kind": "finalize",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    }
+  ],
+  "artifacts": [
+    [
+      "s-address",
+      "address-review.md",
+      "# stub artifact\n\npath: artifacts/address-review.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-confirm",
+      "address-review-check.md",
+      "# stub artifact\n\npath: artifacts/address-review-check.md\ngenerated-by: demeteo stub agent\n"
+    ]
+  ]
+}

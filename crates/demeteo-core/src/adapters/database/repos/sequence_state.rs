@@ -1,8 +1,9 @@
 //! SQL for the durable sequence-step run state (V32, task P1.9):
-//! `sequence_checkpoints` + `sequence_plan_cache`. Replaces the
+//! `sequence_checkpoints` + `sequence_plan_cache`, which replaced the
 //! in-memory `ExecutionDriver::{sequence_checkpoints, cached_plans}`
 //! maps so a restart resumes a sequence step from the exact task, not
-//! the step head. Exposed through
+//! the step head. V57 adds `retry_contexts`, a durable mirror of the
+//! driver's `retry_ctx`, which stays the in-memory authority. Exposed through
 //! [`SequenceResumeRepository`](crate::ports::db::SequenceResumeRepository),
 //! whose `impl` for `SqliteAdapter` is at the foot of this file; peer of
 //! the `step_attempts.rs` SQL.
@@ -18,6 +19,7 @@ use rusqlite::OptionalExtension;
 
 use crate::domain::ids::FeatureId;
 use crate::domain::models::{CheckpointProduced, SequenceCheckpoint};
+use crate::domain::rework::RetryContext;
 use crate::ports::db::SequenceResumeRepository;
 
 use super::super::SqliteAdapter;
@@ -255,6 +257,110 @@ pub fn plan_cache_put(
     Ok(())
 }
 
+/// The `attempt_no` stored with the (feature, node) plan; `None` when
+/// there is no plan or it was stored without one.
+pub fn plan_cache_attempt_no(
+    adapter: &SqliteAdapter,
+    feature_id: &FeatureId,
+    step_id: &str,
+) -> Result<Option<u32>, String> {
+    let conn = adapter.conn.lock()?;
+    conn.query_row(
+        "SELECT attempt_no FROM sequence_plan_cache
+         WHERE feature_id = ?1 AND step_id = ?2",
+        params![feature_id.0, step_id],
+        |row| row.get::<_, Option<u32>>(0),
+    )
+    .optional()
+    .map(Option::flatten)
+    .map_err(|e| e.to_string())
+}
+
+/// The feature's persisted retry context (V57), as written.
+pub fn retry_context_load(
+    adapter: &SqliteAdapter,
+    feature_id: &FeatureId,
+) -> Result<Option<RetryContext>, String> {
+    type Row = (String, String, u32, u32, String, String);
+    let conn = adapter.conn.lock()?;
+    let row: Option<Row> = conn
+        .query_row(
+            "SELECT failing_step_id, feedback, iteration, max, failing_tests_json,
+                    implicated_files_json
+             FROM retry_contexts WHERE feature_id = ?1",
+            params![feature_id.0],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    row.map(
+        |(failing_step_id, feedback, iteration, max, tests_json, files_json)| {
+            Ok(RetryContext {
+                feedback,
+                iteration,
+                max,
+                failing_tests: serde_json::from_str(&tests_json).map_err(|e| e.to_string())?,
+                implicated_files: serde_json::from_str(&files_json).map_err(|e| e.to_string())?,
+                failing_step_id,
+            })
+        },
+    )
+    .transpose()
+}
+
+/// Upsert the feature's retry context (V57).
+pub fn retry_context_save(
+    adapter: &SqliteAdapter,
+    feature_id: &FeatureId,
+    ctx: &RetryContext,
+    now: i64,
+) -> Result<(), String> {
+    let tests_json = serde_json::to_string(&ctx.failing_tests).map_err(|e| e.to_string())?;
+    let files_json = serde_json::to_string(&ctx.implicated_files).map_err(|e| e.to_string())?;
+    let conn = adapter.conn.lock()?;
+    conn.execute(
+        "INSERT INTO retry_contexts
+             (feature_id, failing_step_id, feedback, iteration, max, failing_tests_json,
+              implicated_files_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(feature_id)
+         DO UPDATE SET failing_step_id = ?2, feedback = ?3, iteration = ?4, max = ?5,
+                       failing_tests_json = ?6, implicated_files_json = ?7, updated_at = ?8",
+        params![
+            feature_id.0,
+            ctx.failing_step_id,
+            ctx.feedback,
+            ctx.iteration,
+            ctx.max,
+            tests_json,
+            files_json,
+            now
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Delete the feature's retry context (V57); a no-op when there is none.
+pub fn retry_context_clear(adapter: &SqliteAdapter, feature_id: &FeatureId) -> Result<(), String> {
+    let conn = adapter.conn.lock()?;
+    conn.execute(
+        "DELETE FROM retry_contexts WHERE feature_id = ?1",
+        params![feature_id.0],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// The port face of this module. Every method delegates to the free
 /// function above it — those take `&SqliteAdapter` so the SQL stays
 /// callable (and unit-testable) without going through `dyn`.
@@ -332,6 +438,31 @@ impl SequenceResumeRepository for SqliteAdapter {
         now: i64,
     ) -> Result<(), String> {
         plan_cache_put(self, feature_id, step_id, plan_json, attempt_no, now)
+    }
+
+    fn plan_cache_attempt_no(
+        &self,
+        feature_id: &FeatureId,
+        step_id: &str,
+    ) -> Result<Option<u32>, String> {
+        plan_cache_attempt_no(self, feature_id, step_id)
+    }
+
+    fn retry_context_load(&self, feature_id: &FeatureId) -> Result<Option<RetryContext>, String> {
+        retry_context_load(self, feature_id)
+    }
+
+    fn retry_context_save(
+        &self,
+        feature_id: &FeatureId,
+        ctx: &RetryContext,
+        now: i64,
+    ) -> Result<(), String> {
+        retry_context_save(self, feature_id, ctx, now)
+    }
+
+    fn retry_context_clear(&self, feature_id: &FeatureId) -> Result<(), String> {
+        retry_context_clear(self, feature_id)
     }
 }
 

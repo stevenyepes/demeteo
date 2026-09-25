@@ -33,7 +33,12 @@ pub(super) async fn decide_gate(
 ) -> Result<(), String> {
     let params: DecideGateParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
-    require_owner_of_step(svc, &params.gate_id, client_id)?;
+    require_owner_of_step(
+        svc.ctx.features.as_ref(),
+        svc.ctx.runner_runs.as_ref(),
+        &params.gate_id,
+        client_id,
+    )?;
     svc.ctx
         .presenter
         .gate_decide(

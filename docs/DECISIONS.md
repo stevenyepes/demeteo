@@ -13,7 +13,7 @@
 | 2  | Demeteo's role                     | Orchestrator, not chat client — drop the supervisor plane                      | Interview        |
 | 3  | Brain role                         | Advisor; declarative, embedded in workflow steps                               | Interview Q3     |
 | 4  | LLM provider scope                 | Delegate to a coding agent acting as planner for *runs*. **Exception:** the opt-in **Memory Agent** (`adapters/memory_llm.rs`, `adapters/memory_worker.rs`) calls a user-configured OpenAI-compatible endpoint directly, in the background, only to distill run signals into project memories. It never drives a feature run; it is disabled by default and its API key lives in the OS keyring. | Interview Q4/Q5  |
-| 5  | Planner selection                  | Per-project planner via `ProjectSettings::default_agent_kind` + `default_model`; overrideable per-workflow (`ProjectWorkflowOverride` with `step_id = None`) and per-step (`step_id = Some(...)`); loses to a run-time override chosen in `StartFeatureModal`. | Interview Q6     |
+| 5  | Planner selection                  | Per-project planner via `ProjectSettings::default_agent_kind` + `default_model`; overrideable per-workflow (`ProjectWorkflowOverride` with `step_id = None`) and per-step (`step_id = Some(...)`); loses to a run-time override on the feature row — set in `StartFeatureModal` at launch, and per-step still changeable mid-run ([decision 54](#54--mid-run-assignment-detail)). | Interview Q6     |
 | 6  | Project structure                  | One host per project (local or remote SSH); repos cloned via PAT               | Interview Q7/C   |
 | 7  | Workflows as templates             | First-class, versioned, importable; starter pack shipped in binary              | Interview Q8     |
 | 8  | Step execution model               | Typed node types behind the `NodeTypeRegistry`: `agent` / `gate` / `sequence` (superseding `parallel`) / `sync` / `finalize` / `command`. **`command` un-deferred 2026-07-26** (task P3.5): a deterministic shell command through the `ExecutionPort`, run in a disposable worktree at zero token cost, non-zero exit classified `verdict`. It does **not** merge back — a step that changes tracked files is an agent step. | Interview Q8; PRD_DAG_WORKFLOWS §5.2 |
@@ -45,7 +45,7 @@
 | 34 | Agent protocol                     | `UnifiedCliRuntime` (one-shot CLI + JSON-lines); ACP removed — no JSON-RPC, no tool-call bridge, no capability negotiation. `opencode run --format json` for opencode; `hermes run --format json` for hermes; `claude --print --verbose --output-format stream-json` for claude-code; `codex exec --json` for codex. Install commands: opencode = `curl -fsSL https://opencode.ai/install \| bash`; hermes = `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash`; claude-code = `npm install -g @anthropic-ai/claude-code`; codex = `npm install -g @openai/codex`. | 2026-06-19   |
 | 35 | Agent permission enforcement       | Each `StepCapability` compiles to a four-axis `PermissionProfile` (`read_fs`, `write_fs`, `execute`, `network`, each `Allow` or `Deny`) plus a path-shaped `WriteScope` (`None` \| `ArtifactsOnly` \| `All`). The compiled policy only ever uses `allow` / `deny`, never `ask`. The abstract profile is translated to the agent's native dialect at spawn: opencode / hermes → `OPENCODE_PERMISSION` env (`{"edit":…,"read":…,"bash":…,"webfetch":…,"websearch":…,"external_directory":"deny","doom_loop":"allow"}`); claude-code → `--disallowedTools` (`Bash` / `Edit` / `Write` / `MultiEdit` / `NotebookEdit` / `WebSearch` / `WebFetch` as applicable) + `--exclude-dynamic-system-prompt-sections` + `--setting-sources user,project` + `--strict-mcp-config` for prompt-cache determinism. The `artifacts/` vs source path-shape is enforced uniformly by the OS-level chmod fence in `adapters/worktree/git_ops/scope.rs`. Gate-step approval is the only real-time human-in-the-loop surface. | 2026-06-19   |
 | 36 | Cross-step session continuity      | One captured `session_id` per feature; threaded through every subsequent agent invocation. opencode: `--session <uuid> --continue` (`adapters/agent/opencode/mod.rs:404-408`). hermes: `--resume <sid>` (`adapters/agent/hermes/mod.rs:155-156`). claude-code: `--resume <sid>` (`adapters/agent/claude_code/mod.rs:388-394`), plus `--exclude-dynamic-system-prompt-sections` / `--setting-sources user,project` / `--strict-mcp-config` for byte-identical prompt-cache prefix. Parallel subtasks each get their own session id so they don't pollute each other's context. On context-window saturation (>80% of budget from `PricingTable::context_window`) the driver's watchdog kills the session and the next step's spawn injects a one-shot recap. | 2026-06-19   |
-| 37 | Reasoning effort                   | A **peer of the model**, not a property of it. One canonical ladder — `low` < `medium` < `high` < `xhigh` < `max` (`EffortLevel`, lowercase on every wire) — resolved by the same 5-tier chain as `model` (per-step run override → feature-wide run override → workflow `StepConfig.effort` → project `default_effort` → **`high`**). Each adapter **clamps down** to what its agent declares (`AgentCapabilities.effort_levels`) before emitting: claude-code `--effort` + `CLAUDE_CODE_EFFORT_LEVEL`, codex `-c model_reasoning_effort=`, opencode `--variant`, hermes nothing. See the detail block below. | 2026-07-14 |
+| 37 | Reasoning effort                   | A **peer of the model**, not a property of it. One canonical ladder — `low` < `medium` < `high` < `xhigh` < `max` (`EffortLevel`, lowercase on every wire) — resolved by the same 5-tier chain as `model` (per-step run override → feature-wide run override → workflow `StepConfig.effort` → project `default_effort` → **`high`**; tier 1 is writable mid-run per [decision 54](#54--mid-run-assignment-detail)). Each adapter **clamps down** to what its agent declares (`AgentCapabilities.effort_levels`) before emitting: claude-code `--effort` + `CLAUDE_CODE_EFFORT_LEVEL`, codex `-c model_reasoning_effort=`, opencode `--variant`, hermes nothing. See the detail block below. | 2026-07-14 |
 | 38 | Feature pins its workflow version  | **Yes — `features.workflow_version_id` column** (migration V33). `start_feature` resolves the latest version exactly once and stores the row id; the run path and `RunSpec` read the pinned row (remote already snapshots `workflow_json`). Editing a workflow mid-run can never change a running graph; historical runs render the graph they actually executed. Resolves PRD DAG §11 Q1. | PRD DAG §11 (2026-07-23) |
 | 39 | DAG join-semantics default         | **`all_success`** is the default join for every node, including gates fed by multiple verify branches. The critic's `PASS_WITH_NOTES` verdict maps to *success* for join purposes, so a strict join doesn't block on a passing-with-notes critic. `any_success` / `all_done` remain per-node opt-ins in schema v2. Resolves PRD DAG §11 Q2. | PRD DAG §11 (2026-07-23) |
 | 40 | `conflict_policy` becomes sync-node config | The decorative `ProjectSettings.conflict_policy` (decision 20's known loose end) becomes a **config field on the `sync` node type** in schema v2, where the upstream-sync merge it governs actually happens. The project-settings dropdown is removed; v1→v2 migration seeds the node field from the project value. Resolves PRD DAG §11 Q3. | PRD DAG §11 (2026-07-23) |
@@ -61,6 +61,8 @@
 | 50 | MCP surface exclusions | **Gate approval and worktree merges are excluded permanently — not deferred**; a Gate is the one real-time human-in-the-loop surface ([decision 35](#1-the-locked-decisions)). Ticket creation stays with decomposition. Discovery interviews are out of scope **for this phase only**. `list_pending_gates` and `get_discovery_board` are reads and stay. **Rejected:** exposing any of these. Detail: [MCP_INTEGRATION.md §8](MCP_INTEGRATION.md#8-what-is-excluded-and-whether-permanently). | 2026-09-18 |
 | 51 | `ticket_force_start` is not exposed over MCP | **Rejected:** exposing it — its required `reason` is fed to the started agent as its prerequisite context, so an agent-authored reason would corrupt the run, not merely the audit record. Detail: [MCP_INTEGRATION.md §8](MCP_INTEGRATION.md#ticket_force_start). | 2026-09-18 |
 | 52 | MCP listener default | **Off until enabled in Settings** (`mcp_server_enabled`, default `false`). **Rejected:** always listening — OAuth discovery documents are unauthenticated by necessity, and most installs will never use this. Detail: [MCP_INTEGRATION.md §9](MCP_INTEGRATION.md#9-the-listener-and-what-is-open). | 2026-09-18 |
+| 54 | Per-step assignment is editable mid-run | A step's agent / model / effort may be re-pointed while the run is alive, not only at launch or through Retry. The write is **tier 1 and only tier 1** — one `StepOverride` on `features.step_overrides_json` — never the feature-wide tier-2 columns ([decision 37](#37--effort-level-detail)'s chain); Retry and Replay stopped writing tier 2 from their per-node controls in the same change. It performs no rewind, and it **survives** one: see the detail block below. Local surface `step_set_assignment`, detached-run surface the `set_step_assignment` RPC ([EXECUTION_PARITY.md](EXECUTION_PARITY.md#the-control-rpcs-are-part-of-the-contract)). | 2026-09-22 |
+| 53 | MCP handshake authentication | **`initialize` and `tools/list` need a live grant of any scope**; only `server/discover` and the `.well-known` metadata stay open, and the handshake `401` names no scope. **Rejected:** an open handshake — clients whose SDK starts OAuth only on a connect-time `401` (OpenCode, Hermes) never signed in. Detail: [MCP_INTEGRATION.md §5](MCP_INTEGRATION.md#5-authorization). | 2026-09-24 |
 
 ### 44 — Harness baseline (detail)
 
@@ -286,6 +288,51 @@ not an effort one. Effort deliberately does **not** copy that shape, and the bug
 was left unfixed here as out of scope — recorded so the next reader doesn't
 mistake the inconsistency for intent.
 
+### 54 — Mid-run assignment (detail)
+
+Two things here are choices, not consequences, and neither is recoverable by
+reading the code that implements them.
+
+**Tier 1, never tier 2.** A per-node control has exactly one honest place to
+write: the per-node tier. `Feature::step_overrides` already *was* the top of
+decision 37's resolution chain and already carried `{ step_id, agent_kind,
+model, effort }` — the feature only made it writable after launch. The
+alternative was in the tree and was the bug: Retry and Replay took the harness /
+model / effort a user picked for **one** failed node and wrote it to
+`Feature::agent_kind` / `model` / `effort`, silently re-pointing every node that
+had not yet run. One node's blast radius must be one node, so those call sites
+now send `null` and the feature-wide columns keep whatever launch put there.
+The backend API that writes them is unchanged and still reachable; what was
+removed is the UI path that reached it by accident.
+
+**It outlives a rewind on purpose.** "Change the agent for the step that keeps
+failing" is worth nothing if the next failure discards the change, and the
+engine's re-entry paths (`on_failure` retry, redirect, rewind, replay) all work
+by patching `step_executions`. Tier 1 is not there — it is a column on the
+`features` row — so `rewind_patch` has no reach into it and the pin holds across
+every re-entry with no machinery of its own. That is the reason the pin lives
+where it does, and it is why a test asserts what `rewind_patch` *cannot* touch
+(`crates/demeteo-core/tests/infrastructure/step_executor/replay_patch.rs`)
+rather than asserting what the pin does. The standing cost: a re-pointed step
+stays re-pointed until someone resets it to inherited, including on a rerun
+weeks later — deliberate, and the reason the inspector renders the pin on a node
+that has not run yet.
+
+Refused in exactly two states, `running` and `verifying`: that attempt's agent
+was already spawned against the old assignment, so accepting the write would
+report a change the attempt in flight cannot honour. Every other status is
+assignable, which is what makes the rule statable in one line — the pin applies
+whenever that node next runs. That includes a node of a completed or cancelled
+run: a replay restarts it on the stored pins, so the feature's own status is
+not consulted.
+
+Two refusals are not about timing. A node whose kind spawns no agent (`gate`,
+`command` — an allowlist, `ASSIGNABLE_KINDS`, so a new kind starts refused)
+would store a pin nothing reads and report it as applied. And a harness the
+build has not registered is refused at the write, because a pin defers its
+failure to dispatch, which may be hours after the click. Models are not
+checked: they are whatever the harness answers on the machine at the time.
+
 ### 43 — Rework cycles (detail)
 
 The shape this replaced cost a real feature **26.9M tokens**: a 25-ticket run
@@ -312,7 +359,12 @@ fallback.** The producer declares it; a producer that forgets is caught by id
 overlap (a delta names work that did not exist before; a revision reissues the
 same ticket ids). The fallback only runs when the graph already says this is a
 rework cycle, so the worst a wrong answer does is re-run a list — never the
-reverse.
+reverse. **Except for a replay:** the artifact outlives its cycle still saying
+`rework`, so a list that reproduces one this step already ran and had judged
+(the attempt that cached it completed, and nothing has closed since) is sent
+back to the producer instead — once; the same list again is its answer. A producer fault raised inside a
+rework cycle keeps the verdict that opened it, or the producer would read the
+consumer as the failing step and re-decompose everything.
 
 **Cycles accumulate in `plan_json`, not in a new column.** `sequence_plan_cache`
 keeps `(feature_id, step_id)`; the row's JSON grows `kind`, `cycle` and a
@@ -320,6 +372,16 @@ keeps `(feature_id, step_id)`; the row's JSON grows `kind`, `cycle` and a
 unchanged and new rows parse in older builds — no migration, and the drill-down
 can show "Original decomposition · 25 tickets / Rework 1 · 4 tickets" instead of
 silently replacing one with the other.
+
+**The retry context survives a restart (V57 `retry_contexts`), as a mirror.**
+It was in-memory only, so every restart resumed a step inside a loop as a
+first pass — Greenfield, no verdict, stale-plan guards off. One row per
+feature, written wherever the driver assigns or clears its context, dropped by
+a replay. It is not the budget: `step_executions.iteration_count` still is, so
+a resumed attempt is never counted twice. A write that fails is logged and the
+redirect proceeds; the read side (`restore_retry_context`) drops a row whose
+origin has completed, left the graph, or is blank, so a lost clear cannot
+reopen a closed loop.
 
 **The loop still has to be able to converge.** A spec whose acceptance criteria
 demand a command the project harness does not run can never be satisfied, and
@@ -518,6 +580,6 @@ schema v2, and the project-settings dropdown is removed.
 - **Architecture** (hexagon, port surface, file layout, Tauri commands, frontend state): [`ARCHITECTURE.md`](ARCHITECTURE.md)
 - **Open / deferred questions**: [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
 - **Reliability plan**: [`RELIABILITY_PLAN.md`](RELIABILITY_PLAN.md)
-- **MCP integration** (decisions 45–52 in full): [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md)
+- **MCP integration** (decisions 45–53 in full): [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md)
 - **Agent runtime spec**: [`AGENT_INTEGRATION.md`](../AGENT_INTEGRATION.md)
 - **Known platform issues**: [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md)

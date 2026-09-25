@@ -14,6 +14,23 @@
  * when the provider placed that branch upstream *and* said we may add commits
  * to it; otherwise fall back to what the reviewed request targets.
  *
+ * ## Where the fix is measured, which is a different question
+ *
+ * A plan carries two branches, and they must not be conflated. `publishesTo` is
+ * where the pull request opens, and the *origin* decides it:
+ * `FeatureOrigin::publish_target` never reads `diffBaseBranch`. `diffBaseBranch`
+ * is where the run is *measured* — the left side of its diff, and the base the
+ * lazy baseline attributes a red gate to — and on both paths it is the reviewed
+ * request's target, so a gate is judged against the same fork point the review
+ * run judged it against.
+ *
+ * Measuring against the head was tried and is wrong: the fix branch is cut from
+ * that head, so the merge-base is the very tree the review reported red, and
+ * every gate the pull request broke is subtracted as pre-existing — the run
+ * finishes green and publishes a branch CI still rejects. One cost comes with
+ * the target, shared with the ref path: a manual sync merges the target into
+ * the fix branch.
+ *
  * ## Why the fallback is what gets refused
  *
  * Nothing in this tree can carry a per-run publish target: all three
@@ -37,8 +54,9 @@
  * detached-run-parity decision of its own.
  */
 
-import type { FeatureOrigin } from '../types';
+import type { EffortLevel, FeatureOrigin, WorkflowWithSteps } from '../types';
 import type { PullRequestSummary } from './pullRequests';
+import type { RunChoice } from './reviewLaunch';
 
 /** The bundled fix starter (`src-tauri/workflows/address-review.json`). Its id
  *  is stable across edits, the same way the review starter's is. */
@@ -51,6 +69,9 @@ export interface FixLaunchParams {
   description: string;
   origin: FeatureOrigin;
   diffBaseBranch: string;
+  agentKind?: string;
+  model?: string;
+  effort?: EffortLevel;
 }
 
 /**
@@ -62,11 +83,20 @@ export interface FixLaunchParams {
  *   an empty description is an agent asked to address nothing.
  * - `unreachable-target` — the destination is the reviewed request's target
  *   branch, and no channel exists to say so. See the module doc.
+ * - `no-target-branch` — neither the request nor the project names a branch to
+ *   measure the fix against, and the head is not one (see the module doc).
  */
-export type FixLaunchRefusal = 'no-head-branch' | 'no-findings' | 'unreachable-target';
+export type FixLaunchRefusal =
+  | 'no-head-branch'
+  | 'no-findings'
+  | 'unreachable-target'
+  | 'no-target-branch';
 
+/** `publishesTo` rides beside `launch` rather than in it: `launch` reaches
+ *  `useLaunchRun` verbatim, and the destination is not a launch argument — it
+ *  is what the origin already answers, restated for the copy that names it. */
 export type FixLaunchPlan =
-  | { ok: true; launch: FixLaunchParams }
+  | { ok: true; launch: FixLaunchParams; publishesTo: string }
   | { ok: false; reason: FixLaunchRefusal; message: string };
 
 const TITLE_LIMIT = 72;
@@ -97,8 +127,9 @@ export function planFixLaunch(input: {
   pullRequest: PullRequestSummary;
   findings: string;
   defaultBranch: string;
+  choice?: RunChoice;
 }): FixLaunchPlan {
-  const { pullRequest, findings, defaultBranch } = input;
+  const { pullRequest, findings, defaultBranch, choice } = input;
 
   const head = named(pullRequest.source_branch);
   if (head === null) {
@@ -119,19 +150,26 @@ export function planFixLaunch(input: {
   }
 
   const base = fixBase(pullRequest);
-  if (base !== head) {
+  if (pullRequest.from_fork || !pullRequest.head_repo_push) {
     // The reachable half of the fallback: when the request already targets the
     // project's default branch, the base `publish_target` derives from a `Ref`
     // origin *is* the answer, and nothing is being silently substituted.
     if (base !== null && base === named(defaultBranch)) {
       return {
         ok: true,
+        publishesTo: base,
         launch: {
-          workflowId: FIX_STARTER_WORKFLOW_ID,
           title: fixTitle(pullRequest),
           description: fixDescription(pullRequest, findings),
-          origin: { kind: 'ref', fetch_spec: pullRequest.head_fetch_spec, label: head },
+          origin: {
+            kind: 'ref',
+            fetch_spec: pullRequest.head_fetch_spec,
+            label: pullRequest.head_fetch_spec.startsWith('refs/merge-requests/')
+              ? `MR !${pullRequest.number}`
+              : `PR #${pullRequest.number}`,
+          },
           diffBaseBranch: base,
+          ...runShape(choice),
         },
       };
     }
@@ -145,19 +183,84 @@ export function planFixLaunch(input: {
     };
   }
 
+  // Never `head`: the fix branch is cut from it, so measuring there makes the
+  // pull request's own red gates pre-existing — see the module doc.
+  const measuredAgainst = named(pullRequest.target_branch) ?? named(defaultBranch);
+  if (measuredAgainst === null) {
+    return {
+      ok: false,
+      reason: 'no-target-branch',
+      message:
+        'Neither this pull request nor the project names a branch it merges into, so there ' +
+        "is nothing to measure the fix against. Set the project's default branch and try again.",
+    };
+  }
+
   return {
     ok: true,
+    publishesTo: head,
     launch: {
-      workflowId: FIX_STARTER_WORKFLOW_ID,
       title: fixTitle(pullRequest),
       description: fixDescription(pullRequest, findings),
-      // Cutting from the head branch is also what makes the destination
-      // expressible: `base_branch` answers with it, so the pull request opens
-      // against exactly the branch under review.
+      // The origin alone decides the destination: `publish_target` answers
+      // `Branch { base }` with `base` and never reads `diffBaseBranch`, which
+      // is where the run is measured, not where it lands.
       origin: { kind: 'branch', base: head },
-      diffBaseBranch: head,
+      diffBaseBranch: measuredAgainst,
+      ...runShape(choice),
     },
   };
+}
+
+/**
+ * The workflows a *fix* may be launched with: the ones that can publish what
+ * they produce, and that gate it before they do.
+ *
+ * The inverse of `reviewWorkflowChoices`, and deliberately not a call to it.
+ * That filter exists because a review must not be able to commit or push
+ * stranger-influenced work; a fix run's entire job is to publish — the bundled
+ * starter carries a `finalize` step, so the review filter would exclude the
+ * very default this surface launches with, and offer instead workflows that do
+ * the work and then throw it away. The injection fence the review filter is
+ * made of still holds here, one layer down: what a fix run publishes goes to a
+ * pull request of its own, never to the reviewed branch's owner.
+ *
+ * `finalize` runs no gate: the project's prepare and gate commands run only
+ * from a step that carries a verifier. A workflow that publishes without one
+ * (the bundled Experiment is that shape) would open a pull request no
+ * `test_command` ever saw — so this filter is what makes the surface's "every
+ * gate this project configures still applies" true, and the copy depends on it.
+ */
+export function fixWorkflowChoices(workflows: WorkflowWithSteps[]): WorkflowWithSteps[] {
+  return workflows.filter(
+    (workflow) =>
+      workflow.steps.some((step) => step.kind === 'finalize') &&
+      workflow.steps.some((step) => step.verifier != null),
+  );
+}
+
+/**
+ * The four fields a launch surface's pickers decide, normalised.
+ *
+ * Both `ok: true` sites spread this rather than listing the fields, because a
+ * destination reached through only one of them would carry the starter and the
+ * project defaults while the surface showed the user's choice — and nothing in
+ * a plan's shape would say so. A field added to {@link RunChoice} cannot reach
+ * one site and miss the other.
+ */
+function runShape(choice: RunChoice | undefined) {
+  return {
+    workflowId: chosen(choice?.workflowId) ?? FIX_STARTER_WORKFLOW_ID,
+    agentKind: chosen(choice?.agentKind),
+    model: chosen(choice?.model),
+    effort: chosen(choice?.effort),
+  };
+}
+
+/** An unset field and a blank one both mean *inherit* — {@link RunChoice} says
+ *  why that is not the same as passing the value along. */
+function chosen<T extends string>(value: T | null | undefined): T | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
 function named(value: string | null | undefined): string | null {

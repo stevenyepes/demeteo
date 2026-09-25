@@ -103,6 +103,20 @@ pub struct TaskPlan {
     /// was before this field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<PlanCycle>,
+    /// Which decomposition lineage this plan belongs to — assigned by
+    /// [`plan_epoch`], never by the producer.
+    ///
+    /// Stamped onto every `subtask_runs` row the plan's tasks open, because
+    /// a task id alone cannot say which plan a row ran under: the step
+    /// execution id is the same across every re-run of the step, and a
+    /// fresh decomposition happily reuses ids an abandoned one ran. Joining
+    /// on id alone showed a new plan's first ticket running beside five
+    /// "completed" tickets that were the previous plan's.
+    ///
+    /// `None` on a row cached before this field existed, which reads the
+    /// way it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<String>,
     /// Tasks a targeted retry is deliberately *not* re-running because their
     /// work is already committed on the feature branch (see
     /// [`select_targeted_tasks`]).
@@ -494,6 +508,146 @@ pub fn is_rework_plan(incoming: &TaskPlan, previous: Option<&TaskPlan>) -> bool 
     !incoming.tasks.iter().any(|t| prior.contains(t.id.trim()))
 }
 
+/// Is `incoming` a list this step already ran, and had judged downstream?
+///
+/// The exception to [`is_rework_plan`]'s "the declaration wins". The
+/// `task-list.json` a producer wrote last cycle stays on disk carrying
+/// `kind: rework`, so a consumer re-entered without its producer having
+/// re-run — a redirect that landed between the two — reads that stale file
+/// as a fresh delta and pays for every one of its tickets a second time.
+/// Nothing in the declaration can tell the two apart; the tickets can.
+///
+/// A replay is an id-keyed match, every body field equal, against the
+/// cached plan's own tasks or any cycle in its `history`. Anything else —
+/// a revisited id with a rewritten body, a subset, a superset, new ids —
+/// is the producer's new answer and stays a delta. `retry_note` is
+/// execution state stamped by a targeted retry, not part of the ticket,
+/// so it is not compared.
+///
+/// `cycle_was_judged` is
+/// [`CachedCycleStanding::replay_checkable`](crate::domain::models::step_attempt::CachedCycleStanding::replay_checkable).
+/// Without it the previous cycle never reached a verdict — the consumer
+/// failed on its own — or a replay was already sent back once and the
+/// producer answered with the same list, which is then its answer: asking
+/// again would only spend the redirect budget.
+pub(crate) fn replays_a_judged_cycle(
+    incoming: &TaskPlan,
+    cached: Option<&TaskPlan>,
+    cycle_was_judged: bool,
+) -> bool {
+    let Some(cached) = cached else {
+        return false;
+    };
+    if !cycle_was_judged || incoming.tasks.is_empty() {
+        return false;
+    }
+    std::iter::once(cached.tasks.as_slice())
+        .chain(cached.history.iter().map(|c| c.tasks.as_slice()))
+        .any(|ran| same_tickets(&incoming.tasks, ran))
+}
+
+fn same_tickets(a: &[PlannedTask], b: &[PlannedTask]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let by_id: std::collections::HashMap<&str, &PlannedTask> =
+        b.iter().map(|t| (t.id.trim(), t)).collect();
+    by_id.len() == b.len()
+        && a.iter().all(|t| {
+            by_id
+                .get(t.id.trim())
+                .is_some_and(|other| same_ticket(t, other))
+        })
+}
+
+fn same_ticket(a: &PlannedTask, b: &PlannedTask) -> bool {
+    let trimmed = |v: &[String]| v.iter().map(|s| s.trim().to_string()).collect::<Vec<_>>();
+    a.title.trim() == b.title.trim()
+        && a.description.trim() == b.description.trim()
+        && trimmed(&a.files) == trimmed(&b.files)
+        && trimmed(&a.acceptance) == trimmed(&b.acceptance)
+        && trimmed(&a.blocked_by) == trimmed(&b.blocked_by)
+        && a.test_command.as_deref().map(str::trim) == b.test_command.as_deref().map(str::trim)
+}
+
+/// The plan to cache and run for `incoming`, given what the cache already
+/// holds.
+///
+/// A delta over an unjudged rework cycle is that same cycle re-entered — an
+/// environmental in-place retry, or a resume — so it must not advance the
+/// counter or fold its own tasks into `history`: doing so lists the tickets
+/// about to run as already landed. A non-delta that still declares
+/// `kind: rework` (a resume that lost `in_rework_cycle`) carries serde's
+/// default `cycle` and `history`; writing those over the cache erases the
+/// decomposition the run started from, so it inherits the cached ones.
+///
+/// `cycle_was_judged` is
+/// [`CachedCycleStanding::judged`](crate::domain::models::step_attempt::CachedCycleStanding::judged).
+pub(crate) fn plan_cache_entry(
+    mut incoming: TaskPlan,
+    cached: Option<&TaskPlan>,
+    cycle_was_judged: bool,
+    is_delta: bool,
+) -> TaskPlan {
+    if is_delta {
+        incoming.kind = PlanKind::Rework;
+        incoming.resumes_landed_work = true;
+        match cached {
+            Some(c) if c.kind == PlanKind::Rework && !cycle_was_judged => {
+                incoming.cycle = c.cycle;
+                incoming.history = c.history.clone();
+            }
+            Some(c) => {
+                incoming.cycle = c.cycle + 1;
+                incoming.history = c.close_cycle();
+            }
+            None => {
+                incoming.cycle = 1;
+                incoming.history = Vec::new();
+            }
+        }
+        incoming.already_landed = incoming.all_prior_tasks();
+    } else if incoming.kind == PlanKind::Rework {
+        if let Some(c) = cached {
+            incoming.cycle = c.cycle;
+            incoming.history = c.history.clone();
+        }
+    }
+    incoming
+}
+
+/// The [`TaskPlan::epoch`] for `plan` — already resolved by
+/// [`plan_cache_entry`] — given the cached plan it replaces.
+///
+/// A plan continues the cached lineage when it is a rework of it (its
+/// cycle and history came from the cache, so its earlier cycles' rows are
+/// its own) or the same list re-read at the same cycle (a retry or resume,
+/// whose earlier attempts' rows are this plan's too). Anything else is a new
+/// decomposition, and every row before it belongs to a plan no longer shown.
+///
+/// Identity is by ordered task ids: a re-decomposition that emits exactly
+/// the previous list's ids is indistinguishable from a retry, and inherits
+/// its rows.
+pub(crate) fn plan_epoch(
+    plan: &TaskPlan,
+    cached: Option<&TaskPlan>,
+    fresh: impl FnOnce() -> String,
+) -> String {
+    let continues = |c: &TaskPlan| {
+        plan.kind == PlanKind::Rework
+            || (plan.cycle == c.cycle
+                && plan
+                    .tasks
+                    .iter()
+                    .map(|t| &t.id)
+                    .eq(c.tasks.iter().map(|t| &t.id)))
+    };
+    match cached {
+        Some(c) if continues(c) => c.epoch.clone().unwrap_or_else(fresh),
+        _ => fresh(),
+    }
+}
+
 /// What happens when a rework cycle's freshly-read plan isn't the delta it
 /// should be — the pure sibling of [`is_rework_plan`], which only answers
 /// *is this a delta*. Split out for the same reason [`reject_unexecutable_plan`]
@@ -506,24 +660,39 @@ pub fn is_rework_plan(incoming: &TaskPlan, previous: Option<&TaskPlan>) -> bool 
 /// gate to its own producer hop) — not a defect to send back. `producer`
 /// being `None` (a planner-sourced step) answers the same way: nobody to
 /// fault.
+///
+/// `replayed` is [`replays_a_judged_cycle`]'s answer, and only changes what
+/// the producer is told: a list it already wrote, handed back unchanged, is
+/// a different mistake from a whole decomposition, and the fix names it.
 pub(crate) fn reject_stale_rework_plan(
     in_rework_cycle: bool,
     is_delta: bool,
     producer: Option<&crate::domain::ids::StepId>,
     producer_declares_rework_template: bool,
+    replayed: bool,
 ) -> Option<PlanRejection> {
     if is_delta || !in_rework_cycle || !producer_declares_rework_template {
         return None;
     }
     let producer = producer?;
+    let what = if replayed {
+        format!(
+            "the task list from '{}' is the list I already ran last cycle; the producer did not \
+             re-run or re-emitted it unchanged.",
+            producer.0
+        )
+    } else {
+        format!(
+            "the task list from '{}' is a whole decomposition, not a delta against it.",
+            producer.0
+        )
+    };
     Some(PlanRejection::ProducerMustFix {
         producer: producer.clone(),
         reason: format!(
             "sequence step: this is a rework cycle — a verdict downstream of me sent the run \
              back, and the previous cycle's implementation is already on the feature branch — \
-             but the task list from '{}' is a whole decomposition, not a delta against it. \
-             Write only the tickets that close the current verdict.",
-            producer.0
+             but {what} Write only the tickets that close the current verdict."
         ),
     })
 }

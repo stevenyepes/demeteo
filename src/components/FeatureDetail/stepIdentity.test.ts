@@ -72,6 +72,25 @@ describe('inspectorRunStatus', () => {
     );
   });
 
+  it("carries the selected execution's launch evidence", () => {
+    const status = inspectorRunStatus(step({ id: 'se-2', status: 'running' }), null, {
+      stepExecutionId: 'se-2',
+      agentKind: 'claude-code',
+      model: 'sonnet',
+      effort: 'max',
+    });
+    expect(status.agentKind).toBe('claude-code');
+    expect(status.model).toBe('sonnet');
+    expect(status.effort).toBe('max');
+  });
+
+  it('leaves the assignment fields absent where no spawn was recorded', () => {
+    const bare = inspectorRunStatus(step({ status: 'running' }), null);
+    expect('agentKind' in bare).toBe(false);
+    expect('model' in bare).toBe(false);
+    expect('effort' in bare).toBe(false);
+  });
+
   it('reads absent metrics as null rather than undefined', () => {
     // `NodeRunStatus` is rendered straight into the Overview tab, where
     // `undefined` and `null` are the same on screen but not to a strict test —

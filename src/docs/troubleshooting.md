@@ -20,7 +20,10 @@
 1. Check the **Gate** — human approval may be required (look for the amber glow)
 2. Verify the agent machine is running and reachable
 3. Check the step logs for error messages
-4. Use **Cancel Feature** and retry with a different model or agent
+4. Open the stuck step and change its **Assignment** (agent / model / effort) in the
+   inspector's Actions tab — the pin applies the next time that step runs, and it
+   survives a retry, so the run does not have to be cancelled
+5. If the run is beyond saving, use **Cancel Feature** and relaunch
 
 ### Merge conflict gate won't resolve
 
