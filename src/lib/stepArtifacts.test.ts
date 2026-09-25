@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { listReviewableGateArtifacts, listStepArtifacts } from './stepArtifacts';
+import { findImplementationReport, listReviewableGateArtifacts, listStepArtifacts } from './stepArtifacts';
 import type { StepExecution } from '../types';
 
 function step(over: Partial<StepExecution> = {}): StepExecution {
@@ -127,5 +127,43 @@ describe('listReviewableGateArtifacts', () => {
 
   it('is empty when no predecessor has anything listable', () => {
     expect(listReviewableGateArtifacts([baseline], 1)).toEqual([]);
+  });
+});
+
+describe('findImplementationReport', () => {
+  const implement = step({
+    step_id: 's-implement',
+    step_kind: 'sequence',
+    artifact_paths: ['/a/s-implement/code-diff.diff', '/a/s-implement/implementation-report.md'],
+  });
+
+  it('finds the report by basename and names the step that carries it', () => {
+    expect(findImplementationReport([{ step: implement, listed: implement.artifact_paths }])).toEqual({
+      path: '/a/s-implement/implementation-report.md',
+      stepId: 's-implement',
+    });
+  });
+
+  it('matches a backslash-separated path', () => {
+    const win = step({ step_id: 's-implement', artifact_paths: ['C:\\a\\implementation-report.md'] });
+    expect(findImplementationReport([{ step: win, listed: win.artifact_paths }])?.path).toBe(
+      'C:\\a\\implementation-report.md',
+    );
+  });
+
+  it('does not take a file that merely ends with the name', () => {
+    const other = step({ artifact_paths: ['/a/old-implementation-report.md'] });
+    expect(findImplementationReport([{ step: other, listed: other.artifact_paths }])).toBeNull();
+  });
+
+  it('prefers the latest step when two carry one', () => {
+    const earlier = step({ step_id: 's-a', artifact_paths: ['/x/implementation-report.md'] });
+    const later = step({ step_id: 's-b', artifact_paths: ['/y/implementation-report.md'] });
+    expect(
+      findImplementationReport([
+        { step: earlier, listed: earlier.artifact_paths },
+        { step: later, listed: later.artifact_paths },
+      ])?.stepId,
+    ).toBe('s-b');
   });
 });

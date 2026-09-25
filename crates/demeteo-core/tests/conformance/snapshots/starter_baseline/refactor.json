@@ -101,6 +101,11 @@
       "diff --git a/src/s-refactor.txt b/src/s-refactor.txt\nnew file mode 100644\nindex 0000000..9b888c0\n--- /dev/null\n+++ b/src/s-refactor.txt\n@@ -0,0 +1,4 @@\n+# stub artifact\n+\n+path: src/s-refactor.txt\n+generated-by: demeteo stub agent\n"
     ],
     [
+      "s-refactor",
+      "implementation-report.md",
+      "# Implementation report\n\nBuilt by Demeteo from each ticket's turn, not written by an agent. Two kinds of line, and they are not interchangeable:\n\n- **self-reported** — the agent's own closing summary. A claim, not evidence.\n- **observed** — a shell command the agent's harness reported running, with the status the harness reported for it. `completed` means the tool call finished, not that its tests passed; read the claim beside it. `not observed` means the harness never reported how the command ended.\n\n## Ticket `stub-task-1` — Stub task one\n\n### Observed\n\nNo shell command was observed. Either the agent ran none, or its harness does not report tool calls — this is absence of evidence either way.\n\n### Self-reported\n\nThe agent ended its turn without a summary.\n\n## Ticket `stub-task-2` — Stub task two\n\n### Observed\n\nNo shell command was observed. Either the agent ran none, or its harness does not report tool calls — this is absence of evidence either way.\n\n### Self-reported\n\nThe agent ended its turn without a summary.\n\n"
+    ],
+    [
       "s-regression",
       "s-regression.md",
       "# stub artifact\n\npath: artifacts/s-regression.md\ngenerated-by: demeteo stub agent\n"

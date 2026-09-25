@@ -2,6 +2,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::domain::models::{EffortLevel, WorktreeStrategy};
 
+pub mod park;
+pub mod recurrence;
 pub mod verdict;
 
 #[cfg(test)]

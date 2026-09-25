@@ -636,6 +636,21 @@ impl ExecutionDriver {
                 );
                 Err(crate::domain::verifier::VerifierError::Environment(reason))
             }
+            // This turn's prompt never offers `evidence`, and a verifier error
+            // has no park to reach, so an unasked-for one is read as the fail
+            // it is closest to. The park lives on the validate step's own
+            // verdict path (`steps::agent::verdict`).
+            ParsedVerdict::Evidence(gap) => {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    reason = %gap.reason,
+                    "verifier verdict: evidence, which this turn cannot park on — reading it as fail"
+                );
+                Err(crate::domain::verifier::VerifierError::Verdict(
+                    crate::domain::verifier::VerdictFailure::from_reason(gap.reason),
+                ))
+            }
             ParsedVerdict::Missing(desc) => {
                 tracing::warn!(
                     feature_id = %self.f_id,

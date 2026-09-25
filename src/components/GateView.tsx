@@ -15,7 +15,8 @@ import {
   type GateBlocker,
 } from '../lib/features';
 import { decideRemoteGate, remoteRunForFeature } from '../lib/remoteRuns';
-import { listReviewableGateArtifacts } from '../lib/stepArtifacts';
+import { findImplementationReport, listReviewableGateArtifacts } from '../lib/stepArtifacts';
+import { GateParkReason } from './GateParkReason';
 
 interface GateViewProps {
   stepExecutionId: string;
@@ -59,6 +60,7 @@ export const GateView: React.FC<GateViewProps> = ({
     [allSteps, stepExec],
   );
   const hasReviewableArtifacts = reviewable.length > 0;
+  const implementationReport = useMemo(() => findImplementationReport(reviewable), [reviewable]);
 
   // A real `gate` step clears `error_message` on the way into the wait, so
   // anything here belongs to a step that parked itself and put its question
@@ -222,21 +224,12 @@ export const GateView: React.FC<GateViewProps> = ({
             </p>
           </div>
 
-          {/* A step that stopped to ask carries the question in
-              `error_message` — the only copy of it. Without this the modal
-              renders a generic "review the artifact" over a park that may
-              have produced no artifact to review, and the person is asked
-              to decide something nobody told them. */}
           {parkReason && (
-            <div
-              data-testid="gate-park-reason"
-              className="p-4 rounded-lg bg-amber-500/[0.04] border border-amber-500/20 text-sm text-slate-300 leading-relaxed space-y-3"
-            >
-              <div className="text-amber-300 font-semibold flex items-center gap-1.5 text-xs uppercase tracking-wider">
-                <ShieldAlert className="w-3.5 h-3.5" /> Why the run stopped here
-              </div>
-              <p className="whitespace-pre-wrap">{parkReason}</p>
-            </div>
+            <GateParkReason
+              reason={parkReason}
+              report={implementationReport}
+              onOpenReport={openArtifact}
+            />
           )}
 
           {/* Artifact Preview */}

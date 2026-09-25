@@ -346,6 +346,49 @@ describe('GateView park reason', () => {
     expect(screen.queryByText(/Review the artifact generated below/)).toBeNull();
   });
 
+  it('opens the implementation report from beside a validate park reason', async () => {
+    const implement = step({
+      id: 'se-implement',
+      step_id: 's-implement',
+      step_index: 2,
+      step_kind: 'sequence',
+      artifact_paths: [
+        '/data/artifacts/f-1/s-implement/code-diff.diff',
+        '/data/artifacts/f-1/s-implement/implementation-report.md',
+      ],
+    });
+    const validate = step({
+      id: 'se-validate',
+      step_id: 's-validate',
+      step_index: 3,
+      status: 'awaiting_gate',
+      artifact_paths: ['/data/artifacts/f-1/s-validate/validation-report.md'],
+      error_message: 'Validation found every code and harness criterion met, but no evidence for:\n- AC6',
+    });
+    mount({ gateStep: validate, allSteps: [RESEARCH, SPEC, implement, validate] });
+
+    const open = await screen.findByTestId('gate-open-implementation-report');
+    await userEvent.click(open);
+    expect(screen.getByTestId('artifact-viewer-stub')).toHaveTextContent(
+      '/data/artifacts/f-1/s-implement/implementation-report.md',
+    );
+  });
+
+  it('offers no report button when no step produced one', async () => {
+    const parked = step({
+      id: 'se-implement',
+      step_id: 's-implement',
+      step_index: 3,
+      step_kind: 'sequence',
+      status: 'awaiting_gate',
+      error_message: 'zero tickets',
+    });
+    mount({ gateStep: parked, allSteps: [RESEARCH, SPEC, parked] });
+
+    await screen.findByTestId('gate-park-reason');
+    expect(screen.queryByTestId('gate-open-implementation-report')).toBeNull();
+  });
+
   it('shows no reason block for an ordinary gate step', async () => {
     mount();
 

@@ -64,6 +64,8 @@ impl ExecutionDriver {
         let timeouts = crate::application::timeouts::resolve_effective(self.app_settings.as_ref());
         let base_cost = *spend.cost;
         let base_tokens = *spend.tokens;
+        let mut observer = crate::domain::sequence::report::CommandObserver::default();
+        let mut agent_text = String::new();
 
         let turn_res = crate::adapters::agent::event_stream::stream_agent_turn(
             &*session,
@@ -75,6 +77,7 @@ impl ExecutionDriver {
             target.override_model.map(str::to_string),
             self.pricing.clone(),
             |event| {
+                observer.observe(event);
                 if let AgentEvent::Text { delta } = event {
                     let _ = self.notif.emit(&DomainEvent::AgentStream {
                         feature_id: self.f_id.clone(),
@@ -102,6 +105,7 @@ impl ExecutionDriver {
                 *spend.cost += outcome.cost_usd;
                 *spend.tokens += outcome.tokens;
                 produced_artifacts = outcome.produced_artifacts;
+                agent_text = outcome.text;
                 None
             }
             crate::adapters::agent::event_stream::TurnResult::Failed { reason, spent } => {
@@ -253,6 +257,20 @@ impl ExecutionDriver {
         );
         let missing_names: std::collections::HashSet<&str> =
             missing.iter().map(|m| m.name.as_str()).collect();
+        // Only a task that committed gets a fragment: the report is evidence
+        // about work on the branch, not about attempts that were rolled back.
+        super::report::record_ticket_report(
+            &*self.artifacts,
+            &self.f_id_str,
+            &step_exec.step_id.0,
+            &crate::domain::sequence::report::TicketReport::new(
+                &task.id,
+                &task.title,
+                &agent_text,
+                observer.into_commands(),
+                crate::paths::now_ms(),
+            ),
+        );
         Ok(TaskContribution {
             artifact_refs: refs,
             satisfied_decls: decls
