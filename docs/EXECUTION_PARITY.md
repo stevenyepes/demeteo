@@ -51,7 +51,7 @@ produces. Every mid-run control the desktop offers a local run has a
 same-named, same-shaped twin on the runner's JSON-RPC surface
 (`crates/demeteo-runner/src/rpc/`), because a run being detached is not
 supposed to be something the UI has to explain: `cancel_run`, `retry_step`,
-and — since [decision 53](DECISIONS.md#53--mid-run-assignment-detail) —
+and — since [decision 54](DECISIONS.md#54--mid-run-assignment-detail) —
 `set_step_assignment`, whose params are `{ run_id, step_execution_id,
 agent_kind, model, effort }`.
 

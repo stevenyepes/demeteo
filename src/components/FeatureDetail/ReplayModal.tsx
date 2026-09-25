@@ -5,10 +5,10 @@ import type { ReplayTarget } from './useRerunActions';
 /**
  * Confirm a rewind to `target`.
  *
- * It confirms the rewind and nothing else: the harness, model and effort
- * selects it used to carry wrote the feature-wide tier, so choosing one here
- * re-pointed every step after the target too. A node is re-pointed on the
- * inspector's Assignment control, whose blast radius is the node it is on.
+ * It confirms the rewind and nothing else: harness, model and effort params
+ * write the feature-wide tier, which every step after the target resolves
+ * against. A node is re-pointed on the inspector's Assignment control, whose
+ * blast radius is the node it is on.
  */
 export function ReplayModal({
   target,

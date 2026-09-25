@@ -177,8 +177,7 @@ export function NodePanel({
   const hasOutput =
     artifacts.listed.length > 0 || artifacts.hiddenCount > 0 || !!step?.error_message;
   // Assignment counts: it is the one control a node can offer before anything
-  // has happened to it, and gating the tab on a rewind action hid it on
-  // exactly the queued node it exists for.
+  // has happened to it, so the tab must not depend on a rewind action.
   const hasActions = !!(onRetry || onReplay || onStop || onDecideGate || (overrides && assignment));
 
   return (

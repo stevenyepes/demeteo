@@ -27,7 +27,7 @@
 - **Artifact Mode** — per-workflow setting for how much step output to persist (`full` / `summary_only` / `none`).
 - **Workflow Schedule** — optional schedule attached to a workflow (`workflow_save_schedule`); the scheduler adapter (`adapters/scheduler.rs`) fires it on cadence.
 - **Project Workflow Override** — project-scoped override of agent/model for a workflow or step (`step_id = None` for workflow-level, `Some(...)` for step-level). Persisted in `project_workflow_overrides`.
-- **Step Override** — one step's pinned agent/model/effort, held on the feature row. It is the run's highest-precedence tier, and it is writable for as long as the run is alive: chosen in `StartFeatureModal` at launch, then re-pointed from the step inspector's Assignment control (`step_set_assignment`). A step with no entry inherits down the chain ([decision 53](DECISIONS.md#53--mid-run-assignment-detail)).
+- **Step Override** — one step's pinned agent/model/effort, held on the feature row. It is the run's highest-precedence tier, and it is writable for as long as the run is alive: chosen in `StartFeatureModal` at launch, then re-pointed from the step inspector's Assignment control (`step_set_assignment`). A step with no entry inherits down the chain ([decision 54](DECISIONS.md#54--mid-run-assignment-detail)).
 - **Memory** — typed project-level knowledge captured by the Memory Agent (`conventions | lessons | decisions | preferences | facts`).
 - **Notification** — UI-side cache row for the in-app notification bell.
 

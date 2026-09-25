@@ -7,8 +7,8 @@
 //! row the replay path never patches, so the replacement survives every
 //! re-entry into the step (`on_failure` retry, redirect, rewind, replay)
 //! without any machinery of its own. The feature-wide `agent_kind` / `model` /
-//! `effort` columns are tier 2: writing those from a per-node control is the
-//! bug this replaces, not a shortcut to it.
+//! `effort` columns are tier 2, which every later step resolves
+//! against, so a per-node control must never write them.
 //!
 //! Policy only — the adapter loads the list, calls this, and saves the result.
 //! See [`crate::domain`] for why the decision lives here rather than inside

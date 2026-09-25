@@ -1,4 +1,4 @@
-import { AlertCircle, RefreshCw, RotateCcw, ShieldCheck, XCircle } from 'lucide-react';
+import { RefreshCw, RotateCcw, ShieldCheck, XCircle } from 'lucide-react';
 
 import { isOutOfBandStep } from '../../../lib/featureSync';
 import { isAssignable, takesAssignment } from '../../../lib/stepAssignment';
@@ -9,6 +9,7 @@ import type { StepAssignment } from '../../FeatureDetail/useStepAssignment';
 import type { NodeConfigV2, NodeRunStatus } from '../types';
 import { AssignmentSection } from './AssignmentSection';
 import { classLabel } from './format';
+import { GuardNote } from './GuardNote';
 
 /** The active ancestor blocking a manual retry/gate decision, if any. */
 export interface BlockingAncestor {
@@ -87,9 +88,8 @@ export function ActionsTab({
 
   // Neither rerun reads the picker: `useRerunActions` submits null for agent,
   // model and effort by decision, so both re-run on the node's *stored* pin.
-  // The picker sits directly above them, and the pre-change behaviour was that
-  // it fed them — so a sentence in the rows' body copy is the wrong instrument.
-  // Holding the press shut is the only version a user cannot read past.
+  // The picker sits directly above them and looks like it drives them, so
+  // holding the press shut is the only signal a user cannot read past.
   const unapplied = showAssignment && assignment.dirty;
   const unappliedMsg =
     'The Assignment above has unapplied edits. Retry and Replay re-run on the pinned assignment — press Apply to pin your edits first.';
@@ -175,18 +175,6 @@ export function ActionsTab({
       {unapplied && <GuardNote message={unappliedMsg} />}
 
       {guarded && <GuardNote message={guardMsg} />}
-    </div>
-  );
-}
-
-/** The inline amber note that says why a row above it will not fire. Two of
- *  these can stand at once — an unapplied edit and a still-running ancestor are
- *  independent — so neither may be folded into the other's text. */
-function GuardNote({ message }: { message: string }) {
-  return (
-    <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-950/10 p-3 text-xs text-amber-300/90">
-      <AlertCircle className="mt-px h-4 w-4 shrink-0 text-amber-400" />
-      <span>{message}</span>
     </div>
   );
 }

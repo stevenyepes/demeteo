@@ -230,6 +230,16 @@ impl StepExecutor for DagStepExecutor {
                 AppError::not_found(format!("Step execution not found: {}", execution_id))
             })?;
 
+        if self
+            .runner_owned_features()
+            .contains(step_exec.feature_id.as_str())
+        {
+            return Err(AppError::validation(shadow_refusal(
+                RunAction::Assign,
+                &step_exec.feature_id.0,
+            )));
+        }
+
         if let Some(refusal) =
             crate::domain::run_control::out_of_band_refusal(RunAction::Assign, &step_exec.step_id.0)
         {
@@ -254,20 +264,11 @@ impl StepExecutor for DagStepExecutor {
             }
         }
 
-        if self
-            .runner_owned_features()
-            .contains(step_exec.feature_id.as_str())
-        {
-            return Err(AppError::validation(shadow_refusal(
-                RunAction::Assign,
-                &step_exec.feature_id.0,
-            )));
-        }
-
         // Read-modify-write: the stored list is the one this edit composes
-        // against, so two windows pinning two different nodes keep both pins.
-        // A caller handing over a whole list would silently drop the older of
-        // the two.
+        // against, so sequential edits to different nodes keep both pins. A
+        // caller handing over a whole list would silently drop the older one.
+        // The read and the update are two repository calls, so two edits
+        // overlapping in time can still lose one pin.
         let feature = self
             .features
             .get(&step_exec.feature_id)

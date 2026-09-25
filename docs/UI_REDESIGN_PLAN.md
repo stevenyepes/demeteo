@@ -473,7 +473,7 @@ where the truncation notice now lives, instead of only on the timeline's copy.
   whose only control is its assignment still reaches the tab. Retry and Replay
   correspondingly stopped carrying a harness/model/effort of their own — they were
   writing the *feature-wide* tier from a per-node control
-  ([decision 53](DECISIONS.md#53--mid-run-assignment-detail)).
+  ([decision 54](DECISIONS.md#54--mid-run-assignment-detail)).
 - **`useAgentStream` lost `activeStreamId`.** "Which step's output is on screen" is the
   inspector's selection now, and a second copy of that state would be free to disagree
   with it.

@@ -29,9 +29,9 @@ export interface ReplayTarget {
  *
  * None of these rewinds carries a harness, model or effort. The three override
  * params of `step_retry` / `replay_from_step` write the *feature* row, which
- * every later step then resolves against — so re-pointing one failed node used
- * to re-point the rest of the run with it. A single node is re-pointed through
- * the Assignment control instead, which writes only that node's entry.
+ * every later step then resolves against, so sending them from one node would
+ * re-point the rest of the run. A single node is re-pointed through the
+ * Assignment control instead, which writes only that node's entry.
  */
 export function useRerunActions(input: {
   featureId: string;

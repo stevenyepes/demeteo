@@ -35,7 +35,7 @@ alternative in full.
 | 50 | Gate approval and worktree merges are excluded; ticket creation stays with decomposition; discovery interviews are out of scope this phase | exposing them | see §8 — the first two are *permanent*, the last is *this phase* |
 | 51 | `ticket_force_start` is excluded | exposing it | its `reason` is fed to the agent as prerequisite context |
 | 52 | The listener is off until enabled in Settings | always listening | discovery documents are unauthenticated by necessity |
-| 54 | `initialize` and `tools/list` need a grant; only `server/discover` is open on `/mcp` | an open handshake | clients that sign in only when connecting is refused never got a token — see §5 |
+| 53 | `initialize` and `tools/list` need a grant; only `server/discover` is open on `/mcp` | an open handshake | clients that sign in only when connecting is refused never got a token — see §5 |
 
 ---
 
