@@ -18,7 +18,7 @@ use super::super::SqliteAdapter;
 /// never fires in practice.
 ///
 /// `workspace_fingerprint` is the P1.14 workspace state at node start
-/// (`<HEAD>:<dirty|clean>`, `None` when the probe failed); the row's
+/// (`None` when the probe failed); the row's
 /// `idempotency_key` is derived here — `<se_id>#<attempt_no>#<fp>` —
 /// because only this function knows the assigned `attempt_no`.
 pub fn attempt_open(

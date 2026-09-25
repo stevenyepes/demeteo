@@ -1,7 +1,6 @@
 use crate::domain::ids::ProjectId;
 use crate::domain::models::{ProjectSettings, StepConfig, WorktreeStrategy};
 use crate::domain::prompt_context::PromptContext;
-use crate::paths;
 use crate::ports::db::ProjectRepository;
 use crate::ports::execution::ExecutionPort;
 
@@ -117,13 +116,14 @@ pub(crate) fn build_base_ctx(
         .set("session_resume_summary", session_resume_summary)
 }
 
-/// Probe the feature worktree's state as a comparable fingerprint
-/// (P1.14): `"<repo HEAD>:<dirty|clean>"`. Recorded on every
-/// `step_attempts` row at node start; on resume of an interrupted node,
-/// a mismatch against the live workspace surfaces as the Decision-14
-/// synthetic gate instead of blind re-execution.
+/// Probe the feature's workspace as a comparable fingerprint (P1.14),
+/// recorded on every `step_attempts` row at node start; on resume of an
+/// interrupted node, a mismatch against the live workspace surfaces as the
+/// Decision-14 synthetic gate instead of blind re-execution. What the value
+/// means — and why it is the feature branch's tip rather than `HEAD` of
+/// `target_dir` — is [`crate::domain::workspace_fingerprint`].
 ///
-/// `None` on any probe failure (no repo yet, dead transport, git
+/// `None` on any probe failure (no branch yet, dead transport, git
 /// missing) — a fingerprint that can't be read must never block a run,
 /// so callers treat `None` as "unknown, proceed".
 ///
@@ -135,21 +135,36 @@ pub(crate) async fn workspace_fingerprint(
     exec: &dyn ExecutionPort,
     machine_id: &str,
     target_dir: &str,
+    feature_branch: &str,
 ) -> Option<String> {
-    let d = paths::shell_escape_posix(target_dir);
-    let script = format!(
-        "cd {d} && git rev-parse HEAD 2>/dev/null && git status --porcelain 2>/dev/null | head -1"
-    );
-    let out = exec.run_command(machine_id, &script).await.ok()?;
-    let mut lines = out.lines();
-    let head = lines.next()?.trim();
-    // `git rev-parse HEAD` yields a 40-hex sha; anything else means the
-    // probe ran in a broken repo — treat as unknown.
-    if head.len() != 40 || !head.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
+    use crate::adapters::worktree::git_ops::{git_request, worktree::worktree_list_request};
+    use crate::domain::{workspace_fingerprint, worktree_listing};
+
+    let tip_ref = format!("refs/heads/{feature_branch}^{{commit}}");
+    let tip = exec
+        .run_program(
+            machine_id,
+            git_request(target_dir, ["rev-parse", "--verify", "--quiet", &tip_ref]),
+        )
+        .await
+        .ok()?;
+    let listing = exec
+        .run_program(machine_id, worktree_list_request(target_dir))
+        .await
+        .ok()?;
+    let listing = worktree_listing::parse(&listing);
+    let mut dirty = false;
+    for checkout in workspace_fingerprint::feature_checkouts(&listing, feature_branch) {
+        let status = exec
+            .run_program(machine_id, git_request(checkout, ["status", "--porcelain"]))
+            .await
+            .ok()?;
+        if !status.trim().is_empty() {
+            dirty = true;
+            break;
+        }
     }
-    let dirty = lines.next().is_some_and(|l| !l.trim().is_empty());
-    Some(format!("{head}:{}", if dirty { "dirty" } else { "clean" }))
+    workspace_fingerprint::render(&tip, dirty)
 }
 
 const MAX_SLUG_LEN: usize = 50;

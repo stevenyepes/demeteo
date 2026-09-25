@@ -57,9 +57,9 @@ pub struct StepAttempt {
     /// `environment.in_place`. `None` for non-failure outcomes and for
     /// failures preempted by a cancel (no rule was applied).
     pub applied_rule: Option<String>,
-    /// Workspace state at attempt start (P1.14):
-    /// `<repo HEAD>:<dirty|clean>`. `None` when the probe failed or the
-    /// row predates the column. On resume of an interrupted node, a
+    /// Workspace state at attempt start (P1.14), as
+    /// [`crate::domain::workspace_fingerprint`] renders it. `None` when the
+    /// probe failed or the row predates the column. On resume of an interrupted node, a
     /// mismatch against the live workspace surfaces as the Decision-14
     /// synthetic gate instead of blind re-execution.
     pub workspace_fingerprint: Option<String>,

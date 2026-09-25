@@ -87,4 +87,5 @@ pub mod workflow_graph;
 pub mod workflow_history;
 pub mod workflow_overrides;
 pub mod workflow_starters;
+pub(crate) mod workspace_fingerprint;
 pub(crate) mod worktree_listing;

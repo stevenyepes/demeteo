@@ -1226,7 +1226,7 @@ pub(crate) async fn delete_worktree_residue(
 /// The one reading every worktree listing in this crate is built from. Shared
 /// so the terminal listing and merge-back cannot end up asking git a
 /// differently-shaped question than [`GitOpsHelper::list_worktrees`] does.
-pub(super) fn worktree_list_request(dir: &str) -> crate::ports::execution::ProgramRequest {
+pub(crate) fn worktree_list_request(dir: &str) -> crate::ports::execution::ProgramRequest {
     super::git_request(dir, ["worktree", "list", "--porcelain"])
 }
 

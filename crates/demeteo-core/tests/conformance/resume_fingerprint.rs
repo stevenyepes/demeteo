@@ -15,6 +15,12 @@
 //!      `gate_decide("approve")` lets it re-run to completion;
 //!    * **untouched** workspace → fingerprints match and the run
 //!      auto-resumes with no human in the loop (pre-P1.14 behavior).
+//!
+//! "The workspace" is the feature's, not the project clone's — see
+//! [`crate::domain::workspace_fingerprint`]. So the mutations below are
+//! the ones that reach a feature: its branch checked out and edited, its
+//! branch moved by a commit. The control includes another feature moving
+//! the shared clone, which must not park this one.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -134,9 +140,26 @@ fn ctx_for(dir: &Path) -> AppContext {
     )
 }
 
-/// Life 1 + the forged crash. Returns everything life 2 needs:
-/// `(app_data_dir, feature_id, step_execution_id, repo_dir)`.
-async fn run_then_forge_crash(tag: &str) -> (PathBuf, FeatureId, String, PathBuf) {
+/// Everything life 2 needs from [`run_then_forge_crash`].
+struct Crashed {
+    app_data_dir: PathBuf,
+    feature_id: FeatureId,
+    step_exec_id: String,
+    repo_dir: PathBuf,
+    branch: String,
+}
+
+/// Life 1 + the forged crash.
+async fn run_then_forge_crash(tag: &str) -> Crashed {
+    run_then_forge_crash_recording(tag, |fp| fp).await
+}
+
+/// [`run_then_forge_crash`], with `record` choosing what the forged attempt
+/// row stores given the fingerprint probed at "node start".
+async fn run_then_forge_crash_recording(
+    tag: &str,
+    record: impl FnOnce(String) -> String,
+) -> Crashed {
     std::env::set_var(STUB_AGENT_ENV, "1");
     let tmp = std::env::temp_dir().join(format!(
         "demeteo-resume-fp-{tag}-{}",
@@ -196,11 +219,13 @@ async fn run_then_forge_crash(tag: &str) -> (PathBuf, FeatureId, String, PathBuf
         "life 1 must succeed; got {status}"
     );
 
-    // Settle the workspace to a known-clean state, so the forged attempt's
-    // fingerprint is reproducible on resume (the fingerprint is HEAD + a
-    // dirty bit — a mutation on an already-dirty tree would be invisible).
-    git(&repo_dir, &["add", "-A"]);
-    git(&repo_dir, &["commit", "-m", "settle", "--allow-empty"]);
+    let branch = ctx
+        .features
+        .get(&feature.id)
+        .expect("feature read")
+        .expect("feature exists")
+        .resolved_branch
+        .expect("a V41+ feature records its branch");
 
     let step = ctx
         .features
@@ -217,12 +242,16 @@ async fn run_then_forge_crash(tag: &str) -> (PathBuf, FeatureId, String, PathBuf
         &*ctx.exec,
         "local",
         &repo_dir.to_string_lossy(),
+        &branch,
     )
     .await
     .expect("probe fingerprint");
-    assert!(fp.ends_with(":clean"), "settled tree must be clean: {fp}");
+    assert!(
+        fp.ends_with(":clean"),
+        "no checkout holds the branch yet: {fp}"
+    );
     ctx.features
-        .attempt_open(&step.id, paths::now_ms(), Some(&fp))
+        .attempt_open(&step.id, paths::now_ms(), Some(&record(fp)))
         .expect("forge open attempt");
     ctx.features
         .step_update(
@@ -243,27 +272,24 @@ async fn run_then_forge_crash(tag: &str) -> (PathBuf, FeatureId, String, PathBuf
         )
         .expect("forge feature running");
 
-    (tmp, feature.id.clone(), step.id.0.clone(), repo_dir)
+    Crashed {
+        app_data_dir: tmp,
+        feature_id: feature.id.clone(),
+        step_exec_id: step.id.0.clone(),
+        repo_dir,
+        branch,
+    }
 }
 
-/// The P1.14 exit test: a workspace mutated between crash and resume
-/// parks at the synthetic gate; approval — and only approval — re-runs.
-#[tokio::test]
-async fn mutated_workspace_parks_at_synthetic_gate_until_approved() {
-    let (tmp, feature_id, step_exec_id, repo_dir) = run_then_forge_crash("mutated").await;
-
-    // The between-crash-and-resume mutation: a human edited the worktree.
-    std::fs::write(repo_dir.join("meddled.txt"), "changed while stopped\n")
-        .expect("mutate worktree");
-
-    // Life 2: watchdog marks the step interrupted + surfaces the
-    // synthetic gate; the auto-armed driver must PARK, not re-execute.
-    let ctx2 = ctx_for(&tmp);
+/// Life 2 must hold the step at the synthetic gate; approval — and only
+/// approval — re-runs it to success.
+async fn assert_parks_until_approved(crashed: &Crashed) {
+    let ctx2 = ctx_for(&crashed.app_data_dir);
     tokio::time::sleep(Duration::from_secs(2)).await;
     let step = ctx2
         .features
         .step_get(&crate::domain::ids::StepExecutionId::from(
-            step_exec_id.clone(),
+            crashed.step_exec_id.clone(),
         ))
         .expect("step read")
         .expect("step exists");
@@ -273,7 +299,7 @@ async fn mutated_workspace_parks_at_synthetic_gate_until_approved() {
     );
     let feature = ctx2
         .features
-        .get(&feature_id)
+        .get(&crashed.feature_id)
         .expect("feature read")
         .expect("feature exists");
     assert_eq!(
@@ -281,34 +307,123 @@ async fn mutated_workspace_parks_at_synthetic_gate_until_approved() {
         "the feature must be parked awaiting the synthetic gate"
     );
 
-    // The human blesses the changed workspace → the node re-runs and the
-    // feature completes.
     ctx2.presenter
-        .gate_decide(&step_exec_id, "approve", None)
+        .gate_decide(&crashed.step_exec_id, "approve", None)
         .await
         .expect("approve synthetic gate");
-    let status = poll_terminal(&ctx2, &feature_id).await;
+    let status = poll_terminal(&ctx2, &crashed.feature_id).await;
     assert!(
         matches!(status.as_str(), "completed" | "awaiting_mr"),
         "approval must resume the run to success; got {status}"
     );
-
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Control: an untouched workspace matches the recorded fingerprint and
-/// auto-resumes with no human in the loop — the guard only ever bites on
-/// a real mismatch.
+/// The P1.14 exit test: a human checked the feature branch out in the
+/// project clone — what a terminal opened on a pipeline does — and left an
+/// edit there. The run parks; the edit survives the re-run's merge-back.
 #[tokio::test]
-async fn untouched_workspace_auto_resumes_without_gating() {
-    let (tmp, feature_id, _step_exec_id, _repo_dir) = run_then_forge_crash("clean").await;
+async fn edited_feature_checkout_parks_at_synthetic_gate_until_approved() {
+    let crashed = run_then_forge_crash("edited").await;
+    git(&crashed.repo_dir, &["checkout", &crashed.branch]);
+    std::fs::write(
+        crashed.repo_dir.join("meddled.txt"),
+        "changed while stopped\n",
+    )
+    .expect("mutate worktree");
 
-    let ctx2 = ctx_for(&tmp);
-    let status = poll_terminal(&ctx2, &feature_id).await;
-    assert!(
-        matches!(status.as_str(), "completed" | "awaiting_mr"),
-        "a matching fingerprint must auto-resume; got {status}"
+    assert_parks_until_approved(&crashed).await;
+    assert_eq!(
+        std::fs::read_to_string(crashed.repo_dir.join("meddled.txt")).ok(),
+        Some("changed while stopped\n".to_string()),
+        "merging the re-run into a human's checkout must not discard their edit"
     );
 
-    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::remove_dir_all(&crashed.app_data_dir);
+}
+
+/// Work landed on the feature branch while the run was stopped — a
+/// sequence prefix, or a human's commit — with nothing left uncommitted.
+#[tokio::test]
+async fn moved_feature_branch_parks_at_synthetic_gate_until_approved() {
+    let crashed = run_then_forge_crash("moved").await;
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", &crashed.branch])
+        .current_dir(&crashed.repo_dir)
+        .output()
+        .expect("rev-parse");
+    let tip = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let landed = std::process::Command::new("git")
+        .args([
+            "commit-tree",
+            "-p",
+            &tip,
+            "-m",
+            "landed while stopped",
+            &format!("{tip}^{{tree}}"),
+        ])
+        .current_dir(&crashed.repo_dir)
+        .output()
+        .expect("commit-tree");
+    let landed = String::from_utf8_lossy(&landed.stdout).trim().to_string();
+    git(
+        &crashed.repo_dir,
+        &[
+            "update-ref",
+            &format!("refs/heads/{}", crashed.branch),
+            &landed,
+        ],
+    );
+
+    assert_parks_until_approved(&crashed).await;
+
+    let _ = std::fs::remove_dir_all(&crashed.app_data_dir);
+}
+
+/// Control: nothing reached the feature, so the run auto-resumes with no
+/// human in the loop — even though another feature moved the shared
+/// project clone underneath it, which is not this feature's workspace.
+#[tokio::test]
+async fn untouched_feature_auto_resumes_while_the_shared_clone_moves() {
+    let crashed = run_then_forge_crash("clean").await;
+    git(
+        &crashed.repo_dir,
+        &["checkout", "-b", "demeteo/features/someone-else"],
+    );
+    std::fs::write(crashed.repo_dir.join("other.txt"), "another feature\n").expect("write");
+    git(&crashed.repo_dir, &["add", "-A"]);
+    git(
+        &crashed.repo_dir,
+        &["commit", "-m", "another feature's work"],
+    );
+    std::fs::write(crashed.repo_dir.join("scratch.txt"), "uncommitted\n").expect("write");
+
+    let ctx2 = ctx_for(&crashed.app_data_dir);
+    let status = poll_terminal(&ctx2, &crashed.feature_id).await;
+    assert!(
+        matches!(status.as_str(), "completed" | "awaiting_mr"),
+        "a feature nothing touched must auto-resume; got {status}"
+    );
+
+    let _ = std::fs::remove_dir_all(&crashed.app_data_dir);
+}
+
+/// A row recorded before the fingerprint meant the feature's workspace
+/// holds `HEAD` of the shared clone — a different quantity. Comparing it
+/// would park every feature interrupted across the upgrade, so it reads as
+/// unknown and the run auto-resumes.
+#[tokio::test]
+async fn a_fingerprint_from_the_old_scheme_auto_resumes() {
+    let crashed = run_then_forge_crash_recording("legacy", |_| {
+        "0123456789abcdef0123456789abcdef01234567:clean".to_string()
+    })
+    .await;
+
+    let ctx2 = ctx_for(&crashed.app_data_dir);
+    let status = poll_terminal(&ctx2, &crashed.feature_id).await;
+    assert!(
+        matches!(status.as_str(), "completed" | "awaiting_mr"),
+        "an old-scheme fingerprint must not park the run; got {status}"
+    );
+
+    let _ = std::fs::remove_dir_all(&crashed.app_data_dir);
 }

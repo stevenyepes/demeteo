@@ -348,7 +348,7 @@ pub trait FeatureRepository: Send + Sync {
     /// Open a `running` attempt row as the driver dispatches the step.
     /// Returns the 1-based `attempt_no` assigned (dense per step).
     /// `workspace_fingerprint` is the workspace state at node start
-    /// (P1.14, `<HEAD>:<dirty|clean>`; `None` = probe failed) — stored
+    /// (P1.14; `None` = probe failed) — stored
     /// on the row along with the derived idempotency key.
     fn attempt_open(
         &self,
