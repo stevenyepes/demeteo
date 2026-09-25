@@ -8,6 +8,7 @@
 //! profile is complete and uses only allow/deny by invariant (AGENTS.md §2).
 //! This is prompt text. It is not the fence.
 
+use crate::domain::agent_commit_fold::COMMIT_OWNERSHIP_RULE;
 use crate::domain::permission::{PermissionProfile, StepCapability};
 
 /// Prepend a prohibitive **Operating Boundary** block describing what the
@@ -106,7 +107,9 @@ pub(crate) fn inject_operating_boundary(
 
     // Shell / network lines reflect the *resolved* profile so per-step
     // widenings (allow_shell / allow_network) don't contradict the block.
-    if !profile.execute.is_allow() {
+    if profile.execute.is_allow() {
+        lines.push(format!("- {COMMIT_OWNERSHIP_RULE}"));
+    } else {
         lines.push("- You MUST NOT run shell commands.".to_string());
     }
     if profile.network.is_allow() {

@@ -99,11 +99,6 @@ impl<'a> SequenceGit<'a> {
     pub(crate) async fn delete_ref(&self, repo: &str, git_ref: &str) -> Result<String, String> {
         self.run(&delete_ref_cmd(repo, git_ref)).await
     }
-
-    /// The paths that differ between `base` and the worktree at `repo`.
-    pub(crate) async fn diff_name_only(&self, repo: &str, base: &Sha) -> Result<String, String> {
-        self.run(&diff_name_only_cmd(repo, base.as_str())).await
-    }
 }
 
 impl ExecutionDriver {
@@ -156,10 +151,6 @@ fn update_ref_cmd(repo: &str, git_ref: &str, sha: &str) -> String {
 
 fn delete_ref_cmd(repo: &str, git_ref: &str) -> String {
     format!("git -C {} update-ref -d {}", esc(repo), esc(git_ref))
-}
-
-fn diff_name_only_cmd(repo: &str, base: &str) -> String {
-    format!("git -C {} diff --name-only {}", esc(repo), esc(base))
 }
 
 #[cfg(test)]

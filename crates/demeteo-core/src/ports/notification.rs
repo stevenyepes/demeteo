@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::domain::agent_commit_fold::AgentCommit;
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::intercept::{ExecutionResult, InterceptPayload};
 use crate::domain::models::EffortLevel;
@@ -189,6 +190,20 @@ pub enum DomainEvent {
         feature_id: FeatureId,
         step_id: String,
         reason: String,
+    },
+
+    /// An agent moved its worktree's HEAD during a turn — usually by running
+    /// `git commit` — and Demeteo folded that back into its own commit (see
+    /// [`crate::domain::agent_commit_fold`]). Informational: the work landed.
+    /// `task_id` names the sequence ticket, `None` for an agent step.
+    /// `commits` keeps the agent's subjects for any later stage that wants
+    /// to know what the agent called its work.
+    AgentCommitsFolded {
+        feature_id: FeatureId,
+        step_id: String,
+        task_id: Option<String>,
+        commits: Vec<AgentCommit>,
+        note: String,
     },
 
     /// A terminal-embedded agent (e.g. Claude Code) blocked on a permission/

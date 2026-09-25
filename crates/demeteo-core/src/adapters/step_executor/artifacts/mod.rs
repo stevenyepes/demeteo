@@ -1,4 +1,5 @@
 pub(crate) mod add_exclusions;
+pub(crate) mod agent_commits;
 pub(crate) mod attached;
 pub(crate) mod declared;
 pub(crate) mod materialize;

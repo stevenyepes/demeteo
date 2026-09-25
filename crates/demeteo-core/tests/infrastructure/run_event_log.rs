@@ -104,6 +104,16 @@ fn translation_maps_narrative_events() {
             "env_not_ready",
         ),
         (
+            DomainEvent::AgentCommitsFolded {
+                feature_id: feature(),
+                step_id: "s-implement".into(),
+                task_id: Some("t1".into()),
+                commits: vec![],
+                note: "folded".into(),
+            },
+            "agent_commits_folded",
+        ),
+        (
             DomainEvent::GateRequired {
                 feature_id: feature(),
                 step_execution_id: StepExecutionId::new("se-2"),

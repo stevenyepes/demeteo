@@ -22,6 +22,15 @@ impl ExecutionDriver {
         let (machine_str, wt_path) = (wt.machine, wt.path);
         let decls = step_conf.artifacts.as_deref().unwrap_or(&[]);
 
+        self.fold_agent_commits_into_turn(
+            &step_exec.step_id.0,
+            None,
+            machine_str,
+            wt_path,
+            baseline.head,
+        )
+        .await;
+
         // 1. Process files using delta
         let always: Vec<&str> = decls
             .iter()

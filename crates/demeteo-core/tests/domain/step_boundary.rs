@@ -83,6 +83,29 @@ fn boundary_verify_allows_shell_but_forbids_source_edits() {
     assert!(!out.contains("MUST NOT run shell commands."));
 }
 
+/// A step that can run a shell can run `git commit`; one that cannot is
+/// not told about a command it has no way to issue.
+#[test]
+fn boundary_claims_the_commit_only_where_a_shell_exists() {
+    use crate::domain::agent_commit_fold::COMMIT_OWNERSHIP_RULE;
+    let verify = resolve_profile(StepCapability::Verify, false, false);
+    assert!(
+        inject_operating_boundary("v", StepCapability::Verify, &verify)
+            .contains(COMMIT_OWNERSHIP_RULE)
+    );
+    assert!(inject_operating_boundary(
+        "i",
+        StepCapability::Implement,
+        &PermissionProfile::all_allow()
+    )
+    .contains(COMMIT_OWNERSHIP_RULE));
+    let read_only = resolve_profile(StepCapability::ReadOnly, false, false);
+    assert!(
+        !inject_operating_boundary("r", StepCapability::ReadOnly, &read_only)
+            .contains(COMMIT_OWNERSHIP_RULE)
+    );
+}
+
 #[test]
 fn boundary_reflects_allow_network_override() {
     let p = resolve_profile(StepCapability::Artifacts, true, false);

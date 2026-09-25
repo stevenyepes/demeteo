@@ -246,9 +246,16 @@ impl ExecutionDriver {
             .await
             .map(|s| s.trim().to_string())
             .ok();
+        let pre_turn_head = crate::adapters::step_executor::artifacts::agent_commits::capture_head(
+            &*self.exec,
+            wt.machine,
+            wt.path,
+        )
+        .await;
         let baseline = TurnBaseline {
             snapshot: &worktree_snapshot,
             base_ref: worktree_base_ref.as_deref(),
+            head: &pre_turn_head,
         };
 
         let prompt = self

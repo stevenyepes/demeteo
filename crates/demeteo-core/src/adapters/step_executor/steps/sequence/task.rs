@@ -1,6 +1,7 @@
 //! One task of the list: a fresh session, one turn, the diff guard, and the
 //! commit that makes the next task's worktree contain this one's work.
 
+use crate::adapters::step_executor::artifacts::agent_commits::capture_head;
 use crate::adapters::step_executor::artifacts::{
     commit_worktree_changes, read_worktree_file, resolve_declared_artifacts, WorktreeSnapshot,
 };
@@ -35,32 +36,16 @@ impl ExecutionDriver {
 
         let decls: &[crate::domain::artifact::ArtifactDecl] =
             step_conf.artifacts.as_deref().unwrap_or(&[]);
-        // Both the snapshot and the `pre_head` below exist only to name the
-        // paths whose bodies get read back, so they are gated on the same
-        // question the agent step asks — a step declaring only a `Diff` was
-        // paying for a whole delta whose every body was then discarded.
-        let reads_bodies = captures_file_bodies(decls);
-        let snapshot = if reads_bodies {
+        // The snapshot exists only to name the paths whose bodies get read
+        // back, so it is gated on the same question the agent step asks — a
+        // step declaring only a `Diff` was paying for a whole delta whose
+        // every body was then discarded.
+        let snapshot = if captures_file_bodies(decls) {
             Some(WorktreeSnapshot::capture(&*self.exec, target.machine, wt.path).await)
         } else {
             None
         };
-        // The worktree's HEAD *before* the agent runs. The snapshot delta
-        // misses work the agent committed itself, and diffing against the
-        // worktree's own HEAD afterwards would miss it too — the commit moved
-        // HEAD. Pinning the pre-turn commit is what lets the fallback below
-        // see it. Diffing against the feature branch instead would over-report
-        // here in a way it could not in the old parallel step: this worktree
-        // already carries every earlier task's commits.
-        let pre_head = if reads_bodies {
-            self.sequence_git(target.machine)
-                .rev_parse(wt.path, "HEAD")
-                .await
-                .ok()
-                .filter(|s| !s.is_empty())
-        } else {
-            None
-        };
+        let pre_turn_head = capture_head(&*self.exec, target.machine, wt.path).await;
 
         let prompt = self.build_task_prompt(step, target, wt, run).await;
 
@@ -161,9 +146,15 @@ impl ExecutionDriver {
             )));
         }
 
-        // Artifact capture: snapshot delta, falling back to a diff against
-        // the pre-turn HEAD when the snapshot saw nothing — which is exactly
-        // what happens when the agent committed its own work.
+        self.fold_agent_commits_into_turn(
+            &step_exec.step_id.0,
+            Some(&task.id),
+            target.machine,
+            wt.path,
+            &pre_turn_head,
+        )
+        .await;
+
         if let Some(snapshot) = snapshot {
             let always: Vec<&str> = decls
                 .iter()
@@ -174,24 +165,9 @@ impl ExecutionDriver {
                     _ => None,
                 })
                 .collect();
-            let mut changed = snapshot
+            let changed = snapshot
                 .delta(&*self.exec, target.machine, wt.path, &always, &[])
                 .await;
-            if changed.is_empty() {
-                if let Some(ref base) = pre_head {
-                    if let Ok(diff_files) = self
-                        .sequence_git(target.machine)
-                        .diff_name_only(wt.path, base)
-                        .await
-                    {
-                        changed = diff_files
-                            .lines()
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                    }
-                }
-            }
             for rel_path in changed {
                 let name = std::path::Path::new(&rel_path)
                     .file_stem()

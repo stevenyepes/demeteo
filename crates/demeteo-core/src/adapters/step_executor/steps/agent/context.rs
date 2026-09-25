@@ -38,6 +38,7 @@
 use std::time::Instant;
 
 use crate::adapters::step_executor::artifacts::WorktreeSnapshot;
+use crate::domain::agent_commit_fold::HeadState;
 use crate::domain::models::{EffortLevel, StepConfig, StepExecution};
 
 /// Where this step sits in its feature's plan.
@@ -125,4 +126,7 @@ pub(crate) struct TurnBaseline<'a> {
     /// `None` when `rev-parse` could not resolve the branch — the diff
     /// falls back to `HEAD` and the no-op guard to the worktree's own tip.
     pub base_ref: Option<&'a str>,
+    /// The worktree's own HEAD and branch just before the turn, which any
+    /// commit the agent makes itself is folded back onto.
+    pub head: &'a HeadState,
 }

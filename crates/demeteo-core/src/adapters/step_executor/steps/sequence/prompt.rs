@@ -10,6 +10,7 @@ use crate::adapters::step_executor::steps::agent::{
 };
 
 use super::context::{RunTarget, StepCtx, StepWorktree, TaskRun};
+use crate::domain::agent_commit_fold::COMMIT_OWNERSHIP_RULE;
 use crate::domain::platform_context::place_platform_context;
 use crate::domain::review_base::{needs_review_base, place_review_base};
 use crate::domain::sequence::tasks::PlanKind;
@@ -164,6 +165,7 @@ impl ExecutionDriver {
         };
 
         let prompt = inject_artifact_contract(&prompt, step_conf.artifacts.as_deref());
+        let prompt = format!("{prompt}\n\n{COMMIT_OWNERSHIP_RULE}\n");
         let prompt = if template_uses_retry_section(template) {
             prompt
         } else {
