@@ -3,6 +3,7 @@ use crate::domain::models::{
     EffortLevel, Feature, FeatureDivergence, FeatureDrift, GateDecision, SequenceState,
     StepAttempt, StepExecution,
 };
+use crate::domain::step_assignment::StepAssignment;
 use crate::domain::sync_resolver::SyncResolverChoice;
 use crate::domain::upstream_feature::DivergenceReconcile;
 use crate::error::AppError;
@@ -252,6 +253,37 @@ pub async fn replay_from_step(
         )
         .await
         .map_err(AppError::from)
+}
+
+/// Pin which agent, model and effort one queued step runs as — resolution
+/// tier 1, not the feature-wide columns Retry re-pins. No rewind: the pin
+/// applies the next time the scheduler dispatches that node.
+///
+/// The three fields are one change, not a patch over what is already pinned:
+/// **all three `None` is the "reset to inherited" request**, and it removes
+/// the step's pin. It is never read as "leave the pin alone" — that request
+/// is spelled by not calling this at all. A call that sends only `effort`
+/// likewise un-pins the agent and the model.
+///
+/// `remote_set_step_assignment` is the twin for a detached run.
+#[tauri::command]
+pub async fn step_set_assignment(
+    ctx: State<'_, AppContext>,
+    step_execution_id: String,
+    agent_kind: Option<String>,
+    model: Option<String>,
+    effort: Option<EffortLevel>,
+) -> Result<(), AppError> {
+    ctx.executor
+        .step_set_assignment(
+            &step_execution_id,
+            StepAssignment {
+                agent_kind,
+                model,
+                effort,
+            },
+        )
+        .await
 }
 
 #[tauri::command]

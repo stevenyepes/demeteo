@@ -291,6 +291,13 @@ impl StepExecutor for SpyExecutor {
     ) -> Result<(), crate::error::AppError> {
         panic!("unexpected StepExecutor call")
     }
+    async fn step_set_assignment(
+        &self,
+        _: &str,
+        _: crate::domain::step_assignment::StepAssignment,
+    ) -> Result<(), crate::error::AppError> {
+        panic!("unexpected StepExecutor call")
+    }
     async fn replay_from_step(
         &self,
         _: &str,

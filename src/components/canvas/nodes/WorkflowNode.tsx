@@ -6,9 +6,10 @@
  * Run-mode overlay (P2.2): when `data.run` is present the card takes on the
  * run-status color language (`lib/runStatus.ts`) — a pulsing dot for in-motion
  * nodes, a tone-matched glow, the agent/model/effort the step actually spawned
- * with, duration+cost chips on completion, and the failure class on a failed
- * node. Animation is **opacity-only** (`animate-pulse`,
- * static box-shadows) to honor the webview battery rule; no infinite transforms.
+ * with (or, on a node still queued, the trio it is pinned to), duration+cost
+ * chips on completion, and the failure class on a failed node. Animation is
+ * **opacity-only** (`animate-pulse`, static box-shadows) to honor the webview
+ * battery rule; no infinite transforms.
  */
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { AlertTriangle, OctagonAlert, ShieldCheck } from 'lucide-react';
@@ -21,8 +22,9 @@ import {
   TONE_CHIP,
   type RunStatusTone,
 } from '../../../lib/runStatus';
+import { showsPlanned } from '../../../lib/stepAssignment';
 import { formatCost, formatDuration } from '../../../lib/utils';
-import { AssignmentChips } from '../../ui/AssignmentChips';
+import { AssignmentChips, observedAssignment } from '../../ui/AssignmentChips';
 import type { WorkflowFlowNode } from '../flowGraph';
 
 const HANDLE_CLASS = '!h-2 !w-2 !border-slate-600 !bg-slate-800';
@@ -206,13 +208,26 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
         </div>
       </div>
 
-      <AssignmentChips
-        subject={data.title}
-        agentKind={run?.agentKind}
-        model={run?.model}
-        effort={run?.effort}
-        className="pl-11"
-      />
+      {observedAssignment(run?.agentKind, run?.effort) ? (
+        <AssignmentChips
+          subject={data.title}
+          agentKind={run?.agentKind}
+          model={run?.model}
+          effort={run?.effort}
+          className="pl-11"
+        />
+      ) : (
+        showsPlanned(run?.status) && (
+          <AssignmentChips
+            subject={data.title}
+            variant="planned"
+            agentKind={run?.planned?.agentKind}
+            model={run?.planned?.model}
+            effort={run?.planned?.effort}
+            className="pl-11"
+          />
+        )
+      )}
 
       {showChips && (
         <div className="flex items-center gap-2 pl-11 text-[10px] font-mono">

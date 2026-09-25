@@ -460,10 +460,20 @@ where the truncation notice now lives, instead of only on the timeline's copy.
   the inspector's Actions tab, which already guarded them against a live ancestor; a
   waiting gate is the run asking a question, so it may not wait behind a selection.
 - **`StepRerunPanel` and `StepArtifactList` are deleted, not relocated.** The harness /
-  model / effort selects became `FeatureDetail/RerunOptions.tsx` over the existing
-  `ui/HarnessModelPicker`, mounted in the Actions tab; the artifact split rule (an agent
-  step lists its markdown and folds the rest into "N files changed") became the pure
-  `lib/stepArtifacts.ts`, which the Output tab consumes.
+  model / effort selects became a `FeatureDetail/RerunOptions.tsx` wrapper over the
+  existing `ui/HarnessModelPicker`, mounted in the Actions tab (that wrapper is since
+  deleted; the Actions tab mounts the picker through `AssignmentSection`); the artifact
+  split rule (an agent step lists its markdown and folds the rest into "N files
+  changed") became the pure `lib/stepArtifacts.ts`, which the Output tab consumes.
+
+  **Since superseded in one respect.** Phase 3 left the tab a reaction surface — every
+  control in it answered something that had already happened, so `hasActions` hid the
+  tab entirely for a node that had not run. The picker now leads the tab as a standing
+  **Assignment** control for any node, and the gate widened to match: a queued node
+  whose only control is its assignment still reaches the tab. Retry and Replay
+  correspondingly stopped carrying a harness/model/effort of their own — they were
+  writing the *feature-wide* tier from a per-node control
+  ([decision 53](DECISIONS.md#53--mid-run-assignment-detail)).
 - **`useAgentStream` lost `activeStreamId`.** "Which step's output is on screen" is the
   inspector's selection now, and a second copy of that state would be free to disagree
   with it.

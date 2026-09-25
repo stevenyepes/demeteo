@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, Sparkles, GitBranch, AlertTriangle, ChevronDown, ChevronUp, Cpu, EyeOff, Server, MoonStar } from 'lucide-react';
-import type { EffortLevel, FeatureOrigin, Machine, Repository, WorkflowSummary } from '../types';
+import type { EffortLevel, FeatureOrigin, Machine, Repository, StepOverride, WorkflowSummary } from '../types';
 import { AttachmentDropzone, type LaunchStageEntry } from './AttachmentDropzone';
 import { extractClipboardImageFiles, recoverClipboardImageFile, stageBrowserFilesForLaunch } from '../lib/attachments';
 import { formatError } from '../lib/errors';
@@ -72,7 +72,7 @@ interface StartFeatureModalProps {
      *  (migration V30). Unset = inherit project/engine default ($20). */
     maxBudgetUsd?: number;
     /** Per-step agent/model/effort overrides chosen at launch (migration V13). */
-    stepOverrides?: { step_id: string; agent_kind?: string | null; model?: string | null; effort?: EffortLevel | null }[];
+    stepOverrides?: StepOverride[];
     /**
      * Staged file attachments, keyed by sha256 (see
      * `AttachmentDropzone.tsx`). The modal cannot persist these

@@ -401,6 +401,76 @@ fn feature_patch_sets_and_clears_effort() {
     assert_eq!(adapter.get(&fid).unwrap().unwrap().effort, None);
 }
 
+fn override_for(step_id: &str, model: &str) -> StepOverride {
+    StepOverride {
+        step_id: step_id.to_string(),
+        agent_kind: Some("claude-code".to_string()),
+        model: Some(model.to_string()),
+        effort: Some(EffortLevel::High),
+    }
+}
+
+/// `Some(list)` replaces the pins; `Some(vec![])` clears the column back to
+/// "every step inherits"; a `None` patch field leaves the column alone.
+#[test]
+fn feature_patch_sets_and_clears_step_overrides() {
+    let adapter = setup();
+    let fid = make_feature(&adapter, "f_patch_pins", "p_patch_pins");
+
+    let pins = vec![
+        override_for("s-implement", "opus"),
+        override_for("s-review", "sonnet"),
+    ];
+    FeatureRepository::update(
+        &adapter,
+        &fid,
+        &FeaturePatch {
+            step_overrides: Some(pins.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(adapter.get(&fid).unwrap().unwrap().step_overrides, pins);
+
+    FeatureRepository::update(
+        &adapter,
+        &fid,
+        &FeaturePatch {
+            status: Some("done".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(adapter.get(&fid).unwrap().unwrap().step_overrides, pins);
+
+    FeatureRepository::update(
+        &adapter,
+        &fid,
+        &FeaturePatch {
+            step_overrides: Some(Vec::new()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(adapter
+        .get(&fid)
+        .unwrap()
+        .unwrap()
+        .step_overrides
+        .is_empty());
+    let stored: Option<String> = adapter
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT step_overrides_json FROM features WHERE id = ?1",
+            rusqlite::params![fid.0],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, None);
+}
+
 // ── Harness baseline (V37, decision 44) ──────────────────────────────────────
 
 fn baseline_run(name: &str, exit_ok: bool, fingerprint: &str) -> HarnessBaselineRun {

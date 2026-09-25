@@ -113,6 +113,11 @@ pub struct FeaturePatch {
     /// Record the run's actual branch name once it is cut, so the sites
     /// that re-derive it from `branch_prefix` can read it instead.
     pub resolved_branch: Option<Option<String>>,
+    /// Replace the run's per-step assignment pins — the highest-precedence
+    /// resolution tier. Flat `Option`, like `origin`: an empty vec *is* the
+    /// cleared state, so there is nothing a `Some(None)` here could mean that
+    /// `Some(vec![])` does not already say.
+    pub step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
 }
 
 /// Patch for [`FeatureRepository::step_update`].

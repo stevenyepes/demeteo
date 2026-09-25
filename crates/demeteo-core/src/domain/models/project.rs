@@ -332,8 +332,10 @@ pub fn apply_run_shape_patch(
 ///   - `Some(step_id)` → step-level. It is baked onto the matching
 ///     `StepConfig`, so it beats the workflow author's value for that step.
 ///
-/// In all cases it still loses to a run-time override (feature-wide or
-/// per-step, chosen at launch). `None` on a field = inherit for that field.
+/// In all cases it still loses to a run-time override on the feature row —
+/// the feature-wide pair chosen at launch, and above it the per-step
+/// [`StepOverride`](crate::domain::models::StepOverride), which is writable
+/// for as long as the run is alive. `None` on a field = inherit for that field.
 /// See `resolve_execution_context`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectWorkflowOverride {

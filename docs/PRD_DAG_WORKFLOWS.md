@@ -271,7 +271,7 @@ Clicking a node opens a right side panel (same split-panel pattern as `ArtifactV
 - **Overview:** status, attempt count, per-attempt table (class, cost, duration, outcome) from `step_attempts`.
 - **Live:** the existing `agent_stream` transcript for a running node (moves here from the inline toggle).
 - **Output:** artifacts (Monaco viewer), harness output, verifier verdict with failing tests/implicated files.
-- **Actions:** Retry (policy-aware: shows which rule will apply), Replay-from-node (existing `replayFromStep`, now graph-aware: highlights the downstream subgraph that will re-run before confirming), Stop node, Decide gate.
+- **Actions:** the node's **Assignment** (agent / model / effort), then Retry (policy-aware: shows which rule will apply), Replay-from-node (existing `replayFromStep`, now graph-aware: highlights the downstream subgraph that will re-run before confirming), Stop node, Decide gate. Assignment is offered for *any* node, not only a failed one — which is what makes the tab reachable for a queued node that has no other control — and it is read-only while the node is `running` or `verifying`. It pins this node alone ([decision 53](DECISIONS.md#53--mid-run-assignment-detail)); Retry and Replay no longer carry an agent/model/effort of their own, so nothing here re-points a node the user did not select.
 
 Sequence nodes expand in-place (accordion inside the node or panel) to show the task list with per-task status/cost — the landed-prefix is visually distinct from pending tasks, making Decision 13's semantics legible for the first time.
 

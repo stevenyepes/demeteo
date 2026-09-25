@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { densityClasses } from '../../lib/density';
@@ -28,11 +28,17 @@ function renderCard({
   agentKind,
   model,
   effort,
+  plannedAgentKind,
+  plannedModel,
+  plannedEffort,
 }: {
   execution?: StepExecution;
   agentKind?: string | null;
   model?: string | null;
   effort?: EffortLevel | null;
+  plannedAgentKind?: string | null;
+  plannedModel?: string | null;
+  plannedEffort?: EffortLevel | null;
 } = {}) {
   return render(
     <StepCard
@@ -47,6 +53,9 @@ function renderCard({
       agentKind={agentKind}
       model={model}
       effort={effort}
+      plannedAgentKind={plannedAgentKind}
+      plannedModel={plannedModel}
+      plannedEffort={plannedEffort}
     />,
   );
 }
@@ -116,5 +125,72 @@ describe('StepCard observed assignment', () => {
     const badge = screen.getByTitle(`Agent: ${longAgent}`);
     expect(badge).toHaveAccessibleName(`Agent: ${longAgent}`);
     expect(badge).toHaveTextContent(longAgent);
+  });
+});
+
+describe('StepCard planned assignment', () => {
+  const queued = step({ status: 'pending' });
+
+  it('shows the pin of a step that has not spawned yet', () => {
+    renderCard({
+      execution: queued,
+      plannedAgentKind: 'codex',
+      plannedModel: 'gpt-5.1-codex',
+      plannedEffort: 'high',
+    });
+
+    const chips = screen.getByRole('img', {
+      name: 'Planned assignment for Implement: Agent: codex; Model: gpt-5.1-codex; Effort: High',
+    });
+    expect(within(chips).getByTitle('Agent (planned): codex')).toHaveTextContent('codex');
+    expect(within(chips).getByTitle('Effort (planned): High')).toHaveTextContent('High');
+    expect(screen.queryByRole('img', { name: /Actual assignment/ })).not.toBeInTheDocument();
+  });
+
+  it('draws nothing for a queued step with no pin', () => {
+    renderCard({ execution: queued });
+
+    expect(screen.queryByRole('img', { name: /Planned assignment/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /Actual assignment/ })).not.toBeInTheDocument();
+  });
+
+  it('draws only the dimensions the pin set', () => {
+    renderCard({ execution: queued, plannedAgentKind: null, plannedModel: null, plannedEffort: 'low' });
+
+    expect(
+      screen.getByRole('img', { name: 'Planned assignment for Implement: Effort: Low' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTitle(/^Model \(planned\)/)).not.toBeInTheDocument();
+  });
+
+  it.each(['completed', 'skipped'])('calls nothing planned on a %s step with no spawn evidence', (status) => {
+    // Its run is over; the pin applies to a replay, and the inspector shows it.
+    renderCard({ execution: step({ status }), plannedAgentKind: 'codex', plannedEffort: 'high' });
+
+    expect(screen.queryByRole('img', { name: /Planned assignment/ })).not.toBeInTheDocument();
+  });
+
+  it('shows a pin carrying an effort this build has no label for as stored', () => {
+    renderCard({
+      execution: queued,
+      plannedEffort: 'ultra' as EffortLevel,
+    });
+
+    expect(
+      screen.getByRole('img', { name: 'Planned assignment for Implement: Effort: ultra' }),
+    ).toBeInTheDocument();
+  });
+
+  it('lets what actually spawned outrank the pin', () => {
+    renderCard({
+      agentKind: 'hermes',
+      model: null,
+      effort: 'medium',
+      plannedAgentKind: 'codex',
+      plannedEffort: 'high',
+    });
+
+    expect(screen.getByTitle('Agent: hermes')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /Planned assignment/ })).not.toBeInTheDocument();
   });
 });

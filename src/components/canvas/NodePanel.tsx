@@ -29,6 +29,7 @@ import { runStatusMeta, TONE_CHIP, TONE_TEXT } from '../../lib/runStatus';
 import { listStepArtifacts } from '../../lib/stepArtifacts';
 import type { AgentStreamStore } from '../FeatureDetail/useAgentStream';
 import type { HarnessOverrides } from '../FeatureDetail/useHarnessOverrides';
+import type { StepAssignment } from '../FeatureDetail/useStepAssignment';
 import type { HarnessBaseline, StepAttempt, StepExecution } from '../../types';
 import { nodeTypeMeta, type NodeConfigV2, type NodeRunStatus } from './types';
 import { ActionsTab, type BlockingAncestor } from './nodePanel/ActionsTab';
@@ -61,8 +62,12 @@ export interface NodePanelProps {
    *  panel too and holds neither; absent degrades to the weaker of the two
    *  statements rather than to a guess. */
   harnessBaseline?: HarnessBaseline | null;
-  /** The harness/model/effort a retry re-pins, for the Actions tab. */
+  /** The harness/model/effort picker the Actions tab's Assignment control
+   *  reads. */
   overrides?: HarnessOverrides;
+  /** Writes `overrides`' trio onto this node, for the same control. Passed
+   *  with `overrides` or not at all — the canvas holds neither. */
+  assignment?: StepAssignment;
 
   // --- P2.4 ---
   /** Where the Live tab reads the backing execution's `agent_stream` buffer.
@@ -108,6 +113,7 @@ export function NodePanel({
   onOpenArtifact,
   harnessBaseline,
   overrides,
+  assignment,
   streamStore,
   isStreaming,
   blockedBy,
@@ -170,7 +176,10 @@ export function NodePanel({
   // declares nothing listable and has still produced something to say.
   const hasOutput =
     artifacts.listed.length > 0 || artifacts.hiddenCount > 0 || !!step?.error_message;
-  const hasActions = !!(onRetry || onReplay || onStop || onDecideGate);
+  // Assignment counts: it is the one control a node can offer before anything
+  // has happened to it, and gating the tab on a rewind action hid it on
+  // exactly the queued node it exists for.
+  const hasActions = !!(onRetry || onReplay || onStop || onDecideGate || (overrides && assignment));
 
   return (
     <Inspector
@@ -242,6 +251,7 @@ export function NodePanel({
           attempts={attempts}
           blockedBy={blockedBy ?? null}
           overrides={overrides}
+          assignment={assignment}
           onRetry={onRetry}
           onReplay={onReplay}
           onStop={onStop}

@@ -10,5 +10,6 @@ mod launch_resolution;
 mod origin_cut;
 mod remote_mirror;
 mod retry_guards;
+mod step_assignment;
 mod sync_base;
 mod sync_resolve;

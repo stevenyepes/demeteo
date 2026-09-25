@@ -10,7 +10,8 @@ mod transport;
 
 pub use control::{
     cancel_remote_run, find_mirror_for_feature, list_mirrored_runs, reconcile_all_runs,
-    refresh_remote_run, reinject_credentials, retry_remote_step, RemoteRewind, RewindOverrides,
+    refresh_remote_run, reinject_credentials, retry_remote_step, set_remote_step_assignment,
+    RemoteRewind, RewindOverrides,
 };
 pub use diff_url::resolve_run_diff_url;
 pub use submit::{submit_remote_run, SubmitInput, SubmitOutcome};

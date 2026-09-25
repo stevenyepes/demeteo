@@ -1,20 +1,23 @@
-import { RotateCcw, RotateCw } from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
 import { Modal } from '../ui/Modal';
-import { EFFORT_LABELS, type EffortLevel } from '../../lib/effortLevels';
-import type { HarnessOverrides } from './useHarnessOverrides';
 import type { ReplayTarget } from './useRerunActions';
 
-/** Confirm a rewind to `target`, re-pinning the harness/model/effort it runs with. */
+/**
+ * Confirm a rewind to `target`.
+ *
+ * It confirms the rewind and nothing else: the harness, model and effort
+ * selects it used to carry wrote the feature-wide tier, so choosing one here
+ * re-pointed every step after the target too. A node is re-pointed on the
+ * inspector's Assignment control, whose blast radius is the node it is on.
+ */
 export function ReplayModal({
   target,
   status,
-  overrides,
   onClose,
   onConfirm,
 }: {
   target: ReplayTarget | null;
   status: string;
-  overrides: HarnessOverrides;
   onClose: () => void;
   onConfirm: () => void;
 }) {
@@ -41,59 +44,6 @@ export function ReplayModal({
         Current artifacts for the affected steps will be replaced.
         {status === 'running' && ' The current execution will be cancelled.'}
       </p>
-
-      {overrides.availableAgents.length > 0 && (
-        <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5 mb-2.5">
-          <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Harness:</label>
-          <select
-            value={overrides.selectedAgent}
-            onChange={(e) => overrides.onAgentChange(e.target.value)}
-            className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer capitalize"
-          >
-            <option value="">Default ({overrides.featureAgentKind.replace(/-/g, ' ')})</option>
-            {overrides.availableAgents.map((a) => (
-              <option key={a} value={a}>{a.replace(/-/g, ' ')}</option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {overrides.isLoadingModels ? (
-        <div className="mb-5 flex items-center gap-1.5 px-1 font-mono text-[10px] text-slate-500">
-          <RotateCw className="w-3 h-3 animate-spin text-cyan-400" /> Probing available models…
-        </div>
-      ) : overrides.availableModels.length > 0 && (
-        <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5 mb-5">
-          <label className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Model:</label>
-          <select
-            value={overrides.selectedModel}
-            onChange={(e) => overrides.setSelectedModel(e.target.value)}
-            className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer"
-          >
-            <option value="">Default (From Workflow)</option>
-            {overrides.availableModels.map((m) => (
-              <option key={m.value} value={m.value}>{m.name}</option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      <div className="flex items-center gap-3 bg-black/20 p-2.5 rounded border border-white/5 mb-5">
-        <label htmlFor="replay-effort" className="text-[10px] uppercase font-bold text-slate-400 shrink-0 font-mono">Effort:</label>
-        <select
-          id="replay-effort"
-          value={overrides.selectedEffort}
-          onChange={(e) => overrides.setSelectedEffort(e.target.value as EffortLevel | '')}
-          disabled={overrides.retryEffortLevels.length === 0}
-          title={overrides.retryEffortLevels.length === 0 ? `${(overrides.selectedAgent || overrides.featureAgentKind).replace(/-/g, ' ')} does not support effort selection` : undefined}
-          className="flex-1 min-w-0 bg-[#0d0f14] border border-white/10 rounded px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500/50 font-mono cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <option value="">{overrides.retryEffortLevels.length === 0 ? 'Not supported' : 'Keep current effort'}</option>
-          {overrides.retryEffortLevels.map((l) => (
-            <option key={l} value={l}>{EFFORT_LABELS[l]}</option>
-          ))}
-        </select>
-      </div>
 
       <div className="flex justify-end gap-2">
         <button

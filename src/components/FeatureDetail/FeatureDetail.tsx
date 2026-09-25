@@ -44,13 +44,14 @@ import { useFeatureDrift } from './useFeatureDrift';
 import { useFeatureMr } from './useFeatureMr';
 import { useFeatureRun } from './useFeatureRun';
 import { useGateCardScroll } from './useGateCardScroll';
-import { useHarnessOverrides } from './useHarnessOverrides';
+import { useHarnessOverrides, type HarnessOverrides } from './useHarnessOverrides';
 import { useSyncResolverOverrides } from './useSyncResolverOverrides';
 import { useHeaderCollapse } from './useHeaderCollapse';
 import { useRemoteRun } from './useRemoteRun';
 import { useRerunActions } from './useRerunActions';
 import { useRunGraph } from './useRunGraph';
 import { useRunShortcuts } from './useRunShortcuts';
+import { useStepAssignment } from './useStepAssignment';
 import { useStepSelection } from './useStepSelection';
 import { useSyncActions } from './useSyncActions';
 import { useSyncSession } from './useSyncSession';
@@ -96,12 +97,15 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   const projectId = currentProjectId ?? undefined;
   const currentProject = projects.find(p => p.id === currentProjectId) ?? null;
 
-  const overrides = useHarnessOverrides();
+  /** The picker is built below, from the node the inspector is on — which is
+   *  resolved against the steps `useFeatureRun` fetches. The ref is where that
+   *  loop is cut: nothing reads it during this render. */
+  const overridesRef = useRef<HarnessOverrides | null>(null);
   const run = useFeatureRun({
     featureId,
     projectId,
     initialTitle: view.featureTitle || 'Feature Pipeline',
-    overrides,
+    overridesRef,
   });
   const bootstrap = useBootstrapPhases({
     featureId,
@@ -116,14 +120,6 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   const attachments = useAttachmentPreview(featureId);
   const stream = useAgentStream(featureId);
   const artifact = useArtifactSelection(run.steps);
-  const rerun = useRerunActions({
-    featureId,
-    remoteRun: remote.remoteRun,
-    refreshRemoteRun: remote.refreshRemoteRun,
-    reload: run.reload,
-    setFeatureStatus: run.setFeatureStatus,
-    overrides,
-  });
   // The one launch code path (F28), the same hook every composer uses: a fix
   // run is a run like any other, and on success this navigates to its own
   // feature detail the way every other launch does.
@@ -135,6 +131,29 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     [launchRun],
   );
   const selection = useStepSelection({ view, steps: run.steps, navigate });
+  const overrides = useHarnessOverrides({
+    selectedStepId: selection.selectedNodeId,
+    stepOverrides: run.stepOverrides,
+  });
+  overridesRef.current = overrides;
+  /** Apply / Reset for the node the inspector is on. The routing decision —
+   *  this machine's executor or the runner that owns the run — is the hook's,
+   *  so the two run surfaces cannot disagree about it. */
+  const assignment = useStepAssignment({
+    overrides,
+    selectedStepId: selection.selectedNodeId,
+    selectedExecutionId: selection.selectedExecutionId,
+    stepOverrides: run.stepOverrides,
+    remoteRun: remote.remoteRun,
+    reload: run.reload,
+  });
+  const rerun = useRerunActions({
+    featureId,
+    remoteRun: remote.remoteRun,
+    refreshRemoteRun: remote.refreshRemoteRun,
+    reload: run.reload,
+    setFeatureStatus: run.setFeatureStatus,
+  });
   const graph = useRunGraph({
     featureId,
     featureTitle: run.featureTitle,
@@ -144,6 +163,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     selectedNodeId: selection.selectedNodeId,
     toggleNode: selection.toggleStep,
     detachedAssignments: remote.remoteRun ? remote.remoteRunAssignments : null,
+    stepOverrides: run.stepOverrides,
   });
   const mr = useFeatureMr({
     featureId,
@@ -381,9 +401,11 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
             target={selection.target}
             graphDef={graphDef}
             statusByNode={graph.runStatusByNode}
+            assignments={graph.runAssignments}
             streamStore={stream.store}
             harnessBaseline={run.harnessBaseline}
             overrides={overrides}
+            assignment={assignment}
             onDeselect={deselectStep}
             onOpenEditorForPath={routing.openEditorForPath}
             onOpenArtifact={artifact.openArtifact}
@@ -423,6 +445,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       <StepTimeline
         steps={run.steps}
         assignments={graph.runAssignments}
+        stepOverrides={run.stepOverrides}
         remoteRun={remote.remoteRun}
         remoteMachineName={remote.remoteMachineName}
         hasBootstrapPhases={bootstrap.bootstrapPhases.size > 0}
@@ -646,7 +669,6 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       <ReplayModal
         target={rerun.replayTarget}
         status={run.status}
-        overrides={overrides}
         onClose={rerun.closeReplay}
         onConfirm={rerun.handleReplayFromStep}
       />

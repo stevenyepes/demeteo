@@ -6,7 +6,8 @@ import type { StepExecution } from '../../types';
 import type { DensityClasses } from '../../lib/density';
 import type { EffortLevel } from '../../lib/effortLevels';
 import { TONE_CHIP } from '../../lib/runStatus';
-import { AssignmentChips } from '../ui/AssignmentChips';
+import { showsPlanned } from '../../lib/stepAssignment';
+import { AssignmentChips, observedAssignment } from '../ui/AssignmentChips';
 import { StepMetrics } from './StepMetrics';
 import { humanizeStepId } from './stepIdentity';
 
@@ -21,6 +22,13 @@ interface StepCardProps {
   agentKind?: string | null;
   model?: string | null;
   effort?: EffortLevel | null;
+  /** The step's own tier-1 pin, spread into three primitives rather than
+   *  handed over as a `StepOverride`: the feature row is re-read on every poll,
+   *  so an object prop here would be a fresh identity each tick and re-render
+   *  every card in the run. */
+  plannedAgentKind?: string | null;
+  plannedModel?: string | null;
+  plannedEffort?: EffortLevel | null;
   onSelect: (stepExecutionId: string) => void;
   onDecideGate: (stepExecutionId: string) => void;
 }
@@ -35,6 +43,9 @@ function StepCardInner({
   agentKind,
   model,
   effort,
+  plannedAgentKind,
+  plannedModel,
+  plannedEffort,
   onSelect,
   onDecideGate,
 }: StepCardProps) {
@@ -108,7 +119,24 @@ function StepCardInner({
               <span className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-slate-400 font-mono shrink-0">
                 {step.step_kind}
               </span>
-              <AssignmentChips subject={stepName} agentKind={agentKind} model={model} effort={effort} />
+              {observedAssignment(agentKind, effort) ? (
+                <AssignmentChips
+                  subject={stepName}
+                  agentKind={agentKind}
+                  model={model}
+                  effort={effort}
+                />
+              ) : (
+                showsPlanned(step.status) && (
+                  <AssignmentChips
+                    subject={stepName}
+                    variant="planned"
+                    agentKind={plannedAgentKind}
+                    model={plannedModel}
+                    effort={plannedEffort}
+                  />
+                )
+              )}
               {(step.iteration_count ?? 0) > 0 && (
                 <span
                   className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono"

@@ -82,7 +82,9 @@ function fakeOverrides(): HarnessOverrides {
     selectedAgent: '',
     selectedEffort: '',
     setSelectedEffort: () => {},
+    seededEffort: '',
     featureAgentKind: 'opencode',
+    inheritedAgentKind: 'opencode',
     retryEffortLevels: [],
     onAgentChange: () => {},
     adoptFeatureModel: vi.fn(),
@@ -164,7 +166,7 @@ function mountRun() {
       featureId: FEATURE_ID,
       projectId: PROJECT_ID,
       initialTitle: 'Coalesced telemetry',
-      overrides: fakeOverrides(),
+      overridesRef: { current: fakeOverrides() },
     }),
   );
 }

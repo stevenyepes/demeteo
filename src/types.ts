@@ -681,6 +681,22 @@ export interface Feature {
   /** The branch the run actually works on, written down at cut time.
    *  `null` on pre-V41 rows, which re-derive `{branch_prefix}{id}`. */
   resolved_branch?: string | null;
+  /** Per-step assignment pins carried by the run, so workflow/project edits
+   *  mid-flight don't reach it. Seeded at launch and re-pointable while the
+   *  run is alive. See {@link StepOverride}. */
+  step_overrides?: StepOverride[];
+}
+
+/** Mirrors the Rust `StepOverride` (`domain/models/feature.rs`): the run's
+ *  highest-precedence resolution tier for one step, settable at launch and
+ *  again while the run is alive. Each field is independently `null` =
+ *  "inherit" for that dimension; a step with nothing pinned has no entry at
+ *  all rather than an all-`null` one. */
+export interface StepOverride {
+  step_id: string;
+  agent_kind?: string | null;
+  model?: string | null;
+  effort?: EffortLevel | null;
 }
 
 /** Mirrors the Rust `FeatureOrigin` (`domain/feature_origin.rs`), which serde

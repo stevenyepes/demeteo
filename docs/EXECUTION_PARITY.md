@@ -44,6 +44,34 @@ that, and they are the reason the code looks the way it does:
   a regression detector pointed at the wrong thing.
 - **A red harness is triaged before it feeds the retry loop.** See below.
 
+## The control RPCs are part of the contract
+
+The guarantee covers what a user can *do* to a live run, not only what a run
+produces. Every mid-run control the desktop offers a local run has a
+same-named, same-shaped twin on the runner's JSON-RPC surface
+(`crates/demeteo-runner/src/rpc/`), because a run being detached is not
+supposed to be something the UI has to explain: `cancel_run`, `retry_step`,
+and — since [decision 53](DECISIONS.md#53--mid-run-assignment-detail) —
+`set_step_assignment`, whose params are `{ run_id, step_execution_id,
+agent_kind, model, effort }`.
+
+Three properties hold for each of them, and `set_step_assignment` is the
+worked example:
+
+- **One engine, called from two places.** The runner handler does ownership and
+  nothing else, then calls the *same* `StepExecutor` method the local Tauri
+  command calls. There is no runner-side reimplementation to drift from.
+- **The local executor refuses a runner-owned row rather than racing it.** A
+  desktop-side write to a detached run's feature row is clobbered by the next
+  `hydrate_shadow_feature` and lost without a trace, so the executor's shadow
+  guard makes it an error and the UI routes to the remote twin. The guard lives
+  in the executor, not only in the UI — the UI is not the only caller.
+- **An older runner answers `unknown method: set_step_assignment`, and that
+  must surface as a failure.** The desktop cannot tell "the runner applied it"
+  from "the runner had never heard of it" except by that message, so it is
+  propagated verbatim. A control silently succeeding against a runner that
+  ignored it is the exact divergence this document exists to forbid.
+
 ## Platform is not transport
 
 The guarantee quantifies over **transports**, not over machines. Two transports
