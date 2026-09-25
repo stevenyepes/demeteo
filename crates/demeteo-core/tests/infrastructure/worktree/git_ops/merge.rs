@@ -238,3 +238,79 @@ async fn test_merge_subtask_survives_rejecting_commit_msg_hook() {
     let _ = std::fs::remove_dir_all(&wt_path);
     let _ = std::fs::remove_dir_all(&sib_wt);
 }
+
+/// Regression: merge-back into a checkout Demeteo does not own must keep a
+/// human's uncommitted edit. A terminal opened on a pipeline checks the
+/// feature branch out in the project clone, so merge-back lands in the
+/// checkout the human is editing; it used to `reset --hard` that checkout
+/// first and silently discard their work.
+#[tokio::test]
+async fn test_merge_subtask_keeps_uncommitted_edits_in_a_human_checkout() {
+    let (dir, helper) = make_repo("merge_human_checkout").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+
+    let feature_branch = "feature/f-u";
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" branch {feature_branch}"),
+        )
+        .await;
+    let wt_path = helper
+        .provision_subtask_worktree(None, &repo, feature_branch, "sub-1")
+        .await
+        .unwrap();
+    exec.write_file("local", &format!("{wt_path}/newfile.txt"), "from subtask")
+        .await
+        .unwrap();
+    let _ = exec
+        .run_command("local", &format!("git -C \"{wt_path}\" add ."))
+        .await;
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{wt_path}\" commit -m \"subtask work\""),
+        )
+        .await;
+
+    // The human's side: the feature branch checked out in the project clone,
+    // with an edit to a tracked file the subtask never touched.
+    exec.run_command(
+        "local",
+        &format!("git -C \"{repo}\" checkout {feature_branch}"),
+    )
+    .await
+    .unwrap();
+    exec.write_file("local", &format!("{repo}/README.md"), "# edited by a human")
+        .await
+        .unwrap();
+
+    let result = helper
+        .merge_subtask(None, &wt_path, feature_branch, "sub-1")
+        .await;
+    assert!(
+        result.is_ok(),
+        "a non-overlapping edit must not block the merge: {result:?}"
+    );
+
+    assert_eq!(
+        exec.read_file("local", &format!("{repo}/README.md"))
+            .await
+            .unwrap(),
+        "# edited by a human",
+        "merge-back must not discard the human's uncommitted edit"
+    );
+    assert!(
+        exec.run_command(
+            "local",
+            &format!("git -C \"{repo}\" cat-file -e HEAD:newfile.txt"),
+        )
+        .await
+        .is_ok(),
+        "the subtask's file should be on the feature branch after merge"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&wt_path);
+}

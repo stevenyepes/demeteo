@@ -142,15 +142,16 @@ pub(crate) fn open_attempt(
 }
 
 impl ExecutionDriver {
-    /// Probe the feature worktree's current fingerprint
-    /// (`<HEAD>:<dirty|clean>`, P1.14) on whatever machine hosts it.
-    /// `None` = probe failed; never blocks the run.
+    /// Probe the feature's current workspace fingerprint (P1.14) on
+    /// whatever machine hosts it. `None` = probe failed; never blocks the
+    /// run.
     pub(crate) async fn current_workspace_fingerprint(&self) -> Option<String> {
         let machine_str = self.machine_id();
         crate::adapters::step_executor::setup::workspace_fingerprint(
             &*self.exec,
             machine_str,
             &self.target_dir,
+            &self.branch_name,
         )
         .await
     }

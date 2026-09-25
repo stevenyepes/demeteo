@@ -391,18 +391,26 @@ async fn forge_interrupted_command(
     feature_id: &FeatureId,
     repo_dir: &Path,
 ) -> String {
-    git(repo_dir, &["add", "-A"]);
-    git(repo_dir, &["commit", "-m", "settle", "--allow-empty"]);
-
     let harness = step(ctx, feature_id, "s-harness");
+    let branch = ctx
+        .features
+        .get(feature_id)
+        .expect("feature read")
+        .expect("feature exists")
+        .resolved_branch
+        .expect("a V41+ feature records its branch");
     let fp = crate::adapters::step_executor::setup::workspace_fingerprint(
         &*ctx.exec,
         "local",
         &repo_dir.to_string_lossy(),
+        &branch,
     )
     .await
     .expect("probe fingerprint");
-    assert!(fp.ends_with(":clean"), "settled tree must be clean: {fp}");
+    assert!(
+        fp.ends_with(":clean"),
+        "no checkout holds the branch yet: {fp}"
+    );
 
     ctx.features
         .attempt_open(&harness.id, paths::now_ms(), Some(&fp))

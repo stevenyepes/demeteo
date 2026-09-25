@@ -36,7 +36,13 @@ impl GitOpsHelper {
         if let Some(ref active_wt) = checked_out_path {
             // The feature branch is already checked out in a worktree (e.g. main repo).
             // Merge the subtask branch directly into that worktree.
-            self.abort_inflight_merge(machine_str, active_wt).await;
+            //
+            // Never `reset --hard` here. This checkout is not Demeteo's: a
+            // terminal opened on a pipeline checks the feature branch out in
+            // the project clone, and a human's uncommitted edits live in it.
+            // `merge` itself refuses to overwrite a dirty path, so the edit
+            // either survives the merge or fails it loudly.
+            self.abort_merge_in_progress(machine_str, active_wt).await;
             self.exec
                 .run_program(
                     machine_str,
@@ -56,7 +62,7 @@ impl GitOpsHelper {
         } else {
             // The feature branch is not checked out in any worktree.
             // Checkout the feature branch in the subtask worktree, then merge.
-            self.abort_inflight_merge(machine_str, wt_path).await;
+            self.discard_own_merge_state(machine_str, wt_path).await;
             self.exec
                 .run_program(
                     machine_str,
@@ -83,23 +89,24 @@ impl GitOpsHelper {
         Ok(())
     }
 
-    /// Clear any half-finished merge left in `safe_dir` (an already
-    /// shell-escaped worktree path) by a prior attempt that was interrupted
-    /// or failed mid-merge. Without this, the next `git merge` aborts with
-    /// "fatal: You have not concluded your merge (MERGE_HEAD exists)" and the
-    /// retry can never make progress.
-    ///
-    /// Best-effort: `git merge --abort` fails harmlessly when there is no
-    /// in-progress merge, so its error is ignored. `git reset --hard HEAD`
-    /// then clears any lingering conflicted index / working-tree state
-    /// (e.g. a half-resolved merge with no MERGE_HEAD). Both are safe here
-    /// because the subtask work lives committed on the subtask branch — the
-    /// feature-branch checkout carries no changes worth preserving.
-    async fn abort_inflight_merge(&self, machine_str: &str, dir: &str) {
+    /// Clear a half-finished merge a prior attempt left in `dir`. Without
+    /// this, the next `git merge` aborts with "fatal: You have not concluded
+    /// your merge (MERGE_HEAD exists)" and the retry can never make progress.
+    /// `git merge --abort` fails harmlessly when no merge is in progress.
+    async fn abort_merge_in_progress(&self, machine_str: &str, dir: &str) {
         let _ = self
             .exec
             .run_program(machine_str, git_request(dir, ["merge", "--abort"]))
             .await;
+    }
+
+    /// [`Self::abort_merge_in_progress`], then `git reset --hard HEAD` to
+    /// clear any lingering conflicted index (a half-resolved merge with no
+    /// MERGE_HEAD). Only for Demeteo's own subtask worktree: its work lives
+    /// committed on the subtask branch, so the checkout carries nothing
+    /// worth preserving — which is never true of a checkout a human holds.
+    async fn discard_own_merge_state(&self, machine_str: &str, dir: &str) {
+        self.abort_merge_in_progress(machine_str, dir).await;
         let _ = self
             .exec
             .run_program(machine_str, git_request(dir, ["reset", "--hard", "HEAD"]))

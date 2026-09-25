@@ -179,7 +179,7 @@ Failure classes map 1:1 onto the existing `StepOutcome`/`VerifierError` taxonomy
 - `sequence_checkpoints` → persisted per (feature, node) so a crash mid-list resumes from the exact task, not the step (closes the documented re-run-committed-tasks waste).
 - `cached_plans` → persisted with the attempt that produced them.
 - `env_retried` → derivable from `step_attempts.error_class`, so it's deleted.
-- Workspace fingerprint (repo HEAD + dirty flag) recorded at node start; on resume, a mismatch surfaces as the existing synthetic gate rather than blind re-execution (extends Decision 14).
+- Workspace fingerprint (feature-branch tip + a dirty flag over the feature's own checkouts) recorded at node start; on resume, a mismatch surfaces as the existing synthetic gate rather than blind re-execution (extends Decision 14).
 
 **Idempotency rule:** every side-effecting node records an idempotency key (node id + attempt + workspace fingerprint); `command` nodes must declare `idempotent: true|false` — non-idempotent interrupted commands always go to synthetic gate, never auto-rerun.
 
