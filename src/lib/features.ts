@@ -148,6 +148,36 @@ export async function replayFromStep(input: {
 }
 
 /**
+ * Pin which agent, model and effort one *queued* step runs as. Nothing is
+ * rewound: the pin lands on the run's own step override — the highest
+ * resolution tier — and applies the next time the scheduler dispatches that
+ * node, so it is not {@link retryStep}'s feature-wide re-pin.
+ *
+ * The trio is one value rather than a patch over what is already pinned:
+ * **all three `null` is the reset-to-inherited request**, and it clears the
+ * step's pin. It is never read as "leave the pin alone" — that is spelled by
+ * not calling this at all. Sending only `effort` therefore un-pins the agent
+ * and the model too.
+ *
+ * The backend refuses a step whose spawn already happened (`running`,
+ * `verifying`), so the promise rejects with its message rather than reporting
+ * a pin that this attempt will never use.
+ */
+export async function setStepAssignment(input: {
+  stepExecutionId: string;
+  agentKind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
+}): Promise<void> {
+  await invoke<void>("step_set_assignment", {
+    stepExecutionId: input.stepExecutionId,
+    agentKind: input.agentKind,
+    model: input.model,
+    effort: input.effort,
+  });
+}
+
+/**
  * The detached twin of {@link retryStep}: a run the runner owns is rewound
  * *on the runner* (this machine has neither its driver nor its worktree).
  *
@@ -190,6 +220,33 @@ export async function remoteReplayStep(input: {
     stepExecutionId: input.stepExecutionId,
     model: input.model,
     agentKind: input.agentKind,
+    effort: input.effort,
+  });
+}
+
+/**
+ * The detached twin of {@link setStepAssignment}, carrying its meaning
+ * unchanged — tier 1 only, no rewind, and **all three `null` is the
+ * reset-to-inherited request rather than a no-op** — with the change routed
+ * to the runner that owns the run.
+ *
+ * A runner older than the `set_step_assignment` RPC rejects the call, so the
+ * promise rejects instead of reporting a pin that never landed.
+ */
+export async function remoteSetStepAssignment(input: {
+  machineId: string;
+  runId: string;
+  stepExecutionId: string;
+  agentKind: string | null;
+  model: string | null;
+  effort: EffortLevel | null;
+}): Promise<void> {
+  await invoke<void>("remote_set_step_assignment", {
+    machineId: input.machineId,
+    runId: input.runId,
+    stepExecutionId: input.stepExecutionId,
+    agentKind: input.agentKind,
+    model: input.model,
     effort: input.effort,
   });
 }

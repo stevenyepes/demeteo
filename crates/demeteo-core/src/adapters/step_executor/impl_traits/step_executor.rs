@@ -3,8 +3,12 @@ use async_trait::async_trait;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
 use crate::domain::models::{Feature, StepExecution};
 use crate::domain::run_control::{retry_refusal, shadow_refusal, RunAction};
+use crate::domain::step_assignment::{
+    apply_step_assignment, assignment_refusal, harness_refusal, kind_refusal,
+};
 use crate::error::AppError;
 use crate::paths;
+use crate::ports::db::FeaturePatch;
 use crate::ports::step_executor::{FeatureLaunch, StepExecutor, SyncOutcomeView};
 
 use super::super::DagStepExecutor;
@@ -209,6 +213,81 @@ impl StepExecutor for DagStepExecutor {
         // that broke, which is the whole point of checkpointing it.
         self.replay_steps_from(execution_id, new_model, new_agent, new_effort, true, false)
             .await
+            .map_err(AppError::from)
+    }
+
+    async fn step_set_assignment(
+        &self,
+        execution_id: &str,
+        assignment: crate::domain::step_assignment::StepAssignment,
+    ) -> Result<(), AppError> {
+        let se_id = StepExecutionId::from(execution_id.to_string());
+        let step_exec = self
+            .features
+            .step_get(&se_id)
+            .map_err(AppError::from)?
+            .ok_or_else(|| {
+                AppError::not_found(format!("Step execution not found: {}", execution_id))
+            })?;
+
+        if self
+            .runner_owned_features()
+            .contains(step_exec.feature_id.as_str())
+        {
+            return Err(AppError::validation(shadow_refusal(
+                RunAction::Assign,
+                &step_exec.feature_id.0,
+            )));
+        }
+
+        if let Some(refusal) =
+            crate::domain::run_control::out_of_band_refusal(RunAction::Assign, &step_exec.step_id.0)
+        {
+            return Err(AppError::validation(refusal));
+        }
+
+        if let Some(refusal) = kind_refusal(&step_exec.step_kind) {
+            return Err(AppError::validation(refusal));
+        }
+
+        if let Some(refusal) = assignment_refusal(&step_exec.status) {
+            return Err(AppError::validation(refusal));
+        }
+
+        // A pin outlives the click by as long as the node takes to be
+        // dispatched, so an unknown harness is refused here rather than
+        // surfacing as that step's failure hours later.
+        if let Some(agent_kind) = assignment.agent_kind.as_deref() {
+            let registered: Vec<&str> = self.registry.runtimes().iter().map(|r| r.kind()).collect();
+            if let Some(refusal) = harness_refusal(agent_kind, &registered) {
+                return Err(AppError::validation(refusal));
+            }
+        }
+
+        // Read-modify-write: the stored list is the one this edit composes
+        // against, so sequential edits to different nodes keep both pins. A
+        // caller handing over a whole list would silently drop the older one.
+        // The read and the update are two repository calls, so two edits
+        // overlapping in time can still lose one pin.
+        let feature = self
+            .features
+            .get(&step_exec.feature_id)
+            .map_err(AppError::from)?
+            .ok_or_else(|| {
+                AppError::not_found(format!("Feature not found: {}", step_exec.feature_id.0))
+            })?;
+
+        let pinned =
+            apply_step_assignment(&feature.step_overrides, &step_exec.step_id.0, &assignment);
+
+        self.features
+            .update(
+                &step_exec.feature_id,
+                &FeaturePatch {
+                    step_overrides: Some(pinned),
+                    ..Default::default()
+                },
+            )
             .map_err(AppError::from)
     }
 

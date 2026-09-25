@@ -265,6 +265,39 @@ pub async fn remote_retry_step(
     .map_err(AppError::from)
 }
 
+/// Pin one queued step's agent, model and effort on a detached run — the
+/// remote twin of `step_set_assignment`, carrying the same meaning: tier 1
+/// only, no rewind, and **all three fields `None` is the "reset to inherited"
+/// request**, which removes that step's pin. It is never a no-op patch that
+/// leaves the existing pin standing.
+///
+/// A runner predating the `set_step_assignment` RPC answers `unknown method`,
+/// which surfaces here as an `Err` rather than a silent success.
+#[tauri::command]
+pub async fn remote_set_step_assignment(
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+    run_id: String,
+    step_execution_id: String,
+    agent_kind: Option<String>,
+    model: Option<String>,
+    effort: Option<crate::domain::models::EffortLevel>,
+) -> Result<(), AppError> {
+    set_remote_step_assignment(
+        &ctx,
+        machine_id,
+        run_id,
+        step_execution_id,
+        crate::domain::step_assignment::StepAssignment {
+            agent_kind,
+            model,
+            effort,
+        },
+    )
+    .await
+    .map_err(AppError::from)
+}
+
 /// Replay a detached run from a step — the remote twin of
 /// `replay_from_step`, and deliberately *not* `remote_retry_step` with a
 /// different label. The runner's retry arm rejects any step that is not

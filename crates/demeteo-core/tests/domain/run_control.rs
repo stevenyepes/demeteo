@@ -343,3 +343,65 @@ fn an_out_of_band_row_is_neither_retried_nor_replayed_from() {
         assert_eq!(out_of_band_refusal(action, "s-sync"), None);
     }
 }
+
+// ── Changing what a step will run as ─────────────────────────────────────────
+
+/// An assignment change is a write to the run's own pins, so on a shadow it is
+/// a write to a row the runner will overwrite from its side. The tail has to
+/// name the remote route, or the user is told "no" with nowhere to go — and it
+/// has to be its own sentence: `remote_set_step_assignment` is not
+/// `remote_retry_step`, and Retry's tail names no route at all.
+#[test]
+fn assigning_on_a_shadow_is_refused_in_its_own_words() {
+    const PREFIX: &str = "Feature 'f-9' is a read-only shadow of a run owned by a demeteo-runner; ";
+    let msg = shadow_refusal(RunAction::Assign, "f-9");
+
+    assert!(msg.starts_with(PREFIX), "{msg}");
+    assert!(
+        msg.len() > PREFIX.len(),
+        "Assign refuses with no tail: {msg}"
+    );
+    assert!(
+        msg.contains("remote_set_step_assignment"),
+        "the tail must name the remote route: {msg}"
+    );
+    for other in [
+        RunAction::Drive,
+        RunAction::Cancel,
+        RunAction::Retry,
+        RunAction::DecideGate,
+        RunAction::Replay,
+    ] {
+        assert_ne!(
+            msg,
+            shadow_refusal(other, "f-9"),
+            "Assign refuses identically to {other:?}"
+        );
+    }
+}
+
+/// The out-of-band row has no assignment to change for the same reason it has
+/// no retry: it is not a node, so nothing will ever dispatch it from a pin.
+/// The wildcard arm makes this the one refusal a new action gets *wrong*
+/// rather than not at all — it would tell the user there is nothing to retry.
+#[test]
+fn an_out_of_band_row_has_no_assignment_to_change() {
+    use crate::domain::run_control::out_of_band_refusal;
+    use crate::domain::step_seed::MANUAL_SYNC_STEP_ID;
+
+    let refusal = out_of_band_refusal(RunAction::Assign, MANUAL_SYNC_STEP_ID)
+        .expect("Assign was allowed on the manual sync row");
+    assert!(refusal.contains(MANUAL_SYNC_STEP_ID), "{refusal}");
+    assert!(
+        refusal.contains("nothing to assign"),
+        "the refusal must say what was refused: {refusal}"
+    );
+    // Retry's remedy is re-running the sync; that re-runs it on the same
+    // resolver, which is not what someone trying to re-point it asked for.
+    assert!(
+        !refusal.contains("sync banner") && refusal.contains("sync settings"),
+        "the remedy must be Assign's, not Retry's: {refusal}"
+    );
+
+    assert_eq!(out_of_band_refusal(RunAction::Assign, "s-implement"), None);
+}

@@ -396,6 +396,61 @@ describe('WorkflowCanvas render', () => {
     expect(within(assignment).getByTitle(`Model: ${longModel}`)).toHaveTextContent(longModel);
   });
 
+  it('draws a queued node its pin, and lets a spawn outrank one', () => {
+    const def: WorkflowDefinitionV2 = {
+      schema_version: 2,
+      id: 'wf-pins',
+      name: 'Pins',
+      nodes: [
+        { id: 'implement', type: 'agent', title: 'Implement' },
+        { id: 'queued', type: 'agent', title: 'Queued work' },
+        { id: 'open', type: 'agent', title: 'Open work' },
+      ],
+      edges: [
+        { from: 'implement', to: 'queued' },
+        { from: 'queued', to: 'open' },
+      ],
+    };
+
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas
+          definition={def}
+          statusByNode={{
+            implement: {
+              status: 'running',
+              stepExecutionId: 'se-implement',
+              agentKind: 'claude-code',
+              effort: 'medium',
+              planned: { agentKind: 'codex', model: null, effort: 'high' },
+            },
+            queued: {
+              status: 'pending',
+              stepExecutionId: 'se-queued',
+              planned: { agentKind: 'codex', model: null, effort: 'high' },
+            },
+            open: { status: 'pending', stepExecutionId: 'se-open' },
+          }}
+        />
+      </div>,
+    );
+
+    const planned = screen.getByLabelText(
+      'Planned assignment for Queued work: Agent: codex; Effort: High',
+    );
+    expect(within(planned).getByTitle('Agent (planned): codex')).toHaveTextContent('codex');
+    // `null` is inherit, not a value: the pin names no model, so no model chip.
+    expect(within(planned).queryByTitle(/Model/)).not.toBeInTheDocument();
+    // What ran outranks what was asked for, and is never restated as a plan.
+    expect(
+      screen.getByLabelText(
+        'Actual assignment for Implement: Agent: claude-code; Effective effort: Medium',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Planned assignment for Implement/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/assignment for Open work/)).not.toBeInTheDocument();
+  });
+
   it('keeps configured design-mode essence separate from actual assignment metadata', () => {
     const def: WorkflowDefinitionV2 = {
       schema_version: 2,

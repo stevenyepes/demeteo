@@ -52,6 +52,10 @@ fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
         // decision 44) — but it is written mid-run and may be re-measured, so
         // the first poll's whole-`Feature` insert is not enough on its own.
         harness_baseline: Some(feature.harness_baseline.clone()),
+        // The runner is authoritative for a detached run's assignment pins:
+        // they are editable mid-run there, so the shadow must follow rather
+        // than keep the list it was launched with.
+        step_overrides: Some(feature.step_overrides.clone()),
         commit_artifacts: None,
         origin: None,
         diff_base_branch: None,

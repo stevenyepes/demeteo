@@ -235,6 +235,17 @@ impl FeatureRepository for SqliteAdapter {
             // `Some(None)` clears the pin back to "inherit" (SQL NULL).
             binds.push(Box::new(e.map(|v| v.as_str())));
         }
+        if let Some(overrides) = &patch.step_overrides {
+            sets.push("step_overrides_json=?");
+            // Mirror `add`: an empty list is stored as SQL NULL, not `[]`. But
+            // not `add`'s `.ok()`: here NULL clears a live run's pins, so an
+            // encode failure must be an error rather than a silent un-pin.
+            binds.push(Box::new(if overrides.is_empty() {
+                None
+            } else {
+                Some(serde_json::to_string(overrides).map_err(|e| e.to_string())?)
+            }));
+        }
         if let Some(url) = mr_url {
             sets.push("mr_url=?");
             binds.push(Box::new(url));

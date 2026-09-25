@@ -561,3 +561,74 @@ describe('FeatureDetail — observed assignments across run views', () => {
     expect(screen.queryByTitle('Agent: local-should-not-leak')).not.toBeInTheDocument();
   });
 });
+
+describe('FeatureDetail — pinned assignments before a step runs', () => {
+  it('draws the pin on both run views, and only on the node that has one', async () => {
+    const steps: StepExecution[] = [
+      { ...step(), id: 'se-pinned', step_id: 'pinned', step_index: 0, status: 'pending' },
+      { ...step(), id: 'se-open', step_id: 'open', step_index: 1, status: 'pending' },
+    ];
+    const graph: WorkflowDefinitionV2 = {
+      schema_version: 2,
+      id: 'wf-pins',
+      name: 'Pinned work',
+      nodes: [
+        { id: 'pinned', type: 'agent', title: 'Pinned work' },
+        { id: 'open', type: 'agent', title: 'Open work' },
+      ],
+      edges: [{ from: 'pinned', to: 'open' }],
+    };
+
+    vi.mocked(invoke).mockImplementation(((cmd: string) => {
+      switch (cmd) {
+        case 'step_list_for_run':
+          return Promise.resolve(steps);
+        case 'feature_get':
+          return Promise.resolve({
+            id: FEATURE_ID,
+            status: 'running',
+            step_overrides: [
+              { step_id: 'pinned', agent_kind: 'codex', model: 'gpt-5.1-codex', effort: 'high' },
+            ],
+          });
+        case 'feature_workflow_graph':
+          return Promise.resolve(graph);
+        case 'run_events_since':
+          return Promise.resolve([]);
+        case 'get_app_session':
+        case 'remote_run_for_feature':
+          return Promise.resolve(null);
+        case 'set_app_session':
+          return Promise.resolve(undefined);
+        case 'feature_list_attachments':
+        case 'get_machines':
+        case 'list_agents':
+        case 'list_terminal_sessions':
+        case 'step_attempts_list':
+          return Promise.resolve([]);
+        default:
+          return Promise.reject(new Error(`unexpected IPC command: ${cmd}`));
+      }
+    }) as unknown as typeof invoke);
+
+    mount();
+
+    const planned = await screen.findByLabelText(
+      'Planned assignment for Pinned work: Agent: codex; Model: gpt-5.1-codex; Effort: High',
+    );
+    expect(within(planned).getByTitle('Agent (planned): codex')).toBeInTheDocument();
+    // A pin is not evidence of a spawn, and may never be announced as one.
+    expect(screen.queryByLabelText(/Actual assignment for Pinned work/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Planned assignment for Open work/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Timeline' }));
+
+    const pinnedRow = document.querySelector('[data-step-row="se-pinned"]');
+    const openRow = document.querySelector('[data-step-row="se-open"]');
+    expect(within(pinnedRow as HTMLElement).getByTitle('Agent (planned): codex')).toBeVisible();
+    expect(
+      within(pinnedRow as HTMLElement).getByTitle('Effort (planned): High'),
+    ).toBeVisible();
+    expect(within(openRow as HTMLElement).queryByTitle(/planned/)).not.toBeInTheDocument();
+  });
+});

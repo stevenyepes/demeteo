@@ -76,8 +76,9 @@ pub struct Feature {
     /// migration V30.
     #[serde(default)]
     pub max_budget_usd: Option<f64>,
-    /// Per-step agent/model overrides chosen at launch, snapshotted on the
-    /// feature so workflow/project edits don't affect an in-flight run.
+    /// Per-step agent/model overrides, snapshotted on the feature so
+    /// workflow/project edits don't affect an in-flight run. Written at
+    /// launch and again while the run is alive — see [`StepOverride`].
     /// Empty = every step inherits the workflow/project defaults.
     #[serde(default)]
     pub step_overrides: Vec<StepOverride>,
@@ -151,8 +152,11 @@ pub struct FeatureStatusCount {
     pub count: i64,
 }
 
-/// A per-step agent/model/effort override selected when launching a feature.
-/// Any field may be `None`, meaning "inherit" for that dimension.
+/// One step's pinned agent/model/effort — the run's highest-precedence
+/// resolution tier, settable at launch and again at any point in the run
+/// ([`crate::domain::step_assignment`]). Any field may be `None`, meaning
+/// "inherit" for that dimension; a step with nothing pinned has no entry at
+/// all rather than an all-`None` one.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct StepOverride {
     pub step_id: String,

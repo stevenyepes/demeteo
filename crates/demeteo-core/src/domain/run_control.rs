@@ -12,8 +12,9 @@
 //! written record: a feature listed in the remote-run mirror is a read-only
 //! *shadow* of a run a `demeteo-runner` owns and is still driving on another
 //! machine. This machine never drives it, cancels it, retries its steps,
-//! decides its gates, or replays it — every one of those would arm a second
-//! engine against one run, in a worktree that only exists on the runner's box.
+//! decides its gates, replays it, or sets what its steps run as — every one of
+//! those would arm a second engine against one run, or write a row the runner
+//! owns, in a worktree that only exists on the runner's box.
 //!
 //! Everything here is synchronous and total: it takes what the adapter
 //! observed — a status string, the sibling rows, the ancestor set — and
@@ -29,7 +30,7 @@ use crate::domain::ids::StepId;
 use crate::domain::models::{GateDecision, StepExecution};
 
 /// What a caller is trying to do to a run — the only thing that differs
-/// between the five shadow refusals.
+/// between the shadow refusals.
 ///
 /// Named for the *action*, not for the entry point that performs it, because
 /// the runner grows RPCs faster than the desktop grows call sites: the tail
@@ -48,11 +49,18 @@ pub enum RunAction {
     DecideGate,
     /// Rewind a step and its descendants, then re-arm.
     Replay,
+    /// Pin which agent, model and effort one step runs as.
+    ///
+    /// Unlike the others this one does not move the run, which is why it
+    /// is refused on a shadow anyway: the pin lives in the feature row, and
+    /// the runner is the writer of that row for as long as it owns the run.
+    /// A local write is not a no-op, it is an edit the next reconcile drops.
+    Assign,
 }
 
 impl RunAction {
     /// The clause that follows the shared prefix. Kept as data rather than
-    /// five `format!`s so the prefix cannot drift between them.
+    /// one `format!` per action so the prefix cannot drift between them.
     fn refusal_tail(self) -> &'static str {
         match self {
             RunAction::Drive => {
@@ -64,6 +72,9 @@ impl RunAction {
                 "decide this gate on the runner (remote_decide_gate), not locally"
             }
             RunAction::Replay => "replay it on the runner, not here",
+            RunAction::Assign => {
+                "set its steps' assignment on the runner (remote_set_step_assignment), not locally"
+            }
         }
     }
 }
@@ -98,18 +109,33 @@ pub fn shadow_refusal(action: RunAction, feature_id: &str) -> String {
 /// The refusal is at the door rather than a widened fallback because there is
 /// no graph answer to widen *to*: re-running this work is what the sync's own
 /// affordance is for, and that path knows how to find the worktree.
+///
+/// Assign is refused for the simpler reason that nothing would read the pin:
+/// the scheduler dispatches by node id, and this row has none. The arm exists
+/// because the `match` below ends in a wildcard, so a missing one is not a
+/// compile error — it is a user told there is nothing to *retry*.
 pub fn out_of_band_refusal(action: RunAction, step_id: &str) -> Option<String> {
     if !crate::domain::step_seed::is_out_of_band(step_id) {
         return None;
     }
+    let (verb, remedy) = match action {
+        RunAction::Replay => (
+            "replay from",
+            "Run the sync again from the feature's sync banner.",
+        ),
+        RunAction::Assign => (
+            "assign",
+            "A sync's resolver harness is chosen in the project's sync settings.",
+        ),
+        _ => (
+            "retry",
+            "Run the sync again from the feature's sync banner.",
+        ),
+    };
     Some(format!(
         "Step '{}' is an out-of-band sync, not a node of this run's workflow, \
-         so there is nothing to {}. Run the sync again from the feature's sync banner.",
-        step_id,
-        match action {
-            RunAction::Replay => "replay from",
-            _ => "retry",
-        }
+         so there is nothing to {}. {}",
+        step_id, verb, remedy
     ))
 }
 

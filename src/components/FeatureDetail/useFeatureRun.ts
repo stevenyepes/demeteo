@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTauriEvent } from '../../hooks/useTauriEvent';
-import type { Feature, HarnessBaseline, StepExecution } from '../../types';
+import type { Feature, HarnessBaseline, StepExecution, StepOverride } from '../../types';
 import { REVIEW_READY_META, runStatusMeta } from '../../lib/runStatus';
 import { useErrorBus } from '../../lib/errorBus';
 import { formatError } from '../../lib/errors';
@@ -164,9 +164,18 @@ export function useFeatureRun(input: {
   featureId: string;
   projectId: string | undefined;
   initialTitle: string;
-  overrides: HarnessOverrides;
+  /**
+   * The picker, reached at fetch time rather than at render time.
+   *
+   * It is seeded from the selected node's pin, and the selection resolves
+   * against the steps *this* hook fetches, so the picker cannot be built
+   * before this call. Only `fetchRun` reads it, and that runs from an effect —
+   * by which point the caller has filled the ref. `null` is a caller that has
+   * no picker at all, not an error.
+   */
+  overridesRef: { current: HarnessOverrides | null };
 }) {
-  const { featureId, projectId, initialTitle, overrides } = input;
+  const { featureId, projectId, initialTitle, overridesRef } = input;
   const { reportError } = useErrorBus();
   const [steps, setSteps] = useState<StepExecution[]>([]);
   const [featureStatus, setFeatureStatus] = useState('running');
@@ -180,6 +189,10 @@ export function useFeatureRun(input: {
   // `features.harness_baseline_json`). `null` is "nothing measured" and is
   // rendered as such — never as a pass; see `HarnessGateTable`.
   const [harnessBaseline, setHarnessBaseline] = useState<HarnessBaseline | null>(null);
+  // The run's own tier-1 assignment pins, which the inspector's Assignment
+  // control opens on and re-seeds from. Snapshotted on the feature row, so a
+  // workflow edited mid-flight does not reach this run.
+  const [stepOverrides, setStepOverrides] = useState<StepOverride[]>([]);
 
   // The headline is a verdict on the *run*, so an out-of-band sync is not part
   // of it: that row is work on a run which already ended, and letting it into
@@ -237,7 +250,7 @@ export function useFeatureRun(input: {
       try {
         f = await getFeature(featureId);
         if (f) {
-          overrides.adoptFeatureModel(f.model);
+          overridesRef.current?.adoptFeatureModel(f.model);
           if (f.title) {
             setFeatureTitle(f.title);
           }
@@ -249,6 +262,7 @@ export function useFeatureRun(input: {
           // degrade to "no baseline", exactly as `HarnessBaseline::from_column`
           // degrades every decode failure to `None`.
           setHarnessBaseline(readHarnessBaseline(f));
+          setStepOverrides(f.step_overrides ?? []);
         }
       } catch (err) {
         reportError(err, { kind: "internal" });
@@ -261,7 +275,7 @@ export function useFeatureRun(input: {
 
       const targetProjectId = projectId || f?.project_id;
       if (f && targetProjectId) {
-        overrides.probeForFeature({ agentKind: f.agent_kind, projectId: targetProjectId });
+        overridesRef.current?.probeForFeature({ agentKind: f.agent_kind, projectId: targetProjectId });
       }
     } catch (err) {
       setError(formatError(err));
@@ -316,6 +330,7 @@ export function useFeatureRun(input: {
     featureDescription,
     harnessBaseline,
     harnessEvidence,
+    stepOverrides,
     anyStepStarted,
     reload,
   };

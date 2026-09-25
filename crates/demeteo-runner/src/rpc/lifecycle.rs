@@ -2,12 +2,14 @@ use crate::services::RunnerServices;
 use demeteo_core::domain::ids::{FeatureId, ProjectId};
 use demeteo_core::domain::models::EffortLevel;
 use demeteo_core::domain::run_spec::RunSpec;
+use demeteo_core::domain::step_assignment::StepAssignment;
 use demeteo_core::paths;
-use demeteo_core::ports::runner_run::RunnerRun;
+use demeteo_core::ports::db::FeatureRepository;
+use demeteo_core::ports::runner_run::{RunnerRun, RunnerRunPort};
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::ownership::{require_owner, require_owner_of_step};
+use super::ownership::{no_such_step, require_owner, require_owner_of_step};
 use super::RunIdParams;
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +62,27 @@ struct RetryStepParams {
     effort: Option<EffortLevel>,
     #[serde(default)]
     mode: RetryMode,
+}
+
+/// `set_step_assignment(run_id, step_execution_id, agent_kind?, model?,
+/// effort?)`.
+///
+/// Every dimension is optional-by-default on the wire, and an omitted one
+/// means *unpinned*, not *unchanged*: the trio submitted here becomes the
+/// stored pin wholesale. There is deliberately no wire spelling for "leave
+/// this dimension as it was" — see
+/// [`apply_step_assignment`](demeteo_core::domain::step_assignment::apply_step_assignment)
+/// for why the surface sends all three.
+#[derive(Debug, Deserialize)]
+struct SetStepAssignmentParams {
+    run_id: String,
+    step_execution_id: String,
+    #[serde(default)]
+    agent_kind: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    effort: Option<EffortLevel>,
 }
 
 /// Idempotent by `run_id` (R9/M3.2): re-submitting the same `run_id`
@@ -190,12 +213,17 @@ pub(super) async fn retry_step(
 ) -> Result<RunnerRun, String> {
     let params: RetryStepParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
-    let run = require_owner_of_step(svc, &params.step_execution_id, client_id)?;
+    let run = require_owner_of_step(
+        svc.ctx.features.as_ref(),
+        svc.ctx.runner_runs.as_ref(),
+        &params.step_execution_id,
+        client_id,
+    )?;
     // The step id resolved to a run this client owns — but not necessarily
     // the run it *said* it was retrying. Reject the mismatch rather than
     // silently re-opening a different run than the caller named.
     if run.run_id != params.run_id {
-        return Err(format!("no such step: {}", params.step_execution_id));
+        return Err(no_such_step(&params.step_execution_id));
     }
 
     let spec: RunSpec = serde_json::from_str(&run.spec_json)
@@ -291,6 +319,76 @@ pub(super) async fn retry_step(
         .runner_runs
         .get(&run.run_id)?
         .ok_or_else(|| "run vanished during retry".to_string())
+}
+
+/// Pin which agent, model and effort one step of a detached run uses — the
+/// remote twin of the desktop app's per-step Assignment control, and the
+/// only way to change the assignment on a runner-owned run (the local
+/// executor refuses a shadow row outright, so a laptop-side write would be
+/// clobbered by the next hydration).
+///
+/// All three dimensions absent is the documented **reset to inherited**
+/// request, not a no-op: the step's pin is removed and the node goes back to
+/// resolving through the feature-wide tier.
+///
+/// Unlike [`retry_step`] this performs no rewind and re-opens nothing — the
+/// run is left exactly as it was, and the pin applies the next time the
+/// scheduler dispatches that node. So there is no status to flip back to
+/// `running` and no `await_terminal_and_push` tail to respawn here.
+pub(super) async fn set_step_assignment(
+    svc: &Arc<RunnerServices>,
+    params: serde_json::Value,
+    client_id: &str,
+) -> Result<(), String> {
+    let params: SetStepAssignmentParams =
+        serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    assignment_target(
+        svc.ctx.features.as_ref(),
+        svc.ctx.runner_runs.as_ref(),
+        &params,
+        client_id,
+    )?;
+
+    svc.ctx
+        .executor
+        .step_set_assignment(&params.step_execution_id, assignment_of(&params))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The change [`set_step_assignment`] hands the executor: the wire's trio,
+/// carried across verbatim. Nothing is merged over what the step was pinned
+/// to before and nothing is filled in from a default — an omitted dimension
+/// is an un-pinned one, so an empty payload has to arrive at the executor as
+/// the reset request rather than being dropped on the way.
+fn assignment_of(params: &SetStepAssignmentParams) -> StepAssignment {
+    StepAssignment {
+        agent_kind: params.agent_kind.clone(),
+        model: params.model.clone(),
+        effort: params.effort,
+    }
+}
+
+/// [`set_step_assignment`]'s whole pre-executor gate: resolve the step to a
+/// run this client owns, then confirm it is the run the caller named. A bare
+/// `step_execution_id` is otherwise a bearer capability — any tunnelled
+/// caller who learned one could re-point another client's step at an agent
+/// of their choosing (MC-D2).
+///
+/// Free over the two ports it reads so each refusal is reachable from a test
+/// without a [`RunnerServices`]; the byte-identity the two refusals owe each
+/// other is [`no_such_step`]'s.
+fn assignment_target(
+    features: &dyn FeatureRepository,
+    runs: &dyn RunnerRunPort,
+    params: &SetStepAssignmentParams,
+    client_id: &str,
+) -> Result<(), String> {
+    let run = require_owner_of_step(features, runs, &params.step_execution_id, client_id)?;
+    if run.run_id != params.run_id {
+        return Err(no_such_step(&params.step_execution_id));
+    }
+    Ok(())
 }
 
 /// R8: cancellation is explicit and RPC-only — closing the laptop or

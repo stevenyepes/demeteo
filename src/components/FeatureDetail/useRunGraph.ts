@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { NavigationMode } from '../../context/NavigationContext';
-import type { AppView, StepExecution } from '../../types';
+import type { AppView, StepExecution, StepOverride } from '../../types';
 import { usePersistedPref } from '../../hooks/usePersistedPref';
 import { useRunEvents } from '../../hooks/useRunEvents';
 import { getFeatureWorkflowGraph } from '../../lib/featureDetail';
@@ -31,6 +31,8 @@ export function useRunGraph(input: {
   /** Select the node, or clear the selection when it is already the one shown. */
   toggleNode: (nodeId: string) => void;
   detachedAssignments: RunEventAssignments | null;
+  /** The run's tier-1 pins (`Feature.step_overrides`), keyed by node id. */
+  stepOverrides: StepOverride[];
 }) {
   const {
     featureId,
@@ -40,6 +42,7 @@ export function useRunGraph(input: {
     startReplay,
     toggleNode,
     detachedAssignments,
+    stepOverrides,
   } = input;
   /** Graph first: Phase 2 gives both surfaces the same inspector, which was the
    *  parity the timeline default was waiting on (UI_REDESIGN_PLAN §7,
@@ -77,20 +80,35 @@ export function useRunGraph(input: {
           const assignment = status.stepExecutionId
             ? runAssignments[status.stepExecutionId]
             : undefined;
+          const pin = stepOverrides.find((o) => o.step_id === nodeId);
           return [
             nodeId,
-            assignment
-              ? {
-                  ...status,
-                  agentKind: assignment.agentKind,
-                  model: assignment.model,
-                  effort: assignment.effort,
-                }
-              : status,
+            {
+              ...status,
+              ...(assignment
+                ? {
+                    agentKind: assignment.agentKind,
+                    model: assignment.model,
+                    effort: assignment.effort,
+                  }
+                : {}),
+              // Carried beside the evidence rather than instead of it: which of
+              // the two a card draws is the card's decision, and a node that
+              // has spawned still has a pin.
+              ...(pin
+                ? {
+                    planned: {
+                      agentKind: pin.agent_kind,
+                      model: pin.model,
+                      effort: pin.effort,
+                    },
+                  }
+                : {}),
+            },
           ];
         }),
       ),
-    [localStatusByNode, runAssignments],
+    [localStatusByNode, runAssignments, stepOverrides],
   );
 
   // Load the pinned version's v2 graph once per feature id — it's immutable

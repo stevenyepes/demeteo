@@ -1,7 +1,7 @@
-import { Bot, Gauge, Zap } from 'lucide-react';
+import { Bot, Gauge, Zap, type LucideIcon } from 'lucide-react';
 import React from 'react';
 
-import type { EffortLevel } from '../../lib/effortLevels';
+import { EFFORT_LABELS, type EffortLevel } from '../../lib/effortLevels';
 import {
   assignmentAriaLabel,
   assignmentEffortLabel,
@@ -11,14 +11,21 @@ import {
 interface AssignmentChipsProps {
   /** What the badges annotate, for the accessible name: a node title, a step name. */
   subject: string;
+  /**
+   * Which reading the three values below carry. `observed` is spawn evidence —
+   * what a step execution actually ran with. `planned` is the step's pin before
+   * anything has spawned, where each value is independently "inherit" when
+   * `null` or absent, exactly as `StepOverride` states it.
+   */
+  variant?: 'observed' | 'planned';
   /** The spawned agent, or null/absent when the run left no spawn evidence. */
   agentKind?: string | null;
   /**
-   * The pinned/resolved model; `null` = nothing pinned, the harness chose its
-   * own; absent = no evidence either way, so no model chip is drawn.
+   * The resolved/pinned model; observed: `null` = nothing pinned, the harness
+   * chose its own, absent = no evidence either way, so no model chip is drawn.
    */
   model?: string | null;
-  /** `null` = the spawn injected no effort; absent = no evidence either way. */
+  /** Observed: `null` = the spawn injected no effort; absent = no evidence either way. */
   effort?: EffortLevel | null;
   className?: string;
 }
@@ -28,15 +35,63 @@ const CHIP =
 
 const ICON = 'h-2.5 w-2.5 shrink-0 text-slate-400';
 
+const PLANNED_CHIP =
+  'flex min-w-0 items-center gap-1 rounded border border-dashed border-slate-600/40 bg-slate-700/10 px-1.5 py-0.5 text-slate-400';
+
+const PLANNED_ICON = 'h-2.5 w-2.5 shrink-0 text-slate-500';
+
+const BOX = 'max-w-[160px]';
+const MODEL_BOX = 'grow basis-0 max-w-max overflow-hidden';
+const TEXT = 'truncate';
+const MODEL_TEXT = 'max-w-[132px] truncate';
+
+interface Chip {
+  Icon: LucideIcon;
+  title: string;
+  value: string;
+  /** Layout, which is the dimension's own and not the variant's. */
+  box: string;
+  text: string;
+}
+
+/** A pinned dimension, before its two spellings — chip title and label segment. */
+interface Dimension {
+  Icon: LucideIcon;
+  name: string;
+  value: string;
+  box: string;
+  text: string;
+}
+
+function pinned(value: string | null | undefined): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
 /**
  * What a run *actually* spawned for one step execution — the agent, the model
- * and the post-clamp effort — as the canvas and the timeline both draw it.
+ * and the post-clamp effort — as the canvas and the timeline both draw it, and
+ * what a step is *pinned to* before it has spawned anything.
  *
  * One component rather than one per surface: it is the same fact about the
  * same execution, and the two had already drifted into different palettes,
  * which reads as two different data. Slate because this is an annotation and
  * not a state — §4 spends cyan and emerald on what a run is *doing*, and a
  * chip that borrows those colours competes with the status language beside it.
+ *
+ * The two readings are not interchangeable and the rendering must never let
+ * one be mistaken for the other: a planned chip asserting what ran is a chip
+ * that lies about an execution. So they are separated twice over — dashed and
+ * dimmed against solid for the eye, `Agent (planned)` / `Planned assignment
+ * for …` against `Agent` / `Actual assignment for …` for a screen reader —
+ * because either separation alone is invisible to half the audience. The
+ * observed wording also outranks the planned one in precision and keeps it:
+ * `Effective effort` is post-clamp and only a spawn can say it, so a pin is
+ * announced as plain `Effort`.
+ *
+ * A planned reading draws only the dimensions the pin actually set, and
+ * nothing at all when it set none — `null` is "inherit" there, not a value, so
+ * `Harness default` and `No injected effort` (which are observations) never
+ * appear on it.
  *
  * The trio is announced once, as one composed label on one `role="img"`: the
  * badges are parts of a single reading, and nesting a labelled group per
@@ -65,42 +120,116 @@ const ICON = 'h-2.5 w-2.5 shrink-0 text-slate-400';
  * `StepCard`'s wrapping row the group can drop onto a line of its own, as a
  * unit. The full value lives in each chip's `title` and in the composed label.
  */
-export function AssignmentChips({
-  subject,
-  agentKind,
-  model,
-  effort,
-  className = '',
-}: AssignmentChipsProps): React.ReactElement | null {
-  const observedAgent =
-    typeof agentKind === 'string' && agentKind.trim().length > 0 ? agentKind : null;
-  if (!observedAgent || effort === undefined) return null;
+export function AssignmentChips(props: AssignmentChipsProps): React.ReactElement | null {
+  const reading = props.variant === 'planned' ? plannedReading(props) : observedReading(props);
+  if (!reading) return null;
 
-  const effortLabel = assignmentEffortLabel(effort);
-  const modelLabel = model === undefined ? undefined : assignmentModelLabel(model);
+  const { chips, label, tone } = reading;
   return (
     <span
       role="img"
-      aria-label={assignmentAriaLabel(subject, observedAgent, effortLabel, modelLabel)}
-      className={`flex min-w-0 flex-nowrap items-center gap-1 font-mono text-[9px] ${className}`}
+      aria-label={label}
+      className={`flex min-w-0 flex-nowrap items-center gap-1 font-mono text-[9px] ${props.className ?? ''}`}
     >
-      <span className={`max-w-[160px] ${CHIP}`} title={`Agent: ${observedAgent}`}>
-        <Bot className={ICON} aria-hidden="true" />
-        <span className="truncate">{observedAgent}</span>
-      </span>
-      {modelLabel !== undefined && (
-        <span
-          className={`grow basis-0 max-w-max overflow-hidden ${CHIP}`}
-          title={`Model: ${modelLabel}`}
-        >
-          <Zap className={ICON} aria-hidden="true" />
-          <span className="max-w-[132px] truncate">{modelLabel}</span>
+      {chips.map((chip) => (
+        <span key={chip.title} className={`${chip.box} ${tone.chip}`} title={chip.title}>
+          <chip.Icon className={tone.icon} aria-hidden="true" />
+          <span className={chip.text}>{chip.value}</span>
         </span>
-      )}
-      <span className={`max-w-[160px] ${CHIP}`} title={`Effective effort: ${effortLabel}`}>
-        <Gauge className={ICON} aria-hidden="true" />
-        <span className="truncate">{effortLabel}</span>
-      </span>
+      ))}
     </span>
   );
+}
+
+interface Reading {
+  chips: Chip[];
+  label: string;
+  tone: { chip: string; icon: string };
+}
+
+/**
+ * The spawn evidence in a step's agent/effort pair, or `null` where there is
+ * none — the same question [`AssignmentChips`] answers before it draws an
+ * observed trio, exported so a run surface choosing between the two variants
+ * chooses by the rule that renders them. A surface that decides this for
+ * itself can disagree with the component and draw neither reading.
+ */
+export function observedAssignment(
+  agentKind: string | null | undefined,
+  effort: EffortLevel | null | undefined,
+): { agentKind: string; effort: EffortLevel | null } | null {
+  const agent = pinned(agentKind);
+  return agent !== null && effort !== undefined ? { agentKind: agent, effort } : null;
+}
+
+function observedReading({ subject, agentKind, model, effort }: AssignmentChipsProps): Reading | null {
+  const observed = observedAssignment(agentKind, effort);
+  if (!observed) return null;
+  const observedAgent = observed.agentKind;
+
+  const effortLabel = assignmentEffortLabel(observed.effort);
+  const modelLabel = model === undefined ? undefined : assignmentModelLabel(model);
+  const chips: Chip[] = [
+    { Icon: Bot, title: `Agent: ${observedAgent}`, value: observedAgent, box: BOX, text: TEXT },
+  ];
+  if (modelLabel !== undefined) {
+    chips.push({
+      Icon: Zap,
+      title: `Model: ${modelLabel}`,
+      value: modelLabel,
+      box: MODEL_BOX,
+      text: MODEL_TEXT,
+    });
+  }
+  chips.push({
+    Icon: Gauge,
+    title: `Effective effort: ${effortLabel}`,
+    value: effortLabel,
+    box: BOX,
+    text: TEXT,
+  });
+
+  return {
+    chips,
+    label: assignmentAriaLabel(subject, observedAgent, effortLabel, modelLabel),
+    tone: { chip: CHIP, icon: ICON },
+  };
+}
+
+function plannedReading({ subject, agentKind, model, effort }: AssignmentChipsProps): Reading | null {
+  const dimensions: Dimension[] = [];
+  const agent = pinned(agentKind);
+  if (agent) dimensions.push({ Icon: Bot, name: 'Agent', value: agent, box: BOX, text: TEXT });
+  const pinnedModel = pinned(model);
+  if (pinnedModel) {
+    dimensions.push({
+      Icon: Zap,
+      name: 'Model',
+      value: pinnedModel,
+      box: MODEL_BOX,
+      text: MODEL_TEXT,
+    });
+  }
+  if (effort !== null && effort !== undefined) {
+    dimensions.push({
+      Icon: Gauge,
+      name: 'Effort',
+      // A level a newer build pinned has no label here; show it as stored.
+      value: EFFORT_LABELS[effort] ?? effort,
+      box: BOX,
+      text: TEXT,
+    });
+  }
+  if (dimensions.length === 0) return null;
+
+  return {
+    chips: dimensions.map(({ name, ...rest }) => ({
+      ...rest,
+      title: `${name} (planned): ${rest.value}`,
+    })),
+    label: `Planned assignment for ${subject}: ${dimensions
+      .map((d) => `${d.name}: ${d.value}`)
+      .join('; ')}`,
+    tone: { chip: PLANNED_CHIP, icon: PLANNED_ICON },
+  };
 }

@@ -320,6 +320,13 @@ impl StepExecutor for StubExecutor {
     ) -> Result<(), AppError> {
         Ok(())
     }
+    async fn step_set_assignment(
+        &self,
+        _execution_id: &str,
+        _assignment: demeteo_lib::domain::step_assignment::StepAssignment,
+    ) -> Result<(), AppError> {
+        Err(AppError::validation("not used"))
+    }
     async fn replay_from_step(
         &self,
         _execution_id: &str,

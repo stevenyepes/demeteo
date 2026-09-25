@@ -10,6 +10,7 @@
  */
 
 import type { NodeConfigV2, NodeRunStatus, WorkflowDefinitionV2 } from '../canvas/types';
+import type { AssignmentEvidence } from '../../lib/runEventAssignments';
 import type { StepExecution } from '../../types';
 
 /** `s-write-tests` → `Write Tests`. The step id is the only name a run without
@@ -49,10 +50,16 @@ export function inspectorNodeConfig(
  * history. The failure class is the exception — it arrives on the
  * `retry_decision` run-event, which the step row does not carry, so it is the
  * one field taken from the node's entry.
+ *
+ * `evidence` is this execution's `agent_spawned` payload, and is spread only
+ * when there is one: the three fields absent is how every reader of
+ * `NodeRunStatus` says "no launch evidence", and writing `null`s instead would
+ * turn silence into the claim that nothing was injected.
  */
 export function inspectorRunStatus(
   step: StepExecution,
   errorClass: string | null | undefined,
+  evidence?: AssignmentEvidence,
 ): NodeRunStatus {
   return {
     status: step.status,
@@ -61,5 +68,8 @@ export function inspectorRunStatus(
     tokens: step.tokens ?? null,
     errorClass: errorClass ?? null,
     stepExecutionId: step.id,
+    ...(evidence
+      ? { agentKind: evidence.agentKind, model: evidence.model, effort: evidence.effort }
+      : {}),
   };
 }

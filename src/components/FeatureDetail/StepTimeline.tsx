@@ -1,15 +1,19 @@
-import { useRef, type MutableRefObject } from 'react';
+import { useMemo, useRef, type MutableRefObject } from 'react';
 import { RefreshCw } from 'lucide-react';
-import type { RemoteRunMirror, StepExecution } from '../../types';
+import type { RemoteRunMirror, StepExecution, StepOverride } from '../../types';
 import { densityClasses, type Density } from '../../lib/density';
 import type { RunEventAssignments } from '../../lib/runEventAssignments';
 import { StepCard } from './StepCard';
 
 const EMPTY_ASSIGNMENTS: RunEventAssignments = {};
+const NO_STEP_OVERRIDES: StepOverride[] = [];
 
 interface StepTimelineProps {
   steps: StepExecution[];
   assignments?: RunEventAssignments;
+  /** The run's tier-1 pins (`Feature.step_overrides`), which a queued row shows
+   *  in place of the spawn evidence it does not have yet. */
+  stepOverrides?: StepOverride[];
   remoteRun: RemoteRunMirror | null;
   remoteMachineName: string | null;
   hasBootstrapPhases: boolean;
@@ -48,6 +52,7 @@ interface StepTimelineProps {
 export function StepTimeline({
   steps,
   assignments = EMPTY_ASSIGNMENTS,
+  stepOverrides = NO_STEP_OVERRIDES,
   remoteRun,
   remoteMachineName,
   hasBootstrapPhases,
@@ -59,6 +64,13 @@ export function StepTimeline({
   onDecideGate,
 }: StepTimelineProps) {
   const classes = densityClasses(density);
+  /** Keyed by node id, not by execution id: a pin outlives every attempt of the
+   *  node it names, so every attempt of a retried step reads the same one. */
+  const pinByStepId = useMemo(() => {
+    const map = new Map<string, StepOverride>();
+    for (const pin of stepOverrides) map.set(pin.step_id, pin);
+    return map;
+  }, [stepOverrides]);
 
   /** One ref callback per step, cached: a fresh closure per render would change
    *  a memoized card's props on every frame. */
@@ -100,6 +112,7 @@ export function StepTimeline({
       <ul aria-label="Run steps" className={classes.list}>
         {steps.map((step, idx) => {
           const assignment = assignments[step.id];
+          const pin = pinByStepId.get(step.step_id);
           return (
             <StepCard
               key={step.id}
@@ -112,6 +125,9 @@ export function StepTimeline({
               agentKind={assignment?.agentKind}
               model={assignment?.model}
               effort={assignment?.effort}
+              plannedAgentKind={pin?.agent_kind}
+              plannedModel={pin?.model}
+              plannedEffort={pin?.effort}
               onSelect={onSelect}
               onDecideGate={onDecideGate}
             />

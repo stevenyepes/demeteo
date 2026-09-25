@@ -3,25 +3,37 @@ import { useCallback } from 'react';
 import { NodePanel } from '../canvas/NodePanel';
 import type { NodeRunStatus, WorkflowDefinitionV2 } from '../canvas/types';
 import type { InspectorTarget } from '../../lib/inspectorTarget';
+import type { RunEventAssignments } from '../../lib/runEventAssignments';
 import type { HarnessBaseline, StepExecution } from '../../types';
 import { InspectorEmpty } from './InspectorEmpty';
 import { inspectorNodeConfig, inspectorRunStatus } from './stepIdentity';
 import type { AgentStreamStore } from './useAgentStream';
 import type { HarnessOverrides } from './useHarnessOverrides';
+import type { StepAssignment } from './useStepAssignment';
 
 interface StepInspectorProps {
   featureId: string;
   target: InspectorTarget;
   graphDef: WorkflowDefinitionV2 | null;
   statusByNode: Record<string, NodeRunStatus>;
+  /** Spawn evidence keyed by `step_execution_id`, exactly as `StepTimeline`
+   *  takes it — the selection may name an older attempt, so the panel is served
+   *  per execution and not per node. Required rather than optional: the read-only
+   *  Assignment renders this and nothing else, so a caller that forgets it would
+   *  silently turn every running node's assignment into "no launch evidence". */
+  assignments: RunEventAssignments;
   streamStore: AgentStreamStore;
   /** What the gates said at the base commit, for the Output tab's reading of an
    *  environment failure. Optional here because `NodePanel` is served to the
    *  canvas as well, which has no baseline in hand. */
   harnessBaseline?: HarnessBaseline | null;
-  /** The harness/model/effort a retry re-pins, offered in the Actions tab.
+  /** The harness/model/effort the Actions tab's Assignment control reads.
    *  Optional for the same reason. */
   overrides?: HarnessOverrides;
+  /** Writes that trio onto the selected node. Both are the run view's, held
+   *  against `target` — a picker with nowhere to submit renders no control at
+   *  all, so passing one without the other silently removes the surface. */
+  assignment?: StepAssignment;
   /** Empties the pane rather than hiding it — there is no closed state. */
   onDeselect: () => void;
   onOpenEditorForPath: (filePath: string) => void;
@@ -59,9 +71,11 @@ export function StepInspector({
   target,
   graphDef,
   statusByNode,
+  assignments,
   streamStore,
   harnessBaseline,
   overrides,
+  assignment,
   onDeselect,
   onOpenEditorForPath,
   onOpenArtifact,
@@ -87,13 +101,18 @@ export function StepInspector({
       className={className}
       featureId={featureId}
       node={inspectorNodeConfig(graphDef, target.step)}
-      run={inspectorRunStatus(target.step, statusByNode[target.step.step_id]?.errorClass)}
+      run={inspectorRunStatus(
+        target.step,
+        statusByNode[target.step.step_id]?.errorClass,
+        assignments[target.step.id],
+      )}
       step={target.step}
       onClose={onDeselect}
       onOpenEditorForPath={onOpenEditorForPath}
       onOpenArtifact={openArtifact}
       harnessBaseline={harnessBaseline}
       overrides={overrides}
+      assignment={assignment}
       streamStore={streamStore}
       isStreaming={isStreaming}
       blockedBy={blockedBy}

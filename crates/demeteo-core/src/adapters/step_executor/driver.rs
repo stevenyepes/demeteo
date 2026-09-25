@@ -177,8 +177,16 @@ pub(crate) struct ExecutionDriver {
     /// Feature-wide run override of the reasoning effort. Same precedence as
     /// `feature_model`. `None` = inherit (never "default").
     pub feature_effort: Option<EffortLevel>,
-    /// Per-step agent/model/effort overrides chosen at launch (highest
-    /// precedence).
+    /// Per-step agent/model/effort pins (highest precedence). Seeded when
+    /// the driver arms and then **re-read from the `features` row at the top
+    /// of every run-loop tick** by
+    /// [`run_loop::assignment::refresh_step_overrides`] — not a snapshot.
+    ///
+    /// They are re-read because they are editable mid-run: a driver holding
+    /// the list it armed with would resolve every remaining node from a
+    /// version of the pins the user has already replaced, and nothing would
+    /// say so. Treat a write to this field as valid only until the next
+    /// tick.
     pub step_overrides: Vec<crate::domain::models::StepOverride>,
     /// Project default agent kind (`ProjectSettings::default_agent_kind`).
     pub default_agent_kind: Option<String>,

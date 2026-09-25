@@ -25,6 +25,8 @@ import { NodePanel } from './NodePanel';
 import type { NodeConfigV2, NodeRunStatus } from './types';
 import type { AgentStreamStore } from '../FeatureDetail/useAgentStream';
 import type { HarnessOverrides } from '../FeatureDetail/useHarnessOverrides';
+import type { StepAssignment } from '../FeatureDetail/useStepAssignment';
+import { MANUAL_SYNC_STEP_ID } from '../../lib/featureSync';
 import type { HarnessBaseline, StepAttempt, StepExecution } from '../../types';
 
 const node = (over: Partial<NodeConfigV2> = {}): NodeConfigV2 => ({
@@ -90,11 +92,24 @@ const overrides = (over: Partial<HarnessOverrides> = {}): HarnessOverrides => ({
   selectedAgent: '',
   selectedEffort: '',
   setSelectedEffort: vi.fn(),
+  seededEffort: '',
   featureAgentKind: 'opencode',
+  inheritedAgentKind: 'opencode',
   retryEffortLevels: ['low', 'high'],
   onAgentChange: vi.fn(),
   adoptFeatureModel: vi.fn(),
   probeForFeature: vi.fn(),
+  ...over,
+});
+
+const assignment = (over: Partial<StepAssignment> = {}): StepAssignment => ({
+  dirty: false,
+  pinned: true,
+  applying: false,
+  error: null,
+  clearError: vi.fn(),
+  apply: vi.fn(async () => {}),
+  reset: vi.fn(async () => {}),
   ...over,
 });
 
@@ -646,7 +661,7 @@ describe('NodePanel — Actions', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 
-  it('lets a retry be re-pinned onto another harness before it fires', async () => {
+  it('offers the assignment picker alongside Retry on a failed node', async () => {
     invoke.mockResolvedValue([]);
     const run: NodeRunStatus = { status: 'failed', stepExecutionId: 'se-1' };
     render(
@@ -658,17 +673,202 @@ describe('NodePanel — Actions', () => {
         onClose={() => {}}
         onRetry={() => {}}
         overrides={overrides()}
+        assignment={assignment()}
       />,
     );
     await waitFor(() => expect(invoke).toHaveBeenCalled());
     fireEvent.click(screen.getByText('Actions'));
+    expect(screen.getByText('Assignment')).toBeInTheDocument();
     expect(screen.getByLabelText('Harness')).toBeInTheDocument();
     expect(screen.getByLabelText('Effort')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 
-  it('offers no rerun controls where no retry is offered', async () => {
-    // Selects that re-pin a run nothing is going to fire are three questions
-    // with no answer.
+  it('offers no assignment on a node that spawns no agent', async () => {
+    // A gate reads no harness, so an Apply there would report a pin nothing
+    // consults. The picker's leftover edit from another node must not hold
+    // this node's Replay shut either.
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'pending', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node({ id: 'gate-ship', type: 'gate', title: 'Ship Gate' })}
+        run={run}
+        step={step({ status: 'pending' })}
+        onClose={() => {}}
+        onReplay={() => {}}
+        overrides={overrides({ selectedAgent: 'claude-code' })}
+        assignment={assignment({ dirty: true })}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+
+    expect(screen.queryByText('Assignment')).toBeNull();
+    expect(screen.queryByLabelText('Harness')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Replay…' })).toBeEnabled();
+  });
+
+  it('holds Retry and Replay shut while the picker has an edit nobody applied', async () => {
+    // Both rerun paths submit null for agent/model/effort, so they re-run on
+    // the stored pin. The picker sits one row above them and used to feed
+    // them, so the mismatch has to stop the press — a sentence in the rows'
+    // body copy is read past by anyone who has already decided to click.
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'failed', stepExecutionId: 'se-1' };
+    const onRetry = vi.fn();
+    const onReplay = vi.fn();
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'failed' })}
+        onClose={() => {}}
+        onRetry={onRetry}
+        onReplay={onReplay}
+        overrides={overrides({ selectedAgent: 'claude-code' })}
+        assignment={assignment({ dirty: true })}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+
+    const retryBtn = screen.getByRole('button', { name: 'Retry' });
+    const replayBtn = screen.getByRole('button', { name: 'Replay…' });
+    expect(retryBtn).toBeDisabled();
+    expect(replayBtn).toBeDisabled();
+    fireEvent.click(retryBtn);
+    fireEvent.click(replayBtn);
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(onReplay).not.toHaveBeenCalled();
+
+    // Named on screen, not only in the button's hover text.
+    expect(screen.getByText(/unapplied edits.*press Apply/i)).toBeInTheDocument();
+
+    // And the reason stays out of the rows' own descriptions.
+    const rows = screen.getAllByTestId('action-row');
+    const retry = rows.find((r) => r.textContent?.includes('Retry node'))!;
+    const replay = rows.find((r) => r.textContent?.includes('Replay from node'))!;
+    for (const row of [retry, replay]) {
+      expect(row.textContent).not.toMatch(/with the assignment above/i);
+      expect(row.textContent).toMatch(/pinned assignment/i);
+      expect(row.textContent).not.toMatch(/unapplied edits/i);
+    }
+  });
+
+  it('keeps both reasons on screen when an ancestor blocks a dirty picker too', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'failed', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'failed' })}
+        onClose={() => {}}
+        onRetry={() => {}}
+        onReplay={() => {}}
+        blockedBy={{ step_id: 'research', status: 'running' }}
+        overrides={overrides({ selectedAgent: 'claude-code' })}
+        assignment={assignment({ dirty: true })}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+
+    expect(screen.getByText(/Ancestor "research" is still running/)).toBeInTheDocument();
+    expect(screen.getByText(/unapplied edits.*press Apply/i)).toBeInTheDocument();
+  });
+
+  it('leaves the rerun rows untouched while the picker matches the pin', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'failed', stepExecutionId: 'se-1' };
+    const onRetry = vi.fn();
+    const onReplay = vi.fn();
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'failed' })}
+        onClose={() => {}}
+        onRetry={onRetry}
+        onReplay={onReplay}
+        overrides={overrides()}
+        assignment={assignment({ dirty: false })}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+
+    const retry = screen
+      .getAllByTestId('action-row')
+      .find((r) => r.textContent?.includes('Retry node'))!;
+    expect(retry.textContent).toMatch(/pinned assignment/i);
+    expect(screen.queryByText(/unapplied edits/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Replay…' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetry).toHaveBeenCalled();
+  });
+
+  it('leads the Actions tab on a queued node that has other controls too', async () => {
+    // The `isFailed` branch is the one this used to sit in, so a node with a
+    // rerun row available is where a regression back into it would still read
+    // as passing: Assignment has to stand above the row, not instead of it.
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'pending', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'pending' })}
+        onClose={() => {}}
+        onReplay={() => {}}
+        overrides={overrides()}
+        assignment={assignment()}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+
+    const heading = screen.getByText('Assignment');
+    expect(screen.getByLabelText('Harness')).toBeInTheDocument();
+    expect(screen.queryByText(/Read-only/i)).not.toBeInTheDocument();
+    const replay = screen.getByRole('button', { name: 'Replay…' });
+    expect(heading.compareDocumentPosition(replay) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('reaches the Actions tab for a queued node whose only control is Assignment', async () => {
+    // The node this feature exists for: nothing has run, so no retry, replay,
+    // stop or gate decision applies, and the old gate hid the whole tab.
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'pending', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'pending' })}
+        onClose={() => {}}
+        overrides={overrides()}
+        assignment={assignment()}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+    expect(screen.queryByText(/No actions available/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Assignment')).toBeInTheDocument();
+    expect(screen.getByLabelText('Harness')).toBeInTheDocument();
+  });
+
+  it('shows a running node its assignment read-only, not as a picker', async () => {
+    // The agent is already up: a select here would take a choice the backend
+    // (`domain::step_assignment::assignment_refusal`) refuses.
     invoke.mockResolvedValue([]);
     const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
     render(
@@ -680,16 +880,98 @@ describe('NodePanel — Actions', () => {
         onClose={() => {}}
         onStop={() => {}}
         overrides={overrides()}
+        assignment={assignment()}
       />,
     );
     await waitFor(() => expect(invoke).toHaveBeenCalled());
     fireEvent.click(screen.getByText('Actions'));
+    expect(screen.getByText('Assignment')).toBeInTheDocument();
+    expect(screen.getByText(/This node is running/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
     expect(screen.queryByLabelText('Harness')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
   });
 
-  it('keeps the retry a caller passed no overrides for', async () => {
-    // The canvas mounts this panel with none in hand.
+  it("shows a running node what it spawned with, not the picker's unapplied edit", async () => {
+    // The panel's read-only trio comes off the node's launch evidence, which
+    // `useRunGraph` joins onto the run status — so it agrees with the
+    // `AssignmentChips` on the same screen instead of echoing a picker the
+    // user never applied.
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = {
+      status: 'running',
+      stepExecutionId: 'se-1',
+      agentKind: 'opencode',
+      model: 'gpt-5.6',
+      effort: 'high',
+    };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'running' })}
+        onClose={() => {}}
+        overrides={overrides({ selectedAgent: 'claude-code', selectedModel: 'sonnet', selectedEffort: 'max' })}
+        assignment={assignment()}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+    expect(screen.getByTitle('Harness')).toHaveTextContent(/^opencode$/);
+    expect(screen.getByTitle('Model')).toHaveTextContent(/^gpt-5\.6$/);
+    expect(screen.getByTitle('Effort')).toHaveTextContent(/^High$/);
+    expect(screen.queryByText(/claude code/i)).toBeNull();
+    expect(screen.queryByText('sonnet')).toBeNull();
+  });
+
+  it('makes no spawn claim for a running node with no launch evidence', async () => {
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'running', stepExecutionId: 'se-1' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node()}
+        run={run}
+        step={step({ status: 'running' })}
+        onClose={() => {}}
+        overrides={overrides({ selectedAgent: 'claude-code' })}
+        assignment={assignment()}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+    expect(screen.queryByText(/was spawned with/)).toBeNull();
+    expect(screen.queryByTitle('Harness')).toBeNull();
+    expect(screen.getByText(/no launch evidence/i)).toBeInTheDocument();
+    expect(screen.getByText(/cannot be re-pointed mid-flight/)).toBeInTheDocument();
+  });
+
+  it('offers no assignment on an out-of-band sync node', async () => {
+    // A manual sync is in no graph, so there is no node to pin anything to —
+    // the backend refuses `RunAction::Assign` for it.
+    invoke.mockResolvedValue([]);
+    const run: NodeRunStatus = { status: 'pending', stepExecutionId: 'se-s' };
+    render(
+      <NodePanel
+        featureId="f1"
+        node={node({ id: MANUAL_SYNC_STEP_ID, title: 'Sync with master' })}
+        run={run}
+        step={step({ id: 'se-s', step_id: MANUAL_SYNC_STEP_ID, status: 'pending' })}
+        onClose={() => {}}
+        overrides={overrides()}
+        assignment={assignment()}
+      />,
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Actions'));
+    expect(screen.queryByText('Assignment')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Harness')).not.toBeInTheDocument();
+    expect(screen.getByText(/No actions available/i)).toBeInTheDocument();
+  });
+
+  it('keeps the retry a caller passed no assignment for', async () => {
+    // The canvas mounts this panel with neither picker nor writer in hand.
     invoke.mockResolvedValue([]);
     const run: NodeRunStatus = { status: 'failed', stepExecutionId: 'se-1' };
     render(
@@ -705,6 +987,7 @@ describe('NodePanel — Actions', () => {
     await waitFor(() => expect(invoke).toHaveBeenCalled());
     fireEvent.click(screen.getByText('Actions'));
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByText('Assignment')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Harness')).not.toBeInTheDocument();
   });
 
