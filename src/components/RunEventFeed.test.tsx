@@ -128,6 +128,23 @@ describe('describeEvent', () => {
     expect(d.detail).toContain('attempt 2/3');
   });
 
+  it('renders a folded agent commit as a neutral note naming the ticket', () => {
+    const d = describeEvent(
+      'agent_commits_folded',
+      JSON.stringify({
+        step_id: 's-implement',
+        task_id: 't2',
+        commits: [{ sha: 'abc', author: 'Jane <j@x>', subject: 'feat: x' }],
+        note: 'Agent made 1 commit as Jane <j@x> — folded into Demeteo\'s commit: "feat: x"',
+      }),
+    );
+    expect(d.label).toBe('Agent commits folded');
+    expect(d.tone).toBe('default');
+    expect(d.detail).toBe(
+      's-implement [t2] — Agent made 1 commit as Jane <j@x> — folded into Demeteo\'s commit: "feat: x"',
+    );
+  });
+
   it('falls back to a raw string payload for unknown kinds', () => {
     const d = describeEvent('pushed', JSON.stringify('feature/x'));
     expect(d.label).toBe('Branch pushed');

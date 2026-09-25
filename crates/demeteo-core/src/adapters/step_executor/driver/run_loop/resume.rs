@@ -119,13 +119,10 @@ impl ExecutionDriver {
         // Everything from here is the shared park: create the row,
         // surface it, wait, clean up. Only the reason above is this
         // guard's own — see `domain::step_park` for what the answer means.
-        let park = HumanPark {
-            reason: mismatch,
-            // Redirect targeting is a real-gate affordance. This park's
-            // only question is "safe to re-run here?", and no earlier step
-            // makes a moved workspace safe.
-            redirect_to: None,
-        };
+        // Redirect targeting is a real-gate affordance. This park's only
+        // question is "safe to re-run here?", and no earlier step makes a
+        // moved workspace safe.
+        let park = HumanPark::new(mismatch, None);
         let decision = crate::adapters::step_executor::gate_park::park_for_human(
             crate::adapters::step_executor::gate_park::SyntheticGate {
                 gates: self.gates.as_ref(),

@@ -797,7 +797,7 @@ mod stage_at_each_call {
 
     pub(super) fn merge() -> String {
         format!(
-            "git -C {} merge origin/main -m chore(sync): sync feature with origin/main",
+            "git -C {} -c commit.gpgsign=false merge origin/main -m chore(sync): sync feature with origin/main",
             wt()
         )
     }
@@ -1149,7 +1149,7 @@ mod feature_upstream {
 
     fn reconcile() -> String {
         format!(
-            "git -C {} merge origin/{BRANCH} -m chore(sync): reconcile {BRANCH} with origin",
+            "git -C {} -c commit.gpgsign=false merge origin/{BRANCH} -m chore(sync): reconcile {BRANCH} with origin",
             wt()
         )
     }

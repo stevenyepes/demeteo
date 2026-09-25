@@ -45,10 +45,6 @@ fn the_command_shapes_are_the_ones_git_sees() {
         delete_ref_cmd("/repo", "refs/demeteo/seq/f-1/s-impl"),
         "git -C /repo update-ref -d refs/demeteo/seq/f-1/s-impl"
     );
-    assert_eq!(
-        diff_name_only_cmd("/wt", SHA),
-        format!("git -C /wt diff --name-only {SHA}")
-    );
 }
 
 /// The regression the helper is for. A repo path with a space, and a branch

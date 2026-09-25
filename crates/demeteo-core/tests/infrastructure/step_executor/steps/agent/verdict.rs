@@ -115,6 +115,29 @@ fn an_environment_verdict_ignores_undelivered_artifacts() {
     }
 }
 
+// ── evidence ────────────────────────────────────────────────────────
+
+#[test]
+fn an_evidence_verdict_parks_rather_than_opening_a_rework_loop() {
+    let gap = EvidenceGap {
+        reason: "no proof each test failed first".into(),
+        criteria: vec!["AC6".into()],
+    };
+    match verdict_disposition(ParsedVerdict::Evidence(gap.clone()), &[]) {
+        VerdictDisposition::Evidence(got) => assert_eq!(got, gap),
+        _ => panic!("an evidence verdict must reach a human, not the rework loop"),
+    }
+}
+
+/// The contract, the parser and the re-ask are one menu; a re-ask that drops
+/// `evidence` pushes a verifier that had it right into `fail`.
+#[test]
+fn the_correction_reask_offers_evidence() {
+    let prompt = correction_prompt("verdict");
+    assert!(prompt.contains("\"verdict\": \"evidence\""), "{prompt}");
+    assert!(prompt.contains("Use `evidence`"), "{prompt}");
+}
+
 // ── missing ─────────────────────────────────────────────────────────
 
 #[test]

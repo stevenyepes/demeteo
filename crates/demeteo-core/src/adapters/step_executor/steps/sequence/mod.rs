@@ -67,6 +67,7 @@ mod merge;
 mod plan;
 mod planner;
 mod prompt;
+mod report;
 mod resume;
 mod rollback;
 mod runner;
@@ -342,7 +343,12 @@ impl ExecutionDriver {
                 .artifacts
                 .list_for_step(&self.f_id_str, &step_exec.step_id.0)
             {
-                Ok(stored) => tally.recover_refs(stored),
+                Ok(stored) => tally.recover_refs(
+                    stored
+                        .into_iter()
+                        .filter(|r| !crate::domain::sequence::report::is_fragment_ref(r))
+                        .collect(),
+                ),
                 Err(e) => tracing::warn!(
                     feature_id = %self.f_id,
                     step_id = %step_exec.step_id.0,
@@ -513,6 +519,18 @@ impl ExecutionDriver {
                     .await;
             }
             refs = step_exec.artifact_paths.clone();
+        }
+        // After the emptiness judgement above, never before it: the report
+        // always exists once a ticket ran, and counting it would let a step
+        // that landed no code report `completed`.
+        if let Some(report) = report::store_implementation_report(
+            &*self.artifacts,
+            &self.f_id_str,
+            &step_exec.step_id.0,
+        ) {
+            if !refs.contains(&report) {
+                refs.push(report);
+            }
         }
 
         self.cleanup_sequence_worktree(&wt_id).await;

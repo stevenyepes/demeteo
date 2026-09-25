@@ -262,6 +262,22 @@ pub async fn agent_base_env(
     env
 }
 
+/// [`agent_base_env`] plus the git identity a pipeline agent commits under —
+/// see [`crate::domain::agent_env::agent_git_config_env`].
+///
+/// Pipeline turns only. Ask, Discovery and the probe keep the user's own git
+/// config: those are the user's sessions, not work Demeteo lands on a branch.
+pub async fn pipeline_agent_env(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+    agent_kind: &str,
+) -> HashMap<String, String> {
+    let mut env = agent_base_env(exec, machine_id).await;
+    let git = crate::domain::agent_env::agent_git_config_env(agent_kind, &env);
+    env.extend(git);
+    env
+}
+
 /// Resolve the (HOME, USER) identity to forward to an agent process
 /// spawned against `machine_id`, always through the execution port.
 /// The local adapter reads the GUI process's own identity — and on

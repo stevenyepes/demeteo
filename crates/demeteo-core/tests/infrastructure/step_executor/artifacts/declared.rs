@@ -52,6 +52,51 @@ async fn test_commit_worktree_changes() {
     let _ = std::fs::remove_dir_all(&temp);
 }
 
+/// A user whose git signs every commit — through a `gpg.program` no machine
+/// has, so an attempt fails on every OS instead of prompting — must not have
+/// Demeteo's own bookkeeping commit signed, or failed, on their behalf.
+#[tokio::test]
+async fn test_commit_worktree_changes_never_signs_for_a_signing_user() {
+    let temp = temp_git_repo("commit_unsigned");
+    let exec = crate::adapters::local::execution::LocalSubprocessAdapter::new();
+    let machine = "local";
+    let git = |args: &str| format!("git -C {} {args}", shell_esc(&temp));
+    for setting in [
+        "user.name Human",
+        "user.email human@example.invalid",
+        "user.signingkey DEADBEEF",
+        "commit.gpgsign true",
+        "gpg.program demeteo-no-such-gpg",
+    ] {
+        exec.run_command(machine, &git(&format!("config {setting}")))
+            .await
+            .unwrap();
+    }
+    exec.write_file(machine, &format!("{}/src.rs", temp), "fn a() {}\n")
+        .await
+        .unwrap();
+
+    let sha = commit_worktree_changes(
+        &exec,
+        machine,
+        &temp,
+        "worker: t-1",
+        "artifacts/",
+        true,
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let log = exec
+        .run_command(machine, &git(&format!("log -1 --format=%an:%cn:%G? {sha}")))
+        .await
+        .unwrap();
+    assert_eq!(log.trim(), "demeteo:demeteo:N");
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
 #[tokio::test]
 async fn test_commit_worktree_changes_fails_when_agent_writes_only_land_under_artifacts() {
     // Repro of the docs-update bug: the agent writes the *real* doc

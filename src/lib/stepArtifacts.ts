@@ -76,3 +76,19 @@ export function listReviewableGateArtifacts(
     .filter(({ listed }) => listed.length > 0)
     .sort((a, b) => a.step.step_index - b.step.step_index);
 }
+
+const IMPLEMENTATION_REPORT = 'implementation-report.md';
+
+/** The implementation report among the rows a gate offers, from the latest
+ *  step that carries one — the evidence a validate park asks the reviewer to
+ *  weigh. Matched by basename: a remote run's artifacts are cached locally
+ *  under theirs, and a Windows path separates with backslashes. */
+export function findImplementationReport(
+  reviewable: { step: StepExecution; listed: string[] }[],
+): { path: string; stepId: string } | null {
+  for (const { step, listed } of [...reviewable].reverse()) {
+    const path = listed.find((p) => p.split(/[\\/]/).pop() === IMPLEMENTATION_REPORT);
+    if (path) return { path, stepId: step.step_id };
+  }
+  return null;
+}

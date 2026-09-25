@@ -70,17 +70,9 @@ pub(crate) fn resolve_redirect_target(
         .filter(|s| !s.is_empty())
         .and_then(|cleaned| {
             steps.iter().position(|s| s.id.0 == cleaned).or_else(|| {
-                if cleaned.len() > MAX_ADDRESSED_FEEDBACK_LEN {
-                    return None;
-                }
-                // Whole-word search: a bare substring match would also fire
-                // on "s-tickets2" or a step id that is a prefix of another,
-                // so split on anything that isn't part of a kebab-case id.
-                steps.iter().position(|s| {
-                    cleaned
-                        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
-                        .any(|token| token == s.id.0)
-                })
+                steps
+                    .iter()
+                    .position(|s| feedback_names_step(cleaned, &s.id.0))
             })
         });
 
@@ -113,6 +105,27 @@ pub(crate) fn resolve_redirect_target(
         .or_else(|| on_failure.and_then(|id| steps.iter().position(|s| s.id == *id)))
         .or_else(|| implement_fallback(gate_step_index as usize))
         .or_else(|| predecessor_fallback(gate_step_index))
+}
+
+/// Whether a reviewer's `feedback` addresses the step `id`: the whole trimmed
+/// feedback, or a whole word of feedback no longer than
+/// [`MAX_ADDRESSED_FEEDBACK_LEN`]. Shared with the synthetic park
+/// ([`crate::domain::step_park::resolve_park`]) so a human names a target the
+/// same way at either kind of stop.
+pub(crate) fn feedback_names_step(feedback: &str, id: &str) -> bool {
+    let cleaned = feedback.trim();
+    if cleaned == id {
+        return true;
+    }
+    if cleaned.len() > MAX_ADDRESSED_FEEDBACK_LEN {
+        return false;
+    }
+    // Whole-word search: a bare substring match would also fire on
+    // "s-tickets2" or a step id that is a prefix of another, so split on
+    // anything that isn't part of a kebab-case id.
+    cleaned
+        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+        .any(|token| token == id)
 }
 
 /// The index of the step that produces `from_index`'s task list, when that

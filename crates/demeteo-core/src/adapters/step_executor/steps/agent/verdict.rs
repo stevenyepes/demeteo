@@ -1,14 +1,17 @@
 //! What a validate step does about the verdict its own turn emitted.
 //!
-//! Four answers, four consequences, and none of them is "log it and carry
+//! Five answers, five consequences, and none of them is "log it and carry
 //! on". [`verdict_disposition`] is the whole of the decision: total,
 //! synchronous, and reachable without a port. The tracing, the row write and
 //! the teardown are the adapter's, below.
 
 use crate::adapters::step_executor::artifacts::{note_undelivered_artifacts, MissingArtifact};
 use crate::adapters::step_executor::driver::ExecutionDriver;
-use crate::domain::verifier::verdict::ParsedVerdict;
+use crate::domain::models::StepExecution;
+use crate::domain::verifier::verdict::{EvidenceGap, ParsedVerdict};
 use crate::domain::verifier::{VerdictFailure, VerifierConfig};
+use crate::ports::db::{FeatureRepository, StepExecutionPatch};
+use crate::ports::execution::ExecutionPort;
 
 use super::context::{AgentRunTarget, AgentWorktree};
 
@@ -30,6 +33,9 @@ pub(crate) enum VerdictDisposition {
         /// The user-facing message, prefix included.
         message: String,
     },
+    /// Only process evidence is missing. Parks for a human
+    /// ([`crate::domain::verifier::park::evidence_park`]).
+    Evidence(EvidenceGap),
     /// Two turns and still no readable verdict object. Carries the whole
     /// user-facing message, prefix included.
     NoVerdict(String),
@@ -84,6 +90,7 @@ pub(crate) fn verdict_disposition(
             ),
             reason,
         },
+        ParsedVerdict::Evidence(gap) => VerdictDisposition::Evidence(gap),
         ParsedVerdict::Missing(desc) => VerdictDisposition::NoVerdict(format!(
             "[verifier infrastructure error — no usable verdict from the \
              validate turn] {}",
@@ -94,7 +101,7 @@ pub(crate) fn verdict_disposition(
 
 /// The strict JSON-only correction, asked of the SAME session.
 ///
-/// Offers all three verdicts for the same reason the original contract does
+/// Offers every verdict for the same reason the original contract does
 /// (S13, stated in full on `prompt::append_verdict_contract`): a correction
 /// that silently drops `environment` would push an agent that had correctly
 /// judged the criteria unprovable into `fail` on the retry.
@@ -107,11 +114,64 @@ fn correction_prompt(verdict_key: &str) -> String {
          {{ \"{key}\": \"fail\", \"reason\": \"...\", \
          \"failing_tests\": [], \"implicated_files\": [] }}\n\
          {{ \"{key}\": \"environment\", \"reason\": \"...\" }}\n\
+         {{ \"{key}\": \"evidence\", \"reason\": \"...\", \"criteria\": [] }}\n\
          Use `environment` when what you could not confirm is something \
          this project is not configured to run, rather than something the \
-         implementation got wrong.",
+         implementation got wrong. Use `evidence` when every code and harness \
+         criterion is met and only evidence of how the work was done is missing.",
         key = verdict_key,
     )
+}
+
+/// Where this validate attempt was judged, for
+/// [`crate::domain::verifier::recurrence`].
+pub(crate) struct JudgedTree<'a> {
+    pub machine: &'a str,
+    pub repo: &'a str,
+    /// The feature branch tip the attempt started from. `None` leaves the
+    /// backstop silent: with no commit to name, "no code changed" is a guess.
+    pub rev: Option<&'a str>,
+    pub artifact_subdir: &'a str,
+}
+
+/// Record this `fail`'s fingerprint on the step row and say whether it is the
+/// previous attempt's, over the same code.
+///
+/// Fails open: when git cannot list the tree the fingerprint is not written
+/// and the answer is `false`, so the rework loop runs exactly as it did
+/// before this backstop existed.
+pub(crate) async fn verdict_recurred(
+    exec: &dyn ExecutionPort,
+    features: &dyn FeatureRepository,
+    step_exec: &StepExecution,
+    tree: JudgedTree<'_>,
+    failure: &VerdictFailure,
+) -> bool {
+    use crate::domain::verifier::recurrence::{code_state, verdict_fingerprint, verdict_recurs};
+
+    let Some(rev) = tree.rev.filter(|r| !r.trim().is_empty()) else {
+        return false;
+    };
+    let listing = match exec
+        .run_program(
+            tree.machine,
+            crate::adapters::worktree::git_ops::git_request(tree.repo, ["ls-tree", rev.trim()]),
+        )
+        .await
+    {
+        Ok(out) if !out.trim().is_empty() => out,
+        _ => return false,
+    };
+    let current = verdict_fingerprint(&code_state(&listing, tree.artifact_subdir), failure);
+    let recurred = verdict_recurs(step_exec.last_failure_fingerprint.as_deref(), &current);
+    let _ = features.step_update(
+        &step_exec.id,
+        &StepExecutionPatch {
+            last_failure_fingerprint: Some(Some(current)),
+            ..Default::default()
+        },
+    );
+    recurred
 }
 
 impl ExecutionDriver {

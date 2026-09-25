@@ -124,7 +124,8 @@ impl ExecutionDriver {
             .run_command(
                 machine_str,
                 &format!(
-                    "git -C {} merge {}",
+                    "git -c {} -C {} merge {}",
+                    paths::GIT_NO_SIGNING,
                     paths::shell_escape_posix(wt_path),
                     paths::shell_escape_posix(&self.branch_name)
                 ),

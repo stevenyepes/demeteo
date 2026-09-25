@@ -193,8 +193,12 @@ impl ExecutionDriver {
 
         let prompt = build_test_ids_prompt(cmd, &tail_chars(output, 6000));
 
-        let agent_env =
-            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+        let agent_env = crate::ports::agent_runtime::pipeline_agent_env(
+            self.exec.as_ref(),
+            machine_str,
+            &agent_kind,
+        )
+        .await;
         let platform =
             crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), machine_str)
                 .await;

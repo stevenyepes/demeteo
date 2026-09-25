@@ -44,7 +44,7 @@ const CONFLICTED: &str = "src/lib.rs";
 const MARKED: &str = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> origin/master\n";
 const RESOLVED: &str = "ours and theirs\n";
 const PENDING_STATUS: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 status --porcelain";
-const COMMIT: &str = "git -c core.hooksPath=/dev/null -C /repos/demeteo_wt_sync_feature-f-1 \
+const COMMIT: &str = "git -c core.hooksPath=/dev/null -c commit.gpgsign=false -C /repos/demeteo_wt_sync_feature-f-1 \
                       -c user.email=demeteo@local -c user.name=demeteo commit -m \
                       'chore: resolve sync conflicts with origin/master'";
 /// The push, as `run_program` renders it. Byte-identical to the shell string

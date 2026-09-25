@@ -417,8 +417,12 @@ impl ExecutionDriver {
 
         // Every supported agent is a CLI runtime that takes its model via the
         // `--model` flag in `build_args` from `ctx.model` below.
-        let agent_env =
-            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+        let agent_env = crate::ports::agent_runtime::pipeline_agent_env(
+            self.exec.as_ref(),
+            machine_str,
+            &verifier_agent_kind,
+        )
+        .await;
         let platform =
             crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), machine_str)
                 .await;
@@ -631,6 +635,21 @@ impl ExecutionDriver {
                      these criteria, so no amount of re-implementation can satisfy them"
                 );
                 Err(crate::domain::verifier::VerifierError::Environment(reason))
+            }
+            // This turn's prompt never offers `evidence`, and a verifier error
+            // has no park to reach, so an unasked-for one is read as the fail
+            // it is closest to. The park lives on the validate step's own
+            // verdict path (`steps::agent::verdict`).
+            ParsedVerdict::Evidence(gap) => {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    reason = %gap.reason,
+                    "verifier verdict: evidence, which this turn cannot park on — reading it as fail"
+                );
+                Err(crate::domain::verifier::VerifierError::Verdict(
+                    crate::domain::verifier::VerdictFailure::from_reason(gap.reason),
+                ))
             }
             ParsedVerdict::Missing(desc) => {
                 tracing::warn!(

@@ -246,9 +246,16 @@ impl ExecutionDriver {
             .await
             .map(|s| s.trim().to_string())
             .ok();
+        let pre_turn_head = crate::adapters::step_executor::artifacts::agent_commits::capture_head(
+            &*self.exec,
+            wt.machine,
+            wt.path,
+        )
+        .await;
         let baseline = TurnBaseline {
             snapshot: &worktree_snapshot,
             base_ref: worktree_base_ref.as_deref(),
+            head: &pre_turn_head,
         };
 
         let prompt = self
@@ -421,6 +428,19 @@ impl ExecutionDriver {
                         reason = %failure.reason,
                         "verdict: fail"
                     );
+                    let recurred = verdict::verdict_recurred(
+                        &*self.exec,
+                        &*self.features,
+                        step_exec,
+                        verdict::JudgedTree {
+                            machine: wt.machine,
+                            repo: wt.path,
+                            rev: baseline.base_ref,
+                            artifact_subdir: &self.artifact_subdir,
+                        },
+                        &failure,
+                    )
+                    .await;
                     let _ = self.features.step_update(
                         &step_exec.id,
                         &StepExecutionPatch {
@@ -431,7 +451,47 @@ impl ExecutionDriver {
                     );
                     self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
                         .await;
+                    if recurred {
+                        tracing::warn!(
+                            feature_id = %self.f_id,
+                            step_id = %step_exec.step_id.0,
+                            "verdict: the same failure over unchanged code — parking for a human"
+                        );
+                        return StepOutcome::AwaitHumanDecision(
+                            crate::domain::verifier::park::recurrence_park(
+                                &failure,
+                                &self.steps,
+                                step_exec.step_index as usize,
+                                step_conf.on_failure.as_ref(),
+                            ),
+                        );
+                    }
                     return StepOutcome::VerdictFailed(failure);
+                }
+                verdict::VerdictDisposition::Evidence(gap) => {
+                    tracing::warn!(
+                        feature_id = %self.f_id,
+                        step_id = %step_exec.step_id.0,
+                        reason = %gap.reason,
+                        "verdict: evidence — only process evidence is missing; parking for a human"
+                    );
+                    let _ = self.features.step_update(
+                        &step_exec.id,
+                        &StepExecutionPatch {
+                            artifact_path: Some(artifact_path),
+                            artifact_paths: Some(artifact_paths),
+                            ..Default::default()
+                        },
+                    );
+                    self.tear_down_agent_step(wt, target, SessionDisposition::Kill)
+                        .await;
+                    return StepOutcome::AwaitHumanDecision(
+                        crate::domain::verifier::park::evidence_park(
+                            &gap,
+                            &self.steps,
+                            step_exec.step_index as usize,
+                        ),
+                    );
                 }
                 verdict::VerdictDisposition::Unjudgeable { reason, message } => {
                     tracing::warn!(

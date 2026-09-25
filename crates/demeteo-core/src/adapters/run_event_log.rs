@@ -25,6 +25,7 @@
 //! | `retry_decision`     | `step_id`, `error_class`, `rule_id`, `action`, `target_id`, `attempt`, `max`, `reason` | the retry-policy engine's answer to a failure (P1.10 rule id; `action` ∈ `redirect \| in_place \| exhausted \| fail`) |
 //! | `retry_exhausted`    | `step_id`, `target_id`, `attempt`, `max`, `reason` | user-facing alarm when a redirect budget is spent |
 //! | `env_not_ready`      | `step_id`, `reason` | harness triage verdict: the machine, not the code, is broken (C6) |
+//! | `agent_commits_folded` | `step_id`, `task_id`, `commits` (`sha`, `author`, `subject`), `note` | the agent committed itself; Demeteo folded it into its own commit |
 //! | `gate_required`      | `step_execution_id` | a gate is waiting on a human |
 //! | `gate_decided`       | `step_execution_id`, `decision`, `feedback` | the human's answer (`approve`/`reject`/`redirect`) |
 //! | `bootstrap_progress` | `phase`, `label`, `status`, `detail` | feature-start sub-steps |
@@ -174,6 +175,22 @@ pub fn run_event_record(event: &DomainEvent) -> Option<RunEventRecord> {
             feature_id: feature_id.0.clone(),
             kind: "env_not_ready",
             payload: serde_json::json!({ "step_id": step_id, "reason": reason }),
+        },
+        DomainEvent::AgentCommitsFolded {
+            feature_id,
+            step_id,
+            task_id,
+            commits,
+            note,
+        } => RunEventRecord {
+            feature_id: feature_id.0.clone(),
+            kind: "agent_commits_folded",
+            payload: serde_json::json!({
+                "step_id": step_id,
+                "task_id": task_id,
+                "commits": commits,
+                "note": note,
+            }),
         },
         DomainEvent::GateRequired {
             feature_id,

@@ -458,6 +458,8 @@ impl ExecutionDriver {
                 // guard's park: it emitted nothing and can be told what to
                 // emit instead.
                 redirect_to: Some(crate::domain::ids::StepId::from(producer.to_string())),
+                alternatives: Vec::new(),
+                redirect_brief: None,
             })
         } else {
             StepOutcome::Failed(format!(

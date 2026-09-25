@@ -675,7 +675,12 @@ async fn run_resolver_turn(
             .runtime_for(agent_kind)
             .map(|r| r.binary().to_string())
             .unwrap_or_else(|| agent_kind.to_string()),
-        env: crate::ports::agent_runtime::agent_base_env(exec.as_ref(), machine_str).await,
+        env: crate::ports::agent_runtime::pipeline_agent_env(
+            exec.as_ref(),
+            machine_str,
+            agent_kind,
+        )
+        .await,
         platform: crate::ports::agent_runtime::resolve_agent_platform(exec.as_ref(), machine_str)
             .await,
         machine_str,

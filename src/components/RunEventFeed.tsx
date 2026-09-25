@@ -51,6 +51,7 @@ const EVENT_KIND_LABEL: Record<string, string> = {
   retry_exhausted: 'Retries exhausted',
   retry_decision: 'Retry',
   env_not_ready: 'Environment not ready',
+  agent_commits_folded: 'Agent commits folded',
   gate_required: 'Gate reached',
   gate_decided: 'Gate decided',
   step_output: 'Output',
@@ -107,6 +108,8 @@ interface RunEventPayload {
   max?: number;
   reason?: string;
   decision?: string;
+  task_id?: string | null;
+  note?: string;
 }
 
 /**
@@ -182,6 +185,10 @@ export function describeEvent(
         detail: `${p?.step_id ?? 'step'} — ${p?.reason ?? ''}`,
         tone: 'error',
       };
+    case 'agent_commits_folded': {
+      const where = p?.task_id ? `${p?.step_id ?? 'step'} [${p.task_id}]` : (p?.step_id ?? 'step');
+      return { label: fallbackLabel, detail: `${where} — ${p?.note ?? ''}`, tone: 'default' };
+    }
     case 'gate_decided':
       return { label: fallbackLabel, detail: String(p?.decision ?? ''), tone: 'default' };
     case 'gate_required':

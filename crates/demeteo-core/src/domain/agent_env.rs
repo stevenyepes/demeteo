@@ -20,6 +20,11 @@
 //! rule about `std::env` that could only be tested by mutating `std::env` is a
 //! rule nothing tests, because that mutation is process-global and races every
 //! other test in the binary.
+//!
+//! The one thing added rather than inherited, the git identity a pipeline
+//! agent commits under, is [`agent_git_config_env`].
+
+use std::collections::HashMap;
 
 use crate::domain::models::Platform;
 
@@ -88,6 +93,60 @@ pub fn pinned_shell_env(
         Some(Platform::Windows) => pins,
         Some(Platform::Linux | Platform::MacOS) | None => &[],
     }
+}
+
+/// The address every pipeline agent commits as. Non-routable on purpose, and
+/// a sibling of the `demeteo@local` Demeteo's own bookkeeping commits carry.
+pub const AGENT_GIT_EMAIL: &str = "demeteo-agent@local";
+
+/// Git config for a pipeline agent's process, spelled as the
+/// `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` block
+/// git reads as command-line scope, to be merged into `env`.
+///
+/// An agent that runs `git commit` itself would otherwise commit as the user
+/// — and, with `commit.gpgsign=true`, sign with the user's key or block on a
+/// pinentry nobody is there to answer. What is chosen, and what is not:
+///
+/// - Config, not `GIT_AUTHOR_*` / `GIT_COMMITTER_*`: those outrank even
+///   `git -c`, so nothing downstream could correct them.
+/// - Not `GIT_CONFIG_GLOBAL`: replacing the user's global config also drops
+///   their credential helpers and `safe.directory`, and the obvious empty
+///   file, `/dev/null`, names nothing on Windows.
+/// - Appended after whatever block `env` already carries rather than written
+///   from index 0, so a caller's own entries survive. Only `env` is
+///   consulted: it is the one block every transport forwards, whereas the
+///   desktop's own environment reaches a local child and never a remote one.
+///
+/// Git older than 2.31 ignores the whole block silently.
+pub fn agent_git_config_env(
+    agent_kind: &str,
+    env: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let base = env
+        .get("GIT_CONFIG_COUNT")
+        .and_then(|count| count.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    let entries = [
+        ("user.name", format!("demeteo-agent ({agent_kind})")),
+        ("user.email", AGENT_GIT_EMAIL.to_string()),
+        ("commit.gpgsign", "false".to_string()),
+        ("tag.gpgsign", "false".to_string()),
+    ];
+    let mut out: Vec<(String, String)> = entries
+        .iter()
+        .enumerate()
+        .flat_map(|(i, (key, value))| {
+            [
+                (format!("GIT_CONFIG_KEY_{}", base + i), (*key).to_string()),
+                (format!("GIT_CONFIG_VALUE_{}", base + i), value.clone()),
+            ]
+        })
+        .collect();
+    out.push((
+        "GIT_CONFIG_COUNT".to_string(),
+        (base + entries.len()).to_string(),
+    ));
+    out
 }
 
 #[cfg(test)]

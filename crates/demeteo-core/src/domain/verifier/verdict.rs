@@ -32,9 +32,27 @@ pub enum ParsedVerdict {
     /// was already correct and ends no better informed. This terminates
     /// once, carrying remediation the user can act on.
     Environment(String),
+    /// Every criterion the diff or the harness can prove is met; what is
+    /// missing is evidence of *how* the work was done.
+    ///
+    /// Not a `Fail` for the same reason `Environment` is not: re-implementing
+    /// a correct change cannot manufacture process evidence, so a rework loop
+    /// here re-asks one question until the budget runs out. It parks for a
+    /// human instead, who can waive the criterion, ask for the evidence, or
+    /// rewrite the criterion.
+    Evidence(EvidenceGap),
     /// No JSON object carrying the verdict key was found, or its value was
-    /// none of the three above. The string describes the problem.
+    /// none of the four above. The string describes the problem.
     Missing(String),
+}
+
+/// What an `evidence` verdict says is unproven.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvidenceGap {
+    pub reason: String,
+    /// The criteria lacking evidence, in the verifier's own labels (`AC6`).
+    /// May be empty, in which case the reason carries them.
+    pub criteria: Vec<String>,
 }
 
 /// The prompt a dedicated verifier turn is given: the step's own instructions,
@@ -94,13 +112,21 @@ pub fn verdict_contract(verdict_key: &str) -> String {
          \"failing_tests\": [\"test id\"], \"implicated_files\": [\"src/foo.rs\"] }}\n\
          or\n\
          {{ \"{key}\": \"environment\", \"reason\": \"which command is missing and \
-         which project setting configures it\" }}\n\n\
+         which project setting configures it\" }}\n\
+         or\n\
+         {{ \"{key}\": \"evidence\", \"reason\": \"which evidence is missing\", \
+         \"criteria\": [\"AC6\"] }}\n\n\
          Use `environment` — NOT `fail` — when the criteria you could not confirm \
          are ones this project is not configured to evidence, rather than ones the \
          implementation got wrong. `fail` sends the work back to be \
          re-implemented; nothing an agent writes can add a missing test command, \
          so `fail` there burns the entire rework budget and ends no better \
-         informed.",
+         informed.\n\n\
+         Use `evidence` — NOT `fail` — when every criterion the diff or the harness \
+         can prove is met and all that is missing is evidence of how the work was \
+         done (a process criterion). Re-implementing a correct change cannot \
+         produce that evidence; `evidence` stops the run and asks a human to waive \
+         the criterion, request the evidence, or change the criterion.",
         key = verdict_key,
     )
 }
@@ -148,21 +174,10 @@ pub fn parse_verdict_text(raw_text: &str, verdict_key: &str) -> ParsedVerdict {
                 .get("reason")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Verifier check failed (no reason provided)");
-            let string_list = |key: &str| -> Vec<String> {
-                val.get(key)
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|x| x.as_str())
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            };
             ParsedVerdict::Fail(VerdictFailure {
                 reason: reason.to_string(),
-                failing_tests: string_list("failing_tests"),
-                implicated_files: string_list("implicated_files"),
+                failing_tests: string_list(&val, "failing_tests"),
+                implicated_files: string_list(&val, "implicated_files"),
             })
         }
         // The verifier can only reach this by being *told* to in its
@@ -175,8 +190,30 @@ pub fn parse_verdict_text(raw_text: &str, verdict_key: &str) -> ParsedVerdict {
                 .unwrap_or("The project is not configured to evidence this step's criteria.");
             ParsedVerdict::Environment(reason.to_string())
         }
+        "evidence" => {
+            let reason = val
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Some acceptance criteria lack evidence (no reason provided).");
+            ParsedVerdict::Evidence(EvidenceGap {
+                reason: reason.to_string(),
+                criteria: string_list(&val, "criteria"),
+            })
+        }
         other => ParsedVerdict::Missing(format!("Invalid verifier verdict: '{}'", other)),
     }
+}
+
+fn string_list(val: &serde_json::Value, key: &str) -> Vec<String> {
+    val.get(key)
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Build the "we also produced/modified the following files/artifacts"

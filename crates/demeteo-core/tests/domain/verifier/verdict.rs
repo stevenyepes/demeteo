@@ -197,6 +197,45 @@ fn an_unknown_verdict_word_is_still_missing_not_environment() {
     }
 }
 
+// --- the `evidence` verdict --------------------------------------------------
+
+#[test]
+fn evidence_verdict_carries_its_reason_and_criteria() {
+    let text = r#"Report written. {"verdict": "evidence", "reason": "AC6 asks for proof each test failed first; nothing shows it.", "criteria": ["AC6"]}"#;
+    match parse_verdict_text(text, "verdict") {
+        ParsedVerdict::Evidence(gap) => {
+            assert!(gap.reason.contains("failed first"), "{}", gap.reason);
+            assert_eq!(gap.criteria, vec!["AC6".to_string()]);
+        }
+        other => panic!("expected evidence verdict, got {other:?}"),
+    }
+}
+
+#[test]
+fn evidence_verdict_without_fields_still_parses() {
+    match parse_verdict_text(r#"{"verdict": "EVIDENCE"}"#, "verdict") {
+        ParsedVerdict::Evidence(gap) => {
+            assert!(!gap.reason.is_empty());
+            assert!(gap.criteria.is_empty());
+        }
+        other => panic!("expected evidence verdict, got {other:?}"),
+    }
+}
+
+#[test]
+fn verdict_contract_offers_evidence_and_says_when_it_beats_fail() {
+    let contract = verdict_contract("ship_it");
+    assert!(
+        contract.contains("\"ship_it\": \"evidence\""),
+        "evidence must be in the menu; got:\n{contract}"
+    );
+    assert!(contract.contains("\"criteria\""), "{contract}");
+    assert!(
+        contract.contains("Use `evidence` — NOT `fail`"),
+        "{contract}"
+    );
+}
+
 // ── S13: the agent must be offered the verdict that fits a config defect ─────
 
 #[test]

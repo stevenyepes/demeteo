@@ -40,8 +40,12 @@ impl ExecutionDriver {
         // A fresh session per turn, keyed off the feature so the registry's
         // per-feature sweep tears it down with everything else.
         let thread_id = format!("{}-finalize-{}", self.f_id.0, paths::now_ms());
-        let agent_env =
-            crate::ports::agent_runtime::agent_base_env(self.exec.as_ref(), machine_str).await;
+        let agent_env = crate::ports::agent_runtime::pipeline_agent_env(
+            self.exec.as_ref(),
+            machine_str,
+            &agent_kind,
+        )
+        .await;
         let platform =
             crate::ports::agent_runtime::resolve_agent_platform(self.exec.as_ref(), machine_str)
                 .await;
