@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
+import { offerableAgentKinds } from '../../lib/agentAvailability';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
 import { getAgentModels } from '../../lib/agentModels';
 import { createAskThread } from '../../lib/ask';
-import { DEFAULT_EFFORT, EFFORT_LABELS, type EffortLevel } from '../../lib/effortLevels';
+import { DEFAULT_EFFORT, type EffortLevel, reconcileEffort } from '../../lib/effortLevels';
 import { formatError } from '../../lib/errors';
-import { listMachines } from '../../lib/machines';
+import { type AgentConfigView, getAgentConfigs, listMachines } from '../../lib/machines';
 import {
   interviewerMachineOptions,
   nameFieldState,
@@ -13,12 +14,9 @@ import {
 } from '../../lib/newDiscovery';
 import type { AskThread, ConfigOptionValue, Machine } from '../../types';
 import { FieldLabel } from '../ui/FieldLabel';
+import { HarnessModelPicker } from '../ui/HarnessModelPicker';
 import { Modal } from '../ui/Modal';
-import { OptionPill } from '../discovery/OptionPill';
 import { NetworkUnenforcedNote } from './NetworkUnenforcedNote';
-
-/** What the dimmed group shows when the harness has no effort control at all. */
-const DIMMED_EFFORTS: readonly EffortLevel[] = ['low', 'medium', 'high'];
 
 interface NewAskThreadModalProps {
   projectId: string;
@@ -47,22 +45,59 @@ export function NewAskThreadModal({
   const [title, setTitle] = useState(seedTitle);
   const [agentKind, setAgentKind] = useState('');
   const [model, setModel] = useState('');
-  const [effort, setEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
+  const [effort, setEffort] = useState<EffortLevel | ''>(DEFAULT_EFFORT);
   const [machine, setMachine] = useState(machineId);
   const [network, setNetwork] = useState(true);
   const [machines, setMachines] = useState<Machine[]>([]);
+  const [agentConfigs, setAgentConfigs] = useState<AgentConfigView[]>([]);
+  const [configsCheck, setConfigsCheck] = useState(0);
+  const [configsAnswer, setConfigsAnswer] = useState<{
+    machine: string;
+    check: number;
+    state: 'ready' | 'error';
+  } | null>(null);
   const [models, setModels] = useState<ConfigOptionValue[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // The catalog arrives after the first render, so the initial agent is
-  // picked here rather than in `useState` — and only while none is chosen, so
-  // a later catalog refresh cannot overwrite the user's pick.
+  // Derived from which machine and check answered, not set on a machine change:
+  // an effect runs in the same commit as `setMachine`, before a `loading` set
+  // there could render, so it would see the previous machine's `ready` and
+  // harness list. The harness list is gated on it for the same reason.
+  const configsState =
+    configsAnswer?.machine === machine && configsAnswer.check === configsCheck
+      ? configsAnswer.state
+      : 'loading';
+  const agentKinds = useMemo(
+    () => (configsState === 'ready' ? offerableAgentKinds(agentConfigs) : []),
+    [agentConfigs, configsState],
+  );
+
+  // A thread needs a concrete agent — there is no project default for Ask to
+  // inherit — so the first offerable harness is preselected, and a pick the
+  // chosen machine cannot run is replaced rather than kept.
   useEffect(() => {
-    if (agentKind || agents.length === 0) return;
-    setAgentKind(agents[0].kind);
-  }, [agents, agentKind]);
+    let cancelled = false;
+    getAgentConfigs(machine, false)
+      .then((list) => {
+        if (cancelled) return;
+        const configs = list ?? [];
+        const kinds = offerableAgentKinds(configs);
+        setAgentConfigs(configs);
+        setConfigsAnswer({ machine, check: configsCheck, state: 'ready' });
+        setAgentKind((current) => (current && kinds.includes(current) ? current : (kinds[0] ?? '')));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAgentConfigs([]);
+        setConfigsAnswer({ machine, check: configsCheck, state: 'error' });
+        setAgentKind('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [machine, configsCheck]);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +117,7 @@ export function NewAskThreadModal({
     () => interviewerMachineOptions(machines, machineId),
     [machines, machineId],
   );
+  const machineLabel = machineOptions.find((o) => o.id === machine)?.label ?? machine;
 
   const effortLevels = useMemo(
     () => effortLevelsFor(agents, agentKind),
@@ -89,21 +125,32 @@ export function NewAskThreadModal({
   );
   const effortSupported = effortLevels.length > 0;
 
-  // Picking an agent resets the model to that agent's first entry: a model
-  // list is per-harness, so carrying the previous pick across would send one
-  // harness another's model. The probe runs against the chosen host, which
-  // is the one that will answer.
+  // Keyed on the harness rather than hung off the Harness select's handler: a
+  // machine change reseeds `agentKind` too, and a level the new harness lacks
+  // would otherwise be sent while the select shows none of its options.
   useEffect(() => {
-    if (!agentKind) return;
+    setEffort((current) => reconcileEffort(current, effortLevels));
+  }, [effortLevels]);
+
+  // A model list is per-harness, so a new agent starts back on its own default
+  // model rather than carrying another harness's pick. The probe runs against
+  // the chosen host, which is the one that will answer, and only for a harness
+  // it offers: until its configs arrive `agentKind` is the previous machine's
+  // pick, and `getAgentModels` caches no empty answer, so each switch would
+  // repeat an SSH round-trip spawning a binary the host may not have.
+  useEffect(() => {
+    setModel('');
+    if (configsState !== 'ready' || !agentKinds.includes(agentKind)) {
+      setModels([]);
+      setModelsLoading(false);
+      return;
+    }
     let cancelled = false;
     setModelsLoading(true);
-    setModel('');
     getAgentModels(machine, agentKind)
       .then((list) => {
         if (cancelled) return;
-        const values = list ?? [];
-        setModels(values);
-        setModel(values[0]?.value ?? '');
+        setModels(list ?? []);
       })
       .catch(() => {
         if (!cancelled) setModels([]);
@@ -114,17 +161,17 @@ export function NewAskThreadModal({
     return () => {
       cancelled = true;
     };
-  }, [agentKind, machine]);
-
-  // An agent with no per-invocation effort control gets none sent, rather
-  // than one silently dropped on the floor.
-  useEffect(() => {
-    if (effortSupported && !effortLevels.includes(effort)) setEffort(effortLevels[0]);
-  }, [effortLevels, effortSupported, effort]);
+  }, [agentKind, machine, configsState, agentKinds]);
 
   const name = nameFieldState(title);
+  // While a machine's configs are in flight, `agentKind` may still name the
+  // previous machine's pick, which this one might not run.
   const canStart =
-    title.trim().length > 0 && !name.overLimit && agentKind !== '' && !submitting;
+    title.trim().length > 0 &&
+    !name.overLimit &&
+    agentKind !== '' &&
+    configsState === 'ready' &&
+    !submitting;
 
   const start = async () => {
     if (!canStart) return;
@@ -136,7 +183,7 @@ export function NewAskThreadModal({
         title: title.trim(),
         agentKind,
         model: model || null,
-        effort: effortSupported ? effort : null,
+        effort: effortSupported && effort ? effort : null,
         machineId: machine,
         network,
       });
@@ -192,61 +239,28 @@ export function NewAskThreadModal({
             </div>
           </div>
 
-          <div>
-            <FieldLabel>Agent</FieldLabel>
-            <div role="radiogroup" aria-label="Agent" className="flex flex-wrap gap-2">
-              {agents.map((agent) => (
-                <OptionPill
-                  key={agent.kind}
-                  selected={agent.kind === agentKind}
-                  onSelect={() => setAgentKind(agent.kind)}
-                >
-                  {agent.kind}
-                </OptionPill>
-              ))}
-            </div>
-          </div>
+          <HarnessModelPicker
+            agentKinds={agentKinds}
+            models={models.map((m) => ({ value: m.value, name: m.name }))}
+            modelsLoading={modelsLoading}
+            agentKind={configsState === 'ready' ? agentKind : ''}
+            model={model}
+            effort={effort}
+            effortLevels={effortLevels}
+            onAgentKindChange={setAgentKind}
+            onModelChange={setModel}
+            onEffortChange={setEffort}
+            agentPlaceholder="Choose an agent…"
+            effortPlaceholder="Agent default"
+          />
 
-          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-            <div>
-              <FieldLabel>Model</FieldLabel>
-              {modelsLoading ? (
-                <p className="text-[11px] text-slate-500">Probing models…</p>
-              ) : models.length === 0 ? (
-                <p className="text-[11px] text-slate-500">
-                  This agent lists no models here. It will run on its own default.
-                </p>
-              ) : (
-                <div role="radiogroup" aria-label="Model" className="flex flex-wrap gap-2">
-                  {models.map((option) => (
-                    <OptionPill
-                      key={option.value}
-                      selected={option.value === model}
-                      onSelect={() => setModel(option.value)}
-                    >
-                      {option.value}
-                    </OptionPill>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <FieldLabel>Effort</FieldLabel>
-              <div role="radiogroup" aria-label="Effort" className="flex flex-wrap gap-2">
-                {(effortSupported ? effortLevels : DIMMED_EFFORTS).map((level) => (
-                  <OptionPill
-                    key={level}
-                    selected={effortSupported && level === effort}
-                    unsupported={!effortSupported}
-                    onSelect={() => setEffort(level)}
-                  >
-                    {EFFORT_LABELS[level]}
-                  </OptionPill>
-                ))}
-              </div>
-            </div>
-          </div>
+          {configsState !== 'loading' && agentKinds.length === 0 && (
+            <NoAgentNote
+              machineLabel={machineLabel}
+              failed={configsState === 'error'}
+              onRecheck={() => setConfigsCheck((n) => n + 1)}
+            />
+          )}
 
           {!effortSupported && agentKind && <EffortUnsupportedNote agentKind={agentKind} />}
 
@@ -371,6 +385,46 @@ function EffortUnsupportedNote({ agentKind }: { agentKind: string }): React.Reac
         ? 'Hermes exposes reasoning effort only through its own config file, which Demeteo does not write. Effort is unavailable for this agent — it will run at whatever that file already says.'
         : `${agentKind} exposes no per-invocation reasoning effort, so Demeteo has nothing to set. Effort is unavailable for this agent — it will run at whatever it is already configured to do.`}
     </p>
+  );
+}
+
+/**
+ * Deliberately no fallback to `useAgentCatalog()`: the catalog lists what
+ * Demeteo can drive, not what this machine has, and offering it here is how
+ * a thread got started on a harness that was never installed.
+ *
+ * An unreachable host lands on the amber branch, not the ruby one:
+ * `get_agent_configs` answers it with every agent `available: false` rather
+ * than rejecting, so that copy cannot claim nothing is installed.
+ */
+function NoAgentNote({
+  machineLabel,
+  failed,
+  onRecheck,
+}: {
+  machineLabel: string;
+  failed: boolean;
+  onRecheck: () => void;
+}): React.ReactElement {
+  return (
+    <div
+      role="status"
+      data-testid="ask-new-thread-no-agent"
+      className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 text-[11px] leading-relaxed ${
+        failed
+          ? 'border-ruby-500/20 bg-ruby-500/5 text-ruby-200'
+          : 'border-amber-500/20 bg-amber-500/5 text-amber-200/90'
+      }`}
+    >
+      <p className="min-w-0 flex-1">
+        {failed
+          ? `No coding agent is available on ${machineLabel} — its agents could not be checked. Re-check, or pick another machine.`
+          : `No coding agent is available on ${machineLabel}: none is installed and enabled there, or the machine could not be reached. Install or enable one, re-check, or pick another machine.`}
+      </p>
+      <button type="button" onClick={onRecheck} className="btn-secondary shrink-0 text-[11px]">
+        Re-check
+      </button>
+    </div>
   );
 }
 

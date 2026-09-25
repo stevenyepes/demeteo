@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { offerableAgentKinds } from '../../lib/agentAvailability';
 import { getAgentModels } from '../../lib/agentModels';
 import { useErrorBus } from '../../lib/errorBus';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
@@ -57,12 +58,7 @@ export function useHarnessOverrides(): HarnessOverrides {
   const [featureAgentKind, setFeatureAgentKind] = useState<string>('opencode');
   const [featureMachineId, setFeatureMachineId] = useState<string>('local');
 
-  // Installed *and* enabled: a picker offering a harness the machine does not
-  // have fails at spawn instead.
-  const availableAgents = useMemo(
-    () => machineAgents.filter((a) => a.enabled && a.available).map((a) => a.kind),
-    [machineAgents],
-  );
+  const availableAgents = useMemo(() => offerableAgentKinds(machineAgents), [machineAgents]);
 
   // The effort levels the harness the rerun will actually use accepts. Empty
   // (hermes) disables the control rather than offering a level the adapter
