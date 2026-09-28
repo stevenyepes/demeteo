@@ -1363,9 +1363,14 @@ hazard cheap enough to design around. See §5 F2 for the wiring that shipped.
   naming the test, and a terminal environment failure renders its remediation as
   the primary content rather than as an error message.
 
-- **Done:** `HarnessGateTable` renders baseline vs. now per gate above the
-  Graph|Timeline toggle — a property of the run, not of one rendering of it —
-  and `EnvironmentNotReadyPanel` replaces the ruby error dump on the step that
+- **Done:** `HarnessGateTable` renders baseline vs. now per gate in the run's
+  meta column — a property of the run, not of one rendering of it. It is a
+  `Disclosure`, collapsed by default: its trigger row carries the baseline chip
+  and a one-line verdict from `summarizeGateRows` — gate counts per outcome,
+  ruby when any gate failed — held to the same never-green rule as the rows it
+  stands for, so the collapsed panel still says a gate went red without taking
+  the graph's height. Expanding it names the gate. And
+  `EnvironmentNotReadyPanel` replaces the ruby error dump on the step that
   ended in a terminal environment failure. Both read the V37 record, which now
   exists on the frontend `Feature` type; the join and the two parsers are pure
   functions in `src/lib/harnessVerdict.ts`.

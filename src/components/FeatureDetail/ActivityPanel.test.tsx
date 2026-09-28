@@ -8,7 +8,10 @@
  *    of the rows `useRemoteRun` already caps;
  *  - closing it stops the tunnel poll, and the affordance says so. Both halves
  *    matter: the saving is the point, and a feed that silently stops advancing
- *    is indistinguishable from a run that stopped.
+ *    is indistinguishable from a run that stopped;
+ *  - closed is not silent, though: one fetch still lands, because the graph's
+ *    observed assignments fold from these rows and a finished detached run
+ *    mounts this panel collapsed.
  *
  * The run-event rows themselves are `RunEventFeed.test.tsx`'s.
  */
@@ -156,9 +159,54 @@ describe('ActivityPanel — the sync affordance', () => {
       />,
     );
 
+    await act(async () => {});
+    const afterClose = streamRemoteEvents.mock.calls.length;
+    expect(afterClose).toBeLessThanOrEqual(1);
+
     await act(async () => { vi.advanceTimersByTime(REMOTE_TAIL_POLL_MS * 4); });
-    expect(streamRemoteEvents).not.toHaveBeenCalled();
+    expect(streamRemoteEvents).toHaveBeenCalledTimes(afterClose);
     expect(screen.getByTestId('activity-sync')).toHaveTextContent('paused');
+  });
+
+  it('fetches a detached log once when mounted closed, for the graph, and never polls', async () => {
+    vi.useFakeTimers();
+    const fresh = [event({ offset: 3 })];
+    streamRemoteEvents.mockResolvedValue(fresh);
+
+    const { onEvents } = mountRemote({ open: false });
+
+    await act(async () => {});
+    expect(streamRemoteEvents).toHaveBeenCalledTimes(1);
+    expect(streamRemoteEvents).toHaveBeenLastCalledWith('m-1', 'r-1', 0);
+    expect(onEvents).toHaveBeenCalledWith(fresh);
+
+    await act(async () => { vi.advanceTimersByTime(REMOTE_TAIL_POLL_MS * 4); });
+    expect(streamRemoteEvents).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('activity-sync')).toHaveTextContent('paused');
+  });
+
+  it('keeps a failed closed fetch quiet and resumes the tail on reopen', async () => {
+    vi.useFakeTimers();
+    streamRemoteEvents.mockRejectedValue(new Error('tunnel down'));
+    const onEvents = vi.fn();
+    const { rerender } = mountRemote({ open: false }, onEvents);
+
+    await act(async () => {});
+    expect(screen.getByTestId('activity-sync')).toHaveTextContent('paused');
+
+    rerender(
+      <ActivityPanel
+        events={[]}
+        remote={{ run: RUN, machineName: 'gpu-box', onEvents }}
+        terminal={false}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    await act(async () => {});
+    // Two failures so far — the closed one and the reopen — short of a streak.
+    expect(screen.getByTestId('activity-sync')).toHaveTextContent('reconnecting');
+    expect(screen.queryByText(/Lost the connection/)).not.toBeInTheDocument();
   });
 
   it('does not call a closed local panel paused — nothing stopped', () => {

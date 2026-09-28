@@ -15,11 +15,12 @@
 //      not read as green**: that inversion is the thing decision 44 exists to
 //      prevent, and it is the one failure direction that is not survivable.
 
-import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import { HarnessGateTable } from './HarnessGateTable';
 import { readHarnessEvidence } from '../lib/harnessVerdict';
+import { TONE_TEXT } from '../lib/runStatus';
 import type { HarnessBaseline, StepExecution } from '../types';
 
 const BASE_SHA = 'abcdef0123456789abcdef';
@@ -81,6 +82,8 @@ describe('HarnessGateTable', () => {
       <HarnessGateTable
         baseline={BASELINE}
         evidence={readHarnessEvidence([failedStep(VERDICT_MESSAGE)])}
+        open={true}
+        onOpenChange={() => {}}
       />,
     );
 
@@ -102,6 +105,8 @@ describe('HarnessGateTable', () => {
       <HarnessGateTable
         baseline={BASELINE}
         evidence={readHarnessEvidence([failedStep(VERDICT_MESSAGE)])}
+        open={true}
+        onOpenChange={() => {}}
       />,
     );
 
@@ -137,6 +142,8 @@ describe('HarnessGateTable', () => {
           ],
         }}
         evidence={null}
+        open={true}
+        onOpenChange={() => {}}
       />,
     );
 
@@ -151,7 +158,12 @@ describe('HarnessGateTable', () => {
 
   it('renders a run with no baseline without inventing one', () => {
     render(
-      <HarnessGateTable baseline={null} evidence={readHarnessEvidence([failedStep(VERDICT_MESSAGE)])} />,
+      <HarnessGateTable
+        baseline={null}
+        evidence={readHarnessEvidence([failedStep(VERDICT_MESSAGE)])}
+        open={true}
+        onOpenChange={() => {}}
+      />,
     );
 
     expect(screen.getByTestId('harness-no-baseline')).toBeInTheDocument();
@@ -170,6 +182,8 @@ describe('HarnessGateTable', () => {
       <HarnessGateTable
         baseline={BASELINE}
         evidence={readHarnessEvidence([failedStep(VERDICT_MESSAGE)])}
+        open={true}
+        onOpenChange={() => {}}
       />,
     );
 
@@ -178,8 +192,115 @@ describe('HarnessGateTable', () => {
     expect(className).not.toContain('max-w-');
   });
 
-  it('renders nothing when there is neither a baseline nor a reported gate', () => {
-    const { container } = render(<HarnessGateTable baseline={null} evidence={null} />);
-    expect(container).toBeEmptyDOMElement();
+  it.each([true, false])(
+    'renders nothing when there is neither a baseline nor a reported gate (open=%s)',
+    open => {
+      const { container } = render(
+        <HarnessGateTable baseline={null} evidence={null} open={open} onOpenChange={() => {}} />,
+      );
+      expect(container).toBeEmptyDOMElement();
+    },
+  );
+});
+
+// The panel sits in the meta chrome above the graph, and at a stacked layout
+// every row it shows is height the graph box does not get — so it mounts
+// collapsed, and the collapsed row has to carry enough to decide whether to
+// open it: a verdict line and the baseline it was judged against.
+describe('HarnessGateTable, collapsed', () => {
+  function renderCollapsed(baseline: HarnessBaseline | null = BASELINE) {
+    const onOpenChange = vi.fn();
+    render(
+      <HarnessGateTable
+        baseline={baseline}
+        evidence={readHarnessEvidence([failedStep(VERDICT_MESSAGE)])}
+        open={false}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    return { onOpenChange };
+  }
+
+  it('shows the summary and no per-gate rows', () => {
+    renderCollapsed();
+
+    expect(screen.getByRole('button', { name: /Harness gates/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    expect(document.querySelector('[data-gate-row]')).toBeNull();
+    expect(screen.queryByText('excluded — pre-existing')).not.toBeInTheDocument();
+    expect(screen.getByTestId('harness-gate-summary')).toHaveTextContent('1 failed · 1 excluded');
+  });
+
+  it('asks its owner to open, rather than opening itself', () => {
+    const { onOpenChange } = renderCollapsed();
+
+    fireEvent.click(screen.getByRole('button', { name: /Harness gates/ }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(true);
+    expect(document.querySelector('[data-gate-row]')).toBeNull();
+  });
+
+  it('keeps its test id whether open or closed', () => {
+    const { rerender } = render(
+      <HarnessGateTable baseline={BASELINE} evidence={null} open={false} onOpenChange={() => {}} />,
+    );
+    expect(screen.getByTestId('harness-gate-table')).toBeInTheDocument();
+
+    rerender(
+      <HarnessGateTable baseline={BASELINE} evidence={null} open={true} onOpenChange={() => {}} />,
+    );
+    expect(screen.getByTestId('harness-gate-table')).toBeInTheDocument();
+  });
+
+  it('shows the baseline it was judged against while collapsed', () => {
+    renderCollapsed();
+    expect(screen.getByText('baseline at abcdef012345')).toBeInTheDocument();
+  });
+
+  it('says no baseline was measured while collapsed', () => {
+    renderCollapsed(null);
+    expect(screen.getByTestId('harness-no-baseline')).toBeInTheDocument();
+  });
+
+  it('leaves "not measured" to the chip when there is no baseline, rather than saying it twice', () => {
+    renderCollapsed(null);
+    expect(screen.getByTestId('harness-no-baseline')).toBeInTheDocument();
+    expect(screen.getByTestId('harness-gate-summary')).not.toHaveTextContent('not measured');
+  });
+
+  it('says "not measured" when a baseline exists but covered none of these gates', () => {
+    renderCollapsed({ base_sha: BASE_SHA, harnesses: [] });
+    expect(screen.getByTestId('harness-gate-summary')).toHaveTextContent('not measured');
+  });
+
+  // Disclosure seats `meta` in a `shrink-0` wrapper, so an uncapped `truncate`
+  // never engages and a long summary squeezes the title instead.
+  it('caps the summary width so it truncates instead of squeezing the title', () => {
+    renderCollapsed();
+    const summary = screen.getByTestId('harness-gate-summary');
+    expect(summary.className).toMatch(/(^|\s)max-w-\[[^\]]+\]/);
+    expect(summary).toHaveClass('truncate');
+    expect(summary.getAttribute('title')).toContain('1 failed · 1 excluded');
+    expect(summary.getAttribute('title')).toContain(summary.textContent ?? '');
+  });
+
+  it('paints the summary ruby when a gate failed against this feature', () => {
+    renderCollapsed();
+    expect(screen.getByTestId('harness-gate-summary')).toHaveClass(TONE_TEXT.ruby);
+  });
+
+  it('drops the summary once open — the rows say it in full', () => {
+    render(
+      <HarnessGateTable
+        baseline={BASELINE}
+        evidence={readHarnessEvidence([failedStep(VERDICT_MESSAGE)])}
+        open={true}
+        onOpenChange={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId('harness-gate-summary')).not.toBeInTheDocument();
+    expect(screen.getByText('baseline at abcdef012345')).toBeInTheDocument();
   });
 });

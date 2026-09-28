@@ -44,8 +44,10 @@ interface ActivityPanelProps {
  * this panel used to keep alongside that one was unbounded, which is the cap
  * rule in §4.3 applied to everything except the log most likely to be long.
  *
- * Collapsing unmounts the tail with the body, so a closed panel costs no tunnel
- * traffic. That is a real behaviour change to a user, not an implementation
+ * A closed panel fetches the log once and then stops polling. The one fetch is
+ * not for the panel: the graph's and timeline's observed assignments are folded
+ * from these same rows, and a finished detached run mounts this panel collapsed.
+ * The stopped poll is a real behaviour change to a user, not an implementation
  * detail — `activitySync` puts it in words next to the title, because a run
  * whose bootstrap stepper stops advancing while the panel is shut is otherwise
  * indistinguishable from a run that stopped.
@@ -68,10 +70,12 @@ export function ActivityPanel({
   const onEvents = remote?.onEvents;
 
   useEffect(() => {
-    // Closed panel = nothing to paint; don't keep the poll (and its SSH round
-    // trips) alive for it. `offsetRef` outlives the body, so reopening resumes
-    // from the last consumed row instead of refetching the whole log.
-    if (!open || machineId === null || runId === null) return;
+    // Closed, the one fetch below still feeds the graph's assignments; only the
+    // interval (and its SSH round trips) waits for the panel to open. Restoring
+    // an `!open` return here blanks those assignments for every finished
+    // detached run. `offsetRef` outlives the body, so reopening resumes from the
+    // last consumed row instead of refetching the whole log.
+    if (machineId === null || runId === null) return;
     let cancelled = false;
     const poll = async () => {
       try {
@@ -87,7 +91,9 @@ export function ActivityPanel({
         if (cancelled) return;
         // A terminal run gets exactly one fetch attempt — no retry loop to
         // eventually succeed — so don't wait for a streak that will never
-        // accumulate; surface the failure right away.
+        // accumulate; surface the failure right away. A closed live run's single
+        // attempt joins the streak instead — reopening resumes the tail, so it
+        // reads as one dropped poll there, never as a disconnection.
         if (terminal) {
           setError(formatError(e));
           return;
@@ -100,7 +106,7 @@ export function ActivityPanel({
       }
     };
     void poll();
-    if (terminal) return () => { cancelled = true; };
+    if (terminal || !open) return () => { cancelled = true; };
     const interval = setInterval(() => void poll(), REMOTE_TAIL_POLL_MS);
     return () => {
       cancelled = true;

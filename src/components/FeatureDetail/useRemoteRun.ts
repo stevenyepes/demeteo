@@ -195,8 +195,8 @@ export function useRemoteRun(input: {
   // raw feed — which is what the panel then renders, so this is the run's one
   // accumulation of it rather than a second copy beside the panel's own.
   //
-  // The tail only runs while that panel is open, so a collapsed Activity block
-  // also freezes the bootstrap stepper. That is stated where a user can read
+  // The tail polls only while that panel is open — closed, it fetches once —
+  // so a collapsed Activity block also freezes the bootstrap stepper. That is stated where a user can read
   // it (`activitySync`), not fixed here: a second poll to keep the stepper warm
   // is the duplicate this arrangement exists to avoid.
   const handleRunEvents = useCallback(
