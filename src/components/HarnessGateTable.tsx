@@ -1,8 +1,10 @@
 import type { ReactNode } from 'react';
-import { AlertTriangle, Check, HelpCircle, MinusCircle, XCircle } from 'lucide-react';
+import { AlertTriangle, Check, HelpCircle, ListChecks, MinusCircle, XCircle } from 'lucide-react';
 import type { GateBaselineStatus, GateNowStatus, GateRow, HarnessEvidence } from '../lib/harnessVerdict';
-import { buildGateRows, shortSha } from '../lib/harnessVerdict';
+import { buildGateRows, shortSha, summarizeGateRows } from '../lib/harnessVerdict';
+import { TONE_TEXT } from '../lib/runStatus';
 import type { HarnessBaseline } from '../types';
+import { Disclosure } from './ui/Disclosure';
 
 // HB7 — validate's verdict, per gate, as a table the user can audit.
 //
@@ -152,6 +154,8 @@ interface Props {
   baseline: HarnessBaseline | null;
   /** What this run's persisted step failures say about the same gates. */
   evidence: HarnessEvidence | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }
 
 /**
@@ -160,88 +164,112 @@ interface Props {
  * Renders nothing at all when there is neither a baseline nor a reported gate:
  * an empty table on every healthy run would be noise, and the panel is only
  * honest when it has something to be honest about.
+ *
+ * Collapsed, the rows give way to `summarizeGateRows`' one line, which is held
+ * to the same invariant: it never reads green. The baseline chip stays in both
+ * states, because what the verdict was judged against is part of the verdict.
  */
-export function HarnessGateTable({ baseline, evidence }: Props) {
+export function HarnessGateTable({ baseline, evidence, open, onOpenChange }: Props) {
   const rows = buildGateRows(baseline, evidence);
   if (rows.length === 0) return null;
 
   const baseSha = baseline?.base_sha ?? '';
+  const summary = summarizeGateRows(rows, { baselineRecorded: baseline !== null });
+  const tone = TONE_TEXT[summary.tone];
+
+  const meta = (
+    <>
+      {/* Capped because Disclosure seats `meta` in a `shrink-0` wrapper: an
+          uncapped `truncate` never engages there, and a multi-bucket summary
+          squeezes the title to nothing instead. The title carries the full line. */}
+      {!open && (
+        <span
+          data-testid="harness-gate-summary"
+          title={`${summary.text} — this run's harness gates, compared against the same gates at the commit this feature started from.`}
+          className={`max-w-[12rem] truncate font-mono text-[10px] ${tone}`}
+        >
+          {summary.text}
+        </span>
+      )}
+      {baseline ? (
+        <span className="font-mono text-[10px] text-slate-500">
+          baseline at {shortSha(baseSha)}
+        </span>
+      ) : (
+        <span
+          data-testid="harness-no-baseline"
+          title="Nothing measured this project's gates at the base commit, so no failure can be attributed or excused. This is not a claim that the gates were green."
+          className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-slate-300"
+        >
+          <HelpCircle className={ICON} />
+          no baseline measured
+        </span>
+      )}
+    </>
+  );
 
   return (
-    <section
-      data-testid="harness-gate-table"
-      className="glass-panel mb-6 w-full shrink-0 p-5"
-    >
-      <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="font-heading text-sm font-semibold tracking-wide text-white">
-          Harness gates — before this feature vs. now
-        </h3>
-        {baseline ? (
-          <span className="font-mono text-[10px] text-slate-500">
-            baseline at {shortSha(baseSha)}
-          </span>
-        ) : (
-          <span
-            data-testid="harness-no-baseline"
-            title="Nothing measured this project's gates at the base commit, so no failure can be attributed or excused. This is not a claim that the gates were green."
-            className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-slate-300"
-          >
-            <HelpCircle className={ICON} />
-            no baseline measured
-          </span>
-        )}
-      </header>
-      <p className="mt-1 font-sans text-[11px] leading-relaxed text-slate-400">
-        Validate judges a <span className="text-slate-200">delta</span>: a gate that was already
-        failing before this feature is excluded from the verdict instead of being blamed on it.
-        A gate with no measurement is <span className="text-slate-200">unknown</span>, not passing.
-      </p>
+    <div data-testid="harness-gate-table" className="mb-6 w-full shrink-0">
+      <Disclosure
+        title="Harness gates"
+        open={open}
+        onOpenChange={onOpenChange}
+        icon={<ListChecks className={`h-4 w-4 ${tone}`} />}
+        meta={meta}
+        bodyClassName="px-5 pb-5 pt-4"
+      >
+        <p className="font-sans text-[11px] leading-relaxed text-slate-400">
+          Validate judges a <span className="text-slate-200">delta</span>: a gate that was already
+          failing before this feature is excluded from the verdict instead of being blamed on it.
+          A gate with no measurement is <span className="text-slate-200">unknown</span>, not passing.
+        </p>
 
-      {/* One block per gate rather than a three-column table. The panel's seat
-          is the run's meta track, which is a fraction of the window and narrow
-          at every window the app opens in — the table carried a `min-w-[36rem]`
-          that its own track could not honour, so the third column was clipped
-          and the escape hatch was a horizontal scrollbar inside a side panel.
-          Blocks read the same comparison at any width and cannot clip; the
-          before/now pair keeps its own two-column grid, which is the part that
-          is genuinely tabular. */}
-      <ul className="mt-4 space-y-2.5">
-        {rows.map(row => (
-          <li
-            key={row.name}
-            data-gate-row={row.name}
-            className="rounded-lg border border-white/5 bg-white/[0.02] p-3"
-          >
-            <div className="font-mono text-xs text-slate-200">{row.name}</div>
-            <div className="mt-0.5 font-mono text-[10px] text-slate-500 break-all">
-              {row.command}
-            </div>
-            <div className="mt-2.5 grid grid-cols-2 gap-3">
-              <div className="min-w-0">
-                <div className="mb-1 font-sans text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                  At the base commit
-                </div>
-                <StatusChip chip={baselineChip(row.baseline)} />
-                {row.baselineReason && (
-                  <p className="mt-1.5 font-sans text-[11px] leading-relaxed text-amber-400/80">
-                    {row.baselineReason}
-                  </p>
-                )}
+        {/* One block per gate rather than a three-column table. The panel's seat
+            is the run's meta track, which is a fraction of the window and narrow
+            at every window the app opens in — the table carried a `min-w-[36rem]`
+            that its own track could not honour, so the third column was clipped
+            and the escape hatch was a horizontal scrollbar inside a side panel.
+            Blocks read the same comparison at any width and cannot clip; the
+            before/now pair keeps its own two-column grid, which is the part that
+            is genuinely tabular. */}
+        <ul className="mt-4 space-y-2.5">
+          {rows.map(row => (
+            <li
+              key={row.name}
+              data-gate-row={row.name}
+              className="rounded-lg border border-white/5 bg-white/[0.02] p-3"
+            >
+              <div className="font-mono text-xs text-slate-200">{row.name}</div>
+              <div className="mt-0.5 font-mono text-[10px] text-slate-500 break-all">
+                {row.command}
               </div>
-              <div className="min-w-0">
-                <div className="mb-1 font-sans text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                  This run
-                </div>
-                <StatusChip chip={nowChip(row.now)} />
-                {row.baseline === 'failed' &&
-                  (row.now === 'excluded' || row.now === 'not-reported') && (
-                    <ExclusionNote row={row} baseSha={baseSha} />
+              <div className="mt-2.5 grid grid-cols-2 gap-3">
+                <div className="min-w-0">
+                  <div className="mb-1 font-sans text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    At the base commit
+                  </div>
+                  <StatusChip chip={baselineChip(row.baseline)} />
+                  {row.baselineReason && (
+                    <p className="mt-1.5 font-sans text-[11px] leading-relaxed text-amber-400/80">
+                      {row.baselineReason}
+                    </p>
                   )}
+                </div>
+                <div className="min-w-0">
+                  <div className="mb-1 font-sans text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    This run
+                  </div>
+                  <StatusChip chip={nowChip(row.now)} />
+                  {row.baseline === 'failed' &&
+                    (row.now === 'excluded' || row.now === 'not-reported') && (
+                      <ExclusionNote row={row} baseSha={baseSha} />
+                    )}
+                </div>
               </div>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
+            </li>
+          ))}
+        </ul>
+      </Disclosure>
+    </div>
   );
 }

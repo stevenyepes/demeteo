@@ -27,7 +27,9 @@ import {
   parseHarnessVerdict,
   readHarnessBaseline,
   readHarnessEvidence,
+  summarizeGateRows,
 } from './harnessVerdict';
+import type { GateRow } from './harnessVerdict';
 import type { HarnessBaseline, StepExecution } from '../types';
 
 /** Byte-for-byte what `build_environment_message` composes. */
@@ -256,6 +258,97 @@ describe('buildGateRows', () => {
     const rows = buildGateRows(BASELINE, evidence);
     expect(rows.find(r => r.name === 'unit')?.now).toBe('unrunnable');
     expect(rows.find(r => r.name === 'lint')?.now).toBe('not-reported');
+  });
+});
+
+function row(over: Partial<GateRow>): GateRow {
+  return {
+    name: 'unit',
+    command: 'cargo test',
+    baseline: 'passed',
+    baselineReason: null,
+    measuredAt: 1,
+    producer: 'node',
+    now: 'not-reported',
+    ...over,
+  };
+}
+
+const GREEN_WORDS = /pass|green|ok|healthy|all clear/i;
+
+describe('summarizeGateRows', () => {
+  const allNotReported = [row({ name: 'lint' }), row({ name: 'unit' })];
+  const allUnmeasured = [
+    row({ name: 'lint', baseline: 'not-measured', measuredAt: null, producer: null }),
+    row({ name: 'unit', baseline: 'not-measured', measuredAt: null, producer: null }),
+  ];
+  const oneFailed = [
+    row({ name: 'lint', now: 'excluded' }),
+    row({ name: 'unit', now: 'failed' }),
+    row({ name: 'fmt' }),
+  ];
+  const unrunnableNow = [row({ name: 'unit', now: 'unrunnable' }), row({ name: 'lint' })];
+  const unrunnableAtBase = [row({ name: 'unit', baseline: 'unrunnable' })];
+  const onlyExcluded = [row({ name: 'lint', baseline: 'failed', now: 'excluded' })];
+  const recorded = { baselineRecorded: true };
+
+  it('does not call a run with no failure reported green', () => {
+    const summary = summarizeGateRows(allNotReported, recorded);
+    expect(summary.tone).toBe('slate');
+    expect(summary.text).toBe('2 no failure reported');
+    expect(summary.text).not.toMatch(GREEN_WORDS);
+  });
+
+  it('names an unmeasured baseline instead of reading it as a pass', () => {
+    const summary = summarizeGateRows(allUnmeasured, recorded);
+    expect(summary.tone).toBe('slate');
+    expect(summary.text).toContain('not measured');
+    expect(summary.text).not.toMatch(GREEN_WORDS);
+  });
+
+  it('leaves "not measured" to the no-baseline chip when there is no record at all', () => {
+    const summary = summarizeGateRows(allUnmeasured, { baselineRecorded: false });
+    expect(summary.tone).toBe('slate');
+    expect(summary.text).toBe('2 no failure reported');
+    expect(summary.text).not.toContain('not measured');
+  });
+
+  it('turns ruby on a single failed gate', () => {
+    const summary = summarizeGateRows(oneFailed, recorded);
+    expect(summary.tone).toBe('ruby');
+    expect(summary.text).toContain('1 failed');
+    expect(summary.text).toBe('1 failed · 1 excluded · 1 no failure reported');
+  });
+
+  it('turns amber on a gate that could not run, now or at the base', () => {
+    expect(summarizeGateRows(unrunnableNow, recorded).tone).toBe('amber');
+    expect(summarizeGateRows(unrunnableNow, recorded).text).toContain('1 could not run');
+    expect(summarizeGateRows(unrunnableAtBase, recorded).tone).toBe('amber');
+  });
+
+  it('keeps an excluded-only run neutral and says what was excluded', () => {
+    const summary = summarizeGateRows(onlyExcluded, recorded);
+    expect(summary.tone).toBe('slate');
+    expect(summary.text).toContain('excluded');
+  });
+
+  it('summarizes nothing as an empty neutral string', () => {
+    expect(summarizeGateRows([], recorded)).toEqual({ text: '', tone: 'slate' });
+  });
+
+  it('never answers emerald', () => {
+    for (const rows of [
+      allNotReported,
+      allUnmeasured,
+      oneFailed,
+      unrunnableNow,
+      unrunnableAtBase,
+      onlyExcluded,
+      [],
+    ]) {
+      expect(summarizeGateRows(rows, recorded).tone).not.toBe('emerald');
+      expect(summarizeGateRows(rows, { baselineRecorded: false }).tone).not.toBe('emerald');
+    }
   });
 });
 

@@ -28,6 +28,8 @@ interface RunMetaColumnProps {
   bootstrapPhases: BootstrapPhaseView[];
   harnessBaseline: HarnessBaseline | null;
   harnessEvidence: HarnessEvidence | null;
+  harnessOpen: boolean;
+  onHarnessOpenChange: (open: boolean) => void;
 }
 
 /**
@@ -53,6 +55,8 @@ export function RunMetaColumn({
   bootstrapPhases,
   harnessBaseline,
   harnessEvidence,
+  harnessOpen,
+  onHarnessOpenChange,
 }: RunMetaColumnProps) {
   const remoteTerminal = remoteRun !== null && TERMINAL_STATUSES.includes(remoteRun.status);
   // A local run with nothing in its feed yet gets no panel at all: the push
@@ -125,7 +129,12 @@ export function RunMetaColumn({
       {/* Above the Graph|Timeline toggle so the verdict's evidence is in
           the same place whichever view is selected: it is a property of
           the run, not of one rendering of it. */}
-      <HarnessGateTable baseline={harnessBaseline} evidence={harnessEvidence} />
+      <HarnessGateTable
+        baseline={harnessBaseline}
+        evidence={harnessEvidence}
+        open={harnessOpen}
+        onOpenChange={onHarnessOpenChange}
+      />
     </div>
   );
 }

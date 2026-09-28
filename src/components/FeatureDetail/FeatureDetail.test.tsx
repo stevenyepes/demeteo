@@ -413,6 +413,7 @@ describe('FeatureDetail — observed assignments across run views', () => {
         fromOffset: 0,
       }),
     );
+    await userEvent.click(await screen.findByRole('button', { name: /Activity/ }));
     expect(await screen.findByText(/Agent codex/)).toBeVisible();
 
     // One card per node: the canvas shows the execution `statusByNode` picked,
@@ -549,6 +550,11 @@ describe('FeatureDetail — observed assignments across run views', () => {
       /Actual assignment for Detached work/,
     );
     expect(within(graphAssignment).getByTitle('Agent: remote-codex')).toBeInTheDocument();
+    // The graph owes nothing to a panel the user never opened.
+    expect(screen.getByRole('button', { name: /Activity/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
     expect(screen.queryByTitle('Agent: local-should-not-leak')).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('radio', { name: 'Timeline' }));

@@ -548,7 +548,7 @@ card's pulsing gate block, which was this item's worked example);
   *hides* the other — same gesture, opposite consequence, and `lib/activitySync.ts` is the
   only place a user can learn which they got. It takes the poll interval as an argument
   rather than spelling one, which is what made the old caption wrong.
-- **A tail that only runs while the panel is open also freezes the bootstrap stepper.**
+- **A tail that only polls while the panel is open also freezes the bootstrap stepper.**
   Stated in the affordance rather than fixed: a second poll to keep the stepper warm is
   precisely the duplicate this arrangement removes. Recorded in `useRemoteRun`, at the
   `onEvents` tap, which is where the wrong edit would be made.
@@ -679,12 +679,23 @@ to fire where nothing on screen accounted for it.
   down on `event.defaultPrevented`, because React delegates at the root and the graph
   canvas binds `Enter` on the selected node: one press used to toggle that node's
   selection off and then move focus into the inspector it had just emptied.
-- **`activityOpen` is deliberately not persisted** — the one preference dropped rather
-  than added. `ActivityPanel`'s tail runs only while the panel is open and is a
-  detached run's only source of bootstrap phases (Phase 5 recorded that coupling), so
-  a stored collapse would blank the feed and the stepper for every later remote run,
-  days after the click that caused it. Per-mount it costs one click. Revisit when that
-  poll no longer hangs off the disclosure.
+- **Activity and Harness open collapsed, and neither is persisted.** Stacked in the
+  meta chrome above the graph, two expanded panels starved the graph box of height in
+  a narrow or split window, and each already has a collapsed row that says enough:
+  Harness carries its verdict and baseline there. Activity has one exception, a
+  detached remote run that is not yet terminal: `ActivityPanel`'s tail polls only while
+  the panel is open and is that run's only source of bootstrap phases (Phase 5
+  recorded that coupling), so collapsing it by default would freeze the stepper. The
+  policy is `activityOpensByDefault` in `src/components/FeatureDetail/runMetaDefaults.ts`;
+  once the user clicks, their choice holds for that feature and nothing re-derives it,
+  even when the run finishes underneath. Both choices are kept with the feature they
+  were made on: detail→detail navigation (next/previous feature, a gate notification,
+  the remote-run inbox) reuses the mounted view, and a collapse carried to a live
+  detached run would outrank its default. Neither choice is stored — for Activity that
+  is the one preference dropped rather than added, because a stored collapse would
+  freeze the feed and the stepper for every later live remote run, days after the
+  click that caused it. Per feature it costs one click. Revisit when that poll no longer
+  hangs off the disclosure.
 - **`read()` answers from a pending write.** The store is one mount behind for the
   length of the debounce, and `ui.density` is read by two surfaces — choosing Compact
   in the project view and opening a feature inside 400 ms restored the value the user

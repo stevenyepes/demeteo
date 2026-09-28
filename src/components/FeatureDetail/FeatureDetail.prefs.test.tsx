@@ -38,7 +38,7 @@ import {
   runViewModePref,
   UI_PREF_WRITE_DEBOUNCE_MS,
 } from '../../lib/uiPrefs';
-import type { RunEvent, StepExecution } from '../../types';
+import type { HarnessBaseline, RemoteRunMirror, RunEvent, StepExecution } from '../../types';
 import type { WorkflowDefinitionV2 } from '../canvas/types';
 import { FeatureDetail } from './FeatureDetail';
 
@@ -47,6 +47,8 @@ vi.mock('react-markdown', () => ({
 }));
 
 const FEATURE_ID = 'f-1';
+/** The feature a detail→detail navigation lands on, in the same mount. */
+const OTHER_FEATURE_ID = 'f-2';
 
 const STEP: StepExecution = {
   id: 'se-1',
@@ -68,6 +70,22 @@ const GRAPH: WorkflowDefinitionV2 = {
   edges: [],
 };
 
+const LIVE_MIRROR: RemoteRunMirror = {
+  machine_id: 'machine-1',
+  run_id: 'runner-run-1',
+  project_id: null,
+  title: 'Detached run',
+  status: 'running',
+  error: null,
+  feature_id: FEATURE_ID,
+  pr_url: null,
+  pushed_branch: null,
+  last_offset: 0,
+  created_at: 0,
+  updated_at: 0,
+  last_notified_status: null,
+};
+
 const RUN_EVENT: RunEvent = {
   offset: 1,
   run_id: FEATURE_ID,
@@ -76,23 +94,45 @@ const RUN_EVENT: RunEvent = {
   created_at: 0,
 };
 
+/** The run's one step, whose status is what the header reads the run's as. */
+let runStep: StepExecution = STEP;
 /** The `app_session` rows this mount finds already written. */
 let stored: Record<string, string> = {};
 /** The workflow definition the feature's run was pinned to, or none. */
 let graphDef: WorkflowDefinitionV2 | null = null;
+/** The detached run behind the feature, or none for a local run. */
+let remoteMirror: RemoteRunMirror | null = null;
+/** What the runner answers on the next shadow refresh. */
+let refreshedMirror: RemoteRunMirror | null = null;
+/** The feature's `harness_baseline` column, or none measured. */
+let harnessBaseline: HarnessBaseline | undefined;
+/** What `OTHER_FEATURE_ID` answers with; unset, it is not asked for. */
+let otherFeature: {
+  runStep: StepExecution;
+  remoteMirror: RemoteRunMirror | null;
+  harnessBaseline?: HarnessBaseline;
+} | null = null;
 /** Pushes one row into the local run feed, which is what makes the activity
  *  log appear at all — `RunMetaColumn` withholds an empty one. */
 let emitRunEvent: (event: RunEvent) => void = () => {};
 
 function mockBackend() {
   vi.mocked(invoke).mockImplementation(((cmd: string, args?: Record<string, unknown>) => {
+    const other = args?.featureId === OTHER_FEATURE_ID ? otherFeature : null;
+    if (args?.featureId === OTHER_FEATURE_ID && other === null) {
+      return Promise.reject(new Error(`unexpected feature: ${OTHER_FEATURE_ID}`));
+    }
     switch (cmd) {
       case 'step_list_for_run':
-        return Promise.resolve([STEP]);
+        return Promise.resolve([other ? other.runStep : runStep]);
       case 'sync_session_get':
         return Promise.resolve(null);
       case 'feature_get':
-        return Promise.resolve({ id: FEATURE_ID, status: 'running' });
+        return Promise.resolve(
+          other
+            ? { id: OTHER_FEATURE_ID, status: 'running', harness_baseline: other.harnessBaseline }
+            : { id: FEATURE_ID, status: 'running', harness_baseline: harnessBaseline },
+        );
       case 'feature_workflow_graph':
         return Promise.resolve(graphDef);
       case 'get_app_session':
@@ -106,7 +146,11 @@ function mockBackend() {
       case 'step_attempts_list':
         return Promise.resolve([]);
       case 'remote_run_for_feature':
-        return Promise.resolve(null);
+        return Promise.resolve(other ? other.remoteMirror : remoteMirror);
+      case 'remote_refresh_run':
+        return Promise.resolve(refreshedMirror);
+      case 'remote_stream_events':
+        return Promise.resolve([]);
       default:
         return Promise.reject(new Error(`unexpected IPC command: ${cmd}`));
     }
@@ -126,7 +170,26 @@ function Seed() {
   useEffect(() => {
     navigate({ kind: 'detail', featureId: FEATURE_ID, featureTitle: 'Run' });
   }, [navigate]);
-  return <FeatureDetail />;
+  return (
+    <>
+      {/* Detail→detail, the way the next-feature shortcut and a gate
+          notification get there: `App` keys neither view, so this is the
+          same `FeatureDetailView` instance with a new `featureId`. */}
+      <button
+        type="button"
+        onClick={() => navigate({ kind: 'detail', featureId: OTHER_FEATURE_ID, featureTitle: 'Other' })}
+      >
+        Go to other feature
+      </button>
+      <button
+        type="button"
+        onClick={() => navigate({ kind: 'detail', featureId: FEATURE_ID, featureTitle: 'Run' })}
+      >
+        Go back to first feature
+      </button>
+      <FeatureDetail />
+    </>
+  );
 }
 
 function mount() {
@@ -165,8 +228,13 @@ async function settleWrites(): Promise<void> {
 }
 
 beforeEach(() => {
+  runStep = STEP;
   stored = {};
   graphDef = null;
+  remoteMirror = null;
+  refreshedMirror = null;
+  harnessBaseline = undefined;
+  otherFeature = null;
   emitRunEvent = () => {};
   mockBackend();
 });
@@ -184,20 +252,24 @@ describe('the run view restores what was stored for it', () => {
     expect(screen.getByRole('radio', { name: /compact/i })).toHaveAttribute('aria-checked', 'true');
   });
 
-  it('opens the activity log whatever the last mount left it on', async () => {
+  it('opens the activity log collapsed, whatever the last mount left it on', async () => {
     mount();
     await screen.findByRole('list', { name: 'Run steps' });
     await act(async () => emitRunEvent(RUN_EVENT));
 
-    await userEvent.click(await screen.findByRole('button', { name: /Activity/ }));
-    expect(screen.getByRole('button', { name: /Activity/ })).toHaveAttribute(
+    expect(await screen.findByRole('button', { name: /Activity/ })).toHaveAttribute(
       'aria-expanded',
       'false',
     );
+    await userEvent.click(screen.getByRole('button', { name: /Activity/ }));
+    expect(screen.getByRole('button', { name: /Activity/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
     await settleWrites();
-    // Collapsing stops `ActivityPanel`'s remote tail, and that tail is a
-    // detached run's only source of bootstrap phases — so this one deliberately
-    // does not survive the mount, and stores nothing that could outlive it.
+    // A stored collapse would reach every later detached run too, and there it
+    // stops `ActivityPanel`'s remote tail — that run's only source of bootstrap
+    // phases. So the choice lasts for the feature and stores nothing that outlives it.
     expect(sessionWrites()).toEqual([]);
 
     cleanup();
@@ -207,7 +279,92 @@ describe('the run view restores what was stored for it', () => {
 
     expect(await screen.findByRole('button', { name: /Activity/ })).toHaveAttribute(
       'aria-expanded',
+      'false',
+    );
+  });
+
+  it('opens the activity log of a live detached run without a click', async () => {
+    runStep = { ...STEP, status: 'running' };
+    remoteMirror = LIVE_MIRROR;
+    mount();
+
+    // Collapsed until the mirror lands, then opened by the default alone.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Activity/ })).toHaveAttribute(
+        'aria-expanded',
+        'true',
+      ),
+    );
+  });
+
+  it('keeps a finished feature’s activity log collapsed behind a stale running mirror', async () => {
+    remoteMirror = LIVE_MIRROR;
+    mount();
+
+    // The mirror has resolved and still reads non-terminal.
+    expect(await screen.findByText(/Status last synced/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Activity/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+  });
+
+  it('keeps the user’s activity choice when the run under it finishes', async () => {
+    runStep = { ...STEP, status: 'running' };
+    remoteMirror = LIVE_MIRROR;
+    refreshedMirror = { ...LIVE_MIRROR, status: 'completed', updated_at: 1 };
+    mount();
+
+    // Open for a live detached run, but only once its mirror has landed.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Activity/ })).toHaveAttribute(
+        'aria-expanded',
+        'true',
+      ),
+    );
+    // Collapse and reopen: a choice that matches the finished run's default
+    // could not tell "kept" from "re-derived".
+    await userEvent.click(screen.getByRole('button', { name: /Activity/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Activity/ }));
+
+    // Becoming visible ticks the shadow poll at once (`useRemoteRun`).
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(await screen.findByText(/Final state synced/)).toBeInTheDocument();
+
+    expect(screen.getByRole('button', { name: /Activity/ })).toHaveAttribute(
+      'aria-expanded',
       'true',
+    );
+  });
+
+  it('opens the harness gates collapsed, whatever the last mount left them on', async () => {
+    harnessBaseline = {
+      base_sha: 'abcdef0123456789',
+      harnesses: [
+        { name: 'unit', command: 'npm test', exit_ok: true, measured_at: 1, producer: 'node' },
+      ],
+    };
+    mount();
+
+    expect(await screen.findByRole('button', { name: /Harness gates/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    await userEvent.click(screen.getByRole('button', { name: /Harness gates/ }));
+    expect(screen.getByRole('button', { name: /Harness gates/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    await settleWrites();
+    expect(sessionWrites()).toEqual([]);
+
+    cleanup();
+    mount();
+    expect(await screen.findByRole('button', { name: /Harness gates/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
     );
   });
 
@@ -239,6 +396,102 @@ describe('the run view restores what was stored for it', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Run view' })).not.toBeInTheDocument();
     await settleWrites();
     expect(sessionWrites()).toEqual([]);
+  });
+});
+
+describe('a choice made on one feature stays on that feature', () => {
+  const BASELINE: HarnessBaseline = {
+    base_sha: 'abcdef0123456789',
+    harnesses: [
+      { name: 'unit', command: 'npm test', exit_ok: true, measured_at: 1, producer: 'node' },
+    ],
+  };
+  const OTHER_LIVE_MIRROR: RemoteRunMirror = {
+    ...LIVE_MIRROR,
+    run_id: 'runner-run-2',
+    feature_id: OTHER_FEATURE_ID,
+  };
+
+  async function goTo(name: RegExp) {
+    await userEvent.click(screen.getByRole('button', { name }));
+  }
+
+  it('opens a live detached run’s activity after a collapse on a local feature', async () => {
+    otherFeature = {
+      runStep: { ...STEP, feature_id: OTHER_FEATURE_ID, status: 'running' },
+      remoteMirror: OTHER_LIVE_MIRROR,
+    };
+    mount();
+    await screen.findByRole('list', { name: 'Run steps' });
+    await act(async () => emitRunEvent(RUN_EVENT));
+
+    // Open then close, so the recorded choice is a collapse rather than the
+    // collapsed default this local run already opens with.
+    await userEvent.click(await screen.findByRole('button', { name: /Activity/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Activity/ }));
+    expect(screen.getByRole('button', { name: /Activity/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+
+    await goTo(/Go to other feature/);
+
+    // Carried across, that collapse would stop the other run's remote tail —
+    // its only source of bootstrap phases.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Activity/ })).toHaveAttribute(
+        'aria-expanded',
+        'true',
+      ),
+    );
+  });
+
+  it('opens the next feature’s harness gates collapsed after an expand', async () => {
+    harnessBaseline = BASELINE;
+    otherFeature = {
+      runStep: { ...STEP, feature_id: OTHER_FEATURE_ID },
+      remoteMirror: null,
+      harnessBaseline: { ...BASELINE, base_sha: '0123456789abcdef' },
+    };
+    mount();
+
+    await userEvent.click(await screen.findByRole('button', { name: /Harness gates/ }));
+    expect(screen.getByRole('button', { name: /Harness gates/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+
+    await goTo(/Go to other feature/);
+    await screen.findByText(/0123456/);
+
+    expect(screen.getByRole('button', { name: /Harness gates/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+  });
+
+  it('finds a feature’s own choice again on return, if none was made in between', async () => {
+    harnessBaseline = BASELINE;
+    otherFeature = {
+      runStep: { ...STEP, feature_id: OTHER_FEATURE_ID },
+      remoteMirror: null,
+      harnessBaseline: { ...BASELINE, base_sha: '0123456789abcdef' },
+    };
+    mount();
+
+    await userEvent.click(await screen.findByRole('button', { name: /Harness gates/ }));
+    await goTo(/Go to other feature/);
+    await screen.findByText(/0123456/);
+    await goTo(/Go back to first feature/);
+    await screen.findByText(/abcdef0/);
+
+    // One slot per panel, not one per feature: the visit to the other feature
+    // only read its default, so the slot still holds this feature's expand.
+    // A click there would have replaced it, and this would read the default.
+    expect(screen.getByRole('button', { name: /Harness gates/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
   });
 });
 

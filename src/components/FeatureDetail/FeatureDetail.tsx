@@ -33,6 +33,7 @@ import { ReplayModal } from './ReplayModal';
 import { RunGraphPanel } from './RunGraphPanel';
 import { RunMetaColumn } from './RunMetaColumn';
 import { RunPanes } from './RunPanes';
+import { activityOpensByDefault } from './runMetaDefaults';
 import { StepInspector } from './StepInspector';
 import { StepTimeline } from './StepTimeline';
 import { SyncPanel } from './sync/SyncPanel';
@@ -62,6 +63,12 @@ type DetailView = Extract<AppView, { kind: 'detail' }>;
 interface FeatureDetailViewProps {
   view: DetailView;
   navigate: (view: AppView, mode?: NavigationMode) => void;
+}
+
+/** A disclosure the user opened or closed, and the feature they did it on. */
+interface FeatureScopedChoice {
+  featureId: string;
+  open: boolean;
 }
 
 /**
@@ -233,15 +240,47 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
    *  deliberately keeps `setState` out of (UI_REDESIGN_PLAN §4.1). */
   const [chosenInspectorWidth, setChosenInspectorWidth] = usePersistedPref(inspectorWidthPref, null);
   const [density, setDensity] = usePersistedPref(densityPref, DEFAULT_DENSITY);
-  /** Open by default, and deliberately *not* persisted alongside the rest.
-   *  `ActivityPanel`'s remote tail runs only while the panel is open, and that
-   *  tail is the only source of a detached run's bootstrap phases — so a
-   *  collapse that survived the mount would leave every future remote run with
-   *  a blank feed and no stepper, days after the click that caused it, with
-   *  nothing on screen to connect the two. Per-mount it costs one click; stored
-   *  it is a silent break. Persist this only once that poll no longer hangs off
-   *  the disclosure (`useRemoteRun`, at the `onEvents` tap). */
-  const [activityOpen, setActivityOpen] = useState(true);
+  /** `null` until the user clicks, and then theirs for this feature: once
+   *  chosen nothing re-derives it, even when the run finishes under it. Until
+   *  then `activityOpensByDefault` decides — collapsed, because stacked meta chrome
+   *  starves the graph box of height in a narrow window, except for a live
+   *  detached run, for the reason recorded in `runMetaDefaults.ts`.
+   *
+   *  The choice carries the `featureId` it was made on and reads as unset for
+   *  any other. `App` keys neither this view nor `FeatureDetail`, so the
+   *  next-feature shortcut, a gate notification and the remote-run inbox all
+   *  reach another feature in this same mount — where a carried collapse would
+   *  outrank that feature's live-detached default. Scoped at read time, as
+   *  `useRemoteRun`'s `runKey` is, rather than reset by an effect.
+   *
+   *  Deliberately *not* persisted alongside the rest. `ActivityPanel`'s remote
+   *  tail polls only while the panel is open, and that tail is the only source
+   *  of a detached run's bootstrap phases — so a collapse that survived the
+   *  mount would leave every future remote run's feed and stepper frozen at
+   *  their first fetch, days after the click that caused it, with nothing on
+   *  screen to connect the two. Persist this only once that poll no longer hangs off the
+   *  disclosure (`useRemoteRun`, at the `onEvents` tap). */
+  const [activityChoice, setActivityChoice] = useState<FeatureScopedChoice | null>(null);
+  const activityOpen =
+    activityChoice?.featureId === featureId
+      ? activityChoice.open
+      : activityOpensByDefault({
+          remoteStatus: remote.remoteRun?.status ?? null,
+          featureStatus: run.status,
+        });
+  const onActivityOpenChange = useCallback(
+    (open: boolean) => setActivityChoice({ featureId, open }),
+    [featureId],
+  );
+  /** Collapsed on every feature it opens on, scoped as `activityChoice` is: it
+   *  sits in the meta chrome above the graph, and its collapsed row already
+   *  carries the verdict and the baseline. */
+  const [harnessChoice, setHarnessChoice] = useState<FeatureScopedChoice | null>(null);
+  const harnessOpen = harnessChoice?.featureId === featureId ? harnessChoice.open : false;
+  const onHarnessOpenChange = useCallback(
+    (open: boolean) => setHarnessChoice({ featureId, open }),
+    [featureId],
+  );
   /** Not persisted, for `activityOpen`'s reason: a pane left on Sync days ago
    *  should not be what hides the step inspector on the next run. */
   const [inspectorPane, setInspectorPane] = useState<InspectorPane>('step');
@@ -474,7 +513,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       remoteMachineName={remote.remoteMachineName}
       runEvents={panelRunEvents}
       activityOpen={activityOpen}
-      onActivityOpenChange={setActivityOpen}
+      onActivityOpenChange={onActivityOpenChange}
       onRunEvents={remote.handleRunEvents}
       onRemoteResolved={remote.refreshRemoteRun}
       runStatus={run.status}
@@ -482,6 +521,8 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       bootstrapPhases={bootstrap.orderedBootstrapPhases}
       harnessBaseline={run.harnessBaseline}
       harnessEvidence={run.harnessEvidence}
+      harnessOpen={harnessOpen}
+      onHarnessOpenChange={onHarnessOpenChange}
     />
   );
 

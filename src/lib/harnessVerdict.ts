@@ -32,6 +32,7 @@
 // green.**
 
 import { ENVIRONMENT_ERROR_PREFIX } from './features';
+import type { RunStatusTone } from './runStatus';
 import type { HarnessBaseline, HarnessBaselineRun, StepExecution } from '../types';
 
 /** The engine's terminal "this machine cannot run the command" failure, split
@@ -271,6 +272,55 @@ export function buildGateRows(
     });
   }
   return rows;
+}
+
+/** The one-line verdict the collapsed gate table shows in place of its rows. */
+export interface GateSummary {
+  text: string;
+  tone: RunStatusTone;
+}
+
+const NOW_BUCKETS: ReadonlyArray<[GateNowStatus, string]> = [
+  ['failed', 'failed'],
+  ['excluded', 'excluded'],
+  ['unrunnable', 'could not run'],
+  ['not-reported', 'no failure reported'],
+];
+
+/**
+ * Fold the gate rows into one line for a collapsed panel.
+ *
+ * The tone is never `emerald`: the engine records a gate only when it fails, so
+ * the best this can say is "no failure reported" — the "absent is not green"
+ * invariant in the `HarnessGateTable.tsx` header. A row that summarized to
+ * green would make the claim the expanded table refuses to.
+ *
+ * "not measured" is appended only when a baseline record exists and covered
+ * none of these gates. With no record at all every row is unmeasured by
+ * definition, and the panel's "no baseline measured" chip already says so —
+ * repeating it spends the width the collapsed row does not have.
+ */
+export function summarizeGateRows(
+  rows: GateRow[],
+  { baselineRecorded }: { baselineRecorded: boolean },
+): GateSummary {
+  if (rows.length === 0) return { text: '', tone: 'slate' };
+
+  const parts = NOW_BUCKETS.flatMap(([status, label]) => {
+    const count = rows.filter(r => r.now === status).length;
+    return count > 0 ? [`${count} ${label}`] : [];
+  });
+  if (baselineRecorded && rows.every(r => r.baseline === 'not-measured')) {
+    parts.push('not measured');
+  }
+
+  const tone: RunStatusTone = rows.some(r => r.now === 'failed')
+    ? 'ruby'
+    : rows.some(r => r.now === 'unrunnable' || r.baseline === 'unrunnable')
+      ? 'amber'
+      : 'slate';
+
+  return { text: parts.join(' · '), tone };
 }
 
 /**
