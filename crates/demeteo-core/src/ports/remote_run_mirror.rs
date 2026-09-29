@@ -81,3 +81,15 @@ pub trait RemoteRunMirrorPort: Send + Sync {
     fn get(&self, machine_id: &str, run_id: &str) -> Result<Option<RemoteRunMirror>, String>;
     fn list(&self) -> Result<Vec<RemoteRunMirror>, String>;
 }
+
+/// The `release_feature_cache` RPC of the `demeteo-runner` on `machine_id`,
+/// for a run this client submitted there.
+#[async_trait::async_trait]
+pub trait RunnerCachePort: Send + Sync {
+    async fn release_feature_cache(
+        &self,
+        machine_id: &str,
+        run_id: &str,
+        reason: crate::domain::runner_cache_release::CacheReleaseReason,
+    ) -> Result<(), String>;
+}

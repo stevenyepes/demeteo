@@ -1,9 +1,11 @@
+use crate::domain::cache_release::releasable_after_mr_poll;
 use crate::domain::ids::FeatureId;
-use crate::domain::models::{Notification, NotificationKind};
+use crate::domain::models::{Feature, Notification, NotificationKind};
 use crate::ports::db::{FeaturePatch, FeatureRepository, NotificationRepository};
 use crate::ports::discovery::{DiscoveryPort, TicketPort};
 use crate::ports::mr_publisher::MrPublisher;
 use crate::ports::notification::{DomainEvent, NotificationPort};
+use crate::ports::worktree_ops::FeatureCachePort;
 use std::sync::Arc;
 
 /// Background MR-state monitor — polls `MrPublisher::fetch_mr_state`
@@ -19,15 +21,18 @@ use std::sync::Arc;
 /// single call site below without changing any other layer.
 const MR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(120);
 
-pub fn start_mr_monitor(
-    features: Arc<dyn FeatureRepository>,
-    mr_publisher: Arc<dyn MrPublisher>,
-    notifications: Arc<dyn NotificationRepository>,
-    notif: Arc<dyn NotificationPort>,
-    tickets: Arc<dyn TicketPort>,
-    discoveries: Arc<dyn DiscoveryPort>,
-    runtime: &tokio::runtime::Handle,
-) {
+/// Everything one poll reads or writes.
+pub struct MrMonitorPorts {
+    pub features: Arc<dyn FeatureRepository>,
+    pub mr_publisher: Arc<dyn MrPublisher>,
+    pub notifications: Arc<dyn NotificationRepository>,
+    pub notif: Arc<dyn NotificationPort>,
+    pub tickets: Arc<dyn TicketPort>,
+    pub discoveries: Arc<dyn DiscoveryPort>,
+    pub cache: Arc<dyn FeatureCachePort>,
+}
+
+pub fn start_mr_monitor(ports: MrMonitorPorts, runtime: &tokio::runtime::Handle) {
     runtime.spawn(async move {
         let mut interval = tokio::time::interval(MR_POLL_INTERVAL);
         // Skip the immediate first tick so app launch doesn't fire
@@ -36,30 +41,20 @@ pub fn start_mr_monitor(
         loop {
             interval.tick().await;
             eprintln!("[MrMonitor] tick — polling open MRs");
-            if let Err(e) = check_mr_states(
-                &*features,
-                &*mr_publisher,
-                &*notifications,
-                &*notif,
-                &*tickets,
-                &*discoveries,
-            )
-            .await
-            {
+            if let Err(e) = check_mr_states(&ports).await {
                 eprintln!("[MrMonitor] poll error: {}", e);
             }
         }
     });
 }
 
-async fn check_mr_states(
-    features: &dyn FeatureRepository,
-    mr_publisher: &dyn MrPublisher,
-    notifications: &dyn NotificationRepository,
-    notif: &dyn NotificationPort,
-    tickets: &dyn TicketPort,
-    discoveries: &dyn DiscoveryPort,
-) -> Result<(), String> {
+async fn check_mr_states(ports: &MrMonitorPorts) -> Result<(), String> {
+    let features = &*ports.features;
+    let mr_publisher = &*ports.mr_publisher;
+    let notifications = &*ports.notifications;
+    let notif = &*ports.notif;
+    let tickets = &*ports.tickets;
+    let discoveries = &*ports.discoveries;
     let open = features.list_with_open_mr()?;
     eprintln!("[MrMonitor] found {} feature(s) with open MR", open.len());
     for feature in &open {
@@ -82,25 +77,27 @@ async fn check_mr_states(
             }
         };
 
-        if new_state == "merged" {
-            eprintln!(
-                "[MrMonitor] feature {} transitioned to merged — recording",
-                feature.id.0
-            );
-            record_merged(feature, &new_state, features, notifications, notif)?;
-        } else {
-            eprintln!("[MrMonitor] feature {} state = {}", feature.id.0, new_state);
-        }
-        if new_state != "open" && new_state != "merged" {
-            // `closed` / `draft` aren't notifications, just keep
-            // the column in sync so the UI badge reflects reality.
-            let _ = features.update(
-                &feature.id,
-                &FeaturePatch {
-                    mr_state: Some(Some(new_state.clone())),
-                    ..Default::default()
-                },
-            );
+        eprintln!("[MrMonitor] feature {} state = {}", feature.id.0, new_state);
+        let recorded = match new_state.as_str() {
+            "open" => false,
+            "merged" => {
+                record_mr_state(feature, &new_state, features, notifications, notif)?;
+                true
+            }
+            _ => record_mr_state(feature, &new_state, features, notifications, notif).is_ok(),
+        };
+
+        if recorded && releasable_after_mr_poll(&feature.status, &new_state) {
+            let settled = Feature {
+                mr_state: Some(new_state.clone()),
+                ..feature.clone()
+            };
+            if let Err(e) = ports.cache.release(&settled).await {
+                eprintln!(
+                    "[MrMonitor] dependency cache release failed for feature {}: {}",
+                    feature.id.0, e
+                );
+            }
         }
 
         // Placed here rather than inside `record_merged` because `closed`
@@ -129,8 +126,31 @@ async fn check_mr_states(
     Ok(())
 }
 
+/// Record a polled PR state on `feature`'s row: a merge completes the feature
+/// and notifies once, any other state only updates the badge. The one writer
+/// of a settled PR, for the monitor and for a runner told of a merge its own
+/// monitor could not see.
+pub fn record_mr_state(
+    feature: &Feature,
+    new_state: &str,
+    features: &dyn FeatureRepository,
+    notifications: &dyn NotificationRepository,
+    notif: &dyn NotificationPort,
+) -> Result<(), String> {
+    if new_state == "merged" {
+        return record_merged(feature, new_state, features, notifications, notif);
+    }
+    features.update(
+        &feature.id,
+        &FeaturePatch {
+            mr_state: Some(Some(new_state.to_string())),
+            ..Default::default()
+        },
+    )
+}
+
 fn record_merged(
-    feature: &crate::domain::models::Feature,
+    feature: &Feature,
     new_state: &str,
     features: &dyn FeatureRepository,
     notifications: &dyn NotificationRepository,

@@ -147,7 +147,7 @@ impl ExecutionDriver {
         {
             Ok(p) => p,
             Err(e) => {
-                return StepOutcome::Environmental(format!(
+                return StepOutcome::provision_failed(format!(
                     "agent step worktree provision failed ({}): {}",
                     subtask_id, e
                 ));

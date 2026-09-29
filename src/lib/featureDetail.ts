@@ -189,3 +189,63 @@ export async function cleanupFeature(input: {
     force: input.force,
   });
 }
+
+/** Mirrors the Rust `SweepReport` returned by `feature_cache_sweep`. */
+export interface CacheSweepReport {
+  dry_run: boolean;
+  projects: CacheSweepProject[];
+}
+
+export interface CacheSweepProject {
+  project_id: string;
+  clone_dir: string | null;
+  error: string | null;
+  worktree_list_error: string | null;
+  entries: CacheSweepEntry[];
+}
+
+/** Mirrors the Rust `cache_sweep::Reason`, serialized as its snake_case name. */
+export type CacheSweepReason =
+  | "feature_released"
+  | "feature_idle"
+  | "feature_may_run"
+  | "default_branch_cache"
+  | "session_holds_worktree"
+  | "sessions_recent"
+  | "sessions_idle"
+  | "sessions_unknown"
+  | "no_known_feature"
+  | "registered"
+  | "registration_unknown"
+  | "within_grace"
+  | "age_unknown"
+  | "unregistered"
+  | "other_repository";
+
+/** `text` is the backend's own wording for `code`, sent so no copy of it lives here. */
+export interface CacheSweepReasonView {
+  code: CacheSweepReason;
+  text: string;
+}
+
+export type CacheSweepVerdict = "delete" | "keep" | "unknown";
+
+export interface CacheSweepEntry {
+  path: string;
+  kind: "cache" | "worktree";
+  verdict: CacheSweepVerdict;
+  reason: CacheSweepReasonView;
+  outcome:
+    | { status: "deleted" }
+    | { status: "failed"; detail: string }
+    | { status: "spared"; detail: CacheSweepReasonView }
+    | null;
+}
+
+/**
+ * Judge every leaked feature cache and worktree beside each project's clone;
+ * `dryRun` reports the verdicts without deleting anything.
+ */
+export async function sweepFeatureCaches(dryRun: boolean): Promise<CacheSweepReport> {
+  return invoke<CacheSweepReport>("feature_cache_sweep", { dryRun });
+}

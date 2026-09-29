@@ -3,7 +3,8 @@ use crate::domain::branch_listing::BranchOption;
 use crate::domain::feature_origin::Refspec;
 use crate::domain::models::WorktreeInfo;
 use crate::paths;
-use crate::ports::worktree_ops::{TerminalWorktreeCreated, TerminalWorktreeRequest};
+use crate::ports::cache_reclaim::CacheReclaimPort;
+use crate::ports::worktree_ops::{BranchDeleted, TerminalWorktreeCreated, TerminalWorktreeRequest};
 use std::path::{Component, Path, PathBuf};
 
 impl GitOpsHelper {
@@ -661,8 +662,9 @@ impl GitOpsHelper {
             &wt_dir,
             &paths::feature_cache_dir(repo_dir, feature_branch),
             paths::targets_windows_host(machine_str),
+            self.cache_reclaim.as_deref(),
         )
-        .await;
+        .await?;
 
         Ok(wt_dir)
     }
@@ -744,8 +746,9 @@ impl GitOpsHelper {
                 &wt_dir,
                 cache,
                 paths::targets_windows_host(machine_str),
+                self.cache_reclaim.as_deref(),
             )
-            .await;
+            .await?;
         }
 
         Ok(wt_dir)
@@ -865,15 +868,21 @@ impl GitOpsHelper {
         machine_id: Option<&str>,
         repo_dir: &str,
         branch: &str,
-    ) -> Result<(), String> {
+    ) -> Result<BranchDeleted, String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let safe_dir = paths::shell_escape_posix(repo_dir);
         let safe_branch = paths::shell_escape_posix(branch);
 
-        // If the repo directory is gone, there's nothing to do — git would
-        // fail with "fatal: cannot change to '<path>': No such file or directory".
-        if !Path::new(repo_dir).exists() {
-            return Ok(());
+        // Needs no git, so it runs even when the clone below is gone: the
+        // cache is a sibling of the clone, not inside it, and outlives it.
+        let cache_release = self
+            .release_feature_cache(machine_id, repo_dir, branch)
+            .await;
+
+        // Asked of the machine the clone is on: a host `Path::exists` is false
+        // for every remote project's path.
+        if self.exec.get_metadata(machine_str, repo_dir).await.is_err() {
+            return Ok(BranchDeleted { cache_release });
         }
 
         // Order matters: a branch checked out in a worktree cannot be
@@ -916,24 +925,30 @@ impl GitOpsHelper {
         );
         let _ = self.exec.run_command(machine_str, &subtask_cmd).await;
 
-        // 4. Drop this feature's dependency-cache root. It is per-feature (see
-        //    `paths::feature_cache_dir`), so nothing else can be using it once
-        //    the feature is gone — and it holds a whole `node_modules` /
-        //    `target`, which would otherwise leak once per feature, forever.
-        let _ = delete_worktree_residue(
-            self.exec.as_ref(),
-            machine_str,
-            &paths::feature_cache_dir(repo_dir, branch),
-        )
-        .await;
-
-        // 5. Delete the feature branch itself.
+        // 4. Delete the feature branch itself.
         self.exec
             .run_program(machine_str, git_request(repo_dir, ["branch", "-D", branch]))
             .await
             .map_err(|e| format!("Failed to delete branch '{}': {}", branch, e))?;
 
-        Ok(())
+        Ok(BranchDeleted { cache_release })
+    }
+
+    /// The per-feature half of the cache layout (see
+    /// [`paths::feature_cache_dir`]): nothing but this feature reads it, so
+    /// once the feature can no longer run it is tens of gigabytes of garbage.
+    pub async fn release_feature_cache(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        feature_branch: &str,
+    ) -> Result<(), String> {
+        delete_worktree_residue(
+            self.exec.as_ref(),
+            machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE),
+            &paths::feature_cache_dir(repo_dir, feature_branch),
+        )
+        .await
     }
 
     /// Returns `true` when the branch HEAD has advanced past `base_ref` —
@@ -1517,7 +1532,10 @@ fn validate_git_branch_name(branch: &str) -> Result<(), String> {
 /// nor the platform arm is observable from the filesystem afterwards, so
 /// neither is reachable from a test spelled inside this `async fn`.
 ///
-/// Best-effort throughout: a failure here costs a re-install, not the step.
+/// Best-effort throughout — a failure here costs a re-install, not the step —
+/// with one exception: a *new* cache on a disk without room for it is `Err`,
+/// after one reclaim, because the build it would seed dies halfway on `ENOSPC`
+/// and reads as the agent's fault ([`crate::domain::seed_space`]).
 pub(super) async fn share_dependency_caches(
     exec: &dyn crate::ports::execution::ExecutionPort,
     machine_id: &str,
@@ -1525,14 +1543,15 @@ pub(super) async fn share_dependency_caches(
     wt_dir: &str,
     cache_dir: &str,
     windows_host: bool,
-) {
+    reclaim: Option<&dyn CacheReclaimPort>,
+) -> Result<(), String> {
     let probed = exec
         .run_program(machine_id, shareable_cache_probe(repo_dir))
         .await
         .unwrap_or_default();
     let names = crate::domain::dependency_cache::shareable_cache_paths(&probed);
     if names.is_empty() {
-        return;
+        return Ok(());
     }
 
     let excluded = record_cache_exclusions(exec, machine_id, repo_dir, &names).await;
@@ -1546,14 +1565,85 @@ pub(super) async fn share_dependency_caches(
     }
 
     if !may_link_caches(excluded.is_ok(), windows_host) {
-        return;
+        return Ok(());
     }
+    ensure_seed_space(exec, machine_id, cache_dir, reclaim).await?;
     let _ = exec
         .run_command(
             machine_id,
             &link_dependency_caches_cmd(repo_dir, wt_dir, cache_dir, &names),
         )
         .await;
+    Ok(())
+}
+
+/// Stand between [`share_dependency_caches`] and a seed the disk has no room
+/// for. The verdicts are [`seed_space`](crate::domain::seed_space)'s.
+async fn ensure_seed_space(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+    cache_dir: &str,
+    reclaim: Option<&dyn CacheReclaimPort>,
+) -> Result<(), String> {
+    use crate::domain::seed_space::{seed_probe, seed_space, SeedProbe, SeedSite, SeedSpace};
+
+    let existing = nearest_existing(exec, machine_id, cache_dir).await;
+    let probed = match seed_probe(cache_dir, existing.as_deref()) {
+        SeedProbe::Probe(probed) => probed,
+        SeedProbe::AlreadySeeded | SeedProbe::Unknown => return Ok(()),
+    };
+    let site = SeedSite {
+        machine: machine_id,
+        cache_dir,
+        probed,
+    };
+    let mut reclaim_spent = reclaim.is_none();
+    loop {
+        let free = match exec.free_space_bytes(machine_id, probed).await {
+            Ok(free) => Some(free),
+            Err(error) => {
+                tracing::warn!(
+                    machine = %machine_id,
+                    path = %probed,
+                    error = %error,
+                    "free space could not be read; seeding the dependency cache unchecked",
+                );
+                None
+            }
+        };
+        match seed_space(&site, free, reclaim_spent) {
+            SeedSpace::Proceed => return Ok(()),
+            SeedSpace::Refuse(message) => return Err(message),
+            SeedSpace::ReclaimThenRecheck => {
+                if let Some(reclaim) = reclaim {
+                    if let Err(error) = reclaim.reclaim().await {
+                        tracing::warn!(machine = %machine_id, error = %error, "cache reclaim failed");
+                    }
+                }
+                reclaim_spent = true;
+            }
+        }
+    }
+}
+
+/// The first of `path` and its ancestors that exists on the machine, or `None`
+/// once one of them cannot be read at all — past a dead transport, every
+/// ancestor would look missing too.
+async fn nearest_existing(
+    exec: &dyn crate::ports::execution::ExecutionPort,
+    machine_id: &str,
+    path: &str,
+) -> Option<String> {
+    for candidate in crate::domain::seed_space::ancestor_candidates(path) {
+        match exec.get_metadata(machine_id, &candidate).await {
+            Ok(_) => return Some(candidate),
+            Err(error) if error.starts_with(crate::ports::execution::TRANSPORT_ERROR_PREFIX) => {
+                return None
+            }
+            Err(_) => {}
+        }
+    }
+    None
 }
 
 /// Whether step 3 of [`share_dependency_caches`] may run.

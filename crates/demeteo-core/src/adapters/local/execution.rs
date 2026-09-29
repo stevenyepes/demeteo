@@ -248,6 +248,13 @@ impl ExecutionPort for LocalSubprocessAdapter {
         .map_err(|e| format!("blocking task panicked: {}", e))?
     }
 
+    async fn free_space_bytes(&self, _machine_id: &str, path: &str) -> Result<u64, String> {
+        let path = path.to_string();
+        tokio::task::spawn_blocking(move || super::disk_free::available_bytes(&path))
+            .await
+            .map_err(|e| format!("blocking task panicked: {}", e))?
+    }
+
     async fn list_dir(&self, _machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String> {
         let path = path.to_string();
         tokio::task::spawn_blocking(move || -> Result<Vec<SftpEntry>, String> {

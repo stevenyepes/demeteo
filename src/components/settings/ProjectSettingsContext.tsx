@@ -5,6 +5,7 @@ import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
 import { reconcileDefaultWorkflow } from '../../lib/workflowDefault';
 import { DEFAULT_EFFORT, reconcileEffort } from '../../lib/effortLevels';
 import { formatError } from '../../lib/errors';
+import { parseCacheIdleTtlDays } from '../../lib/cacheIdleTtl';
 import { useErrorBus } from '../../lib/errorBus';
 import {
   checkReposDirty,
@@ -120,6 +121,9 @@ interface SettingsCtx {
   prTemplate: string; setPrTemplate: (v: string) => void;
   conflictPolicy: string; setConflictPolicy: (v: string) => void;
   featureLifecycle: string; setFeatureLifecycle: (v: string) => void;
+  /** The field's raw text: `''` persists as `null` (the engine default),
+   *  `'0'` as `0` (never release on idleness). */
+  cacheIdleTtlDays: string; setCacheIdleTtlDays: (v: string) => void;
   defaultAgentKind: string; setDefaultAgentKind: (v: string) => void;
   defaultModel: string; setDefaultModel: (v: string) => void;
   /** Project-wide default reasoning effort. `''` = no project default, which
@@ -303,6 +307,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [prTemplate, setPrTemplate] = useState('');
   const [conflictPolicy, setConflictPolicy] = useState('always_gate');
   const [featureLifecycle, setFeatureLifecycle] = useState('archive');
+  const [cacheIdleTtlDays, setCacheIdleTtlDays] = useState('');
 
   const [dirtyWarningRepos, setDirtyWarningRepos] = useState<RepoDirtyStatus[]>([]);
   const [pendingActionAfterConfirm, setPendingActionAfterConfirm] = useState<'save' | 'delete' | null>(null);
@@ -633,6 +638,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setPrTemplate(res.worktree_strategy.pr_template || '');
           setConflictPolicy(res.conflict_policy);
           setFeatureLifecycle(res.feature_lifecycle);
+          setCacheIdleTtlDays(res.cache_idle_ttl_days != null ? String(res.cache_idle_ttl_days) : '');
           setDefaultAgentKind(res.default_agent_kind || '');
           setDefaultModel(res.default_model || '');
           setDefaultEffort(res.default_effort || '');
@@ -735,6 +741,12 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const gatesToPersist = () =>
     validationGates.filter(g => Object.prototype.hasOwnProperty.call(harnesses, g));
 
+  const parsedCacheIdleTtlDays = (): number | null => {
+    const parsed = parseCacheIdleTtlDays(cacheIdleTtlDays);
+    if (!parsed.ok) throw new Error(parsed.message);
+    return parsed.days;
+  };
+
   /** The whole settings record, spelled once.
    *
    *  Two call sites save it — `handleSave` and the strategy-approval
@@ -743,7 +755,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
    *  every project that goes through the site that omitted it. Spelled twice,
    *  that omission is invisible to the compiler and to any test that exercises
    *  only the other site. */
-  const settingsToPersist = (): ProjectSettingsInput => ({ default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts, review_entrypoint: reviewEntrypoint.trim() || null, sync_resolver_agent_kind: syncResolverAgentKind || null, sync_resolver_model: syncResolverModel || null, sync_resolver_effort: syncResolverEffort || null, sync_review_before_push: syncReviewBeforePush === 'push' ? false : null });
+  const settingsToPersist = (): ProjectSettingsInput => ({ default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts, review_entrypoint: reviewEntrypoint.trim() || null, sync_resolver_agent_kind: syncResolverAgentKind || null, sync_resolver_model: syncResolverModel || null, sync_resolver_effort: syncResolverEffort || null, sync_review_before_push: syncReviewBeforePush === 'push' ? false : null, cache_idle_ttl_days: parsedCacheIdleTtlDays() });
 
   const saveAllSettings = async () => {
     const machineId = computeType === 'remote' ? remoteHost : 'local';
@@ -756,6 +768,8 @@ await saveProjectSettings(activeProject.id, settingsToPersist());
   };
 
   const handleSave = async () => {
+    const ttl = parseCacheIdleTtlDays(cacheIdleTtlDays);
+    if (!ttl.ok) { setStatus('error'); setErrorMsg(ttl.message); return; }
     setStatus('saving'); setErrorMsg('');
     const reposChanged = selectedRepos.length !== originalRepos.length || selectedRepos.some(r => !originalRepos.some(o => o.path === r.path));
     const computeChanged = computeType !== activeProject.compute_type || remoteHost !== activeProject.remote_host;
@@ -847,7 +861,7 @@ await saveProjectSettings(activeProject.id, settingsToPersist());
     harnesses, setHarnesses, validationGates, setValidationGates,
     commandProbe, isProbingCommands, probeError, refreshCommandProbe,
     prepareCommand, setPrepareCommand, prTemplate, setPrTemplate, conflictPolicy, setConflictPolicy,
-    featureLifecycle, setFeatureLifecycle, defaultAgentKind, setDefaultAgentKind, defaultModel, setDefaultModel,
+    featureLifecycle, setFeatureLifecycle, cacheIdleTtlDays, setCacheIdleTtlDays, defaultAgentKind, setDefaultAgentKind, defaultModel, setDefaultModel,
     defaultEffort, setDefaultEffort,
     defaultWorkflowId, setDefaultWorkflowId: chooseDefaultWorkflow, missingDefaultWorkflowId,
     defaultLoopIterations, setDefaultLoopIterations, availableModelsForDefault, isLoadingModelsForDefault,

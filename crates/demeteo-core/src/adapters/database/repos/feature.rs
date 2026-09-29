@@ -137,6 +137,44 @@ impl FeatureRepository for SqliteAdapter {
         Ok(list)
     }
 
+    fn get_all_for_project(&self, project_id: &ProjectId) -> Result<Vec<Feature>, String> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {FEATURE_COLUMNS} FROM features WHERE project_id = ?1 ORDER BY created_at DESC",
+            ))
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(params![project_id.0], feature_from_row)
+            .map_err(|e| e.to_string())?;
+        let mut list = Vec::new();
+        for r in iter {
+            list.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok(list)
+    }
+
+    fn last_activity_for_project(
+        &self,
+        project_id: &ProjectId,
+    ) -> Result<std::collections::HashMap<String, i64>, String> {
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.id, MAX(f.created_at,
+                        COALESCE((SELECT MAX(updated_at) FROM step_executions WHERE feature_id = f.id), 0),
+                        COALESCE((SELECT MAX(updated_at) FROM sync_sessions WHERE feature_id = f.id), 0))
+                 FROM features f WHERE f.project_id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![project_id.0], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+    }
+
     fn get(&self, id: &FeatureId) -> Result<Option<Feature>, String> {
         let conn = self.conn.lock()?;
         let mut stmt = conn

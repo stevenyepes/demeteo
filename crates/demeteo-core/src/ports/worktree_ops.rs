@@ -351,6 +351,23 @@ impl MergeGate<'_> {
     }
 }
 
+/// A deleted feature branch, and whether its dependency cache went with it.
+///
+/// The branch is the durable half: a cache that could not be deleted does not
+/// fail the delete, but it is tens of gigabytes the user has to be told about,
+/// so it is carried out rather than dropped.
+#[derive(Debug)]
+pub struct BranchDeleted {
+    pub cache_release: Result<(), String>,
+}
+
+/// Deletes one feature's dependency cache on whichever machine its project
+/// runs on. See [`crate::domain::cache_release`] for when a caller may.
+#[async_trait]
+pub trait FeatureCachePort: Send + Sync {
+    async fn release(&self, feature: &crate::domain::models::Feature) -> Result<(), String>;
+}
+
 #[async_trait]
 pub trait WorktreeOpsPort: Send + Sync {
     /// Check if the repository is dirty.
@@ -556,12 +573,22 @@ pub trait WorktreeOpsPort: Send + Sync {
         subtask_id: &str,
     ) -> Result<(), String>;
 
-    /// Delete a branch (and optionally any subtask branches and prune worktrees).
+    /// Delete a feature branch, its subtask branches and worktrees, and its
+    /// dependency cache.
     async fn branch_delete(
         &self,
         machine_id: Option<&str>,
         repo_dir: &str,
         branch: &str,
+    ) -> Result<BranchDeleted, String>;
+
+    /// Delete the [`feature_cache_dir`](crate::paths::feature_cache_dir) of
+    /// `feature_branch` beside the clone at `repo_dir`. Already gone is `Ok`.
+    async fn release_feature_cache(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        feature_branch: &str,
     ) -> Result<(), String>;
 
     /// Merge a subtask branch.

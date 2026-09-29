@@ -1,7 +1,6 @@
 use std::time::Instant;
 use tokio::sync::watch;
 
-use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::domain::ids::FeatureId;
 use crate::domain::run_control::{shadow_refusal, RunAction};
 
@@ -100,7 +99,7 @@ impl DagStepExecutor {
             artifacts: self.artifacts.clone(),
             attachments: self.attachments.clone(),
             app_settings: self.app_settings.clone(),
-            git_ops: GitOpsHelper::new(self.app_settings.clone(), self.exec.clone()),
+            git_ops: self.git_ops.clone(),
             merge_executor: self.merge_executor.clone(),
             subtask_runs: self.subtask_runs.clone(),
             sequence_resume: self.sequence_resume.clone(),

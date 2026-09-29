@@ -11,9 +11,14 @@
 //! yields the path on *its* machine — which is exactly what a detached run
 //! needs (the runner's real worktree path, not the laptop's computed one).
 
+use std::path::Path;
+use std::sync::Arc;
+
 use serde::Serialize;
 
-use crate::domain::ids::FeatureId;
+use crate::domain::ids::{FeatureId, ProjectId};
+use crate::ports::db::ProjectRepository;
+use crate::ports::execution::ExecutionPort;
 use crate::state::AppContext;
 
 /// Where a feature's working tree lives and the branch it holds.
@@ -53,49 +58,14 @@ pub async fn resolve_feature_worktree(
         .ok_or_else(|| "Feature not found".to_string())?;
 
     let project_id = feature.project_id.clone();
-    let project = ctx
-        .projects
-        .get_projects()?
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| "Project not found".to_string())?;
-
-    let repos = ctx.projects.get_repositories_for(&project_id)?;
-    let repo = repos
-        .first()
-        .ok_or_else(|| "No repository configured for this project".to_string())?;
-
     let settings = ctx
         .projects
         .get_settings(&project_id)?
         .unwrap_or_else(crate::adapters::step_executor::setup::fetch_default_settings);
-
-    let is_local = project.compute_type.eq_ignore_ascii_case("local");
-    let machine_id = if is_local {
-        crate::domain::ids::LOCAL_MACHINE.to_string()
-    } else {
-        project
-            .remote_host
-            .as_deref()
-            .unwrap_or(crate::domain::ids::LOCAL_MACHINE)
-            .to_string()
-    };
-
-    let worktree_path = if is_local {
-        crate::paths::repo_target_dir_local(&ctx.workspace_dir, &project_id.0, &repo.repo_path)
-            .to_string_lossy()
-            .to_string()
-    } else {
-        crate::paths::repo_target_dir_str(
-            &ctx.exec,
-            &project.compute_type,
-            project.remote_host.as_deref(),
-            &project_id.0,
-            &repo.repo_path,
-            None,
-        )
-        .await?
-    };
+    let ProjectClone {
+        machine_id,
+        clone_dir: worktree_path,
+    } = resolve_project_clone(ctx, &project_id).await?;
 
     let branch = feature.run_branch(&settings.worktree_strategy.branch_prefix);
     let default_branch = crate::domain::diff_base::resolve(
@@ -111,5 +81,78 @@ pub async fn resolve_feature_worktree(
         worktree_path,
         branch,
         default_branch,
+    })
+}
+
+/// The machine a project runs on and the path of its orchestrator clone there
+/// — the `repo_dir` every worktree, sync worktree and
+/// [`feature_cache_dir`](crate::paths::feature_cache_dir) is a sibling of.
+///
+/// `repositories.repo_path` is the provider slug (`owner/name`), not a path.
+/// Handing it to git or to a cache computation directly names a relative path
+/// under the process cwd that does not exist, and every best-effort cleanup
+/// built on it "succeeds" at deleting nothing.
+#[derive(Debug, Clone)]
+pub struct ProjectClone {
+    pub machine_id: String,
+    pub clone_dir: String,
+}
+
+pub async fn resolve_project_clone(
+    ctx: &AppContext,
+    project_id: &ProjectId,
+) -> Result<ProjectClone, String> {
+    project_clone(&*ctx.projects, &ctx.exec, &ctx.workspace_dir, project_id).await
+}
+
+/// [`resolve_project_clone`] for a caller that holds the ports rather than an
+/// [`AppContext`] — a background task started before the context exists.
+pub async fn project_clone(
+    projects: &dyn ProjectRepository,
+    exec: &Arc<dyn ExecutionPort>,
+    workspace_dir: &Path,
+    project_id: &ProjectId,
+) -> Result<ProjectClone, String> {
+    let project = projects
+        .get_projects()?
+        .into_iter()
+        .find(|p| &p.id == project_id)
+        .ok_or_else(|| "Project not found".to_string())?;
+
+    let repos = projects.get_repositories_for(project_id)?;
+    let repo = repos
+        .first()
+        .ok_or_else(|| "No repository configured for this project".to_string())?;
+
+    let is_local = project.compute_type.eq_ignore_ascii_case("local");
+    let machine_id = if is_local {
+        crate::domain::ids::LOCAL_MACHINE.to_string()
+    } else {
+        project
+            .remote_host
+            .as_deref()
+            .unwrap_or(crate::domain::ids::LOCAL_MACHINE)
+            .to_string()
+    };
+
+    let clone_dir = if is_local {
+        crate::paths::repo_target_dir_local(workspace_dir, &project_id.0, &repo.repo_path)
+            .to_string_lossy()
+            .to_string()
+    } else {
+        crate::paths::repo_target_dir_str(
+            exec,
+            &project.compute_type,
+            project.remote_host.as_deref(),
+            &project_id.0,
+            &repo.repo_path,
+            None,
+        )
+        .await?
+    };
+
+    Ok(ProjectClone {
+        machine_id,
+        clone_dir,
     })
 }

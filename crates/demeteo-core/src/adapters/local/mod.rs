@@ -1,3 +1,4 @@
+mod disk_free;
 pub mod execution;
 pub mod invocation;
 mod process_guard;

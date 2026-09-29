@@ -3,6 +3,7 @@ pub mod agent_runtime;
 pub mod artifact_store;
 pub mod ask;
 pub mod attachment_store;
+pub mod cache_reclaim;
 pub mod create_project_port;
 pub mod db;
 pub mod discovery;

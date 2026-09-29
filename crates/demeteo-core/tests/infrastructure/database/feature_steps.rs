@@ -380,3 +380,35 @@ fn step_artifact_path_only_mirrors_into_list() {
         Some("/legacy/only".to_string())
     );
 }
+
+#[test]
+fn last_activity_is_the_newest_step_write_or_else_creation() {
+    let adapter = setup();
+    let idle = make_feature(&adapter, "f_idle", "p_activity");
+    let active = make_feature(&adapter, "f_active", "p_activity");
+    make_feature(&adapter, "f_elsewhere", "p_other");
+    make_step(&adapter, "se_active", &active, None);
+
+    let activity = adapter
+        .last_activity_for_project(&ProjectId::from("p_activity".to_string()))
+        .unwrap();
+
+    assert_eq!(activity.len(), 2, "{activity:?}");
+    assert_eq!(activity.get(&idle.0), Some(&1000));
+    assert!(activity[&active.0] > 1_000_000, "{activity:?}");
+}
+
+#[test]
+fn project_settings_cache_idle_ttl_round_trips_through_v59() {
+    let adapter = setup();
+    make_feature(&adapter, "f_ttl", "p_ttl");
+    let mut settings = crate::adapters::step_executor::setup::fetch_default_settings();
+    settings.project_id = ProjectId::from("p_ttl".to_string());
+
+    for ttl in [Some(0), Some(30), None] {
+        settings.cache_idle_ttl_days = ttl;
+        adapter.save_settings(settings.clone()).unwrap();
+        let saved = adapter.get_settings(&settings.project_id).unwrap().unwrap();
+        assert_eq!(saved.cache_idle_ttl_days, ttl);
+    }
+}

@@ -290,6 +290,7 @@ export interface ProjectSettingsInput {
   sync_resolver_agent_kind?: string | null;
   sync_resolver_model?: string | null;
   sync_resolver_effort?: EffortLevel | null;
+  cache_idle_ttl_days?: number | null;
 }
 
 /**
@@ -413,6 +414,10 @@ export async function saveProjectSettings(
       input.sync_resolver_effort !== undefined
         ? input.sync_resolver_effort
         : (existing?.sync_resolver_effort ?? null),
+    cache_idle_ttl_days:
+      input.cache_idle_ttl_days !== undefined
+        ? input.cache_idle_ttl_days
+        : (existing?.cache_idle_ttl_days ?? null),
   };
 
   await invoke("save_project_settings", { projectId, settings: merged });

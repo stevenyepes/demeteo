@@ -345,9 +345,18 @@ async fn cleanup_dismissal_blocks_a_stale_reconciliation_snapshot() {
         ["r-unrelated"],
         "the dismissed run must never enter ordinary reconciliation"
     );
+    // The cleanup's own call is not reconciliation: archiving a runner-owned
+    // feature asks its runner to release the dependency cache, and must do so
+    // before the dismissal erases the only record of which runner that is.
     assert_eq!(
         runner.calls(),
-        [("get_status".to_string(), "r-unrelated".to_string())],
+        [
+            (
+                "release_feature_cache".to_string(),
+                "r-dismissed".to_string()
+            ),
+            ("get_status".to_string(), "r-unrelated".to_string())
+        ],
         "only the unrelated mirror may reach the runner; any hydration RPC is unexpected"
     );
     assert_eq!(

@@ -4,6 +4,8 @@ pub mod agents;
 pub mod ask;
 pub mod attachments;
 pub mod bootstrap;
+pub mod cache_reclaim;
+pub mod cache_sweep;
 pub mod discovery;
 pub mod lifecycle;
 pub mod memory;

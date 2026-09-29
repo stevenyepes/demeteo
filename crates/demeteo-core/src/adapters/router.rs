@@ -123,6 +123,12 @@ impl ExecutionPort for RouterExecutionPort {
             .await
     }
 
+    async fn free_space_bytes(&self, machine_id: &str, path: &str) -> Result<u64, String> {
+        self.resolve(machine_id)?
+            .free_space_bytes(machine_id, path)
+            .await
+    }
+
     async fn list_dir(&self, machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String> {
         self.resolve(machine_id)?.list_dir(machine_id, path).await
     }

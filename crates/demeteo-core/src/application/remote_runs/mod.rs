@@ -1,4 +1,5 @@
 mod attachments;
+mod cache_release;
 mod client_id;
 mod control;
 mod credentials;
@@ -8,6 +9,9 @@ mod rpc;
 mod submit;
 mod transport;
 
+pub use cache_release::{
+    pending_runner_releases, release_on_runner, retry_pending_runner_releases, RunnerCacheRpc,
+};
 pub use control::{
     cancel_remote_run, find_mirror_for_feature, list_mirrored_runs, reconcile_all_runs,
     refresh_remote_run, reinject_credentials, retry_remote_step, set_remote_step_assignment,

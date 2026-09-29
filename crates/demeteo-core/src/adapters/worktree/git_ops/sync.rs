@@ -835,8 +835,9 @@ impl GitOpsHelper {
                 &wt_path,
                 &crate::paths::feature_cache_dir(repo_dir, feature_branch),
                 crate::paths::targets_windows_host(machine_str),
+                self.cache_reclaim.as_deref(),
             )
-            .await;
+            .await?;
         }
 
         Ok(wt_path)

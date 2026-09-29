@@ -65,6 +65,19 @@ pub(crate) enum StepOutcome {
     RedirectTo(usize),
 }
 
+impl StepOutcome {
+    /// A worktree that would not provision is [`Self::Environmental`] — one
+    /// in-place retry — unless the disk had no room for its dependency cache,
+    /// which a retry minutes later will not find either.
+    pub(crate) fn provision_failed(message: String) -> Self {
+        if crate::domain::seed_space::is_seed_refusal(&message) {
+            Self::NonRetryable(message)
+        } else {
+            Self::Environmental(message)
+        }
+    }
+}
+
 impl From<crate::domain::sequence::outcome::SequenceError> for StepOutcome {
     /// The literal mapping, variant for variant.
     ///

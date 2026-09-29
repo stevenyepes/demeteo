@@ -1,6 +1,7 @@
 use crate::domain::branch_listing::BranchOption;
 use crate::domain::feature_origin::Refspec;
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
+use crate::ports::cache_reclaim::CacheReclaimPort;
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
 use crate::ports::worktree_ops::{
@@ -27,11 +28,22 @@ use std::sync::Arc;
 pub struct GitOpsHelper {
     pub(crate) app_settings: Arc<dyn AppSettingsRepository>,
     pub(crate) exec: Arc<dyn ExecutionPort>,
+    pub(crate) cache_reclaim: Option<Arc<dyn CacheReclaimPort>>,
 }
 
 impl GitOpsHelper {
     pub fn new(app_settings: Arc<dyn AppSettingsRepository>, exec: Arc<dyn ExecutionPort>) -> Self {
-        Self { app_settings, exec }
+        Self {
+            app_settings,
+            exec,
+            cache_reclaim: None,
+        }
+    }
+
+    /// What a cache seed short of disk may reclaim with before it refuses.
+    pub fn with_cache_reclaim(mut self, reclaim: Arc<dyn CacheReclaimPort>) -> Self {
+        self.cache_reclaim = Some(reclaim);
+        self
     }
 }
 
@@ -291,8 +303,18 @@ impl WorktreeOpsPort for GitOpsHelper {
         machine_id: Option<&str>,
         repo_dir: &str,
         branch: &str,
-    ) -> Result<(), String> {
+    ) -> Result<crate::ports::worktree_ops::BranchDeleted, String> {
         self.branch_delete(machine_id, repo_dir, branch).await
+    }
+
+    async fn release_feature_cache(
+        &self,
+        machine_id: Option<&str>,
+        repo_dir: &str,
+        feature_branch: &str,
+    ) -> Result<(), String> {
+        self.release_feature_cache(machine_id, repo_dir, feature_branch)
+            .await
     }
 
     async fn merge_subtask(

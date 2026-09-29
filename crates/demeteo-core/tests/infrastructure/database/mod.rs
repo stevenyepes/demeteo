@@ -271,6 +271,7 @@ fn project_settings_default_effort_round_trips() {
         sync_resolver_model: None,
         sync_resolver_effort: None,
         sync_review_before_push: None,
+        cache_idle_ttl_days: None,
     };
 
     adapter
@@ -342,6 +343,7 @@ fn project_settings_default_workflow_id_round_trips() {
         sync_resolver_model: None,
         sync_resolver_effort: None,
         sync_review_before_push: None,
+        cache_idle_ttl_days: None,
     };
 
     adapter
@@ -433,6 +435,7 @@ fn project_settings_harnesses_and_validation_gates_round_trip() {
         sync_resolver_model: None,
         sync_resolver_effort: None,
         sync_review_before_push: None,
+        cache_idle_ttl_days: None,
     };
 
     // No selection: the column keeps its pre-HB5 bare-map shape, and the map
@@ -509,6 +512,7 @@ fn project_settings_review_entrypoint_round_trips() {
         sync_resolver_model: None,
         sync_resolver_effort: None,
         sync_review_before_push: None,
+        cache_idle_ttl_days: None,
     };
 
     adapter

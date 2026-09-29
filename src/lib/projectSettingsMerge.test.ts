@@ -28,6 +28,7 @@ const STORED = {
   sync_resolver_agent_kind: 'codex',
   sync_resolver_model: 'gpt-5-codex',
   sync_resolver_effort: 'low',
+  cache_idle_ttl_days: 0,
 };
 
 function written(): Record<string, unknown> {
@@ -54,6 +55,7 @@ describe('saveProjectSettings', () => {
       sync_resolver_agent_kind: 'codex',
       sync_resolver_model: 'gpt-5-codex',
       sync_resolver_effort: 'low',
+      cache_idle_ttl_days: 0,
     });
   });
 
@@ -62,12 +64,14 @@ describe('saveProjectSettings', () => {
       sync_resolver_agent_kind: null,
       sync_resolver_model: null,
       sync_resolver_effort: null,
+      cache_idle_ttl_days: null,
     });
 
     expect(written()).toMatchObject({
       sync_resolver_agent_kind: null,
       sync_resolver_model: null,
       sync_resolver_effort: null,
+      cache_idle_ttl_days: null,
     });
   });
 });

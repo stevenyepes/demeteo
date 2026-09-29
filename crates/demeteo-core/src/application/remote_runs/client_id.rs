@@ -1,15 +1,15 @@
-use crate::state::AppContext;
+use crate::ports::db::AppSettingsRepository;
 
 const INSTALL_ID_KEY: &str = "install_id";
 
-pub(super) fn client_install_id(ctx: &AppContext) -> Result<String, String> {
-    if let Some(id) = ctx.app_settings.app_setting_get(INSTALL_ID_KEY)? {
+pub(super) fn install_id_in(settings: &dyn AppSettingsRepository) -> Result<String, String> {
+    if let Some(id) = settings.app_setting_get(INSTALL_ID_KEY)? {
         if !id.is_empty() {
             return Ok(id);
         }
     }
     let id = format!("client-{}", crate::paths::new_id());
-    ctx.app_settings.app_setting_set(INSTALL_ID_KEY, &id)?;
+    settings.app_setting_set(INSTALL_ID_KEY, &id)?;
     Ok(id)
 }
 

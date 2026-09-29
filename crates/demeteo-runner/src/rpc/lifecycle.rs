@@ -1,15 +1,21 @@
 use crate::services::RunnerServices;
+use demeteo_core::adapters::mr_monitor::record_mr_state;
+use demeteo_core::application::lifecycle::FeatureCacheRelease;
+use demeteo_core::domain::cache_release::cache_releasable;
 use demeteo_core::domain::ids::{FeatureId, ProjectId};
 use demeteo_core::domain::models::EffortLevel;
 use demeteo_core::domain::run_spec::RunSpec;
+use demeteo_core::domain::runner_cache_release::{runner_settle, CacheReleaseReason, RunnerSettle};
 use demeteo_core::domain::step_assignment::StepAssignment;
 use demeteo_core::paths;
-use demeteo_core::ports::db::FeatureRepository;
+use demeteo_core::ports::db::{FeaturePatch, FeatureRepository, NotificationRepository};
+use demeteo_core::ports::notification::NotificationPort;
 use demeteo_core::ports::runner_run::{RunnerRun, RunnerRunPort};
-use serde::Deserialize;
+use demeteo_core::ports::worktree_ops::FeatureCachePort;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use super::ownership::{no_such_step, require_owner, require_owner_of_step};
+use super::ownership::{no_such_step, require_owner, require_owner_in, require_owner_of_step};
 use super::RunIdParams;
 
 #[derive(Debug, Deserialize)]
@@ -433,6 +439,98 @@ pub(super) async fn cancel_run(
         svc.creds.remove(&params.run_id);
     }
     Ok(run)
+}
+
+/// `release_feature_cache(run_id, reason)`. `reason` is why the laptop holds
+/// the feature finished ([`CacheReleaseReason`]); the runner cannot see it for
+/// itself (see [`demeteo_core::domain::runner_cache_release`]).
+#[derive(Debug, Deserialize)]
+struct ReleaseFeatureCacheParams {
+    run_id: String,
+    reason: CacheReleaseReason,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub(super) struct CacheReleased {
+    /// False when the settled feature still keeps its cache, or the run never
+    /// bootstrapped one.
+    released: bool,
+}
+
+/// Record on this runner's own feature row what the laptop saw end it, then
+/// release its dependency cache if [`cache_releasable`] now agrees. Recording
+/// first is what makes a lost or failed release recoverable: the startup sweep
+/// judges the same row. Repeating a call is harmless — the merge notification
+/// is written once, and a cache already gone releases as `Ok`.
+pub(super) async fn release_feature_cache(
+    svc: &Arc<RunnerServices>,
+    params: serde_json::Value,
+    client_id: &str,
+) -> Result<CacheReleased, String> {
+    let params: ReleaseFeatureCacheParams =
+        serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
+    let cache = FeatureCacheRelease::from_ctx(&svc.ctx);
+    settle_and_release(
+        &SettlePorts {
+            runs: svc.ctx.runner_runs.as_ref(),
+            features: svc.ctx.features.as_ref(),
+            notifications: svc.ctx.notifications.as_ref(),
+            notif: svc.ctx.notif.as_ref(),
+            cache: &cache,
+        },
+        &params,
+        client_id,
+    )
+    .await
+}
+
+struct SettlePorts<'a> {
+    runs: &'a dyn RunnerRunPort,
+    features: &'a dyn FeatureRepository,
+    notifications: &'a dyn NotificationRepository,
+    notif: &'a dyn NotificationPort,
+    cache: &'a dyn FeatureCachePort,
+}
+
+async fn settle_and_release(
+    ports: &SettlePorts<'_>,
+    params: &ReleaseFeatureCacheParams,
+    client_id: &str,
+) -> Result<CacheReleased, String> {
+    let run = require_owner_in(ports.runs, &params.run_id, client_id)?;
+    let settle = runner_settle(&run.status, &run.run_id, params.reason)?;
+    let not_released = CacheReleased { released: false };
+    let Some(feature_id) = run.feature_id.map(FeatureId::from) else {
+        return Ok(not_released);
+    };
+    let Some(feature) = ports.features.get(&feature_id)? else {
+        return Ok(not_released);
+    };
+    match settle {
+        RunnerSettle::MrState(state) => record_mr_state(
+            &feature,
+            state,
+            ports.features,
+            ports.notifications,
+            ports.notif,
+        )?,
+        RunnerSettle::Archive => ports.features.update(
+            &feature_id,
+            &FeaturePatch {
+                status: Some("archived".to_string()),
+                ..Default::default()
+            },
+        )?,
+    }
+    let feature = ports
+        .features
+        .get(&feature_id)?
+        .ok_or_else(|| format!("feature {} vanished while settling", feature_id.as_str()))?;
+    if !cache_releasable(&feature.status, feature.mr_state.as_deref()) {
+        return Ok(not_released);
+    }
+    ports.cache.release(&feature).await?;
+    Ok(CacheReleased { released: true })
 }
 
 #[cfg(test)]

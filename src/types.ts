@@ -1199,6 +1199,11 @@ export interface ProjectSettingsData {
    *  cannot impose review on a run that still owns its branch — see
    *  `domain::sync_session::publish_policy`. Migration V45. */
   sync_review_before_push?: boolean | null;
+  /** Days an idle feature's dependency cache, and the default branch's cache
+   *  Ask and Discovery share, are kept before a sweep releases them.
+   *  `null`/absent = the engine default (14); `0` never releases on
+   *  idleness. Migration V59. */
+  cache_idle_ttl_days?: number | null;
 }
 
 export interface SessionInfo {

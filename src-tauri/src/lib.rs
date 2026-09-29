@@ -539,6 +539,7 @@ pub fn run() {
             commands::mr_publisher::pull_request_detail,
             commands::mr_publisher::post_pull_request_comment,
             commands::feature_lifecycle::feature_cleanup,
+            commands::feature_lifecycle::feature_cache_sweep,
             commands::notifications::notifications_list,
             commands::attachments::feature_add_attachment,
             commands::attachments::feature_list_attachments,

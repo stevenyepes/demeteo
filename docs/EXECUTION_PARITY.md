@@ -121,6 +121,16 @@ block above, the desktop environment an agent may inherit
 no bytes on any platform. [`WINDOWS_PARITY.md`](WINDOWS_PARITY.md) records what
 each is for and what remains unobserved.
 
+### `free_space_bytes`: one answer, two mechanisms
+
+The local adapter asks the kernel (`statvfs`, `GetDiskFreeSpaceExW`) because a
+Windows desktop has no `df`; SSH runs `df -Pk` because a remote is always Linux.
+Both report the space an unprivileged writer can use, and both refuse a missing
+path rather than silently answering for an ancestor — the walk to the nearest
+existing directory is the caller's (`git_ops::worktree::nearest_existing`), so
+no transport can pick a different disk than another. `exec_contract` holds both
+clauses.
+
 ## The gates — and the trap
 
 Two conformance suites hold the guarantee. **Neither runs under `npm run

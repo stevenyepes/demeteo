@@ -161,7 +161,7 @@ impl ExecutionDriver {
                     step_exec,
                     step_start,
                     &[],
-                    StepOutcome::Environmental(format!(
+                    StepOutcome::provision_failed(format!(
                         "command step worktree provision failed ({subtask_id}): {e}"
                     )),
                 )
