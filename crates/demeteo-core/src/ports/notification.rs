@@ -284,6 +284,23 @@ pub enum DomainEvent {
     /// [`NotificationKind::CachesReclaimed`]: crate::domain::models::NotificationKind::CachesReclaimed
     CachesReclaimed { project_id: String, message: String },
 
+    /// Where a cache sweep has got to — the background one and one asked for
+    /// from Storage alike, since an on-demand sweep queues behind a running
+    /// one and the only honest progress to show meanwhile is that one's. A
+    /// sweep emits one per project, one per deletion, and a last one with
+    /// `project_id: None` when it ends; nothing reports sizes, because sizing
+    /// a cache means walking tens of gigabytes of small files.
+    CacheSweepProgress {
+        dry_run: bool,
+        /// `None` once the sweep has finished.
+        project_id: Option<String>,
+        /// Zero-based position of `project_id` among `project_count`.
+        project_index: usize,
+        project_count: usize,
+        /// The sibling being deleted, when one is.
+        deleting: Option<String>,
+    },
+
     /// A row was appended to the durable `run_events` log (P1.13). This
     /// is the live-push half of the unified event log: the local
     /// recorder appends the row, then forwards this variant so the UI

@@ -1,52 +1,38 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { AlertTriangle, HardDrive, RefreshCw, RotateCw, Trash2 } from 'lucide-react';
 
 import { StorageProjectCard } from './StorageProjectCard';
 import { Chip } from '../ui/Chip';
 import { useProject } from '../../context';
 import { viewSweep } from '../../lib/cacheSweepView';
-import { formatError } from '../../lib/errors';
-import { sweepFeatureCaches, type CacheSweepReport } from '../../lib/featureDetail';
-
-type Busy = 'scanning' | 'reclaiming' | null;
-
-const BUSY_TEXT: Record<Exclude<Busy, null>, string> = {
-  scanning: 'Scanning every project…',
-  reclaiming: 'Reclaiming…',
-};
+import {
+  describeSweepStatus,
+  readCacheSweep,
+  startCacheSweep,
+  subscribeCacheSweep,
+} from '../../lib/cacheSweepSession';
 
 export function StoragePanel() {
   const { state } = useProject();
-  const [report, setReport] = useState<CacheSweepReport | null>(null);
-  const [busy, setBusy] = useState<Busy>(null);
-  const [error, setError] = useState<string | null>(null);
+  const sweep = useSyncExternalStore(subscribeCacheSweep, readCacheSweep);
+  const { busy, report, error, finishedAt } = sweep;
   const [confirming, setConfirming] = useState(false);
-  const mounted = useRef(true);
 
-  const run = useCallback(async (dryRun: boolean) => {
-    setBusy(dryRun ? 'scanning' : 'reclaiming');
-    setError(null);
+  const run = (dryRun: boolean) => {
     setConfirming(false);
-    try {
-      const next = await sweepFeatureCaches(dryRun);
-      if (mounted.current) setReport(next);
-    } catch (err) {
-      if (mounted.current) setError(formatError(err));
-    } finally {
-      if (mounted.current) setBusy(null);
-    }
-  }, []);
+    void startCacheSweep(dryRun);
+  };
 
   useEffect(() => {
-    mounted.current = true;
-    void run(true);
-    return () => { mounted.current = false; };
-  }, [run]);
+    const { busy, report } = readCacheSweep();
+    if (!busy && !report) void startCacheSweep(true);
+  }, []);
 
   const projectNames = useMemo(
     () => Object.fromEntries(state.projects.map(p => [p.id, p.name])),
     [state.projects],
   );
+  const status = describeSweepStatus(sweep, projectNames);
   const view = useMemo(() => (report ? viewSweep(report, projectNames) : null), [report, projectNames]);
   const reclaimable = report?.dry_run ? view?.totals.delete ?? 0 : 0;
 
@@ -67,7 +53,7 @@ export function StoragePanel() {
           <div className="flex gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => void run(true)}
+              onClick={() => run(true)}
               disabled={busy !== null}
               className="px-3 py-2 text-xs rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-white disabled:opacity-40 flex items-center gap-1.5 transition-all"
             >
@@ -93,19 +79,20 @@ export function StoragePanel() {
               <button type="button" onClick={() => setConfirming(false)} className="px-3 py-1.5 text-xs rounded-md border border-white/10 text-slate-300 hover:bg-white/5 transition-all">
                 Cancel
               </button>
-              <button type="button" onClick={() => void run(false)} className="px-3 py-1.5 text-xs font-semibold rounded-md bg-ruby-600 hover:bg-ruby-500 text-white transition-all">
+              <button type="button" onClick={() => run(false)} className="px-3 py-1.5 text-xs font-semibold rounded-md bg-ruby-600 hover:bg-ruby-500 text-white transition-all">
                 Delete {reclaimable}
               </button>
             </div>
           </div>
         )}
 
-        {busy && (
+        {status && (
           <div role="status" className="flex items-start gap-2 text-sm text-slate-300">
             <RotateCw className="w-4 h-4 mt-0.5 animate-spin text-cyan-400 shrink-0" />
-            <div>
-              <p>{BUSY_TEXT[busy]}</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">This can take minutes on a remote machine, and waits for a background sweep that is already running.</p>
+            <div className="min-w-0">
+              <p>{status.title}</p>
+              {status.detail && <p className="text-[11px] font-mono text-slate-400 mt-0.5 break-all">{status.detail}</p>}
+              <p className="text-[11px] text-slate-500 mt-0.5">This can take minutes on a remote machine. It carries on if you leave this tab.</p>
             </div>
           </div>
         )}
@@ -131,6 +118,11 @@ export function StoragePanel() {
                 <Chip tone="ruby">{view.totals.failed} failed</Chip>
                 <Chip tone="slate">{view.totals.spared} spared</Chip>
               </>
+            )}
+            {finishedAt !== null && (
+              <span className="text-[11px] text-slate-500 self-center">
+                as of {new Date(finishedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
             )}
             {view.totals.projectErrors > 0 && (
               <Chip tone="ruby">{view.totals.projectErrors} project{view.totals.projectErrors === 1 ? '' : 's'} with errors</Chip>
