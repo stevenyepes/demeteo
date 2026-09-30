@@ -227,6 +227,11 @@ pub async fn sweep_feature_caches(ctx: &AppContext, dry_run: bool) -> Result<Swe
         progress.emit(None);
         projects.push(sweep_project(ctx, &progress, dry_run).await);
     }
+    // Only a sweep that announced a project announces its end: one over no
+    // project at all fires at every context build, into every test's capture.
+    if all.is_empty() {
+        return Ok(SweepReport { dry_run, projects });
+    }
     let _ = ctx.notif.emit(&DomainEvent::CacheSweepProgress {
         dry_run,
         project_id: None,
