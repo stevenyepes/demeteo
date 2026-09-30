@@ -222,6 +222,10 @@ impl NotificationPort for TauriNotificationAdapter {
                 "caches_reclaimed",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
+            DomainEvent::CacheSweepProgress { .. } => (
+                "cache_sweep_progress",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
             DomainEvent::McpConsentRequested { .. } => (
                 "mcp_consent_requested",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,

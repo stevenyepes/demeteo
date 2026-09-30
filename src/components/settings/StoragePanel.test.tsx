@@ -5,12 +5,14 @@
 // throws, so a stray command surfaces as a failure.
 
 import { invoke } from '@tauri-apps/api/core';
-import { render, screen, within } from '@testing-library/react';
+import { listen, type EventCallback } from '@tauri-apps/api/event';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { StoragePanel } from './StoragePanel';
 import { ProjectProvider } from '../../context';
+import { resetCacheSweepSession, type CacheSweepProgress } from '../../lib/cacheSweepSession';
 import type { CacheSweepReport } from '../../lib/featureDetail';
 
 const mockedInvoke = vi.mocked(invoke);
@@ -66,6 +68,7 @@ function sweepCalls(): boolean[] {
 }
 
 beforeEach(() => {
+  resetCacheSweepSession();
   mockedInvoke.mockReset();
   mockedInvoke.mockImplementation((async (cmd: string, args?: unknown) => {
     if (cmd === 'feature_cache_sweep') return report((args as { dryRun: boolean }).dryRun);
@@ -109,5 +112,43 @@ describe('StoragePanel', () => {
 
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(sweepCalls()).toEqual([true]);
+  });
+
+  it('keeps a scan that finished after the tab was left, instead of starting another', async () => {
+    let finish: (r: CacheSweepReport) => void = () => {};
+    mockedInvoke.mockImplementation((async (cmd: string) => {
+      if (cmd === 'feature_cache_sweep') return new Promise<CacheSweepReport>(resolve => { finish = resolve; });
+      throw new Error(`unscripted invoke('${cmd}')`);
+    }) as typeof invoke);
+
+    const first = render(<ProjectProvider><StoragePanel /></ProjectProvider>);
+    expect(screen.getByRole('status')).toHaveTextContent('Scanning every project');
+    first.unmount();
+
+    await act(async () => finish(report(true)));
+    render(<ProjectProvider><StoragePanel /></ProjectProvider>);
+
+    expect(await screen.findByText('/w/demeteo-cache-feat-a')).toBeInTheDocument();
+    expect(sweepCalls()).toEqual([true]);
+  });
+
+  it('names the project a background sweep is on while a scan waits behind it', async () => {
+    let emit: EventCallback<CacheSweepProgress> = () => {};
+    vi.mocked(listen).mockImplementationOnce((async (_event: string, handler: EventCallback<CacheSweepProgress>) => {
+      emit = handler;
+      return () => {};
+    }) as unknown as typeof listen);
+    mockedInvoke.mockImplementation((async () => new Promise(() => {})) as typeof invoke);
+
+    render(<ProjectProvider><StoragePanel /></ProjectProvider>);
+    await act(async () => emit({
+      event: 'cache_sweep_progress',
+      id: 1,
+      payload: { dry_run: false, project_id: 'p-9', project_index: 1, project_count: 3, deleting: '/w/x-cache-feat-z' },
+    }));
+
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('Waiting for the background sweep, which is reclaiming project 2 of 3: p-9');
+    expect(status).toHaveTextContent('Deleting /w/x-cache-feat-z');
   });
 });

@@ -214,14 +214,51 @@ pub fn start_cache_sweep(ctx: AppContext, runtime: &tokio::runtime::Handle) {
 /// any sweep already under way.
 pub async fn sweep_feature_caches(ctx: &AppContext, dry_run: bool) -> Result<SweepReport, String> {
     let _sweeping = SWEEPING.lock().await;
+    let all = ctx.projects.get_projects()?;
     let mut projects = Vec::new();
-    for project in ctx.projects.get_projects()? {
-        projects.push(sweep_project(ctx, &project.id, dry_run).await);
+    for (index, project) in all.iter().enumerate() {
+        let progress = Progress {
+            ctx,
+            dry_run,
+            project_id: &project.id,
+            project_index: index,
+            project_count: all.len(),
+        };
+        progress.emit(None);
+        projects.push(sweep_project(ctx, &progress, dry_run).await);
     }
+    let _ = ctx.notif.emit(&DomainEvent::CacheSweepProgress {
+        dry_run,
+        project_id: None,
+        project_index: all.len(),
+        project_count: all.len(),
+        deleting: None,
+    });
     Ok(SweepReport { dry_run, projects })
 }
 
-async fn sweep_project(ctx: &AppContext, project_id: &ProjectId, dry_run: bool) -> ProjectSweep {
+struct Progress<'a> {
+    ctx: &'a AppContext,
+    dry_run: bool,
+    project_id: &'a ProjectId,
+    project_index: usize,
+    project_count: usize,
+}
+
+impl Progress<'_> {
+    fn emit(&self, deleting: Option<&str>) {
+        let _ = self.ctx.notif.emit(&DomainEvent::CacheSweepProgress {
+            dry_run: self.dry_run,
+            project_id: Some(self.project_id.0.clone()),
+            project_index: self.project_index,
+            project_count: self.project_count,
+            deleting: deleting.map(str::to_owned),
+        });
+    }
+}
+
+async fn sweep_project(ctx: &AppContext, progress: &Progress<'_>, dry_run: bool) -> ProjectSweep {
+    let project_id = progress.project_id;
     let mut out = ProjectSweep {
         project_id: project_id.0.clone(),
         clone_dir: None,
@@ -258,6 +295,7 @@ async fn sweep_project(ctx: &AppContext, project_id: &ProjectId, dry_run: bool) 
         let path = site.sibling_path(&action.name);
         let outcome = match action.verdict {
             Verdict::Delete if !dry_run => {
+                progress.emit(Some(&path));
                 Some(site.delete_if_still_due(ctx, &action, &path).await)
             }
             _ => None,
