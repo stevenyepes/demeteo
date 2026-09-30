@@ -4,13 +4,14 @@
 
 use super::rpc::remote_rpc_via;
 use crate::domain::runner_cache_release::{
-    with_pending, worth_retrying, CacheReleaseReason, PendingRunnerRelease,
+    with_pending, worth_logging, worth_retrying, CacheReleaseReason, PendingRunnerRelease,
 };
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::remote_run_mirror::RunnerCachePort;
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
+use std::sync::{Arc, LazyLock, Mutex};
 
 pub struct RunnerCacheRpc {
     pub exec: Arc<dyn ExecutionPort>,
@@ -42,6 +43,9 @@ const PENDING_KEY: &str = "pending_runner_cache_releases";
 /// Serialises the queue's read-modify-write between the MR monitor's task, a
 /// cleanup command and a reconcile. Never held across an `await`.
 static PENDING_LOCK: Mutex<()> = Mutex::new(());
+
+/// The machines this process has already reported as too old for the method.
+static TOO_OLD: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
 
 /// Send `entry`, and keep it for [`retry_pending_runner_releases`] when it
 /// failed in a way a later try could fix. The failure is still returned: the
@@ -86,10 +90,16 @@ pub async fn retry_pending_runner_releases(
         {
             Ok(()) => true,
             Err(error) => {
-                eprintln!(
-                    "[RunnerCache] release for run {} on {} still pending: {error}",
-                    entry.run_id, entry.machine_id
-                );
+                let news = TOO_OLD
+                    .lock()
+                    .map(|mut too_old| worth_logging(&mut too_old, &entry.machine_id, &error))
+                    .unwrap_or(true);
+                if news {
+                    eprintln!(
+                        "[RunnerCache] release for run {} on {} still pending: {error}",
+                        entry.run_id, entry.machine_id
+                    );
+                }
                 !worth_retrying(&error)
             }
         };

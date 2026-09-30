@@ -776,7 +776,8 @@ export type NotificationKind =
   | 'feature_completed'
   | 'merge_conflict'
   | 'retry_budget_exhausted'
-  | 'environment_not_ready';
+  | 'environment_not_ready'
+  | 'caches_reclaimed';
 
 /** Mirrors the Rust `Notification` struct on the `notifications`
  *  table. `feature_url` is a relative deep link; the bell decides
@@ -790,6 +791,12 @@ export interface Notification {
   feature_url?: string | null;
   read: boolean;
   created_at: number;
+}
+
+/** A background sweep deleted leaked caches or worktrees of a project. */
+export interface CachesReclaimedEvent {
+  project_id: string;
+  message: string;
 }
 
 /** Wire shape of `DomainEvent::MrMerged` as emitted by the

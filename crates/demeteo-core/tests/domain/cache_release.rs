@@ -18,35 +18,45 @@ fn a_completed_feature_releases_only_once_its_pr_is_settled() {
 }
 
 #[test]
-fn a_replayable_feature_keeps_its_cache() {
-    for status in [
-        "awaiting_mr",
-        "failed",
-        "cancelled",
-        "interrupted",
-        "running",
-        "pending",
-        "awaiting_gate",
-    ] {
-        assert!(
-            !cache_releasable(status, Some("merged")),
-            "{status} can still run"
-        );
+fn a_replayable_feature_keeps_its_cache_until_its_pr_settles() {
+    for status in ["awaiting_mr", "failed", "cancelled", "interrupted"] {
+        for mr_state in [None, Some("open"), Some("draft")] {
+            assert!(
+                !cache_releasable(status, mr_state),
+                "{status} with its PR {mr_state:?} can still run"
+            );
+        }
+        assert!(cache_releasable(status, Some("merged")), "{status} merged");
+        assert!(cache_releasable(status, Some("closed")), "{status} closed");
     }
 }
 
 #[test]
-fn a_polled_merge_releases_whatever_status_the_feature_held() {
-    assert!(releasable_after_mr_poll("awaiting_mr", "merged"));
-    assert!(releasable_after_mr_poll("completed", "merged"));
+fn a_live_feature_keeps_its_cache_whatever_its_pr_did() {
+    for status in ["running", "pending", "awaiting_gate", "some_future_status"] {
+        for mr_state in ["merged", "closed"] {
+            assert!(
+                !cache_releasable(status, Some(mr_state)),
+                "{status} is owned by a driver"
+            );
+        }
+    }
 }
 
 #[test]
-fn a_polled_close_releases_only_a_feature_that_was_already_done() {
-    assert!(releasable_after_mr_poll("completed", "closed"));
-    assert!(!releasable_after_mr_poll("awaiting_mr", "closed"));
+fn a_polled_settle_releases_a_feature_no_driver_owns() {
+    for status in ["awaiting_mr", "completed", "failed"] {
+        assert!(releasable_after_mr_poll(status, "merged"), "{status}");
+        assert!(releasable_after_mr_poll(status, "closed"), "{status}");
+    }
     assert!(!releasable_after_mr_poll("completed", "open"));
     assert!(!releasable_after_mr_poll("completed", "draft"));
+}
+
+#[test]
+fn a_merge_polled_mid_replay_keeps_the_live_run_cache() {
+    assert!(!releasable_after_mr_poll("running", "merged"));
+    assert!(!releasable_after_mr_poll("awaiting_gate", "merged"));
 }
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;

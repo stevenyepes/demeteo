@@ -5,10 +5,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rusqlite::Connection;
 
 use crate::adapters::database::SqliteAdapter;
+use crate::application::lifecycle::RoutedFeatureCacheRelease;
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::ProjectId;
 use crate::domain::models::{Feature, Project};
+use crate::domain::runner_cache_release::CacheReleaseReason;
 use crate::ports::db::{FeatureRepository, ProjectRepository};
+use crate::ports::remote_run_mirror::{RemoteRunMirrorPort, RunnerCachePort};
 use crate::ports::worktree_ops::FeatureCachePort;
 
 /// Counts how many `MrMerged` live events were emitted, so a test can
@@ -261,13 +264,95 @@ async fn the_released_feature_carries_the_polled_pr_state() {
 
 #[tokio::test]
 async fn a_polled_merge_or_close_of_a_finished_feature_releases_its_cache() {
-    assert_eq!(poll_once("completed", "merged").await, ["f-1"]);
-    assert_eq!(poll_once("completed", "closed").await, ["f-1"]);
+    for status in ["completed", "awaiting_mr"] {
+        assert_eq!(poll_once(status, "merged").await, ["f-1"], "{status}");
+        assert_eq!(poll_once(status, "closed").await, ["f-1"], "{status}");
+    }
 }
 
 #[tokio::test]
 async fn a_poll_that_leaves_the_feature_runnable_keeps_its_cache() {
     assert!(poll_once("completed", "open").await.is_empty());
     assert!(poll_once("completed", "draft").await.is_empty());
-    assert!(poll_once("awaiting_mr", "closed").await.is_empty());
+    assert!(poll_once("running", "merged").await.is_empty());
+}
+
+#[derive(Default)]
+struct RecordingRunner {
+    calls: std::sync::Mutex<Vec<(String, String, CacheReleaseReason)>>,
+}
+
+#[async_trait::async_trait]
+impl RunnerCachePort for RecordingRunner {
+    async fn release_feature_cache(
+        &self,
+        machine_id: &str,
+        run_id: &str,
+        reason: CacheReleaseReason,
+    ) -> Result<(), String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((machine_id.to_string(), run_id.to_string(), reason));
+        Ok(())
+    }
+}
+
+/// The desktop's monitor is handed a [`RoutedFeatureCacheRelease`]: the poll
+/// is the only thing on the laptop that sees a runner-owned feature's PR
+/// settle, and the cache it would release lives beside the runner's clone.
+#[tokio::test]
+async fn a_polled_settle_of_a_shadow_is_released_by_its_runner() {
+    for (state, reason) in [
+        ("merged", CacheReleaseReason::Merged),
+        ("closed", CacheReleaseReason::Closed),
+    ] {
+        let adapter = Arc::new(setup());
+        let feature = make_open_mr_feature(&adapter, "f-1", "p-1");
+        FeatureRepository::update(
+            &*adapter,
+            &feature.id,
+            &FeaturePatch {
+                status: Some("awaiting_mr".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        RemoteRunMirrorPort::upsert_submitted(
+            &*adapter,
+            "runner-1",
+            "run-1",
+            Some("p-1"),
+            Some("f-1"),
+            "shadow",
+            0,
+        )
+        .unwrap();
+        let local = Arc::new(RecordingCache::default());
+        let runner = Arc::new(RecordingRunner::default());
+
+        check_mr_states(&MrMonitorPorts {
+            features: adapter.clone(),
+            mr_publisher: Arc::new(FixedMrState(state)),
+            notifications: adapter.clone(),
+            notif: Arc::new(CountingNotif::default()),
+            tickets: adapter.clone(),
+            discoveries: adapter.clone(),
+            cache: Arc::new(RoutedFeatureCacheRelease {
+                local: local.clone(),
+                remote_run_mirror: adapter.clone(),
+                runner: runner.clone(),
+                app_settings: adapter,
+            }),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            *runner.calls.lock().unwrap(),
+            [("runner-1".to_string(), "run-1".to_string(), reason)],
+            "{state}"
+        );
+        assert!(local.released.lock().unwrap().is_empty(), "{state}");
+    }
 }

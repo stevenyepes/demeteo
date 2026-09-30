@@ -38,6 +38,10 @@ pub enum NotificationKind {
     /// Tickets in a Discovery (`docs/PRD_DISCOVERY.md` §6.4). Written by the
     /// MR-state monitor's ticket hook; one row per transition, not per Ticket.
     TicketsStartable,
+    /// A background cache sweep deleted a project's leaked dependency caches
+    /// or worktrees. One row per project per sweep that deleted anything, so
+    /// an automatic deletion is never a silent one; `feature_id` is empty.
+    CachesReclaimed,
 }
 
 impl NotificationKind {
@@ -53,6 +57,7 @@ impl NotificationKind {
             NotificationKind::RetryBudgetExhausted => "retry_budget_exhausted",
             NotificationKind::EnvironmentNotReady => "environment_not_ready",
             NotificationKind::TicketsStartable => "tickets_startable",
+            NotificationKind::CachesReclaimed => "caches_reclaimed",
         }
     }
 }
@@ -70,6 +75,7 @@ impl FromStr for NotificationKind {
             "retry_budget_exhausted" => Ok(NotificationKind::RetryBudgetExhausted),
             "environment_not_ready" => Ok(NotificationKind::EnvironmentNotReady),
             "tickets_startable" => Ok(NotificationKind::TicketsStartable),
+            "caches_reclaimed" => Ok(NotificationKind::CachesReclaimed),
             _ => Err(()),
         }
     }

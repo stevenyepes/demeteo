@@ -21,6 +21,7 @@ impl CacheReclaimPort for SweepReclaim {
     async fn reclaim(&self) -> Result<(), String> {
         let report = super::cache_sweep::sweep_feature_caches(&self.0, false).await?;
         report.log();
+        report.notify(&self.0);
         Ok(())
     }
 }

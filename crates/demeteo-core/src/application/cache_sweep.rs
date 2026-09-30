@@ -27,7 +27,9 @@ use crate::domain::cache_sweep::{
     Verdict,
 };
 use crate::domain::ids::ProjectId;
+use crate::domain::models::{Notification, NotificationKind};
 use crate::ports::execution::SftpEntry;
+use crate::ports::notification::DomainEvent;
 use crate::state::AppContext;
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,6 +68,41 @@ pub enum Outcome {
     Spared(SweepReason),
 }
 
+impl ProjectSweep {
+    /// What the bell says of this project's deletions, or `None` when there
+    /// were none. Counts, not bytes: sizing a tree means walking it, and a
+    /// cache is tens of gigabytes of small files.
+    pub fn reclaimed_notice(&self) -> Option<String> {
+        let deleted = |kind| {
+            self.entries
+                .iter()
+                .filter(|e| e.kind == kind && matches!(e.outcome, Some(Outcome::Deleted)))
+                .count()
+        };
+        let parts: Vec<String> = [
+            (
+                deleted(SiblingKind::Cache),
+                "dependency cache",
+                "dependency caches",
+            ),
+            (
+                deleted(SiblingKind::Worktree),
+                "leaked worktree",
+                "leaked worktrees",
+            ),
+        ]
+        .into_iter()
+        .filter(|(n, _, _)| *n > 0)
+        .map(|(n, one, many)| format!("{n} {}", if n == 1 { one } else { many }))
+        .collect();
+        if parts.is_empty() {
+            return None;
+        }
+        let place = self.clone_dir.as_deref().unwrap_or(&self.project_id);
+        Some(format!("Reclaimed {} beside {place}", parts.join(" and ")))
+    }
+}
+
 /// A [`Reason`] with its [`Reason::describe`] text attached, so a surface
 /// prints the domain's own words instead of keeping a copy that drifts.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -84,6 +121,34 @@ impl From<Reason> for SweepReason {
 }
 
 impl SweepReport {
+    /// Tell the bell what a sweep nobody asked for deleted, one row per
+    /// project. A sweep the user ran from Storage reports there instead.
+    pub fn notify(&self, ctx: &AppContext) {
+        let now = crate::paths::now_ms();
+        for project in &self.projects {
+            let Some(message) = project.reclaimed_notice() else {
+                continue;
+            };
+            let row = Notification {
+                id: format!("notif-caches-{}-{now}", project.project_id),
+                project_id: project.project_id.clone(),
+                feature_id: String::new(),
+                kind: NotificationKind::CachesReclaimed,
+                message: message.clone(),
+                feature_url: None,
+                read: false,
+                created_at: now,
+            };
+            if let Err(error) = ctx.notifications.add(row) {
+                eprintln!("[CacheSweep] could not record the notice: {error}");
+            }
+            let _ = ctx.notif.emit(&DomainEvent::CachesReclaimed {
+                project_id: project.project_id.clone(),
+                message,
+            });
+        }
+    }
+
     pub fn log(&self) {
         for project in &self.projects {
             if let Some(error) = &project.error {
@@ -133,7 +198,10 @@ pub fn start_cache_sweep(ctx: AppContext, runtime: &tokio::runtime::Handle) {
     runtime.spawn(async move {
         loop {
             match sweep_feature_caches(&ctx, false).await {
-                Ok(report) => report.log(),
+                Ok(report) => {
+                    report.log();
+                    report.notify(&ctx);
+                }
                 Err(error) => eprintln!("[CacheSweep] sweep failed: {error}"),
             }
             tokio::time::sleep(SWEEP_INTERVAL).await;
@@ -406,3 +474,7 @@ fn now_secs() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+#[path = "../../tests/application/cache_sweep.rs"]
+mod tests;

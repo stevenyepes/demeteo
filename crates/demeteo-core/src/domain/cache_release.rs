@@ -12,7 +12,9 @@
 //! `failed`, `cancelled`, `awaiting_mr` and a `completed` feature whose PR is
 //! still open are all one click from running again, and deleting their cache
 //! would turn that click into a cold install. A merged or closed PR, or a
-//! feature the user archived or deleted, is where work on it has ended.
+//! feature the user archived or deleted, is where work on it has ended. The PR
+//! decides that, not the status label: a closed PR ends an `awaiting_mr`
+//! feature exactly as it ends a `completed` one, since either could reopen it.
 //!
 //! Until nobody has touched it for the project's `cache_idle_ttl_days`
 //! ([`cache_releasable_at`]). A feature left `failed` for a month is still one
@@ -27,9 +29,20 @@
 pub fn cache_releasable(status: &str, mr_state: Option<&str>) -> bool {
     match status {
         "deleted" | "archived" => true,
-        "completed" => matches!(mr_state, Some("merged" | "closed")),
-        _ => false,
+        _ => is_idle(status) && matches!(mr_state, Some("merged" | "closed")),
     }
+}
+
+/// Whether no driver owns a feature in `status`.
+///
+/// An allowlist rather than a list of live statuses: a status added later is
+/// treated as live until someone decides it is idle, where a denylist would
+/// release the cache under a run it had never heard of.
+fn is_idle(status: &str) -> bool {
+    matches!(
+        status,
+        "failed" | "cancelled" | "awaiting_mr" | "interrupted" | "completed"
+    )
 }
 
 /// How long an idle cache is kept when the project has not said.
@@ -50,12 +63,8 @@ pub fn idle_past_ttl(last_activity_ms: i64, now_ms: i64, ttl_days: u32) -> bool 
 }
 
 /// [`cache_releasable`], or a feature no driver owns that has sat idle past
-/// the project's TTL.
-///
-/// An allowlist of idle statuses rather than a list of live ones: a status
-/// added later is kept until someone decides it is idle, where a denylist
-/// would age out a live run it had never heard of. `completed` is here for a
-/// PR still open, which is as abandoned as `awaiting_mr` after two weeks.
+/// the project's TTL. `completed` ages out for a PR still open, which is as
+/// abandoned as `awaiting_mr` after two weeks.
 pub fn cache_releasable_at(
     status: &str,
     mr_state: Option<&str>,
@@ -64,22 +73,16 @@ pub fn cache_releasable_at(
     ttl_days: u32,
 ) -> bool {
     cache_releasable(status, mr_state)
-        || (matches!(
-            status,
-            "failed" | "cancelled" | "awaiting_mr" | "interrupted" | "completed"
-        ) && idle_past_ttl(last_activity_ms, now_ms, ttl_days))
+        || (is_idle(status) && idle_past_ttl(last_activity_ms, now_ms, ttl_days))
 }
 
-/// [`cache_releasable`] for a feature in `status` whose PR the MR monitor has
-/// just recorded as `new_mr_state`. The monitor writes a merge as `completed`
-/// whatever the status was, and leaves the status of every other transition
-/// alone.
+/// [`cache_releasable`] for a feature in `status` — as it was *before* the
+/// poll — whose PR the MR monitor has just recorded as `new_mr_state`.
+///
+/// The monitor writes a merge as `completed` whatever the status was, a live
+/// run included, so judging the status it overwrote is what keeps the poll
+/// from deleting a cache under a driver whose PR merged mid-replay.
 pub fn releasable_after_mr_poll(status: &str, new_mr_state: &str) -> bool {
-    let status = if new_mr_state == "merged" {
-        "completed"
-    } else {
-        status
-    };
     cache_releasable(status, Some(new_mr_state))
 }
 

@@ -218,6 +218,10 @@ impl NotificationPort for TauriNotificationAdapter {
                 "tickets_startable",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
+            DomainEvent::CachesReclaimed { .. } => (
+                "caches_reclaimed",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
             DomainEvent::McpConsentRequested { .. } => (
                 "mcp_consent_requested",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,

@@ -125,3 +125,23 @@ fn only_an_unknown_run_is_given_up_on() {
     ));
     assert!(worth_retrying("Timed out waiting on socket"));
 }
+
+#[test]
+fn a_runner_too_old_for_the_method_is_reported_once_per_machine() {
+    let mut too_old = std::collections::HashSet::new();
+    let old = "unknown method: release_feature_cache";
+
+    assert!(worth_logging(&mut too_old, "runner-1", old));
+    assert!(!worth_logging(&mut too_old, "runner-1", old));
+    assert!(worth_logging(&mut too_old, "runner-2", old));
+}
+
+#[test]
+fn every_other_failure_is_reported_every_time() {
+    let mut too_old = std::collections::HashSet::new();
+    let offline = "Timed out waiting on socket";
+
+    assert!(worth_logging(&mut too_old, "runner-1", offline));
+    assert!(worth_logging(&mut too_old, "runner-1", offline));
+    assert!(too_old.is_empty());
+}

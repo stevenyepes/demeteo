@@ -528,22 +528,19 @@ mod release_feature_cache {
     }
 
     #[tokio::test]
-    async fn a_closed_pr_on_an_unmerged_feature_is_recorded_but_keeps_the_cache() {
+    async fn a_closed_pr_on_an_unmerged_feature_is_recorded_and_releases_the_cache() {
         let db = db_with_run("awaiting_mr");
         let cache = RecordingCache::default();
 
         let outcome = release(&db, &cache, CacheReleaseReason::Closed, "client-A").await;
 
-        assert_eq!(outcome, Ok(CacheReleased { released: false }));
+        assert_eq!(outcome, Ok(CacheReleased { released: true }));
         let row = feature(&db);
         assert_eq!(
             (row.status.as_str(), row.mr_state.as_deref()),
             ("awaiting_mr", Some("closed"))
         );
-        assert!(
-            released(&cache).is_empty(),
-            "`awaiting_mr` is one click from running again (domain::cache_release)"
-        );
+        assert_eq!(released(&cache).len(), 1);
     }
 
     #[tokio::test]

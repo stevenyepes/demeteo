@@ -289,12 +289,18 @@ pub fn build_core_context(
             notif: notif.clone(),
             tickets: tickets_repo.clone(),
             discoveries: discoveries_repo.clone(),
-            cache: Arc::new(crate::application::lifecycle::FeatureCacheRelease {
-                projects: projects_repo.clone(),
-                exec: exec_inner.clone(),
-                workspace_dir: workspace_dir.clone(),
-                worktree_ops: worktree_ops.clone(),
-            }),
+            cache: Arc::new(
+                crate::application::lifecycle::RoutedFeatureCacheRelease::new(
+                    crate::application::lifecycle::FeatureCacheRelease {
+                        projects: projects_repo.clone(),
+                        exec: exec_inner.clone(),
+                        workspace_dir: workspace_dir.clone(),
+                        worktree_ops: worktree_ops.clone(),
+                    },
+                    remote_run_mirror_repo.clone(),
+                    app_settings_repo.clone(),
+                ),
+            ),
         },
         &runtime,
     );

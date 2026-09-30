@@ -105,6 +105,21 @@ pub fn worth_retrying(error: &str) -> bool {
     !error.starts_with(NO_SUCH_RUN)
 }
 
+/// Whether a retry that failed with `error` on `machine_id` is news, given the
+/// machines `too_old` already records as not knowing the method.
+///
+/// A runner too old for `release_feature_cache` answers the same way on every
+/// reconcile until it is upgraded, and its entry is kept for that upgrade
+/// ([`worth_retrying`]), so it is said once per machine rather than once per
+/// reconcile. Every other failure is said each time: it can change.
+pub fn worth_logging(
+    too_old: &mut std::collections::HashSet<String>,
+    machine_id: &str,
+    error: &str,
+) -> bool {
+    !error.starts_with("unknown method") || too_old.insert(machine_id.to_string())
+}
+
 #[cfg(test)]
 #[path = "../../tests/domain/runner_cache_release.rs"]
 mod tests;
