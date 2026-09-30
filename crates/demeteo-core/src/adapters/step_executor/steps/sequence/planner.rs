@@ -46,7 +46,7 @@ impl ExecutionDriver {
         {
             Ok(p) => p,
             Err(e) => {
-                return Err(StepOutcome::Environmental(format!(
+                return Err(StepOutcome::provision_failed(format!(
                     "sequence step: planner worktree provision failed: {}",
                     e
                 )))

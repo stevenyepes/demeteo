@@ -1,3 +1,4 @@
+use super::cache_release::{retry_pending_runner_releases, RunnerCacheRpc};
 use super::credentials::inject_pat_for_run;
 use super::reconcile::{reconcile_one_run, NOTIFY_ON};
 use super::rpc::{json_str, remote_rpc};
@@ -233,6 +234,13 @@ pub async fn reconcile_all_runs(
     ctx: &AppContext,
     notify: &(dyn Fn(&[String]) + Sync),
 ) -> Result<Vec<RemoteRunMirror>, AppError> {
+    let runner = RunnerCacheRpc {
+        exec: ctx.exec.clone(),
+        app_settings: ctx.app_settings.clone(),
+    };
+    if let Err(error) = retry_pending_runner_releases(&runner, &*ctx.app_settings).await {
+        eprintln!("[RunnerCache] pending releases not retried: {error}");
+    }
     let rows = ctx.remote_run_mirror.list().map_err(AppError::from)?;
     let mut notify_bodies = Vec::new();
     for row in &rows {

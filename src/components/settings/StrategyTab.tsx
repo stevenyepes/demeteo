@@ -4,6 +4,7 @@ import { HarnessModelPicker } from '../ui/HarnessModelPicker';
 import { HarnessesSection } from './HarnessesSection';
 import { useSettings } from './ProjectSettingsContext';
 import { UNSET_DEFAULT_WORKFLOW_HINT } from '../../lib/workflowDefault';
+import { DEFAULT_CACHE_IDLE_TTL_DAYS, parseCacheIdleTtlDays } from '../../lib/cacheIdleTtl';
 
 export function StrategyTab() {
   const s = useSettings();
@@ -14,6 +15,7 @@ export function StrategyTab() {
   // The resolver row runs under its own harness when it names one, so its
   // ladder is that harness's — not the project default's.
   const resolverEffortLevels = s.effortLevelsFor(s.syncResolverAgentKind || s.defaultAgentKind);
+  const cacheIdleTtl = parseCacheIdleTtlDays(s.cacheIdleTtlDays);
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -58,6 +60,12 @@ export function StrategyTab() {
             <option value="keep">Keep active</option>
             <option value="auto_delete">Auto delete branch after MR merge</option>
           </select>
+        </div>
+        <div>
+          <label htmlFor="cache-idle-ttl-days" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Release Idle Dependency Caches After (Days)</label>
+          <input id="cache-idle-ttl-days" type="number" min={0} step={1} value={s.cacheIdleTtlDays} onChange={e => s.setCacheIdleTtlDays(e.target.value)} placeholder={`${DEFAULT_CACHE_IDLE_TTL_DAYS} (engine default)`} className="w-40 bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50 font-mono placeholder-slate-600" />
+          {!cacheIdleTtl.ok && <p className="text-[11px] text-ruby-400 mt-1.5">{cacheIdleTtl.message}</p>}
+          <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">A failed, cancelled, interrupted or awaiting-MR feature — or a completed one whose PR is still open — has its dependency cache released once it sits idle this long, as does the default branch's cache Ask and Discovery share once no session holds it. The next run reseeds it. <span className="font-mono">0</span> never releases on idleness; leave blank for the engine default ({DEFAULT_CACHE_IDLE_TTL_DAYS}).</p>
         </div>
         <div>
           <label htmlFor="review-entrypoint" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Code review entrypoint</label>

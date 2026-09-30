@@ -362,6 +362,22 @@ pub trait ExecutionPort: Send + Sync {
 
     async fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String>;
 
+    /// Bytes an unprivileged writer can still put on the filesystem holding
+    /// `path` — `statvfs`'s `f_bavail`, `df`'s *Available*,
+    /// `GetDiskFreeSpaceExW`'s caller-available count; never the total free,
+    /// which counts the blocks reserved for root.
+    ///
+    /// `path` must be an existing directory: a missing one is `Err` (D3), not
+    /// the free space of some ancestor chosen by the transport. A caller asking
+    /// about a directory it is about to create walks to the nearest existing
+    /// ancestor itself, so that choice is made once and not per transport.
+    ///
+    /// Test doubles inherit the `Err` default, which callers must read as "the
+    /// machine did not answer" and never as a full disk.
+    async fn free_space_bytes(&self, _machine_id: &str, _path: &str) -> Result<u64, String> {
+        Err("free-space inspection is not implemented by this transport".to_string())
+    }
+
     async fn list_dir(&self, machine_id: &str, path: &str) -> Result<Vec<SftpEntry>, String>;
 
     async fn setup_worktree(

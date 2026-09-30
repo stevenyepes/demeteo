@@ -1,4 +1,4 @@
-// Tests for `impl From<VerifierError> for StepOutcome`. `super` = the
+// Tests for the pure mappings onto `StepOutcome`. `super` = the
 // `steps` module. No doubles and no runtime — the mapping is total and pure.
 
 use super::*;
@@ -54,4 +54,22 @@ fn a_cancel_is_not_a_failure() {
         ),
         "nothing was judged and nothing should be persisted as an error"
     );
+}
+
+/// A full disk is not worth the environment rule's free retry: nothing between
+/// two attempts frees the space, so the second would refuse the same way.
+#[test]
+fn a_seed_refused_for_disk_is_non_retryable_and_other_provision_failures_are_not() {
+    let refusal = format!(
+        "sequence step: worktree provision failed (f-1): {}machine 'local' has 1.0 GiB free",
+        crate::domain::seed_space::DISK_FULL_ERROR_PREFIX
+    );
+    match StepOutcome::provision_failed(refusal.clone()) {
+        StepOutcome::NonRetryable(msg) => assert_eq!(msg, refusal),
+        _ => panic!("a disk-full refusal must end the step without a retry"),
+    }
+    assert!(matches!(
+        StepOutcome::provision_failed("git worktree add failed: lock held".into()),
+        StepOutcome::Environmental(_)
+    ));
 }

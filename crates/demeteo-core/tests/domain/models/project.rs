@@ -33,6 +33,7 @@ fn apply_leaves_all_excluded_fields_untouched() {
     settings.default_max_budget_usd = Some(42.5);
     settings.default_loop_iterations = Some(7);
     settings.sync_review_before_push = Some(false);
+    settings.cache_idle_ttl_days = Some(0);
     settings.worktree_strategy.default_branch = "trunk".to_string();
     settings.feature_lifecycle = "delete".to_string();
 
@@ -41,6 +42,7 @@ fn apply_leaves_all_excluded_fields_untouched() {
     assert_eq!(result.default_max_budget_usd, Some(42.5));
     assert_eq!(result.default_loop_iterations, Some(7));
     assert_eq!(result.sync_review_before_push, Some(false));
+    assert_eq!(result.cache_idle_ttl_days, Some(0));
     assert_eq!(result.worktree_strategy.default_branch, "trunk");
     assert_eq!(result.feature_lifecycle, "delete");
 }

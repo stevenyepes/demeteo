@@ -289,6 +289,29 @@ pub trait ProjectRepository: Send + Sync {
 /// the per-step `StepExecution` rows.
 pub trait FeatureRepository: Send + Sync {
     fn get_active(&self, project_id: &ProjectId) -> Result<Vec<Feature>, String>;
+    /// Every feature of the project, archived and deleted included — the ones
+    /// [`get_active`](Self::get_active) hides are exactly those whose leftovers
+    /// may be reclaimed.
+    ///
+    /// Defaults to an error so a double that never scripted it makes a caller
+    /// judge nothing rather than judge against an empty project.
+    fn get_all_for_project(&self, _project_id: &ProjectId) -> Result<Vec<Feature>, String> {
+        Err("listing every feature of a project is not implemented by this repository".into())
+    }
+    /// When each feature of the project was last touched, in milliseconds:
+    /// the newest of its creation, any write to one of its steps, and any
+    /// write to its sync session. `features` carries no `updated_at` of its
+    /// own, and the step rows are what every run, retry, cancel and replay
+    /// writes.
+    ///
+    /// Defaults to an error for the reason
+    /// [`get_all_for_project`](Self::get_all_for_project) does.
+    fn last_activity_for_project(
+        &self,
+        _project_id: &ProjectId,
+    ) -> Result<std::collections::HashMap<String, i64>, String> {
+        Err("reading feature activity is not implemented by this repository".into())
+    }
     fn get(&self, id: &FeatureId) -> Result<Option<Feature>, String>;
     fn add(&self, f: Feature) -> Result<(), String>;
     /// Apply a [`FeaturePatch`] (replaces the 4-arg `update_feature_status`).

@@ -148,7 +148,11 @@ pub async fn ensure(
         }
     }
 
-    let git = GitOpsHelper::new(ctx.app_settings.clone(), ctx.exec.clone());
+    let git = GitOpsHelper::new(ctx.app_settings.clone(), ctx.exec.clone()).with_cache_reclaim(
+        std::sync::Arc::new(crate::application::cache_reclaim::SweepReclaim::new(
+            ctx.clone(),
+        )),
+    );
     let start_point = git
         .refreshed_start_point(
             &repo.machine_str,
@@ -260,5 +264,9 @@ pub async fn reclaim_idle(
 }
 
 fn subtask_id(discovery: &Discovery) -> String {
-    format!("discovery-{}", discovery.id.as_str())
+    format!(
+        "{}{}",
+        crate::domain::cache_sweep::DISCOVERY_WORKTREE_PREFIX,
+        discovery.id.as_str()
+    )
 }

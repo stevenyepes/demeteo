@@ -1,4 +1,6 @@
-use super::client_id::{client_install_id, stamp_client_id};
+use super::client_id::{install_id_in, stamp_client_id};
+use crate::ports::db::AppSettingsRepository;
+use crate::ports::execution::ExecutionPort;
 use crate::state::AppContext;
 
 pub(super) fn json_str(v: &serde_json::Value, key: &str) -> Option<String> {
@@ -11,9 +13,21 @@ pub(super) async fn remote_rpc(
     method: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let client_id = client_install_id(ctx)?;
+    remote_rpc_via(&*ctx.exec, &*ctx.app_settings, machine_id, method, params).await
+}
+
+/// [`remote_rpc`] over the two ports it reads, for a caller that holds no
+/// [`AppContext`].
+pub(super) async fn remote_rpc_via(
+    exec: &dyn ExecutionPort,
+    settings: &dyn AppSettingsRepository,
+    machine_id: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let client_id = install_id_in(settings)?;
     let params = stamp_client_id(params, &client_id);
-    ctx.exec.control_rpc(machine_id, method, params).await
+    exec.control_rpc(machine_id, method, params).await
 }
 
 #[cfg(test)]

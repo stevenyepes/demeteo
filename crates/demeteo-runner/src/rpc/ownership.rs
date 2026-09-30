@@ -1,5 +1,6 @@
 use crate::services::RunnerServices;
 use demeteo_core::domain::ids::StepExecutionId;
+use demeteo_core::domain::runner_cache_release::NO_SUCH_RUN;
 use demeteo_core::ports::db::FeatureRepository;
 use demeteo_core::ports::runner_run::{RunnerRun, RunnerRunPort};
 use std::sync::Arc;
@@ -20,7 +21,16 @@ pub(super) fn require_owner(
     run_id: &str,
     client_id: &str,
 ) -> Result<RunnerRun, String> {
-    check_owner(svc.ctx.runner_runs.get(run_id)?, run_id, client_id)
+    require_owner_in(svc.ctx.runner_runs.as_ref(), run_id, client_id)
+}
+
+/// [`require_owner`] over the one port it reads.
+pub(super) fn require_owner_in(
+    runs: &dyn RunnerRunPort,
+    run_id: &str,
+    client_id: &str,
+) -> Result<RunnerRun, String> {
+    check_owner(runs.get(run_id)?, run_id, client_id)
 }
 
 /// The pure ownership decision behind [`require_owner`], split out so the
@@ -39,7 +49,7 @@ fn check_owner(run: Option<RunnerRun>, run_id: &str, client_id: &str) -> Result<
 /// drift between the two would re-open the existence-probe leak MC-D2
 /// closes).
 fn no_such_run(run_id: &str) -> String {
-    format!("no such run: {}", run_id)
+    format!("{NO_SUCH_RUN}{run_id}")
 }
 
 /// Resolve a bare step_execution_id — a `gate_id` (M5.3), a retry target

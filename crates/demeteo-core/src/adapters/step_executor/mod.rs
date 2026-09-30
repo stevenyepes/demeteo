@@ -253,6 +253,14 @@ impl DagStepExecutor {
     /// PAT instead (docs/REMOTE_EXECUTION.md §6.2). A runner that wired one up
     /// here would fail the publish and force a credential to be resident for
     /// the whole run — the exact thing that design avoids.
+    pub fn with_cache_reclaim(
+        mut self,
+        reclaim: Arc<dyn crate::ports::cache_reclaim::CacheReclaimPort>,
+    ) -> Self {
+        self.git_ops = self.git_ops.with_cache_reclaim(reclaim);
+        self
+    }
+
     pub fn with_mr_publisher(
         mut self,
         publisher: Arc<dyn crate::ports::mr_publisher::MrPublisher>,

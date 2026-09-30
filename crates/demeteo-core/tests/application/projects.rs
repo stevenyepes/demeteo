@@ -296,7 +296,15 @@ impl WorktreeOpsPort for RecordingWorktrees {
     ) -> Result<(), String> {
         panic!("unexpected WorktreeOpsPort call")
     }
-    async fn branch_delete(&self, _: Option<&str>, _: &str, _: &str) -> Result<(), String> {
+    async fn branch_delete(
+        &self,
+        _: Option<&str>,
+        _: &str,
+        _: &str,
+    ) -> Result<crate::ports::worktree_ops::BranchDeleted, String> {
+        panic!("unexpected WorktreeOpsPort call")
+    }
+    async fn release_feature_cache(&self, _: Option<&str>, _: &str, _: &str) -> Result<(), String> {
         panic!("unexpected WorktreeOpsPort call")
     }
     async fn merge_subtask(

@@ -219,6 +219,7 @@ pub fn build_core_context(
     let artifact_store: Arc<dyn ports::artifact_store::ArtifactStore> = Arc::new(
         adapters::artifact_store::fs::FsArtifactStore::new(app_data_dir.clone()),
     );
+    let cache_reclaim = Arc::new(application::cache_reclaim::DeferredReclaim::default());
     let step_executor_adapter = {
         let exec = adapters::step_executor::DagStepExecutor::new(
             machines_repo.clone(),
@@ -245,7 +246,8 @@ pub fn build_core_context(
             pricing.clone(),
             remote_run_mirror_repo.clone(),
             sync_turns.clone(),
-        );
+        )
+        .with_cache_reclaim(cache_reclaim.clone());
         // Only the desktop lets a finished run open its own PR. The headless
         // runner (`LocalOnly`) publishes at the end of `run.rs` instead, with
         // a memory-only PAT — it has no keyring for this publisher to resolve
@@ -280,12 +282,26 @@ pub fn build_core_context(
     // `Notification` row on transition to `merged`, and emits
     // `DomainEvent::MrMerged` for the bell + toast.
     adapters::mr_monitor::start_mr_monitor(
-        features_repo.clone(),
-        mr_publisher.clone(),
-        notifications_repo.clone(),
-        notif.clone(),
-        tickets_repo.clone(),
-        discoveries_repo.clone(),
+        adapters::mr_monitor::MrMonitorPorts {
+            features: features_repo.clone(),
+            mr_publisher: mr_publisher.clone(),
+            notifications: notifications_repo.clone(),
+            notif: notif.clone(),
+            tickets: tickets_repo.clone(),
+            discoveries: discoveries_repo.clone(),
+            cache: Arc::new(
+                crate::application::lifecycle::RoutedFeatureCacheRelease::new(
+                    crate::application::lifecycle::FeatureCacheRelease {
+                        projects: projects_repo.clone(),
+                        exec: exec_inner.clone(),
+                        workspace_dir: workspace_dir.clone(),
+                        worktree_ops: worktree_ops.clone(),
+                    },
+                    remote_run_mirror_repo.clone(),
+                    app_settings_repo.clone(),
+                ),
+            ),
+        },
         &runtime,
     );
 
@@ -363,6 +379,13 @@ pub fn build_core_context(
     if matches!(execution_mode, ExecutionMode::Router) {
         adapters::mcp::start_if_enabled(ctx.clone(), &runtime);
     }
+
+    // Both modes: the runner sweeps its own workspace against its own
+    // database, which no laptop-side project path ever reaches into. Racing
+    // `resume_interrupted_features` is safe because a resumable feature keeps
+    // its cache and every deletion is re-judged just before it happens.
+    cache_reclaim.bind(ctx.clone());
+    application::cache_sweep::start_cache_sweep(ctx.clone(), &runtime);
 
     ctx
 }

@@ -338,3 +338,278 @@ mod set_step_assignment {
         );
     }
 }
+
+mod release_feature_cache {
+    // The runner owns a detached run's feature row and cache, but cannot see
+    // the PR merge or the laptop's cleanup that ends it; this is how it is
+    // told. What it owes: refuse a foreign run exactly as an absent one,
+    // refuse a live one, record the reason on its own row before releasing,
+    // and answer a repeat the same way.
+
+    use super::super::{settle_and_release, CacheReleased, ReleaseFeatureCacheParams, SettlePorts};
+    use demeteo_core::adapters::database::SqliteAdapter;
+    use demeteo_core::adapters::notification_noop::NoopNotificationAdapter;
+    use demeteo_core::domain::feature_origin::FeatureOrigin;
+    use demeteo_core::domain::ids::{FeatureId, ProjectId};
+    use demeteo_core::domain::models::{Feature, NotificationKind, Project};
+    use demeteo_core::domain::runner_cache_release::CacheReleaseReason;
+    use demeteo_core::ports::db::{FeatureRepository, NotificationRepository, ProjectRepository};
+    use demeteo_core::ports::runner_run::RunnerRunPort;
+    use demeteo_core::ports::worktree_ops::FeatureCachePort;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RecordingCache {
+        released: Mutex<Vec<(String, String, Option<String>)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl FeatureCachePort for RecordingCache {
+        async fn release(&self, feature: &Feature) -> Result<(), String> {
+            self.released.lock().unwrap().push((
+                feature.id.as_str().to_string(),
+                feature.status.clone(),
+                feature.mr_state.clone(),
+            ));
+            Ok(())
+        }
+    }
+
+    static NEXT_DB: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    fn empty_db() -> SqliteAdapter {
+        let dir = std::env::temp_dir().join(format!(
+            "demeteo_runner_cache_{}_{}_{}",
+            std::process::id(),
+            demeteo_core::paths::now_ms(),
+            NEXT_DB.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let conn = demeteo_core::db::init_db(dir).expect("init_db");
+        let db = SqliteAdapter::new(conn).expect("migrations run");
+        ProjectRepository::add(
+            &db,
+            Project {
+                id: ProjectId::from("p-cache"),
+                name: "cache".to_string(),
+                compute_type: "local".to_string(),
+                remote_host: None,
+                status: "idle".to_string(),
+                nodes: 0,
+                spend: 0.0,
+                tokens: 0,
+                created_at: 1_700_000_000,
+            },
+        )
+        .expect("seed the project");
+        db
+    }
+
+    /// `run-1`, owned by `client-A` and in `run_status`, whose feature `f-1`
+    /// finished `awaiting_mr` with its PR open.
+    fn db_with_run(run_status: &str) -> SqliteAdapter {
+        let db = empty_db();
+        FeatureRepository::add(
+            &db,
+            Feature {
+                id: FeatureId::from("f-1"),
+                project_id: ProjectId::from("p-cache"),
+                workflow_id: None,
+                workflow_version_id: None,
+                title: "feature".to_string(),
+                description: String::new(),
+                status: "awaiting_mr".to_string(),
+                total_cost: 0.0,
+                duration: "0s".to_string(),
+                tokens: 0,
+                created_at: 1_700_000_000,
+                agent_kind: None,
+                model: None,
+                effort: None,
+                mr_url: Some("https://example.invalid/pr/1".to_string()),
+                mr_state: Some("open".to_string()),
+                pr_title: None,
+                pr_body: None,
+                commit_artifacts: None,
+                loop_iterations: None,
+                max_budget_usd: None,
+                step_overrides: Vec::new(),
+                attachments: Vec::new(),
+                harness_baseline: None,
+                origin: FeatureOrigin::DefaultBranch,
+                diff_base_branch: None,
+                resolved_branch: None,
+            },
+        )
+        .expect("seed the feature");
+        RunnerRunPort::get_or_create(&db, "run-1", "{}", "client-A", 1_700_000_000)
+            .expect("seed the run");
+        RunnerRunPort::update_status(
+            &db,
+            "run-1",
+            run_status,
+            Some("p-cache"),
+            Some("f-1"),
+            None,
+            None,
+            1_700_000_000,
+        )
+        .expect("attach the feature to the run");
+        db
+    }
+
+    async fn release(
+        db: &SqliteAdapter,
+        cache: &RecordingCache,
+        reason: CacheReleaseReason,
+        client_id: &str,
+    ) -> Result<CacheReleased, String> {
+        settle_and_release(
+            &SettlePorts {
+                runs: db,
+                features: db,
+                notifications: db,
+                notif: &NoopNotificationAdapter,
+                cache,
+            },
+            &ReleaseFeatureCacheParams {
+                run_id: "run-1".to_string(),
+                reason,
+            },
+            client_id,
+        )
+        .await
+    }
+
+    fn feature(db: &SqliteAdapter) -> Feature {
+        FeatureRepository::get(db, &FeatureId::from("f-1"))
+            .unwrap()
+            .expect("f-1 is seeded")
+    }
+
+    fn released(cache: &RecordingCache) -> Vec<(String, String, Option<String>)> {
+        cache.released.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn the_owner_records_the_merge_and_releases() {
+        let db = db_with_run("awaiting_mr");
+        let cache = RecordingCache::default();
+
+        let outcome = release(&db, &cache, CacheReleaseReason::Merged, "client-A").await;
+
+        assert_eq!(outcome, Ok(CacheReleased { released: true }));
+        let row = feature(&db);
+        assert_eq!(
+            (row.status.as_str(), row.mr_state.as_deref()),
+            ("completed", Some("merged")),
+            "the row must read as merged, or the runner's own sweep keeps the \
+             cache this call just released the next time it is re-provisioned"
+        );
+        assert_eq!(
+            released(&cache),
+            [(
+                "f-1".to_string(),
+                "completed".to_string(),
+                Some("merged".to_string())
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dismissal_archives_the_row_and_releases() {
+        let db = db_with_run("awaiting_mr");
+        let cache = RecordingCache::default();
+
+        let outcome = release(&db, &cache, CacheReleaseReason::Dismissed, "client-A").await;
+
+        assert_eq!(outcome, Ok(CacheReleased { released: true }));
+        assert_eq!(feature(&db).status, "archived");
+        assert_eq!(released(&cache).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_closed_pr_on_an_unmerged_feature_is_recorded_and_releases_the_cache() {
+        let db = db_with_run("awaiting_mr");
+        let cache = RecordingCache::default();
+
+        let outcome = release(&db, &cache, CacheReleaseReason::Closed, "client-A").await;
+
+        assert_eq!(outcome, Ok(CacheReleased { released: true }));
+        let row = feature(&db);
+        assert_eq!(
+            (row.status.as_str(), row.mr_state.as_deref()),
+            ("awaiting_mr", Some("closed"))
+        );
+        assert_eq!(released(&cache).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_foreign_run_is_indistinguishable_from_an_absent_one() {
+        let db = db_with_run("awaiting_mr");
+        let cache = RecordingCache::default();
+
+        let foreign = release(&db, &cache, CacheReleaseReason::Merged, "client-B")
+            .await
+            .expect_err("client-B does not own run-1");
+        let absent = release(&empty_db(), &cache, CacheReleaseReason::Merged, "client-B")
+            .await
+            .expect_err("this runner has never heard of run-1");
+
+        assert_eq!(foreign, absent);
+        assert_eq!(absent, "no such run: run-1");
+        assert!(released(&cache).is_empty());
+        assert_eq!(
+            feature(&db).mr_state.as_deref(),
+            Some("open"),
+            "a refused caller must not have written the owner's row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_live_run_is_refused_untouched() {
+        let db = db_with_run("running");
+        let cache = RecordingCache::default();
+
+        let refusal = release(&db, &cache, CacheReleaseReason::Dismissed, "client-A")
+            .await
+            .expect_err("the driver may read the cache at any moment");
+
+        assert!(refusal.contains("still running"), "{refusal}");
+        assert_eq!(feature(&db).status, "awaiting_mr");
+        assert!(released(&cache).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_repeat_answers_the_same_and_notifies_once() {
+        let db = db_with_run("awaiting_mr");
+        let cache = RecordingCache::default();
+
+        let first = release(&db, &cache, CacheReleaseReason::Merged, "client-A").await;
+        let second = release(&db, &cache, CacheReleaseReason::Merged, "client-A").await;
+
+        assert_eq!(first, second);
+        let merges = NotificationRepository::list(&db, Some(&ProjectId::from("p-cache")), 100)
+            .unwrap()
+            .into_iter()
+            .filter(|n| n.kind == NotificationKind::MrMerged)
+            .count();
+        assert_eq!(merges, 1);
+    }
+
+    #[test]
+    fn the_reason_is_required_and_spelled_snake_case() {
+        let params: ReleaseFeatureCacheParams = serde_json::from_value(serde_json::json!({
+            "run_id": "run-1",
+            "reason": "dismissed",
+        }))
+        .expect("the wire spelling");
+        assert_eq!(params.reason, CacheReleaseReason::Dismissed);
+
+        for bad in [
+            serde_json::json!({ "run_id": "run-1" }),
+            serde_json::json!({ "run_id": "run-1", "reason": "open" }),
+        ] {
+            assert!(serde_json::from_value::<ReleaseFeatureCacheParams>(bad).is_err());
+        }
+    }
+}

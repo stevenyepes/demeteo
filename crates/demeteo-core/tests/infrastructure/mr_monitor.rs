@@ -5,10 +5,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rusqlite::Connection;
 
 use crate::adapters::database::SqliteAdapter;
+use crate::application::lifecycle::RoutedFeatureCacheRelease;
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::ProjectId;
 use crate::domain::models::{Feature, Project};
+use crate::domain::runner_cache_release::CacheReleaseReason;
 use crate::ports::db::{FeatureRepository, ProjectRepository};
+use crate::ports::remote_run_mirror::{RemoteRunMirrorPort, RunnerCachePort};
+use crate::ports::worktree_ops::FeatureCachePort;
 
 /// Counts how many `MrMerged` live events were emitted, so a test can
 /// assert the bell/toast fires exactly once even if `record_merged`
@@ -140,4 +144,215 @@ fn record_merged_is_idempotent_for_the_same_feature() {
         1,
         "a repeated merge must not re-emit the live bell/toast event"
     );
+}
+
+/// Answers `fetch_mr_state` with one fixed state; any other call is a test bug.
+struct FixedMrState(&'static str);
+
+#[async_trait::async_trait]
+impl MrPublisher for FixedMrState {
+    async fn publish_mr(
+        &self,
+        _: &str,
+        _: &FeatureId,
+        _: crate::domain::models::PublishOptions,
+    ) -> Result<crate::domain::models::MrInfo, String> {
+        panic!("unexpected MrPublisher call")
+    }
+    async fn fetch_mr_state(&self, _: &str, _: &str) -> Result<String, String> {
+        Ok(self.0.to_string())
+    }
+    async fn list_open_mrs(
+        &self,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<Vec<crate::domain::mr_summary::MrSummary>, crate::domain::mr_list_error::MrListError>
+    {
+        panic!("unexpected MrPublisher call")
+    }
+    async fn fetch_mr_detail(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<crate::domain::mr_summary::MrSummary, crate::domain::mr_list_error::MrListError>
+    {
+        panic!("unexpected MrPublisher call")
+    }
+    async fn post_mr_comment(&self, _: &str, _: &str, _: &str) -> Result<String, String> {
+        panic!("unexpected MrPublisher call")
+    }
+    async fn publish_branch_mr(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: crate::domain::models::PublishOptions,
+    ) -> Result<crate::domain::models::MrInfo, String> {
+        panic!("unexpected MrPublisher call")
+    }
+}
+
+#[derive(Default)]
+struct RecordingCache {
+    released: std::sync::Mutex<Vec<String>>,
+    mr_states: std::sync::Mutex<Vec<Option<String>>>,
+}
+
+#[async_trait::async_trait]
+impl FeatureCachePort for RecordingCache {
+    async fn release(&self, feature: &Feature) -> Result<(), String> {
+        self.released.lock().unwrap().push(feature.id.0.clone());
+        self.mr_states
+            .lock()
+            .unwrap()
+            .push(feature.mr_state.clone());
+        Err("the monitor must survive a failed release".to_string())
+    }
+}
+
+/// One poll of a feature in `status` whose PR the provider reports as
+/// `provider_state`; returns the features whose cache the poll released.
+async fn poll_once(status: &str, provider_state: &'static str) -> Vec<String> {
+    poll_once_recording(status, provider_state)
+        .await
+        .released
+        .into_inner()
+        .unwrap()
+}
+
+async fn poll_once_recording(status: &str, provider_state: &'static str) -> RecordingCache {
+    let adapter = Arc::new(setup());
+    let feature = make_open_mr_feature(&adapter, "f-1", "p-1");
+    FeatureRepository::update(
+        &*adapter,
+        &feature.id,
+        &FeaturePatch {
+            status: Some(status.to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let cache = Arc::new(RecordingCache::default());
+
+    check_mr_states(&MrMonitorPorts {
+        features: adapter.clone(),
+        mr_publisher: Arc::new(FixedMrState(provider_state)),
+        notifications: adapter.clone(),
+        notif: Arc::new(CountingNotif::default()),
+        tickets: adapter.clone(),
+        discoveries: adapter,
+        cache: cache.clone(),
+    })
+    .await
+    .unwrap();
+
+    Arc::try_unwrap(cache).unwrap_or_else(|_| panic!("the poll kept the cache port"))
+}
+
+/// A runner-owned feature's cache is released by telling its runner *why*, so
+/// the port must see the state the poll found, not the `open` it polled from.
+#[tokio::test]
+async fn the_released_feature_carries_the_polled_pr_state() {
+    for state in ["merged", "closed"] {
+        let cache = poll_once_recording("completed", state).await;
+        assert_eq!(
+            cache.mr_states.into_inner().unwrap(),
+            [Some(state.to_string())]
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_polled_merge_or_close_of_a_finished_feature_releases_its_cache() {
+    for status in ["completed", "awaiting_mr"] {
+        assert_eq!(poll_once(status, "merged").await, ["f-1"], "{status}");
+        assert_eq!(poll_once(status, "closed").await, ["f-1"], "{status}");
+    }
+}
+
+#[tokio::test]
+async fn a_poll_that_leaves_the_feature_runnable_keeps_its_cache() {
+    assert!(poll_once("completed", "open").await.is_empty());
+    assert!(poll_once("completed", "draft").await.is_empty());
+    assert!(poll_once("running", "merged").await.is_empty());
+}
+
+#[derive(Default)]
+struct RecordingRunner {
+    calls: std::sync::Mutex<Vec<(String, String, CacheReleaseReason)>>,
+}
+
+#[async_trait::async_trait]
+impl RunnerCachePort for RecordingRunner {
+    async fn release_feature_cache(
+        &self,
+        machine_id: &str,
+        run_id: &str,
+        reason: CacheReleaseReason,
+    ) -> Result<(), String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((machine_id.to_string(), run_id.to_string(), reason));
+        Ok(())
+    }
+}
+
+/// The desktop's monitor is handed a [`RoutedFeatureCacheRelease`]: the poll
+/// is the only thing on the laptop that sees a runner-owned feature's PR
+/// settle, and the cache it would release lives beside the runner's clone.
+#[tokio::test]
+async fn a_polled_settle_of_a_shadow_is_released_by_its_runner() {
+    for (state, reason) in [
+        ("merged", CacheReleaseReason::Merged),
+        ("closed", CacheReleaseReason::Closed),
+    ] {
+        let adapter = Arc::new(setup());
+        let feature = make_open_mr_feature(&adapter, "f-1", "p-1");
+        FeatureRepository::update(
+            &*adapter,
+            &feature.id,
+            &FeaturePatch {
+                status: Some("awaiting_mr".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        RemoteRunMirrorPort::upsert_submitted(
+            &*adapter,
+            "runner-1",
+            "run-1",
+            Some("p-1"),
+            Some("f-1"),
+            "shadow",
+            0,
+        )
+        .unwrap();
+        let local = Arc::new(RecordingCache::default());
+        let runner = Arc::new(RecordingRunner::default());
+
+        check_mr_states(&MrMonitorPorts {
+            features: adapter.clone(),
+            mr_publisher: Arc::new(FixedMrState(state)),
+            notifications: adapter.clone(),
+            notif: Arc::new(CountingNotif::default()),
+            tickets: adapter.clone(),
+            discoveries: adapter.clone(),
+            cache: Arc::new(RoutedFeatureCacheRelease {
+                local: local.clone(),
+                remote_run_mirror: adapter.clone(),
+                runner: runner.clone(),
+                app_settings: adapter,
+            }),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            *runner.calls.lock().unwrap(),
+            [("runner-1".to_string(), "run-1".to_string(), reason)],
+            "{state}"
+        );
+        assert!(local.released.lock().unwrap().is_empty(), "{state}");
+    }
 }

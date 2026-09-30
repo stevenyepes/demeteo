@@ -198,6 +198,13 @@ pub struct ProjectSettings {
     /// migration V45.
     #[serde(default)]
     pub sync_review_before_push: Option<bool>,
+    /// Days an idle feature, or the default branch's Ask/Discovery cache,
+    /// keeps its dependency cache. `None` is
+    /// [`DEFAULT_CACHE_IDLE_TTL_DAYS`](crate::domain::cache_release::DEFAULT_CACHE_IDLE_TTL_DAYS)
+    /// and `Some(0)` never releases on idleness. See migration V59 and
+    /// [`cache_releasable_at`](crate::domain::cache_release::cache_releasable_at).
+    #[serde(default)]
+    pub cache_idle_ttl_days: Option<u32>,
 }
 
 fn default_artifact_subdir() -> String {

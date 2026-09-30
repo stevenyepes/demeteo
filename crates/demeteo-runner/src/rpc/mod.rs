@@ -169,6 +169,9 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
         "retry_step" => lifecycle::retry_step(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+        "release_feature_cache" => lifecycle::release_feature_cache(svc, req.params, cid)
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         "set_step_assignment" => lifecycle::set_step_assignment(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),

@@ -2057,6 +2057,80 @@ async fn test_branch_delete_handles_chmod_locked_worktree() {
     let _ = std::fs::remove_dir_all(&wt_path);
 }
 
+/// The cache is a sibling of the clone, so it can outlive it — and a missing
+/// clone used to end `branch_delete` before the cache was reached.
+#[tokio::test]
+async fn test_branch_delete_releases_the_cache_of_a_clone_that_is_gone() {
+    let (dir, helper) = make_repo("branch_delete_gone_clone").await;
+    let repo = dir.to_string_lossy().to_string();
+    let cache = feature_cache_dir(&repo, "feature/f-gone");
+    std::fs::create_dir_all(format!("{cache}/node_modules/left-pad")).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    let deleted = helper
+        .branch_delete(None, &repo, "feature/f-gone")
+        .await
+        .expect("a missing clone is nothing to delete, not a failure");
+
+    assert_eq!(deleted.cache_release, Ok(()));
+    assert!(
+        !std::path::Path::new(&cache).exists(),
+        "the cache outlived its clone"
+    );
+}
+
+/// A cache that will not delete is reported, and does not keep the branch.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_branch_delete_reports_a_cache_it_could_not_delete() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (dir, helper) = make_repo("branch_delete_locked_cache").await;
+    let repo = dir.to_string_lossy().to_string();
+    let exec = fresh_exec();
+    let feature_branch = "feature/f-locked-cache";
+    let _ = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" branch {feature_branch}"),
+        )
+        .await;
+    let cache = feature_cache_dir(&repo, feature_branch);
+    let locked = format!("{cache}/target");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(format!("{locked}/lib.rlib"), "x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // Root ignores the mode bit, so there is nothing for this test to observe.
+    if std::fs::write(format!("{locked}/probe"), "").is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&cache);
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+
+    let deleted = helper
+        .branch_delete(None, &repo, feature_branch)
+        .await
+        .expect("the branch delete itself succeeds");
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let error = deleted
+        .cache_release
+        .expect_err("an undeletable cache must be reported");
+    assert!(error.starts_with(&cache), "{error}");
+    let branches = exec
+        .run_command(
+            "local",
+            &format!("git -C \"{repo}\" branch --list {feature_branch}"),
+        )
+        .await
+        .unwrap();
+    assert!(branches.trim().is_empty(), "branch survived: {branches:?}");
+
+    let _ = std::fs::remove_dir_all(&cache);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ── Detached worktrees (HB2b) ────────────────────────────────────────────────
 //
 // The baseline fallback measures the *base* commit, which predates the feature
@@ -2848,6 +2922,10 @@ struct CacheShareExec {
     log: Mutex<Vec<String>>,
     /// Whether the `.git/info/exclude` write succeeds.
     exclusion_writable: bool,
+    /// Paths `get_metadata` finds; every other one is missing.
+    existing: Vec<&'static str>,
+    /// Successive `free_space_bytes` answers; none left is an error.
+    free: Mutex<Vec<u64>>,
 }
 
 impl CacheShareExec {
@@ -2855,6 +2933,15 @@ impl CacheShareExec {
         Self {
             log: Mutex::new(Vec::new()),
             exclusion_writable,
+            existing: Vec::new(),
+            free: Mutex::new(Vec::new()),
+        }
+    }
+    fn on_disk(existing: &[&'static str], free: &[u64]) -> Self {
+        Self {
+            existing: existing.to_vec(),
+            free: Mutex::new(free.iter().rev().copied().collect()),
+            ..Self::new(true)
         }
     }
     fn seen(&self) -> Vec<String> {
@@ -2894,8 +2981,27 @@ impl ExecutionPort for CacheShareExec {
     async fn remove_dir_all(&self, _m: &str, _p: &str) -> Result<(), String> {
         Err("unscripted remove_dir_all".into())
     }
-    async fn get_metadata(&self, _m: &str, _p: &str) -> Result<SftpEntry, String> {
-        Err("unscripted get_metadata".into())
+    async fn get_metadata(&self, _m: &str, path: &str) -> Result<SftpEntry, String> {
+        if self.existing.contains(&path) {
+            return Ok(SftpEntry {
+                name: String::new(),
+                path: path.to_string(),
+                is_dir: true,
+                size: 0,
+                modified: 0,
+            });
+        }
+        Err(format!(
+            "Failed to stat '{path}': No such file or directory"
+        ))
+    }
+    async fn free_space_bytes(&self, _m: &str, path: &str) -> Result<u64, String> {
+        self.note(format!("free {path}"));
+        self.free
+            .lock()
+            .unwrap()
+            .pop()
+            .ok_or_else(|| "unscripted free_space_bytes".to_string())
     }
     async fn read_file(&self, _m: &str, path: &str) -> Result<String, String> {
         self.note(format!("read_file {path}"));
@@ -2948,8 +3054,119 @@ impl ExecutionPort for CacheShareExec {
 }
 
 async fn share_caches(exec: &CacheShareExec, windows_host: bool) -> Vec<String> {
-    share_dependency_caches(exec, "m-dev", "/repo", "/wt", "/cache", windows_host).await;
+    share_dependency_caches(exec, "m-dev", "/repo", "/wt", "/cache", windows_host, None)
+        .await
+        .expect("nothing here is short of disk");
     exec.seen()
+}
+
+/// Counts its calls and frees nothing — what the sweep amounts to on a disk
+/// full of live features.
+#[derive(Default)]
+struct CountingReclaim(std::sync::atomic::AtomicUsize);
+
+#[async_trait::async_trait]
+impl crate::ports::cache_reclaim::CacheReclaimPort for CountingReclaim {
+    async fn reclaim(&self) -> Result<(), String> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+impl CountingReclaim {
+    fn calls(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+const ROOMY: u64 = crate::domain::seed_space::SEED_FLOOR_BYTES;
+const SHORT: u64 = ROOMY - 1;
+
+async fn seed(exec: &CacheShareExec, reclaim: &CountingReclaim) -> Result<(), String> {
+    share_dependency_caches(
+        exec,
+        "m-dev",
+        "/repo",
+        "/wt",
+        "/srv/repo_cache_f",
+        false,
+        Some(reclaim),
+    )
+    .await
+}
+
+/// A later step of the same feature finds its cache and links into it; the
+/// disk that cache already fills is no reason to stop the feature it belongs to.
+#[tokio::test]
+async fn an_existing_cache_is_linked_without_a_free_space_probe() {
+    let exec = CacheShareExec::on_disk(&["/srv/repo_cache_f", "/srv"], &[0]);
+    let reclaim = CountingReclaim::default();
+    seed(&exec, &reclaim).await.expect("reuse never refuses");
+    let seen = exec.seen();
+    assert!(!seen.iter().any(|l| l.starts_with("free ")), "{seen:?}");
+    assert!(seen.contains(&"link".to_string()), "{seen:?}");
+    assert_eq!(reclaim.calls(), 0);
+}
+
+#[tokio::test]
+async fn a_new_cache_with_room_is_probed_at_its_nearest_ancestor_and_seeded() {
+    let exec = CacheShareExec::on_disk(&["/srv"], &[ROOMY]);
+    let reclaim = CountingReclaim::default();
+    seed(&exec, &reclaim).await.expect("room to spare");
+    let seen = exec.seen();
+    assert_eq!(
+        seen[seen.len() - 2..],
+        ["free /srv".to_string(), "link".to_string()]
+    );
+    assert_eq!(reclaim.calls(), 0);
+}
+
+#[tokio::test]
+async fn a_short_disk_reclaims_once_and_seeds_when_that_was_enough() {
+    let exec = CacheShareExec::on_disk(&["/srv"], &[SHORT, ROOMY]);
+    let reclaim = CountingReclaim::default();
+    seed(&exec, &reclaim)
+        .await
+        .expect("the reclaim freed enough");
+    assert_eq!(reclaim.calls(), 1);
+    assert!(exec.seen().contains(&"link".to_string()));
+}
+
+/// The failure this guard exists for: no seed on a disk that cannot hold it,
+/// and an error the step executor reads as the disk's, not the agent's.
+#[tokio::test]
+async fn a_disk_still_short_after_reclaiming_refuses_before_seeding() {
+    let exec = CacheShareExec::on_disk(&["/srv"], &[SHORT, SHORT]);
+    let reclaim = CountingReclaim::default();
+    let error = seed(&exec, &reclaim)
+        .await
+        .expect_err("no room, even after reclaiming");
+    assert!(
+        crate::domain::seed_space::is_seed_refusal(&error),
+        "{error}"
+    );
+    assert!(
+        error.contains("m-dev") && error.contains("/srv/repo_cache_f"),
+        "{error}"
+    );
+    assert_eq!(reclaim.calls(), 1);
+    assert!(
+        !exec.seen().contains(&"link".to_string()),
+        "{:?}",
+        exec.seen()
+    );
+}
+
+/// A machine that cannot say how much room it has seeds as it always did.
+#[tokio::test]
+async fn an_unreadable_free_space_seeds_unchecked() {
+    let exec = CacheShareExec::on_disk(&["/srv"], &[]);
+    let reclaim = CountingReclaim::default();
+    seed(&exec, &reclaim)
+        .await
+        .expect("no answer is not a full disk");
+    assert!(exec.seen().contains(&"link".to_string()));
+    assert_eq!(reclaim.calls(), 0);
 }
 
 /// The link is what a commit can see, and the exclusion is the only thing that

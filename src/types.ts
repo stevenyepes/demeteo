@@ -776,7 +776,8 @@ export type NotificationKind =
   | 'feature_completed'
   | 'merge_conflict'
   | 'retry_budget_exhausted'
-  | 'environment_not_ready';
+  | 'environment_not_ready'
+  | 'caches_reclaimed';
 
 /** Mirrors the Rust `Notification` struct on the `notifications`
  *  table. `feature_url` is a relative deep link; the bell decides
@@ -790,6 +791,12 @@ export interface Notification {
   feature_url?: string | null;
   read: boolean;
   created_at: number;
+}
+
+/** A background sweep deleted leaked caches or worktrees of a project. */
+export interface CachesReclaimedEvent {
+  project_id: string;
+  message: string;
 }
 
 /** Wire shape of `DomainEvent::MrMerged` as emitted by the
@@ -1199,6 +1206,11 @@ export interface ProjectSettingsData {
    *  cannot impose review on a run that still owns its branch — see
    *  `domain::sync_session::publish_policy`. Migration V45. */
   sync_review_before_push?: boolean | null;
+  /** Days an idle feature's dependency cache, and the default branch's cache
+   *  Ask and Discovery share, are kept before a sweep releases them.
+   *  `null`/absent = the engine default (14); `0` never releases on
+   *  idleness. Migration V59. */
+  cache_idle_ttl_days?: number | null;
 }
 
 export interface SessionInfo {

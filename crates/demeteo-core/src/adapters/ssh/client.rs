@@ -283,6 +283,23 @@ impl ExecutionPort for SshClientAdapter {
         .await
     }
 
+    /// A remote is always Linux, so `df` is always there; `-P` fixes the
+    /// record to one line whatever the filesystem is called, and the path
+    /// travels as one escaped argument through [`Self::run_program`].
+    async fn free_space_bytes(&self, machine_id: &str, path: &str) -> Result<u64, String> {
+        let out = self
+            .run_program(
+                machine_id,
+                ProgramRequest {
+                    executable: "df".to_string(),
+                    args: vec!["-Pk".to_string(), "--".to_string(), path.to_string()],
+                    ..ProgramRequest::default()
+                },
+            )
+            .await?;
+        crate::domain::seed_space::parse_df_available(&out)
+    }
+
     async fn get_metadata(&self, machine_id: &str, path: &str) -> Result<SftpEntry, String> {
         let mid = machine_id.to_string();
         let path = path.to_string();

@@ -275,7 +275,7 @@ impl ProjectRepository for SqliteAdapter {
                         extra_writable_paths, prepare_command, default_effort,
                         default_max_budget_usd, default_workflow_id, review_entrypoint,
                         sync_resolver_agent_kind, sync_resolver_model, sync_resolver_effort,
-                        sync_review_before_push
+                        sync_review_before_push, cache_idle_ttl_days
                  FROM project_settings WHERE project_id = ?1",
             )
             .map_err(|e| e.to_string())?;
@@ -318,6 +318,9 @@ impl ProjectRepository for SqliteAdapter {
                     sync_resolver_model: row.get(23)?,
                     sync_resolver_effort: effort_from_row(row, 24)?,
                     sync_review_before_push: row.get::<_, Option<i64>>(25)?.map(|v| v != 0),
+                    cache_idle_ttl_days: row
+                        .get::<_, Option<i64>>(26)?
+                        .and_then(|v| u32::try_from(v).ok()),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -347,8 +350,8 @@ impl ProjectRepository for SqliteAdapter {
               default_loop_iterations, extra_writable_paths, prepare_command, default_effort,
               default_max_budget_usd, default_workflow_id, review_entrypoint,
               sync_resolver_agent_kind, sync_resolver_model, sync_resolver_effort,
-              sync_review_before_push)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+              sync_review_before_push, cache_idle_ttl_days)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
             params![
                 s.project_id,
                 s.worktree_strategy.default_branch,
@@ -376,6 +379,7 @@ impl ProjectRepository for SqliteAdapter {
                 s.sync_resolver_model,
                 s.sync_resolver_effort.map(|e| e.as_str()),
                 s.sync_review_before_push.map(i64::from),
+                s.cache_idle_ttl_days.map(i64::from),
             ],
         )
         .map_err(|e| e.to_string())?;

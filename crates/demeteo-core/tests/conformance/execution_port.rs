@@ -12,6 +12,8 @@
 //! * missing file ⇒ `Err`, not `Ok("")` (D3);
 //! * `list_dir` entry shape (name/is_dir, `.`/`..` filtered);
 //! * `resolve_platform` answers on every transport (no default, no guess);
+//! * `free_space_bytes` answers for an existing directory, `Err` for a missing
+//!   one (D3);
 //! * login-shell env resolution (D2 — the caller's env crosses the boundary);
 //! * a command silent longer than the transport's blocking-call timeout still
 //!   drains to EOF and returns its output (D3 — a slow, silent command is not
@@ -157,6 +159,21 @@ pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workd
         .find(|e| e.name == "conformance-roundtrip.txt")
         .unwrap();
     assert!(!file_entry.is_dir, "the written file must not be is_dir");
+
+    // --- free space: answered for a directory, Err for a missing path (D3) -
+    // A missing path is not answered with an ancestor's free space: that walk
+    // is the caller's, so no transport can pick a different disk than another.
+    let free = port
+        .free_space_bytes(machine_id, &base)
+        .await
+        .expect("every transport must read the free space of an existing directory");
+    assert!(
+        free > 0,
+        "the workdir's filesystem was just written to: {free}"
+    );
+    port.free_space_bytes(machine_id, &format!("{base}/no-such-dir-xyz"))
+        .await
+        .expect_err("a missing path must be Err, never an ancestor's free space");
 
     // --- login-shell env resolution (D2) ---------------------------------
     // The caller's env must cross the transport boundary and win inside the

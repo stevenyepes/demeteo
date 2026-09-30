@@ -8,10 +8,11 @@ use crate::domain::ids::{RepositoryId, StepExecutionId, WorkflowId, WorkflowVers
 use crate::domain::models::{
     Feature, Project, ProjectSettings, Repository, StepAttempt, StepExecution, SubtaskRunRow,
 };
+use crate::domain::runner_cache_release::{CacheReleaseReason, PendingRunnerRelease};
 use crate::ports::db::{FeatureRepository, StepExecutionPatch};
-use crate::ports::remote_run_mirror::{RemoteRunMirror, RemoteRunMirrorPort};
+use crate::ports::remote_run_mirror::{RemoteRunMirror, RemoteRunMirrorPort, RunnerCachePort};
 use crate::ports::worktree_ops::{
-    CommitMessageRejected, SquashOutcome, SyncFailure, SyncOutcome, WorktreeOpsPort,
+    BranchDeleted, CommitMessageRejected, SquashOutcome, SyncFailure, SyncOutcome, WorktreeOpsPort,
 };
 use crate::state::AppContext;
 use async_trait::async_trait;
@@ -148,6 +149,8 @@ struct RecordingMirrors {
     calls: Arc<Mutex<Vec<String>>>,
     delete_error: Option<String>,
     present: Arc<Mutex<bool>>,
+    /// What `list` answers while the mirror is present.
+    rows: Vec<RemoteRunMirror>,
 }
 
 impl RecordingMirrors {
@@ -156,6 +159,7 @@ impl RecordingMirrors {
             calls,
             delete_error: delete_error.map(str::to_string),
             present: Arc::new(Mutex::new(true)),
+            rows: Vec::new(),
         }
     }
 
@@ -214,7 +218,11 @@ impl RemoteRunMirrorPort for RecordingMirrors {
         panic!("unexpected RemoteRunMirrorPort call")
     }
     fn list(&self) -> Result<Vec<RemoteRunMirror>, String> {
-        panic!("unexpected RemoteRunMirrorPort call")
+        Ok(if self.is_present() {
+            self.rows.clone()
+        } else {
+            Vec::new()
+        })
     }
 }
 
@@ -274,8 +282,24 @@ fn failed_status_update_does_not_dismiss_and_failed_dismissal_is_propagated() {
     );
 }
 
+/// Records the machine, clone dir and branch each cleanup call names, and
+/// answers every cache release with `cache_error` when one is set.
 struct RecordingWorktrees {
     calls: Arc<Mutex<Vec<String>>>,
+    cache_error: Option<String>,
+}
+
+impl RecordingWorktrees {
+    fn record(&self, call: &str, machine: Option<&str>, repo_dir: &str, branch: &str) {
+        self.calls.lock().unwrap().push(format!(
+            "{call}:{}:{repo_dir}:{branch}",
+            machine.unwrap_or("<none>")
+        ));
+    }
+
+    fn cache_result(&self) -> Result<(), String> {
+        self.cache_error.clone().map_or(Ok(()), Err)
+    }
 }
 
 type CleanupContext = (
@@ -410,9 +434,25 @@ impl WorktreeOpsPort for RecordingWorktrees {
     ) -> Result<(), String> {
         panic!("unexpected WorktreeOpsPort call")
     }
-    async fn branch_delete(&self, _: Option<&str>, _: &str, _: &str) -> Result<(), String> {
-        self.calls.lock().unwrap().push("branch_delete".to_string());
-        Ok(())
+    async fn branch_delete(
+        &self,
+        machine: Option<&str>,
+        repo_dir: &str,
+        branch: &str,
+    ) -> Result<BranchDeleted, String> {
+        self.record("branch_delete", machine, repo_dir, branch);
+        Ok(BranchDeleted {
+            cache_release: self.cache_result(),
+        })
+    }
+    async fn release_feature_cache(
+        &self,
+        machine: Option<&str>,
+        repo_dir: &str,
+        branch: &str,
+    ) -> Result<(), String> {
+        self.record("release_cache", machine, repo_dir, branch);
+        self.cache_result()
     }
     async fn merge_subtask(
         &self,
@@ -456,7 +496,7 @@ impl WorktreeOpsPort for RecordingWorktrees {
     }
 }
 
-fn cleanup_feature(mr_state: &str) -> Feature {
+fn cleanup_feature(status: &str, mr_state: &str) -> Feature {
     Feature {
         id: FeatureId::from("f-cleanup"),
         project_id: ProjectId::from("p-cleanup"),
@@ -464,7 +504,7 @@ fn cleanup_feature(mr_state: &str) -> Feature {
         workflow_version_id: None,
         title: "Cleanup fixture".to_string(),
         description: String::new(),
-        status: "completed".to_string(),
+        status: status.to_string(),
         total_cost: 0.0,
         duration: "0s".to_string(),
         tokens: 0,
@@ -489,6 +529,15 @@ fn cleanup_feature(mr_state: &str) -> Feature {
 }
 
 fn cleanup_context(policy: &str, mr_state: &str) -> CleanupContext {
+    cleanup_context_with(policy, "completed", mr_state, None)
+}
+
+fn cleanup_context_with(
+    policy: &str,
+    status: &str,
+    mr_state: &str,
+    cache_error: Option<&str>,
+) -> CleanupContext {
     let dir = std::env::temp_dir().join(format!(
         "demeteo-lifecycle-cleanup-{}",
         std::time::SystemTime::now()
@@ -535,13 +584,14 @@ fn cleanup_context(policy: &str, mr_state: &str) -> CleanupContext {
     let calls = Arc::new(Mutex::new(vec![]));
     let features = Arc::new(RecordingFeatures::with_feature(
         calls.clone(),
-        cleanup_feature(mr_state),
+        cleanup_feature(status, mr_state),
     ));
     let mirrors = Arc::new(RecordingMirrors::new(calls.clone(), None));
     ctx.features = features.clone();
     ctx.remote_run_mirror = mirrors.clone();
     ctx.worktree_ops = Arc::new(RecordingWorktrees {
         calls: calls.clone(),
+        cache_error: cache_error.map(str::to_string),
     });
     (ctx, features, mirrors, calls)
 }
@@ -564,7 +614,11 @@ async fn feature_cleanup_policy_branches_dismiss_only_successful_transitions() {
     assert_eq!(result.action, "archived");
     assert_eq!(
         *calls.lock().unwrap(),
-        ["update:f-cleanup:archived", "dismiss:f-cleanup"]
+        [
+            cleanup_call("release_cache", &ctx),
+            "update:f-cleanup:archived".to_string(),
+            "dismiss:f-cleanup".to_string(),
+        ]
     );
     assert!(!mirrors.is_present(), "archive must dismiss its mirror");
 
@@ -576,9 +630,9 @@ async fn feature_cleanup_policy_branches_dismiss_only_successful_transitions() {
     assert_eq!(
         *calls.lock().unwrap(),
         [
-            "branch_delete",
-            "update:f-cleanup:deleted",
-            "dismiss:f-cleanup"
+            cleanup_call("branch_delete", &ctx),
+            "update:f-cleanup:deleted".to_string(),
+            "dismiss:f-cleanup".to_string(),
         ]
     );
     assert!(
@@ -598,4 +652,377 @@ async fn feature_cleanup_policy_branches_dismiss_only_successful_transitions() {
         "rejected auto-delete must retain its mirror"
     );
     assert!(features.calls().is_empty());
+}
+
+/// The call a cleanup of the fixture feature must make: on the local machine,
+/// against the project's clone under the workspace — never the repository's
+/// `owner/name` slug, which names a relative path that does not exist.
+fn cleanup_call(call: &str, ctx: &AppContext) -> String {
+    let clone_dir =
+        crate::paths::repo_target_dir_local(&ctx.workspace_dir, "p-cleanup", "fixture/repo");
+    let prefix = crate::adapters::step_executor::setup::fetch_default_settings()
+        .worktree_strategy
+        .branch_prefix;
+    format!(
+        "{call}:{}:{}:{}",
+        crate::domain::ids::LOCAL_MACHINE,
+        clone_dir.display(),
+        cleanup_feature("completed", "merged").run_branch(&prefix)
+    )
+}
+
+#[tokio::test]
+async fn auto_delete_targets_the_project_clone_not_the_repository_slug() {
+    let (ctx, _features, _mirrors, calls) = cleanup_context("auto_delete", "merged");
+    let result = feature_cleanup(&ctx, "f-cleanup".to_string(), None)
+        .await
+        .unwrap();
+
+    assert!(result.branch_deleted);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    assert_eq!(
+        calls.lock().unwrap()[0],
+        cleanup_call("branch_delete", &ctx)
+    );
+}
+
+#[tokio::test]
+async fn keep_releases_the_cache_of_a_feature_whose_pr_is_settled() {
+    for mr_state in ["merged", "closed"] {
+        let (ctx, _features, mirrors, calls) = cleanup_context("keep", mr_state);
+        let result = feature_cleanup(&ctx, "f-cleanup".to_string(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.action, "noop");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [cleanup_call("release_cache", &ctx)],
+            "keep on a {mr_state} PR"
+        );
+        assert!(mirrors.is_present());
+    }
+}
+
+#[tokio::test]
+async fn keep_leaves_the_cache_of_a_feature_that_can_still_run() {
+    for (status, mr_state) in [("completed", "open"), ("awaiting_mr", "none")] {
+        let (ctx, _features, _mirrors, calls) =
+            cleanup_context_with("keep", status, mr_state, None);
+        feature_cleanup(&ctx, "f-cleanup".to_string(), None)
+            .await
+            .unwrap();
+
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "keep on a {status} feature with a {mr_state} PR released its cache"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_cache_that_will_not_delete_is_a_warning_not_a_failed_cleanup() {
+    let (ctx, _features, mirrors, _calls) =
+        cleanup_context_with("archive", "completed", "open", Some("cache held open"));
+    let result = feature_cleanup(&ctx, "f-cleanup".to_string(), None)
+        .await
+        .unwrap();
+    assert_eq!(result.action, "archived");
+    assert_eq!(result.warnings, ["Dependency cache: cache held open"]);
+    assert!(!mirrors.is_present());
+
+    let (ctx, _features, _mirrors, _calls) = cleanup_context_with(
+        "auto_delete",
+        "completed",
+        "merged",
+        Some("cache held open"),
+    );
+    let result = feature_cleanup(&ctx, "f-cleanup".to_string(), None)
+        .await
+        .unwrap();
+    assert!(
+        result.branch_deleted,
+        "the branch went even if the cache did not"
+    );
+    assert_eq!(result.warnings, ["Dependency cache: cache held open"]);
+}
+
+// ── runner-owned features ───────────────────────────────────────────
+//
+// A shadow's cache is beside the runner's clone; the local release would look
+// for it on this process's view of the project, find nothing, and report
+// success. So a shadow is routed to the runner, and what could not reach it is
+// kept for the next reconcile — the cleanup that dismisses the mirror leaves
+// nothing else on this machine that remembers the run.
+
+fn runner_row() -> RemoteRunMirror {
+    RemoteRunMirror {
+        machine_id: "runner-1".to_string(),
+        run_id: "run-1".to_string(),
+        project_id: Some("p-cleanup".to_string()),
+        title: "Cleanup fixture".to_string(),
+        status: "awaiting_mr".to_string(),
+        error: None,
+        feature_id: Some("f-cleanup".to_string()),
+        pr_url: None,
+        pushed_branch: None,
+        last_offset: 0,
+        created_at: 0,
+        updated_at: 0,
+        last_notified_status: None,
+    }
+}
+
+fn runner_owned_cleanup_context(policy: &str, mr_state: &str) -> CleanupContext {
+    let (mut ctx, features, _local_mirrors, calls) =
+        cleanup_context_with(policy, "completed", mr_state, None);
+    let mut mirrors = RecordingMirrors::new(calls.clone(), None);
+    mirrors.rows = vec![runner_row()];
+    let mirrors = Arc::new(mirrors);
+    ctx.remote_run_mirror = mirrors.clone();
+    (ctx, features, mirrors, calls)
+}
+
+fn pending(reason: CacheReleaseReason) -> PendingRunnerRelease {
+    PendingRunnerRelease {
+        machine_id: "runner-1".to_string(),
+        run_id: "run-1".to_string(),
+        reason,
+    }
+}
+
+/// `ctx.exec` here has no runner behind any machine, which is the unreachable
+/// runner: the cleanup must still land, and the release must be kept.
+#[tokio::test]
+async fn cleaning_up_a_shadow_asks_its_runner_and_keeps_what_did_not_arrive() {
+    for (policy, mr_state, reason, expected_calls) in [
+        ("keep", "merged", CacheReleaseReason::Merged, &[][..]),
+        (
+            "archive",
+            "open",
+            CacheReleaseReason::Dismissed,
+            &["update:f-cleanup:archived", "dismiss:f-cleanup"][..],
+        ),
+        (
+            "auto_delete",
+            "merged",
+            CacheReleaseReason::Merged,
+            &[
+                "branch_delete",
+                "update:f-cleanup:deleted",
+                "dismiss:f-cleanup",
+            ][..],
+        ),
+    ] {
+        let (ctx, _features, _mirrors, calls) = runner_owned_cleanup_context(policy, mr_state);
+        let result = feature_cleanup(&ctx, "f-cleanup".to_string(), None)
+            .await
+            .unwrap_or_else(|e| panic!("{policy}: an unreachable runner failed the cleanup: {e}"));
+
+        let calls: Vec<String> = calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| match c.starts_with("branch_delete:") {
+                true => "branch_delete".to_string(),
+                false => c.clone(),
+            })
+            .collect();
+        assert_eq!(
+            calls, expected_calls,
+            "{policy}: a shadow's cache must never be released on this machine's view of the project"
+        );
+        assert_eq!(result.warnings.len(), 1, "{policy}: {:?}", result.warnings);
+        assert!(
+            result.warnings[0].starts_with("Dependency cache: "),
+            "{policy}: {:?}",
+            result.warnings
+        );
+        assert_eq!(
+            crate::application::remote_runs::pending_runner_releases(&*ctx.app_settings).unwrap(),
+            [pending(reason)],
+            "{policy}"
+        );
+    }
+}
+
+#[derive(Default)]
+struct RecordingLocalCache {
+    released: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl FeatureCachePort for RecordingLocalCache {
+    async fn release(&self, feature: &Feature) -> Result<(), String> {
+        self.released
+            .lock()
+            .unwrap()
+            .push(feature.id.as_str().to_string());
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct RecordingRunner {
+    calls: Mutex<Vec<(String, String, CacheReleaseReason)>>,
+}
+
+#[async_trait]
+impl RunnerCachePort for RecordingRunner {
+    async fn release_feature_cache(
+        &self,
+        machine_id: &str,
+        run_id: &str,
+        reason: CacheReleaseReason,
+    ) -> Result<(), String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((machine_id.to_string(), run_id.to_string(), reason));
+        Ok(())
+    }
+}
+
+fn routed(
+    rows: Vec<RemoteRunMirror>,
+) -> (
+    RoutedFeatureCacheRelease,
+    Arc<RecordingLocalCache>,
+    Arc<RecordingRunner>,
+) {
+    let local = Arc::new(RecordingLocalCache::default());
+    let runner = Arc::new(RecordingRunner::default());
+    let mut mirrors = RecordingMirrors::new(Arc::new(Mutex::new(vec![])), None);
+    mirrors.rows = rows;
+    let settings = Arc::new(
+        crate::adapters::database::SqliteAdapter::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        )
+        .unwrap(),
+    );
+    (
+        RoutedFeatureCacheRelease {
+            local: local.clone(),
+            remote_run_mirror: Arc::new(mirrors),
+            runner: runner.clone(),
+            app_settings: settings,
+        },
+        local,
+        runner,
+    )
+}
+
+#[tokio::test]
+async fn a_shadow_is_released_by_its_runner_with_the_reason() {
+    let (cache, local, runner) = routed(vec![runner_row()]);
+
+    cache
+        .release(&cleanup_feature("awaiting_mr", "merged"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        *runner.calls.lock().unwrap(),
+        [(
+            "runner-1".to_string(),
+            "run-1".to_string(),
+            CacheReleaseReason::Merged
+        )]
+    );
+    assert!(local.released.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_feature_this_machine_owns_is_released_here() {
+    let mut elsewhere = runner_row();
+    elsewhere.feature_id = Some("f-other".to_string());
+    let (cache, local, runner) = routed(vec![elsewhere]);
+
+    cache
+        .release(&cleanup_feature("completed", "merged"))
+        .await
+        .unwrap();
+
+    assert_eq!(*local.released.lock().unwrap(), ["f-cleanup"]);
+    assert!(runner.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_shadow_that_has_not_finished_asks_no_one() {
+    let (cache, local, runner) = routed(vec![runner_row()]);
+
+    cache
+        .release(&cleanup_feature("awaiting_mr", "open"))
+        .await
+        .expect_err("there is no reason to give the runner");
+
+    assert!(runner.calls.lock().unwrap().is_empty());
+    assert!(local.released.lock().unwrap().is_empty());
+}
+
+/// Answers `fetch_mr_state` with one fixed state; any other call is a test bug.
+struct FixedMrState(&'static str);
+
+#[async_trait]
+impl crate::ports::mr_publisher::MrPublisher for FixedMrState {
+    async fn publish_mr(
+        &self,
+        _: &str,
+        _: &FeatureId,
+        _: crate::domain::models::PublishOptions,
+    ) -> Result<crate::domain::models::MrInfo, String> {
+        panic!("unexpected MrPublisher call")
+    }
+    async fn fetch_mr_state(&self, _: &str, _: &str) -> Result<String, String> {
+        Ok(self.0.to_string())
+    }
+    async fn list_open_mrs(
+        &self,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<Vec<crate::domain::mr_summary::MrSummary>, crate::domain::mr_list_error::MrListError>
+    {
+        panic!("unexpected MrPublisher call")
+    }
+    async fn fetch_mr_detail(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<crate::domain::mr_summary::MrSummary, crate::domain::mr_list_error::MrListError>
+    {
+        panic!("unexpected MrPublisher call")
+    }
+    async fn post_mr_comment(&self, _: &str, _: &str, _: &str) -> Result<String, String> {
+        panic!("unexpected MrPublisher call")
+    }
+    async fn publish_branch_mr(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: crate::domain::models::PublishOptions,
+    ) -> Result<crate::domain::models::MrInfo, String> {
+        panic!("unexpected MrPublisher call")
+    }
+}
+
+/// The shadow's row still reads `open` — hydration copies the runner's view,
+/// and the runner could not see the merge — so the runner must be told the
+/// state this cleanup just fetched, not the row's.
+#[tokio::test]
+async fn keep_tells_the_runner_the_freshly_fetched_pr_state() {
+    let (mut ctx, _features, _mirrors, calls) = runner_owned_cleanup_context("keep", "open");
+    let mut shadow = cleanup_feature("completed", "open");
+    shadow.mr_url = Some("https://example.invalid/pr/1".to_string());
+    ctx.features = Arc::new(RecordingFeatures::with_feature(calls, shadow));
+    ctx.mr_publisher = Arc::new(FixedMrState("merged"));
+
+    feature_cleanup(&ctx, "f-cleanup".to_string(), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        crate::application::remote_runs::pending_runner_releases(&*ctx.app_settings).unwrap(),
+        [pending(CacheReleaseReason::Merged)]
+    );
 }

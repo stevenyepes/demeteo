@@ -277,6 +277,13 @@ pub enum DomainEvent {
         message: String,
     },
 
+    /// A background sweep deleted leaked caches or worktrees of a project.
+    /// The live half of a [`NotificationKind::CachesReclaimed`] row, so the
+    /// bell refreshes without waiting for its next read.
+    ///
+    /// [`NotificationKind::CachesReclaimed`]: crate::domain::models::NotificationKind::CachesReclaimed
+    CachesReclaimed { project_id: String, message: String },
+
     /// A row was appended to the durable `run_events` log (P1.13). This
     /// is the live-push half of the unified event log: the local
     /// recorder appends the row, then forwards this variant so the UI

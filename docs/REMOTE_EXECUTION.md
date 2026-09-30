@@ -120,6 +120,7 @@ Control RPC methods (over the SSH-tunneled unix socket, R4):
 | `stream_events(run_id, from_offset)` | Tail an **append-only per-run event log**; the laptop catches up on everything missed by offset — never relies on a live socket having been connected. |
 | `decide_gate(run_id, gate_id, decision)` | Clear a **parked** gate remotely from the laptop. |
 | `cancel_run(run_id)` | The only way to stop a run (R8). |
+| `release_feature_cache(run_id, reason)` | The laptop saw the run's PR `merged`/`closed`, or the user `dismissed` the feature — the runner can't see either once its PAT is wiped (§6.2). Records it on the runner's own feature row, then frees the dependency cache if `domain::cache_release` agrees. Refused while the run is `pending`/`running`; idempotent. |
 | `health()` | Heartbeat + version + capacity. |
 
 **Lifecycle:** laptop composes the spec (description, workflow, agent/model,

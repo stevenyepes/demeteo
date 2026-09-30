@@ -40,6 +40,8 @@ interface Scenario {
   /** What `project_settings.sync_review_before_push` holds on disk. Three
    *  values, not two: `null` is "no opinion" and resolves conditionally. */
   storedSyncReviewBeforePush?: boolean | null;
+  /** What `project_settings.cache_idle_ttl_days` holds on disk. */
+  storedCacheIdleTtlDays?: number | null;
 }
 
 function scriptIpc(scenario: Scenario) {
@@ -58,6 +60,7 @@ function scriptIpc(scenario: Scenario) {
       sync_resolver_model: null,
       sync_resolver_effort: null,
       sync_review_before_push: scenario.storedSyncReviewBeforePush ?? null,
+      cache_idle_ttl_days: scenario.storedCacheIdleTtlDays ?? null,
     }),
     get_repositories_for_project: () => [],
     get_machines: () => [],
@@ -260,5 +263,51 @@ describe('review before push', () => {
 
     await save();
     expect(savedSettings()).toHaveProperty('sync_review_before_push', null);
+  });
+});
+
+// `0` and blank are different answers — "never release" against "the engine
+// default" — so the field must not collapse one into the other on its way to
+// a `u32` column, and must refuse what that column cannot hold.
+describe('cache idle TTL', () => {
+  const field = () => screen.getByLabelText(/Release Idle Dependency Caches/) as HTMLInputElement;
+
+  it('shows a stored 0 and persists it as 0, not as unset', async () => {
+    await mount({ storedCacheIdleTtlDays: 0 });
+    await waitFor(() => expect(field()).toHaveValue(0));
+
+    await save();
+    expect(savedSettings()).toHaveProperty('cache_idle_ttl_days', 0);
+  });
+
+  it('persists an edit', async () => {
+    await mount({ storedCacheIdleTtlDays: 7 });
+    await waitFor(() => expect(field()).toHaveValue(7));
+
+    await userEvent.clear(field());
+    await userEvent.type(field(), '30');
+
+    await save();
+    expect(savedSettings()).toHaveProperty('cache_idle_ttl_days', 30);
+  });
+
+  it('persists a cleared field as null, the engine default', async () => {
+    await mount({ storedCacheIdleTtlDays: 7 });
+    await waitFor(() => expect(field()).toHaveValue(7));
+
+    await userEvent.clear(field());
+
+    await save();
+    expect(savedSettings()).toHaveProperty('cache_idle_ttl_days', null);
+  });
+
+  it('refuses a fractional day instead of saving it', async () => {
+    await mount({ storedCacheIdleTtlDays: null });
+
+    await userEvent.type(field(), '2.5');
+    await userEvent.click(screen.getByRole('button', { name: /Save Changes/ }));
+
+    expect(await screen.findAllByText(/whole number of days/)).not.toHaveLength(0);
+    expect(mockedInvoke.mock.calls.some(([name]) => name === 'save_project_settings')).toBe(false);
   });
 });

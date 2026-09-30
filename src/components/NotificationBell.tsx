@@ -12,6 +12,7 @@ import type {
   MrMergedEvent,
   RetryBudgetExhaustedEvent,
   EnvironmentNotReadyEvent,
+  CachesReclaimedEvent,
 } from "../types";
 
 /**
@@ -51,6 +52,12 @@ export function NotificationBell() {
 
   // Initial fetch + on every `mr_merged` event.
   useEffect(() => { refresh(); }, []);
+
+  // Not toasted: a sweep nobody asked for is worth a badge, not an
+  // interruption — the row is there when the user opens the bell.
+  useTauriEvent<CachesReclaimedEvent>("caches_reclaimed", () => {
+    refresh();
+  });
 
   useTauriEvent<MrMergedEvent>("mr_merged", ({ feature_title }) => {
     setToast({
@@ -263,6 +270,8 @@ function kindLabel(kind: string): string {
       return "Retry budget exhausted";
     case "environment_not_ready":
       return "Environment not ready";
+    case "caches_reclaimed":
+      return "Disk reclaimed";
     default:
       return kind;
   }
@@ -272,6 +281,7 @@ function kindAccent(kind: string): { dot: string } {
   switch (kind) {
     case "mr_merged":
     case "feature_completed":
+    case "caches_reclaimed":
       return { dot: "bg-emerald-400 text-emerald-400" };
     case "gate_pending":
       return { dot: "bg-cyan-400 text-cyan-400" };
