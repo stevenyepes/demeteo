@@ -237,10 +237,21 @@ impl RunView {
 
         let runs = self.features.subtask_runs_for_step(execution_id)?;
         let epoch = plan.epoch.clone();
+        let step_completed = self
+            .features
+            .steps_for_feature(feature_id)?
+            .iter()
+            .any(|s| &s.id == execution_id && s.status == "completed");
 
         Ok(SequenceState {
             planned: true,
-            tasks: assemble_tasks(&plan.ordered_tasks(), epoch.as_deref(), &landed, &runs),
+            tasks: assemble_tasks(
+                &plan.ordered_tasks(),
+                epoch.as_deref(),
+                &landed,
+                &runs,
+                step_completed,
+            ),
         })
     }
 

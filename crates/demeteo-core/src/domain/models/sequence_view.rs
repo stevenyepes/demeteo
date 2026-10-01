@@ -215,6 +215,13 @@ pub struct PlannedTaskRef {
 /// cycle is running against them. Reading those rows as `pending` would show
 /// twenty-five never-started tickets beside four running ones.
 ///
+/// The same reasoning covers the **current** cycle once its step has
+/// completed (`step_completed`): the step spends its checkpoint on the way
+/// to `completed`, so a finished run's newest list has no checkpoint either.
+/// A step only completes once every task in it has committed, so a
+/// `completed` run row under a completed step is landed. Any other row
+/// status keeps its own reading — a skipped task committed nothing.
+///
 /// `runs` is every row the step execution holds, in start order, and a row
 /// belongs to a task only when it ran under this plan's `epoch` *and* the
 /// task's cycle — the latest such row wins. The step execution outlives any
@@ -227,6 +234,7 @@ pub fn assemble_tasks(
     epoch: Option<&str>,
     landed: &std::collections::HashSet<String>,
     runs: &[SubtaskRunRow],
+    step_completed: bool,
 ) -> Vec<SequenceTaskView> {
     let mut latest: std::collections::HashMap<(&str, Option<u32>), &SubtaskRunRow> =
         std::collections::HashMap::new();
@@ -243,9 +251,11 @@ pub fn assemble_tasks(
     }
     plan.iter()
         .map(|planned| {
-            let is_landed = planned.prior_cycle || landed.contains(&planned.id);
             let cycle = epoch.map(|_| planned.cycle);
             let run = latest.get(&(planned.id.as_str(), cycle)).copied();
+            let is_landed = planned.prior_cycle
+                || landed.contains(&planned.id)
+                || (step_completed && run.is_some_and(|r| r.status == "completed"));
             let status = if is_landed {
                 "landed".to_string()
             } else {
@@ -306,7 +316,7 @@ mod tests {
         let landed: HashSet<String> = ["t1".to_string()].into_iter().collect();
         let runs = vec![run("t1", "completed", 0.5), run("t2", "running", 0.2)];
 
-        let out = assemble_tasks(&plan, None, &landed, &runs);
+        let out = assemble_tasks(&plan, None, &landed, &runs, false);
         assert_eq!(out.len(), 3);
 
         assert_eq!(out[0].status, "landed");
@@ -329,7 +339,7 @@ mod tests {
         let landed = HashSet::new();
         let mut row = run("t1", "failed", 0.9);
         row.error_message = Some("boom".into());
-        let out = assemble_tasks(&plan, None, &landed, &[row]);
+        let out = assemble_tasks(&plan, None, &landed, &[row], false);
         assert_eq!(out[0].status, "failed");
         assert!(!out[0].landed);
         assert_eq!(out[0].error_message.as_deref(), Some("boom"));
@@ -354,7 +364,7 @@ mod tests {
         let landed = HashSet::new();
         let runs = vec![run("fix-1", "running", 0.1)];
 
-        let out = assemble_tasks(&plan, None, &landed, &runs);
+        let out = assemble_tasks(&plan, None, &landed, &runs, false);
         assert_eq!(out[0].status, "landed");
         assert!(out[0].landed);
         assert!(out[0].prior_cycle);
@@ -363,6 +373,36 @@ mod tests {
         assert_eq!(out[1].status, "running");
         assert!(!out[1].landed);
         assert!(!out[1].prior_cycle);
+    }
+
+    /// The step spends its checkpoint on the way to `completed`, so a
+    /// finished run's newest cycle has none — its tickets must not read as
+    /// merely run-and-uncommitted beside the earlier cycles' landed ones.
+    #[test]
+    fn a_completed_steps_current_cycle_reads_landed_without_a_checkpoint() {
+        let plan = vec![
+            PlannedTaskRef {
+                id: "rework-1".into(),
+                title: "Earlier".into(),
+                cycle: 1,
+                prior_cycle: true,
+            },
+            planned("fix-1", "Done"),
+            planned("fix-2", "Skipped"),
+        ];
+        let runs = vec![run("fix-1", "completed", 1.1), run("fix-2", "skipped", 0.0)];
+
+        let done = assemble_tasks(&plan, None, &HashSet::new(), &runs, true);
+        assert!(done[0].landed);
+        assert_eq!(done[1].status, "landed");
+        assert!(done[1].landed);
+        assert_eq!(done[1].cost_usd, Some(1.1));
+        assert_eq!(done[2].status, "skipped");
+        assert!(!done[2].landed);
+
+        let running = assemble_tasks(&plan, None, &HashSet::new(), &runs, false);
+        assert_eq!(running[1].status, "completed");
+        assert!(!running[1].landed);
     }
 
     /// The cycle tag is what the accordion groups by, so it has to survive
@@ -389,7 +429,7 @@ mod tests {
                 prior_cycle: false,
             },
         ];
-        let out = assemble_tasks(&plan, None, &HashSet::new(), &[]);
+        let out = assemble_tasks(&plan, None, &HashSet::new(), &[], false);
         let cycles: Vec<u32> = out.iter().map(|t| t.cycle).collect();
         assert_eq!(cycles, [0, 1, 2]);
     }
@@ -415,7 +455,7 @@ mod tests {
             tagged("t1", "running", 0.0, "new", 0),
         ];
 
-        let out = assemble_tasks(&plan, Some("new"), &HashSet::new(), &runs);
+        let out = assemble_tasks(&plan, Some("new"), &HashSet::new(), &runs, false);
         assert_eq!(out[0].status, "running");
         assert_eq!(out[0].cost_usd, Some(0.0));
         assert_eq!(out[1].status, "pending");
@@ -444,7 +484,7 @@ mod tests {
         failed.error_message = Some("boom".into());
         let runs = vec![tagged("rework-1", "completed", 1.7, "e", 1), failed];
 
-        let out = assemble_tasks(&plan, Some("e"), &HashSet::new(), &runs);
+        let out = assemble_tasks(&plan, Some("e"), &HashSet::new(), &runs, false);
         assert_eq!(out[0].cost_usd, Some(1.7));
         assert_eq!(out[0].error_message, None);
         assert_eq!(out[1].status, "failed");
