@@ -64,9 +64,16 @@ function pollDelayMs(consecutiveFailures: number): number {
 export function useRemoteRun(input: {
   featureId: string;
   reload: () => void;
+  /**
+   * Called after each re-hydration lands. A hydration rewrites the shadow's
+   * `features.status` with no local event behind it, and the rail's rollup is
+   * otherwise re-read only on local driver events and a full reconcile — so it
+   * kept showing a gate the runner had long since passed.
+   */
+  onShadowSynced: () => void;
   upsertBootstrapPhase: (p: BootstrapPhasePayload) => void;
 }) {
-  const { featureId, reload, upsertBootstrapPhase } = input;
+  const { featureId, reload, onShadowSynced, upsertBootstrapPhase } = input;
   const [remoteRun, setRemoteRun] = useState<RemoteRunMirror | null>(null);
   // Display name for `remoteRun.machine_id` — resolved lazily (only
   // when the feature turns out to be a remote run) from the same
@@ -122,6 +129,7 @@ export function useRemoteRun(input: {
       });
       if (updated) setRemoteRun(updated);
       reload();
+      onShadowSynced();
     } catch {
       // Transient tunnel hiccup — the next poll tick retries.
     }
@@ -162,6 +170,7 @@ export function useRemoteRun(input: {
         consecutiveFailures = 0;
         if (updated) setRemoteRun(updated);
         reload();
+        onShadowSynced();
       } catch {
         // Transient tunnel hiccup — the next tick retries. Nothing to
         // surface: the shadow keeps showing the last good state.

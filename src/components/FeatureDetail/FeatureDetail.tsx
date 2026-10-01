@@ -85,7 +85,7 @@ export function FeatureDetail() {
 }
 
 function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
-  const { state: { currentProjectId, projects } } = useProject();
+  const { state: { currentProjectId, projects }, refreshProjectActivity } = useProject();
   const {
     ui: {
       sidebarCollapsed: _sidebarCollapsed,
@@ -122,6 +122,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   const remote = useRemoteRun({
     featureId,
     reload: run.reload,
+    onShadowSynced: refreshProjectActivity,
     upsertBootstrapPhase: bootstrap.upsertBootstrapPhase,
   });
   const attachments = useAttachmentPreview(featureId);

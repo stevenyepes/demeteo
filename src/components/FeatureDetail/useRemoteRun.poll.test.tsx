@@ -76,14 +76,15 @@ const spawnedEvent = (
 async function mount(run: RemoteRunMirror | null) {
   remoteRunForFeature.mockResolvedValue(run);
   const reload = vi.fn();
+  const onShadowSynced = vi.fn();
   const view = renderHook(() =>
-    useRemoteRun({ featureId: 'f1', reload, upsertBootstrapPhase: () => {} }),
+    useRemoteRun({ featureId: 'f1', reload, onShadowSynced, upsertBootstrapPhase: () => {} }),
   );
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
   });
-  return { reload, ...view };
+  return { reload, onShadowSynced, ...view };
 }
 
 const advance = (ms: number) =>
@@ -212,6 +213,17 @@ describe('useRemoteRun poll scheduling', () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
+  it('re-reads the rail rollup after a hydration lands, not after a failed one', async () => {
+    remoteRefreshRun.mockRejectedValueOnce(new Error('tunnel hiccup'));
+    const { onShadowSynced } = await mount(mirror());
+
+    await advance(3_000);
+    expect(onShadowSynced).not.toHaveBeenCalled();
+
+    await advance(6_000);
+    expect(onShadowSynced).toHaveBeenCalledTimes(1);
+  });
+
   it('schedules nothing for a locally-run feature', async () => {
     const { reload } = await mount(null);
 
@@ -227,7 +239,7 @@ describe('useRemoteRun detached event folding', () => {
     remoteRunForFeature.mockResolvedValue(mirror());
     const upsertBootstrapPhase = vi.fn();
     const { result } = renderHook(() =>
-      useRemoteRun({ featureId: 'f1', reload: () => {}, upsertBootstrapPhase }),
+      useRemoteRun({ featureId: 'f1', reload: () => {}, onShadowSynced: () => {}, upsertBootstrapPhase }),
     );
     await act(async () => {
       await Promise.resolve();
@@ -333,7 +345,7 @@ describe('useRemoteRun detached event folding', () => {
     );
     const { result, rerender } = renderHook(
       ({ featureId }) =>
-        useRemoteRun({ featureId, reload, upsertBootstrapPhase: () => {} }),
+        useRemoteRun({ featureId, reload, onShadowSynced: () => {}, upsertBootstrapPhase: () => {} }),
       { initialProps: { featureId: 'f1' } },
     );
     await act(async () => {

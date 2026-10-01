@@ -1,6 +1,6 @@
 use super::{
     backfill_local_path, declared_remote_paths, hydrate_shadow_feature, mime_for_path,
-    shadow_feature_patch, shadow_step_artifacts_stale,
+    shadow_feature_patch, shadow_feature_status, shadow_step_artifacts_stale,
 };
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
@@ -427,7 +427,7 @@ async fn hydrate_shadow_feature_mirrors_sequence_state_for_a_sequence_step() {
         Ok(serde_json::to_value(&sequence_state).unwrap()),
     );
 
-    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1")
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "running")
         .await
         .unwrap();
 
@@ -476,7 +476,7 @@ async fn hydrate_shadow_feature_leaves_sequence_tables_untouched_without_get_seq
         Err("unknown method: get_sequence_state".to_string()),
     );
 
-    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1")
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "running")
         .await
         .expect("an older runner without get_sequence_state must not fail the whole poll");
 
@@ -504,6 +504,103 @@ async fn hydrate_shadow_feature_leaves_sequence_tables_untouched_without_get_seq
     assert!(
         ctx.features.step_get(&step_execution_id).unwrap().is_some(),
         "the step shadow itself must still hydrate normally"
+    );
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+// ── Run-level blocks on the shadow's status ──────────────────────────────────
+
+#[test]
+fn a_credential_park_overrides_a_runner_feature_that_already_finished() {
+    // The terminal push park: the pipeline is done on the runner, the PR is
+    // not — so the shadow must band as "needs you", not "done".
+    assert_eq!(
+        shadow_feature_status("completed", "needs-credentials"),
+        "needs-credentials"
+    );
+    assert_eq!(
+        shadow_feature_status("pending", "needs-credentials"),
+        "needs-credentials"
+    );
+}
+
+#[test]
+fn a_parked_gate_reads_as_awaiting_gate_whatever_the_feature_column_says() {
+    assert_eq!(shadow_feature_status("running", "parked"), "awaiting_gate");
+    assert_eq!(
+        shadow_feature_status("awaiting_gate", "parked"),
+        "awaiting_gate"
+    );
+    assert_eq!(shadow_feature_status("gated", "parked"), "gated");
+}
+
+#[test]
+fn an_unblocked_run_mirrors_the_runner_feature_verbatim() {
+    for run_status in [
+        "running",
+        "awaiting_mr",
+        "completed",
+        "failed",
+        "unreachable",
+    ] {
+        assert_eq!(shadow_feature_status("completed", run_status), "completed");
+    }
+}
+
+#[tokio::test]
+async fn hydrate_shows_a_credential_park_until_the_run_moves_on() {
+    let feature_id = FeatureId::from("f-1".to_string());
+    let (mut ctx, temp_dir) =
+        make_sequence_test_ctx("credential_park", Ok(serde_json::Value::Null));
+    let mut finished = sequence_test_feature();
+    finished.status = "completed".to_string();
+    ctx.exec = Arc::new(SequenceRpcStub {
+        feature: serde_json::to_value(finished).unwrap(),
+        steps: serde_json::json!([]),
+        sequence_state: Ok(serde_json::Value::Null),
+    });
+
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "needs-credentials")
+        .await
+        .unwrap();
+    assert_eq!(
+        ctx.features.get(&feature_id).unwrap().unwrap().status,
+        "needs-credentials",
+        "the first poll inserts the shadow — it must already carry the block"
+    );
+
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "awaiting_mr")
+        .await
+        .unwrap();
+    assert_eq!(
+        ctx.features.get(&feature_id).unwrap().unwrap().status,
+        "completed",
+        "once credentials land, the update branch must follow the runner again"
+    );
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+#[tokio::test]
+async fn a_pre_clone_credential_park_marks_the_desktop_row_it_cannot_hydrate() {
+    let feature_id = FeatureId::from("f-1".to_string());
+    let (mut ctx, temp_dir) = make_sequence_test_ctx("pre_clone_park", Ok(serde_json::Value::Null));
+    let mut submitted = sequence_test_feature();
+    submitted.status = "pending".to_string();
+    ctx.features.add(submitted).unwrap();
+    ctx.exec = Arc::new(SequenceRpcStub {
+        feature: serde_json::Value::Null,
+        steps: serde_json::json!([]),
+        sequence_state: Ok(serde_json::Value::Null),
+    });
+
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "needs-credentials")
+        .await
+        .unwrap();
+    assert_eq!(
+        ctx.features.get(&feature_id).unwrap().unwrap().status,
+        "needs-credentials"
     );
 
     let _ = std::fs::remove_dir_all(temp_dir);
