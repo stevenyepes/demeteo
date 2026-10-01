@@ -63,12 +63,55 @@ fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
     }
 }
 
+/// The status a detached run's shadow row shows, given the runner's own
+/// `Feature.status` and the run-level status the mirror recorded.
+///
+/// The two disagree exactly when the run is blocked on the laptop. The
+/// terminal credential park happens *after* the pipeline finished, so the
+/// runner's feature already reads `completed` while the run waits for a PAT
+/// to push — copied verbatim, the card banded a run that has published
+/// nothing as done. A dangerous-gate park is reported through
+/// `parked_gate_id` and likewise need not move the feature's own column.
+/// Every surface that bands a run (`segmentFor`, the rail rollup) reads
+/// `features.status`, so the blocking state has to be in that column, not
+/// only in `remote_run_mirror`.
+pub(super) fn shadow_feature_status(feature_status: &str, run_status: &str) -> String {
+    match run_status {
+        "needs-credentials" => "needs-credentials",
+        "parked" if feature_status != "gated" => "awaiting_gate",
+        _ => feature_status,
+    }
+    .to_string()
+}
+
+/// Puts the run-level block onto a shadow row the runner has no feature
+/// for yet — the pre-clone credential park, which stops before the runner
+/// bootstraps one, so `get_feature` has nothing to hydrate from.
+fn mark_unhydrated_shadow(ctx: &AppContext, feature_id: &str, run_status: &str) {
+    let feature_id = FeatureId::from(feature_id.to_string());
+    let Ok(Some(local)) = ctx.features.get(&feature_id) else {
+        return;
+    };
+    let status = shadow_feature_status(&local.status, run_status);
+    if status == local.status {
+        return;
+    }
+    let patch = FeaturePatch {
+        status: Some(status),
+        ..Default::default()
+    };
+    if let Err(error) = ctx.features.update(&feature_id, &patch) {
+        eprintln!("shadow status write failed for feature {feature_id}: {error}");
+    }
+}
+
 pub(super) async fn hydrate_shadow_feature(
     ctx: &AppContext,
     machine_id: &str,
     run_id: &str,
     local_project_id: &str,
     canonical_id: &str,
+    run_status: &str,
 ) -> Result<(), String> {
     let feature_value = remote_rpc(
         ctx,
@@ -78,6 +121,7 @@ pub(super) async fn hydrate_shadow_feature(
     )
     .await?;
     if feature_value.is_null() {
+        mark_unhydrated_shadow(ctx, canonical_id, run_status);
         return Ok(());
     }
     let mut feature: Feature = serde_json::from_value(feature_value)
@@ -85,6 +129,7 @@ pub(super) async fn hydrate_shadow_feature(
     let canonical = FeatureId::from(canonical_id.to_string());
     feature.project_id = ProjectId::new(local_project_id);
     feature.id = canonical;
+    feature.status = shadow_feature_status(&feature.status, run_status);
 
     let steps_value = remote_rpc(
         ctx,
@@ -440,9 +485,11 @@ pub(super) async fn reconcile_one_run(
                         &row.run_id,
                         project_id,
                         feature_id,
+                        &status,
                     )
                     .await
                     {
+                        mark_unhydrated_shadow(ctx, feature_id, &status);
                         eprintln!(
                             "shadow hydrate failed for run {} (feature {feature_id}): {error}",
                             row.run_id
