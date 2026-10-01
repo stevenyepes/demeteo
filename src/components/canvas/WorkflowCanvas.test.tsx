@@ -721,6 +721,36 @@ describe('WorkflowCanvas re-layout on a measured size change', () => {
     expect(elkGraphs).toHaveLength(1);
   });
 
+  /** A browser re-reports a card's size only when it changes, so a status tick
+   *  that resizes nothing gets no second measurement. Before the re-seed kept
+   *  `measured`, that left every card `visibility: hidden` — an empty graph
+   *  partway through a long remote run. */
+  it('keeps every card visible and the selection across a status tick', async () => {
+    const view = render(
+      <div style={{ width: 1600, height: 600 }}>
+        <WorkflowCanvas definition={def} statusByNode={statuses('pending')} selectedNodeId="s-implement" />
+      </div>,
+    );
+    act(() => canvasObserver().tick(1600, 600));
+    await settle();
+
+    view.rerender(
+      <div style={{ width: 1600, height: 600 }}>
+        <WorkflowCanvas definition={def} statusByNode={statuses('running')} selectedNodeId="s-implement" />
+      </div>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const cards = Array.from(document.querySelectorAll<HTMLElement>('.react-flow__node'));
+    expect(cards).toHaveLength(def.nodes.length);
+    for (const card of cards) expect(card.style.visibility).toBe('visible');
+    expect(document.querySelector('.react-flow__node.selected')?.getAttribute('data-id')).toBe(
+      's-implement',
+    );
+  });
+
   it('re-runs elk when a card widens in place, at the new width', async () => {
     await mountLaidOut();
 

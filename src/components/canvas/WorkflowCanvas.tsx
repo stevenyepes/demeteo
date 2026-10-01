@@ -193,17 +193,28 @@ function CanvasInner({
   }, [definition]);
 
   // Re-seed when the definition (or its overlay) changes identity, carrying
-  // any auto-layout positions across.
+  // any auto-layout positions across — and what React Flow measured, and the
+  // selection. `toFlowGraph` sets neither, and a node handed over without
+  // `measured` is hidden until React Flow measures it again, which it only
+  // re-arms on an initialized→uninitialized edge. A remote run re-seeds on
+  // every 3s poll; once two of those land in one batch the edge is never seen,
+  // the card's size never changes again to re-report it, and the whole graph
+  // stays `visibility: hidden` for the rest of the run. Carrying `measured`
+  // costs nothing: an observed card keeps reporting its real size changes.
   useEffect(() => {
     const laid = laidOutRef.current;
-    setNodes(
-      laid
-        ? base.nodes.map((n) => {
-            const p = laid.get(n.id);
-            return p ? { ...n, position: p } : n;
-          })
-        : base.nodes,
-    );
+    setNodes((prev) => {
+      const previous = new Map(prev.map((n) => [n.id, n]));
+      return base.nodes.map((n) => {
+        const old = previous.get(n.id);
+        return {
+          ...n,
+          position: laid?.get(n.id) ?? n.position,
+          ...(old?.measured ? { measured: old.measured } : {}),
+          ...(old?.selected ? { selected: true } : {}),
+        };
+      });
+    });
     setEdges(base.edges);
   }, [base, setNodes, setEdges]);
 
@@ -288,10 +299,10 @@ function CanvasInner({
   const showMiniMap = needsMiniMap(plan, nodes.length);
 
   const sizeKey = layoutSizeKey(nodes);
-  // A re-seed from `base` drops every `measured` for one render, while
-  // `nodesInitialized` still reports the last commit's `true`. Acting then
-  // feeds elk placeholder sizes — and the placeholder plan can disagree on
-  // direction, which ping-pongs elk on every status tick.
+  // A node not yet measured — a new definition's, or one first mounted — has no
+  // `measured` while `nodesInitialized` can still report the last commit's
+  // `true`. Acting then feeds elk placeholder sizes, and the placeholder plan
+  // can disagree on direction with the real one, which ping-pongs elk.
   const measured = everyNodeMeasured(nodes);
 
   /** Lay the graph out, choosing the orientation that renders largest in the
