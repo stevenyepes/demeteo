@@ -1,10 +1,23 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import NewAskThreadModal from './NewAskThreadModal';
 import { getAgentModels } from '../../lib/agentModels';
 import { getAgentConfigs, listMachines } from '../../lib/machines';
-import type { AskThread, Machine } from '../../types';
+import { getRunnerCompatibility } from '../../lib/runner';
+import { invalidateRunnerCompatibility } from '../../lib/runnerCompatibility';
+import type { AskThread, Machine, RunnerCompatibilityReport } from '../../types';
+
+const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }));
+
+vi.mock('../../context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../context')>()),
+  useNavigation: () => ({ navigate }),
+}));
+
+vi.mock('../../lib/runner', () => ({
+  getRunnerCompatibility: vi.fn(),
+}));
 
 const agents = [
   { kind: 'claude-code', display_label: 'Claude Code', lists_models: true, default_model: null, install_command: '' },
@@ -117,6 +130,12 @@ beforeEach(() => {
   vi.mocked(getAgentConfigs).mockReset();
   vi.mocked(getAgentModels).mockReset();
   undeclaredModelProbes = [];
+  navigate.mockReset();
+  invalidateRunnerCompatibility();
+  vi.mocked(getRunnerCompatibility).mockReset();
+  vi.mocked(getRunnerCompatibility).mockImplementation(async (machineId: string) => {
+    throw new Error(`no runner compatibility for machine ${machineId}`);
+  });
   configsByMachine({
     local: [config('claude-code'), config('opencode'), config('hermes')],
   });
@@ -617,5 +636,81 @@ describe('NewAskThreadModal', () => {
     fireEvent.click(screen.getByTestId('ask-new-thread-network-toggle'));
 
     expect(capability).not.toHaveTextContent(/reaches the network/i);
+  });
+});
+
+describe('NewAskThreadModal runner compatibility', () => {
+  const behind: RunnerCompatibilityReport = {
+    verdict: 'runner_behind',
+    runner: '1.1.0',
+    runner_channel: 'stable',
+    app: '1.2.0',
+    app_channel: 'stable',
+    message:
+      'demeteo-runner 1.1.0 (stable) on host-2 is older than Demeteo 1.2.0 (stable) — upgrade the runner from Machines settings.',
+  };
+
+  const ahead: RunnerCompatibilityReport = {
+    verdict: 'runner_ahead',
+    runner: '1.3.0',
+    runner_channel: 'stable',
+    app: '1.2.0',
+    app_channel: 'stable',
+    message:
+      "demeteo-runner 1.3.0 (stable) on host-2 is newer than Demeteo 1.2.0 (stable) — upgrade Demeteo to match, or push this app's runner from Machines settings.",
+  };
+
+  // Ask never calls the runner, so a mismatch is worth knowing but stops nothing.
+  it.each([
+    ['behind', behind, 'Runner is older than Demeteo'],
+    ['ahead of', ahead, 'Runner is newer than Demeteo'],
+  ])('informs about a runner %s the app on a remote machine without blocking start', async (_, report, title) => {
+    vi.mocked(getRunnerCompatibility).mockImplementation(async (machineId: string) => {
+      if (machineId !== 'host-2') throw new Error(`no runner compatibility for machine ${machineId}`);
+      return report;
+    });
+    configsByMachine({ 'host-2': [config('claude-code')] });
+
+    renderModal({ machineId: 'host-2', seedTitle: 'My thread' });
+
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /open machine settings/i }));
+    expect(navigate).toHaveBeenCalledWith({ kind: 'settings' });
+
+    await harnessOffers('claude-code');
+    expect(screen.getByRole('button', { name: /start thread/i })).toBeEnabled();
+    expect(getRunnerCompatibility).toHaveBeenCalledWith('host-2');
+  });
+
+  it('says nothing about a runner that is not installed, since Ask never uses it', async () => {
+    const notInstalled: RunnerCompatibilityReport = {
+      verdict: 'not_installed',
+      app: '1.2.0',
+      app_channel: 'stable',
+      message: 'demeteo-runner is not installed on host-2 — enable remote runs from Machines settings.',
+    };
+    const probe = Promise.resolve(notInstalled);
+    vi.mocked(getRunnerCompatibility).mockReturnValue(probe);
+    configsByMachine({ 'host-2': [config('claude-code')] });
+
+    renderModal({ machineId: 'host-2', seedTitle: 'My thread' });
+
+    await harnessOffers('claude-code');
+    await waitFor(() => expect(getRunnerCompatibility).toHaveBeenCalledWith('host-2'));
+    await act(async () => {
+      await probe;
+    });
+    expect(screen.queryByText('Runner not installed')).toBeNull();
+    expect(screen.queryByRole('button', { name: /open machine settings/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /start thread/i })).toBeEnabled();
+  });
+
+  it('asks nothing about the runner for the local machine and shows no notice', async () => {
+    renderModal();
+
+    await harnessOffers('claude-code');
+    expect(getRunnerCompatibility).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /open machine settings/i })).toBeNull();
   });
 });

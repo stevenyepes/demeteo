@@ -1,9 +1,10 @@
 import { useCallback } from 'react';
 import { startFeature } from '../lib/createProjectWizard';
 import { submitRemoteRun } from '../lib/remoteRuns';
-import { useNavigation, useProject } from '../context';
+import { useNavigation, useProject, useUIState } from '../context';
 import { useErrorBus } from '../lib/errorBus';
 import { stagedAttachmentInputs } from '../lib/attachments';
+import { invalidateRunnerCompatibility, isRunnerIncompatibleError } from '../lib/runnerCompatibility';
 import type { LaunchStageEntry } from '../components/AttachmentDropzone';
 import type { EffortLevel, Feature, FeatureOrigin, StepOverride } from '../types';
 
@@ -40,6 +41,13 @@ export interface LaunchRunParams {
   diffBaseBranch?: string;
 }
 
+/** Per-call hooks for the one caller that needs more than `Feature | null`. */
+export interface LaunchRunOptions {
+  /** The runner refused the detached submit as version-incompatible, already
+   *  reported and its cached verdict dropped — the caller's cue to re-probe. */
+  onRunnerRefused?: () => void;
+}
+
 /**
  * The one launch code path (ux-audit F28): every composer routes through
  * this hook, and every branch ends the same way — `navigate` to
@@ -62,9 +70,10 @@ export function useLaunchRun(options: {
   const { navigate } = useNavigation();
   const { refreshProjectActivity } = useProject();
   const { reportError } = useErrorBus();
+  const { uiDispatch } = useUIState();
 
   return useCallback(
-    async (params: LaunchRunParams): Promise<Feature | null> => {
+    async (params: LaunchRunParams, launchOptions?: LaunchRunOptions): Promise<Feature | null> => {
       try {
         if (!projectId) {
           throw new Error('No active project to launch a feature in.');
@@ -163,10 +172,29 @@ export function useLaunchRun(options: {
         navigate({ kind: 'detail', featureId: feature.id, featureTitle: feature.title });
         return feature;
       } catch (err) {
-        reportError(err);
+        if (params.machineId && isRunnerIncompatibleError(err)) {
+          // The refusal is fresher than any cached verdict that let Start enable.
+          invalidateRunnerCompatibility(params.machineId);
+          reportError(err, {
+            action: {
+              label: 'Open machine settings',
+              // The toast sits above the Start Feature modal, which stays over
+              // every view until something closes it (see `StartFeatureHost`).
+              // `params` is not that modal's draft unless it launched them, so
+              // the modal is asked to leave and keeps its own.
+              onClick: () => {
+                uiDispatch({ type: 'LEAVE_START_FEATURE' });
+                navigate({ kind: 'settings' });
+              },
+            },
+          });
+          launchOptions?.onRunnerRefused?.();
+        } else {
+          reportError(err);
+        }
         return null;
       }
     },
-    [projectId, onLaunched, navigate, refreshProjectActivity, reportError],
+    [projectId, onLaunched, navigate, refreshProjectActivity, reportError, uiDispatch],
   );
 }

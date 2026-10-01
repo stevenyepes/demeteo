@@ -10,8 +10,11 @@
 //!    to a Linux x86_64 host (`Exec format error`).
 //! 3. *Which* version it reports — best-effort `<path> --version` with
 //!    a short timeout, used to warn about stale dev builds *before*
-//!    pushing them.
+//!    pushing them. The comparison is [`crate::domain::runner_version`]'s.
 
+use crate::domain::runner_version::{
+    assess, ReleaseVersion, RunnerCompatibility, RunnerVersionReading,
+};
 use crate::error::AppError;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -151,18 +154,31 @@ fn classify_magic(bytes: &[u8]) -> RunnerArch {
     RunnerArch::Unknown
 }
 
-/// If `binary.version` is `Some(v)` and `v != expected`, returns a
-/// human-readable warning explaining the mismatch. `None` when versions
-/// match, when the version is unknown (binary wasn't executable on this
-/// laptop, e.g. the musl build on a Mac dev), or when the binary is
-/// absent.
+/// A human-readable warning when `binary.version` is not the app's
+/// `expected` build, judged by [`assess`] so the local check and the
+/// remote gate agree on what "the same version" means. `None` when the
+/// versions match or when the version is unknown (binary wasn't
+/// executable on this laptop, e.g. the musl build on a Mac dev).
+///
+/// Unlike the remote gate, a reading that isn't a release version still
+/// warns: nothing here blocks the push, so the warning is the only place
+/// the user learns the build is unrecognised.
 pub fn stale_version_warning(binary: &RunnerBinary, expected: &str) -> Option<String> {
-    match &binary.version {
-        Some(v) if v.as_str() != expected => Some(format!(
-            "this local build reports version {v}, not the app's {expected} — \
+    let reported = binary.version.clone()?;
+    match assess(expected, RunnerVersionReading::Reported(reported)) {
+        RunnerCompatibility::Compatible { .. } | RunnerCompatibility::NotInstalled { .. } => None,
+        RunnerCompatibility::RunnerBehind { runner, app, .. } => Some(format!(
+            "this local build reports version {runner}, older than the app's {app} — \
+             it'll be pushed as-is; upgrade the runner build to match"
+        )),
+        RunnerCompatibility::RunnerAhead { runner, app, .. } => Some(format!(
+            "this local build reports version {runner}, newer than the app's {app} — \
+             it'll be pushed as-is; upgrade Demeteo to match"
+        )),
+        RunnerCompatibility::Unknown { app, detail, .. } => Some(format!(
+            "couldn't compare this local build with the app's {app} ({detail}) — \
              it'll be pushed as-is"
         )),
-        _ => None,
     }
 }
 
@@ -182,11 +198,17 @@ pub async fn probe_version(path: &Path) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .rsplit(' ')
-        .next()
-        .map(|s| s.to_string())
+    version_from_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// The canonical version when the output parses as one; otherwise the
+/// output as printed, so [`stale_version_warning`] can still name it.
+fn version_from_output(stdout: &str) -> Option<String> {
+    let text = stdout.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(ReleaseVersion::parse(text).map_or_else(|| text.to_string(), |v| v.to_string()))
 }
 
 async fn read_with_version(path: PathBuf) -> RunnerBinary {

@@ -47,3 +47,26 @@ fn from_db_sqlite_redacts_raw_error() {
         _ => panic!("expected Database variant"),
     }
 }
+
+#[test]
+fn runner_incompatible_serializes_verdict_payload() {
+    use crate::domain::runner_version::{ReleaseChannel, RunnerCompatibility};
+
+    let verdict = RunnerCompatibility::RunnerBehind {
+        runner: "1.2.0-30".into(),
+        runner_channel: ReleaseChannel::Nightly,
+        app: "1.2.0-31".into(),
+        app_channel: ReleaseChannel::Nightly,
+    };
+    let err = AppError::runner_incompatible("devbox", verdict.clone());
+    assert_eq!(err.code(), "runner_incompatible");
+    assert_eq!(err.to_string(), verdict.message("devbox"));
+
+    let json = serde_json::to_value(&err).unwrap();
+    assert_eq!(json["kind"], "runner_incompatible");
+    assert_eq!(json["message"], verdict.message("devbox"));
+    assert_eq!(json["compatibility"]["verdict"], "runner_behind");
+    assert_eq!(json["compatibility"]["runner"], "1.2.0-30");
+    assert_eq!(json["compatibility"]["app"], "1.2.0-31");
+    assert_eq!(json["compatibility"]["app_channel"], "nightly");
+}

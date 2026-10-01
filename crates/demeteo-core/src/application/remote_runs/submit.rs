@@ -1,4 +1,5 @@
 use super::attachments::{cleanup_attachment_spool, mark_placeholder_failed, spool_attachments};
+use super::compatibility::ensure_runner_compatible;
 use super::rpc::{json_str, remote_rpc};
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::application::attachments::StagedAttachmentInput;
@@ -39,6 +40,9 @@ pub struct SubmitInput {
     /// when that is not where it started. See
     /// [`FeatureOrigin::base_branch`].
     pub diff_base_branch: Option<String>,
+    /// This app's own build, read from the running bundle by the caller; the
+    /// runner must be exactly this build to accept a submit.
+    pub app_version: String,
 }
 
 pub struct SubmitOutcome {
@@ -226,10 +230,16 @@ impl ResolvedSubmit {
     }
 }
 
+/// Refuses a runner that is not this app's build before anything else: a
+/// refused run must leave no placeholder row and no spooled attachment, and
+/// must never have been handed the PAT. Only this entry point is gated —
+/// status, retry and reconcile of a run already on the runner are not, so a
+/// runner upgraded mid-run does not strand it.
 pub async fn submit_remote_run(
     ctx: &AppContext,
     mut input: SubmitInput,
 ) -> Result<SubmitOutcome, AppError> {
+    ensure_runner_compatible(&*ctx.exec, &input.machine_id, &input.app_version).await?;
     let project_id = ProjectId::from(input.project_id.clone());
     let repo = resolve_target_repo(ctx, &project_id, input.target_repo_id.as_deref())?;
     let provider = resolve_target_provider(ctx, &repo)?;

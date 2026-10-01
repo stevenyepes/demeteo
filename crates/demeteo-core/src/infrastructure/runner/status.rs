@@ -11,11 +11,13 @@ use crate::ports::execution::ExecutionPort;
 /// State of a remote runner. Each field is independently optional —
 /// `None` means the corresponding sub-probe couldn't run, not that the
 /// value is false.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RemoteRunnerProbe {
-    /// Raw `demeteo-runner --version` output. `None` when the binary
-    /// isn't on the box or the probe failed.
-    pub version: Option<String>,
+    /// The `--version` probe as `probe_version` returned it. Kept raw
+    /// because the compatibility verdict reuses it, and there a command that
+    /// did not run is `unknown` while one that printed nothing is
+    /// `not_installed`.
+    pub binary_version: Result<Option<String>, String>,
     /// `true` when `systemctl --user is-active demeteo-runner` reports
     /// `active`; `false` for any other state; `None` on probe failure.
     pub service_active: Option<bool>,
@@ -25,8 +27,14 @@ pub struct RemoteRunnerProbe {
 }
 
 impl RemoteRunnerProbe {
+    /// Raw `demeteo-runner --version` output. `None` when the binary
+    /// isn't on the box or the probe failed.
+    pub fn version(&self) -> Option<&str> {
+        self.binary_version.as_ref().ok().and_then(Option::as_deref)
+    }
+
     pub fn is_installed(&self) -> bool {
-        self.version.is_some()
+        self.version().is_some()
     }
 }
 
@@ -40,13 +48,11 @@ pub async fn probe(
         .resolve_home(machine_id)
         .await
         .map_err(AppError::from)?;
-    let bin_path = format!("{home}/.local/bin/demeteo-runner");
+    let binary_version = probe_version(exec, machine_id, &installed_bin_path(&home)).await;
 
-    let version = probe_version(exec, machine_id, &bin_path).await;
-
-    if version.is_none() {
+    if !matches!(binary_version, Ok(Some(_))) {
         return Ok(RemoteRunnerProbe {
-            version: None,
+            binary_version,
             service_active: None,
             lingering: None,
         });
@@ -79,27 +85,31 @@ pub async fn probe(
         });
 
     Ok(RemoteRunnerProbe {
-        version,
+        binary_version,
         service_active,
         lingering,
     })
 }
 
-async fn probe_version(
+/// Where the runner is installed under the SSH user's `home`.
+pub(crate) fn installed_bin_path(home: &str) -> String {
+    format!("{home}/.local/bin/demeteo-runner")
+}
+
+/// The trimmed `--version` line of the binary at `bin_path`. `Ok(None)` when
+/// it printed nothing — the `|| true` folds a missing binary into that — and
+/// `Err` only when the machine did not run the command at all.
+pub(crate) async fn probe_version(
     exec: &dyn ExecutionPort,
     machine_id: &str,
     bin_path: &str,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     use crate::paths::shell_escape_posix;
     let cmd = format!(
         "{} --version 2>/dev/null || true",
         shell_escape_posix(bin_path)
     );
-    let out = exec.run_command(machine_id, &cmd).await.ok()?;
+    let out = exec.run_command(machine_id, &cmd).await?;
     let trimmed = out.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
+    Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
 }

@@ -1,6 +1,7 @@
 mod attachments;
 mod cache_release;
 mod client_id;
+mod compatibility;
 mod control;
 mod credentials;
 mod diff_url;
@@ -11,6 +12,10 @@ mod transport;
 
 pub use cache_release::{
     pending_runner_releases, release_on_runner, retry_pending_runner_releases, RunnerCacheRpc,
+};
+pub use compatibility::{
+    ensure_runner_compatible, read_runner_version, read_runner_version_with, runner_compatibility,
+    runner_compatibility_with, BinaryFallback,
 };
 pub use control::{
     cancel_remote_run, find_mirror_for_feature, list_mirrored_runs, reconcile_all_runs,

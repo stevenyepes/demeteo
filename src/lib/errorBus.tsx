@@ -9,6 +9,14 @@ import React, {
 import type { AppErrorKind } from "../types";
 import { asAppError } from "./errors";
 
+/** A caller-supplied button on one toast, for a remedy only the reporting
+ *  site knows — unlike the per-kind CTAs in `ErrorToast.tsx`, which are the
+ *  same for every error of a kind. */
+export interface ErrorToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 /**
  * One row in the error toast stack.
  */
@@ -25,6 +33,7 @@ export interface ErrorToast {
   dismissable: boolean;
   /** Original unknown value, kept for debugging in the console. */
   raw?: unknown;
+  action?: ErrorToastAction;
 }
 
 export interface ReportOptions {
@@ -33,6 +42,7 @@ export interface ReportOptions {
   ttlMs?: number;
   /** Mark as sticky regardless of kind. */
   sticky?: boolean;
+  action?: ErrorToastAction;
 }
 
 export interface ErrorBus {
@@ -102,6 +112,7 @@ export function reportError(err: unknown, options: ReportOptions = {}): string {
     timestamp: Date.now(),
     dismissable: !(options.sticky ?? false),
     raw: err,
+    action: options.action,
   };
 
   // Cap visible count — drop the oldest non-sticky if we'd overflow.

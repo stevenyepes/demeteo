@@ -111,6 +111,19 @@ rm -f src-tauri/target/{debug,release}/demeteo-runner
 | Slate "Installed, stopped" | systemd `--user` unit isn't active | `ssh <user>@<machine> 'systemctl --user start demeteo-runner'` or re-click *Upgrade runner* in the UI |
 | Slate "Remote runner not installed" | No push has happened yet | Click *Enable remote runs* |
 
+### A dev build is blocked against a nightly runner
+
+`npm run dev:tauri` reports `tauri.conf.json`'s version, which is always stable
+(e.g. `1.2.0`). A machine still running a nightly runner (`1.2.0-N`) therefore
+reads as *runner ahead — upgrade Demeteo*, and detached runs are refused. That is
+the locked policy, not a bug: the channel comes from the version string alone and
+there is no debug-build override (see
+`crates/demeteo-core/src/domain/runner_version.rs` and
+[`DECISIONS.md`](DECISIONS.md)). Ignore the "upgrade Demeteo" advice — push your
+local runner build (`npm run build:runner`, which stamps it with that same
+`tauri.conf.json` version, then *Downgrade runner to 1.2.0* on that machine in
+`Settings → Machines`) so the two versions match.
+
 ## Cross-cutting change map
 
 When editing the runner binary location/arch logic, these files move together:

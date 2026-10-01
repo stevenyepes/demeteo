@@ -8,59 +8,77 @@ use demeteo_core::application::remote_runs::*;
 use tauri::{AppHandle, State};
 use tauri_plugin_notification::NotificationExt;
 
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn remote_submit_run(
-    ctx: State<'_, AppContext>,
-    machine_id: String,
-    project_id: String,
-    workflow_id: String,
-    title: String,
-    description: String,
-    agent_kind: Option<String>,
-    model: Option<String>,
-    effort: Option<crate::domain::models::EffortLevel>,
-    commit_artifacts: Option<bool>,
-    loop_iterations: Option<u32>,
-    max_budget_usd: Option<f64>,
-    step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
-    staged_attachments: Option<Vec<crate::commands::attachments::StagedAttachmentInput>>,
-    target_repo_id: Option<String>,
-    unattended: bool,
-    max_cost_usd: Option<f64>,
-    max_wall_clock_secs: Option<u64>,
+/// The frontend's `submitRemoteRun` input, everything [`SubmitInput`] needs
+/// except `app_version`, which only the running bundle can state.
+///
+/// `remote_submit_run` takes this as one camelCase `args` object
+/// (`{ args: { machineId, … } }`), not as flat top-level keys. The only caller
+/// is `submitRemoteRun` in `src/lib/remoteRuns.ts`, and `useLaunchRun.test.tsx`
+/// pins that shape — change all three together.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSubmitRunArgs {
+    pub machine_id: String,
+    pub project_id: String,
+    pub workflow_id: String,
+    pub title: String,
+    pub description: String,
+    pub agent_kind: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<crate::domain::models::EffortLevel>,
+    pub commit_artifacts: Option<bool>,
+    pub loop_iterations: Option<u32>,
+    pub max_budget_usd: Option<f64>,
+    pub step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
+    pub staged_attachments: Option<Vec<crate::commands::attachments::StagedAttachmentInput>>,
+    pub target_repo_id: Option<String>,
+    pub unattended: bool,
+    pub max_cost_usd: Option<f64>,
+    pub max_wall_clock_secs: Option<u64>,
     // Omitted (a frontend older than the origin picker) = `None`, which
     // `SubmitInput::origin` and `SubmitInput::diff_base_branch` define.
-    origin: Option<crate::domain::feature_origin::FeatureOrigin>,
-    diff_base_branch: Option<String>,
-) -> Result<RemoteRunHandle, AppError> {
-    submit_remote_run(
-        &ctx,
+    pub origin: Option<crate::domain::feature_origin::FeatureOrigin>,
+    pub diff_base_branch: Option<String>,
+}
+
+impl RemoteSubmitRunArgs {
+    fn into_submit_input(self, app_version: String) -> SubmitInput {
         SubmitInput {
-            machine_id,
-            project_id,
-            workflow_id,
-            title,
-            description,
-            agent_kind,
-            model,
-            effort,
-            commit_artifacts,
-            loop_iterations,
-            max_budget_usd,
-            step_overrides,
-            staged_attachments,
-            target_repo_id,
-            unattended,
-            max_cost_usd,
-            max_wall_clock_secs,
-            origin,
-            diff_base_branch,
-        },
-    )
-    .await
-    .map(RemoteRunHandle::from)
-    .map_err(AppError::from)
+            machine_id: self.machine_id,
+            project_id: self.project_id,
+            workflow_id: self.workflow_id,
+            title: self.title,
+            description: self.description,
+            agent_kind: self.agent_kind,
+            model: self.model,
+            effort: self.effort,
+            commit_artifacts: self.commit_artifacts,
+            loop_iterations: self.loop_iterations,
+            max_budget_usd: self.max_budget_usd,
+            step_overrides: self.step_overrides,
+            staged_attachments: self.staged_attachments,
+            target_repo_id: self.target_repo_id,
+            unattended: self.unattended,
+            max_cost_usd: self.max_cost_usd,
+            max_wall_clock_secs: self.max_wall_clock_secs,
+            origin: self.origin,
+            diff_base_branch: self.diff_base_branch,
+            app_version,
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn remote_submit_run(
+    app: AppHandle,
+    ctx: State<'_, AppContext>,
+    args: RemoteSubmitRunArgs,
+) -> Result<RemoteRunHandle, AppError> {
+    let input = args.into_submit_input(app.package_info().version.to_string());
+    submit_remote_run(&ctx, input)
+        .await
+        .map(RemoteRunHandle::from)
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -329,3 +347,7 @@ pub async fn remote_replay_step(
     .await
     .map_err(AppError::from)
 }
+
+#[cfg(test)]
+#[path = "../../tests/infrastructure/remote_runner.rs"]
+mod tests;

@@ -204,9 +204,11 @@ jobs:
       # ── demeteo-runner (Linux leg only) ─────────────────────────────
       # Built with the exact same version string as the app it ships
       # alongside (nightly: <base>-N, stable: vX.Y.Z tag minus the `v`)
-      # so `demeteo-runner --version` can be string-compared directly
-      # against `app.package_info().version` when the laptop decides
-      # whether a locally cached runner build is up to date.
+      # so `demeteo-runner --version` parses to the same build version as
+      # `app.package_info().version`. The app compares the two with the
+      # channel-aware check in crates/demeteo-core/src/domain/runner_version.rs
+      # and refuses a detached run on any mismatch, so any other string
+      # here ships a runner that its own app refuses to launch on.
       - name: Build demeteo-runner
         if: matrix.platform == 'ubuntu-22.04'
         env:

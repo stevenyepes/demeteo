@@ -27,6 +27,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::adapters::database::DbError;
+use crate::domain::runner_version::RunnerCompatibility;
 use crate::ports::agent_execution::ActionError;
 use crate::ports::agent_runtime::AgentStartError;
 
@@ -79,6 +80,15 @@ pub enum AppError {
     /// Surfaces as a UI-level error; full context in `tracing`.
     #[error("{message}")]
     Internal { message: String },
+
+    /// The `demeteo-runner` on a detached machine does not match this app's
+    /// build. `compatibility` carries the typed verdict so the frontend can
+    /// render direction and channels without parsing `message`.
+    #[error("{message}")]
+    RunnerIncompatible {
+        message: String,
+        compatibility: RunnerCompatibility,
+    },
 }
 
 impl AppError {
@@ -135,6 +145,13 @@ impl AppError {
         }
     }
 
+    pub fn runner_incompatible(machine: &str, verdict: RunnerCompatibility) -> Self {
+        AppError::RunnerIncompatible {
+            message: verdict.message(machine),
+            compatibility: verdict,
+        }
+    }
+
     /// Stable, frontend-friendly error code. Stable across releases
     /// even if the variant is renamed.
     pub fn code(&self) -> &'static str {
@@ -147,6 +164,7 @@ impl AppError {
             AppError::Database { .. } => "database",
             AppError::Agent { .. } => "agent",
             AppError::Internal { .. } => "internal",
+            AppError::RunnerIncompatible { .. } => "runner_incompatible",
         }
     }
 }

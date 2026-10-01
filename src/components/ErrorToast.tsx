@@ -16,7 +16,7 @@ import {
   ScrollText,
 } from "lucide-react";
 import type { AppErrorKind } from "../types";
-import { useErrorBus } from "../lib/errorBus";
+import { type ErrorToastAction, useErrorBus } from "../lib/errorBus";
 
 /**
  * Window event the toast dispatches when the user clicks a kind-specific
@@ -96,6 +96,12 @@ const KIND_META: Record<
     accent: "text-slate-300",
     leftBar: "border-l-slate-500/60",
   },
+  runner_incompatible: {
+    icon: AlertTriangle,
+    label: "Runner version",
+    accent: "text-ruby-300",
+    leftBar: "border-l-ruby-400/70",
+  },
 };
 
 interface CtaDef {
@@ -154,7 +160,8 @@ const ErrorToastRow: React.FC<{
   kind: AppErrorKind;
   message: string;
   dismissable: boolean;
-}> = ({ id, kind, message, dismissable }) => {
+  action?: ErrorToastAction;
+}> = ({ id, kind, message, dismissable, action }) => {
   const { dismiss } = useErrorBus();
   const meta = KIND_META[kind] ?? KIND_META.internal;
   const Icon = meta.icon;
@@ -179,6 +186,18 @@ const ErrorToastRow: React.FC<{
         </div>
         <div className="text-sm text-slate-100 break-words mt-0.5">{message}</div>
         <div className="flex items-center gap-3 mt-2">
+          {action && (
+            <button
+              type="button"
+              onClick={() => {
+                action.onClick();
+                if (dismissable) dismiss(id);
+              }}
+              className="inline-flex items-center gap-1 text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
+            >
+              {action.label}
+            </button>
+          )}
           {ctas.map(({ cta, label, icon: CtaIcon }) => (
             <button
               key={cta}
@@ -210,9 +229,11 @@ const ErrorToastRow: React.FC<{
 export const ErrorToast: React.FC = () => {
   const { toasts } = useErrorBus();
   if (toasts.length === 0) return null;
+  // Above modal dialogs (`z-[60]`): a toast often reports the failure of the
+  // dialog still open beneath it, and its action is how the user leaves it.
   return (
     <div
-      className="fixed bottom-6 right-6 z-50 flex flex-col-reverse gap-2 pointer-events-none"
+      className="fixed bottom-6 right-6 z-[70] flex flex-col-reverse gap-2 pointer-events-none"
       aria-live="polite"
       aria-atomic="false"
     >
@@ -223,6 +244,7 @@ export const ErrorToast: React.FC = () => {
           kind={t.kind}
           message={t.message}
           dismissable={t.dismissable}
+          action={t.action}
         />
       ))}
     </div>

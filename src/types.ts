@@ -1117,11 +1117,35 @@ export type AppErrorKind =
   | 'transport'
   | 'database'
   | 'agent'
-  | 'internal';
+  | 'internal'
+  | 'runner_incompatible';
 
 export interface AppError {
   kind: AppErrorKind;
   message: string;
+}
+
+/** Whether a machine's `demeteo-runner` is this app's build. Mirrors the Rust
+ *  `RunnerCompatibility`, whose `verdict` is the serde tag. */
+export type RunnerCompatibility =
+  | { verdict: 'compatible'; version: string; channel: ReleaseChannel }
+  | {
+      verdict: 'runner_behind' | 'runner_ahead';
+      runner: string;
+      runner_channel: ReleaseChannel;
+      app: string;
+      app_channel: ReleaseChannel;
+    }
+  | { verdict: 'not_installed'; app: string; app_channel: ReleaseChannel }
+  | { verdict: 'unknown'; app: string; app_channel: ReleaseChannel; detail: string };
+
+/** A {@link RunnerCompatibility} plus the backend's user-facing sentence for it. */
+export type RunnerCompatibilityReport = RunnerCompatibility & { message: string };
+
+/** Detached submit refused because the machine's runner is not this app's build. */
+export interface RunnerIncompatibleError extends AppError {
+  kind: 'runner_incompatible';
+  compatibility: RunnerCompatibility;
 }
 
 export interface WorktreeStrategy {

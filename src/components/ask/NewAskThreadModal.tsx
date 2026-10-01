@@ -16,6 +16,8 @@ import type { AskThread, ConfigOptionValue, Machine } from '../../types';
 import { FieldLabel } from '../ui/FieldLabel';
 import { HarnessModelPicker } from '../ui/HarnessModelPicker';
 import { Modal } from '../ui/Modal';
+import { useRunnerCompatibility } from '../../hooks/useRunnerCompatibility';
+import { RunnerVersionNotice } from '../RunnerVersionNotice';
 import { NetworkUnenforcedNote } from './NetworkUnenforcedNote';
 
 interface NewAskThreadModalProps {
@@ -60,6 +62,7 @@ export function NewAskThreadModal({
   const [modelsLoading, setModelsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { report: runnerReport } = useRunnerCompatibility(machine);
 
   // Derived from which machine and check answered, not set on a machine change:
   // an effect runs in the same commit as `setMachine`, before a `loading` set
@@ -283,6 +286,8 @@ export function NewAskThreadModal({
               the thread runs there instead.
             </p>
           </div>
+
+          <RunnerVersionNotice report={runnerReport} variant="informational" />
 
           <div>
             <FieldLabel>Web access</FieldLabel>

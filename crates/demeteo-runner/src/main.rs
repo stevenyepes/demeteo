@@ -41,10 +41,11 @@ use std::sync::Arc;
 /// Version reported by `--version`. CI sets `DEMETEO_RUNNER_VERSION` at
 /// build time to the exact same version string the desktop app reports
 /// (`app.package_info().version`, e.g. `"0.1.0-45"` nightly or `"0.2.0"`
-/// stable) so the laptop can compare its own version against a locally
-/// cached runner build with a plain string equality check. Local `cargo
-/// build` runs (no CI env var set) fall back to the crate's own version.
-const VERSION: &str = match option_env!("DEMETEO_RUNNER_VERSION") {
+/// stable). It must keep that exact format: the laptop parses it into channel
+/// and release and refuses detached runs on any mismatch — see
+/// [`demeteo_core::domain::runner_version`]. Local `cargo build` runs (no CI
+/// env var set) fall back to the crate's own version.
+pub(crate) const VERSION: &str = match option_env!("DEMETEO_RUNNER_VERSION") {
     Some(v) => v,
     None => env!("CARGO_PKG_VERSION"),
 };
@@ -158,6 +159,7 @@ fn main() {
         // decide install (missing/unparseable output) vs. upgrade
         // (version mismatch against the running app's own version).
         Some("--version") | Some("-V") => {
+            // The desktop app parses this exact format; do not change it.
             println!("demeteo-runner {}", VERSION);
         }
         Some("submit") => {

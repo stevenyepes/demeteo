@@ -1,9 +1,9 @@
 // NewDiscoveryModal — base-branch choice and the two-call `start()` sequence
 // (createDiscovery, then setDiscoveryBase when a named branch was chosen).
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const createDiscovery = vi.fn();
 const setDiscoveryBase = vi.fn();
@@ -46,8 +46,32 @@ vi.mock('../AttachmentDropzone', () => ({
   AttachmentDropzone: () => null,
 }));
 
+const { navigate, getRunnerCompatibility } = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  getRunnerCompatibility: vi.fn(),
+}));
+
+vi.mock('../../context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../context')>()),
+  useNavigation: () => ({ navigate }),
+}));
+
+vi.mock('../../lib/runner', () => ({
+  getRunnerCompatibility: (...args: unknown[]) => getRunnerCompatibility(...args),
+}));
+
 import { NewDiscoveryModal } from './NewDiscoveryModal';
-import type { Discovery } from '../../types';
+import { invalidateRunnerCompatibility } from '../../lib/runnerCompatibility';
+import type { Discovery, RunnerCompatibilityReport } from '../../types';
+
+beforeEach(() => {
+  navigate.mockReset();
+  invalidateRunnerCompatibility();
+  getRunnerCompatibility.mockReset();
+  getRunnerCompatibility.mockImplementation(async (machineId: string) => {
+    throw new Error(`no runner compatibility for machine ${machineId}`);
+  });
+});
 
 function discovery(overrides: Partial<Discovery> = {}): Discovery {
   return {
@@ -73,13 +97,13 @@ function discovery(overrides: Partial<Discovery> = {}): Discovery {
   };
 }
 
-function mount() {
+function mount(machineId = 'local') {
   const onCreated = vi.fn();
   const onClose = vi.fn();
   render(
     <NewDiscoveryModal
       projectId="proj-1"
-      machineId="local"
+      machineId={machineId}
       seedTitle="My discovery"
       onClose={onClose}
       onCreated={onCreated}
@@ -177,5 +201,81 @@ describe('NewDiscoveryModal base branch', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onCreated).not.toHaveBeenCalled();
     expect(createDiscovery).not.toHaveBeenCalled();
+  });
+});
+
+describe('NewDiscoveryModal runner compatibility', () => {
+  const behind: RunnerCompatibilityReport = {
+    verdict: 'runner_behind',
+    runner: '1.1.0',
+    runner_channel: 'stable',
+    app: '1.2.0',
+    app_channel: 'stable',
+    message:
+      'demeteo-runner 1.1.0 (stable) on box is older than Demeteo 1.2.0 (stable) — upgrade the runner from Machines settings.',
+  };
+
+  const ahead: RunnerCompatibilityReport = {
+    verdict: 'runner_ahead',
+    runner: '1.3.0',
+    runner_channel: 'stable',
+    app: '1.2.0',
+    app_channel: 'stable',
+    message:
+      "demeteo-runner 1.3.0 (stable) on box is newer than Demeteo 1.2.0 (stable) — upgrade Demeteo to match, or push this app's runner from Machines settings.",
+  };
+
+  // The interview never calls the runner, so a mismatch is worth knowing but stops nothing.
+  it.each([
+    ['behind', behind, 'Runner is older than Demeteo'],
+    ['ahead of', ahead, 'Runner is newer than Demeteo'],
+  ])('informs about a runner %s the app on a remote machine without blocking start', async (_, report, title) => {
+    const user = userEvent.setup();
+    getRepositoriesForProject.mockResolvedValue([]);
+    getRunnerCompatibility.mockImplementation(async (machineId: string) => {
+      if (machineId !== 'box') throw new Error(`no runner compatibility for machine ${machineId}`);
+      return report;
+    });
+
+    mount('box');
+
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    await user.click(screen.getByRole('button', { name: /open machine settings/i }));
+    expect(navigate).toHaveBeenCalledWith({ kind: 'settings' });
+    expect(screen.getByRole('button', { name: 'Start discovery' })).toBeEnabled();
+    expect(getRunnerCompatibility).toHaveBeenCalledWith('box');
+  });
+
+  it('says nothing about a runner that is not installed, since discovery never uses it', async () => {
+    const notInstalled: RunnerCompatibilityReport = {
+      verdict: 'not_installed',
+      app: '1.2.0',
+      app_channel: 'stable',
+      message: 'demeteo-runner is not installed on box — enable remote runs from Machines settings.',
+    };
+    getRepositoriesForProject.mockResolvedValue([]);
+    const probe = Promise.resolve(notInstalled);
+    getRunnerCompatibility.mockReturnValue(probe);
+
+    mount('box');
+
+    await waitFor(() => expect(getRunnerCompatibility).toHaveBeenCalledWith('box'));
+    await act(async () => {
+      await probe;
+    });
+    expect(screen.queryByText('Runner not installed')).toBeNull();
+    expect(screen.queryByRole('button', { name: /open machine settings/i })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start discovery' })).toBeEnabled();
+  });
+
+  it('asks nothing about the runner for the local machine and shows no notice', async () => {
+    getRepositoriesForProject.mockResolvedValue([]);
+
+    mount();
+
+    expect(await screen.findByRole('button', { name: 'Start discovery' })).toBeEnabled();
+    expect(getRunnerCompatibility).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /open machine settings/i })).toBeNull();
   });
 });
