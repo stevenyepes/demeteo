@@ -26,7 +26,7 @@ import { GateView } from "./components/GateView";
 import { McpConsentView } from "./components/McpConsentView";
 import { OverlayPortal } from "./components/ui/OverlayPortal";
 import { CodeEditorView } from "./components/CodeEditorView";
-import StartFeatureModal from "./components/StartFeatureModal";
+import { StartFeatureHost } from "./components/StartFeatureHost";
 import CreateProjectWizard from "./components/wizard/CreateProjectWizard";
 import PreferencesScreen from "./components/PreferencesScreen";
 import CommandPalette from "./components/CommandPalette";
@@ -88,12 +88,12 @@ function AppInner() {
   const { state: proj, dispatch: projDispatch, refreshProjectActivity } = useProject();
   const { ui, uiDispatch } = useUIState();
 
-  const { projects, currentProjectId, providers, reposByProject, initialLoadError } = proj;
-  // `commandPaletteOpen`, `docsPanelOpen`, `startFeatureOpen`, and
-  // `startFeatureWorkflowId` drive the per-overlay render branches
-  // below. `isConnectModalOpen` and `editingProvider` are read
-  // indirectly via the `ui` object passed to `pickEscapeAction`.
-  const { commandPaletteOpen, docsPanelOpen, startFeatureOpen, startFeatureWorkflowId, startFeatureSeed } = ui;
+  const { projects, currentProjectId, providers, initialLoadError } = proj;
+  // `commandPaletteOpen` and `docsPanelOpen` drive the per-overlay render
+  // branches below; `StartFeatureHost` reads its own. `isConnectModalOpen`
+  // and `editingProvider` are read indirectly via the `ui` object passed to
+  // `pickEscapeAction`.
+  const { commandPaletteOpen, docsPanelOpen } = ui;
 
   const currentProject = useMemo(() => projects.find(p => p.id === currentProjectId) ?? null, [projects, currentProjectId]);
   const currentFeatureId: string | null = view.kind === 'detail' ? view.featureId : null;
@@ -545,25 +545,7 @@ function AppInner() {
               own event arrives. */}
           <McpConsentView />
 
-          {/* Start Feature modal */}
-          {startFeatureOpen && currentProjectId && currentProject && (
-            <StartFeatureModal
-              isOpen={startFeatureOpen}
-              projectId={currentProjectId}
-              projectName={currentProject.name}
-              computeType={currentProject.compute_type}
-              remoteHost={currentProject.remote_host}
-              repositories={reposByProject[currentProjectId] || []}
-              defaultWorkflowId={startFeatureWorkflowId}
-              seedTitle={startFeatureSeed?.title}
-              seedAttachments={startFeatureSeed?.attachments}
-              onClose={() => uiDispatch({ type: 'CLOSE_START_FEATURE' })}
-              onLaunch={async (params) => {
-                const feature = await launchRun(params);
-                if (feature) uiDispatch({ type: 'CLOSE_START_FEATURE' });
-              }}
-            />
-          )}
+          <StartFeatureHost launchRun={launchRun} />
 
           <CommandPalette
             isOpen={commandPaletteOpen}

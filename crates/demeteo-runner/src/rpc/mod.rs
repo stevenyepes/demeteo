@@ -54,7 +54,17 @@ struct Response {
 #[derive(Debug, Serialize)]
 struct HealthInfo {
     version: &'static str,
+    /// Must be `VERSION`, not `CARGO_PKG_VERSION`; the app gates on it.
+    build_version: &'static str,
     pid: u32,
+}
+
+fn health_info() -> HealthInfo {
+    HealthInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        build_version: crate::VERSION,
+        pid: std::process::id(),
+    }
 }
 
 /// Bind the control socket and serve connections until the process exits.
@@ -125,11 +135,7 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
         .to_string();
     let cid = client_id.as_str();
     let result = match req.method.as_str() {
-        "health" => Ok(serde_json::to_value(HealthInfo {
-            version: env!("CARGO_PKG_VERSION"),
-            pid: std::process::id(),
-        })
-        .unwrap()),
+        "health" => serde_json::to_value(health_info()).map_err(|e| e.to_string()),
         "submit_run" => lifecycle::submit_run(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
@@ -190,3 +196,7 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
         },
     }
 }
+
+#[cfg(test)]
+#[path = "health_tests.rs"]
+mod tests;

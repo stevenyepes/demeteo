@@ -74,3 +74,65 @@ fn missing_file_errors() {
     let path = PathBuf::from("/nonexistent/demeteo-runner");
     assert!(arch_from_path(&path).is_err());
 }
+
+fn built(version: Option<&str>) -> RunnerBinary {
+    RunnerBinary {
+        path: PathBuf::from("demeteo-runner"),
+        version: version.map(str::to_string),
+    }
+}
+
+#[test]
+fn stale_warning_is_none_for_the_same_version() {
+    assert_eq!(
+        stale_version_warning(&built(Some("1.2.0-31")), "1.2.0-31"),
+        None
+    );
+}
+
+#[test]
+fn stale_warning_treats_the_raw_version_line_as_its_version() {
+    let binary = built(Some("demeteo-runner 1.2.0-31"));
+    assert_eq!(stale_version_warning(&binary, "1.2.0-31"), None);
+}
+
+#[test]
+fn stale_warning_is_none_when_the_version_could_not_be_read() {
+    assert_eq!(stale_version_warning(&built(None), "1.2.0"), None);
+}
+
+#[test]
+fn stale_warning_for_an_older_build_says_upgrade_the_runner() {
+    let warning = stale_version_warning(&built(Some("1.1.0")), "1.2.0").unwrap();
+    assert!(warning.contains("older"), "{warning}");
+    assert!(warning.contains("upgrade the runner"), "{warning}");
+    assert!(!warning.contains("newer"), "{warning}");
+}
+
+#[test]
+fn stale_warning_for_a_newer_build_says_upgrade_demeteo() {
+    // A nightly of the same X.Y.Z is built after the stable, so it is ahead.
+    let warning = stale_version_warning(&built(Some("1.2.0-3")), "1.2.0").unwrap();
+    assert!(warning.contains("newer"), "{warning}");
+    assert!(warning.contains("upgrade Demeteo"), "{warning}");
+    assert!(!warning.contains("older"), "{warning}");
+}
+
+#[test]
+fn stale_warning_still_fires_for_an_unreadable_version() {
+    let warning = stale_version_warning(&built(Some("garbage")), "1.2.0").unwrap();
+    assert!(warning.contains("garbage"), "{warning}");
+}
+
+#[test]
+fn version_output_is_read_through_the_domain_parser() {
+    assert_eq!(
+        version_from_output("demeteo-runner 1.2.0-31\n").as_deref(),
+        Some("1.2.0-31")
+    );
+    assert_eq!(
+        version_from_output("  weird output ").as_deref(),
+        Some("weird output")
+    );
+    assert_eq!(version_from_output(" \n"), None);
+}

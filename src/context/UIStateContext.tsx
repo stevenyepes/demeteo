@@ -3,14 +3,31 @@ import type { Provider } from '../types';
 import type { LaunchStageEntry } from '../components/AttachmentDropzone';
 
 /**
- * Prefill for the Start Feature modal when it is opened from the
- * inline composer on ProjectHome. The composer captures a title and
- * staged attachments, then hands them off; the modal owns the actual
- * launch (Alternative A — one launch surface).
+ * Prefill for the Start Feature modal. Two sources: the inline composer on
+ * ProjectHome, which has only a title and staged attachments (the modal owns
+ * the launch — Alternative A, one launch surface), and a draft kept by
+ * `CLOSE_START_FEATURE`.
+ *
+ * A kept draft is the title, description, attachments and target machine —
+ * nothing else. Workflow, per-step overrides and budgets are deliberately not
+ * kept; the modal re-derives them on the next open. A seed without a
+ * `description` is a composer seed, and the modal fills it from the title.
  */
 export interface StartFeatureSeed {
   title?: string;
+  description?: string;
   attachments?: LaunchStageEntry[];
+  /** Detached target; absent means "run here". */
+  machineId?: string;
+  /**
+   * The project a kept draft was kept in; a composer seed may omit it, since
+   * it is always the current project's. `StartFeatureHost` restores a tagged
+   * draft only while that project is current, and keeps a mismatched one
+   * (unshown) so switching back restores it — until any newer seed or kept
+   * draft takes the single slot. The match lives there because this reducer
+   * cannot see the current project.
+   */
+  projectId?: string;
 }
 
 interface UIState {
@@ -32,6 +49,11 @@ interface UIState {
   startFeatureOpen: boolean;
   startFeatureWorkflowId: string | null;
   startFeatureSeed: StartFeatureSeed | null;
+  /**
+   * Set by `LEAVE_START_FEATURE`; the open modal answers it by closing through
+   * its own settings link, with the draft built from its live fields.
+   */
+  startFeatureLeaveRequested: boolean;
 }
 
 type UIAction =
@@ -41,7 +63,24 @@ type UIAction =
   | { type: 'SET_DOCS_PANEL'; open: boolean }
   | { type: 'SET_CONNECT_MODAL'; open: boolean; editing?: Provider | null }
   | { type: 'OPEN_START_FEATURE'; workflowId?: string | null; seed?: StartFeatureSeed }
-  | { type: 'CLOSE_START_FEATURE' }
+  /**
+   * `keepDraft` is for a close the user made to go somewhere else (the
+   * runner notice's settings link, reached directly or through
+   * `LEAVE_START_FEATURE`): the draft survives in memory and the next open
+   * restores it. Escape, Cancel and a launch omit it. It carries title,
+   * description, attachments and target machine only — workflow, overrides
+   * and budgets are deliberately not kept.
+   */
+  | { type: 'CLOSE_START_FEATURE'; keepDraft?: StartFeatureSeed }
+  /**
+   * Asks an open Start Feature modal to leave for settings, keeping its draft.
+   * The refusal toast sends this rather than a `keepDraft` of its own because
+   * `useLaunchRun` serves `FeatureDetail` and `CodeReviewView` too: the
+   * refused launch's params are not the draft whenever the modal was opened
+   * while another surface's submit was in flight. Only the modal holds the
+   * live draft, so only the modal may produce it.
+   */
+  | { type: 'LEAVE_START_FEATURE' }
   | { type: 'PUSH_OVERLAY'; id: string }
   | { type: 'POP_OVERLAY'; id: string };
 
@@ -55,7 +94,15 @@ const initial: UIState = {
   startFeatureOpen: false,
   startFeatureWorkflowId: null,
   startFeatureSeed: null,
+  startFeatureLeaveRequested: false,
 };
+
+function seedHasContent(seed: StartFeatureSeed | null | undefined): seed is StartFeatureSeed {
+  return (
+    !!seed &&
+    (!!seed.title || !!seed.description || !!seed.machineId || (seed.attachments?.length ?? 0) > 0)
+  );
+}
 
 function reducer(state: UIState, action: UIAction): UIState {
   switch (action.type) {
@@ -78,10 +125,24 @@ function reducer(state: UIState, action: UIAction): UIState {
         ...state,
         startFeatureOpen: true,
         startFeatureWorkflowId: action.workflowId ?? null,
-        startFeatureSeed: action.seed ?? null,
+        // ProjectHome sends a seed even from an empty composer; that must not
+        // wipe a draft kept by `CLOSE_START_FEATURE`.
+        startFeatureSeed: seedHasContent(action.seed) ? action.seed : state.startFeatureSeed,
+        startFeatureLeaveRequested: false,
       };
     case 'CLOSE_START_FEATURE':
-      return { ...state, startFeatureOpen: false, startFeatureWorkflowId: null, startFeatureSeed: null };
+      if (!state.startFeatureOpen) return state;
+      return {
+        ...state,
+        startFeatureOpen: false,
+        startFeatureWorkflowId: null,
+        startFeatureSeed: seedHasContent(action.keepDraft) ? action.keepDraft : null,
+        startFeatureLeaveRequested: false,
+      };
+    case 'LEAVE_START_FEATURE':
+      // Closed, there is no draft to keep and nothing to close.
+      if (!state.startFeatureOpen || state.startFeatureLeaveRequested) return state;
+      return { ...state, startFeatureLeaveRequested: true };
     case 'PUSH_OVERLAY':
       // Ids are unique per mount, so a repeat is a double-register rather than
       // a second overlay; adding it twice would leave one behind on unmount.

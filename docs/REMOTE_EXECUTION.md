@@ -358,25 +358,20 @@ stopped being hypothetical. Kept numbered to match the original list;
 each entry says what's actually implemented today and why, or what's
 deliberately deferred and under what condition it should be revisited.
 
-1. **Runner ↔ engine versioning — no strict handshake; version-match is
-   structural, not enforced.** `demeteo-runner --version` and the
-   `health` RPC both expose a version string, but nothing refuses a
-   mismatch today. The reason this is safe in practice: the only
-   provisioning path (M7.1's `remote_enable_runs`) always SFTPs *this
-   laptop's own build* over the existing binary and restarts the unit —
-   there is no path today where a laptop talks to a runner it didn't
-   just provision itself, so drift can't occur. CI now publishes a
-   version-matched `demeteo-runner` release asset and the laptop can
-   auto-fetch one when it doesn't already have a matching local build
-   (`remote_runner_local_check`/`remote_runner_download`), but this is
-   still laptop-side only — the remote box never `curl`s anything itself,
-   and the fetched binary is checksum-verified against the exact version
-   tag the running app reports, so the invariant above still holds.
-   **Revisit when** a remote-side `curl`-on-the-box provisioning path
-   ships instead (deliberately not built — remote machines aren't assumed
-   to have internet access) — that's the path where laptop and runner
-   versions could actually diverge, and that's when a real
-   refuse-on-mismatch (or N-1 tolerance) check earns its complexity.
+1. **Runner ↔ engine versioning — the detached submit refuses any
+   mismatch.** Before `submit_remote_run` resolves anything or sends
+   `submit_run`, it reads the machine's runner version and refuses the run
+   unless it equals the app's build — whether the runner is behind,
+   ahead, not installed, or unreadable. The refusal names which side to
+   upgrade. Ask and Discovery never talk to the runner, so on a remote
+   machine they only show the same verdict as a notice; RPCs for runs
+   already in flight are not gated, so a runner upgraded mid-run does not
+   strand them. Provisioning (M7.1's `remote_enable_runs`, and the
+   checksum-verified `remote_runner_download`) still pushes this laptop's
+   own build, so a mismatch mostly means another laptop or an older app
+   provisioned the box last. What "equal" means across stable and
+   nightly builds, and where the version is read from, is
+   [decision 55](DECISIONS.md#1-the-locked-decisions).
 2. **Two laptops, one runner — no explicit arbitration lock; the
    existing idempotent operations already prevent the bad outcomes.**
    `submit_run` is keyed by a client-generated `run_id` (get-or-create,

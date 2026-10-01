@@ -19,7 +19,9 @@ import {
   getRunnerStatus,
   type LocalRunnerCheck,
 } from '../lib/runner';
-import type { Machine } from '../types';
+import { invalidateRunnerCompatibility, pushActionLabel } from '../lib/runnerCompatibility';
+import { RunnerStatusPill } from './RunnerStatusPill';
+import type { Machine, RunnerCompatibilityReport } from '../types';
 
 interface MachinesViewProps {
   /** Optional callback fired when a machine is added/updated/deleted,
@@ -55,6 +57,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
     expectedVersion?: string | null;
     serviceActive?: boolean | null;
     lingering?: boolean | null;
+    compatibility?: RunnerCompatibilityReport | null;
     error?: string | null;
     downloadedBytes?: number;
     totalBytes?: number | null;
@@ -82,28 +85,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
     checkLocalRunner().then(setLocalRunnerInfo).catch(() => {});
   }, []);
 
-  const probeRunner = async (m: Machine) => {
-    setRunnerState((s) => ({ ...s, [m.id]: { ...s[m.id], status: 'checking' } }));
-    try {
-      const [result, local] = await Promise.all([getRunnerStatus(m.id), checkLocalRunner()]);
-      setRunnerState((s) => ({
-        ...s,
-        [m.id]: {
-          ...s[m.id],
-          status: 'idle',
-          version: result.installed ? result.version : null,
-          serviceActive: result.service_active,
-          lingering: result.lingering,
-          expectedVersion: local.expected,
-          error: null,
-        },
-      }));
-    } catch (e) {
-      setRunnerState((s) => ({ ...s, [m.id]: { ...s[m.id], status: 'idle', error: formatError(e) } }));
-    }
-  };
-
-  const probeRunnerSilent = async (machineId: string) => {
+  const probeRunner = async (machineId: string) => {
     setRunnerState((s) => ({ ...s, [machineId]: { ...s[machineId], status: 'checking' } }));
     try {
       const result = await getRunnerStatus(machineId);
@@ -115,6 +97,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
           version: result.installed ? result.version : null,
           serviceActive: result.service_active,
           lingering: result.lingering,
+          compatibility: result.compatibility,
           error: null,
         },
       }));
@@ -151,6 +134,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
       }
       setRunnerState((s) => ({ ...s, [m.id]: { status: 'installing', expectedVersion: check.expected } }));
       const result = await enableRemoteRuns(m.id, localBinPath);
+      invalidateRunnerCompatibility(m.id);
       setRunnerState((s) => ({
         ...s,
         [m.id]: {
@@ -161,6 +145,8 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
           serviceActive: true,
         },
       }));
+      // The outcome carries no verdict, so the pill would keep the pre-push mismatch.
+      void probeRunner(m.id);
     } catch (e) {
       setRunnerState((s) => ({ ...s, [m.id]: { status: 'idle', error: formatError(e) } }));
     }
@@ -181,7 +167,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
     try {
       const list = await listMachines();
       setMachines(list ?? []);
-      list.forEach((m) => { void probeRunnerSilent(m.id); });
+      list.forEach((m) => { void probeRunner(m.id); });
     } catch (e) {
       setError(formatError(e));
       setMachines([]);
@@ -373,6 +359,10 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                 m.auth_type === 'key' ? 'Private Key' :
                 m.auth_type === 'password' ? 'Password' :
                 m.auth_type === 'agent' ? 'SSH Agent' : m.auth_type;
+              const pushLabel = pushActionLabel(
+                runnerState[m.id]?.compatibility,
+                runnerState[m.id]?.version ? 'Upgrade runner' : 'Enable remote runs',
+              );
               return (
                 <div
                   key={m.id}
@@ -461,60 +451,17 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                             </p>
                           );
                         }
-                        if (!st.version) {
-                          return (
-                            <p className="mt-2 text-[11px] text-slate-500 flex items-center gap-1">
-                              <Cpu className="w-3 h-3" />
-                              Remote runner not installed — click <span className="text-slate-300">Enable remote runs</span> to provision it.
-                            </p>
-                          );
-                        }
-                        const v = st.version;
-                        const stale = st.expectedVersion && v !== st.expectedVersion;
-                        const isRunning = st.serviceActive === true;
-                        const pillTone = isRunning
-                          ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
-                          : st.serviceActive === false
-                          ? 'border-white/10 bg-white/5 text-slate-300'
-                          : 'border-white/10 bg-white/5 text-slate-400';
-                        const dotTone = isRunning
-                          ? 'bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.7)]'
-                          : st.serviceActive === false
-                          ? 'bg-slate-500'
-                          : 'bg-slate-600';
-                        const label = isRunning
-                          ? 'Running'
-                          : st.serviceActive === false
-                          ? 'Installed, stopped'
-                          : 'Installed';
                         return (
-                          <>
-                            <div className={`mt-2 inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-[11px] font-medium max-w-full ${pillTone}`}>
-                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotTone} ${isRunning ? 'animate-pulse' : ''}`} />
-                              <span>{label}</span>
-                              <span>·</span>
-                              <span className="font-mono">{v}</span>
-                              {stale && (
-                                <span className="text-slate-400">
-                                  · update available ({st.expectedVersion})
-                                </span>
-                              )}
-                            </div>
-                            {isRunning && st.lingering === false && (
-                              <div className="mt-2 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5 flex items-start gap-2">
-                                <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                                <span className="break-words">
-                                  Lingering isn't enabled for this user — the runner will stop when you log out of SSH and won't auto-start on reboot. Ask an administrator to run <code className="px-1 py-0.5 rounded bg-white/5 text-amber-200">loginctl enable-linger &lt;user&gt;</code> on this machine.
-                                </span>
-                              </div>
-                            )}
-                            {st.serviceActive === false && (
-                              <p className="mt-1 text-[11px] text-slate-400 flex items-start gap-1">
-                                <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
-                                <span className="break-words">Service is installed but not running. Run <code className="px-1 py-0.5 rounded bg-white/5 text-slate-200">systemctl --user start demeteo-runner</code> on the remote host, or click <span className="text-slate-200">Upgrade runner</span> to re-provision.</span>
-                              </p>
-                            )}
-                          </>
+                          <RunnerStatusPill
+                            pushLabel={pushLabel}
+                            status={{
+                              installed: !!st.version,
+                              version: st.version ?? null,
+                              service_active: st.serviceActive ?? null,
+                              lingering: st.lingering ?? null,
+                              compatibility: st.compatibility ?? null,
+                            }}
+                          />
                         );
                       })()}
                     </div>
@@ -522,7 +469,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
 
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
-                      onClick={() => probeRunner(m)}
+                      onClick={() => probeRunner(m.id)}
                       disabled={runnerState[m.id]?.status === 'checking'}
                       className="px-2 py-1.5 text-[11px] rounded-lg text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-all disabled:opacity-50"
                       title="Check demeteo-runner status without installing"
@@ -544,11 +491,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                       ) : (
                         <Rocket className="w-3.5 h-3.5" />
                       )}
-                      {runnerState[m.id]?.status === 'downloading'
-                        ? 'Downloading…'
-                        : runnerState[m.id]?.version
-                        ? 'Upgrade runner'
-                        : 'Enable remote runs'}
+                      {runnerState[m.id]?.status === 'downloading' ? 'Downloading…' : pushLabel}
                     </button>
                     {runnerState[m.id]?.status === 'downloading' && (
                       <button

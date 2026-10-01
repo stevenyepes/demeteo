@@ -22,13 +22,18 @@
 //!   asset fetch with Tauri event emission + cancellation
 
 use crate::adapters::tauri_ui::runner_download as download_adapter;
+use crate::application::remote_runs::{
+    runner_compatibility, runner_compatibility_with, BinaryFallback,
+};
 use crate::domain::ids::MachineId;
+use crate::domain::runner_version::RunnerCompatibility;
 use crate::error::AppError;
 use crate::infrastructure::runner::binary::{
     self as binary, locate_local, release_cache_path, RunnerArch, RunnerBinary,
 };
 use crate::infrastructure::runner::{install as install_module, status as status_module};
 use crate::paths::shell_escape_posix;
+use crate::ports::execution::ExecutionPort;
 use crate::state::AppContext;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -50,19 +55,72 @@ pub struct RunnerInstallStatus {
     /// reports `Linger=yes`; `Some(false)` for `Linger=no`; `None` on
     /// probe failure.
     pub lingering: Option<bool>,
+    /// The verdict a detached submit to this machine is gated on. An
+    /// unreachable runner is still a verdict (`unknown`), not `None`.
+    pub compatibility: Option<RunnerCompatibilityReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunnerCompatibilityReport {
+    #[serde(flatten)]
+    pub compatibility: RunnerCompatibility,
+    pub message: String,
+}
+
+impl RunnerCompatibilityReport {
+    pub fn new(machine: &str, compatibility: RunnerCompatibility) -> Self {
+        let message = compatibility.message(machine);
+        Self {
+            compatibility,
+            message,
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn remote_runner_status(
+    app: tauri::AppHandle,
     ctx: State<'_, AppContext>,
     machine_id: String,
 ) -> Result<RunnerInstallStatus, AppError> {
-    let probe = status_module::probe(&*ctx.exec, &machine_id).await?;
+    runner_status(
+        &*ctx.exec,
+        &machine_id,
+        &app.package_info().version.to_string(),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn remote_runner_compatibility(
+    app: tauri::AppHandle,
+    ctx: State<'_, AppContext>,
+    machine_id: String,
+) -> Result<RunnerCompatibilityReport, AppError> {
+    let app_version = app.package_info().version.to_string();
+    let verdict = runner_compatibility(&*ctx.exec, &machine_id, &app_version).await;
+    Ok(RunnerCompatibilityReport::new(&machine_id, verdict))
+}
+
+/// The verdict reuses the probe's `--version`, so a runner without a live
+/// `build_version` costs one `health` RPC on top of the probe, not a second
+/// `resolve_home` and `--version` per machine.
+async fn runner_status(
+    exec: &dyn ExecutionPort,
+    machine_id: &str,
+    app_version: &str,
+) -> Result<RunnerInstallStatus, AppError> {
+    let probe = status_module::probe(exec, machine_id).await?;
+    let installed = probe.is_installed();
+    let version = probe.version().map(str::to_string);
+    let fallback = BinaryFallback::Taken(probe.binary_version);
+    let verdict = runner_compatibility_with(exec, machine_id, app_version, fallback).await;
     Ok(RunnerInstallStatus {
-        installed: probe.is_installed(),
-        version: probe.version,
+        installed,
+        version,
         service_active: probe.service_active,
         lingering: probe.lingering,
+        compatibility: Some(RunnerCompatibilityReport::new(machine_id, verdict)),
     })
 }
 
@@ -278,3 +336,7 @@ fn reject_non_linux_x86_64(path: &Path) -> Result<(), AppError> {
         path.display()
     )))
 }
+
+#[cfg(test)]
+#[path = "../../tests/infrastructure/remote_install.rs"]
+mod tests;

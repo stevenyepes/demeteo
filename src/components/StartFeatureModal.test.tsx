@@ -3,7 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
 import StartFeatureModal from './StartFeatureModal';
+import { invalidateRunnerCompatibility, RUNNER_COMPATIBILITY_TTL_MS } from '../lib/runnerCompatibility';
 import { STANDARD_STARTER_WORKFLOW_ID } from '../lib/workflowDefault';
+import type { RunnerCompatibilityReport } from '../types';
+
+const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }));
+
+vi.mock('../context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../context')>()),
+  useNavigation: () => ({ navigate }),
+}));
 
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
@@ -185,6 +194,24 @@ describe('StartFeatureModal clipboard paste', () => {
  * would answer differently from the rule — otherwise these pass against the bug
  * they exist to pin.
  */
+describe('StartFeatureModal seed', () => {
+  it('fills the description with the title when the composer seeds only a title', async () => {
+    render(
+      <StartFeatureModal
+        isOpen
+        projectId="project-1"
+        repositories={[]}
+        seed={{ title: 'From the composer' }}
+        onClose={vi.fn()}
+        onLaunch={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByPlaceholderText(/add oauth2 login flow/i)).toHaveValue('From the composer');
+    expect(screen.getByPlaceholderText(/what does this feature do/i)).toHaveValue('From the composer');
+  });
+});
+
 describe('StartFeatureModal workflow default', () => {
   const listed = [
     { id: 'wf-alpha', name: 'Alpha', version: 1 },
@@ -333,7 +360,7 @@ describe('StartFeatureModal workflow default', () => {
         projectId="project-1"
         repositories={[]}
         defaultWorkflowId={STANDARD_STARTER_WORKFLOW_ID}
-        seedTitle={seedTitle}
+        seed={{ title: seedTitle }}
         onClose={vi.fn()}
         onLaunch={vi.fn()}
       />
@@ -345,5 +372,242 @@ describe('StartFeatureModal workflow default', () => {
     rerender(modal(''));
 
     await waitFor(() => expect(picker().value).toBe('wf-alpha'));
+  });
+});
+
+describe('StartFeatureModal runner compatibility', () => {
+  const box = { id: 'machine-box', name: 'box', host: 'box.lan', port: 22, username: 'dev', auth_type: 'key' };
+
+  const reports: Record<string, RunnerCompatibilityReport> = {
+    compatible: {
+      verdict: 'compatible',
+      version: '1.2.0',
+      channel: 'stable',
+      message: 'demeteo-runner 1.2.0 (stable) on box matches Demeteo.',
+    },
+    runner_behind: {
+      verdict: 'runner_behind',
+      runner: '1.1.0',
+      runner_channel: 'stable',
+      app: '1.2.0',
+      app_channel: 'stable',
+      message: 'demeteo-runner 1.1.0 (stable) on box is older than Demeteo 1.2.0 (stable) — upgrade the runner from Machines settings.',
+    },
+    runner_ahead: {
+      verdict: 'runner_ahead',
+      runner: '1.3.0',
+      runner_channel: 'stable',
+      app: '1.2.0',
+      app_channel: 'stable',
+      message: 'demeteo-runner 1.3.0 (stable) on box is newer than Demeteo 1.2.0 (stable) — upgrade Demeteo to match.',
+    },
+    not_installed: {
+      verdict: 'not_installed',
+      app: '1.2.0',
+      app_channel: 'stable',
+      message: 'demeteo-runner is not installed on box — install it from Machines settings.',
+    },
+    unknown: {
+      verdict: 'unknown',
+      app: '1.2.0',
+      app_channel: 'stable',
+      detail: 'ssh: connection refused',
+      message: "Couldn't verify the demeteo-runner version on box — check the machine in Machines settings.",
+    },
+  };
+
+  /** Every compatibility answer comes from `report`; `undefined` holds the
+   *  probe open, the state the modal is in until the runner answers. */
+  function mockBackend(report: RunnerCompatibilityReport | undefined) {
+    const probe = vi.fn((_machineId: string) =>
+      report ? Promise.resolve(report) : new Promise<never>(() => {}),
+    );
+    vi.mocked(invoke).mockImplementation((command: string, args?: unknown) => {
+      switch (command) {
+        case 'workflow_list':
+          return Promise.resolve([{ id: 'workflow-1', name: 'Default', version: 1 }]);
+        case 'workflow_get':
+          return Promise.resolve({ steps: [], version_id: 'version-1' });
+        case 'workflow_version_graph':
+          return Promise.resolve(null);
+        case 'get_proposed_strategy':
+          return Promise.resolve({ default_workflow_id: 'workflow-1' });
+        case 'get_machines':
+          return Promise.resolve([box]);
+        case 'get_agent_configs':
+        case 'fetch_active_features':
+          return Promise.resolve([]);
+        case 'remote_runner_compatibility':
+          return probe((args as { machineId: string }).machineId);
+        default:
+          return Promise.resolve(undefined);
+      }
+    });
+    return probe;
+  }
+
+  async function fillIn() {
+    fireEvent.change(await screen.findByPlaceholderText(/add oauth2 login flow/i), {
+      target: { value: 'A feature' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/what does this feature do/i), {
+      target: { value: 'What the feature does' },
+    });
+  }
+
+  async function pickMachine(machineId: string) {
+    const select = await screen.findByDisplayValue('This machine');
+    await screen.findByRole('option', { name: /box — detached/i });
+    fireEvent.change(select, { target: { value: machineId } });
+  }
+
+  const launchButton = () => screen.getByRole('button', { name: /launch feature/i });
+
+  beforeEach(() => {
+    invalidateRunnerCompatibility();
+    navigate.mockReset();
+  });
+
+  it.each(['runner_behind', 'runner_ahead', 'not_installed'])(
+    'disables launch on a detached machine whose runner is %s',
+    async (verdict) => {
+      const probe = mockBackend(reports[verdict]);
+      renderModal();
+      await fillIn();
+      await waitFor(() => expect(launchButton()).toBeEnabled());
+
+      await pickMachine(box.id);
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(reports[verdict].message);
+      expect(launchButton()).toBeDisabled();
+      expect(probe).toHaveBeenCalledWith(box.id);
+    },
+  );
+
+  it.each(['compatible', 'unknown'])(
+    'leaves launch enabled when the runner is %s',
+    async (verdict) => {
+      const probe = mockBackend(reports[verdict]);
+      renderModal();
+      await fillIn();
+
+      await pickMachine(box.id);
+
+      await waitFor(() => expect(probe).toHaveBeenCalledWith(box.id));
+      await act(async () => {});
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(launchButton()).toBeEnabled();
+    },
+  );
+
+  it('does not block launch while the probe is still in flight', async () => {
+    const probe = mockBackend(undefined);
+    renderModal();
+    await fillIn();
+
+    await pickMachine(box.id);
+
+    await waitFor(() => expect(probe).toHaveBeenCalledWith(box.id));
+    expect(launchButton()).toBeEnabled();
+  });
+
+  it('never probes a run on this machine', async () => {
+    const probe = mockBackend(reports.runner_behind);
+    renderModal();
+    await fillIn();
+
+    await screen.findByRole('option', { name: /box — detached/i });
+    await waitFor(() => expect(launchButton()).toBeEnabled());
+
+    expect(probe).not.toHaveBeenCalled();
+    expect(screen.queryByText('Open machine settings')).not.toBeInTheDocument();
+  });
+
+  it('does not re-probe the runner after a launch that failed for another reason', async () => {
+    const probe = mockBackend(reports.compatible);
+    const onLaunch = renderModal(vi.fn(() => Promise.resolve('failed' as const)));
+    await fillIn();
+    await pickMachine(box.id);
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(launchButton()).toBeEnabled());
+
+    fireEvent.click(launchButton());
+    await act(async () => {});
+
+    expect(onLaunch).toHaveBeenCalledOnce();
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(launchButton()).toBeEnabled();
+  });
+
+  it('does not re-probe after a failed launch even once the cached verdict has expired', async () => {
+    const probe = mockBackend(reports.compatible);
+    const onLaunch = renderModal(vi.fn(() => Promise.resolve('failed' as const)));
+    await fillIn();
+    await pickMachine(box.id);
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(launchButton()).toBeEnabled());
+
+    // A description that took longer to write than the verdict lives.
+    const expired = Date.now() + RUNNER_COMPATIBILITY_TTL_MS + 1;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(expired);
+    try {
+      fireEvent.click(launchButton());
+      await act(async () => {});
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(onLaunch).toHaveBeenCalledOnce();
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-probes the runner after the runner refused the launch, and blocks on the fresh verdict', async () => {
+    const probe = mockBackend(reports.compatible);
+    probe.mockResolvedValueOnce(reports.compatible).mockResolvedValue(reports.runner_behind);
+    // What `useLaunchRun` does with a `runner_incompatible` refusal.
+    const onLaunch = renderModal(
+      vi.fn(() => {
+        invalidateRunnerCompatibility(box.id);
+        return Promise.resolve('runner_refused' as const);
+      }),
+    );
+    await fillIn();
+    await pickMachine(box.id);
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(launchButton()).toBeEnabled());
+
+    fireEvent.click(launchButton());
+
+    expect(onLaunch).toHaveBeenCalledOnce();
+    expect(await screen.findByRole('alert')).toHaveTextContent(reports.runner_behind.message);
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(launchButton()).toBeDisabled();
+  });
+
+  it('links the mismatch notice to machine settings', async () => {
+    mockBackend(reports.runner_behind);
+    renderModal();
+
+    await pickMachine(box.id);
+    fireEvent.click(await screen.findByRole('button', { name: /open machine settings/i }));
+
+    expect(navigate).toHaveBeenCalledWith({ kind: 'settings' });
+  });
+
+  it('re-checks a cached blocking verdict on request and enables launch once the runner matches', async () => {
+    const probe = mockBackend(reports.runner_behind);
+    probe.mockResolvedValueOnce(reports.runner_behind).mockResolvedValue(reports.compatible);
+    renderModal();
+    await fillIn();
+    await pickMachine(box.id);
+    expect(await screen.findByRole('alert')).toHaveTextContent(reports.runner_behind.message);
+    expect(launchButton()).toBeDisabled();
+    expect(probe).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /check again/i }));
+
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(launchButton()).toBeEnabled();
   });
 });

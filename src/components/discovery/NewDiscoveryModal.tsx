@@ -18,7 +18,9 @@ import {
 import { getProposedStrategy, getRepositoriesForProject } from '../../lib/project';
 import { listTerminalBranches } from '../../lib/terminal';
 import type { ConfigOptionValue, Discovery, Machine, TerminalBranchOption } from '../../types';
+import { useRunnerCompatibility } from '../../hooks/useRunnerCompatibility';
 import { AttachmentDropzone, type LaunchStageEntry } from '../AttachmentDropzone';
+import { RunnerVersionNotice } from '../RunnerVersionNotice';
 import { FieldLabel } from '../ui/FieldLabel';
 import { Modal } from '../ui/Modal';
 import { OptionPill } from './OptionPill';
@@ -56,6 +58,7 @@ export function NewDiscoveryModal({
   const [effort, setEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
   const [machine, setMachine] = useState(machineId);
   const [machines, setMachines] = useState<Machine[]>([]);
+  const { report: runnerReport } = useRunnerCompatibility(machine);
   const [models, setModels] = useState<ConfigOptionValue[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [attachments, setAttachments] = useState<LaunchStageEntry[]>([]);
@@ -350,6 +353,8 @@ export function NewDiscoveryModal({
               the interview runs there instead.
             </p>
           </div>
+
+          <RunnerVersionNotice report={runnerReport} variant="informational" />
 
           <div>
             <FieldLabel>Base branch</FieldLabel>

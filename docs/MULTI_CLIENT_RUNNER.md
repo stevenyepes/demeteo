@@ -141,6 +141,14 @@ force-upgrading. Upgrades become an explicit **drain** (stop accepting new runs,
 let in-flight finish, then restart). Per-client `last_seen` makes retention GC
 safe (never reap a terminal run an absent owner hasn't reconciled). **← P1.**
 
+*Single-client interim (2026-09-30):* `health` now reports `build_version`,
+the running binary's real release version, and a client refuses a detached
+submit to any runner whose build is not exactly its own
+([decision 55](DECISIONS.md#1-the-locked-decisions)). That is stricter than the
+warn-only posture above: with two laptops on different builds, one of them
+cannot submit until they converge. When MC-D6 lands, `min_supported_client`
+and drain replace it.
+
 ### MC-D7 — Concurrency & reliability
 Confirm the engine tolerates N concurrent features (the desktop already runs
 several against one `AppContext`; verify no global single-run assumption). Audit

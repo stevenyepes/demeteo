@@ -21,6 +21,10 @@ import { resolveLaunchWorkflowId } from '../lib/workflowDefault';
 import { MiniGraph } from './canvas/MiniGraph';
 import { OriginPicker } from './StartFeatureModal/OriginPicker';
 import { runOriginArgs, type OriginSelection } from '../lib/runOrigin';
+import { blocksLaunch } from '../lib/runnerCompatibility';
+import { useRunnerCompatibility } from '../hooks/useRunnerCompatibility';
+import { RunnerVersionNotice } from './RunnerVersionNotice';
+import type { StartFeatureSeed } from '../context/UIStateContext';
 import type { WorkflowDefinitionV2 } from './canvas/types';
 
 interface StartFeatureModalProps {
@@ -40,13 +44,19 @@ interface StartFeatureModalProps {
   /** Pre-select a specific workflow id (e.g. the one the user clicked). */
   defaultWorkflowId?: string | null;
   /**
-   * Prefill from the inline composer on ProjectHome (Alternative A).
+   * Prefill from the inline composer or a kept draft (see `StartFeatureSeed`).
    * Applied once on open, and only into still-empty fields so a user
    * mid-edit is never clobbered. The modal owns the launch from here.
    */
-  seedTitle?: string;
-  seedAttachments?: LaunchStageEntry[];
+  seed?: StartFeatureSeed | null;
   onClose: () => void;
+  /** Leaves for Machines from the runner notice. The host owns this because
+   *  the modal is portalled over every view and must close before it goes;
+   *  `draft` is what to restore on the next open. */
+  onOpenMachineSettings?: (draft: StartFeatureSeed) => void;
+  /** Leave through `onOpenMachineSettings` now, as if its link were clicked
+   *  (`LEAVE_START_FEATURE`, sent by the refusal toast). */
+  leaveRequested?: boolean;
   /**
    * Called with the resolved launch parameters when the user clicks
    * "Launch feature". The parent is responsible for invoking
@@ -99,14 +109,20 @@ interface StartFeatureModalProps {
      *  origin picker — see `src/lib/runOrigin.ts`. */
     origin?: FeatureOrigin;
     diffBaseBranch?: string;
-  }) => void;
+  }) => LaunchOutcome | Promise<LaunchOutcome>;
 }
+
+/** How `onLaunch` ended. `runner_refused` is the submit gate turning the run
+ *  away as version-incompatible, which the modal answers with a fresh probe. */
+export type LaunchOutcome = 'launched' | 'runner_refused' | 'failed';
 
 interface StepRow {
   id: string;
   title: string;
   kind: string;
 }
+
+const isRemoteMachine = (m: Machine) => m.auth_type !== 'local';
 
 /**
  * The slim "Start a feature" modal (Q22).
@@ -132,9 +148,10 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   computeType,
   remoteHost,
   defaultWorkflowId,
-  seedTitle,
-  seedAttachments,
+  seed,
   onClose,
+  onOpenMachineSettings,
+  leaveRequested,
   onLaunch,
 }) => {
   const [title, setTitle] = useState('');
@@ -229,27 +246,32 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   // one remaining asymmetry is that a detached run clones a single
   // repository, annotated on the repo picker below.
   const detached = machineId !== '';
+  const {
+    report: runnerReport,
+    loading: runnerChecking,
+    refresh: reprobeRunner,
+  } = useRunnerCompatibility(machineId);
   // Attached-remote is a project-level setting, not a per-run choice:
   // a machine-less launch on such a project executes over SSH with the
   // desktop app orchestrating. Stated in "Where to run" as a fact.
   const attachedRemote = computeType === 'remote';
   const remoteMachines = useMemo(
-    () => machines.filter((m) => m.auth_type !== 'local'),
+    () => machines.filter(isRemoteMachine),
     [machines],
   );
 
   useEffect(() => {
     if (isOpen) {
-      // Prefill from the inline composer, but only into still-empty
-      // fields so a user editing in the modal is never clobbered.
-      // Seeding `description` drives the modal's repo-chip inference.
-      if (seedTitle && !title) {
-        setTitle(seedTitle);
-        setDescription(seedTitle);
+      // Only into still-empty fields so a user editing in the modal is never
+      // clobbered. A composer seed has no description, and seeding one from
+      // the title is what drives the modal's repo-chip inference.
+      if (seed?.title && !title) setTitle(seed.title);
+      const seedDescription = seed?.description ?? seed?.title;
+      if (seedDescription && !description) setDescription(seedDescription);
+      if (seed?.attachments && seed.attachments.length > 0 && attachments.length === 0) {
+        setAttachments(seed.attachments);
       }
-      if (seedAttachments && seedAttachments.length > 0 && attachments.length === 0) {
-        setAttachments(seedAttachments);
-      }
+      if (seed?.machineId && !machineId) setMachineId(seed.machineId);
       setTimeout(() => titleRef.current?.focus(), 0);
     } else {
       // reset on close so the next open is clean
@@ -273,7 +295,15 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       setMaxCostUsd('');
       setMaxWallClockMins('');
     }
-  }, [isOpen, seedTitle, seedAttachments]);
+  }, [isOpen, seed]);
+
+  const leaveForMachineSettings =
+    onOpenMachineSettings &&
+    (() => onOpenMachineSettings({ title, description, attachments, machineId, projectId }));
+
+  useEffect(() => {
+    if (isOpen && leaveRequested) leaveForMachineSettings?.();
+  }, [isOpen, leaveRequested]);
 
   // Seed the workflow picker exactly once per open, and only once both inputs
   // the rule reads have answered.
@@ -429,16 +459,27 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   // Fetch remote machines whenever the modal opens (M6.1). Local runs
   // don't need this list, so it's fetched lazily rather than threaded
   // through from the parent.
+  //
+  // A restored draft seeds `machineId` before this answers, and the user
+  // left for Machines settings to fix that very machine — deleting and
+  // re-adding it mints a new id. A target the list no longer offers falls
+  // back to "run here" rather than staying detached on an id with no option.
+  const adoptMachines = (list: Machine[]) => {
+    setMachines(list);
+    setMachineId((current) =>
+      current && !list.some((m) => isRemoteMachine(m) && m.id === current) ? '' : current,
+    );
+  };
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
     (async () => {
       try {
         const list = await listMachines();
-        if (!cancelled) setMachines(list ?? []);
+        if (!cancelled) adoptMachines(list ?? []);
       } catch (e) {
         console.warn('failed to load machines for remote-run picker:', e);
-        if (!cancelled) setMachines([]);
+        if (!cancelled) adoptMachines([]);
       }
     })();
     return () => {
@@ -682,6 +723,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
     description.trim().length > 0 &&
     workflowId !== '' &&
     oversizedForDetached.length === 0 &&
+    !blocksLaunch(runnerReport) &&
     (repositories.length === 0 || selectedRepoIds.length > 0);
 
   const launch = () => {
@@ -705,7 +747,10 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
     const costArg = detached && maxCostUsd.trim() ? parseFloat(maxCostUsd) : undefined;
     const wallClockArg =
       detached && maxWallClockMins.trim() ? parseInt(maxWallClockMins, 10) : undefined;
-    onLaunch({
+    // Only a refusal re-probes: the submit gate just proved the verdict that
+    // enabled Start wrong. Any other failure says nothing about the runner, and
+    // re-probes nothing even once that verdict has outlived its TTL.
+    void Promise.resolve(onLaunch({
       workflowId,
       title: title.trim(),
       description: description.trim(),
@@ -728,6 +773,8 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       maxCostUsd: Number.isFinite(costArg as number) ? costArg : undefined,
       maxWallClockMins: Number.isFinite(wallClockArg as number) ? wallClockArg : undefined,
       ...runOriginArgs(originSelection),
+    })).then((outcome) => {
+      if (outcome === 'runner_refused') reprobeRunner();
     });
   };
 
@@ -900,6 +947,13 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                       </span>
                       ; you can close Demeteo and the run continues.
                     </p>
+                    <RunnerVersionNotice
+                      report={runnerReport}
+                      variant="blocking"
+                      onRecheck={reprobeRunner}
+                      checking={runnerChecking}
+                      onOpenSettings={leaveForMachineSettings}
+                    />
                     <div className="flex items-start gap-2 rounded-lg bg-cyan-500/[0.07] border border-cyan-500/20 px-3 py-2">
                       <MoonStar className="w-3.5 h-3.5 text-cyan-300 mt-0.5 shrink-0" />
                       <p className="text-[10px] font-mono text-slate-400 leading-relaxed">

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { RunnerCompatibilityReport } from "../types";
 
 /**
  * What this laptop can push right now, with no network and no SSH — the
@@ -23,6 +24,9 @@ export interface RunnerInstallStatus {
   version: string | null;
   service_active: boolean | null;
   lingering: boolean | null;
+  /** `null` only when the verdict could not be computed at all; an
+   *  unreachable runner is still a verdict (`unknown`). */
+  compatibility: RunnerCompatibilityReport | null;
 }
 
 /** Result of pushing + installing the binary. Mirrors the Rust
@@ -46,6 +50,14 @@ export async function checkLocalRunner(): Promise<LocalRunnerCheck> {
 
 export async function getRunnerStatus(machineId: string): Promise<RunnerInstallStatus> {
   return invoke<RunnerInstallStatus>('remote_runner_status', { machineId });
+}
+
+/** Whether `machineId`'s runner is this app's build — the same verdict a
+ *  detached submit is gated on. */
+export async function getRunnerCompatibility(
+  machineId: string,
+): Promise<RunnerCompatibilityReport> {
+  return invoke<RunnerCompatibilityReport>('remote_runner_compatibility', { machineId });
 }
 
 /**

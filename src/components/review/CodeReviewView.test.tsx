@@ -10,7 +10,7 @@ import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
-import { NavigationProvider, ProjectProvider, useProject } from '../../context';
+import { NavigationProvider, ProjectProvider, UIStateProvider, useProject } from '../../context';
 import { REVIEW_STARTER_WORKFLOW_ID } from '../../lib/reviewLaunch';
 import type { Project, WorkflowWithSteps } from '../../types';
 import { CodeReviewView } from './CodeReviewView';
@@ -155,9 +155,11 @@ function mount() {
   return render(
     <NavigationProvider>
       <ProjectProvider>
-        <ProjectSeed>
-          <CodeReviewView />
-        </ProjectSeed>
+        <UIStateProvider>
+          <ProjectSeed>
+            <CodeReviewView />
+          </ProjectSeed>
+        </UIStateProvider>
       </ProjectProvider>
     </NavigationProvider>,
   );

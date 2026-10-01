@@ -470,6 +470,7 @@ pub fn run() {
             commands::remote_runner::remote_list_messages,
             commands::remote_runner::remote_get_worktree,
             commands::remote_install::remote_runner_status,
+            commands::remote_install::remote_runner_compatibility,
             commands::remote_install::remote_runner_local_check,
             commands::remote_install::remote_enable_runs,
             adapters::tauri_ui::runner_download::remote_runner_download,
