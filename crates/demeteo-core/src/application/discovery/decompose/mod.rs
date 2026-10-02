@@ -104,7 +104,20 @@ where
     let choices = Choices::read(ctx)?;
 
     let emit = Arc::new(emit_fn);
-    let (mut prepared, running) = turn::begin(ctx, &discovery, None, claim, emit.as_ref()).await?;
+    let (mut prepared, running) =
+        match turn::begin(ctx, &discovery, None, claim, emit.as_ref()).await {
+            Ok(begun) => begun,
+            Err(reason) => {
+                keep(
+                    ctx,
+                    discovery_id,
+                    &rows,
+                    &choices,
+                    Asked::stopped(reason.clone()),
+                );
+                return Err(reason);
+            }
+        };
     prepared.user_text = prompt::decompose_request(&rows, &choices);
 
     emit(
@@ -115,21 +128,77 @@ where
     // Before the last status event rather than after it: a surface refreshing
     // on `idle` must not read a pass that has just ended as one still running.
     drop(running);
+    // Kept before the event for the same reason: a surface that refreshes on
+    // `error` must find the stopped pass already written down.
+    let stopped = asked.stopped.clone();
+    let proposal = keep(ctx, discovery_id, &rows, &choices, asked);
     emit(
         EVENT_DISCOVERY_TURN_STATUS,
         status_payload(
             &discovery,
-            if asked.is_ok() {
+            if stopped.is_none() {
                 STATUS_IDLE
             } else {
                 STATUS_ERROR
             },
-            asked.as_ref().err().cloned(),
+            stopped.clone(),
         ),
     );
-    let asked = asked?;
+    match stopped {
+        Some(reason) => Err(reason),
+        None => Ok(proposal),
+    }
+}
 
-    let proposal = DecomposeProposal {
+/// Resolve what a pass came to into its proposal and [`store`] it, whether or
+/// not it ended with a plan.
+///
+/// A pass that stopped is kept too. The surface that pressed Decompose is free
+/// to leave, and an error event or a rejected call reaches only a surface that
+/// is still there: without a stored record, a pass that was killed while
+/// nobody watched reads on return exactly like one that was never asked for —
+/// billed, and invisible.
+///
+/// A pass that cannot be written down is still the pass the caller asked for.
+/// Failing here would throw away a billed plan to report a write, so the write
+/// is logged and the proposal handed back regardless.
+fn keep(
+    ctx: &AppContext,
+    discovery_id: &DiscoveryId,
+    rows: &[Ticket],
+    choices: &Choices,
+    asked: Asked,
+) -> DecomposeProposal {
+    let locked = if asked.stopped.is_none() {
+        match lanes(ctx, rows) {
+            Ok(lanes) => proposal::locked(rows, &lanes),
+            Err(e) => {
+                tracing::warn!(discovery = %discovery_id.as_str(), error = %e, "discovery: could not read ticket lanes for the proposal");
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    if let Some(reason) = &asked.stopped {
+        tracing::warn!(discovery = %discovery_id.as_str(), reason = %reason, "discovery: decompose pass stopped before it produced a plan");
+    }
+    let proposal = proposal_for(discovery_id, rows, choices, locked, asked);
+    if let Err(e) = store(ctx, discovery_id, Some(&proposal)) {
+        tracing::warn!(discovery = %discovery_id.as_str(), error = %e, "discovery: the pass could not be kept for review");
+    }
+    proposal
+}
+
+/// The proposal one pass came to, from what its ask loop accumulated.
+fn proposal_for(
+    discovery_id: &DiscoveryId,
+    rows: &[Ticket],
+    choices: &Choices,
+    locked: Vec<proposal::LockedTicket>,
+    asked: Asked,
+) -> DecomposeProposal {
+    DecomposeProposal {
         discovery_id: discovery_id.as_str().to_string(),
         first_pass: rows.is_empty(),
         tickets: asked
@@ -140,21 +209,16 @@ where
         changes: asked
             .pass
             .as_ref()
-            .map(|pass| pass.changes(&choices))
+            .map(|pass| pass.changes(choices))
             .unwrap_or_default(),
-        locked: proposal::locked(&rows, &lanes(ctx, &rows)?),
+        locked,
         refused: asked.refused,
         refusal: asked.refusal,
         violations: asked.violations,
+        stopped: asked.stopped,
         cost_usd: asked.cost_usd,
         tokens: asked.tokens,
-    };
-    // A pass that cannot be written down is still the pass the caller asked
-    // for. Failing here would throw away a billed plan to report a write.
-    if let Err(e) = store(ctx, discovery_id, Some(&proposal)) {
-        tracing::warn!(discovery = %discovery_id.as_str(), error = %e, "discovery: the pass could not be kept for review");
     }
-    Ok(proposal)
 }
 
 /// Keep the pass where the next visit to this Discovery can find it, or clear
@@ -204,7 +268,11 @@ pub fn pending(
         .discoveries
         .pending_proposal(discovery_id)?
         .as_deref()
-        .and_then(|raw| serde_json::from_str(raw).ok()))
+        .and_then(decode))
+}
+
+fn decode(raw: &str) -> Option<DecomposeProposal> {
+    serde_json::from_str(raw).ok()
 }
 
 /// Drop the pass without applying any of it — the "Keep talking" that means it
@@ -220,19 +288,35 @@ struct Asked {
     refused: Vec<String>,
     refusal: Option<String>,
     violations: Vec<ImmutableViolation>,
+    /// Why the pass ended without an answer to read: the agent could not be
+    /// started, its turn failed, or setting it up did. Distinct from
+    /// [`Asked::refusal`], which is an answer that was read and refused.
+    stopped: Option<String>,
     cost_usd: f64,
     tokens: i64,
 }
 
-/// `Err` only when the turn itself did not run. A plan that was refused is
-/// still a completed pass: it cost money, the user has to see why, and the
-/// refusal is the interviewer's to answer rather than the caller's.
-async fn ask<F>(
-    p: &mut Prepared,
-    emit: &Arc<F>,
-    rows: &[Ticket],
-    choices: &Choices,
-) -> Result<Asked, String>
+impl Asked {
+    fn stopped(reason: String) -> Self {
+        Self {
+            stopped: Some(reason),
+            ..Self::default()
+        }
+    }
+
+    /// End the loop on a turn that did not finish, keeping what the asks
+    /// before it already spent and were refused over.
+    fn stop(mut self, reason: String) -> Self {
+        self.stopped = Some(reason);
+        self
+    }
+}
+
+/// Never fails: a turn that did not run comes back as [`Asked::stopped`] with
+/// the spend of the asks before it, so the caller can keep it. A plan that was
+/// refused is still a completed pass: it cost money, the user has to see why,
+/// and the refusal is the interviewer's to answer rather than the caller's.
+async fn ask<F>(p: &mut Prepared, emit: &Arc<F>, rows: &[Ticket], choices: &Choices) -> Asked
 where
     F: Fn(&str, serde_json::Value) + Send + Sync + 'static,
 {
@@ -244,11 +328,16 @@ where
     loop {
         let was_resumed = resumed;
         let text = p.render_prompt(!resumed);
-        let session = p
+        let session = match p
             .registry
             .get_or_spawn(&p.thread_id, &p.discovery.agent_kind, p.agent_ctx.clone())
             .await
-            .map_err(|e| format!("Could not start {}: {e}", p.discovery.agent_kind))?;
+        {
+            Ok(session) => session,
+            Err(e) => {
+                return out.stop(format!("Could not start {}: {e}", p.discovery.agent_kind));
+            }
+        };
 
         let sink = Sink::new(emit.clone(), p.discovery.id.as_str().to_string());
         let result = stream_agent_turn(
@@ -280,7 +369,7 @@ where
                 resumed = false;
                 continue;
             }
-            return Err(reason.unwrap_or_else(|| "The decomposition did not finish.".into()));
+            return out.stop(reason.unwrap_or_else(|| "The decomposition did not finish.".into()));
         }
         resumed = true;
         asks += 1;
@@ -288,7 +377,7 @@ where
         match read_plan(&spent.text, rows, choices) {
             Ok(pass) => {
                 out.pass = Some(pass);
-                return Ok(out);
+                return out;
             }
             Err(rejected) => {
                 let message = rejected.message();
@@ -296,7 +385,7 @@ where
                 if asks >= MAX_ASKS {
                     out.violations = rejected.violations();
                     out.refusal = Some(message);
-                    return Ok(out);
+                    return out;
                 }
                 p.user_text = prompt::re_ask(&message);
             }

@@ -430,6 +430,13 @@ pub struct DecomposeProposal {
     /// applied.
     pub refusal: Option<String>,
     pub violations: Vec<ImmutableViolation>,
+    /// Set when the pass ended before there was an answer to read — the turn
+    /// was killed, failed, or never started — so there is no plan here at
+    /// all, only what the asks before it spent. Keep it an `Option`: the
+    /// payload is stored (V50), and a proposal written before this field
+    /// existed has to read back as the finished pass it was, not as nothing
+    /// pending.
+    pub stopped: Option<String>,
     pub cost_usd: f64,
     pub tokens: i64,
 }
