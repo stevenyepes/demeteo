@@ -275,7 +275,7 @@ describe('the turn count, across both surfaces', () => {
         onPublishIntegration={() => {}}
       />,
     );
-    expect(screen.getByText('2')).toBeTruthy();
+    expect(screen.getByTestId('discovery-turns').textContent).toBe('2 turns');
   });
 
   it('does not count the question card as a turn of its own', () => {
