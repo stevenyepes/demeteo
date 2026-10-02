@@ -19,15 +19,7 @@ struct Repo {
 
 impl Repo {
     async fn new(label: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "demeteo_test_fold_{label}_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::support::test_dir::scratch(&format!("demeteo_test_fold_{label}"));
         let repo = Self {
             exec: LocalSubprocessAdapter::new(),
             path: dir.to_string_lossy().to_string(),

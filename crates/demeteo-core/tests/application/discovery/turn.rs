@@ -231,13 +231,7 @@ impl ProjectRepository for HeldProjects {
 /// One Discovery on a project with no repository, so setup gets as far as
 /// resolving one and no further.
 fn fixture(tag: &str) -> (AppContext, DiscoveryId) {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-discovery-send-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-discovery-send-{tag}"));
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: dir,

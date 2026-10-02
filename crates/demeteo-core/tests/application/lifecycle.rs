@@ -538,13 +538,7 @@ fn cleanup_context_with(
     mr_state: &str,
     cache_error: Option<&str>,
 ) -> CleanupContext {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-lifecycle-cleanup-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch("demeteo-lifecycle-cleanup");
     let mut ctx = build_core_context(
         CoreConfig {
             app_data_dir: dir,

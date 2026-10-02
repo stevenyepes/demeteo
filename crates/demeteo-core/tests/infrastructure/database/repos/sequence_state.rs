@@ -104,14 +104,8 @@ fn a_pre_v35_row_reads_back_without_an_anchor() {
 /// resumes from the exact task, not the step head.
 #[test]
 fn checkpoint_survives_across_driver_lives() {
-    let tmp = std::env::temp_dir().join(format!(
-        "demeteo-seq-state-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&tmp).unwrap();
+    let guard = crate::support::test_dir::TestDir::new("demeteo-seq-state");
+    let tmp = guard.path().to_path_buf();
     let path = tmp.join("db.sqlite");
 
     // Life 1 writes the checkpoint, then the process "dies".
@@ -136,7 +130,6 @@ fn checkpoint_survives_across_driver_lives() {
         assert_eq!(cp.landed_task_ids, vec!["stub-task-1".to_string()]);
         assert_eq!(cp.anchor_sha.as_deref(), Some("stub-sha"));
     }
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]

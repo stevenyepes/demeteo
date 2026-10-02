@@ -30,7 +30,8 @@ fn a_step(step_id: &str, artifact_paths: Vec<String>) -> crate::domain::models::
 /// separately), skips the finalize step itself, and tolerates a missing file.
 #[test]
 fn gather_prior_artifacts_is_selective_and_best_effort() {
-    let dir = std::env::temp_dir().join(format!("demeteo-finalize-ctx-{}", std::process::id()));
+    let guard = crate::support::test_dir::TestDir::new("demeteo-finalize-ctx");
+    let dir = guard.path().to_path_buf();
     let _ = std::fs::create_dir_all(&dir);
     let spec = dir.join("implementation-spec.md");
     std::fs::write(&spec, "the intended approach").unwrap();
@@ -71,6 +72,4 @@ fn gather_prior_artifacts_is_selective_and_best_effort() {
     // No report-producing steps at all → empty, so the prompt degrades to
     // diff-only rather than erroring.
     assert!(gather_prior_artifacts(&store, &[], "s-finalize").is_empty());
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

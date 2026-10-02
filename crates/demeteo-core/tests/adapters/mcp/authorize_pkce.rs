@@ -20,13 +20,7 @@ const CLIENT_REDIRECT_URI: &str = "http://127.0.0.1:9/cb";
 /// capturing double instead of the no-op adapter: this file's whole point is
 /// asserting what did — and, more importantly, did not — get emitted.
 fn fixture(tag: &str) -> (AppContext, Arc<CapturingNotificationPort>) {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-mcp-authorize-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-mcp-authorize-{tag}"));
     let captured = Arc::new(CapturingNotificationPort::new());
     let ctx = build_core_context(
         CoreConfig {

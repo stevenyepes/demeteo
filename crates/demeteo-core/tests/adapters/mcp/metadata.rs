@@ -13,13 +13,7 @@ use crate::state::AppContext;
 /// `.well-known` handler reads from it today, but the router-builder takes
 /// one so later tickets' routes (`/authorize`, `/token`, `/mcp`) can.
 fn fixture(tag: &str) -> AppContext {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-mcp-metadata-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-mcp-metadata-{tag}"));
     build_core_context(
         CoreConfig {
             app_data_dir: dir,

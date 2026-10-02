@@ -22,27 +22,17 @@ fn fail<'a>(path: &'a str, error: &'a str, now: i64) -> CleanupFailure<'a> {
 
 /// A file-backed database, so a test can prove a row survives the
 /// adapter that wrote it.
-struct TempDb(std::path::PathBuf);
+struct TempDb(crate::support::test_dir::TestDir);
 
 impl TempDb {
     fn new(tag: &str) -> TempDb {
-        let path = std::env::temp_dir().join(format!(
-            "demeteo-{tag}-{}-{:?}.sqlite",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        TempDb(path)
+        TempDb(crate::support::test_dir::TestDir::new(&format!(
+            "demeteo-{tag}"
+        )))
     }
 
     fn open(&self) -> SqliteAdapter {
-        SqliteAdapter::new(Connection::open(&self.0).unwrap()).unwrap()
-    }
-}
-
-impl Drop for TempDb {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        SqliteAdapter::new(Connection::open(self.0.path().join("db.sqlite")).unwrap()).unwrap()
     }
 }
 

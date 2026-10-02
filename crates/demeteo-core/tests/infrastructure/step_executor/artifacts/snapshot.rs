@@ -217,16 +217,7 @@ async fn a_file_where_the_worktree_should_be_is_missing() {
 }
 
 fn temp_git_repo(label: &str) -> String {
-    let d = std::env::temp_dir().join(format!(
-        "demeteo_test_{}_{}",
-        label,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis(),
-    ));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
+    let d = crate::support::test_dir::scratch(&format!("demeteo_test_{label}"));
     let path = d.to_string_lossy().to_string();
     let cmd = format!("git init -b main {}", shell_esc(&path));
     let _ = std::process::Command::new("sh")

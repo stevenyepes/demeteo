@@ -21,13 +21,7 @@ use crate::ports::worktree_ops::WorktreeOpsPort;
 /// (not yet created on disk — callers that need a real repo call
 /// [`init_repo_at`] on it).
 async fn fixture(tag: &str) -> (AppContext, ProjectId, PathBuf) {
-    let base = std::env::temp_dir().join(format!(
-        "demeteo-ask-wt-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let base = crate::support::test_dir::scratch(&format!("demeteo-ask-wt-{tag}"));
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: base,

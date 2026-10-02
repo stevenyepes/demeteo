@@ -75,22 +75,9 @@ fn unrecognized_enabled_value_defaults_to_disabled() {
     assert!(!read_mcp_server_status(&db).enabled);
 }
 
+/// A path inside a fresh scratch dir; nothing exists at it yet.
 fn unique_temp_path(label: &str) -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "demeteo_mcp_skill_test_{}_{}_{}_{}",
-        nanos,
-        std::process::id(),
-        count,
-        label,
-    ))
+    demeteo_core::test_dir::scratch(&format!("demeteo_mcp_skill_test_{label}")).join(label)
 }
 
 #[test]

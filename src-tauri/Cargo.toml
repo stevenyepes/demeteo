@@ -54,6 +54,8 @@ tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
 async-trait = "0.1"
+# Only the feature differs from the dependency above: `demeteo_core::test_dir`.
+demeteo-core = { path = "../crates/demeteo-core", features = ["test-support"] }
 # `test` enables Tauri's headless MockRuntime so the tray runtime helpers
 # (`run_in_background_enabled`, `cleanup_terminal_sessions`) can be exercised
 # against a real `AppHandle` without a display server.

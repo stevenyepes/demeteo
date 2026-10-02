@@ -17,14 +17,7 @@ impl crate::ports::notification::NotificationPort for NoopNotif {
 }
 
 fn scratch(label: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-composition-{label}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).expect("create app data dir");
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-composition-{label}"));
     dir
 }
 
