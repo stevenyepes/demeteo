@@ -181,14 +181,7 @@ async fn run_leg(
 ) -> (String, Arc<PhaseRecorder>, usize) {
     std::env::set_var(STUB_AGENT_ENV, "1");
     let recorder = Arc::new(PhaseRecorder::default());
-    let tmp = std::env::temp_dir().join(format!(
-        "demeteo-preflight-{label}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&tmp).expect("create app data dir");
+    let tmp = crate::support::test_dir::scratch(&format!("demeteo-preflight-{label}"));
 
     let ctx = build_core_context(
         CoreConfig {

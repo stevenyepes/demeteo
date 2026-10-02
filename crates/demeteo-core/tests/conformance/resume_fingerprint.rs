@@ -161,14 +161,7 @@ async fn run_then_forge_crash_recording(
     record: impl FnOnce(String) -> String,
 ) -> Crashed {
     std::env::set_var(STUB_AGENT_ENV, "1");
-    let tmp = std::env::temp_dir().join(format!(
-        "demeteo-resume-fp-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&tmp).expect("create app data dir");
+    let tmp = crate::support::test_dir::scratch(&format!("demeteo-resume-fp-{tag}"));
     let ctx = ctx_for(&tmp);
 
     ctx.app_settings

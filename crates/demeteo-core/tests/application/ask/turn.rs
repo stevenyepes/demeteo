@@ -158,13 +158,7 @@ async fn init_repo_at(dir: &Path) {
 /// A project with a real repository and an open Ask thread against it, with
 /// `ctx.registry` wired to a [`FakeRuntime`] scripted to stream `events`.
 async fn fixture(tag: &str, events: Vec<AgentEvent>) -> (AppContext, AskThreadId) {
-    let base = std::env::temp_dir().join(format!(
-        "demeteo-ask-turn-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let base = crate::support::test_dir::scratch(&format!("demeteo-ask-turn-{tag}"));
     let mut ctx = build_core_context(
         CoreConfig {
             app_data_dir: base,

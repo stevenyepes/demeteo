@@ -24,13 +24,7 @@ use crate::domain::oauth::OAuthClient;
 /// `ctx.oauth_clients` / `ctx.oauth_grants` are real repositories a grant can
 /// be seeded into directly.
 fn fixture(tag: &str) -> AppContext {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-mcp-guard-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-mcp-guard-{tag}"));
     build_core_context(
         CoreConfig {
             app_data_dir: dir,

@@ -231,11 +231,7 @@ use demeteo_core::ports::db::{FeatureRepository, ProjectRepository};
 const PREFIX: &str = "demeteo/features/";
 
 fn seeded_db(label: &str, resolved_branch: Option<&str>) -> SqliteAdapter {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo_runner_push_{}_{}",
-        label,
-        demeteo_core::paths::now_ms()
-    ));
+    let dir = demeteo_core::test_dir::scratch(&format!("demeteo_runner_push_{label}"));
     let conn = demeteo_core::db::init_db(dir).expect("init_db");
     let db = SqliteAdapter::new(conn).expect("migrations run");
     ProjectRepository::add(

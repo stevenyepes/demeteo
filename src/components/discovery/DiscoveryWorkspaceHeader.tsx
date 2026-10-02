@@ -1,20 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Code, Lock } from 'lucide-react';
+import { Code, GitBranch, Lock } from 'lucide-react';
 
 import { setDiscoveryBase } from '../../lib/discovery';
 import { baseBranchLabel, baseBranchLock, resolveBaseBranchInput } from '../../lib/discoveryBase';
 import { discoveryIntegrationActions } from '../../lib/discoveryIntegration';
-import { discoveryLifecycle } from '../../lib/discoveryProgress';
+import { discoveryLifecycle, turnCountLabel } from '../../lib/discoveryProgress';
 import { formatError } from '../../lib/errors';
 import { getRepositoriesForProject } from '../../lib/project';
+import { TONE_TEXT } from '../../lib/runStatus';
 import { listTerminalBranches } from '../../lib/terminal';
 import { formatCost, formatTokens } from '../../lib/utils';
 import type { Discovery, DiscoveryBoard, TerminalBranchOption } from '../../types';
 import { BackButton } from '../ui/BackButton';
 import { Chip } from '../ui/Chip';
 import { FieldLabel } from '../ui/FieldLabel';
-import { Metric, MetricStrip } from '../ui/MetricStrip';
+import { DiscoveryActionsMenu, type DiscoveryMenuAction } from './DiscoveryActionsMenu';
 import { OptionPill } from './OptionPill';
+import { useDiscoveryHeaderDensity } from './useDiscoveryHeaderDensity';
 
 interface DiscoveryWorkspaceHeaderProps {
   discovery: Discovery;
@@ -59,6 +61,7 @@ export function DiscoveryWorkspaceHeader({
   const started = tickets.filter((view) => view.ticket.state === 'started').length;
   const lifecycle = discoveryLifecycle(discovery, tickets.length, turnRunning);
   const lock = baseBranchLock(tickets.map((view) => view.ticket));
+  const { setHeaderEl, density } = useDiscoveryHeaderDensity();
 
   const [editingBase, setEditingBase] = useState(false);
   const [baseDraft, setBaseDraft] = useState<{ mode: 'default' | 'named'; name: string }>({
@@ -129,40 +132,179 @@ export function DiscoveryWorkspaceHeader({
 
   const integration = discoveryIntegrationActions(discovery, tickets);
 
+  const wide = density === 'wide';
+  const narrow = density === 'narrow';
+  const toggleLabel = discovery.status === 'open' ? 'Close discovery' : 'Reopen discovery';
+
+  const decomposeButton = (
+    <button
+      type="button"
+      data-testid="discovery-decompose"
+      onClick={onDecompose}
+      disabled={busy || decomposing}
+      className="btn-primary inline-flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      <Code className="h-3.5 w-3.5" aria-hidden="true" />
+      {decomposing ? 'Decomposing…' : 'Decompose'}
+    </button>
+  );
+
+  const menuActions: DiscoveryMenuAction[] = [];
+  if (integration.showControls) {
+    menuActions.push({
+      key: 'update-base',
+      label: 'Update from default branch',
+      disabled: busy || !integration.sync.enabled,
+      onSelect: onUpdateBase,
+      testId: 'discovery-update-base',
+    });
+    menuActions.push(
+      discovery.integration_mr_url
+        ? {
+            key: 'view-pr',
+            label: 'View integration PR',
+            hint: discovery.integration_mr_state,
+            href: discovery.integration_mr_url,
+          }
+        : {
+            key: 'publish-pr',
+            label: 'Open integration PR',
+            hint: integration.publish.reason,
+            disabled: busy || !integration.publish.enabled,
+            onSelect: onPublishIntegration,
+            testId: 'discovery-publish-integration',
+          },
+    );
+  }
+  menuActions.push({ key: 'toggle-open', label: toggleLabel, disabled: busy, onSelect: onToggleOpen });
+
   return (
-    <header className="flex shrink-0 items-start justify-between gap-6 border-b border-white/5 bg-[#0d0f14]/60 px-6 py-3.5">
-      <div className="flex min-w-0 items-start gap-3">
-        <BackButton className="mt-1" />
-        <div className="flex min-w-0 flex-col gap-1.5">
-        <p className="m-0 font-mono text-[11px] text-slate-500">Discovery</p>
-        <div className="flex min-w-0 items-center gap-3">
-          <h1 className="m-0 truncate font-heading text-xl font-bold tracking-tight text-white">
+    <header
+      ref={setHeaderEl}
+      data-density={density}
+      className="flex shrink-0 flex-col gap-2 border-b border-white/5 bg-[#0d0f14]/60 px-5 py-3"
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <BackButton />
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
+          {narrow ? (
+            <span
+              role="img"
+              aria-label={lifecycle.label}
+              title={lifecycle.label}
+              data-testid="discovery-lifecycle-dot"
+              className={`h-2 w-2 shrink-0 rounded-full bg-current ${TONE_TEXT[lifecycle.tone]} ${
+                lifecycle.live ? 'animate-pulse motion-reduce:animate-none' : ''
+              }`}
+            />
+          ) : (
+            <span className="shrink-0 font-mono text-[11px] text-slate-500">Discovery /</span>
+          )}
+          <h1
+            className={`m-0 truncate font-heading text-lg font-bold tracking-tight text-white ${
+              narrow ? 'min-w-0' : 'min-w-[120px]'
+            }`}
+          >
             {discovery.title}
           </h1>
-          <Chip size="sm" tone={lifecycle.tone} dot pulse={lifecycle.live}>
-            {lifecycle.label}
-          </Chip>
-          {tickets.length > 0 && (
+          {!narrow && (
+            <Chip size="sm" tone={lifecycle.tone} dot pulse={lifecycle.live}>
+              {lifecycle.label}
+            </Chip>
+          )}
+          {wide && tickets.length > 0 && (
             <Chip size="sm" tone="slate">
               {tickets.length} tickets · {started} started
             </Chip>
           )}
         </div>
 
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="truncate font-mono text-[11px] text-slate-500">
-            {baseBranchLabel(discovery.base_branch, defaultBranchName)}
-          </span>
-          {!editingBase && (
-            <button
-              type="button"
-              onClick={openEditingBase}
-              disabled={lock.locked || busy}
-              className="btn-secondary text-[11px] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Change
+        {wide ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <button type="button" onClick={onToggleOpen} disabled={busy} className="btn-secondary">
+              {toggleLabel}
             </button>
-          )}
+            {integration.showControls && (
+              <>
+                <button
+                  type="button"
+                  data-testid="discovery-update-base"
+                  onClick={onUpdateBase}
+                  disabled={busy || !integration.sync.enabled}
+                  className="btn-secondary disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Update from default branch
+                </button>
+                {discovery.integration_mr_url ? (
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={discovery.integration_mr_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-secondary"
+                    >
+                      View integration PR
+                    </a>
+                    <Chip size="sm" tone="slate">
+                      {discovery.integration_mr_state}
+                    </Chip>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="discovery-publish-integration"
+                    onClick={onPublishIntegration}
+                    disabled={busy || !integration.publish.enabled}
+                    title={integration.publish.reason ?? undefined}
+                    className="btn-secondary disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Open integration PR
+                  </button>
+                )}
+              </>
+            )}
+            {decomposeButton}
+          </div>
+        ) : (
+          <div className="flex shrink-0 items-center gap-2">
+            {decomposeButton}
+            <DiscoveryActionsMenu actions={menuActions} />
+          </div>
+        )}
+      </div>
+
+      <div className="flex min-w-0 flex-col gap-2 pl-11">
+        <div className="flex min-w-0 items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <GitBranch className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
+            <span className="truncate font-mono text-[11px] text-slate-400">
+              {baseBranchLabel(discovery.base_branch, defaultBranchName)}
+            </span>
+            {!editingBase && (
+              <button
+                type="button"
+                onClick={openEditingBase}
+                disabled={lock.locked || busy}
+                className="shrink-0 rounded px-1 py-0.5 text-[11px] font-medium text-violet-300 transition-colors hover:text-violet-200 disabled:cursor-not-allowed disabled:text-slate-600"
+              >
+                Change
+              </button>
+            )}
+          </div>
+          <p
+            data-testid="discovery-stats"
+            className="m-0 shrink-0 whitespace-nowrap font-mono text-[11px] text-slate-500"
+          >
+            <span data-testid="discovery-turns">{turnCountLabel(turnCount)}</span>
+            {' · '}
+            <span className="text-emerald-300">{formatCost(discovery.total_cost)}</span>
+            {!narrow && (
+              <>
+                {' · '}
+                <span className="text-cyan-300">{formatTokens(discovery.tokens)}</span> tokens
+              </>
+            )}
+          </p>
         </div>
 
         {lock.locked && (
@@ -235,75 +377,6 @@ export function DiscoveryWorkspaceHeader({
                 {baseSubmitting ? 'Saving…' : 'Save'}
               </button>
             </div>
-          </div>
-        )}
-        </div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-4">
-        <MetricStrip variant="inset">
-          <Metric label="Turns" value={String(turnCount)} />
-          <Metric label="Spend" value={formatCost(discovery.total_cost)} tone="emerald" />
-          <Metric label="Tokens" value={formatTokens(discovery.tokens)} tone="cyan" />
-        </MetricStrip>
-
-        <button type="button" onClick={onToggleOpen} disabled={busy} className="btn-secondary">
-          {discovery.status === 'open' ? 'Close discovery' : 'Reopen discovery'}
-        </button>
-
-        <button
-          type="button"
-          data-testid="discovery-decompose"
-          onClick={onDecompose}
-          disabled={busy || decomposing}
-          className="btn-primary inline-flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <Code className="h-3.5 w-3.5" aria-hidden="true" />
-          {decomposing ? 'Decomposing…' : 'Decompose'}
-        </button>
-
-        {integration.showControls && (
-          <div className="flex shrink-0 items-center gap-2.5">
-            <button
-              type="button"
-              data-testid="discovery-update-base"
-              onClick={onUpdateBase}
-              disabled={busy || !integration.sync.enabled}
-              className="btn-secondary disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Update from default branch
-            </button>
-
-            {discovery.integration_mr_url ? (
-              <div className="flex items-center gap-2">
-                <a
-                  href={discovery.integration_mr_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn-secondary"
-                >
-                  View integration PR
-                </a>
-                <Chip size="sm" tone="slate">
-                  {discovery.integration_mr_state}
-                </Chip>
-              </div>
-            ) : (
-              <div className="flex flex-col items-end gap-1">
-                <button
-                  type="button"
-                  data-testid="discovery-publish-integration"
-                  onClick={onPublishIntegration}
-                  disabled={busy || !integration.publish.enabled}
-                  className="btn-primary disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Open integration PR
-                </button>
-                {integration.publish.reason && (
-                  <p className="m-0 text-[11px] text-slate-500">{integration.publish.reason}</p>
-                )}
-              </div>
-            )}
           </div>
         )}
       </div>

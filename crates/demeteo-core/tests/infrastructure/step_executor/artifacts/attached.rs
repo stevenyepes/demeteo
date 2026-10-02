@@ -38,14 +38,8 @@ fn step_conf_inline(step_id: &str) -> crate::domain::models::StepConfig {
 
 #[test]
 fn test_resolve_attached_artifacts() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_artifacts_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let guard = crate::support::test_dir::TestDir::new("demeteo_test_artifacts");
+    let temp_dir = guard.path().to_path_buf();
 
     let store: Arc<dyn ArtifactStore> = Arc::new(
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
@@ -118,8 +112,6 @@ fn test_resolve_attached_artifacts() {
         resolved_prev,
         "=== ATTACHED CONTEXT: s-research (inlined body) ===\nThis is the research content.\n================================\n\nPrevious content: [See attached s-research at the beginning of the prompt]"
     );
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 /// Regression: an *earlier* step whose template references a *later*
@@ -133,14 +125,8 @@ fn test_resolve_attached_artifacts() {
 /// here.
 #[test]
 fn forward_reference_resolves_on_redirect_and_degrades_on_first_run() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_fwd_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let guard = crate::support::test_dir::TestDir::new("demeteo_test_fwd");
+    let temp_dir = guard.path().to_path_buf();
     let store: Arc<dyn ArtifactStore> = Arc::new(
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
     );
@@ -203,20 +189,12 @@ fn forward_reference_resolves_on_redirect_and_degrades_on_first_run() {
             && !degraded.contains("ATTACHED CONTEXT: s-critic"),
         "forward reference with no artifact yet should degrade gracefully; got:\n{degraded}"
     );
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 #[test]
 fn test_resolve_attached_artifacts_uses_artifact_paths() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_attach_paths_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let guard = crate::support::test_dir::TestDir::new("demeteo_test_attach_paths");
+    let temp_dir = guard.path().to_path_buf();
 
     let store: Arc<dyn ArtifactStore> = Arc::new(
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
@@ -259,20 +237,12 @@ fn test_resolve_attached_artifacts_uses_artifact_paths() {
         resolved,
         "=== ATTACHED CONTEXT: s-research (inlined body) ===\nResearch content from paths.\n================================\n\nPrevious: [See attached s-research at the beginning of the prompt]"
     );
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 #[test]
 fn test_resolve_attached_artifacts_default_uses_path_manifest() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_attach_manifest_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let guard = crate::support::test_dir::TestDir::new("demeteo_test_attach_manifest");
+    let temp_dir = guard.path().to_path_buf();
 
     let store: Arc<dyn ArtifactStore> = Arc::new(
         crate::adapters::artifact_store::fs::FsArtifactStore::new(temp_dir.clone()),
@@ -321,8 +291,6 @@ fn test_resolve_attached_artifacts_default_uses_path_manifest() {
         !resolved.contains("Research content."),
         "path manifest must NOT inline the body"
     );
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 // ── resolve_attached_user_attachments fallback footer ───────────────────
@@ -339,22 +307,7 @@ fn temp_attachment_store() -> (
     crate::adapters::attachment_store::fs::FsAttachmentStore,
     std::path::PathBuf,
 ) {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo_attach_fallback_test_{}_{}_{}",
-        nanos,
-        std::process::id(),
-        count
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::support::test_dir::scratch("demeteo_attach_fallback_test");
     let store = crate::adapters::attachment_store::fs::FsAttachmentStore::new(dir.clone());
     (store, dir)
 }

@@ -14,8 +14,7 @@ fn helper() -> GitOpsHelper {
 }
 
 fn worktree(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("demeteo {name} {}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = crate::support::test_dir::scratch(&format!("demeteo {name}"));
     std::fs::create_dir_all(root.join("src")).expect("source directory");
     std::fs::create_dir_all(root.join("artifacts")).expect("artifact directory");
     std::fs::write(root.join("src").join("main.rs"), "original").expect("source file");
@@ -177,8 +176,8 @@ async fn the_fence_writes_no_file_into_the_worktree() {
 /// deleted the worktree already.
 #[tokio::test]
 async fn teardown_on_a_worktree_that_is_gone_is_not_a_failure() {
-    let root = std::env::temp_dir().join(format!("demeteo absent {}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = crate::support::test_dir::scratch("demeteo absent");
+    std::fs::remove_dir(&root).expect("an empty scratch dir to take away");
     helper()
         .restore_artifact_scope(None, &root.to_string_lossy())
         .await

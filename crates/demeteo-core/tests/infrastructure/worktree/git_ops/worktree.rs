@@ -437,13 +437,7 @@ async fn make_project_repo_at(base: &std::path::Path) -> (String, String, GitOps
 }
 
 fn scratch(suffix: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "demeteo_test_{suffix}_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock is after the Unix epoch")
-            .as_millis()
-    ))
+    crate::support::test_dir::scratch(&format!("demeteo_test_{suffix}"))
 }
 
 #[tokio::test]
@@ -684,13 +678,8 @@ async fn terminal_worktree_collision_is_reported_without_reusing_the_worktree() 
 /// is the surface the application calls, and it is where the restatement lives.
 #[tokio::test]
 async fn a_missing_clone_is_named_as_such_by_every_terminal_operation() {
-    let project_root = std::env::temp_dir().join(format!(
-        "demeteo_terminal_missing_clone_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock is after the Unix epoch")
-            .as_millis()
-    ));
+    let guard = crate::support::test_dir::TestDir::new("demeteo_terminal_missing_clone");
+    let project_root = guard.path().to_path_buf();
     let repo = project_root
         .join(crate::paths::REPOS_SUBDIR)
         .join("never-cloned")
@@ -750,19 +739,12 @@ async fn a_missing_clone_is_named_as_such_by_every_terminal_operation() {
         create.starts_with(&repo),
         "the base branch must not lead the report of an absent repository: {create}"
     );
-
-    let _ = std::fs::remove_dir_all(&project_root);
 }
 
 #[tokio::test]
 async fn terminal_worktree_propagates_git_failures_without_cleanup() {
-    let temp = std::env::temp_dir().join(format!(
-        "demeteo_terminal_worktree_failure_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock is after the Unix epoch")
-            .as_millis()
-    ));
+    let guard = crate::support::test_dir::TestDir::new("demeteo_terminal_worktree_failure");
+    let temp = guard.path().to_path_buf();
     let non_repo = temp
         .join(crate::paths::REPOS_SUBDIR)
         .join("not-a-repository");
@@ -788,7 +770,6 @@ async fn terminal_worktree_propagates_git_failures_without_cleanup() {
             .exists(),
         "a failed add must not leave a reused or cleaned-up destination"
     );
-    let _ = std::fs::remove_dir_all(&temp);
 }
 
 #[tokio::test]
@@ -1746,14 +1727,8 @@ async fn test_create_and_push_branch_refreshes_stale_origin_before_cutting() {
 /// not this fallback case.
 #[tokio::test]
 async fn test_create_and_push_branch_falls_back_to_local_without_origin_ref() {
-    let remote_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_remote_push_branch_fallback_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&remote_dir).unwrap();
+    let guard = crate::support::test_dir::TestDir::new("demeteo_test_remote_push_branch_fallback");
+    let remote_dir = guard.path().to_path_buf();
     let remote = remote_dir.to_string_lossy().to_string();
     let exec = fresh_exec();
     let _ = exec
@@ -1794,7 +1769,6 @@ async fn test_create_and_push_branch_falls_back_to_local_without_origin_ref() {
     );
 
     let _ = std::fs::remove_dir_all(&local_dir);
-    let _ = std::fs::remove_dir_all(&remote_dir);
 }
 
 /// The push must never carry `--force`/`-f`: when origin already holds a

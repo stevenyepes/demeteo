@@ -95,7 +95,7 @@ pub async fn stream_agent_turn<F>(
 where
     F: FnMut(&AgentEvent),
 {
-    let hb = session.stderr_heartbeat();
+    let hb = session.activity_heartbeat();
     let mut stream = session.prompt(prompt);
     let mut first_event_seen = false;
     let mut text_buffer = String::new();

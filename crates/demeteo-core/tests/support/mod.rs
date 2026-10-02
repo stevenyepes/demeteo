@@ -7,3 +7,4 @@
 
 pub mod notification_capture;
 pub mod preflight_strategy;
+pub use crate::test_dir;

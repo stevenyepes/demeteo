@@ -165,12 +165,7 @@ mod set_step_assignment {
     /// byte-identity assertion meaningful: the *same* id is asked for on both,
     /// so anything but an identical answer is the probe itself.
     fn empty_db() -> SqliteAdapter {
-        let dir = std::env::temp_dir().join(format!(
-            "demeteo_runner_assign_{}_{}_{}",
-            std::process::id(),
-            demeteo_core::paths::now_ms(),
-            NEXT_DB.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
+        let dir = demeteo_core::test_dir::scratch("demeteo_runner_assign");
         let conn = demeteo_core::db::init_db(dir).expect("init_db");
         let db = SqliteAdapter::new(conn).expect("migrations run");
         ProjectRepository::add(
@@ -190,10 +185,6 @@ mod set_step_assignment {
         .expect("seed the project");
         db
     }
-
-    /// `now_ms()` alone collides between two databases built inside the same
-    /// millisecond, and they would then share one file.
-    static NEXT_DB: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
     fn seed_tenant(db: &SqliteAdapter, suffix: &str, client_id: &str) {
         let feature_id = FeatureId::from(format!("f-{}", suffix));
@@ -375,15 +366,8 @@ mod release_feature_cache {
         }
     }
 
-    static NEXT_DB: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
     fn empty_db() -> SqliteAdapter {
-        let dir = std::env::temp_dir().join(format!(
-            "demeteo_runner_cache_{}_{}_{}",
-            std::process::id(),
-            demeteo_core::paths::now_ms(),
-            NEXT_DB.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
+        let dir = demeteo_core::test_dir::scratch("demeteo_runner_cache");
         let conn = demeteo_core::db::init_db(dir).expect("init_db");
         let db = SqliteAdapter::new(conn).expect("migrations run");
         ProjectRepository::add(

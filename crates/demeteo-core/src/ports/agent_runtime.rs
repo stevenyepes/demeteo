@@ -580,12 +580,13 @@ pub trait AgentSession: Send + Sync {
     fn kill(&self) -> Result<(), String> {
         Ok(())
     }
-    /// Return a handle that signals stderr activity from the underlying
-    /// agent process. The step executor uses this to differentiate "agent
-    /// is working (API call, model inference)" from "agent is blocked
-    /// (no stdout + no stderr)". Sessions that don't track stderr return
-    /// `None` — the executor falls back to the standard timeout.
-    fn stderr_heartbeat(&self) -> Option<StderrHeartbeat> {
+    /// Return a handle that signals any output from the underlying agent
+    /// process — every stdout line, parsed or not, and every stderr line.
+    /// The step executor uses this to differentiate "agent is working (API
+    /// call, model inference)" from "agent is blocked (no stdout + no
+    /// stderr)". Sessions that don't track output return `None` — the
+    /// executor falls back to the standard timeout.
+    fn activity_heartbeat(&self) -> Option<ActivityHeartbeat> {
         None
     }
 
@@ -642,35 +643,41 @@ pub trait AgentSession: Send + Sync {
     }
 }
 
-/// Cheaply-cloneable handle that tracks how recently the agent's stderr
-/// produced output. The stderr drain thread calls [`beat`](StderrHeartbeat::beat) on every
-/// line; the step executor polls [`last_activity_ago_ms`](StderrHeartbeat::last_activity_ago_ms) to decide
+/// Cheaply-cloneable handle that tracks how recently the agent process wrote
+/// anything. Both drain threads call [`beat`](ActivityHeartbeat::beat) on
+/// every non-empty line — stdout whether or not it parses into an event, and
+/// stderr where the transport keeps it separate; the step executor polls
+/// [`last_activity_ago_ms`](ActivityHeartbeat::last_activity_ago_ms) to decide
 /// whether the process is truly stuck.
+///
+/// Unparsed stdout counts because the parser is not the judge of liveness.
+/// claude-code reports a long think only as `system`/`thinking_tokens` lines,
+/// about one a second, which no adapter turns into an event; counting parsed
+/// events alone read ten minutes of that as silence and killed the turn.
 #[derive(Clone)]
-pub struct StderrHeartbeat {
+pub struct ActivityHeartbeat {
     last_ts: Arc<AtomicU64>,
 }
 
-impl Default for StderrHeartbeat {
+impl Default for ActivityHeartbeat {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl StderrHeartbeat {
+impl ActivityHeartbeat {
     pub fn new() -> Self {
         Self {
             last_ts: Arc::new(AtomicU64::new(Self::now_ms())),
         }
     }
 
-    /// Call from the stderr drain thread every time a complete line is
-    /// received from the agent's stderr pipe.
+    /// Call every time a complete, non-empty line is received from the agent.
     pub fn beat(&self) {
         self.last_ts.store(Self::now_ms(), Ordering::Relaxed);
     }
 
-    /// Milliseconds since the last call to [`beat`](StderrHeartbeat::beat) (or since construction
+    /// Milliseconds since the last call to [`beat`](ActivityHeartbeat::beat) (or since construction
     /// if `beat` was never called).
     pub fn last_activity_ago_ms(&self) -> u64 {
         Self::now_ms().saturating_sub(self.last_ts.load(Ordering::Relaxed))

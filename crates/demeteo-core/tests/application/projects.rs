@@ -382,9 +382,8 @@ fn context() -> (
     Arc<Mutex<Vec<WorktreeCall>>>,
 ) {
     let sequence = CONTEXT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let app_data_dir = std::env::temp_dir().join(format!(
-        "demeteo-terminal-worktree-projects-{}-{sequence}",
-        crate::paths::now_ms()
+    let app_data_dir = crate::support::test_dir::scratch(&format!(
+        "demeteo-terminal-worktree-projects-{sequence}"
     ));
     let mut ctx = build_core_context(
         CoreConfig {

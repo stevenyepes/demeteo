@@ -172,6 +172,9 @@ fi
 step "Doc references + duplicate comment blocks"
 scripts/check-doc-refs.sh
 
+step "Test scratch dirs (no raw temp_dir)"
+scripts/check-test-temp-dirs.sh
+
 step "Rust tests (cargo test)"
 ( cd src-tauri && cargo test )
 

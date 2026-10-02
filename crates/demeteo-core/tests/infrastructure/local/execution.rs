@@ -96,7 +96,8 @@ async fn a_command_that_finishes_returns_its_stdout() {
 #[tokio::test]
 async fn a_program_request_preserves_argv_cwd_and_environment() {
     let adapter = LocalSubprocessAdapter::new();
-    let cwd = std::env::temp_dir();
+    let scratch = crate::support::test_dir::TestDir::new("demeteo-argv");
+    let cwd = scratch.path();
     let mut env = std::collections::BTreeMap::new();
     env.insert("DEMETEO_ARGV_TEST".to_string(), "present".to_string());
     let out = adapter
@@ -124,8 +125,8 @@ async fn a_program_request_preserves_argv_cwd_and_environment() {
 #[tokio::test]
 async fn a_windows_program_request_preserves_argv_cwd_and_environment_with_spaces() {
     let adapter = LocalSubprocessAdapter::new();
-    let cwd = std::env::temp_dir().join(format!("demeteo argv spaces {}", std::process::id()));
-    std::fs::create_dir_all(&cwd).expect("scratch directory");
+    let scratch = crate::support::test_dir::TestDir::new("demeteo argv spaces");
+    let cwd = scratch.path();
     let script = cwd.join("inspect.ps1");
     // The `param` block ends at the newline; PowerShell will not start a
     // statement on the same line as it.
@@ -162,12 +163,11 @@ async fn a_windows_program_request_preserves_argv_cwd_and_environment_with_space
     // working directory to the long one, so the child reports a different
     // spelling of the very directory it was handed. Resolved through the
     // filesystem and compared as a path, or this asserts a spelling.
-    let resolved = std::fs::canonicalize(&cwd)
+    let resolved = std::fs::canonicalize(cwd)
         .expect("the scratch directory resolves")
         .to_string_lossy()
         .into_owned();
     let expected_cwd = resolved.strip_prefix(r"\\?\").unwrap_or(&resolved);
-    let _ = std::fs::remove_dir_all(&cwd);
 
     let mut fields = out.split('|');
     assert_eq!(fields.next(), Some("value with spaces"), "got: {out}");
@@ -304,8 +304,8 @@ async fn the_timeout_kills_the_whole_process_tree_not_just_the_shell() {
     // direct child reaps the *shell* and orphans whatever it spawned. Here the
     // grandchild is the long `sleep`; it must not outlive the deadline.
     let adapter = LocalSubprocessAdapter::new();
-    let dir = std::env::temp_dir().join(format!("demeteo-killtest-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let scratch = crate::support::test_dir::TestDir::new("demeteo-killtest");
+    let dir = scratch.path();
     let pidfile = dir.join("grandchild.pid");
 
     let script = format!("sleep 60 & echo $! > {}; wait", pidfile.display());
@@ -338,7 +338,6 @@ async fn the_timeout_kills_the_whole_process_tree_not_just_the_shell() {
             libc::kill(pid as libc::pid_t, libc::SIGKILL);
         }
     }
-    let _ = std::fs::remove_dir_all(&dir);
     assert!(
         !still_running,
         "the `sleep 60` grandchild outlived the timeout — the shell was killed but not its tree"
@@ -352,8 +351,8 @@ async fn abandoning_the_future_kills_the_tree_too() {
     // run against its cancel watch, and dropping the losing future is what has
     // to stop the work.
     let adapter = LocalSubprocessAdapter::new();
-    let dir = std::env::temp_dir().join(format!("demeteo-canceltest-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let scratch = crate::support::test_dir::TestDir::new("demeteo-canceltest");
+    let dir = scratch.path();
     let pidfile = dir.join("grandchild.pid");
     let script = format!("sleep 60 & echo $! > {}; wait", pidfile.display());
 
@@ -379,7 +378,6 @@ async fn abandoning_the_future_kills_the_tree_too() {
             libc::kill(pid as libc::pid_t, libc::SIGKILL);
         }
     }
-    let _ = std::fs::remove_dir_all(&dir);
     assert!(
         !still_running,
         "dropping the run future left the command running"
@@ -485,8 +483,8 @@ async fn a_grandchild_is_reaped_when_the_deadline_takes_the_tree() {
     // the direct child leaves its own children running — an `npm test`
     // abandoned at its ceiling would leave the compiler it started writing
     // into a worktree that is about to be deleted.
-    let dir = std::env::temp_dir().join(format!("demeteo-jobtest-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let scratch = crate::support::test_dir::TestDir::new("demeteo-jobtest");
+    let dir = scratch.path();
     let started = dir.join("grandchild-started");
     let survived = dir.join("grandchild-survived");
     let script = dir.join("spawn-grandchild.ps1");
@@ -527,7 +525,6 @@ async fn a_grandchild_is_reaped_when_the_deadline_takes_the_tree() {
     tokio::time::sleep(Duration::from_secs(12)).await;
     let launched = started.exists();
     let outlived = survived.exists();
-    let _ = std::fs::remove_dir_all(&dir);
 
     assert!(
         launched,
@@ -542,15 +539,8 @@ async fn a_grandchild_is_reaped_when_the_deadline_takes_the_tree() {
 #[tokio::test]
 async fn create_dir_all_creates_nested_directories_without_a_shell() {
     let adapter = LocalSubprocessAdapter::new();
-    let root = std::env::temp_dir().join(format!(
-        "demeteo-create-dir-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock after Unix epoch")
-            .as_nanos()
-    ));
-    let target = root.join("nested").join("directory");
+    let root = crate::support::test_dir::TestDir::new("demeteo-create-dir");
+    let target = root.path().join("nested").join("directory");
 
     adapter
         .create_dir_all("local", &target.to_string_lossy())
@@ -558,5 +548,4 @@ async fn create_dir_all_creates_nested_directories_without_a_shell() {
         .expect("native recursive create succeeds");
 
     assert!(target.is_dir());
-    let _ = std::fs::remove_dir_all(root);
 }

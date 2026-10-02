@@ -17,13 +17,7 @@ use crate::state::AppContext;
 const TOKEN: &str = "protocol-test-token";
 
 fn fixture(tag: &str) -> AppContext {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-mcp-protocol-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-mcp-protocol-{tag}"));
     build_core_context(
         CoreConfig {
             app_data_dir: dir,

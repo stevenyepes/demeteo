@@ -2,25 +2,7 @@
 
 use super::*;
 
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new(tag: &str) -> TempDir {
-        let path = std::env::temp_dir().join(format!(
-            "demeteo-trace-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        TempDir(path)
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
+use crate::support::test_dir::TestDir;
 
 #[test]
 fn a_blank_or_absent_variable_leaves_tracing_off() {
@@ -96,13 +78,13 @@ fn an_oversized_session_id_is_capped() {
 /// redacted it first.
 #[test]
 fn a_credential_in_agent_output_is_scrubbed_before_it_reaches_disk() {
-    let dir = TempDir::new("scrub");
+    let dir = TestDir::new("trace-scrub");
     let mut trace =
-        TurnTrace::open_in(&dir.0, "codex-feat42", 1).expect("trace file must be creatable");
+        TurnTrace::open_in(dir.path(), "codex-feat42", 1).expect("trace file must be creatable");
     trace.record(r#"{"command":"git push https://x:ghp_abcdef1234567890@github.com/o/r"}"#);
     trace.record(r#"{"command":"gh auth login --with-token github_pat_0123456789abcdef"}"#);
 
-    let written = std::fs::read_to_string(dir.0.join("codex-feat42.turn001.jsonl"))
+    let written = std::fs::read_to_string(dir.path().join("codex-feat42.turn001.jsonl"))
         .expect("the capture must exist under the directory it was opened in");
     assert!(
         !written.contains("ghp_abcdef1234567890") && !written.contains("github_pat_0123456789"),
@@ -120,12 +102,12 @@ fn a_credential_in_agent_output_is_scrubbed_before_it_reaches_disk() {
 /// bytes have to be readable while the trace is still open.
 #[test]
 fn a_recorded_line_is_on_disk_before_the_trace_is_dropped() {
-    let dir = TempDir::new("unbuffered");
+    let dir = TestDir::new("trace-unbuffered");
     let mut trace =
-        TurnTrace::open_in(&dir.0, "codex-feat42", 7).expect("trace file must be creatable");
+        TurnTrace::open_in(dir.path(), "codex-feat42", 7).expect("trace file must be creatable");
     trace.record(r#"{"type":"item.completed","item":{"command":"bash -lc ls"}}"#);
 
-    let written = std::fs::read_to_string(dir.0.join("codex-feat42.turn007.jsonl"))
+    let written = std::fs::read_to_string(dir.path().join("codex-feat42.turn007.jsonl"))
         .expect("the capture must exist while the trace is still open");
     assert!(
         written.contains("bash -lc ls"),
@@ -138,23 +120,25 @@ fn a_recorded_line_is_on_disk_before_the_trace_is_dropped() {
 /// attempt worth reading is usually the one that failed.
 #[test]
 fn a_second_capture_of_the_same_turn_never_overwrites_the_first() {
-    let dir = TempDir::new("retry");
+    let dir = TestDir::new("trace-retry");
     let mut first =
-        TurnTrace::open_in(&dir.0, "codex-f1-s-implement-t-3", 1).expect("first attempt");
+        TurnTrace::open_in(dir.path(), "codex-f1-s-implement-t-3", 1).expect("first attempt");
     first.record(r#"{"command":"the attempt that misbehaved"}"#);
     drop(first);
 
-    let mut second = TurnTrace::open_in(&dir.0, "codex-f1-s-implement-t-3", 1).expect("the retry");
+    let mut second =
+        TurnTrace::open_in(dir.path(), "codex-f1-s-implement-t-3", 1).expect("the retry");
     second.record(r#"{"command":"the re-run that worked"}"#);
 
     let original =
-        std::fs::read_to_string(dir.0.join("codex-f1-s-implement-t-3.turn001.jsonl")).unwrap();
+        std::fs::read_to_string(dir.path().join("codex-f1-s-implement-t-3.turn001.jsonl")).unwrap();
     assert!(
         original.contains("the attempt that misbehaved"),
         "the failing attempt's capture was truncated by the retry: {original}"
     );
     let retried =
-        std::fs::read_to_string(dir.0.join("codex-f1-s-implement-t-3.turn001.1.jsonl")).unwrap();
+        std::fs::read_to_string(dir.path().join("codex-f1-s-implement-t-3.turn001.1.jsonl"))
+            .unwrap();
     assert!(
         retried.contains("the re-run that worked"),
         "the retry's own capture is missing: {retried}"
@@ -163,9 +147,9 @@ fn a_second_capture_of_the_same_turn_never_overwrites_the_first() {
 
 #[test]
 fn an_unwritable_directory_yields_no_trace_rather_than_an_error() {
-    let dir = TempDir::new("blocked");
-    std::fs::create_dir_all(&dir.0).expect("temp dir");
-    let blocked = dir.0.join("file-not-a-dir");
+    let dir = TestDir::new("trace-blocked");
+    std::fs::create_dir_all(dir.path()).expect("temp dir");
+    let blocked = dir.path().join("file-not-a-dir");
     std::fs::write(&blocked, b"x").expect("temp file");
 
     assert!(TurnTrace::open_in(&blocked, "codex-feat42", 1).is_none());

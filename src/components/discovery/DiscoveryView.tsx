@@ -121,13 +121,14 @@ export function DiscoveryView({
       getDiscovery(discoveryId),
       getDiscoveryBoard(discoveryId),
     ]);
+    if (boardResult.status === 'fulfilled') setBoard(boardResult.value);
     if (detailResult.status === 'fulfilled') {
       setDetail(detailResult.value);
       setError(null);
-    } else {
-      setError(formatError(detailResult.reason));
+      return detailResult.value;
     }
-    if (boardResult.status === 'fulfilled') setBoard(boardResult.value);
+    setError(formatError(detailResult.reason));
+    return null;
   }, [discoveryId]);
 
   useEffect(() => {
@@ -311,13 +312,17 @@ export function DiscoveryView({
   async function decompose() {
     setDecomposing(true);
     setActionError(null);
+    let failure: string | null = null;
     try {
       setProposal(await decomposeDiscovery(discoveryId));
     } catch (cause) {
-      setActionError(formatError(cause));
+      failure = formatError(cause);
     } finally {
       setDecomposing(false);
-      await refresh();
+      const fresh = await refresh();
+      // A pass that stopped was kept, and its notice already says why; only a
+      // refusal that was never kept ("already running", "closed") needs this.
+      if (failure !== null && !fresh?.pending_proposal?.stopped) setActionError(failure);
     }
   }
 
@@ -387,6 +392,7 @@ export function DiscoveryView({
           busy={busy || decomposing}
           onReview={() => setProposal(pendingProposal)}
           onDiscard={() => void runAction(() => discardProposal(discoveryId))}
+          onDecompose={() => void decompose()}
         />
       )}
 

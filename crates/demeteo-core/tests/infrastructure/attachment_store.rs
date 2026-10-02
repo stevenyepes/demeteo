@@ -1,26 +1,10 @@
 use crate::adapters::attachment_store::fs::FsAttachmentStore;
 use crate::ports::attachment_store::AttachmentStore;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::support::test_dir::TestDir;
 
-fn temp_store() -> (FsAttachmentStore, PathBuf) {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo_attach_test_{}_{}_{}_{}",
-        nanos,
-        std::process::id(),
-        count,
-        "store",
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let store = FsAttachmentStore::new(dir.clone());
+fn temp_store() -> (FsAttachmentStore, TestDir) {
+    let dir = TestDir::new("demeteo_attach_test_store");
+    let store = FsAttachmentStore::new(dir.path().to_path_buf());
     (store, dir)
 }
 
@@ -30,7 +14,7 @@ fn write_and_read_round_trip() {
     let bytes = b"hello attachment world";
     let sha = crate::domain::attachment::compute_sha256_hex(bytes);
     let path = store.write("f-1", &sha, "png", bytes).unwrap();
-    assert!(path.starts_with(dir.to_string_lossy().as_ref()));
+    assert!(path.starts_with(dir.path().to_string_lossy().as_ref()));
     assert!(path.ends_with(format!("{sha}.png").as_str()));
     let back = store.read(&path).unwrap();
     assert_eq!(back, bytes);
