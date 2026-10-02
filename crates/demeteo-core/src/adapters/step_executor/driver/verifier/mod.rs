@@ -493,7 +493,7 @@ impl ExecutionDriver {
         };
 
         let mut text_buffer = String::new();
-        let hb = session.stderr_heartbeat();
+        let hb = session.activity_heartbeat();
         let mut stream = session.prompt(&verifier_prompt);
         let mut cancel_watch = self.cancel_watch.clone();
         let mut first_event_seen = false;

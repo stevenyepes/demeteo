@@ -154,9 +154,13 @@ export function validationState(proposal: DecomposeProposal): ValidationState {
  * Reads the same two fields {@link validationState} does and reaches the same
  * verdict in one line, because the two must never disagree: a notice promising
  * changes over a pass whose plan was refused would be offering something the
- * modal then declines to apply.
+ * modal then declines to apply. A pass that stopped is said first: it has no
+ * plan for either of them to judge.
  */
 export function pendingProposalNote(proposal: DecomposeProposal): string {
+  if (proposal.stopped) {
+    return `The last decompose pass stopped before it produced a plan: ${proposal.stopped.replace(/\.\s*$/, '')}. Nothing was applied.`;
+  }
   if (validationState(proposal).fatal) {
     return 'A decompose pass finished without a plan that could be used. Nothing here can be applied.';
   }
