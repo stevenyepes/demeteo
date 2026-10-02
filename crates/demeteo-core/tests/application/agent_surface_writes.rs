@@ -13,13 +13,7 @@ use crate::domain::models::{EffortLevel, Project, ProviderInstance};
 /// A fully wired `AppContext` over a fresh temp-dir SQLite database — same
 /// shape as `tests/application/agent_surface.rs`'s `fixture`.
 fn fixture(tag: &str) -> AppContext {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-agent-surface-writes-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-agent-surface-writes-{tag}"));
     build_core_context(
         CoreConfig {
             app_data_dir: dir,

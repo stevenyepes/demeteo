@@ -127,13 +127,7 @@ fn spend_vs_read_does_not_overclaim_free_reads() {
 #[tokio::test]
 async fn every_scoped_tool_has_a_dispatch_arm() {
     use std::sync::Arc;
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-mcp-dispatch-arms-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch("demeteo-mcp-dispatch-arms");
     let ctx = crate::composition::build_core_context(
         crate::composition::CoreConfig {
             app_data_dir: dir,

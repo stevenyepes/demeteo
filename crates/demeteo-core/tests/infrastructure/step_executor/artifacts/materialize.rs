@@ -20,6 +20,8 @@ use super::*;
 
 use std::sync::Mutex;
 
+use crate::support::test_dir::TestDir;
+
 /// `ExecutionPort` double that records every `write_file` /
 /// `write_file_bytes` / `get_metadata` / `create_dir_all` call so the test can
 /// assert the artifact ended up on the *target* host (path string) — not on the
@@ -147,25 +149,11 @@ impl crate::ports::execution::ExecutionPort for RecordingExec {
     }
 }
 
-fn temp_artifact(name: &str, body: &str) -> (tempdir::TempDir, std::path::PathBuf) {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo_materialize_test_{}_{}_{}",
-        nanos,
-        std::process::id(),
-        count
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join(name);
+fn temp_artifact(name: &str, body: &str) -> (TestDir, std::path::PathBuf) {
+    let dir = TestDir::new("demeteo_materialize_test");
+    let file = dir.path().join(name);
     std::fs::write(&file, body).unwrap();
-    (tempdir::TempDir::from_path(dir.clone()), file)
+    (dir, file)
 }
 
 #[tokio::test]
@@ -315,14 +303,8 @@ async fn materialize_external_paths_local_machine_routes_through_exec() {
     let (_src_dir, src_path) = temp_artifact("s-implement.md", "## Files\n");
     let src_str = src_path.to_string_lossy().to_string();
 
-    let local_wt = std::env::temp_dir().join(format!(
-        "demeteo_mat_local_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&local_wt).unwrap();
+    let wt = TestDir::new("demeteo_mat_local");
+    let local_wt = wt.path();
 
     let exec = RecordingExec::new();
     let prompt = format!("- `{src_str}`\n");
@@ -336,28 +318,4 @@ async fn materialize_external_paths_local_machine_routes_through_exec() {
     assert!(dest_path.starts_with(&local_wt.to_string_lossy().to_string()));
     assert_eq!(content, "## Files\n");
     assert!(rewritten.contains(dest_path));
-
-    // Clean up the worktree dest.
-    let _ = std::fs::remove_dir_all(&local_wt);
-    drop(_src_dir);
-}
-
-// ── tempdir re-implementation ───────────────────────────────────────────
-//
-// The workspace tests use a tiny `tempdir` crate (the standalone
-// `tempdir` re-export). It isn't on this crate's dev-dependencies
-// for the production build, so we inline a 4-line equivalent here so
-// the materialize tests don't pull a new dep.
-mod tempdir {
-    pub struct TempDir(std::path::PathBuf);
-    impl TempDir {
-        pub fn from_path(p: std::path::PathBuf) -> Self {
-            Self(p)
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 }

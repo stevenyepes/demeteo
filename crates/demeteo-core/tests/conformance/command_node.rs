@@ -174,14 +174,7 @@ fn ctx_for(dir: &Path) -> AppContext {
 }
 
 fn fresh_dir(tag: &str) -> PathBuf {
-    let tmp = std::env::temp_dir().join(format!(
-        "demeteo-command-node-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&tmp).expect("create app data dir");
+    let tmp = crate::support::test_dir::scratch(&format!("demeteo-command-node-{tag}"));
     tmp
 }
 

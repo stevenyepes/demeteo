@@ -99,15 +99,7 @@ pub(super) async fn build_test_executor_with_notif(
 /// derive the repository path it will be asked about *before* the executor
 /// that asks exists.
 pub(super) fn scratch_dir(label: &str) -> std::path::PathBuf {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_guard_{}_{}",
-        label,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = crate::support::test_dir::scratch(&format!("demeteo_test_guard_{label}"));
     temp_dir
 }
 

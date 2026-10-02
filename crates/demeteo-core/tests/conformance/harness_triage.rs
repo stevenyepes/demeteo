@@ -240,14 +240,7 @@ async fn run_triage_leg(
 ) {
     std::env::set_var(STUB_AGENT_ENV, "1");
     let recorder = Arc::new(SignalRecorder::default());
-    let tmp = std::env::temp_dir().join(format!(
-        "demeteo-triage-{triage_category}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&tmp).expect("create app data dir");
+    let tmp = crate::support::test_dir::scratch(&format!("demeteo-triage-{triage_category}"));
 
     let ctx = build_core_context(
         CoreConfig {

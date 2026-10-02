@@ -9,29 +9,7 @@ fn db() -> SqliteAdapter {
     SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap()
 }
 
-/// A directory removed when the binding drops, so a failing assertion below
-/// leaks nothing. `std::fs::remove_dir_all` on the last line of a test only
-/// runs when the test passes, which is the case that needed it least.
-struct TempDir(std::path::PathBuf);
-
-impl TempDir {
-    fn new(tag: &str) -> TempDir {
-        let path = std::env::temp_dir().join(format!(
-            "demeteo-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).unwrap();
-        TempDir(path)
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
+use crate::support::test_dir::TestDir;
 
 fn agents_json(entries: &[(&str, bool)]) -> String {
     let configs: Vec<AgentConfig> = entries
@@ -161,8 +139,8 @@ fn a_machine_with_no_stored_config_reads_as_empty() {
 /// reset the toggles.
 #[test]
 fn local_agent_config_survives_a_fresh_sqlite_adapter() {
-    let tmp = TempDir::new("local-agent-config");
-    let path = tmp.0.join("db.sqlite");
+    let tmp = TestDir::new("demeteo-local-agent-config");
+    let path = tmp.path().join("db.sqlite");
     let machine_id = MachineId::from("local".to_string());
 
     {

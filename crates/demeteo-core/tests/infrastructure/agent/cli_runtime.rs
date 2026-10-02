@@ -85,15 +85,7 @@ where
 /// layer.
 #[test]
 fn drain_lines_captures_the_lines_the_parser_recognises_and_the_ones_it_drops() {
-    struct TempDir(std::path::PathBuf);
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    let dir =
-        TempDir(std::env::temp_dir().join(format!("demeteo-drain-trace-{}", std::process::id())));
-    let _ = std::fs::remove_dir_all(&dir.0);
+    let dir = crate::support::test_dir::TestDir::new("demeteo-drain-trace");
 
     let input = concat!(
         r#"{"type":"text","delta":"hi"}"#,
@@ -104,7 +96,7 @@ fn drain_lines_captures_the_lines_the_parser_recognises_and_the_ones_it_drops() 
         r#"{"type":"end_turn"}"#,
         "\n",
     );
-    let trace = crate::adapters::agent::trace::TurnTrace::open_in(&dir.0, "codex-t42", 3)
+    let trace = crate::adapters::agent::trace::TurnTrace::open_in(dir.path(), "codex-t42", 3)
         .expect("trace file must be creatable");
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(8);
     let handle = std::thread::spawn(move || {
@@ -122,7 +114,7 @@ fn drain_lines_captures_the_lines_the_parser_recognises_and_the_ones_it_drops() 
     while rx.blocking_recv().is_some() {}
     handle.join().unwrap();
 
-    let written = std::fs::read_to_string(dir.0.join("codex-t42.turn003.jsonl"))
+    let written = std::fs::read_to_string(dir.path().join("codex-t42.turn003.jsonl"))
         .expect("the capture must exist");
     assert!(
         written.contains("bash -lc 'ls'"),

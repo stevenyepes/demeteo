@@ -663,11 +663,7 @@ fn the_port_message_keeps_the_prefix_it_always_had() {
 
 #[test]
 fn the_host_filesystem_deletes_a_real_nested_tree() {
-    let root = std::env::temp_dir().join(format!(
-        "demeteo-fs-remove-{}-{}",
-        std::process::id(),
-        crate::shared::time::now_ms()
-    ));
+    let root = crate::support::test_dir::scratch("demeteo-fs-remove");
     let nested = root.join("a").join("b");
     std::fs::create_dir_all(&nested).expect("fixture");
     std::fs::write(nested.join("f.txt"), b"x").expect("fixture");

@@ -210,15 +210,7 @@ async fn start_run(
     workflow: &serde_json::Value,
 ) -> (std::path::PathBuf, AppContext, String, FeatureId, String) {
     std::env::set_var(STUB_AGENT_ENV, "1");
-    let tmp = std::env::temp_dir().join(format!(
-        "demeteo-durable-ckpt-{}-{}",
-        tag,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&tmp).expect("create app data dir");
+    let tmp = crate::support::test_dir::scratch(&format!("demeteo-durable-ckpt-{tag}"));
 
     let ctx = build_core_context(
         CoreConfig {

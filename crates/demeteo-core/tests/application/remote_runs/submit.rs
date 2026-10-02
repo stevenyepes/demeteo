@@ -260,11 +260,11 @@ impl ExecutionPort for RunnerAt {
 /// A context in which every step before the RPC would succeed: the project,
 /// its repository and provider, the workflow, and a PAT seeded into the
 /// process-wide credential cache under a provider id no other test uses.
-fn submittable_ctx(exec: Arc<RunnerAt>) -> (AppContext, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("demeteo-submit-gate-{}", crate::paths::new_id()));
+fn submittable_ctx(exec: Arc<RunnerAt>) -> (AppContext, crate::support::test_dir::TestDir) {
+    let dir = crate::support::test_dir::TestDir::new("demeteo-submit-gate");
     let mut ctx = build_core_context(
         CoreConfig {
-            app_data_dir: dir.clone(),
+            app_data_dir: dir.path().to_path_buf(),
             execution_mode: ExecutionMode::LocalOnly,
         },
         Arc::new(NoopNotificationAdapter),
@@ -325,7 +325,7 @@ fn submittable_ctx(exec: Arc<RunnerAt>) -> (AppContext, std::path::PathBuf) {
 #[tokio::test]
 async fn a_mismatched_runner_is_refused_before_any_side_effect() {
     let exec = Arc::new(RunnerAt::new("1.2.0-30"));
-    let (ctx, dir) = submittable_ctx(exec.clone());
+    let (ctx, _dir) = submittable_ctx(exec.clone());
     let mut input = submit_input(None, None);
     input.staged_attachments = Some(vec![StagedAttachmentInput {
         source_path: String::new(),
@@ -350,8 +350,6 @@ async fn a_mismatched_runner_is_refused_before_any_side_effect() {
         0,
         "a refused submit leaves no shadow feature row"
     );
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// The gate's other half: this build's runner is let through to the submit
@@ -359,7 +357,7 @@ async fn a_mismatched_runner_is_refused_before_any_side_effect() {
 #[tokio::test]
 async fn a_runner_on_this_build_is_let_through_to_the_submit() {
     let exec = Arc::new(RunnerAt::new(APP_VERSION));
-    let (ctx, dir) = submittable_ctx(exec.clone());
+    let (ctx, _dir) = submittable_ctx(exec.clone());
 
     let result = submit_remote_run(&ctx, submit_input(None, None)).await;
 
@@ -368,6 +366,4 @@ async fn a_runner_on_this_build_is_let_through_to_the_submit() {
         "a matching runner must not be refused"
     );
     assert_eq!(exec.calls(), ["rpc health", "rpc submit_run"]);
-
-    let _ = std::fs::remove_dir_all(dir);
 }

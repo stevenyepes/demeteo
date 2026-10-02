@@ -29,13 +29,7 @@ const MCP_SERVER_PORT_KEY: &str = "mcp_server_port";
 const MCP_SERVER_ENABLED_KEY: &str = "mcp_server_enabled";
 
 fn fixture(tag: &str) -> AppContext {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-mcp-gating-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = demeteo_core::test_dir::scratch(&format!("demeteo-mcp-gating-{tag}"));
     build_core_context(
         CoreConfig {
             app_data_dir: dir,

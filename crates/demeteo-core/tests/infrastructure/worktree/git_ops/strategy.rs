@@ -34,14 +34,8 @@ fn all_commands(s: &crate::domain::models::WorktreeStrategy) -> Vec<String> {
 
 #[tokio::test]
 async fn test_detect_worktree_strategy_local() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_gitops_detect_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let guard = crate::support::test_dir::TestDir::new("demeteo_test_gitops_detect");
+    let temp_dir = guard.path().to_path_buf();
 
     // Run git init and config
     let local_exec = fresh_exec();
@@ -119,9 +113,6 @@ async fn test_detect_worktree_strategy_local() {
         strategy.pr_template,
         Some("PR Template Content".to_string())
     );
-
-    // Cleanup
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 /// The Stratosbar layout, and the reason HB3 exists: a root `package.json` plus

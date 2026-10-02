@@ -347,19 +347,17 @@ fn sequence_test_step() -> StepExecution {
 
 /// Builds an `AppContext` backed by a real (tempdir) `SqliteAdapter), with
 /// `ctx.exec` swapped for `SequenceRpcStub`, and seeds the one project the
-/// hydrate call needs. Returns the tempdir too so the caller can clean it up.
+/// hydrate call needs. Returns the tempdir guard too, which removes it on drop.
 fn make_sequence_test_ctx(
     label: &str,
     sequence_state: Result<serde_json::Value, String>,
-) -> (AppContext, std::path::PathBuf) {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_hydrate_sequence_state_{label}_{}",
-        crate::paths::now_ms()
+) -> (AppContext, crate::support::test_dir::TestDir) {
+    let temp_dir = crate::support::test_dir::TestDir::new(&format!(
+        "demeteo_test_hydrate_sequence_state_{label}"
     ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
     let mut ctx = build_core_context(
         CoreConfig {
-            app_data_dir: temp_dir.clone(),
+            app_data_dir: temp_dir.path().to_path_buf(),
             execution_mode: ExecutionMode::LocalOnly,
         },
         Arc::new(NoopNotificationAdapter),
@@ -422,7 +420,7 @@ async fn hydrate_shadow_feature_mirrors_sequence_state_for_a_sequence_step() {
         },
         subtask_runs: vec![subtask_row],
     };
-    let (ctx, temp_dir) = make_sequence_test_ctx(
+    let (ctx, _temp_dir) = make_sequence_test_ctx(
         "mirrors",
         Ok(serde_json::to_value(&sequence_state).unwrap()),
     );
@@ -455,8 +453,6 @@ async fn hydrate_shadow_feature_mirrors_sequence_state_for_a_sequence_step() {
     assert_eq!(runs[0].subtask_id, "t1");
     assert_eq!(runs[0].status, "completed");
     assert_eq!(runs[0].cost_usd, 0.42);
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 /// Version skew: an older deployed runner has no `get_sequence_state` handler
@@ -471,7 +467,7 @@ async fn hydrate_shadow_feature_leaves_sequence_tables_untouched_without_get_seq
     let step_execution_id = StepExecutionId::from("se-1".to_string());
     let node_id = "s-implement";
 
-    let (ctx, temp_dir) = make_sequence_test_ctx(
+    let (ctx, _temp_dir) = make_sequence_test_ctx(
         "method_not_found",
         Err("unknown method: get_sequence_state".to_string()),
     );
@@ -505,8 +501,6 @@ async fn hydrate_shadow_feature_leaves_sequence_tables_untouched_without_get_seq
         ctx.features.step_get(&step_execution_id).unwrap().is_some(),
         "the step shadow itself must still hydrate normally"
     );
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 // ── Run-level blocks on the shadow's status ──────────────────────────────────
@@ -551,7 +545,7 @@ fn an_unblocked_run_mirrors_the_runner_feature_verbatim() {
 #[tokio::test]
 async fn hydrate_shows_a_credential_park_until_the_run_moves_on() {
     let feature_id = FeatureId::from("f-1".to_string());
-    let (mut ctx, temp_dir) =
+    let (mut ctx, _temp_dir) =
         make_sequence_test_ctx("credential_park", Ok(serde_json::Value::Null));
     let mut finished = sequence_test_feature();
     finished.status = "completed".to_string();
@@ -578,14 +572,13 @@ async fn hydrate_shows_a_credential_park_until_the_run_moves_on() {
         "completed",
         "once credentials land, the update branch must follow the runner again"
     );
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 #[tokio::test]
 async fn a_pre_clone_credential_park_marks_the_desktop_row_it_cannot_hydrate() {
     let feature_id = FeatureId::from("f-1".to_string());
-    let (mut ctx, temp_dir) = make_sequence_test_ctx("pre_clone_park", Ok(serde_json::Value::Null));
+    let (mut ctx, _temp_dir) =
+        make_sequence_test_ctx("pre_clone_park", Ok(serde_json::Value::Null));
     let mut submitted = sequence_test_feature();
     submitted.status = "pending".to_string();
     ctx.features.add(submitted).unwrap();
@@ -602,6 +595,4 @@ async fn a_pre_clone_credential_park_marks_the_desktop_row_it_cannot_hydrate() {
         ctx.features.get(&feature_id).unwrap().unwrap().status,
         "needs-credentials"
     );
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }

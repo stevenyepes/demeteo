@@ -11,13 +11,7 @@ use crate::domain::models::{Machine, Project, TITLE_MAX_CHARS};
 /// A project with nothing in it, which is as much as `create` reads, plus
 /// whatever machine the case under test needs configured.
 fn fixture(tag: &str, compute_type: &str, remote_host: Option<&str>) -> (AppContext, ProjectId) {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-ask-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-ask-{tag}"));
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: dir,

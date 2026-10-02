@@ -9,15 +9,7 @@ use std::sync::Arc;
 
 /// Helper: create a fresh git repo in a temp dir and return (repo_dir, git_ops).
 pub(super) async fn make_repo(suffix: &str) -> (PathBuf, GitOpsHelper) {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_{}_{}",
-        suffix,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = crate::support::test_dir::scratch(&format!("demeteo_test_{suffix}"));
 
     let exec = LocalSubprocessAdapter::new();
     let repo = temp_dir.to_string_lossy().to_string();
@@ -61,14 +53,8 @@ pub(super) async fn make_repo(suffix: &str) -> (PathBuf, GitOpsHelper) {
 /// upstream/feature divergence before calling
 /// `sync_feature_with_upstream`.
 pub(super) async fn make_two_repos(suffix: &str) -> (PathBuf, PathBuf, GitOpsHelper) {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let remote_dir = std::env::temp_dir().join(format!("demeteo_test_remote_{}_{}", suffix, stamp));
-    let local_dir = std::env::temp_dir().join(format!("demeteo_test_local_{}_{}", suffix, stamp));
-    std::fs::create_dir_all(&remote_dir).unwrap();
-    std::fs::create_dir_all(&local_dir).unwrap();
+    let remote_dir = crate::support::test_dir::scratch(&format!("demeteo_test_remote_{suffix}"));
+    let local_dir = crate::support::test_dir::scratch(&format!("demeteo_test_local_{suffix}"));
     let exec = LocalSubprocessAdapter::new();
 
     // 1. The "remote" is a regular working tree that we push

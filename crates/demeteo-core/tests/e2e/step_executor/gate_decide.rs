@@ -18,14 +18,7 @@ use crate::ports::step_executor::{GatePresenter, StepExecutor};
 
 #[tokio::test]
 async fn test_executor_instantiation_and_cancel() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_exec_instantiation_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = crate::support::test_dir::scratch("demeteo_test_exec_instantiation");
     let conn = crate::db::init_db(temp_dir.clone()).expect("init_db failed");
     let db = Arc::new(SqliteAdapter::new(conn).unwrap());
     let registry = Arc::new(AgentRegistry::new(vec![]));
@@ -96,14 +89,7 @@ async fn test_executor_instantiation_and_cancel() {
 
 #[tokio::test]
 async fn test_executor_gate_decide() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_exec_gate_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = crate::support::test_dir::scratch("demeteo_test_exec_gate");
     let conn = crate::db::init_db(temp_dir.clone()).expect("init_db failed");
     let db = Arc::new(SqliteAdapter::new(conn).unwrap());
     let registry = Arc::new(AgentRegistry::new(vec![]));
@@ -298,14 +284,7 @@ async fn test_executor_gate_decide() {
 ///      loop iteration and applies the recorded decision.
 #[tokio::test]
 async fn test_gate_decide_recovers_after_driver_death() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_gate_recover_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = crate::support::test_dir::scratch("demeteo_test_gate_recover");
     let conn = crate::db::init_db(temp_dir.clone()).expect("init_db failed");
     let db = Arc::new(SqliteAdapter::new(conn).unwrap());
     let registry = Arc::new(AgentRegistry::new(vec![]));
