@@ -526,12 +526,12 @@ mod helper_execution {
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
+        // `store` and `erase` return without reading stdin, so the write can
+        // lose the race to the helper's exit. Git ignores that EPIPE too.
+        match child.stdin.take().unwrap().write_all(stdin.as_bytes()) {
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+            other => other.unwrap(),
+        }
         let out = child.wait_with_output().unwrap();
         (String::from_utf8(out.stdout).unwrap(), out.status.success())
     }

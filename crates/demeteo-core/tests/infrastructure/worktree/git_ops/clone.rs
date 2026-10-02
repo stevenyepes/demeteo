@@ -2,7 +2,7 @@
 
 use super::super::common::make_repo;
 use super::super::{git_request_vec, GitOpsHelper};
-use super::{clone_args, clone_config_args, configure_clone};
+use super::{clone_args, clone_config_args, clones_to_windows, configure_clone};
 use crate::adapters::database::SqliteAdapter;
 use crate::adapters::git_push::{
     clone_request, credential_helper, GitCredential, HOST_ENV_VAR, PAT_ENV_VAR, USER_ENV_VAR,
@@ -177,8 +177,17 @@ fn rendered(request: &ProgramRequest) -> String {
     format!("git {}", request.args.join(" "))
 }
 
-fn config_key() -> String {
-    format!("git -C {TARGET} config --local core.autocrlf false")
+/// Whether the strict double below is scripting a Windows-host clone: the
+/// `"local"` machine is the desktop, so on a Windows CI leg it is one.
+fn windows_target() -> bool {
+    clones_to_windows("local")
+}
+
+fn config_keys() -> Vec<String> {
+    clone_config_args(windows_target())
+        .iter()
+        .map(|args| format!("git -C {TARGET} {}", args.join(" ")))
+        .collect()
 }
 
 /// Runs `clone_repository` for a provider of `kind` against a strict double
@@ -211,13 +220,16 @@ async fn clone_from(
     crate::credential_cache::set(provider_id, PAT);
 
     let clone_key = rendered(&clone_request(
-        clone_args(cred_for(kind).user, host, REPO, TARGET, false),
+        clone_args(cred_for(kind).user, host, REPO, TARGET, windows_target()),
         &cred_for(kind),
     ));
+    let config_keys = config_keys();
+    let mut programs = vec![(clone_key.as_str(), clone_answer)];
+    programs.extend(config_keys.iter().map(|key| (key.as_str(), Ok(""))));
     let exec = Arc::new(
         ScriptedExec::new(&[])
             .with_dirs(&[PARENT])
-            .with_programs(&[(&clone_key, clone_answer), (&config_key(), Ok(""))]),
+            .with_programs(&programs),
     );
     let result = GitOpsHelper::new(db, exec.clone())
         .clone_repository(Some("local"), provider_id, REPO, TARGET)
@@ -257,10 +269,10 @@ async fn a_clone_resets_then_installs_the_helper_before_the_subcommand() {
     result.expect("the scripted clone succeeds");
 
     let helper = format!("credential.helper={}", credential_helper());
-    assert_eq!(
-        strs(&requests[0].args)[..5],
-        ["-c", "credential.helper=", "-c", helper.as_str(), "clone"]
-    );
+    let clone = clone_args("x-access-token", HOST, REPO, TARGET, windows_target());
+    let mut expected = vec!["-c", "credential.helper=", "-c", helper.as_str()];
+    expected.extend(strs(&clone));
+    assert_eq!(strs(&requests[0].args), expected);
 }
 
 #[tokio::test]
