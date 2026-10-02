@@ -3349,6 +3349,7 @@ async fn the_fork_point_fetches_its_base_before_asking_for_a_merge_base() {
     assert_eq!(
         exec.seen(),
         vec![
+            "git -C /repo remote get-url origin".to_string(),
             "git -C /repo fetch origin -- release/2.1".to_string(),
             "git -C /repo merge-base refs/remotes/origin/release/2.1 feature/f-1".to_string(),
             "git -C /repo merge-base release/2.1 feature/f-1".to_string(),
@@ -3484,4 +3485,161 @@ async fn test_refreshed_start_point_falls_back_to_the_local_branch() {
         .await
         .expect_err("a base that resolves neither way is an error")
         .contains("neither on origin nor locally"));
+}
+
+/// The three fetches of this module go through the shared credentialed fetch,
+/// and the one whose failure a user reads cannot echo the token it carried.
+mod credentialed_fetches {
+    use super::*;
+    use crate::adapters::git_push::{credential_helper, PAT_ENV_VAR, USER_ENV_VAR};
+    use crate::adapters::step_executor::scripted_exec::ScriptedExec;
+    use crate::domain::feature_origin::Refspec;
+    use crate::domain::ids::ProviderId;
+    use crate::domain::models::ProviderInstance;
+    use crate::ports::execution::ProgramRequest;
+
+    const PAT: &str = "tok-worktree-5c2e80";
+    const PROVIDER: &str = "prov-worktree-fetches";
+    const GET_URL: &str = "git -C /repo remote get-url origin";
+    const CREDENTIALED: &str = "-c credential.helper= -c credential.helper=";
+
+    fn helper_over(
+        programs: &[(String, Result<String, String>)],
+    ) -> (Arc<ScriptedExec>, GitOpsHelper) {
+        crate::credential_cache::set(PROVIDER, PAT);
+        let db = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+        db.add_provider_instance(ProviderInstance {
+            id: ProviderId::from(PROVIDER),
+            kind: "github".to_string(),
+            host: "github.com".to_string(),
+            username: "someone".to_string(),
+            avatar_url: String::new(),
+            created_at: 0,
+        })
+        .unwrap();
+        let script: Vec<(&str, Result<&str, &str>)> = programs
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.as_str(),
+                    v.as_ref().map(String::as_str).map_err(String::as_str),
+                )
+            })
+            .collect();
+        let exec = Arc::new(ScriptedExec::new(&[]).with_programs(&script));
+        let helper =
+            GitOpsHelper::new(Arc::new(db) as Arc<dyn AppSettingsRepository>, exec.clone());
+        (exec, helper)
+    }
+
+    fn origin_probe() -> (String, Result<String, String>) {
+        (
+            GET_URL.to_string(),
+            Ok("https://github.com/acme/widgets\n".to_string()),
+        )
+    }
+
+    fn credentialed(rest: &str) -> String {
+        format!("git -C /repo {CREDENTIALED}{} {rest}", credential_helper())
+    }
+
+    fn fetches(exec: &ScriptedExec) -> Vec<ProgramRequest> {
+        exec.requests()
+            .into_iter()
+            .filter(|r| r.args.iter().any(|a| a == "fetch"))
+            .collect()
+    }
+
+    fn assert_carries_credential(fetch: &ProgramRequest) {
+        let before_fetch: Vec<&str> = fetch
+            .args
+            .iter()
+            .take_while(|a| *a != "fetch")
+            .map(String::as_str)
+            .collect();
+        assert!(
+            before_fetch.contains(&format!("credential.helper={}", credential_helper()).as_str()),
+            "{:?}",
+            fetch.args
+        );
+        assert!(fetch.args.iter().all(|a| !a.contains(PAT)));
+        assert!(
+            fetch.env.iter().any(|(k, v)| k == PAT_ENV_VAR && v == PAT),
+            "{:?}",
+            fetch.env
+        );
+        assert!(fetch.env.iter().any(|(k, _)| k == USER_ENV_VAR));
+    }
+
+    #[tokio::test]
+    async fn a_failed_refspec_fetch_does_not_echo_the_token_it_carried() {
+        let err = format!(
+            "fatal: unable to access 'https://x-access-token:{PAT}@github.com/acme/widgets/': 403"
+        );
+        let (_, helper) = helper_over(&[
+            origin_probe(),
+            (
+                credentialed("fetch --no-recurse-submodules origin -- refs/pull/7/head"),
+                Err(err),
+            ),
+        ]);
+        let refspec =
+            Refspec::try_from("refs/pull/7/head".to_string()).expect("a plain ref is a refspec");
+
+        let failure = helper
+            .fetch_origin_refspec(None, "/repo", &refspec)
+            .await
+            .expect_err("the fetch is scripted to fail");
+
+        assert!(failure.contains("403"), "{failure}");
+        assert!(!failure.contains(PAT), "{failure}");
+    }
+
+    #[tokio::test]
+    async fn a_refreshed_start_point_fetch_carries_the_helper_and_the_env_when_a_provider_matches()
+    {
+        let (exec, helper) = helper_over(&[
+            origin_probe(),
+            (
+                credentialed("fetch --no-recurse-submodules origin main"),
+                Ok(String::new()),
+            ),
+            (
+                "git -C /repo rev-parse --verify --quiet refs/remotes/origin/main".to_string(),
+                Ok("beef".to_string()),
+            ),
+        ]);
+
+        let start = helper
+            .refreshed_start_point("local", "/repo", Some("main"))
+            .await
+            .expect("origin/main resolves");
+
+        assert_eq!(start, "origin/main");
+        let fetches = fetches(&exec);
+        assert_eq!(fetches.len(), 1, "{:?}", exec.programs());
+        assert_carries_credential(&fetches[0]);
+    }
+
+    #[tokio::test]
+    async fn a_fork_point_fetch_carries_the_helper_and_the_env_when_a_provider_matches() {
+        let (exec, helper) = helper_over(&[
+            origin_probe(),
+            (
+                credentialed("fetch --no-recurse-submodules origin -- main"),
+                Ok(String::new()),
+            ),
+            (
+                "git -C /repo merge-base refs/remotes/origin/main feat/x".to_string(),
+                Ok("abc123\n".to_string()),
+            ),
+        ]);
+
+        let sha = helper.fork_point(None, "/repo", "main", "feat/x").await;
+
+        assert_eq!(sha.as_deref(), Some("abc123"));
+        let fetches = fetches(&exec);
+        assert_eq!(fetches.len(), 1, "{:?}", exec.programs());
+        assert_carries_credential(&fetches[0]);
+    }
 }

@@ -28,20 +28,130 @@
 /// every non-MR push in the app came to fail on a project the MR publisher had
 /// touched once.
 pub fn credential_host(remote_url: &str) -> Option<&str> {
-    let rest = remote_url
-        .strip_prefix("https://")
-        .or_else(|| remote_url.strip_prefix("http://"))?;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    let (userinfo, host) = match authority.rsplit_once('@') {
-        Some((user, host)) => (Some(user), host),
-        None => (None, authority),
-    };
+    let remote = HttpRemote::parse(remote_url)?;
     // A colon in the userinfo is a password already in hand.
-    if userinfo.is_some_and(|u| u.contains(':')) {
+    if remote.userinfo.is_some_and(|u| u.contains(':')) {
         return None;
     }
-    let host = host.split(':').next().unwrap_or(host);
+    let host = host_without_port(remote.host_port);
     (!host.is_empty()).then_some(host)
+}
+
+/// `host[:port]` as the bare host — the form git's credential protocol and
+/// [`GitCredential`](crate::adapters::git_push::GitCredential) both name, so a
+/// provider stored as `gitlab.local:8443` still matches what git sends.
+pub fn host_without_port(host_port: &str) -> &str {
+    host_port.split(':').next().unwrap_or(host_port)
+}
+
+/// The same remote with the password dropped from its userinfo, or `None` when
+/// there is nothing to drop.
+///
+/// This is the inverse case of [`credential_host`]: that one declines a URL
+/// that carries a password, this one is what turns such a URL into the
+/// token-free form `credential_host` accepts — `scheme://<user>@host[:port]/…`,
+/// path and query untouched; a password with no user (`https://:tok@host/r`)
+/// leaves no userinfo at all rather than an empty `@host`. A password inline in `origin` sits in
+/// `.git/config` in the clear, so the caller has to move it out before a
+/// credential helper can supply it instead.
+///
+/// `None` is the answer for everything that is not an http(s) URL with a
+/// password: ssh and `git@host:path` authenticate with the user's key, and a
+/// URL already without a password has nothing to rewrite. The latter also makes
+/// the function idempotent — its own output is never rewritten again.
+pub fn token_free_origin(remote_url: &str) -> Option<String> {
+    let remote = HttpRemote::parse(remote_url)?;
+    let (user, _password) = remote.userinfo?.split_once(':')?;
+    let userinfo = if user.is_empty() {
+        String::new()
+    } else {
+        format!("{user}@")
+    };
+    Some(format!(
+        "{}{userinfo}{}{}",
+        remote.scheme, remote.host_port, remote.tail
+    ))
+}
+
+/// The password embedded in an http(s) URL's userinfo, exactly as written —
+/// still percent-encoded if the URL spelled it that way.
+///
+/// Shares `HttpRemote::parse` with [`token_free_origin`], so the two agree on
+/// which URLs carry a password at all: this is `Some` precisely when that one
+/// is. A password containing an unencoded `/`, `?` or `#` ends the authority
+/// early and is therefore never seen — see `docs/KNOWN_ISSUES.md`.
+///
+/// Git decodes the userinfo before it sends it, so a caller comparing against a
+/// stored secret has to try [`percent_decode`] of this value too.
+pub fn embedded_password(remote_url: &str) -> Option<String> {
+    let (_user, password) = HttpRemote::parse(remote_url)?.userinfo?.split_once(':')?;
+    Some(password.to_string())
+}
+
+/// `%XX` escapes decoded, any other byte kept; `None` when the result is not
+/// UTF-8. A malformed escape (`%zz`, a trailing `%`) is left literal, which is
+/// what git does with it.
+pub fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = (bytes[i] == b'%')
+            .then(|| bytes.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escaped {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Whether the password `remote_url` carries is `secret`, compared both as
+/// written and percent-decoded.
+pub fn embeds_secret(remote_url: &str, secret: &str) -> bool {
+    let Some(raw) = embedded_password(remote_url) else {
+        return false;
+    };
+    raw == secret || percent_decode(&raw).is_some_and(|decoded| decoded == secret)
+}
+
+struct HttpRemote<'a> {
+    scheme: &'static str,
+    userinfo: Option<&'a str>,
+    host_port: &'a str,
+    /// Path, query and fragment, from the first delimiter on.
+    tail: &'a str,
+}
+
+impl<'a> HttpRemote<'a> {
+    fn parse(remote_url: &'a str) -> Option<Self> {
+        let (scheme, rest) = if let Some(rest) = remote_url.strip_prefix("https://") {
+            ("https://", rest)
+        } else {
+            ("http://", remote_url.strip_prefix("http://")?)
+        };
+        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let (authority, tail) = rest.split_at(end);
+        let (userinfo, host_port) = match authority.rsplit_once('@') {
+            Some((user, host)) => (Some(user), host),
+            None => (None, authority),
+        };
+        Some(Self {
+            scheme,
+            userinfo,
+            host_port,
+            tail,
+        })
+    }
 }
 
 /// Whether a failed push failed to *authenticate*, as opposed to being refused

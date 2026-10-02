@@ -603,6 +603,7 @@ impl MergeExecutor for SqliteMergeExecutor {
         let fetched = refresh
             && crate::adapters::worktree::git_ops::divergence::refresh_base_ref(
                 &*self.exec,
+                &*self.git_ops.app_settings,
                 machine_str,
                 &repo_dir,
                 base_branch,

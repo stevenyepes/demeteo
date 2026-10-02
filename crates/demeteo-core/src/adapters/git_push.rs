@@ -1,15 +1,17 @@
-//! Pushing a branch to `origin`, and the credential path that authenticates
-//! it.
+//! Pushing a branch to `origin`, cloning a repository, and the credential
+//! path that authenticates them.
 //!
-//! Every push Demeteo makes goes through here. That was not always true, and
-//! the gap is what this module exists to close: the credential path lived
-//! inside `mr_publisher`, which also rewrites `origin` to a deliberately
-//! token-free URL on its way out (see [`credential_host`]). So the moment a
-//! project published one merge request, the *other* three pushes — a resolved
-//! sync, the Publish affordance, a clean sync merge — were issuing a bare `git
-//! push` against a remote that had no credential to offer and no terminal to
-//! ask on. They failed with `fatal: could not read Password` for the rest of
-//! the project's life.
+//! Every push, every clone and every fetch against `origin` Demeteo makes goes
+//! through here, so the one credential path below serves all three. The
+//! reasoning that follows is written about pushes and holds unchanged for the
+//! others, but pushes are where the gap showed first: the credential path used
+//! to live inside `mr_publisher`, which also rewrites `origin` to a
+//! deliberately token-free URL on its way out (see [`credential_host`]). So the
+//! moment a project published one merge request, the *other* three pushes — a
+//! resolved sync, the Publish affordance, a clean sync merge — were issuing a
+//! bare `git push` against a remote that had no credential to offer and no
+//! terminal to ask on. They failed with `fatal: could not read Password` for
+//! the rest of the project's life.
 //!
 //! ## Why the PAT rides an inline helper rather than a file or the URL
 //!
@@ -50,7 +52,7 @@
 
 use std::time::Duration;
 
-use crate::domain::git_push::credential_host;
+use crate::domain::git_push::{credential_host, host_without_port};
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
 
@@ -69,11 +71,17 @@ pub(crate) const PAT_ENV_VAR: &str = "DEMETEO_GIT_PAT";
 /// cannot disagree.
 pub(crate) const USER_ENV_VAR: &str = "DEMETEO_GIT_USERNAME";
 
+/// The one host the inline helper will answer for. Not a secret; it rides the
+/// environment beside the token so the helper can refuse every other host.
+pub(crate) const HOST_ENV_VAR: &str = "DEMETEO_GIT_HOST";
+
 /// What one push needs to authenticate, when it needs anything at all.
 pub(crate) struct GitCredential {
     /// The provider-side username half of basic auth.
     pub user: &'static str,
     pub pat: String,
+    /// The provider host, without a port, the helper is bound to.
+    pub host: String,
 }
 
 /// The credential a push from `repo_dir` will need, or `None` when it needs
@@ -106,15 +114,29 @@ pub(crate) async fn credential_for_repo(
         )
         .await
         .ok()?;
-    let host = credential_host(remote.trim())?;
+    credential_for_remote(app_settings, remote.trim())
+}
+
+/// The credential `remote_url` needs, read from the URL alone.
+///
+/// The half of [`credential_for_repo`] that needs no port, split out so a
+/// caller that already holds the origin does not probe for it a second time.
+/// `None` for the same reasons, a password-bearing URL included — the caller
+/// that wants to replace one rewrites it first.
+pub(crate) fn credential_for_remote(
+    app_settings: &dyn AppSettingsRepository,
+    remote_url: &str,
+) -> Option<GitCredential> {
+    let host = credential_host(remote_url)?;
     let provider = app_settings
         .get_provider_instances()
         .ok()?
         .into_iter()
-        .find(|p| p.host == host)?;
+        .find(|p| host_without_port(&p.host) == host)?;
     Some(GitCredential {
         user: remote_user(&provider.kind),
         pat: crate::adapters::mr_publisher::resolve_pat_for(&provider.id.0).ok()?,
+        host: host_without_port(&provider.host).to_string(),
     })
 }
 
@@ -136,26 +158,74 @@ pub(crate) fn remote_user(provider_kind: &str) -> &'static str {
 /// bundles and puts on its children's `PATH`. Hence the shell *function*: it
 /// is what gives the appended operation somewhere to land as `$1`.
 ///
-/// It answers `get` and nothing else. The explicit `return 0` is why the
-/// `test` may fail: without it, `store` and `erase` — whose output git
-/// discards — would exit non-zero and read as a broken helper.
+/// It answers `get` and nothing else, and only for [`HOST_ENV_VAR`]. The
+/// helper reads git's `key=value` lines from stdin and prints the credential
+/// only when `host=` — a `:port` suffix dropped, as [`credential_host`] drops
+/// it — equals that variable. Any other host gets no output and a zero exit,
+/// which git reads as "this helper has nothing", not as a failure.
+///
+/// The binding lives in the helper rather than in the flags of whichever
+/// builder spawns git: the helper and the PAT env are inherited by every child
+/// git a credentialed invocation spawns (submodules, `git-lfs`), so anything
+/// later added to [`credential_args`] would otherwise hand the provider's PAT
+/// to whatever host that child talks to. An empty `host=` never matches, so an
+/// unset [`HOST_ENV_VAR`] cannot degrade to "answer everyone".
+///
+/// The explicit `return 0` is why the `test` may fail: without it, `store` and
+/// `erase` — whose output git discards — would exit non-zero and read as a
+/// broken helper.
 pub(crate) fn credential_helper() -> String {
     format!(
-        "!f() {{ test \"$1\" = get && printf \"username=%s\\npassword=%s\\n\" \"${}\" \"${}\"; return 0; }}; f",
-        USER_ENV_VAR, PAT_ENV_VAR
+        "!f() {{ test \"$1\" = get || return 0; h=; \
+         while IFS== read -r k v; do test \"$k\" = host && h=${{v%%:*}}; done; \
+         test -n \"$h\" && test \"$h\" = \"${host}\" \
+         && printf \"username=%s\\npassword=%s\\n\" \"${user}\" \"${pat}\"; return 0; }}; f",
+        host = HOST_ENV_VAR,
+        user = USER_ENV_VAR,
+        pat = PAT_ENV_VAR
     )
 }
 
-/// The push invocation, assembled where a test can read it.
+/// The two `-c` pairs that make our inline helper the only one git consults.
 ///
-/// The two `-c credential.helper=` are ordered and both required: the empty
-/// one clears every helper the system, global and repository configs
-/// accumulated (Git for Windows' `manager` among them), the second installs
-/// ours as the only one. Command-line config is applied last, so the reset
-/// reaches helpers no matter which file declared them.
+/// Both are ordered and both required: the empty one clears every helper the
+/// system, global and repository configs accumulated (Git for Windows'
+/// `manager` among them), the second installs ours as the only one.
+/// Command-line config is applied last, so the reset reaches helpers no matter
+/// which file declared them. They must precede the subcommand: after `clone`
+/// the same flag is git-clone's own `--config` and persists into the new
+/// repository's config.
+pub(crate) fn credential_args() -> Vec<String> {
+    vec![
+        "-c".to_string(),
+        "credential.helper=".to_string(),
+        "-c".to_string(),
+        format!("credential.helper={}", credential_helper()),
+    ]
+}
+
+/// The environment of an invocation that may carry a credential.
+///
+/// [`crate::domain::git_push::unattended_env`] rides every one,
+/// credentialed or not: a git that stops to ask is unanswerable in all of them,
+/// and the difference between blocking until a wall-clock cap and failing in
+/// words a caller can diagnose is the whole of what the user sees.
 ///
 /// `GCM_INTERACTIVE`/`GCM_GUI_PROMPT` are belt-and-braces for the same reason
-/// the reset exists — they matter only if a GCM survives it.
+/// the helper reset exists — they matter only if a GCM survives it.
+pub(crate) fn credential_env(
+    credential: Option<&GitCredential>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut env = crate::domain::git_push::unattended_env();
+    if let Some(cred) = credential {
+        env.insert(PAT_ENV_VAR.to_string(), cred.pat.clone());
+        env.insert(USER_ENV_VAR.to_string(), cred.user.to_string());
+        env.insert(HOST_ENV_VAR.to_string(), cred.host.clone());
+    }
+    env
+}
+
+/// The push invocation, assembled where a test can read it.
 ///
 /// `force` is the merge-request publisher's alone, and is spelled at the call
 /// site rather than defaulted here: it re-points a branch that was squashed
@@ -169,12 +239,7 @@ pub(crate) fn push_request(
 ) -> ProgramRequest {
     let mut args = vec!["-C".to_string(), repo_dir.to_string()];
     if credential.is_some() {
-        args.extend([
-            "-c".to_string(),
-            "credential.helper=".to_string(),
-            "-c".to_string(),
-            format!("credential.helper={}", credential_helper()),
-        ]);
+        args.extend(credential_args());
     }
     args.push("push".to_string());
     if force {
@@ -182,22 +247,71 @@ pub(crate) fn push_request(
     }
     args.extend(["origin".to_string(), branch.to_string()]);
 
-    // [`crate::domain::git_push::unattended_env`] rides every push,
-    // credentialed or not: a push that stops to ask is unanswerable in all of
-    // them, and the difference between blocking until a wall-clock cap and
-    // failing in words a caller can diagnose is the whole of what the user
-    // sees.
-    let mut env = crate::domain::git_push::unattended_env();
-    if let Some(cred) = credential {
-        env.insert(PAT_ENV_VAR.to_string(), cred.pat.clone());
-        env.insert(USER_ENV_VAR.to_string(), cred.user.to_string());
-    }
-
     ProgramRequest {
         executable: "git".to_string(),
         args,
-        env,
+        env: credential_env(credential),
         timeout: Some(PUSH_TIMEOUT),
+        ..ProgramRequest::default()
+    }
+}
+
+/// A clone, which has no repository to `-C` into and therefore no `origin` to
+/// have been rewritten.
+///
+/// `args` is everything after the credential pair, `-c` settings the caller
+/// needs before `clone` included. No deadline: unlike [`PUSH_TIMEOUT`], whose
+/// job is to bound a git that has decided to ask, a clone's duration is its
+/// payload's size, and the prompt routes are already closed by
+/// [`credential_env`].
+pub(crate) fn clone_request(args: Vec<String>, credential: &GitCredential) -> ProgramRequest {
+    ProgramRequest {
+        executable: "git".to_string(),
+        args: credential_args().into_iter().chain(args).collect(),
+        env: credential_env(Some(credential)),
+        timeout: None,
+        ..ProgramRequest::default()
+    }
+}
+
+/// A fetch, which is the one subcommand whose caller may not know whether its
+/// `origin` still carries a credential of its own.
+///
+/// `args` is everything after `fetch`, a `--` included, verbatim. The same
+/// reset-then-helper pair a push gets rides ahead of the subcommand, and
+/// [`credential_env`] carries the prompt suppression whether or not there is a
+/// token. No deadline, for [`clone_request`]'s reason: a fetch's duration is
+/// its payload's size, and [`PUSH_TIMEOUT`] is a push's alone.
+///
+/// `--no-recurse-submodules` rides ahead of `args` when a credential is
+/// attached, and only then. The helper is bound to the provider's host (see
+/// [`credential_helper`]), so this is defence in depth: a recursing fetch would
+/// still spawn child gits inheriting the helper and the PAT env, and keeping
+/// them from starting is cheaper than relying on the host check alone. It is
+/// ahead of the caller's args so that a `--recurse-submodules` among them
+/// cannot re-enable it — git takes the last. A credential-less fetch has
+/// nothing to protect, so an ssh or path origin keeps fetching the submodule
+/// commits it needs on demand.
+pub(crate) fn fetch_request(
+    repo_dir: &str,
+    args: Vec<String>,
+    credential: Option<&GitCredential>,
+) -> ProgramRequest {
+    let mut full = vec!["-C".to_string(), repo_dir.to_string()];
+    if credential.is_some() {
+        full.extend(credential_args());
+    }
+    full.push("fetch".to_string());
+    if credential.is_some() {
+        full.push("--no-recurse-submodules".to_string());
+    }
+    full.extend(args);
+
+    ProgramRequest {
+        executable: "git".to_string(),
+        args: full,
+        env: credential_env(credential),
+        timeout: None,
         ..ProgramRequest::default()
     }
 }

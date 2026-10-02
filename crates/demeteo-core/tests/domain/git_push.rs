@@ -56,6 +56,124 @@ fn a_remote_that_carries_its_own_credential_needs_none() {
     assert_eq!(credential_host(""), None);
 }
 
+/// Port, path, query and the user all survive; only the password goes.
+#[test]
+fn a_password_is_dropped_and_everything_else_kept() {
+    assert_eq!(
+        token_free_origin("https://x-access-token:tok@host/o/r.git").as_deref(),
+        Some("https://x-access-token@host/o/r.git")
+    );
+    assert_eq!(
+        token_free_origin("https://oauth2:tok@host:8443/o/r?x=1").as_deref(),
+        Some("https://oauth2@host:8443/o/r?x=1")
+    );
+    assert_eq!(
+        token_free_origin("http://u:p@host").as_deref(),
+        Some("http://u@host")
+    );
+}
+
+/// With no user left to keep, `https://@host/r` would be an empty-user URL;
+/// the userinfo goes entirely.
+#[test]
+fn a_password_with_no_user_drops_the_whole_userinfo() {
+    let clean = token_free_origin("https://:tok@host/r").unwrap();
+    assert_eq!(clean, "https://host/r");
+    assert_eq!(credential_host(&clean), Some("host"));
+    assert_eq!(token_free_origin(&clean), None);
+}
+
+/// The rewritten URL is what the provider lookup reads its host from.
+#[test]
+fn the_rewritten_url_names_the_host_of_the_original() {
+    let clean = token_free_origin("https://oauth2:tok@gitlab.example.com:8443/o/r").unwrap();
+    assert_eq!(credential_host(&clean), Some("gitlab.example.com"));
+}
+
+#[test]
+fn nothing_to_rewrite_is_none() {
+    for url in [
+        "git@github.com:o/r.git",
+        "ssh://git@github.com/o/r.git",
+        "ssh://user:pw@github.com/o/r.git",
+        "file:///srv/mirrors/r.git",
+        "/srv/mirrors/r.git",
+        "https://user@host/o/r",
+        "https://host/o/r",
+        "",
+    ] {
+        assert_eq!(token_free_origin(url), None, "rewrote: {url}");
+    }
+}
+
+#[test]
+fn rewriting_is_idempotent() {
+    let once = token_free_origin("https://x-access-token:tok@host:8443/o/r.git?a=b").unwrap();
+    assert_eq!(token_free_origin(&once), None);
+}
+
+#[test]
+fn the_embedded_password_is_the_part_after_the_first_colon() {
+    assert_eq!(
+        embedded_password("https://x-access-token:tok@host/o/r").as_deref(),
+        Some("tok")
+    );
+    assert_eq!(
+        embedded_password("http://u:a:b@host:8443/o/r?x=1").as_deref(),
+        Some("a:b")
+    );
+    assert_eq!(
+        embedded_password("https://:tok@host/r").as_deref(),
+        Some("tok")
+    );
+}
+
+#[test]
+fn no_password_to_read_is_none() {
+    for url in [
+        "https://user@host/o/r",
+        "https://host/o/r",
+        "ssh://user:pw@host/o/r.git",
+        "git@host:o/r.git",
+        "/srv/mirrors/r.git",
+        "",
+    ] {
+        assert_eq!(embedded_password(url), None, "read a password from: {url}");
+    }
+}
+
+/// `HttpRemote` ends the authority at the first `/`, `?` or `#`, so a password
+/// holding one is not userinfo. Pinned because the limit is deliberate — see
+/// `docs/KNOWN_ISSUES.md` — and a "fix" that re-parses at the last `@` would
+/// mis-read a path that contains one.
+#[test]
+fn a_password_with_an_unencoded_delimiter_is_not_read() {
+    assert_eq!(embedded_password("https://u:p/ss@host/r"), None);
+    assert_eq!(token_free_origin("https://u:p/ss@host/r"), None);
+    assert_eq!(embedded_password("https://u:p?ss@host/r"), None);
+    assert_eq!(embedded_password("https://u:p#ss@host/r"), None);
+}
+
+#[test]
+fn percent_escapes_decode_and_malformed_ones_stay_literal() {
+    assert_eq!(percent_decode("a%2Fb%3Fc%23d").as_deref(), Some("a/b?c#d"));
+    assert_eq!(percent_decode("%e2%82%ac").as_deref(), Some("€"));
+    assert_eq!(percent_decode("100%").as_deref(), Some("100%"));
+    assert_eq!(percent_decode("%zz%4").as_deref(), Some("%zz%4"));
+    assert_eq!(percent_decode("%ff"), None, "not UTF-8");
+}
+
+#[test]
+fn a_url_embeds_a_secret_raw_or_percent_encoded() {
+    assert!(embeds_secret("https://u:tok@host/r", "tok"));
+    assert!(embeds_secret("https://u:p%40ss%2Fw@host/r", "p@ss/w"));
+    assert!(embeds_secret("https://u:p%40ss@host/r", "p%40ss"));
+    assert!(!embeds_secret("https://u:tok@host/r", "other"));
+    assert!(!embeds_secret("https://u:tok@host/r", ""));
+    assert!(!embeds_secret("https://u@host/r", "tok"));
+    assert!(!embeds_secret("git@host:o/r.git", "tok"));
+}
+
 /// Git never reached origin, so "the branch may have moved — fetch and sync
 /// again" is advice that cannot work, offered with confidence. Every wording
 /// here is one this tree has actually seen.
@@ -82,4 +200,20 @@ fn a_branch_that_moved_is_not_a_credential_failure() {
     ] {
         assert!(!is_credential_failure(stderr), "false positive: {stderr}");
     }
+}
+
+#[test]
+fn a_host_loses_its_port_and_nothing_else() {
+    assert_eq!(host_without_port("gitlab.local:8443"), "gitlab.local");
+    assert_eq!(host_without_port("github.com"), "github.com");
+    assert_eq!(host_without_port(""), "");
+}
+
+#[test]
+fn the_remote_host_and_the_provider_host_share_one_rule() {
+    let remote = "https://oauth2@gitlab.local:8443/o/r.git";
+    assert_eq!(
+        credential_host(remote),
+        Some(host_without_port("gitlab.local:8443"))
+    );
 }

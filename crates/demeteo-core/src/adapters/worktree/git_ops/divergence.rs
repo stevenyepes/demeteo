@@ -1,7 +1,10 @@
 use std::time::Duration;
 
+use super::clone::prepare_origin;
 use super::git_request;
+use crate::adapters::git_push::{fetch_request, GitCredential};
 use crate::domain::upstream_feature::FeatureUpstream;
+use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
 use crate::ports::worktree_ops::BranchDivergence;
 
@@ -12,7 +15,7 @@ use crate::ports::worktree_ops::BranchDivergence;
 /// unattended environment already denies the credential prompt that is the
 /// usual way a fetch never returns; this bounds the rest — a host that accepts
 /// the connection and then says nothing.
-const BASE_FETCH_TIMEOUT: Duration = Duration::from_secs(45);
+pub(crate) const BASE_FETCH_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Count how `feature_ref` and `tracking` have diverged, from local refs only.
 ///
@@ -169,23 +172,44 @@ pub(crate) async fn measured_divergence(
 /// `false` is load-bearing all the way to the Sync pane, which reads it as the
 /// difference between a zero it verified and one it inherited
 /// (`src/lib/syncPanel.ts`).
+///
+/// The origin probe behind the credential is one local `git remote get-url`
+/// bounded by its own, shorter deadline rather than [`BASE_FETCH_TIMEOUT`]; a
+/// probe that fails or times out resolves to no credential, so the fetch that
+/// follows is the bounded, helper-less one.
 pub(crate) async fn refresh_base_ref(
     exec: &dyn ExecutionPort,
+    app_settings: &dyn AppSettingsRepository,
     machine_id: &str,
     repo_dir: &str,
     base_branch: &str,
 ) -> bool {
-    exec.run_program(machine_id, base_fetch_request(repo_dir, base_branch))
-        .await
-        .is_ok()
+    let credential = prepare_origin(exec, app_settings, machine_id, repo_dir).await;
+    exec.run_program(
+        machine_id,
+        base_fetch_request(repo_dir, base_branch, credential.as_ref()),
+    )
+    .await
+    .is_ok()
 }
 
 /// The one `git` a user waits on with nothing to press, built where its
 /// deadline can be read without a transport.
-fn base_fetch_request(repo_dir: &str, base_branch: &str) -> ProgramRequest {
+///
+/// The shared [`fetch_request`] has no deadline, so the ceiling is restored
+/// here rather than inherited.
+fn base_fetch_request(
+    repo_dir: &str,
+    base_branch: &str,
+    credential: Option<&GitCredential>,
+) -> ProgramRequest {
     ProgramRequest {
         timeout: Some(BASE_FETCH_TIMEOUT),
-        ..git_request(repo_dir, ["fetch", "origin", "--", base_branch])
+        ..fetch_request(
+            repo_dir,
+            ["origin", "--", base_branch].map(String::from).to_vec(),
+            credential,
+        )
     }
 }
 

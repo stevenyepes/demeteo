@@ -12,7 +12,7 @@ use rusqlite::Connection;
 
 use super::{FakeHttpClient, HttpMrPublisher};
 use crate::adapters::database::SqliteAdapter;
-use crate::adapters::git_push::{push_request, GitCredential};
+use crate::adapters::git_push::{push_request, GitCredential, HOST_ENV_VAR};
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, ProviderId, RepositoryId};
@@ -116,6 +116,7 @@ fn push_exec(remote_user: &str, host: &str) -> Arc<ScriptedExec> {
             "oauth2"
         },
         pat: PAT.to_string(),
+        host: "github.com".to_string(),
     };
     let push = rendered(&push_request(&dir, SOURCE_BRANCH, true, Some(&credential)));
     Arc::new(
@@ -262,4 +263,37 @@ async fn a_fix_run_measured_against_another_branch_still_targets_its_head() {
     .await;
 
     assert_eq!(field(&http, GITHUB_URL, "base"), "pr-head");
+}
+
+/// The rewritten origin keeps the port git will connect to; the helper is
+/// bound to the bare host git names in `host=`.
+#[tokio::test]
+async fn a_push_to_a_provider_on_a_port_binds_the_helper_without_it() {
+    let adapter = seeded("gitlab", "gitlab.local:8443");
+    add_feature(&adapter, FeatureOrigin::DefaultBranch, None);
+    let url = "https://gitlab.local:8443/api/v4/projects/acme%2Fwidget/merge_requests";
+    let http = Arc::new(FakeHttpClient::new().reply(
+        url,
+        201,
+        r#"{"web_url":"https://gitlab.local:8443/acme/widget/-/merge_requests/7","iid":7,"state":"opened"}"#,
+    ));
+    let exec = push_exec("oauth2", "gitlab.local:8443");
+
+    publish(adapter, exec.clone(), http, options(None)).await;
+
+    let requests = exec.requests();
+    assert!(
+        requests.iter().any(|r| r
+            .args
+            .contains(&"https://oauth2@gitlab.local:8443/acme/widget".to_string())),
+        "{requests:?}"
+    );
+    let push = requests
+        .iter()
+        .find(|r| r.args.contains(&"push".to_string()))
+        .expect("the branch was pushed");
+    assert_eq!(
+        push.env.get(HOST_ENV_VAR).map(String::as_str),
+        Some("gitlab.local")
+    );
 }

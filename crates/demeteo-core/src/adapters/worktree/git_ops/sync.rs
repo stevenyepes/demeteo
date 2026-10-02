@@ -1,4 +1,5 @@
 use super::{git_request, GitOpsHelper};
+use crate::adapters::git_push::redacted;
 use crate::domain::sync_failure::SyncBlockedStage;
 use crate::domain::upstream_feature::{DivergedBranch, DivergenceReconcile, FeatureUpstream};
 use crate::ports::execution::ExecutionPort;
@@ -46,14 +47,17 @@ impl GitOpsHelper {
         default_branch: &str,
     ) -> Result<(), String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        let credential = self.origin_credential(machine_str, repo_dir).await;
+
         // 1. Fetch the latest refs from origin. The fetch is best-effort:
         //    if origin is unreachable, we leave the local branch alone and
         //    warn via stderr (which the executor surfaces to the UI logs).
         let _ = self
-            .exec
-            .run_program(
+            .fetch_with(
                 machine_str,
-                git_request(repo_dir, ["fetch", "origin", "--", default_branch]),
+                repo_dir,
+                ["origin", "--", default_branch].map(String::from).to_vec(),
+                credential.as_ref(),
             )
             .await;
 
@@ -93,17 +97,14 @@ impl GitOpsHelper {
         //    ref-only fast-forward is rejected we fall back to a path
         //    that keeps the local ref in sync.
         let fetch_outcome = self
-            .exec
-            .run_program(
+            .fetch_with(
                 machine_str,
-                git_request(
-                    repo_dir,
-                    [
-                        "fetch",
-                        "origin",
-                        &format!("+{default_branch}:{default_branch}"),
-                    ],
-                ),
+                repo_dir,
+                vec![
+                    "origin".to_string(),
+                    format!("+{default_branch}:{default_branch}"),
+                ],
+                credential.as_ref(),
             )
             .await;
         if fetch_outcome.is_ok() {
@@ -335,14 +336,20 @@ impl GitOpsHelper {
         //    *reported* on failure — silently swallowing it is what
         //    caused the "no conflicts detected" bug where a stale
         //    `origin/<base>` was used as the merge source.
+        let credential = self.origin_credential(machine_str, repo_dir).await;
         let fetch_outcome = self
-            .exec
-            .run_program(
+            .fetch_with(
                 machine_str,
-                git_request(repo_dir, ["fetch", "origin", "--", base_branch]),
+                repo_dir,
+                ["origin", "--", base_branch].map(String::from).to_vec(),
+                credential.as_ref(),
             )
             .await;
         if let Err(fetch_err) = fetch_outcome {
+            let fetch_err = match &credential {
+                Some(credential) => redacted(&fetch_err, &credential.pat),
+                None => fetch_err,
+            };
             return Err(SyncFailure::Blocked {
                 stage: SyncBlockedStage::Fetch,
                 raw_error: format!(
@@ -365,10 +372,11 @@ impl GitOpsHelper {
         // sync. What survives the swallow is the ref probe below, which reads
         // whatever this did or did not update.
         let _ = self
-            .exec
-            .run_program(
+            .fetch_with(
                 machine_str,
-                git_request(repo_dir, ["fetch", "origin", "--", feature_branch]),
+                repo_dir,
+                ["origin", "--", feature_branch].map(String::from).to_vec(),
+                credential.as_ref(),
             )
             .await;
 
