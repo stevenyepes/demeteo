@@ -47,6 +47,7 @@ fn sinks(
         cumulative_tokens,
         agent: "stub-agent".to_string(),
         trace: None,
+        activity: ActivityHeartbeat::new(),
     }
 }
 
@@ -1035,5 +1036,197 @@ fn the_other_spawn_failures_read_exactly_as_before() {
     assert!(
         !other.contains("Nothing about the machine is wrong"),
         "a permission problem really is the machine's; got: {other}"
+    );
+}
+
+/// What claude-code writes while it thinks: a `system`/`thinking_tokens` line
+/// about once a second, which no parser turns into an event.
+const THINKING: &str = r#"{"type":"system","subtype":"thinking_tokens","estimated_tokens":50}"#;
+
+#[test]
+fn drain_lines_beats_on_lines_the_parser_drops() {
+    let activity = ActivityHeartbeat::new();
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    assert!(activity.last_activity_ago_ms() >= 50);
+
+    let input = format!("{THINKING}\n{THINKING}\n");
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(8);
+    let sinks = DrainSinks {
+        activity: activity.clone(),
+        ..sinks(None, None)
+    };
+    let handle = std::thread::spawn(move || {
+        drain_lines(Cursor::new(input), mock_parse_event, || Some(0), tx, sinks);
+    });
+    while rx.blocking_recv().is_some() {}
+    handle.join().unwrap();
+
+    assert!(
+        activity.last_activity_ago_ms() < 50,
+        "an unparsed line is still the agent saying something; got {}ms",
+        activity.last_activity_ago_ms()
+    );
+}
+
+/// Yields each line only after its delay — a process that writes slowly.
+struct PacedReader {
+    lines: std::collections::VecDeque<(std::time::Duration, Vec<u8>)>,
+    current: Vec<u8>,
+}
+
+impl PacedReader {
+    fn new(script: Vec<(u64, String)>) -> Self {
+        Self {
+            lines: script
+                .into_iter()
+                .map(|(ms, line)| {
+                    (
+                        std::time::Duration::from_millis(ms),
+                        format!("{line}\n").into_bytes(),
+                    )
+                })
+                .collect(),
+            current: Vec::new(),
+        }
+    }
+}
+
+impl Read for PacedReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.current.is_empty() {
+            let Some((delay, line)) = self.lines.pop_front() else {
+                return Ok(0);
+            };
+            std::thread::sleep(delay);
+            self.current = line;
+        }
+        let n = buf.len().min(self.current.len());
+        buf[..n].copy_from_slice(&self.current[..n]);
+        self.current.drain(..n);
+        Ok(n)
+    }
+}
+
+/// The real drain under a scripted process: what `UnifiedCliSession` does,
+/// minus the spawn.
+struct PacedSession {
+    script: Mutex<Option<Vec<(u64, String)>>>,
+    activity: ActivityHeartbeat,
+}
+
+impl AgentSession for PacedSession {
+    fn session_id(&self) -> &str {
+        "paced"
+    }
+    fn prompt(&self, _: &str) -> Pin<Box<dyn Stream<Item = AgentEvent> + Send>> {
+        let script = self.script.lock().unwrap().take().unwrap_or_default();
+        let (tx, rx) = mpsc::channel::<AgentEvent>(64);
+        let sinks = DrainSinks {
+            activity: self.activity.clone(),
+            ..sinks(None, None)
+        };
+        std::thread::spawn(move || {
+            drain_lines(
+                PacedReader::new(script),
+                mock_parse_event,
+                || Some(0),
+                tx,
+                sinks,
+            );
+        });
+        Box::pin(ReceiverStream::new(rx))
+    }
+    fn cancel(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_mode(&self, _: &str) -> Result<(), String> {
+        Err("paced session has no modes".to_string())
+    }
+    fn set_config_option(&self, _: &str, _: &str) -> Result<(), String> {
+        Err("paced session has no config options".to_string())
+    }
+    fn session_info(&self) -> SessionInfo {
+        SessionInfo::default()
+    }
+    fn activity_heartbeat(&self) -> Option<ActivityHeartbeat> {
+        Some(self.activity.clone())
+    }
+}
+
+struct Unpriced;
+
+impl crate::ports::pricing::PricingTable for Unpriced {
+    fn price_for(&self, _: &str) -> Option<crate::ports::pricing::ModelPrice> {
+        None
+    }
+    fn context_window(&self, _: &str) -> Option<u64> {
+        None
+    }
+    fn known_models(&self) -> Vec<String> {
+        vec![]
+    }
+}
+
+fn run_paced(script: Vec<(u64, String)>) -> crate::adapters::agent::event_stream::TurnResult {
+    let session = PacedSession {
+        script: Mutex::new(Some(script)),
+        activity: ActivityHeartbeat::new(),
+    };
+    let timeouts = crate::domain::models::AgentTimeouts {
+        fast_timeout_s: 1,
+        normal_timeout_s: 2,
+        wall_cap_s: 30,
+    };
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(crate::adapters::agent::event_stream::stream_agent_turn(
+        &session,
+        "plan",
+        timeouts,
+        None,
+        crate::domain::ids::LOCAL_MACHINE,
+        &crate::adapters::agent::test_stubs::StubExec,
+        None,
+        Arc::new(Unpriced),
+        |_| {},
+    ))
+}
+
+/// A long think spans several fast timeouts with nothing the parser keeps. The
+/// decompose pass that motivated this was killed exactly `fast_timeout_s`
+/// after its last parsed event, mid-thought.
+#[test]
+fn a_turn_that_is_only_thinking_outlives_the_silence_timeout() {
+    let mut script = vec![(0, r#"{"type":"text","delta":"looking"}"#.to_string())];
+    script.extend((0..10).map(|_| (300, THINKING.to_string())));
+    script.push((0, r#"{"type":"text","delta":"plan"}"#.to_string()));
+    script.push((0, r#"{"type":"end_turn"}"#.to_string()));
+
+    let result = run_paced(script);
+    assert!(
+        matches!(
+            result,
+            crate::adapters::agent::event_stream::TurnResult::Success(_)
+        ),
+        "a thinking agent was read as a blocked one"
+    );
+}
+
+#[test]
+fn a_turn_that_says_nothing_at_all_still_trips_it() {
+    let script = vec![
+        (0, r#"{"type":"text","delta":"looking"}"#.to_string()),
+        (3500, r#"{"type":"end_turn"}"#.to_string()),
+    ];
+
+    let result = run_paced(script);
+    assert!(
+        matches!(
+            result,
+            crate::adapters::agent::event_stream::TurnResult::Environmental { .. }
+        ),
+        "a silent agent must still be stopped"
     );
 }
