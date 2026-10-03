@@ -5,7 +5,7 @@
 //! those. Runs through [`stream_agent_turn`] for the same reason Discovery
 //! does: it is what reports cost and tokens, which a turn has to fold onto
 //! its own thread (§8.5 of `docs/PRD_DISCOVERY.md`'s Ask-adjacent counterpart
-//! is `docs/ask-canvas/`).
+//! is the Ask Canvas mockup, `docs/ask-canvas/` in git history).
 //!
 //! A canvas' path-bearing nodes are stat'd against the mounted worktree
 //! between [`parse_ask_turn`] and [`persist_assistant`] — synchronously, in

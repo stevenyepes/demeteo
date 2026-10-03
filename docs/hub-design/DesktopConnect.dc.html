@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Demeteo desktop — Settings, Hub</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Outfit:wght@500;600;700;800&amp;family=Fira+Code:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#08090c}
+a{color:#22d3ee}a:hover{color:#67e8f9}
+.app{min-height:100vh;display:flex;flex-direction:column;font-family:'Inter',-apple-system,sans-serif;color:#f3f4f6;-webkit-font-smoothing:antialiased;background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.04) 0%,transparent 60%),radial-gradient(circle at 10% 80%,rgba(6,182,212,.03) 0%,transparent 50%),#08090c}
+.top{height:52px;display:flex;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid rgba(255,255,255,.05);background:#0d0f14;flex-wrap:wrap}
+.logo{font-family:'Outfit',sans-serif;font-weight:800;font-size:20px;color:#06b6d4;text-shadow:0 0 12px rgba(6,182,212,.35);margin-right:16px}
+.tn{height:36px;padding:0 12px;border-radius:8px;display:flex;align-items:center;font-size:13px;color:#9ca3af;text-decoration:none}
+.tn:hover{background:rgba(28,34,46,.85);color:#f3f4f6}
+.body{flex:1;display:flex;flex-wrap:wrap}
+.snav{flex:0 0 220px;padding:20px 12px;border-right:1px solid rgba(255,255,255,.05);background:rgba(11,13,18,.95);display:flex;flex-direction:column;gap:4px;box-sizing:border-box}
+.si{height:40px;padding:0 12px;border-radius:8px;display:flex;align-items:center;gap:10px;font-size:14px;color:#9ca3af;text-decoration:none;border:1px solid transparent}
+.si:hover{background:rgba(28,34,46,.85);color:#f3f4f6}
+.si.on{background:rgba(6,182,212,.08);border-color:rgba(6,182,212,.3);color:#e5e7eb;box-shadow:0 0 12px rgba(6,182,212,.15)}
+.new{margin-left:auto;font-size:10px;font-family:'Fira Code',monospace;color:#c4b5fd}
+.main{flex:999 1 560px;min-width:0;padding:28px 36px 48px;box-sizing:border-box;display:flex;flex-direction:column;gap:20px;max-width:1000px}
+.h1{font-family:'Outfit',sans-serif;font-weight:600;font-size:24px;margin:0}
+.h2{font-family:'Outfit',sans-serif;font-weight:600;font-size:13px;letter-spacing:.6px;text-transform:uppercase;color:#9ca3af;margin:0}
+.mono{font-family:'Fira Code','JetBrains Mono',monospace}
+.sub{color:#9ca3af;font-size:13px}
+.glass{background:rgba(18,22,30,.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.05);box-shadow:0 8px 32px rgba(0,0,0,.4);border-radius:12px}
+.btn{height:40px;padding:0 14px;border-radius:8px;display:inline-flex;align-items:center;gap:8px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;box-sizing:border-box;white-space:nowrap}
+.btn-s{background:rgba(255,255,255,.04);color:#e5e7eb;border:1px solid rgba(255,255,255,.08)}
+.btn-r{background:rgba(239,68,68,.08);color:#fca5a5;border:1px solid rgba(239,68,68,.3)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;border:1px solid;font-size:11px;font-weight:500;white-space:nowrap}
+.p-em{border-color:rgba(16,185,129,.2);background:rgba(16,185,129,.1);color:#6ee7b7}
+.p-ru{border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.1);color:#fca5a5}
+.p-sl{border-color:rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:#cbd5e1}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+.d-em{background:#34d399;box-shadow:0 0 8px rgba(16,185,129,.7);animation:pg 2s ease-in-out infinite}
+@keyframes pg{0%,100%{opacity:1}50%{opacity:.45}}
+.kv{display:flex;justify-content:space-between;gap:16px;font-size:13px;padding:10px 0;border-top:1px solid rgba(255,255,255,.05)}
+.kv .k{color:#9ca3af}
+.kv .v{font-family:'Fira Code',monospace;color:#e5e7eb;text-align:right;overflow-wrap:anywhere}
+.tg{display:flex;gap:14px;align-items:flex-start;padding:14px 0;border-top:1px solid rgba(255,255,255,.05);cursor:pointer}
+.sw{appearance:none;-webkit-appearance:none;width:40px;height:22px;border-radius:11px;background:rgba(255,255,255,.1);position:relative;flex:none;cursor:pointer;margin:0;margin-top:2px}
+.sw::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#9ca3af;transition:all .15s ease}
+.sw:checked{background:rgba(139,92,246,.55);box-shadow:0 0 10px rgba(139,92,246,.3)}
+.sw:checked::after{left:21px;background:#fff}
+.sw:disabled{opacity:.6;cursor:not-allowed}
+.log{display:grid;grid-template-columns:52px 1fr auto;gap:12px;font-size:12px;padding:9px 0;border-top:1px solid rgba(255,255,255,.04);align-items:baseline}
+.log .t{font-family:'Fira Code',monospace;color:#9ca3af}
+</style>
+</helmet>
+<div class="app">
+  <header class="top">
+    <span class="logo">Demeteo</span>
+    <a class="tn" href="#">Workflows</a><a class="tn" href="#">Providers</a><a class="tn" href="#">Runs</a><a class="tn" href="#">Terminals</a>
+    <span style="margin-left: auto; display: flex; align-items: center; gap: 10px">
+      <span class="pill p-em"><span class="dot d-em"></span>Hub</span>
+      <span style="width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg,#8b5cf6,#06b6d4); display: flex; align-items: center; justify-content: center; font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 12px">SY</span>
+    </span>
+  </header>
+  <div class="body">
+    <nav class="snav" aria-label="Settings">
+      <a class="si" href="#">Machines</a>
+      <a class="si" href="#">Providers</a>
+      <a class="si" href="#">Defaults</a>
+      <a class="si" href="#">Storage</a>
+      <a class="si" href="#">Memory</a>
+      <a class="si" href="#">MCP</a>
+      <a class="si on" href="#">Hub <span class="new">new</span></a>
+      <a class="si" href="#">About</a>
+    </nav>
+
+    <main class="main">
+      <header style="display: flex; flex-direction: column; gap: 6px"><h1 class="h1">Hub</h1><span class="sub" style="line-height: 1.5">Report this machine to a Demeteo Hub and let it ask for runs. What it may do is decided here, and enforced here.</span></header>
+
+      <section class="glass" style="padding: 20px; display: flex; flex-direction: column" aria-labelledby="c">
+        <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 10px">
+          <div style="display: flex; flex-direction: column; gap: 6px"><h2 class="h2" id="c">Connection</h2><span style="font-family: 'Outfit', sans-serif; font-size: 18px; font-weight: 600">[YOUR HUB URL]</span></div>
+          <span class="pill p-em"><span class="dot d-em"></span>Connected · 38 ms</span>
+        </div>
+        <div class="kv"><span class="k">This machine, as the Hub sees it</span><span class="v">studio-mbp</span></div>
+        <div class="kv"><span class="k">Signed in to the Hub as</span><span class="v">you · personal fleet</span></div>
+        <div class="kv"><span class="k">Device key</span><span class="v">SHA256:Qm4x · 7Hc2 · 8kPw</span></div>
+        <div class="kv"><span class="k">Kept in</span><span class="v">macOS Keychain · never in SQLite</span></div>
+        <div class="kv"><span class="k">Reported up to</span><span class="v">event #9,512 · in sync</span></div>
+      </section>
+
+      <section class="glass" style="padding: 20px; display: flex; flex-direction: column" aria-labelledby="s">
+        <h2 class="h2" id="s">What the Hub may do</h2>
+        <p class="sub" style="margin: 8px 0 6px; line-height: 1.5">A Hub request outside these is refused on this machine and shows in the activity below. Turning one off takes effect on the next request; no Hub action can turn one on.</p>
+        <label class="tg"><input class="sw" type="checkbox" checked disabled><span style="display: flex; flex-direction: column; gap: 3px"><span class="mono" style="font-size: 13px">read</span><span class="sub" style="font-size: 12px; line-height: 1.5">Online status, projects by name and remote, runs, step progress, costs, gate summaries. Needed for anything else.</span></span></label>
+        <label class="tg"><input class="sw" type="checkbox" checked><span style="display: flex; flex-direction: column; gap: 3px"><span class="mono" style="font-size: 13px">spend</span><span class="sub" style="font-size: 12px; line-height: 1.5">Start and cancel runs on this machine's projects. Costs money and agent time until each run finishes or is stopped.</span></span></label>
+        <label class="tg"><input class="sw" type="checkbox"><span style="display: flex; flex-direction: column; gap: 3px"><span class="mono" style="font-size: 13px">gates</span><span class="sub" style="font-size: 12px; line-height: 1.5">Approve, redirect or cancel at a gate from the Hub. Merge-to-default-branch and over-budget gates also need a passkey in the Hub each time.</span></span></label>
+        <label class="tg"><input class="sw" type="checkbox"><span style="display: flex; flex-direction: column; gap: 3px"><span class="mono" style="font-size: 13px">logs</span><span class="sub" style="font-size: 12px; line-height: 1.5">Send agent transcripts and diffs to the Hub. Off, the Hub sees that a step ran, not what it wrote.</span></span></label>
+        <div class="tg" style="cursor: default"><span style="width: 40px; flex: none; display: flex; justify-content: center; color: #9ca3af; margin-top: 2px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg></span><span style="display: flex; flex-direction: column; gap: 3px"><span style="font-size: 13px; color: #e5e7eb">Never shared, whatever is on</span><span class="sub" style="font-size: 12px; line-height: 1.5">Provider keys, git tokens, harness sign-ins, local paths, file contents outside a reported diff.</span></span></div>
+      </section>
+
+      <section class="glass" style="padding: 20px; display: flex; flex-direction: column" aria-labelledby="a">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 8px"><h2 class="h2" id="a">Activity from the Hub</h2><a href="#" class="mono" style="font-size: 12px">All activity</a></div>
+        <div class="log"><span class="t">10:41</span><span>Start “Rate-limit the public search endpoint” on admin-web</span><span class="pill p-em">accepted · spend</span></div>
+        <div class="log"><span class="t">10:12</span><span>Transcript for “Add SSO to the admin console”</span><span class="pill p-ru">refused · logs is off</span></div>
+        <div class="log"><span class="t">09:12</span><span>Connected; reported 3 runs since #9,388</span><span class="pill p-sl">sync</span></div>
+      </section>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
+        <a class="btn btn-r" href="#">Disconnect from Hub</a>
+        <span class="sub" style="font-size: 12px">Forgets the device key and tokens on this machine. Runs keep going here.</span>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

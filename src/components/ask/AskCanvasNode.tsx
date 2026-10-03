@@ -1,8 +1,8 @@
 /**
  * The card drawn for one Ask Canvas node — same 202×72 anatomy as
  * `WorkflowNode.tsx` so a diagram reads the same whichever surface drew it
- * (docs/ask-canvas/probe/Nodes.html). No placement math or citation
- * matching here; both are pure functions this component only consumes.
+ * (docs/ask-canvas/probe/Nodes.html, in git history). No placement math or
+ * citation matching here; both are pure functions this component only consumes.
  *
  * Positioned by the caller through an inline `left`/`top`, the way
  * `TicketGraphNode.tsx` is and for the same reason — a computed coordinate is

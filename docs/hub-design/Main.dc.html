@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub — Fleet</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Outfit:wght@500;600;700;800&amp;family=Fira+Code:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#08090c}
+a{color:#22d3ee}a:hover{color:#67e8f9}
+.hub{min-height:100vh;display:flex;flex-wrap:wrap;font-family:'Inter',-apple-system,sans-serif;color:#f3f4f6;-webkit-font-smoothing:antialiased;background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.05) 0%,transparent 60%),radial-gradient(circle at 10% 80%,rgba(6,182,212,.04) 0%,transparent 50%),#08090c}
+.rail{flex:0 0 72px;background:#0d0f14;border-right:1px solid rgba(255,255,255,.05);display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:12px;box-sizing:border-box}
+.logo{font-family:'Outfit',sans-serif;font-weight:800;font-size:24px;color:#06b6d4;text-shadow:0 0 12px rgba(6,182,212,.35);margin-bottom:16px;text-decoration:none}
+.nav{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#9ca3af;border:1px solid transparent;text-decoration:none;position:relative}
+.nav:hover{background:rgba(28,34,46,.85);color:#f3f4f6;border-color:rgba(255,255,255,.05)}
+.nav.on{background:rgba(139,92,246,.25);color:#a78bfa;border-color:rgba(139,92,246,.3);box-shadow:0 0 10px rgba(139,92,246,.25)}
+.badge{position:absolute;top:4px;right:4px;min-width:16px;height:16px;border-radius:8px;background:#f59e0b;color:#1f1300;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px;box-sizing:border-box}
+.avatar{margin-top:auto;width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#8b5cf6,#06b6d4);display:flex;align-items:center;justify-content:center;font-family:'Outfit',sans-serif;font-weight:700;font-size:14px;color:#fff}
+.main{flex:999 1 560px;min-width:0;padding:32px 40px 56px;box-sizing:border-box;display:flex;flex-direction:column;gap:28px}
+.h1{font-family:'Outfit',sans-serif;font-weight:600;font-size:30px;margin:0;letter-spacing:.2px}
+.h2{font-family:'Outfit',sans-serif;font-weight:600;font-size:13px;letter-spacing:.6px;text-transform:uppercase;color:#9ca3af;margin:0}
+.mono{font-family:'Fira Code','JetBrains Mono',monospace}
+.sub{color:#9ca3af;font-size:13px}
+.glass{background:rgba(18,22,30,.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.05);box-shadow:0 8px 32px rgba(0,0,0,.4);border-radius:12px}
+.nested{background:rgba(18,22,30,.55);border:1px solid rgba(255,255,255,.05);border-radius:12px}
+.btn{height:44px;padding:0 16px;border-radius:8px;display:inline-flex;align-items:center;gap:8px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;box-sizing:border-box;white-space:nowrap}
+.btn-p{background:linear-gradient(135deg,#8b5cf6,#7c3aed);color:#fff;border:none;box-shadow:0 0 16px rgba(139,92,246,.3)}
+.btn-s{background:rgba(255,255,255,.04);color:#e5e7eb;border:1px solid rgba(255,255,255,.08)}
+.btn-s:hover{background:rgba(28,34,46,.85);color:#fff}
+.btn-sm{height:36px;padding:0 12px;font-size:13px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;border:1px solid;font-size:11px;font-weight:500;white-space:nowrap}
+.p-em{border-color:rgba(16,185,129,.2);background:rgba(16,185,129,.1);color:#6ee7b7}
+.p-am{border-color:rgba(245,158,11,.25);background:rgba(245,158,11,.1);color:#fcd34d}
+.p-sl{border-color:rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:#cbd5e1}
+.p-cy{border-color:rgba(6,182,212,.3);background:rgba(6,182,212,.1);color:#67e8f9}
+.p-vi{border-color:rgba(139,92,246,.3);background:rgba(139,92,246,.1);color:#c4b5fd}
+.p-ru{border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.1);color:#fca5a5}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+.d-em{background:#34d399;box-shadow:0 0 8px rgba(16,185,129,.7);animation:pg 2s ease-in-out infinite}
+.d-am{background:#fbbf24;box-shadow:0 0 8px rgba(245,158,11,.7)}
+.d-sl{background:#64748b}
+.d-cy{background:#22d3ee;box-shadow:0 0 8px rgba(6,182,212,.7);animation:pg 2s ease-in-out infinite}
+@keyframes pg{0%,100%{opacity:1}50%{opacity:.45}}
+.bar{position:absolute;left:0;top:0;bottom:0;width:4px}
+.b-am{background:#f59e0b;box-shadow:0 0 10px rgba(245,158,11,.8)}
+.b-cy{background:#06b6d4;box-shadow:0 0 10px rgba(6,182,212,.8)}
+.b-sl{background:#475569}
+.tile{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex:none}
+.chip{display:inline-flex;align-items:center;height:24px;padding:0 8px;border-radius:6px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.06);font-family:'Fira Code',monospace;font-size:11px;color:#cbd5e1}
+.seg{display:inline-flex;padding:4px;gap:4px;border-radius:10px;background:rgba(10,12,16,.6);border:1px solid rgba(255,255,255,.05)}
+.seg a{height:36px;padding:0 14px;border-radius:7px;display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;color:#9ca3af;text-decoration:none}
+.seg a.on{background:rgba(6,182,212,.1);color:#67e8f9;box-shadow:inset 0 0 0 1px rgba(6,182,212,.3)}
+.seg .n{font-family:'Fira Code',monospace;font-size:11px;color:#9ca3af}
+.input{height:44px;border-radius:8px;background:rgba(10,12,16,.6);border:1px solid rgba(255,255,255,.06);color:#f3f4f6;font-family:inherit;font-size:14px;padding:0 12px 0 38px;box-sizing:border-box;width:100%}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.kv{display:flex;flex-direction:column;gap:2px}
+.kv .k{font-size:11px;color:#9ca3af}
+.kv .v{font-family:'Fira Code',monospace;font-size:13px;color:#e5e7eb}
+</style>
+</helmet>
+<div class="hub">
+
+<nav class="rail" aria-label="Hub">
+  <a class="logo" href="#">D</a>
+  <a class="nav on" href="Main.dc.html" aria-label="Fleet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"></rect><rect width="20" height="8" x="2" y="14" rx="2"></rect><line x1="6" x2="6.01" y1="6" y2="6"></line><line x1="6" x2="6.01" y1="18" y2="18"></line></svg></a>
+  <a class="nav" href="Runs.dc.html" aria-label="Runs and gates, 2 need you"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"></path></svg><span class="badge">2</span></a>
+  <a class="nav" href="#" aria-label="Projects"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.3 7 8.7 5 8.7-5"></path><path d="M12 22V12"></path></svg></a>
+  <a class="nav" href="#" aria-label="Access and tokens"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 3 3L22 7l-3-3"></path></svg></a>
+  <a class="nav" href="#" aria-label="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"></line><line x1="4" x2="4" y1="10" y2="3"></line><line x1="12" x2="12" y1="21" y2="12"></line><line x1="12" x2="12" y1="8" y2="3"></line><line x1="20" x2="20" y1="21" y2="16"></line><line x1="20" x2="20" y1="12" y2="3"></line><line x1="2" x2="6" y1="14" y2="14"></line><line x1="10" x2="14" y1="8" y2="8"></line><line x1="18" x2="22" y1="16" y2="16"></line></svg></a>
+  <div class="avatar" aria-label="Signed in as you">SY</div>
+</nav>
+
+<main class="main">
+
+  <header style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px">
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <div class="sub mono" style="font-size: 12px">Personal fleet</div>
+      <h1 class="h1">Fleet</h1>
+      <div class="sub mono">6 instances · 4 online · 5 runs active · 2 need you</div>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 12px">
+      <a class="btn btn-s" href="AddInstance.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg>Add instance</a>
+      <a class="btn btn-p" href="Dispatch.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>Run a pipeline</a>
+    </div>
+  </header>
+
+  <section style="display: flex; flex-direction: column; gap: 12px" aria-labelledby="needs">
+    <h2 class="h2" id="needs" style="color: #fcd34d">Needs you</h2>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 12px">
+      <div class="glass" style="position: relative; overflow: hidden; padding: 16px 16px 16px 20px; display: flex; align-items: center; gap: 16px; box-shadow: 0 8px 32px rgba(0,0,0,.4), inset 0 0 0 1px rgba(245,158,11,.35)">
+        <div class="bar b-am"></div>
+        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap"><span class="pill p-am"><span class="dot d-am"></span>Gate needs you</span><span class="sub mono" style="font-size: 12px">dev-workstation</span></div>
+          <div style="font-family: 'Outfit', sans-serif; font-size: 16px; font-weight: 600">Retry failed webhooks with backoff</div>
+          <div class="sub mono" style="font-size: 12px">checkout-api · Review gate · waiting 14m</div>
+        </div>
+        <a class="btn btn-s btn-sm" href="Runs.dc.html">Review</a>
+      </div>
+      <div class="glass" style="position: relative; overflow: hidden; padding: 16px 16px 16px 20px; display: flex; align-items: center; gap: 16px; box-shadow: 0 8px 32px rgba(0,0,0,.4), inset 0 0 0 1px rgba(245,158,11,.35)">
+        <div class="bar b-am"></div>
+        <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap"><span class="pill p-am"><span class="dot d-am"></span>Needs credentials</span><span class="sub mono" style="font-size: 12px">runner-eu-1</span></div>
+          <div style="font-family: 'Outfit', sans-serif; font-size: 16px; font-weight: 600">Migrate billing exports to Parquet</div>
+          <div class="sub mono" style="font-size: 12px">data-pipelines · parked · git push rejected</div>
+        </div>
+        <a class="btn btn-s btn-sm" href="Runs.dc.html">Open</a>
+      </div>
+    </div>
+  </section>
+
+  <section style="display: flex; flex-direction: column; gap: 16px" aria-labelledby="inst">
+    <h2 class="sr" id="inst">Instances</h2>
+    <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
+      <div class="seg" role="group" aria-label="Kind">
+        <a class="on" href="#">All <span class="n">6</span></a>
+        <a href="#">Desktops <span class="n">4</span></a>
+        <a href="#">Runners <span class="n">2</span></a>
+      </div>
+      <div class="seg" role="group" aria-label="Status">
+        <a href="#">Online <span class="n">4</span></a>
+        <a href="#">Offline <span class="n">1</span></a>
+        <a href="#">Attention <span class="n">1</span></a>
+      </div>
+      <div style="position: relative; flex: 1 1 240px; max-width: 360px; margin-left: auto">
+        <label class="sr" for="q">Search instances</label>
+        <svg style="position: absolute; left: 12px; top: 14px; color: #9ca3af" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+        <input class="input" id="q" type="search" placeholder="Search instances, projects, harnesses">
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); gap: 16px">
+
+      <article class="glass" style="padding: 20px; display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; gap: 14px; align-items: flex-start">
+          <div class="tile" style="background: rgba(139,92,246,.12); color: #c4b5fd"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"></path></svg></div>
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+            <a href="Instance.dc.html" style="font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 18px; color: #f3f4f6; text-decoration: none">studio-mbp</a>
+            <div class="sub mono" style="font-size: 12px">macOS 15.5 · aarch64 · Demeteo 1.2.0</div>
+          </div>
+          <span class="pill p-em"><span class="dot d-em"></span>Online</span>
+        </div>
+        <div class="nested" style="position: relative; overflow: hidden; padding: 12px 12px 12px 16px; display: flex; flex-direction: column; gap: 4px">
+          <div class="bar b-cy"></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span style="font-size: 14px; font-weight: 500">Add SSO to the admin console</span><span class="mono" style="font-size: 12px; color: #e5e7eb">12m</span></div>
+          <div class="sub mono" style="font-size: 12px">admin-web · Implement · 3 of 5 tickets</div>
+        </div>
+        <div class="nested" style="position: relative; overflow: hidden; padding: 12px 12px 12px 16px; display: flex; flex-direction: column; gap: 4px">
+          <div class="bar b-cy"></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span style="font-size: 14px; font-weight: 500">Flaky e2e: retry login fixture</span><span class="mono" style="font-size: 12px; color: #e5e7eb">4m</span></div>
+          <div class="sub mono" style="font-size: 12px">admin-web · Verifying</div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+          <span class="chip">claude-code</span><span class="chip">opencode</span>
+          <span class="sub mono" style="font-size: 12px; margin-left: auto">3 projects · seen now</span>
+        </div>
+      </article>
+
+      <article class="glass" style="padding: 20px; display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; gap: 14px; align-items: flex-start">
+          <div class="tile" style="background: rgba(139,92,246,.12); color: #c4b5fd"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"></rect><line x1="8" x2="16" y1="21" y2="21"></line><line x1="12" x2="12" y1="17" y2="21"></line></svg></div>
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+            <a href="Instance.dc.html" style="font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 18px; color: #f3f4f6; text-decoration: none">dev-workstation</a>
+            <div class="sub mono" style="font-size: 12px">Linux · x86_64 · Demeteo 1.2.0</div>
+          </div>
+          <span class="pill p-em"><span class="dot d-em"></span>Online</span>
+        </div>
+        <div class="nested" style="position: relative; overflow: hidden; padding: 12px 12px 12px 16px; display: flex; flex-direction: column; gap: 4px; box-shadow: inset 0 0 0 1px rgba(245,158,11,.3)">
+          <div class="bar b-am"></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span style="font-size: 14px; font-weight: 500">Retry failed webhooks with backoff</span><span class="pill p-am">Gate needs you</span></div>
+          <div class="sub mono" style="font-size: 12px">checkout-api · Review gate · waiting 14m</div>
+        </div>
+        <div class="nested" style="position: relative; overflow: hidden; padding: 12px 12px 12px 16px; display: flex; flex-direction: column; gap: 4px">
+          <div class="bar b-cy"></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span style="font-size: 14px; font-weight: 500">Index search by tenant</span><span class="mono" style="font-size: 12px; color: #e5e7eb">31m</span></div>
+          <div class="sub mono" style="font-size: 12px">search-svc · Implement · 2 of 4 tickets</div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+          <span class="chip">claude-code</span><span class="chip">hermes</span><span class="chip">opencode</span>
+          <span class="sub mono" style="font-size: 12px; margin-left: auto">5 projects · seen now</span>
+        </div>
+      </article>
+
+      <article class="glass" style="padding: 20px; display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; gap: 14px; align-items: flex-start">
+          <div class="tile" style="background: rgba(139,92,246,.12); color: #c4b5fd"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"></rect><line x1="8" x2="16" y1="21" y2="21"></line><line x1="12" x2="12" y1="17" y2="21"></line></svg></div>
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+            <a href="Instance.dc.html" style="font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 18px; color: #f3f4f6; text-decoration: none">win-buildbox</a>
+            <div class="sub mono" style="font-size: 12px">Windows 11 · x86_64 · Demeteo 1.2.0</div>
+          </div>
+          <span class="pill p-em"><span class="dot d-em"></span>Online</span>
+        </div>
+        <div class="nested" style="padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px">
+          <span class="sub" style="font-size: 13px">Idle — nothing running</span>
+          <a class="btn btn-s btn-sm" href="Dispatch.dc.html">Run here</a>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+          <span class="chip">codex</span><span class="chip">opencode</span>
+          <span class="sub mono" style="font-size: 12px; margin-left: auto">2 projects · seen now</span>
+        </div>
+      </article>
+
+      <article class="glass" style="padding: 20px; display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; gap: 14px; align-items: flex-start">
+          <div class="tile" style="background: rgba(255,255,255,.05); color: #9ca3af"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"></path></svg></div>
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+            <a href="Instance.dc.html" style="font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 18px; color: #d1d5db; text-decoration: none">travel-air</a>
+            <div class="sub mono" style="font-size: 12px">macOS 15.4 · aarch64 · Demeteo 1.1.4</div>
+          </div>
+          <span class="pill p-sl"><span class="dot d-sl"></span>Offline</span>
+        </div>
+        <div class="nested" style="position: relative; overflow: hidden; padding: 12px 12px 12px 16px; display: flex; flex-direction: column; gap: 4px">
+          <div class="bar b-sl"></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span style="font-size: 14px; font-weight: 500">Bump Tailwind to v4.2</span><span class="pill p-sl">Queued</span></div>
+          <div class="sub mono" style="font-size: 12px">marketing-site · starts when travel-air reconnects</div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+          <span class="chip">claude-code</span>
+          <span class="sub mono" style="font-size: 12px; margin-left: auto">1 project · last seen 2 days ago</span>
+        </div>
+      </article>
+
+      <article class="glass" style="padding: 20px; display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; gap: 14px; align-items: flex-start">
+          <div class="tile" style="background: rgba(6,182,212,.12); color: #67e8f9"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"></rect><rect width="20" height="8" x="2" y="14" rx="2"></rect><line x1="6" x2="6.01" y1="6" y2="6"></line><line x1="6" x2="6.01" y1="18" y2="18"></line></svg></div>
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+            <a href="Instance.dc.html" style="font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 18px; color: #f3f4f6; text-decoration: none">runner-eu-1</a>
+            <div class="sub mono" style="font-size: 12px">Remote runner · Linux x86_64 · 1.2.0</div>
+          </div>
+          <span class="pill p-em"><span class="dot d-em"></span>Online</span>
+        </div>
+        <div class="nested" style="position: relative; overflow: hidden; padding: 12px 12px 12px 16px; display: flex; flex-direction: column; gap: 4px">
+          <div class="bar b-cy"></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span style="font-size: 14px; font-weight: 500">Nightly dependency sweep</span><span class="mono" style="font-size: 12px; color: #e5e7eb">1h 08m</span></div>
+          <div class="sub mono" style="font-size: 12px">platform-infra · detached · Implement</div>
+        </div>
+        <div class="nested" style="position: relative; overflow: hidden; padding: 12px 12px 12px 16px; display: flex; flex-direction: column; gap: 4px; box-shadow: inset 0 0 0 1px rgba(245,158,11,.3)">
+          <div class="bar b-am"></div>
+          <div style="display: flex; justify-content: space-between; gap: 8px"><span style="font-size: 14px; font-weight: 500">Migrate billing exports to Parquet</span><span class="pill p-am">Needs credentials</span></div>
+          <div class="sub mono" style="font-size: 12px">data-pipelines · detached · parked</div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+          <span class="chip">claude-code</span><span class="chip">opencode</span>
+          <span class="sub mono" style="font-size: 12px; margin-left: auto">4 projects · seen now</span>
+        </div>
+      </article>
+
+      <article class="glass" style="padding: 20px; display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; gap: 14px; align-items: flex-start">
+          <div class="tile" style="background: rgba(6,182,212,.12); color: #67e8f9"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"></rect><rect width="20" height="8" x="2" y="14" rx="2"></rect><line x1="6" x2="6.01" y1="6" y2="6"></line><line x1="6" x2="6.01" y1="18" y2="18"></line></svg></div>
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+            <a href="Instance.dc.html" style="font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 18px; color: #f3f4f6; text-decoration: none">runner-gpu-2</a>
+            <div class="sub mono" style="font-size: 12px">Remote runner · Linux x86_64 · 1.1.4</div>
+          </div>
+          <span class="pill p-am"><span class="dot d-am"></span>Runner behind</span>
+        </div>
+        <div class="nested" style="padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; background: rgba(245,158,11,.06); border-color: rgba(245,158,11,.2)">
+          <span style="font-size: 13px; color: #fde68a">Refusing new detached runs until it matches the fleet's Demeteo <span class="mono">1.2.0</span>.</span>
+          <div><a class="btn btn-s btn-sm" href="Instance.dc.html">Update runner</a></div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+          <span class="chip">opencode</span>
+          <span class="sub mono" style="font-size: 12px; margin-left: auto">2 projects · seen now</span>
+        </div>
+      </article>
+
+    </div>
+  </section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

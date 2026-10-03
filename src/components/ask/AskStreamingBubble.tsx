@@ -71,7 +71,8 @@ export function AskStreamingBubble({
 }
 
 /**
- * `docs/ask-canvas/probe/Streaming.html`'s `.srcs` block. Plain text rather
+ * The `.srcs` block of `docs/ask-canvas/probe/Streaming.html` (in git
+ * history). Plain text rather
  * than anchors: a bare `<a href>` navigates the webview away from the app,
  * so a clickable source would have to route through
  * `@tauri-apps/plugin-opener`, which nothing in `src/` uses yet.

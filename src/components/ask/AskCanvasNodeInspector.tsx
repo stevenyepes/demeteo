@@ -1,5 +1,6 @@
 /**
- * The Ask Canvas node detail pane (`docs/ask-canvas/probe/CanvasFocus.html`).
+ * The Ask Canvas node detail pane (`docs/ask-canvas/probe/CanvasFocus.html`,
+ * in git history).
  * No tabs — unlike `NodePanel.tsx`'s 4-tab use of `Inspector`, this is a
  * single scrolling body, so it builds directly on `INSPECTOR_SURFACE` rather
  * than `Inspector` itself (see that component's doc comment).

@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub — Runs and gates</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Outfit:wght@500;600;700;800&amp;family=Fira+Code:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#08090c}
+a{color:#22d3ee}a:hover{color:#67e8f9}
+.hub{min-height:100vh;display:flex;flex-wrap:wrap;font-family:'Inter',-apple-system,sans-serif;color:#f3f4f6;-webkit-font-smoothing:antialiased;background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.05) 0%,transparent 60%),radial-gradient(circle at 10% 80%,rgba(6,182,212,.04) 0%,transparent 50%),#08090c}
+.rail{flex:0 0 72px;background:#0d0f14;border-right:1px solid rgba(255,255,255,.05);display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:12px;box-sizing:border-box}
+.logo{font-family:'Outfit',sans-serif;font-weight:800;font-size:24px;color:#06b6d4;text-shadow:0 0 12px rgba(6,182,212,.35);margin-bottom:16px;text-decoration:none}
+.nav{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#9ca3af;border:1px solid transparent;text-decoration:none;position:relative}
+.nav:hover{background:rgba(28,34,46,.85);color:#f3f4f6;border-color:rgba(255,255,255,.05)}
+.nav.on{background:rgba(139,92,246,.25);color:#a78bfa;border-color:rgba(139,92,246,.3);box-shadow:0 0 10px rgba(139,92,246,.25)}
+.badge{position:absolute;top:4px;right:4px;min-width:16px;height:16px;border-radius:8px;background:#f59e0b;color:#1f1300;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px;box-sizing:border-box}
+.avatar{margin-top:auto;width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#8b5cf6,#06b6d4);display:flex;align-items:center;justify-content:center;font-family:'Outfit',sans-serif;font-weight:700;font-size:14px;color:#fff}
+.main{flex:999 1 560px;min-width:0;padding:32px 40px 56px;box-sizing:border-box;display:flex;flex-direction:column;gap:24px}
+.h1{font-family:'Outfit',sans-serif;font-weight:600;font-size:30px;margin:0;letter-spacing:.2px}
+.h2{font-family:'Outfit',sans-serif;font-weight:600;font-size:13px;letter-spacing:.6px;text-transform:uppercase;color:#9ca3af;margin:0}
+.mono{font-family:'Fira Code','JetBrains Mono',monospace}
+.sub{color:#9ca3af;font-size:13px}
+.glass{background:rgba(18,22,30,.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.05);box-shadow:0 8px 32px rgba(0,0,0,.4);border-radius:12px}
+.nested{background:rgba(18,22,30,.55);border:1px solid rgba(255,255,255,.05);border-radius:12px}
+.btn{height:44px;padding:0 16px;border-radius:8px;display:inline-flex;align-items:center;gap:8px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;box-sizing:border-box;white-space:nowrap}
+.btn-p{background:linear-gradient(135deg,#8b5cf6,#7c3aed);color:#fff;border:none;box-shadow:0 0 16px rgba(139,92,246,.3)}
+.btn-s{background:rgba(255,255,255,.04);color:#e5e7eb;border:1px solid rgba(255,255,255,.08)}
+.btn-r{background:rgba(239,68,68,.08);color:#fca5a5;border:1px solid rgba(239,68,68,.3)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;border:1px solid;font-size:11px;font-weight:500;white-space:nowrap}
+.p-em{border-color:rgba(16,185,129,.2);background:rgba(16,185,129,.1);color:#6ee7b7}
+.p-am{border-color:rgba(245,158,11,.25);background:rgba(245,158,11,.1);color:#fcd34d}
+.p-sl{border-color:rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:#cbd5e1}
+.p-cy{border-color:rgba(6,182,212,.3);background:rgba(6,182,212,.1);color:#67e8f9}
+.p-vi{border-color:rgba(139,92,246,.3);background:rgba(139,92,246,.1);color:#c4b5fd}
+.p-ru{border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.1);color:#fca5a5}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+.d-am{background:#fbbf24;box-shadow:0 0 8px rgba(245,158,11,.7)}
+.d-cy{background:#22d3ee;box-shadow:0 0 8px rgba(6,182,212,.7);animation:pg 2s ease-in-out infinite}
+.d-vi{background:#a78bfa;box-shadow:0 0 8px rgba(139,92,246,.7);animation:pg 2s ease-in-out infinite}
+@keyframes pg{0%,100%{opacity:1}50%{opacity:.45}}
+.bar{position:absolute;left:0;top:0;bottom:0;width:4px}
+.b-am{background:#f59e0b;box-shadow:0 0 10px rgba(245,158,11,.8)}
+.b-cy{background:#06b6d4;box-shadow:0 0 10px rgba(6,182,212,.8)}
+.b-vi{background:#8b5cf6;box-shadow:0 0 10px rgba(139,92,246,.8)}
+.b-em{background:#10b981;box-shadow:0 0 10px rgba(16,185,129,.8)}
+.b-ru{background:#ef4444;box-shadow:0 0 10px rgba(239,68,68,.8)}
+.seg{display:inline-flex;padding:4px;gap:4px;border-radius:10px;background:rgba(10,12,16,.6);border:1px solid rgba(255,255,255,.05)}
+.seg a{height:36px;padding:0 14px;border-radius:7px;display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;color:#9ca3af;text-decoration:none}
+.seg a.on{background:rgba(6,182,212,.1);color:#67e8f9;box-shadow:inset 0 0 0 1px rgba(6,182,212,.3)}
+.seg .n{font-family:'Fira Code',monospace;font-size:11px;color:#9ca3af}
+.row{position:relative;overflow:hidden;padding:14px 14px 14px 20px;display:flex;flex-direction:column;gap:6px;text-decoration:none;color:inherit;border-radius:10px;border:1px solid transparent}
+.row:hover{background:rgba(28,34,46,.85);border-color:rgba(255,255,255,.08)}
+.row.sel{background:rgba(6,182,212,.08);border-color:rgba(6,182,212,.3);box-shadow:0 0 12px rgba(6,182,212,.15)}
+.stat{display:flex;flex-direction:column;gap:4px}
+.stat .k{font-size:11px;color:#9ca3af}
+.stat .v{font-family:'Fira Code',monospace;font-size:16px;color:#f3f4f6}
+.ev{display:grid;grid-template-columns:64px 1fr auto;gap:12px;font-size:12px;padding:8px 0;border-top:1px solid rgba(255,255,255,.04);align-items:baseline}
+.ev .o{font-family:'Fira Code',monospace;color:#6b7280}
+.ev .t{font-family:'Fira Code',monospace;color:#9ca3af}
+.tk{display:flex;gap:10px;align-items:center;font-size:13px;padding:8px 0;border-top:1px solid rgba(255,255,255,.04)}
+.ps{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px}
+.ps .n{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:7px;border:1px solid rgba(255,255,255,.08);background:rgba(15,23,42,.7);color:#cbd5e1;white-space:nowrap}
+.ps .n.ok{border-color:rgba(16,185,129,.3)}
+.ps .n.now{border-color:rgba(245,158,11,.5);color:#fde68a;box-shadow:0 0 12px rgba(245,158,11,.2)}
+.ps .n.wait{color:#9ca3af;border-style:dashed}
+.ps .sep{color:#4b5563}
+.ps .par{display:inline-flex;flex-direction:column;gap:4px;padding-left:8px;border-left:1px solid rgba(255,255,255,.12)}
+.field{border-radius:8px;background:rgba(10,12,16,.6);border:1px solid rgba(255,255,255,.08);color:#f3f4f6;font-family:inherit;font-size:14px;padding:10px 12px;box-sizing:border-box;width:100%;height:72px;resize:vertical}
+</style>
+</helmet>
+<div class="hub">
+
+<nav class="rail" aria-label="Hub">
+  <a class="logo" href="#">D</a>
+  <a class="nav" href="Main.dc.html" aria-label="Fleet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"></rect><rect width="20" height="8" x="2" y="14" rx="2"></rect><line x1="6" x2="6.01" y1="6" y2="6"></line><line x1="6" x2="6.01" y1="18" y2="18"></line></svg></a>
+  <a class="nav on" href="Runs.dc.html" aria-label="Runs and gates, 2 need you"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"></path></svg><span class="badge">2</span></a>
+  <a class="nav" href="#" aria-label="Projects"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.3 7 8.7 5 8.7-5"></path><path d="M12 22V12"></path></svg></a>
+  <a class="nav" href="#" aria-label="Access and tokens"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 3 3L22 7l-3-3"></path></svg></a>
+  <a class="nav" href="#" aria-label="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"></line><line x1="4" x2="4" y1="10" y2="3"></line><line x1="12" x2="12" y1="21" y2="12"></line><line x1="12" x2="12" y1="8" y2="3"></line><line x1="20" x2="20" y1="21" y2="16"></line><line x1="20" x2="20" y1="12" y2="3"></line><line x1="2" x2="6" y1="14" y2="14"></line><line x1="10" x2="14" y1="8" y2="8"></line><line x1="18" x2="22" y1="16" y2="16"></line></svg></a>
+  <div class="avatar" aria-label="Signed in as you">SY</div>
+</nav>
+
+<main class="main">
+  <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+    <div style="display: flex; flex-direction: column; gap: 8px"><h1 class="h1">Runs</h1><span class="sub mono">Every Feature on every instance, newest first</span></div>
+    <div class="seg" role="group" aria-label="Show">
+      <a class="on" href="#">Needs you <span class="n">2</span></a>
+      <a href="#">Active <span class="n">5</span></a>
+      <a href="#">Finished today <span class="n">9</span></a>
+    </div>
+  </header>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+
+    <section class="glass" style="flex: 1 1 340px; min-width: 0; padding: 10px; display: flex; flex-direction: column; gap: 4px" aria-label="Run list">
+      <a class="row sel" href="#"><div class="bar b-am"></div>
+        <div style="display: flex; justify-content: space-between; gap: 8px"><span style="font-weight: 500; font-size: 14px">Retry failed webhooks with backoff</span></div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"><span class="pill p-am">Gate needs you</span><span class="sub mono" style="font-size: 11px">dev-workstation · checkout-api</span></div>
+      </a>
+      <a class="row" href="#"><div class="bar b-am"></div>
+        <div style="font-weight: 500; font-size: 14px">Migrate billing exports to Parquet</div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"><span class="pill p-am">Needs credentials</span><span class="sub mono" style="font-size: 11px">runner-eu-1 · data-pipelines</span></div>
+      </a>
+      <div class="h2" style="padding: 14px 10px 6px; font-size: 11px">Active</div>
+      <a class="row" href="#"><div class="bar b-cy"></div>
+        <div style="font-weight: 500; font-size: 14px">Add SSO to the admin console</div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"><span class="pill p-cy">Running</span><span class="sub mono" style="font-size: 11px">studio-mbp · admin-web · 12m</span></div>
+      </a>
+      <a class="row" href="#"><div class="bar b-vi"></div>
+        <div style="font-weight: 500; font-size: 14px">Flaky e2e: retry login fixture</div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"><span class="pill p-vi">Verifying</span><span class="sub mono" style="font-size: 11px">studio-mbp · admin-web · 4m</span></div>
+      </a>
+      <a class="row" href="Run.dc.html"><div class="bar b-cy"></div>
+        <div style="font-weight: 500; font-size: 14px">Index search by tenant</div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"><span class="pill p-cy">Running</span><span class="sub mono" style="font-size: 11px">dev-workstation · search-svc · 31m</span></div>
+      </a>
+      <a class="row" href="#"><div class="bar b-cy"></div>
+        <div style="font-weight: 500; font-size: 14px">Nightly dependency sweep</div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"><span class="pill p-cy">Running</span><span class="sub mono" style="font-size: 11px">runner-eu-1 · detached · 1h 08m</span></div>
+      </a>
+      <div class="h2" style="padding: 14px 10px 6px; font-size: 11px">Today</div>
+      <a class="row" href="#"><div class="bar b-em"></div>
+        <div style="font-weight: 500; font-size: 14px">Ledger: round half-even on FX</div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"><span class="pill p-em">PR ready</span><span class="sub mono" style="font-size: 11px">dev-workstation · ledger</span></div>
+      </a>
+      <a class="row" href="#"><div class="bar b-ru"></div>
+        <div style="font-weight: 500; font-size: 14px">Split deploy script per region</div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"><span class="pill p-ru">Failed</span><span class="sub mono" style="font-size: 11px">dev-workstation · infra-scripts</span></div>
+      </a>
+    </section>
+
+    <section style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 20px" aria-labelledby="rt">
+      <div class="glass" style="padding: 24px; display: flex; flex-direction: column; gap: 20px; box-shadow: 0 8px 32px rgba(0,0,0,.4), inset 0 0 0 1px rgba(245,158,11,.25)">
+        <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: flex-start">
+          <div style="display: flex; flex-direction: column; gap: 8px; min-width: 0">
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center"><span class="pill p-am"><span class="dot d-am"></span>Gate needs you</span><span class="pill p-sl">Review gate</span><span class="sub mono" style="font-size: 12px">waiting 14m</span></div>
+            <h2 id="rt" style="font-family: 'Outfit', sans-serif; font-size: 22px; font-weight: 600; margin: 0">Retry failed webhooks with backoff</h2>
+            <div class="sub mono" style="font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap"><a href="Instance.dc.html" style="color: #c4b5fd; text-decoration: none">dev-workstation</a><span>checkout-api</span><span>feature/webhook-backoff</span><span>feature-standard v7</span></div>
+          </div>
+        </div>
+
+        <div class="nested" style="padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap"><span class="h2" style="font-size: 11px">Pipeline</span><a href="Run.dc.html" class="mono" style="font-size: 12px">Open the run graph</a></div>
+          <div class="ps" aria-label="Pipeline progress">
+            <span class="n ok"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Plan</span><span class="sep">›</span>
+            <span class="n ok"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Review plan</span><span class="sep">›</span>
+            <span class="n ok"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Implement · 3/3</span><span class="sep">›</span>
+            <span class="par"><span class="n ok"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Validate · looped 1×</span><span class="n ok"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Security review</span></span><span class="sep">›</span>
+            <span class="n now"><span class="dot d-am"></span>Review diff</span><span class="sep">›</span>
+            <span class="n wait">Finalize</span>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr)); gap: 16px">
+          <div class="stat"><span class="k">Changed</span><span class="v">7 files</span></div>
+          <div class="stat"><span class="k">Lines</span><span class="v"><span style="color: #6ee7b7">+214</span> <span style="color: #fca5a5">−38</span></span></div>
+          <div class="stat"><span class="k">Tests</span><span class="v">142 passed</span></div>
+          <div class="stat"><span class="k">Cost</span><span class="v">$1.84</span></div>
+          <div class="stat"><span class="k">Elapsed</span><span class="v">46m</span></div>
+        </div>
+
+        <div class="nested" style="padding: 16px; display: flex; flex-direction: column">
+          <span class="h2" style="margin-bottom: 6px">Tickets</span>
+          <div class="tk"><span style="color: #6ee7b7"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span><span style="flex: 1">Exponential backoff with jitter in the webhook dispatcher</span><span class="mono sub" style="font-size: 11px">claude-code</span></div>
+          <div class="tk"><span style="color: #6ee7b7"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span><span style="flex: 1">Dead-letter table after 8 attempts</span><span class="mono sub" style="font-size: 11px">opencode</span></div>
+          <div class="tk"><span style="color: #6ee7b7"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span><span style="flex: 1">Admin endpoint to replay dead letters</span><span class="mono sub" style="font-size: 11px">claude-code</span></div>
+          <div class="tk"><span style="color: #6ee7b7"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span><span style="flex: 1">Verifier: all suites green, no new lint</span><span class="mono sub" style="font-size: 11px">verify</span></div>
+        </div>
+
+        <div class="nested" style="padding: 14px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+          <span class="sub" style="flex: 1 1 240px">The diff and agent transcript stay on dev-workstation — it doesn't share <span class="mono">logs</span> with the Hub.</span>
+          <a href="#" class="mono" style="font-size: 12px">Open in Demeteo on dev-workstation</a>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px; padding-top: 4px; border-top: 1px solid rgba(255,255,255,.05)">
+          <label for="redir" class="sub" style="font-size: 12px; padding-top: 14px">Redirect instructions (only if you redirect)</label>
+          <textarea class="field" id="redir" placeholder="e.g. cap the jitter at 30s and add a metric for dead-letter depth"></textarea>
+          <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
+            <a class="btn btn-p" href="#"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>Approve</a>
+            <a class="btn btn-s" href="#">Redirect</a>
+            <a class="btn btn-r" href="#">Cancel run</a>
+            <span class="sub" style="font-size: 12px; flex: 1 1 260px; text-align: right">dev-workstation records this as decided by you, via the Hub</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="glass" style="padding: 20px; display: flex; flex-direction: column" aria-label="Run events">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 8px"><span class="h2">Events</span><span class="sub mono" style="font-size: 11px">reported by dev-workstation · in sync</span></div>
+        <div class="ev"><span class="o">#18204</span><span>gate_required · Review gate</span><span class="t">10:41</span></div>
+        <div class="ev"><span class="o">#18187</span><span>step completed · verify · all suites green</span><span class="t">10:40</span></div>
+        <div class="ev"><span class="o">#18102</span><span>step completed · implement · 3 of 3 tickets</span><span class="t">10:31</span></div>
+        <div class="ev"><span class="o">#17760</span><span>step started · implement</span><span class="t">09:58</span></div>
+        <div class="ev"><span class="o">#17741</span><span>feature created · dispatched from Hub by you</span><span class="t">09:55</span></div>
+      </div>
+    </section>
+  </div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

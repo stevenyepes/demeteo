@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub — Start a feature</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Outfit:wght@500;600;700;800&amp;family=Fira+Code:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#08090c}
+a{color:#22d3ee}a:hover{color:#67e8f9}
+.scrim{min-height:100vh;box-sizing:border-box;padding:40px 24px;display:flex;justify-content:center;align-items:flex-start;font-family:'Inter',-apple-system,sans-serif;color:#f3f4f6;-webkit-font-smoothing:antialiased;background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.08) 0%,transparent 60%),radial-gradient(circle at 10% 80%,rgba(6,182,212,.05) 0%,transparent 50%),rgba(5,6,8,.96)}
+.dlg{width:100%;max-width:1360px;background:#0a0a0e;border:1px solid rgba(255,255,255,.1);box-shadow:0 24px 80px rgba(0,0,0,.6);border-radius:16px;display:flex;flex-direction:column;overflow:hidden}
+.hd{padding:16px 24px;border-bottom:1px solid rgba(255,255,255,.05);background:#050508;display:flex;justify-content:space-between;align-items:center;gap:16px}
+.mono{font-family:'Fira Code','JetBrains Mono',monospace}
+.sub{color:#9ca3af;font-size:13px}
+.lbl{display:block;font-family:'Fira Code',monospace;font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.hint{font-family:'Fira Code',monospace;font-size:10px;color:#8b93a1;text-transform:none;letter-spacing:0}
+.col-h{font-family:'Outfit',sans-serif;font-weight:600;font-size:13px;letter-spacing:.6px;text-transform:uppercase;color:#cbd5e1;margin:0;display:flex;align-items:center;gap:8px}
+.field{width:100%;box-sizing:border-box;background:#050508;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:0 12px;height:40px;font-family:'Fira Code',monospace;font-size:13px;color:#e2e8f0}
+.field:focus{outline:none;border-color:rgba(6,182,212,.5)}
+textarea.field{height:112px;padding:10px 12px;resize:vertical;line-height:1.55}
+select.field{padding-right:8px}
+.field.sm{height:36px;font-size:12px}
+.box{border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.02);border-radius:10px;padding:12px}
+.btn{height:44px;padding:0 18px;border-radius:8px;display:inline-flex;align-items:center;gap:8px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;box-sizing:border-box;white-space:nowrap;border:none}
+.btn-launch{background:#06b6d4;color:#020617;font-weight:700}
+.btn-launch:hover{background:#22d3ee;color:#020617}
+.btn-ghost{background:transparent;color:#9ca3af}
+.btn-ghost:hover{color:#fff}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:6px;border:1px solid;font-size:11px;font-weight:500;white-space:nowrap}
+.p-em{border-color:rgba(16,185,129,.2);background:rgba(16,185,129,.1);color:#6ee7b7}
+.p-am{border-color:rgba(245,158,11,.25);background:rgba(245,158,11,.1);color:#fcd34d}
+.p-sl{border-color:rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:#cbd5e1}
+.p-cy{border-color:rgba(6,182,212,.3);background:rgba(6,182,212,.1);color:#67e8f9}
+.target{width:100%;text-align:left;font-family:inherit;color:inherit;cursor:pointer;padding:10px 12px;min-height:60px;border-radius:10px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:10px;box-sizing:border-box}
+.target:hover{background:rgba(28,34,46,.85)}
+.target.sel{background:rgba(6,182,212,.08);border-color:rgba(6,182,212,.45);box-shadow:0 0 12px rgba(6,182,212,.15)}
+.target.dis{opacity:.5;cursor:not-allowed}
+.radio{width:14px;height:14px;border-radius:50%;border:2px solid #4b5563;flex:none;box-sizing:border-box}
+.target.sel .radio{border-color:#22d3ee;background:#22d3ee;box-shadow:inset 0 0 0 2px #0a0a0e}
+.drop{border:1px dashed rgba(255,255,255,.14);border-radius:10px;padding:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:#050508}
+.att{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 6px 0 10px;border-radius:7px;background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.25);font-family:'Fira Code',monospace;font-size:11px;color:#ddd6fe}
+.att button{width:24px;height:24px;border:none;background:transparent;color:#a78bfa;cursor:pointer;border-radius:5px;display:flex;align-items:center;justify-content:center}
+.addf{height:32px;padding:0 10px;border-radius:7px;border:1px solid rgba(255,255,255,.1);background:transparent;color:#cbd5e1;font-family:inherit;font-size:12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.chk{display:flex;align-items:center;gap:8px;font-family:'Fira Code',monospace;font-size:12px;color:#cbd5e1;min-height:28px}
+.chk input{accent-color:#06b6d4;width:15px;height:15px}
+.seg3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.seg3 button{height:36px;border-radius:8px;font-family:inherit;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;border:1px solid rgba(255,255,255,.1);background:#050508;color:#9ca3af;cursor:pointer}
+.seg3 button.on{background:rgba(6,182,212,.15);border-color:rgba(6,182,212,.4);color:#a5f3fc}
+.rank{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
+.conn{width:1px;height:14px;background:rgba(255,255,255,.14);margin:0 auto}
+.node{flex:1 1 0;max-width:300px;min-width:0;text-align:left;font-family:inherit;color:inherit;cursor:pointer;display:flex;flex-direction:column;gap:6px;border-radius:12px;padding:9px 12px;background:rgba(15,23,42,.7);border:1px solid rgba(51,65,85,.6);box-shadow:0 6px 16px rgba(0,0,0,.3);box-sizing:border-box}
+.node:hover{border-color:rgba(71,85,105,.9)}
+.node.sel{border-color:rgba(34,211,238,.7);box-shadow:0 0 0 1px rgba(34,211,238,.4),0 0 18px rgba(34,211,238,.25)}
+.node.ov{border-color:rgba(167,139,250,.55)}
+.node.ov.sel{border-color:rgba(34,211,238,.7)}
+.ico{width:28px;height:28px;border-radius:8px;border:1px solid;display:flex;align-items:center;justify-content:center;flex:none}
+.t-cy{background:rgba(6,182,212,.1);border-color:rgba(6,182,212,.3);color:#22d3ee}
+.t-am{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.3);color:#fbbf24}
+.t-vi{background:rgba(139,92,246,.1);border-color:rgba(139,92,246,.3);color:#a78bfa}
+.t-em{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#34d399}
+.kind{font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.06em}
+.ac{display:flex;gap:4px;flex-wrap:wrap;font-family:'Fira Code',monospace;font-size:10px;padding-left:38px}
+.ac span{padding:1px 6px;border-radius:5px;border:1px solid rgba(255,255,255,.08);color:#9ca3af;background:rgba(255,255,255,.03);white-space:nowrap}
+.ac span.set{border-color:rgba(139,92,246,.35);color:#ddd6fe;background:rgba(139,92,246,.1)}
+.ac span.warn{border-color:rgba(245,158,11,.35);color:#fcd34d;background:rgba(245,158,11,.1)}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(120px,100%),1fr));gap:8px}
+.note{font-family:'Fira Code',monospace;font-size:10px;line-height:1.6;color:#8b93a1;margin:6px 0 0}
+</style>
+</helmet>
+<div class="scrim">
+<div class="dlg" role="dialog" aria-labelledby="dt">
+
+  <div class="hd">
+    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.94 14.06 4 20M12 3l1.9 5.8L20 10.5l-5.8 1.9L12 18l-1.9-5.6L4 10.5l6.1-1.7z"></path></svg>
+      <h1 id="dt" style="margin: 0; font-size: 14px; font-weight: 600">Start a feature <span style="color: #9ca3af">· {{ sel.project }} on {{ sel.name }}</span></h1>
+    </div>
+    <a href="Main.dc.html" aria-label="Close" class="btn btn-ghost" style="width: 44px; padding: 0; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></a>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap">
+
+    <section style="flex: 1 1 260px; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 10px; border-right: 1px solid rgba(255,255,255,.05); background: rgba(5,5,8,.5)" aria-labelledby="w1">
+      <h2 class="col-h" id="w1"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"></rect><rect width="20" height="8" x="2" y="14" rx="2"></rect></svg>Where to run</h2>
+      <sc-for list="{{ targets }}" as="t" hint-placeholder-count="6">
+        <button class="target {{ t.cls }}" onClick="{{ t.pick }}" disabled="{{ t.disabled }}" aria-pressed="{{ t.selected }}">
+          <span class="radio"></span>
+          <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+            <span style="font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 14px">{{ t.name }}</span>
+            <span class="mono" style="font-size: 10px; color: #9ca3af">{{ t.meta }}</span>
+          </span>
+          <span class="pill {{ t.pillCls }}">{{ t.pill }}</span>
+        </button>
+      </sc-for>
+      <div class="box" style="display: flex; flex-direction: column; gap: 6px; margin-top: 6px; border-color: {{ sel.ring }}">
+        <span class="lbl" style="margin: 0; color: #cbd5e1">{{ sel.modeTitle }}</span>
+        <span style="font-size: 12px; line-height: 1.55; color: #cbd5e1">{{ sel.modeText }}</span>
+      </div>
+      <sc-if value="{{ sel.detached }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; gap: 8px; border-radius: 8px; background: rgba(6,182,212,.07); border: 1px solid rgba(6,182,212,.2); padding: 10px 12px">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#67e8f9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 2px"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+            <p class="mono" style="margin: 0; font-size: 10px; line-height: 1.6; color: #9ca3af"><b style="color: #a5f3fc">Always unattended.</b> Review gates and merges to the feature branch auto-approve. Merge-to-default and over-budget gates still park for you under Runs.</p>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+            <div><label class="lbl" for="mc">Max cost (USD)</label><input class="field sm" id="mc" placeholder="no cap"></div>
+            <div><label class="lbl" for="mw">Max wall-clock (min)</label><input class="field sm" id="mw" placeholder="no cap"></div>
+          </div>
+        </div>
+      </sc-if>
+    </section>
+
+    <section style="flex: 1 1 400px; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 16px" aria-labelledby="w2">
+      <h2 class="col-h" id="w2">What</h2>
+      <div>
+        <div class="lbl">Attachments <span class="hint">optional · referenced as [attachment -- &lt;name&gt;] in prompts</span></div>
+        <div class="drop">
+          <span class="att"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"></rect><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"></path></svg>429-burst.png · 212 KB<button aria-label="Remove 429-burst.png"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></span>
+          <span class="att"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>rate-limit-spec.md · 8 KB<button aria-label="Remove rate-limit-spec.md"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button></span>
+          <button class="addf"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg>Add files</button>
+          <span class="mono" style="font-size: 10px; color: #8b93a1; flex-basis: 100%">Drop, paste or pick · up to 10 files, {{ sel.fileCap }} each</span>
+        </div>
+        <p class="note">Uploaded to the Hub encrypted, fetched once by {{ sel.name }} before launch, then deleted from the Hub.</p>
+      </div>
+      <div><label class="lbl" for="ttl">Title</label><input class="field" id="ttl" value="Rate-limit the public search endpoint"></div>
+      <div><label class="lbl" for="desc">Describe the feature</label><textarea class="field" id="desc">Per-tenant token bucket in front of /v1/search. 429 with Retry-After when exhausted; limits from tenant settings, default 50 rps. See the attached spec and the burst screenshot.</textarea></div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px">
+        <div><label class="lbl" for="pj">Project</label><select class="field" id="pj"><sc-for list="{{ sel.projects }}" as="p" hint-placeholder-count="3"><option>{{ p }}</option></sc-for></select></div>
+        <div><label class="lbl" for="wf">Workflow</label><select class="field" id="wf"><option>feature-standard (v7)</option><option>bugfix-fast (v3)</option><option>chore (v2)</option></select></div>
+      </div>
+      <div>
+        <div class="lbl" style="display: flex; align-items: center; gap: 6px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>Target repositories <span class="hint">(auto-detected from description)</span></div>
+        <label class="chk"><input type="checkbox" checked>acme/search-svc</label>
+        <label class="chk"><input type="checkbox">acme/search-protos</label>
+      </div>
+      <div class="box" style="display: flex; align-items: center; justify-content: space-between; gap: 12px">
+        <span class="mono" style="font-size: 12px; color: #cbd5e1">Origin · starts from <b style="color: #f3f4f6">main</b> · compared against <b style="color: #f3f4f6">main</b></span>
+        <a href="#" class="mono" style="font-size: 12px">Change</a>
+      </div>
+    </section>
+
+    <section style="flex: 1.3 1 460px; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 16px; border-left: 1px solid rgba(255,255,255,.05)" aria-labelledby="w3">
+      <h2 class="col-h" id="w3">How <span class="hint" style="font-size: 11px">harnesses and models reported by {{ sel.name }}</span></h2>
+      <div>
+        <span class="lbl">Default agent, model &amp; effort — all steps</span>
+        <div class="grid3">
+          <select class="field sm" id="da" aria-label="Default agent" value="{{ def.agent }}" onChange="{{ setDefAgent }}"><sc-for list="{{ sel.harnesses }}" as="h" hint-placeholder-count="3"><option value="{{ h }}">{{ h }}</option></sc-for></select>
+          <select class="field sm" aria-label="Default model"><option>Agent default model</option><sc-for list="{{ defModels }}" as="m" hint-placeholder-count="3"><option>{{ m }}</option></sc-for></select>
+          <select class="field sm" aria-label="Default effort"><option>project default</option><option>low</option><option>medium</option><option>high</option></select>
+        </div>
+      </div>
+
+      <div>
+        <span class="lbl">Pipeline · click a step to override it</span>
+        <div class="box" style="background: rgba(0,0,0,.2); border-color: rgba(255,255,255,.05); padding: 14px; display: flex; flex-direction: column">
+          <sc-for list="{{ ranks }}" as="r" hint-placeholder-count="5">
+            <sc-if value="{{ r.notFirst }}" hint-placeholder-val="{{ true }}"><div class="conn"></div></sc-if>
+            <div class="rank">
+              <sc-for list="{{ r.nodes }}" as="n" hint-placeholder-count="1">
+                <button class="node {{ n.cls }}" onClick="{{ n.pick }}" aria-pressed="{{ n.selected }}">
+                  <span style="display: flex; align-items: center; gap: 10px; min-width: 0">
+                    <span class="ico {{ n.tone }}"><sc-if value="{{ n.isGate }}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></svg></sc-if><sc-if value="{{ n.isAgent }}" hint-placeholder-val="{{ true }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2M20 14h2M15 13v2M9 13v2"></path></svg></sc-if><sc-if value="{{ n.isSeq }}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"></path><path d="m3 7 2 2 4-4"></path><path d="M13 6h8M13 12h8M13 18h8"></path></svg></sc-if><sc-if value="{{ n.isFin }}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" x2="4" y1="22" y2="15"></line></svg></sc-if></span>
+                    <span style="display: flex; flex-direction: column; min-width: 0">
+                      <span style="font-size: 13px; font-weight: 500; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{ n.title }}</span>
+                      <span class="kind" style="color: {{ n.kindColor }}">{{ n.kind }}</span>
+                    </span>
+                  </span>
+                  <sc-if value="{{ n.overridable }}" hint-placeholder-val="{{ true }}">
+                    <span class="ac"><span class="{{ n.agentCls }}">{{ n.agent }}</span><span class="{{ n.modelCls }}">{{ n.model }}</span><span class="{{ n.effortCls }}">{{ n.effort }}</span></span>
+                  </sc-if>
+                </button>
+              </sc-for>
+            </div>
+          </sc-for>
+          <div class="mono" style="font-size: 10px; color: #fcd34d; text-align: center; margin-top: 10px">↺ Validate loops back to Implement on a failing verdict</div>
+        </div>
+      </div>
+
+      <div class="box" style="display: flex; flex-direction: column; gap: 10px; border-color: rgba(34,211,238,.3)">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><span class="lbl" style="margin: 0; color: #a5f3fc">Override · {{ cur.title }}</span><sc-if value="{{ cur.overridable }}" hint-placeholder-val="{{ true }}"><button class="addf" onClick="{{ clearCur }}">Inherit all</button></sc-if></div>
+        <sc-if value="{{ cur.overridable }}" hint-placeholder-val="{{ true }}">
+          <div class="grid3">
+            <select class="field sm" aria-label="Agent for this step" value="{{ cur.agentVal }}" onChange="{{ setCurAgent }}"><option value="">inherit</option><sc-for list="{{ sel.harnesses }}" as="h" hint-placeholder-count="3"><option value="{{ h }}">{{ h }}</option></sc-for></select>
+            <select class="field sm" aria-label="Model for this step" value="{{ cur.modelVal }}" onChange="{{ setCurModel }}"><option value="">inherit</option><sc-for list="{{ cur.models }}" as="m" hint-placeholder-count="3"><option value="{{ m }}">{{ m }}</option></sc-for></select>
+            <select class="field sm" aria-label="Effort for this step" value="{{ cur.effortVal }}" onChange="{{ setCurEffort }}" disabled="{{ cur.noEffort }}"><option value="">inherit</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select>
+          </div>
+          <sc-if value="{{ cur.warn }}" hint-placeholder-val="{{ false }}"><p class="note" style="color: #fcd34d; margin: 0">{{ cur.warnText }}</p></sc-if>
+          <sc-if value="{{ cur.noEffort }}" hint-placeholder-val="{{ false }}"><p class="note" style="margin: 0">Hermes reads effort only from its own config file, which Demeteo never edits — it runs at whatever that says.</p></sc-if>
+        </sc-if>
+        <sc-if value="{{ cur.fixed }}" hint-placeholder-val="{{ false }}"><p style="margin: 0; font-size: 12px; color: #9ca3af; line-height: 1.5">{{ cur.fixedText }}</p></sc-if>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px">
+        <div><label class="lbl" for="li">Loop iterations</label><input class="field sm" id="li" placeholder="blank = project default (3)"></div>
+        <div><label class="lbl" for="pb">Per-turn budget</label><input class="field sm" id="pb" placeholder="blank = project default ($20)"></div>
+      </div>
+      <div>
+        <span class="lbl">Commit artifacts to PR</span>
+        <div class="seg3" role="group" aria-label="Commit artifacts to PR"><button class="on">Project default</button><button>Yes</button><button>No</button></div>
+      </div>
+    </section>
+  </div>
+
+  <div style="padding: 14px 24px; border-top: 1px solid rgba(255,255,255,.05); background: #050508; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between">
+    <span class="mono" style="font-size: 10px; color: #8b93a1">⌘/Ctrl + Enter to launch · {{ overrideCount }} step overrides · nothing secret leaves {{ sel.name }}</span>
+    <div style="display: flex; gap: 12px"><a class="btn btn-ghost" href="Main.dc.html">Cancel</a><a class="btn btn-launch" href="Run.dc.html">{{ sel.cta }}</a></div>
+  </div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1360}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      picked: 'dev-workstation',
+      step: 'impl',
+      defAgent: 'claude-code',
+      ov: {
+        impl: { agent: 'opencode', model: 'anthropic/claude-sonnet-5', effort: 'high' },
+        sec: { agent: 'codex', model: 'gpt-5-codex', effort: '' },
+      },
+    };
+  }
+  renderVals() {
+    const MODELS = {
+      'claude-code': ['claude-opus-5-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
+      opencode: ['anthropic/claude-sonnet-5', 'anthropic/claude-opus-5-5', 'anthropic/claude-haiku-4-5'],
+      codex: ['gpt-5-codex'],
+      hermes: ['hermes default'],
+    };
+    const T = [
+      { id: 'studio-mbp', name: 'studio-mbp', meta: 'Desktop · macOS · 2 running', pill: 'Online', pillCls: 'p-em', project: 'admin-web',
+        projects: ['admin-web', 'design-tokens', 'checkout-api'], harnesses: ['claude-code', 'opencode'] },
+      { id: 'dev-workstation', name: 'dev-workstation', meta: 'Desktop · Linux · 2 of 4 running', pill: 'Online', pillCls: 'p-em', project: 'search-svc',
+        projects: ['search-svc', 'checkout-api', 'ledger', 'design-tokens', 'infra-scripts'], harnesses: ['claude-code', 'hermes', 'opencode'] },
+      { id: 'win-buildbox', name: 'win-buildbox', meta: 'Desktop · Windows · idle', pill: 'Online', pillCls: 'p-em', project: 'desktop-installer',
+        projects: ['desktop-installer', 'win-shell-ext'], harnesses: ['codex', 'opencode'] },
+      { id: 'travel-air', name: 'travel-air', meta: 'Desktop · macOS · seen 2 days ago', pill: 'Offline', pillCls: 'p-sl', project: 'marketing-site', offline: true,
+        projects: ['marketing-site'], harnesses: ['claude-code'] },
+      { id: 'runner-eu-1', name: 'runner-eu-1', meta: 'Remote runner · Linux · 4 detached', pill: 'Online', pillCls: 'p-cy', project: 'search-svc', detached: true,
+        projects: ['search-svc', 'platform-infra', 'data-pipelines', 'checkout-api'], harnesses: ['claude-code', 'opencode'] },
+      { id: 'runner-gpu-2', name: 'runner-gpu-2', meta: 'Remote runner · 1.1.4 · fleet is 1.2.0', pill: 'Runner behind', pillCls: 'p-am', disabled: true,
+        projects: [], harnesses: [] },
+    ];
+    const picked = this.state.picked;
+    const targets = T.map((t) => ({
+      ...t, selected: t.id === picked, disabled: !!t.disabled,
+      cls: (t.id === picked ? 'sel' : '') + (t.disabled ? ' dis' : ''),
+      pick: () => { if (!t.disabled) this.setState({ picked: t.id, defAgent: t.harnesses[0] }); },
+    }));
+    const s = T.find((t) => t.id === picked) || T[1];
+    const sel = {
+      ...s,
+      detached: !!s.detached,
+      fileCap: s.detached ? '25 MB' : '100 MB',
+      cta: s.offline ? 'Queue feature' : 'Launch feature',
+      ring: s.offline ? 'rgba(148,163,184,.3)' : s.detached ? 'rgba(6,182,212,.3)' : 'rgba(255,255,255,.1)',
+      modeTitle: s.offline ? 'Queued until it reconnects' : s.detached ? 'Detached' : 'Runs on the desktop',
+      modeText: s.offline
+        ? 'The Hub holds the request; ' + s.name + ' picks it up next time it connects and checks it against what it allows. Expires after 24 h.'
+        : s.detached
+          ? 'Runs on ' + s.name + ' with the Hub as its client. Git credentials come from an online desktop’s keyring for this run only; none online, it parks as Needs credentials.'
+          : s.name + ' creates the Feature itself and runs it exactly as if you had launched it at the desk. The desktop shows the same run.',
+    };
+    const ov = this.state.ov;
+    const def = { agent: s.harnesses.includes(this.state.defAgent) ? this.state.defAgent : (s.harnesses[0] || '') };
+    const STEPS = [
+      { id: 'plan', title: 'Plan', type: 'agent', rank: 0 },
+      { id: 'gplan', title: 'Review plan', type: 'gate', rank: 1 },
+      { id: 'impl', title: 'Implement', type: 'sequence', rank: 2 },
+      { id: 'val', title: 'Validate', type: 'agent', rank: 3 },
+      { id: 'sec', title: 'Security review', type: 'agent', rank: 3 },
+      { id: 'gdiff', title: 'Review diff', type: 'gate', rank: 4 },
+      { id: 'fin', title: 'Finalize', type: 'finalize', rank: 5 },
+    ];
+    const META = {
+      agent: { kind: 'Agent', tone: 't-cy', color: '#22d3ee' },
+      gate: { kind: 'Gate', tone: 't-am', color: '#fbbf24' },
+      sequence: { kind: 'Sequence', tone: 't-vi', color: '#a78bfa' },
+      finalize: { kind: 'Finalize', tone: 't-em', color: '#34d399' },
+    };
+    const nodes = STEPS.map((st) => {
+      const o = ov[st.id] || {};
+      const overridable = st.type === 'agent' || st.type === 'sequence';
+      const missing = o.agent && !s.harnesses.includes(o.agent);
+      const m = META[st.type];
+      return {
+        ...st, overridable,
+        isGate: st.type === 'gate', isAgent: st.type === 'agent', isSeq: st.type === 'sequence', isFin: st.type === 'finalize',
+        kind: m.kind, tone: m.tone, kindColor: m.color,
+        selected: st.id === this.state.step,
+        cls: (st.id === this.state.step ? 'sel' : '') + (o.agent || o.model || o.effort ? ' ov' : ''),
+        agent: o.agent ? (missing ? o.agent + ' · not on ' + s.name : o.agent) : def.agent,
+        agentCls: o.agent ? (missing ? 'warn' : 'set') : '',
+        model: o.model || 'default model',
+        modelCls: o.model ? 'set' : '',
+        effort: o.effort || 'default effort',
+        effortCls: o.effort ? 'set' : '',
+        pick: () => this.setState({ step: st.id }),
+      };
+    });
+    const ranks = [];
+    nodes.forEach((n) => { (ranks[n.rank] = ranks[n.rank] || []).push(n); });
+    const rankList = ranks.map((r, i) => ({ nodes: r, notFirst: i > 0 }));
+    const cs = nodes.find((n) => n.id === this.state.step) || nodes[2];
+    const co = ov[cs.id] || {};
+    const effAgent = co.agent || def.agent;
+    const missing = co.agent && !s.harnesses.includes(co.agent);
+    const cur = {
+      title: cs.title,
+      overridable: cs.overridable,
+      fixed: !cs.overridable,
+      fixedText: cs.type === 'gate'
+        ? 'A gate is a human checkpoint — no agent runs it, so there is nothing to override.'
+        : 'Finalize squashes and publishes with the project’s own settings; no agent turn to override.',
+      agentVal: co.agent || '', modelVal: co.model || '', effortVal: co.effort || '',
+      models: MODELS[effAgent] || [],
+      noEffort: effAgent === 'hermes',
+      warn: !!missing,
+      warnText: missing ? co.agent + ' isn’t installed on ' + s.name + '. Pick another harness, or the launch is refused there.' : '',
+    };
+    const setOv = (patch) => this.setState({ ov: { ...ov, [cs.id]: { ...(ov[cs.id] || {}), ...patch } } });
+    return {
+      targets, sel, def, cur,
+      ranks: rankList,
+      defModels: MODELS[def.agent] || [],
+      overrideCount: Object.values(ov).filter((o) => o.agent || o.model || o.effort).length,
+      setDefAgent: (e) => this.setState({ defAgent: e.target.value }),
+      setCurAgent: (e) => setOv({ agent: e.target.value, model: '' }),
+      setCurModel: (e) => setOv({ model: e.target.value }),
+      setCurEffort: (e) => setOv({ effort: e.target.value }),
+      clearCur: () => setOv({ agent: '', model: '', effort: '' }),
+    };
+  }
+}
+</script>
+</body>
+</html>
