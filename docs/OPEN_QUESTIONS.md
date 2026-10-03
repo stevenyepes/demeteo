@@ -226,7 +226,7 @@ These came up briefly but weren't deep-dived in the interview. Captured here for
 - **Workflow marketplace / community sharing** — defer until there's a community; v3+ at earliest.
 - **Custom step types via WASM** — defer with the WASM plugin host.
 - **Pluggable UI themes beyond the dark neon system** — defer; the design system is the product identity.
-- **Mobile / web companion** — explicitly out of scope; demeteo is a desktop control plane.
+- **Mobile / web companion** — no longer out of scope. A browser control plane, the Demeteo Hub, is decided and not built: see [decision 56](DECISIONS.md#1-the-locked-decisions) and [HUB.md](HUB.md). A native mobile app is not part of it.
 - **WebKitGTK + NVIDIA + Wayland Error 71** — not a deferred feature, but a documented platform quirk with an auto-detected workaround and `DEMETEO_DISABLE_GPU=1` escape hatch. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 ---

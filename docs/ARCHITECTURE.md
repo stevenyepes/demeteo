@@ -408,6 +408,24 @@ src/                              # React frontend
 └── docs/                          # Bundled user-facing help markdown (out of scope for engineering docs)
 ```
 
+### Workspace crates and the Hub (decided, not built)
+
+The tree above is `src-tauri/` only. The shared core and the remote runner live
+in `crates/demeteo-core` and `crates/demeteo-runner`. The Demeteo Hub — a hosted
+browser control plane over many instances — adds three more, **none of which exists
+yet**:
+
+| Path | What it is |
+|---|---|
+| `crates/demeteo-hub` | the axum server |
+| `crates/demeteo-hub-protocol` | serde-only wire types shared by the desktop client and the Hub; it does not depend on `demeteo-core` |
+| `hub-web/` | a second Vite entry in this repo, reusing `src/components/canvas` and the `src/App.css` tokens |
+
+The Hub does not link `demeteo-core` in v1. Where the desktop's client for it sits in the
+hexagon above is open ([HUB.md §11](HUB.md#11-what-is-not-decided)); the Hub never
+dials a desktop. Spec:
+[HUB.md](HUB.md); decisions 56–63 in [DECISIONS.md](DECISIONS.md#1-the-locked-decisions).
+
 ## 4. Tauri Command Surface
 
 The commands registered in [`src-tauri/src/lib.rs:461-585`](../../src-tauri/src/lib.rs)
