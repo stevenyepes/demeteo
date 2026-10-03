@@ -1,0 +1,41 @@
+# Spike variant of sshd/Dockerfile (docs/HUB_SSH_CERT_SPIKE.md): trusts a CA via
+# TrustedUserCAKeys, password auth OFF, LogLevel VERBOSE so the cert key ID and
+# CA fingerprint reach `docker logs`. Build context is the spike's work dir
+# (ca.pub, ctl.pub, auth_principals), not this directory.
+#
+# Loopback test image only: it bakes the CA public key and principals into
+# layers. Production runners get them from the runner install. Never built; see
+# the note in ssh_cert/run-ssh-cert-spike.sh.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-server ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /run/sshd
+
+ARG SSH_USER=demeteo
+RUN useradd --create-home --shell /bin/bash "$SSH_USER" \
+ && passwd -l "$SSH_USER" \
+ && mkdir -p "/home/$SSH_USER/.ssh"
+
+COPY ca.pub /etc/ssh/test_user_ca.pub
+COPY auth_principals /etc/ssh/auth_principals
+COPY ctl.pub /home/demeteo/.ssh/authorized_keys
+RUN chown -R "$SSH_USER:$SSH_USER" "/home/$SSH_USER/.ssh" \
+ && chmod 700 "/home/$SSH_USER/.ssh" && chmod 600 "/home/$SSH_USER/.ssh/authorized_keys"
+
+RUN printf '%s\n' \
+      'PasswordAuthentication no' \
+      'KbdInteractiveAuthentication no' \
+      'PermitRootLogin no' \
+      'UsePAM no' \
+      'PubkeyAuthentication yes' \
+      'LogLevel VERBOSE' \
+      'PerSourcePenalties no' \
+      'MaxAuthTries 20' \
+      'TrustedUserCAKeys /etc/ssh/test_user_ca.pub' \
+      'AuthorizedPrincipalsFile /etc/ssh/auth_principals' \
+      >> /etc/ssh/sshd_config
+
+EXPOSE 22
+CMD ["/usr/sbin/sshd", "-D", "-e"]
