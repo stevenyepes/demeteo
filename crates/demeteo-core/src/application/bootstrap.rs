@@ -148,7 +148,11 @@ async fn do_bootstrap_inner(
             .await
             .is_ok();
 
-        if !exists {
+        if exists {
+            ctx.worktree_ops
+                .scrub_origin_credentials(machine_id, &target_dir)
+                .await;
+        } else {
             ctx.worktree_ops
                 .clone_repository(
                     machine_id,

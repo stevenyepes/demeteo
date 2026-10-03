@@ -122,8 +122,8 @@ fn remote_url(spec: &RunSpec) -> String {
 
 /// Clone the repo directly via askpass (M4.3), *before* handing off to
 /// the shared `bootstrap::bootstrap_project` — which detects the
-/// already-cloned directory and skips its own (keyring-backed, PAT-in-URL)
-/// clone path entirely. A no-op if the directory is already a git
+/// already-cloned directory and skips its own (keyring-backed, token-free
+/// URL) clone path entirely. A no-op if the directory is already a git
 /// working tree (idempotent across retries/resumes).
 async fn pre_clone_with_askpass(
     svc: &RunnerServices,

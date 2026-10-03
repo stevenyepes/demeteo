@@ -377,10 +377,10 @@ impl GitOpsHelper {
             (!base_ref.starts_with("refs/")).then(|| format!("refs/remotes/origin/{}", base_ref));
         if remote_tracking.is_some() {
             let _ = self
-                .exec
-                .run_program(
+                .fetch(
                     machine_str,
-                    git_request(repo_dir, ["fetch", "origin", base_ref]),
+                    repo_dir,
+                    ["origin", base_ref].map(String::from).to_vec(),
                 )
                 .await;
         }

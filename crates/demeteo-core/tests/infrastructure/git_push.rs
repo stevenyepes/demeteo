@@ -5,11 +5,13 @@
 use super::*;
 
 const PAT: &str = "glpat-not-a-real-token";
+const HOST: &str = "gitlab.example.com";
 
 fn credential() -> GitCredential {
     GitCredential {
         user: "oauth2",
         pat: PAT.to_string(),
+        host: HOST.to_string(),
     }
 }
 
@@ -45,6 +47,17 @@ fn the_helper_reads_the_token_from_the_environment() {
         helper.starts_with('!'),
         "git only treats a helper as a shell command line when it starts with `!`: {helper}"
     );
+}
+
+/// The host the helper answers for travels with the secret, beside it and
+/// never in argv.
+#[test]
+fn the_host_binding_rides_the_environment_beside_the_credential() {
+    let req = request();
+
+    assert_eq!(req.env.get(HOST_ENV_VAR).map(String::as_str), Some(HOST));
+    assert!(!req.args.iter().any(|a| a.contains(HOST)), "{:?}", req.args);
+    assert!(credential_helper().contains(&format!("${}", HOST_ENV_VAR)));
 }
 
 /// Order is the whole mechanism. The empty value resets every helper the
@@ -222,6 +235,166 @@ fn a_failed_push_carries_no_token_into_its_diagnosis() {
     assert!(!said.contains(PAT), "token survived: {said}");
 }
 
+/// `push_request` is what every push site hands the transport; factoring its
+/// credential half out must not move a byte of it.
+#[test]
+fn a_credentialed_force_push_is_exactly_this_argv_and_env() {
+    let req = request();
+
+    assert_eq!(req.executable, "git");
+    assert_eq!(
+        req.args,
+        [
+            "-C".to_string(),
+            "/w/repo".to_string(),
+            "-c".to_string(),
+            "credential.helper=".to_string(),
+            "-c".to_string(),
+            format!("credential.helper={}", credential_helper()),
+            "push".to_string(),
+            "-f".to_string(),
+            "origin".to_string(),
+            "demeteo/f-1".to_string(),
+        ]
+    );
+    let mut env = crate::domain::git_push::unattended_env();
+    env.insert(PAT_ENV_VAR.to_string(), PAT.to_string());
+    env.insert(USER_ENV_VAR.to_string(), "oauth2".to_string());
+    env.insert(HOST_ENV_VAR.to_string(), HOST.to_string());
+    assert_eq!(req.env, env);
+    assert_eq!(req.timeout, Some(PUSH_TIMEOUT));
+}
+
+#[test]
+fn an_uncredentialed_push_is_exactly_this_argv_and_env() {
+    let req = push_request("/w/repo", "b", false, None);
+
+    assert_eq!(
+        req.args,
+        ["-C", "/w/repo", "push", "origin", "b"].map(String::from)
+    );
+    assert_eq!(req.env, crate::domain::git_push::unattended_env());
+    assert_eq!(req.timeout, Some(PUSH_TIMEOUT));
+}
+
+mod clone {
+    use super::*;
+
+    fn request() -> ProgramRequest {
+        clone_request(
+            ["clone", "https://oauth2@h/r", "/t"]
+                .map(String::from)
+                .to_vec(),
+            &credential(),
+        )
+    }
+
+    #[test]
+    fn the_credential_pair_leads_and_the_callers_args_follow_unchanged() {
+        let req = request();
+
+        let mut expected = credential_args();
+        expected.extend(["clone", "https://oauth2@h/r", "/t"].map(String::from));
+        assert_eq!(req.args, expected);
+        assert_eq!(req.executable, "git");
+        assert_eq!(&req.args[..4], &credential_args()[..]);
+    }
+
+    #[test]
+    fn it_has_no_working_directory_flag_and_no_token_in_argv() {
+        let req = request();
+
+        assert!(!req.args.iter().any(|a| a == "-C"), "{:?}", req.args);
+        assert!(!req.args.iter().any(|a| a.contains(PAT)), "{:?}", req.args);
+    }
+
+    #[test]
+    fn it_carries_the_credential_and_prompt_suppression_but_no_push_deadline() {
+        let req = request();
+
+        let mut env = crate::domain::git_push::unattended_env();
+        env.insert(PAT_ENV_VAR.to_string(), PAT.to_string());
+        env.insert(USER_ENV_VAR.to_string(), "oauth2".to_string());
+        env.insert(HOST_ENV_VAR.to_string(), HOST.to_string());
+        assert_eq!(req.env, env);
+        assert_eq!(req.timeout, None);
+    }
+}
+
+mod fetch {
+    use super::*;
+
+    fn args() -> Vec<String> {
+        ["origin", "--", "main"].map(String::from).to_vec()
+    }
+
+    #[test]
+    fn a_credentialed_fetch_resets_then_installs_the_helper_before_the_subcommand() {
+        let req = fetch_request("/w/repo", args(), Some(&credential()));
+
+        let mut expected = vec!["-C".to_string(), "/w/repo".to_string()];
+        expected.extend(credential_args());
+        expected
+            .extend(["fetch", "--no-recurse-submodules", "origin", "--", "main"].map(String::from));
+        assert_eq!(req.args, expected);
+        assert_eq!(req.executable, "git");
+    }
+
+    #[test]
+    fn a_credentialed_fetch_carries_the_credential_and_every_prompt_suppression() {
+        let req = fetch_request("/w/repo", args(), Some(&credential()));
+
+        let mut env = crate::domain::git_push::unattended_env();
+        env.insert(PAT_ENV_VAR.to_string(), PAT.to_string());
+        env.insert(USER_ENV_VAR.to_string(), "oauth2".to_string());
+        env.insert(HOST_ENV_VAR.to_string(), HOST.to_string());
+        assert_eq!(req.env, env);
+        for arg in &req.args {
+            assert!(!arg.contains(PAT), "token leaked into argv: {arg}");
+        }
+    }
+
+    #[test]
+    fn an_uncredentialed_fetch_installs_no_helper_but_still_cannot_be_asked() {
+        let req = fetch_request("/w/repo", args(), None);
+
+        assert_eq!(
+            req.args,
+            ["-C", "/w/repo", "fetch", "origin", "--", "main"].map(String::from)
+        );
+        assert_eq!(req.env, crate::domain::git_push::unattended_env());
+    }
+
+    #[test]
+    fn a_credentialed_fetch_forbids_submodule_recursion_before_the_callers_args() {
+        let req = fetch_request("/w/repo", args(), Some(&credential()));
+
+        let fetch_at = req.args.iter().position(|a| a == "fetch").unwrap();
+        assert_eq!(req.args[fetch_at + 1], "--no-recurse-submodules");
+        assert_eq!(req.args[fetch_at + 2], "origin");
+    }
+
+    #[test]
+    fn a_credentialless_fetch_leaves_submodule_recursion_to_git() {
+        let req = fetch_request("/w/repo", args(), None);
+
+        assert!(
+            !req.args.iter().any(|a| a.contains("submodules")),
+            "{:?}",
+            req.args
+        );
+    }
+
+    #[test]
+    fn a_fetch_inherits_no_push_deadline() {
+        assert_eq!(
+            fetch_request("/w/repo", args(), Some(&credential())).timeout,
+            None
+        );
+        assert_eq!(fetch_request("/w/repo", args(), None).timeout, None);
+    }
+}
+
 /// Resolving the credential from the remote, which is the whole reason this is
 /// reachable from a push site that holds nothing but a directory.
 mod from_the_remote {
@@ -271,7 +444,24 @@ mod from_the_remote {
             .expect("a token-free https remote needs a credential");
 
         assert_eq!(cred.user, "x-access-token");
+        assert_eq!(cred.host, "github.com");
         assert_eq!(cred.pat, PAT);
+    }
+
+    /// `sanitize_host` keeps a `:port`, so a self-hosted provider is stored with
+    /// one — while git's `host=` and `credential_host` both drop it.
+    #[tokio::test]
+    async fn a_provider_on_a_port_is_matched_and_bound_without_it() {
+        let exec = ScriptedExec::new(&[])
+            .with_programs(&[(GET_URL, Ok("https://oauth2@git.internal:8443/o/r.git\n"))]);
+        let db = seeded("git.internal:8443", "gitlab", "prov-ported");
+
+        let cred = credential_for_repo(&exec, db.as_ref(), "local", REPO)
+            .await
+            .expect("the port is not part of the host a provider is matched by");
+
+        assert_eq!(cred.host, "git.internal");
+        assert_eq!(cred.user, "oauth2");
     }
 
     /// An ssh clone authenticates itself. Answering `Some` here would install a
@@ -311,5 +501,103 @@ mod from_the_remote {
         assert!(credential_for_repo(&exec, db.as_ref(), "local", REPO)
             .await
             .is_none());
+    }
+}
+
+/// The helper run the way git runs it: one `sh -c` over the helper text with
+/// the operation appended, the credential in the environment, and git's
+/// `key=value` request on stdin.
+#[cfg(unix)]
+mod helper_execution {
+    use super::*;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    fn run(operation: &str, stdin: &str) -> (String, bool) {
+        let helper = credential_helper();
+        let script = format!("{} {}", helper.trim_start_matches('!'), operation);
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .env(PAT_ENV_VAR, PAT)
+            .env(USER_ENV_VAR, "oauth2")
+            .env(HOST_ENV_VAR, HOST)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        // `store` and `erase` return without reading stdin, so the write can
+        // lose the race to the helper's exit. Git ignores that EPIPE too.
+        match child.stdin.take().unwrap().write_all(stdin.as_bytes()) {
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+            other => other.unwrap(),
+        }
+        let out = child.wait_with_output().unwrap();
+        (String::from_utf8(out.stdout).unwrap(), out.status.success())
+    }
+
+    fn request_for(host: &str) -> String {
+        format!("protocol=https\nhost={host}\n\n")
+    }
+
+    #[test]
+    fn it_answers_for_the_provider_host() {
+        let (out, ok) = run("get", &request_for(HOST));
+
+        assert!(ok);
+        assert_eq!(out, format!("username=oauth2\npassword={PAT}\n"));
+    }
+
+    #[test]
+    fn it_answers_nothing_for_any_other_host_and_still_succeeds() {
+        for host in ["evil.example", "gitlab.example.com.evil.example", ""] {
+            let (out, ok) = run("get", &request_for(host));
+
+            assert!(ok, "host {host:?}");
+            assert_eq!(out, "", "host {host:?} was handed the credential");
+        }
+    }
+
+    #[test]
+    fn a_port_on_the_provider_host_still_matches() {
+        let (out, ok) = run("get", &request_for(&format!("{HOST}:8443")));
+
+        assert!(ok);
+        assert!(out.contains(PAT), "{out}");
+    }
+
+    #[test]
+    fn a_request_naming_no_host_gets_nothing() {
+        let (out, ok) = run("get", "protocol=https\n\n");
+
+        assert!(ok);
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn store_and_erase_print_nothing_and_succeed() {
+        for operation in ["store", "erase"] {
+            let (out, ok) = run(operation, &request_for(HOST));
+
+            assert!(ok, "{operation}");
+            assert_eq!(out, "", "{operation}");
+        }
+    }
+
+    /// The ssh transport wraps the whole body in one `sh -c '…'`, so the helper
+    /// text is single-quoted twice over (as a git arg, then as the body). It has
+    /// to come out the other end byte-for-byte or the remote helper is a
+    /// different program.
+    #[test]
+    fn the_helper_survives_the_remote_shell_quoting() {
+        let helper = credential_helper();
+        let quoted = crate::paths::shell_escape_posix(&helper);
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf %s {quoted}"))
+            .output()
+            .unwrap();
+
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), helper);
     }
 }

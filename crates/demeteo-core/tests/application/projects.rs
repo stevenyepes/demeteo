@@ -63,6 +63,18 @@ enum WorktreeCall {
         machine: Option<String>,
         repo_dir: String,
     },
+    CleanupLegacy {
+        machine: Option<String>,
+        repo_dir: String,
+    },
+    ScrubOrigin {
+        machine: Option<String>,
+        repo_dir: String,
+    },
+    DetectStrategy {
+        machine: Option<String>,
+        repo_dir: String,
+    },
 }
 
 /// Strictly records the calls this policy is allowed to make. Every other
@@ -222,17 +234,32 @@ impl WorktreeOpsPort for RecordingWorktrees {
     }
     async fn cleanup_legacy_terminal_worktrees(
         &self,
-        _: Option<&str>,
-        _: &str,
+        machine: Option<&str>,
+        repo_dir: &str,
     ) -> Result<usize, String> {
-        panic!("unexpected WorktreeOpsPort call")
+        self.record(WorktreeCall::CleanupLegacy {
+            machine: machine.map(str::to_string),
+            repo_dir: repo_dir.to_string(),
+        })?;
+        Ok(0)
+    }
+    async fn scrub_origin_credentials(&self, machine: Option<&str>, repo_dir: &str) {
+        self.record(WorktreeCall::ScrubOrigin {
+            machine: machine.map(str::to_string),
+            repo_dir: repo_dir.to_string(),
+        })
+        .unwrap();
     }
     async fn detect_worktree_strategy(
         &self,
-        _: Option<&str>,
-        _: &str,
+        machine: Option<&str>,
+        repo_dir: &str,
     ) -> Result<WorktreeStrategy, String> {
-        panic!("unexpected WorktreeOpsPort call")
+        self.record(WorktreeCall::DetectStrategy {
+            machine: machine.map(str::to_string),
+            repo_dir: repo_dir.to_string(),
+        })?;
+        Ok(crate::adapters::step_executor::setup::fetch_default_settings().worktree_strategy)
     }
     async fn clone_repository(
         &self,
@@ -907,5 +934,45 @@ async fn a_pin_that_cannot_be_dropped_does_not_block_the_project_delete() {
             .iter()
             .any(|p| p.id == ProjectId::from("p-stuck")),
         "the project row survived a failure the workspace removal below it would have swallowed"
+    );
+}
+
+#[tokio::test]
+async fn bootstrapping_an_existing_clone_scrubs_its_origin_and_does_not_reclone() {
+    let (ctx, worktree_port, calls) = context();
+    add_project(&ctx, "p-local", "local", None);
+    add_repo(&ctx, "r-local", "p-local", "org/local-repo");
+    let (_, repo_dir) = local_layout(&ctx, "p-local", "local-repo");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    let init = std::process::Command::new("git")
+        .args(["init", "--quiet", &repo_dir])
+        .status()
+        .unwrap();
+    assert!(init.success());
+    for call in [
+        WorktreeCall::CleanupLegacy {
+            machine: None,
+            repo_dir: repo_dir.clone(),
+        },
+        WorktreeCall::ScrubOrigin {
+            machine: None,
+            repo_dir: repo_dir.clone(),
+        },
+        WorktreeCall::DetectStrategy {
+            machine: None,
+            repo_dir: repo_dir.clone(),
+        },
+    ] {
+        worktree_port.expect(call);
+    }
+
+    crate::application::bootstrap::bootstrap_project(&ctx, "p-local".to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        calls.lock().unwrap().len(),
+        3,
+        "an opened legacy clone is scrubbed even when no run follows; a clone call would have panicked"
     );
 }

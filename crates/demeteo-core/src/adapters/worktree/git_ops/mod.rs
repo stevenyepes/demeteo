@@ -1,3 +1,4 @@
+use crate::adapters::git_push::{fetch_request, GitCredential};
 use crate::domain::branch_listing::BranchOption;
 use crate::domain::feature_origin::Refspec;
 use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
@@ -9,6 +10,7 @@ use crate::ports::worktree_ops::{
     TerminalWorktreeCreated, TerminalWorktreeRequest, WorktreeOpsPort,
 };
 use async_trait::async_trait;
+use clone::{prepare_origin, scrub_origin};
 use std::sync::Arc;
 
 /// Git plumbing shared by local, desktop-over-SSH, and runner execution.
@@ -40,6 +42,59 @@ impl GitOpsHelper {
         }
     }
 
+    /// `git fetch <args>` in `repo_dir`, carrying the provider credential when
+    /// `origin` names a host one is configured for.
+    ///
+    /// `args` is everything after `fetch`. A method issuing several fetches
+    /// resolves the credential once through [`Self::origin_credential`] and
+    /// goes through [`Self::fetch_with`] instead, so the probe behind it runs
+    /// once per operation and not once per fetch.
+    pub(crate) async fn fetch(
+        &self,
+        machine_str: &str,
+        repo_dir: &str,
+        args: Vec<String>,
+    ) -> Result<String, String> {
+        let credential = self.origin_credential(machine_str, repo_dir).await;
+        self.fetch_with(machine_str, repo_dir, args, credential.as_ref())
+            .await
+    }
+
+    /// The credential a fetch of `origin` in `repo_dir` carries.
+    ///
+    /// A legacy `origin` that embeds a password is migrated to the token-free
+    /// form on the way, see [`prepare_origin`]. The lookup degrades to no
+    /// helper when `origin` is unreadable, ssh, a path, or has no PAT to offer,
+    /// and the fetch is still issued: refusing here would break the remotes
+    /// that never needed a token to protect the ones that did.
+    pub(crate) async fn origin_credential(
+        &self,
+        machine_str: &str,
+        repo_dir: &str,
+    ) -> Option<GitCredential> {
+        prepare_origin(
+            self.exec.as_ref(),
+            self.app_settings.as_ref(),
+            machine_str,
+            repo_dir,
+        )
+        .await
+    }
+
+    /// [`Self::fetch`] over a credential already resolved by
+    /// [`Self::origin_credential`].
+    pub(crate) async fn fetch_with(
+        &self,
+        machine_str: &str,
+        repo_dir: &str,
+        args: Vec<String>,
+        credential: Option<&GitCredential>,
+    ) -> Result<String, String> {
+        self.exec
+            .run_program(machine_str, fetch_request(repo_dir, args, credential))
+            .await
+    }
+
     /// What a cache seed short of disk may reclaim with before it refuses.
     pub fn with_cache_reclaim(mut self, reclaim: Arc<dyn CacheReclaimPort>) -> Self {
         self.cache_reclaim = Some(reclaim);
@@ -62,6 +117,11 @@ impl GitOpsHelper {
 /// The line-ending answer is instead written **once**, persistently, into the
 /// clone's own config (`git_ops::clone`), where the index and the working tree
 /// are created agreeing with it and every linked worktree inherits it.
+///
+/// **A fetch against `origin` must not be built here — go through
+/// [`GitOpsHelper::fetch`].** The clone's `origin` no longer embeds the PAT, so
+/// a bare `fetch` from this constructor has nothing to authenticate with and,
+/// with no terminal to ask on, fails on any private remote.
 pub(crate) fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> ProgramRequest {
     git_request_vec(repo_dir, args.into_iter().map(str::to_string).collect())
 }
@@ -110,6 +170,10 @@ pub(crate) mod worktree;
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/worktree/git_ops/common.rs"]
 mod common;
+
+#[cfg(test)]
+#[path = "../../../../tests/infrastructure/worktree/git_ops/fetch.rs"]
+mod fetch_tests;
 
 #[async_trait]
 impl WorktreeOpsPort for GitOpsHelper {
@@ -220,6 +284,17 @@ impl WorktreeOpsPort for GitOpsHelper {
         repo_dir: &str,
     ) -> Result<WorktreeStrategy, String> {
         self.detect_worktree_strategy(machine_id, repo_dir).await
+    }
+
+    async fn scrub_origin_credentials(&self, machine_id: Option<&str>, repo_dir: &str) {
+        let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
+        scrub_origin(
+            self.exec.as_ref(),
+            self.app_settings.as_ref(),
+            machine_str,
+            repo_dir,
+        )
+        .await;
     }
 
     async fn clone_repository(

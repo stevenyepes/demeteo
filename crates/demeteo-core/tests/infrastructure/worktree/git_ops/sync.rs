@@ -1610,3 +1610,247 @@ mod feature_upstream {
         );
     }
 }
+
+/// The four fetches of `sync_feature_with_upstream` and
+/// `ensure_default_branch_updated` share one resolved credential, and the one
+/// fetch whose failure a user reads cannot echo it.
+mod credentialed_fetches {
+    use super::stage_at_each_call::{as_script, full_run, BASE, BRANCH, REPO};
+    use super::*;
+    use crate::adapters::database::SqliteAdapter;
+    use crate::adapters::git_push::{credential_helper, PAT_ENV_VAR, USER_ENV_VAR};
+    use crate::adapters::step_executor::scripted_exec::ScriptedExec;
+    use crate::adapters::worktree::git_ops::GitOpsHelper;
+    use crate::domain::ids::ProviderId;
+    use crate::domain::models::ProviderInstance;
+    use crate::ports::db::AppSettingsRepository;
+    use crate::ports::execution::ProgramRequest;
+    use rusqlite::Connection;
+    use std::sync::Arc;
+
+    const PAT: &str = "tok-sync-7f3a91";
+    const PROVIDER: &str = "prov-sync-fetches";
+    const GET_URL: &str = "git -C /repo remote get-url origin";
+
+    fn helper_over(
+        programs: &[(String, Result<String, String>)],
+    ) -> (Arc<ScriptedExec>, GitOpsHelper) {
+        crate::credential_cache::set(PROVIDER, PAT);
+        let db = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
+        db.add_provider_instance(ProviderInstance {
+            id: ProviderId::from(PROVIDER),
+            kind: "github".to_string(),
+            host: "github.com".to_string(),
+            username: "someone".to_string(),
+            avatar_url: String::new(),
+            created_at: 0,
+        })
+        .unwrap();
+        let exec = Arc::new(ScriptedExec::new(&[]).with_programs(&as_script(programs)));
+        let helper =
+            GitOpsHelper::new(Arc::new(db) as Arc<dyn AppSettingsRepository>, exec.clone());
+        (exec, helper)
+    }
+
+    /// `key` as a credentialed fetch renders it: the helper pair sits between
+    /// `-C <dir>` and the subcommand.
+    fn credentialed(key: &str) -> String {
+        let rest = key
+            .strip_prefix("git -C /repo ")
+            .expect("a key for the clone under test");
+        let rest = match rest.strip_prefix("fetch ") {
+            Some(args) => format!("fetch --no-recurse-submodules {args}"),
+            None => rest.to_string(),
+        };
+        format!(
+            "git -C /repo -c credential.helper= -c credential.helper={} {rest}",
+            credential_helper()
+        )
+    }
+
+    fn credentialed_run(
+        failing_base_fetch: Option<String>,
+    ) -> Vec<(String, Result<String, String>)> {
+        let mut run = vec![(
+            GET_URL.to_string(),
+            Ok("https://github.com/acme/widgets\n".to_string()),
+        )];
+        for (key, answer) in full_run() {
+            let is_fetch = key.contains(" fetch origin ");
+            let answer = match (&failing_base_fetch, key.as_str()) {
+                (Some(err), "git -C /repo fetch origin -- main") => Err(err.clone()),
+                _ => answer,
+            };
+            run.push((if is_fetch { credentialed(&key) } else { key }, answer));
+        }
+        run
+    }
+
+    fn fetches(exec: &ScriptedExec) -> Vec<ProgramRequest> {
+        exec.requests()
+            .into_iter()
+            .filter(|r| r.args.iter().any(|a| a == "fetch"))
+            .collect()
+    }
+
+    fn probes(exec: &ScriptedExec) -> usize {
+        exec.programs().iter().filter(|p| *p == GET_URL).count()
+    }
+
+    #[tokio::test]
+    async fn a_fatal_base_fetch_does_not_echo_the_token_it_carried() {
+        let err = format!(
+            "fatal: unable to access 'https://x-access-token:{PAT}@github.com/acme/widgets/': 403"
+        );
+        let (_, helper) = helper_over(&credentialed_run(Some(err)));
+
+        let failure = helper
+            .sync_feature_with_upstream(None, REPO, BRANCH, BASE, MergeGate::default(), &())
+            .await
+            .expect_err("the base fetch is scripted to fail");
+
+        match failure {
+            SyncFailure::Blocked {
+                stage, raw_error, ..
+            } => {
+                assert_eq!(stage, SyncBlockedStage::Fetch);
+                assert!(raw_error.contains("403"), "{raw_error}");
+                assert!(!raw_error.contains(PAT), "{raw_error}");
+            }
+            other => panic!("expected a blocked fetch, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sync_resolves_the_credential_once_for_both_of_its_fetches() {
+        let (exec, helper) = helper_over(&credentialed_run(None));
+
+        helper
+            .sync_feature_with_upstream(None, REPO, BRANCH, BASE, MergeGate::default(), &())
+            .await
+            .expect("the scripted run merges and pushes cleanly");
+
+        assert_eq!(probes(&exec), 1, "{:?}", exec.programs());
+        assert_eq!(fetches(&exec).len(), 2, "{:?}", exec.programs());
+    }
+
+    #[tokio::test]
+    async fn the_fetches_of_a_sync_carry_the_helper_and_the_env_when_a_provider_matches() {
+        let (exec, helper) = helper_over(&credentialed_run(None));
+
+        helper
+            .sync_feature_with_upstream(None, REPO, BRANCH, BASE, MergeGate::default(), &())
+            .await
+            .expect("the scripted run merges and pushes cleanly");
+
+        let fetches = fetches(&exec);
+        assert_eq!(fetches.len(), 2);
+        for fetch in fetches {
+            let before_fetch: Vec<&str> = fetch
+                .args
+                .iter()
+                .take_while(|a| *a != "fetch")
+                .map(String::as_str)
+                .collect();
+            assert!(
+                before_fetch
+                    .contains(&format!("credential.helper={}", credential_helper()).as_str()),
+                "{:?}",
+                fetch.args
+            );
+            assert!(fetch.args.iter().all(|a| !a.contains(PAT)));
+            assert!(
+                fetch.env.iter().any(|(k, v)| k == PAT_ENV_VAR && v == PAT),
+                "{:?}",
+                fetch.env
+            );
+            assert!(fetch.env.iter().any(|(k, _)| k == USER_ENV_VAR));
+        }
+    }
+
+    #[tokio::test]
+    async fn the_default_branch_refresh_resolves_once_and_both_fetches_carry_it() {
+        let fetch_default = credentialed("git -C /repo fetch origin -- main");
+        let ref_only = credentialed("git -C /repo fetch origin +main:main");
+        let run: Vec<(String, Result<String, String>)> = vec![
+            (
+                GET_URL.to_string(),
+                Ok("https://github.com/acme/widgets\n".to_string()),
+            ),
+            (fetch_default, Ok(String::new())),
+            (
+                "git -C /repo rev-parse --verify origin/main".to_string(),
+                Ok("beef".to_string()),
+            ),
+            (
+                ref_only,
+                Err("fatal: refusing to fetch into current branch".to_string()),
+            ),
+            (
+                "git -C /repo rev-parse --abbrev-ref HEAD".to_string(),
+                Ok("feat/x".to_string()),
+            ),
+            (
+                "git -C /repo update-ref refs/heads/main origin/main".to_string(),
+                Ok(String::new()),
+            ),
+        ];
+        let (exec, helper) = helper_over(&run);
+
+        helper
+            .ensure_default_branch_updated(None, REPO, BASE)
+            .await
+            .expect("the update-ref fallback lands");
+
+        assert_eq!(probes(&exec), 1, "{:?}", exec.programs());
+        let fetches = fetches(&exec);
+        assert_eq!(fetches.len(), 2);
+        assert!(fetches
+            .iter()
+            .all(|f| f.env.iter().any(|(k, v)| k == PAT_ENV_VAR && v == PAT)));
+    }
+
+    #[tokio::test]
+    async fn a_legacy_origin_is_migrated_when_the_default_branch_is_refreshed() {
+        let run: Vec<(String, Result<String, String>)> = vec![
+            (
+                GET_URL.to_string(),
+                Ok("https://x-access-token:tok-sync-7f3a91@github.com/acme/widgets\n".to_string()),
+            ),
+            (
+                "git -C /repo config --get remote.origin.url".to_string(),
+                Ok("https://x-access-token:tok-sync-7f3a91@github.com/acme/widgets\n".to_string()),
+            ),
+            (
+                "git -C /repo remote set-url origin https://x-access-token@github.com/acme/widgets"
+                    .to_string(),
+                Ok(String::new()),
+            ),
+            (
+                credentialed("git -C /repo fetch origin -- main"),
+                Ok(String::new()),
+            ),
+            (
+                "git -C /repo rev-parse --verify origin/main".to_string(),
+                Ok("beef".to_string()),
+            ),
+            (
+                credentialed("git -C /repo fetch origin +main:main"),
+                Ok(String::new()),
+            ),
+        ];
+        let (exec, helper) = helper_over(&run);
+
+        helper
+            .ensure_default_branch_updated(None, REPO, BASE)
+            .await
+            .expect("the scripted refresh lands");
+
+        let set_urls = exec
+            .programs()
+            .into_iter()
+            .filter(|p| p.contains("remote set-url"))
+            .count();
+        assert_eq!(set_urls, 1, "{:?}", exec.programs());
+    }
+}

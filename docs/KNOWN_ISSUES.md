@@ -151,6 +151,44 @@ commits along with the fix rather than stacking on top of them.
 source branch, parsed in the provider mapping (`MrSummary::from_gitlab`)
 — not a special case in `fix_destination`, which has no provider to ask.
 
+## A clone's embedded token is only scrubbed when it matches the keyring
+
+**Symptom:** A clone made by an older Demeteo keeps a token inside its
+`origin` URL (`https://user:token@host/…`), visible in `.git/config`,
+after the project has been opened and fetched from with a current
+build. No error is shown; for one case below, nothing is logged either.
+
+**Cause:** Moving the token out of `origin` is a `git remote set-url`
+that cannot be undone — the old token is gone once it returns — so
+`prepare_origin` in
+`crates/demeteo-core/src/adapters/worktree/git_ops/clone.rs` rewrites
+the URL only when the keyring PAT for that host is *exactly* the
+password the URL embeds (raw or percent-decoded). A different token for
+the same host — a stale keyring entry, or another account's PAT — would
+replace a working credential with one that fails. On a mismatch it logs
+a redacted warning and leaves the URL alone, so the fetch authenticates
+as it always did.
+
+**Consequence:** The token stays in `.git/config` until the user
+re-saves the provider token (so the keyring matches) or fixes the
+remote by hand. Any PAT that has already sat in a `.git/config` — or in
+a log, a backup or a synced folder that copied it — has leaked as far
+as that copy goes and must be rotated; scrubbing the URL does not
+un-expose it.
+
+A password containing an unencoded `/`, `?` or `#` is never migrated and
+**no log line says so**. `HttpRemote` in
+`crates/demeteo-core/src/domain/git_push.rs` ends the authority at the
+first of those delimiters, so `https://u:p/ss@host/r` has no userinfo
+and reads as a token-free URL. This is accepted: re-parsing at the last
+`@` would mis-rewrite URLs whose *path* contains one. A password
+percent-encoded in the URL is handled.
+
+**What would close it:** for the mismatch, a probe that proves which
+credential works before choosing (an authenticated `ls-remote` with
+each), or a prompt that lets the user pick; for the delimiter case, a
+parse that can tell a path `@` from a password one — neither is built.
+
 ## References
 
 - [tauri-apps/tauri#10702](https://github.com/tauri-apps/tauri/issues/10702) — Error 71 dispatching to Wayland display

@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use crate::adapters::git_push::{push_request, redacted, remote_user, GitCredential};
+use crate::domain::git_push::host_without_port;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
 
 pub(super) struct BranchPush<'a> {
@@ -72,6 +73,7 @@ pub(super) async fn push_feature_branch(
     let credential = GitCredential {
         user: remote_user,
         pat: push.pat.to_string(),
+        host: host_without_port(push.provider_host).to_string(),
     };
     exec.run_program(
         machine_str,

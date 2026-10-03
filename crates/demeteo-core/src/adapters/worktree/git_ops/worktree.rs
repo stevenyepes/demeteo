@@ -1,4 +1,5 @@
 use super::{git_request, git_request_vec, GitOpsHelper};
+use crate::adapters::git_push::redacted;
 use crate::domain::branch_listing::BranchOption;
 use crate::domain::feature_origin::Refspec;
 use crate::domain::models::WorktreeInfo;
@@ -139,10 +140,10 @@ impl GitOpsHelper {
         validate_git_branch_name(base)
             .map_err(|_| format!("base branch '{base}' is not a safe Git branch name"))?;
         let _ = self
-            .exec
-            .run_program(
+            .fetch(
                 machine_str,
-                git_request(repo_dir, ["fetch", "origin", base]),
+                repo_dir,
+                ["origin", base].map(String::from).to_vec(),
             )
             .await;
 
@@ -391,16 +392,24 @@ impl GitOpsHelper {
     ) -> Result<(), String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let spec = refspec.as_str();
-        self.exec
-            .run_program(
-                machine_str,
-                // Never drop the `--`: without it git reads a refspec
-                // beginning with `-` as an option. See `Refspec`.
-                git_request(repo_dir, ["fetch", "origin", "--", spec]),
-            )
-            .await
-            .map(|_| ())
-            .map_err(|e| format!("Failed to fetch '{spec}' from origin: {e}"))
+        let credential = self.origin_credential(machine_str, repo_dir).await;
+        self.fetch_with(
+            machine_str,
+            repo_dir,
+            // Never drop the `--`: without it git reads a refspec
+            // beginning with `-` as an option. See `Refspec`.
+            ["origin", "--", spec].map(String::from).to_vec(),
+            credential.as_ref(),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| {
+            let e = match &credential {
+                Some(credential) => redacted(&e, &credential.pat),
+                None => e,
+            };
+            format!("Failed to fetch '{spec}' from origin: {e}")
+        })
     }
 
     /// Point a branch at an already-resolvable start point, with no fallback.
@@ -1054,10 +1063,10 @@ impl GitOpsHelper {
     ) -> Option<String> {
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
         let _ = self
-            .exec
-            .run_program(
+            .fetch(
                 machine_str,
-                git_request(repo_dir, ["fetch", "origin", "--", base_branch]),
+                repo_dir,
+                ["origin", "--", base_branch].map(String::from).to_vec(),
             )
             .await;
         self.merge_base(machine_id, repo_dir, base_branch, branch)
