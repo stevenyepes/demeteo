@@ -134,6 +134,26 @@ pub struct SequenceStateMirror {
     pub subtask_runs: Vec<SubtaskRunMirrorRow>,
 }
 
+impl SequenceStateMirror {
+    /// Content hash the laptop sends as `get_sequence_state`'s
+    /// `if_revision`, computed over its own mirrored copy, so the runner can
+    /// answer `{"unchanged": true}` instead of resending the plan — which
+    /// runs to ~100 KB and would otherwise cross the wire on every 2s poll.
+    ///
+    /// Both sides must assemble the value identically for this to ever
+    /// match, which is why they share
+    /// [`read_sequence_state_mirror`](crate::application::remote_runs::read_sequence_state_mirror).
+    /// A mismatch costs a full fetch, never a stale view.
+    pub fn revision(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let bytes = serde_json::to_vec(self).unwrap_or_default();
+        Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+}
+
 /// One task in a sequence node, merged from its plan entry and (if it has run)
 /// its `subtask_runs` row, with the landed flag from the checkpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
