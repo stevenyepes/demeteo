@@ -1,6 +1,7 @@
 use crate::services::RunnerServices;
+use demeteo_core::application::remote_runs::read_sequence_state_mirror;
 use demeteo_core::domain::ids::{FeatureId, ThreadId};
-use demeteo_core::domain::models::{Feature, Message, SequenceStateMirror, StepExecution};
+use demeteo_core::domain::models::{Feature, Message, StepExecution};
 use demeteo_core::ports::run_events::RunEvent;
 use demeteo_core::ports::runner_run::RunnerRun;
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,12 @@ struct StreamEventsParams {
 struct SequenceStateParams {
     run_id: String,
     node_id: String,
+    /// The laptop's
+    /// [`SequenceStateMirror::revision`](demeteo_core::domain::models::SequenceStateMirror::revision)
+    /// of its own copy. Absent from an older laptop, which then gets the
+    /// full state as before.
+    #[serde(default)]
+    if_revision: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -159,28 +166,20 @@ pub(super) fn get_sequence_state(
     svc: &Arc<RunnerServices>,
     params: serde_json::Value,
     client_id: &str,
-) -> Result<SequenceStateMirror, String> {
+) -> Result<serde_json::Value, String> {
     let params: SequenceStateParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
     let fid = feature_id_for_run(svc, &params.run_id, client_id)?;
-    let plan_json = svc
-        .ctx
-        .sequence_resume
-        .plan_cache_get(&fid, &params.node_id)?;
-    let checkpoint = svc
-        .ctx
-        .sequence_resume
-        .sequence_checkpoint_get(&fid, &params.node_id)?;
-    let steps = svc.ctx.features.steps_for_feature(&fid)?;
-    let subtask_runs = match steps.iter().find(|s| s.step_id.as_str() == params.node_id) {
-        Some(step) => svc.ctx.features.subtask_runs_mirror_for_step(&step.id)?,
-        None => Vec::new(),
-    };
-    Ok(SequenceStateMirror {
-        plan_json,
-        checkpoint,
-        subtask_runs,
-    })
+    let state = read_sequence_state_mirror(
+        &*svc.ctx.features,
+        &*svc.ctx.sequence_resume,
+        &fid,
+        &params.node_id,
+    )?;
+    if params.if_revision.as_deref() == Some(state.revision().as_str()) {
+        return Ok(serde_json::json!({ "unchanged": true }));
+    }
+    serde_json::to_value(state).map_err(|e| e.to_string())
 }
 
 /// Variant A of the detached-run "Browse Code" fix: the runner's own

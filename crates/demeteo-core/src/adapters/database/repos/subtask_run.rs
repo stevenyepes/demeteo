@@ -56,7 +56,7 @@ pub fn subtask_runs_mirror_for_step(
                     tokens, error_message, started_at, ended_at, plan_epoch, plan_cycle
              FROM subtask_runs
              WHERE step_execution_id = ?1
-             ORDER BY started_at ASC",
+             ORDER BY started_at ASC, id ASC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
