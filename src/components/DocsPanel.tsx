@@ -55,7 +55,7 @@ const DocsPanel: React.FC<DocsPanelProps> = ({ isOpen, onClose }) => {
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <div className="absolute inset-0 bg-black/70" />
       <div
         className="relative w-full max-w-3xl h-[80vh] glass-panel border border-white/10 rounded-xl shadow-2xl overflow-hidden flex flex-col"
         onClick={e => e.stopPropagation()}
