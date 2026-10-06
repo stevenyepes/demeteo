@@ -1,8 +1,10 @@
+use crate::application::launch::{launch_run, LaunchRequest};
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::models::{
     EffortLevel, Feature, FeatureDivergence, FeatureDrift, GateDecision, SequenceState,
     StepAttempt, StepExecution,
 };
+use crate::domain::run_placement::{DetachedOptions, RunPlacement};
 use crate::domain::step_assignment::StepAssignment;
 use crate::domain::sync_resolver::SyncResolverChoice;
 use crate::domain::upstream_feature::DivergenceReconcile;
@@ -68,26 +70,33 @@ pub async fn start_feature(
     origin: Option<crate::domain::feature_origin::FeatureOrigin>,
     diff_base_branch: Option<String>,
 ) -> Result<Feature, AppError> {
-    ctx.executor
-        .feature_start(FeatureLaunch {
-            project_id,
-            workflow_id,
-            title,
-            description,
-            agent_kind,
-            model,
-            effort,
-            commit_artifacts,
-            loop_iterations,
-            max_budget_usd,
-            step_overrides: step_overrides.unwrap_or_default(),
-            staged_attachments: staged_attachments.unwrap_or_default(),
-            origin: origin.unwrap_or_default(),
-            diff_base_branch,
-            ..FeatureLaunch::default()
-        })
-        .await
-        .map_err(AppError::from)
+    let launch = FeatureLaunch {
+        project_id,
+        workflow_id,
+        title,
+        description,
+        agent_kind,
+        model,
+        effort,
+        commit_artifacts,
+        loop_iterations,
+        max_budget_usd,
+        step_overrides: step_overrides.unwrap_or_default(),
+        staged_attachments: staged_attachments.unwrap_or_default(),
+        origin: origin.unwrap_or_default(),
+        diff_base_branch,
+        ..FeatureLaunch::default()
+    };
+    launch_run(
+        &ctx,
+        LaunchRequest {
+            launch,
+            placement: RunPlacement::Local,
+            detached: DetachedOptions::default(),
+        },
+    )
+    .await
+    .map(|launched| launched.feature)
 }
 
 #[tauri::command]

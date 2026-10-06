@@ -687,6 +687,24 @@ export interface Feature {
   step_overrides?: StepOverride[];
 }
 
+/** Mirrors the Rust `LaunchedRun`: what `launch_run`, `ticket_start` and
+ *  `ticket_force_start` resolve with. The Feature's own fields, plus a note
+ *  for each way a run that *did* launch is still degraded — each absent
+ *  unless set. None is a failure, so none rejects: `reportDegradedLaunch`
+ *  (`src/lib/launch.ts`) turns them into what the user is told. */
+export interface LaunchedRun extends Feature {
+  /** The run's git credentials were not delivered; it waits at
+   *  `needs-credentials` until they are re-injected. Detached runs only. */
+  credentials_parked?: string;
+  /** Demeteo could not record the run, so reconcile will never report on it.
+   *  Detached runs only. */
+  mirror_unrecorded?: string;
+  /** A ticket's run launched, local or detached, but the ticket could not
+   *  record it: the board still shows it startable, and starting it again
+   *  would launch a second run. Ticket starts only. */
+  ticket_unrecorded?: string;
+}
+
 /** Mirrors the Rust `StepOverride` (`domain/models/feature.rs`): the run's
  *  highest-precedence resolution tier for one step, settable at launch and
  *  again while the run is alive. Each field is independently `null` =
@@ -1491,6 +1509,9 @@ export interface Ticket {
   agent_kind: string | null;
   model: string | null;
   effort: EffortLevel | null;
+  /** `null` inherits the Discovery's default placement; `'local'` is an
+   *  explicit local choice, not the same thing. */
+  machine_id: string | null;
   attachments: AttachedFile[];
   state: TicketState;
   drop_reason: string | null;
@@ -1537,6 +1558,25 @@ export interface TicketProgress {
   live: number;
 }
 
+/** Mirrors `RunPlacement` (`domain/run_placement.rs`): a destination, not a
+ *  transport. */
+export type RunPlacement = { kind: 'local' } | { kind: 'detached'; machine_id: string };
+
+/** Mirrors `ResolvedPlacement`. `inherited` is true only when the placement
+ *  came from the Discovery default rather than a stored or override choice. */
+export interface ResolvedPlacement {
+  placement: RunPlacement;
+  inherited: boolean;
+}
+
+/** Mirrors `TicketRemoteRun` — the mirror row of a detached attempt, for
+ *  display only; the lane still derives from the Feature. */
+export interface TicketRemoteRun {
+  machine_id: string;
+  run_id: string;
+  status: string;
+}
+
 /** Mirrors `TicketFeatureView` — what a started ticket's current attempt
  *  contributes to a card. */
 export interface TicketFeatureView {
@@ -1544,6 +1584,10 @@ export interface TicketFeatureView {
   status: string;
   mr_state: string | null;
   mr_url: string | null;
+  /** Where this attempt was placed, as its start recorded it; `null` when
+   *  nothing did. Never inferred from `remote` being absent. */
+  placement: RunPlacement | null;
+  remote: TicketRemoteRun | null;
 }
 
 /** Mirrors `TicketView`: the row, its derived position, and the forge state
@@ -1553,12 +1597,18 @@ export interface TicketView {
   ticket: Ticket;
   standing: TicketStanding;
   feature: TicketFeatureView | null;
+  placement: ResolvedPlacement;
 }
 
 /** Mirrors `DiscoveryBoard`. `tickets` arrive in `Ticket.seq` order. */
 export interface DiscoveryBoard {
   tickets: TicketView[];
   progress: TicketProgress;
+  /** What a ticket left on Default runs on — resolved by the server, since no
+   *  ticket holding a stored choice can say it. */
+  discovery_default: RunPlacement;
+  /** The machine a Local run executes on (`'local'` for the desktop). */
+  local_host: string;
 }
 
 // ── Decomposition (docs/PRD_DISCOVERY.md §5) ──────────────────────────────
@@ -1691,6 +1741,7 @@ export interface TicketEdit {
   agent_kind: string | null;
   model: string | null;
   effort: EffortLevel | null;
+  machine_id: string | null;
 }
 
 /** Mirrors `AskStatus`. Ask never surfaces `closed` yet — no close/reopen

@@ -4,15 +4,17 @@
 // `invoke()` — and a sync failure must surface verbatim in the same
 // `actionError` banner every other action uses, with no second error surface.
 
-import { fireEvent, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Discovery, DiscoveryBoard, DiscoveryDetail, TicketView } from '../../types';
+import type { Discovery, DiscoveryBoard, DiscoveryDetail, Feature, TicketView } from '../../types';
 import { RoutedSelection } from '../../test/routedSelection';
 import { DiscoveryView } from './DiscoveryView';
-import { NavigationProvider } from '../../context';
+import { NavigationProvider, useNavigation } from '../../context';
+import { ErrorToast } from '../ErrorToast';
+import { ErrorBusProvider, useErrorBus } from '../../lib/errorBus';
 
 const discovery: Discovery = {
   id: 'd-1',
@@ -57,6 +59,7 @@ const mergedTicket: TicketView = {
     agent_kind: null,
     model: null,
     effort: null,
+    machine_id: null,
     attachments: [],
     state: 'started',
     drop_reason: null,
@@ -67,12 +70,15 @@ const mergedTicket: TicketView = {
     updated_at: 0,
   },
   standing: { id: 't-1', lane: 'landed', startable: false, blockers: [] },
-  feature: { id: 'f-1', status: 'landed', mr_state: 'merged', mr_url: 'https://example.com/pr/1' },
+  placement: { placement: { kind: 'local' }, inherited: true },
+  feature: { id: 'f-1', status: 'landed', mr_state: 'merged', mr_url: 'https://example.com/pr/1', placement: null, remote: null },
 };
 
 const board: DiscoveryBoard = {
   tickets: [mergedTicket],
   progress: { blocked: 0, ready: 0, in_flight: 0, landed: 1, dropped: 0, live: 1 },
+  discovery_default: { kind: 'local' },
+  local_host: 'local',
 };
 
 beforeEach(() => {
@@ -151,5 +157,147 @@ describe('the integration controls', () => {
     fireEvent.click(view.getByTestId('discovery-publish-integration'));
 
     await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+  });
+});
+
+// Starting a ticket goes through `launch_run`, so a detached start can be
+// refused by the runner gate. That refusal has a remedy the banner cannot
+// offer, and a detached start is slow enough to be clicked twice.
+
+const readyTicket: TicketView = {
+  ...mergedTicket,
+  ticket: { ...mergedTicket.ticket, state: 'unstarted', feature_id: null, machine_id: 'm-box' },
+  standing: { id: 't-1', lane: 'ready', startable: true, blockers: [] },
+  placement: { placement: { kind: 'detached', machine_id: 'm-box' }, inherited: false },
+  feature: null,
+};
+
+const readyBoard: DiscoveryBoard = {
+  tickets: [readyTicket],
+  progress: { blocked: 0, ready: 1, in_flight: 0, landed: 0, dropped: 0, live: 1 },
+  discovery_default: { kind: 'local' },
+  local_host: 'local',
+};
+
+const refusalMessage = 'The runner on box is 1.0.0; this Demeteo is 1.1.0. Upgrade the runner.';
+const refusal = {
+  kind: 'runner_incompatible',
+  message: refusalMessage,
+  compatibility: {
+    verdict: 'runner_behind',
+    runner: '1.0.0',
+    runner_channel: 'stable',
+    app: '1.1.0',
+    app_channel: 'stable',
+  },
+};
+
+function CurrentView() {
+  const { view } = useNavigation();
+  return <output data-testid="current-view">{view.kind}</output>;
+}
+
+function ClearToasts() {
+  const { clear } = useErrorBus();
+  return <button type="button" data-testid="clear-toasts" onClick={clear} />;
+}
+
+async function openReadyTicket(start: () => Promise<unknown>) {
+  mockInvoke({ discovery_board: () => Promise.resolve(readyBoard), ticket_start: start });
+  const view = render(
+    <ErrorBusProvider>
+      <NavigationProvider>
+        <RoutedSelection>
+          {(selectedTicketId, onSelectTicket) => (
+            <DiscoveryView
+              discoveryId="d-1"
+              discoveryTitle="multi-client runner"
+              selectedTicketId={selectedTicketId}
+              onSelectTicket={onSelectTicket}
+            />
+          )}
+        </RoutedSelection>
+        <ErrorToast />
+        <CurrentView />
+        <ClearToasts />
+      </NavigationProvider>
+    </ErrorBusProvider>,
+  );
+  const button = await view.findByRole('button', { name: 'Start ticket' });
+  return { view, button };
+}
+
+describe('starting a ticket', () => {
+  it('renders a runner_incompatible refusal as a toast that routes to machine settings', async () => {
+    const start = vi.fn(() => Promise.reject(refusal));
+    const { view, button } = await openReadyTicket(start);
+
+    fireEvent.click(button);
+
+    const toast = await view.findByTestId('error-toast-runner_incompatible');
+    expect(toast.textContent).toContain(refusalMessage);
+    expect(view.queryByText(refusalMessage, { selector: 'p' })).toBeNull();
+    expect(invoke).toHaveBeenCalledWith('ticket_start', { ticketId: 't-1', machineId: null });
+
+    fireEvent.click(within(toast).getByRole('button', { name: 'Open machine settings' }));
+
+    expect(view.getByTestId('current-view').textContent).toBe('settings');
+    act(() => fireEvent.click(view.getByTestId('clear-toasts')));
+  });
+
+  it('keeps any other start failure in the action banner', async () => {
+    const { view, button } = await openReadyTicket(() => Promise.reject('ticket t-1 is locked'));
+
+    fireEvent.click(button);
+
+    const alert = await view.findByText('ticket t-1 is locked');
+    expect(alert.getAttribute('role')).toBe('alert');
+    expect(view.queryByTestId('error-toast-runner_incompatible')).toBeNull();
+  });
+
+  it('disables Start while the start is pending, so it cannot be submitted twice', async () => {
+    let resolve: (feature: Feature) => void = () => {};
+    const start = vi.fn(
+      () =>
+        new Promise<Feature>((settle) => {
+          resolve = settle;
+        }),
+    );
+    const { button } = await openReadyTicket(start);
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(button).toBeDisabled();
+    expect(start).toHaveBeenCalledTimes(1);
+    await act(async () => resolve({ id: 'f-1' } as Feature));
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it('starts a ticket whose credentials were parked, and says so in a notice that offers Runs', async () => {
+    const parked = { id: 'f-1', title: 'the ticket', credentials_parked: 'unscripted rpc inject_credentials' };
+    const { view, button } = await openReadyTicket(() => Promise.resolve(parked));
+
+    fireEvent.click(button);
+
+    const toast = await view.findByTestId('error-toast-provider');
+    expect(toast.textContent).toContain('unscripted rpc inject_credentials');
+    expect(view.queryByText(/inject_credentials/, { selector: 'p' })).toBeNull();
+
+    fireEvent.click(within(toast).getByRole('button', { name: 'Open runs' }));
+
+    expect(view.getByTestId('current-view').textContent).toBe('remote-inbox');
+    act(() => fireEvent.click(view.getByTestId('clear-toasts')));
+  });
+
+  it('posts no notice for a clean start', async () => {
+    const start = vi.fn(() => Promise.resolve({ id: 'f-1', title: 'the ticket' }));
+    const { view, button } = await openReadyTicket(start);
+
+    fireEvent.click(button);
+
+    await waitFor(() => expect(start).toHaveBeenCalledOnce());
+    await waitFor(() => expect(button).not.toBeDisabled());
+    expect(view.queryByRole('alert')).toBeNull();
   });
 });

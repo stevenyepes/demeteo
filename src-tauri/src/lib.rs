@@ -299,6 +299,7 @@ pub fn run() {
             run_event_recorder.wire(ctx.run_events.clone());
 
             commands::workflows::seed_starter_workflows(&ctx.workflows);
+            ctx.app_version.set(app.package_info().version.to_string());
 
             app.manage(ctx);
             app.manage(SessionState::default());
@@ -456,7 +457,7 @@ pub fn run() {
             commands::project::set_workflow_override,
             commands::features::fetch_active_features,
             commands::features::start_feature,
-            commands::remote_runner::remote_submit_run,
+            commands::remote_runner::launch_run,
             commands::remote_runner::remote_list_mirrored_runs,
             commands::remote_runner::remote_reconcile_runs,
             commands::remote_runner::remote_refresh_run,

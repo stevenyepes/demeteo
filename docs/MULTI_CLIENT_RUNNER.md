@@ -194,7 +194,11 @@ project settings; an old client (no `client_id`) still works unchanged.
   `"client_id"` into the `params` of **every** `ctx.exec.control_rpc(...)` call
   the remote commands make.
 - **Where:** `src-tauri/src/commands/remote_runner.rs` (new `remote_rpc(ctx,
-  machine, method, params)` wrapper; route all `remote_submit_run`,
+  machine, method, params)` wrapper; route the `submit_run` RPC — issued from
+  core by `submit_remote_run` in
+  `crates/demeteo-core/src/application/remote_runs/submit.rs`, which the Tauri
+  `launch_run` command reaches through `application::launch::launch_run`, so
+  the wrapper must be reachable from there — and all of
   `remote_get_status`, `remote_reconcile_runs`→`reconcile_one_run`,
   `remote_refresh_run`, `remote_stream_events`, `remote_get_feature`,
   `remote_list_steps`, `remote_read_artifact`, `remote_list_messages`,
@@ -251,10 +255,11 @@ project settings; an old client (no `client_id`) still works unchanged.
 
 - **What:** Add `RunSpec::project_settings: Option<ProjectSettings>` (serde
   default). Client fills it from `ctx.projects.get_settings(project_id)` in
-  `remote_submit_run`. Runner overlays it per MC-D4's merge rule when composing
+  `submit_remote_run`. Runner overlays it per MC-D4's merge rule when composing
   the row for `save_settings`, keeping bootstrap-detected `default_branch`.
 - **Where:** `crates/demeteo-core/src/domain/run_spec.rs` (new field);
-  `src-tauri/src/commands/remote_runner.rs` (populate);
+  `crates/demeteo-core/src/application/remote_runs/submit.rs` (populate, in
+  `submit_remote_run`);
   `crates/demeteo-runner/src/run.rs` (merge before `save_settings`, ~L226).
 - **Why:** MC-D4 / gap **f** — parity with local runs; no `feature_start` or port
   change (only *what row exists* before the shared code reads it).

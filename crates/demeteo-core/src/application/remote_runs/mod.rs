@@ -25,29 +25,9 @@ pub use control::{
 };
 pub use diff_url::resolve_run_diff_url;
 pub use sequence_mirror::read_sequence_state_mirror;
-pub use submit::{submit_remote_run, SubmitInput, SubmitOutcome};
+pub use submit::SubmitOutcome;
+pub(crate) use submit::{submit_remote_run, SubmitInput};
 pub use transport::{
     decide_gate, get_feature, get_status, get_worktree, list_messages, list_steps, read_artifact,
     stream_events,
 };
-
-use serde::Serialize;
-
-#[derive(Serialize)]
-pub struct RemoteRunHandle {
-    pub run_id: String,
-    pub machine_id: String,
-    pub status: String,
-    pub feature_id: String,
-}
-
-impl From<SubmitOutcome> for RemoteRunHandle {
-    fn from(outcome: SubmitOutcome) -> Self {
-        Self {
-            run_id: outcome.run_id,
-            machine_id: outcome.machine_id,
-            status: outcome.status,
-            feature_id: outcome.feature_id,
-        }
-    }
-}

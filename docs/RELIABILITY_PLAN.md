@@ -490,6 +490,30 @@ leads; the missing report is appended, because the consuming step attaches the
 report by name and needs to know there is nothing there. A *passing* verdict
 still falls through to the ordinary check, which already covered it.
 
+### S15. A lost `submit_run` reply can double-submit a detached run — **[Open]**
+
+**Where:** `application/remote_runs/submit.rs` (`make_run_id`, `submit_remote_run`)
+
+If the runner accepted a run but its reply never reached the laptop — an RPC
+timeout, a dropped SSH channel — `submit_remote_run` takes its `Err` arm: the
+shadow Feature is marked failed, the launch returns `Err`, and a ticket stays
+`Unstarted`. The next Start mints a fresh `laptop-…` run id, so the runner
+starts a second paid run beside the first, which is still going with nothing
+on the laptop pointing at it. The outcomes `SubmitOutcome` reports are only
+the failures observable *after* acceptance; this one is not.
+
+It predates ticket placement for UI launches, but a ticket start and MCP
+`start_ticket` are where a retry is most likely.
+
+**Fix:** the runner's `submit_run` is already idempotent on `run_id`
+(`demeteo-runner/src/rpc/lifecycle.rs`) — a re-submit returns the existing
+row. So derive the run id deterministically from what is being retried — the
+`(ticket, attempt)` for a ticket start, or a client-generated launch key the
+UI and MCP resend on retry — instead of a fresh id per call, and have the
+`Err` arm leave the shadow pending rather than failed when the error is a
+transport one. Needs `run-ssh-conformance.sh`, since it changes what a
+transport failure means at submit time.
+
 ---
 
 ## 4. Verifying reliability changes

@@ -6,9 +6,12 @@ use std::sync::Arc;
 use super::*;
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::adapters::step_executor::setup::fetch_default_settings;
+use crate::application::discovery::{create as open_discovery, NewDiscovery};
+use crate::application::launch::tests::{harness, RunnerAt};
 use crate::application::projects::RepositoryConfig;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
-use crate::domain::models::{EffortLevel, Project, ProviderInstance};
+use crate::domain::ids::WorkflowId;
+use crate::domain::models::{EffortLevel, Project, ProviderInstance, Ticket, TicketState};
 
 /// A fully wired `AppContext` over a fresh temp-dir SQLite database — same
 /// shape as `tests/application/agent_surface.rs`'s `fixture`.
@@ -182,4 +185,203 @@ async fn a_hostile_artifact_subdir_is_refused_and_nothing_is_saved() {
     assert!(apply_run_shape_patch(&ctx, &project_id, hostile).is_err());
     let reloaded = ctx.projects.get_settings(&project_id).unwrap().unwrap();
     assert_eq!(reloaded.artifact_subdir, initial.artifact_subdir);
+}
+
+fn agent_launch(machine_id: Option<&str>) -> AgentFeatureLaunch {
+    AgentFeatureLaunch {
+        project_id: "p-1".to_string(),
+        workflow_id: "w-1".to_string(),
+        title: "Ship it".to_string(),
+        description: "Started over MCP".to_string(),
+        machine_id: machine_id.map(str::to_string),
+        target_repo_id: None,
+        unattended: None,
+        max_cost_usd: None,
+        max_wall_clock_secs: None,
+    }
+}
+
+fn feature_ids(ctx: &AppContext) -> Vec<String> {
+    ctx.features
+        .get_all_for_project(&ProjectId::from("p-1"))
+        .unwrap()
+        .into_iter()
+        .map(|feature| feature.id.0)
+        .collect()
+}
+
+#[tokio::test]
+async fn start_feature_without_a_machine_hands_the_executor_the_launch_it_always_did() {
+    let h = harness(RunnerAt::accepting());
+
+    let feature = start_feature(&h.ctx, agent_launch(None))
+        .await
+        .expect("a local start reaches the executor")
+        .feature;
+
+    let received = h.spy.launched().expect("feature_start was called");
+    let before = FeatureLaunch {
+        project_id: "p-1".to_string(),
+        workflow_id: "w-1".to_string(),
+        title: "Ship it".to_string(),
+        description: "Started over MCP".to_string(),
+        ..FeatureLaunch::default()
+    };
+    assert_eq!(format!("{received:?}"), format!("{before:?}"));
+    assert_eq!(feature.id.0, "f-1");
+    assert_eq!(
+        h.exec.calls(),
+        Vec::<String>::new(),
+        "no RPC on a local start"
+    );
+}
+
+#[tokio::test]
+async fn a_blank_or_local_machine_id_starts_locally() {
+    for local in ["", "  ", "local"] {
+        let h = harness(RunnerAt::accepting());
+
+        start_feature(&h.ctx, agent_launch(Some(local)))
+            .await
+            .unwrap_or_else(|e| panic!("{local:?} means local, got: {e}"));
+
+        assert!(h.spy.launched().is_some(), "{local:?}: executor not called");
+        assert_eq!(h.exec.calls(), Vec::<String>::new(), "{local:?}");
+    }
+}
+
+#[tokio::test]
+async fn start_feature_on_an_unknown_machine_names_it_and_creates_nothing() {
+    let h = harness(RunnerAt::accepting());
+
+    let err = start_feature(&h.ctx, agent_launch(Some("ghost-box")))
+        .await
+        .expect_err("an unknown machine is refused");
+
+    assert!(err.contains("ghost-box"), "got: {err}");
+    assert!(h.spy.launched().is_none(), "the executor was not called");
+    assert_eq!(h.exec.calls(), Vec::<String>::new(), "no RPC was issued");
+    assert_eq!(feature_ids(&h.ctx), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn detached_options_with_a_local_placement_are_refused() {
+    let h = harness(RunnerAt::accepting());
+    let launch = AgentFeatureLaunch {
+        max_cost_usd: Some(5.0),
+        ..agent_launch(Some(""))
+    };
+
+    let err = start_feature(&h.ctx, launch)
+        .await
+        .expect_err("a cap on a local run would not be honoured");
+
+    assert!(err.contains("max_cost_usd"), "got: {err}");
+    assert!(h.spy.launched().is_none());
+}
+
+#[tokio::test]
+async fn start_feature_on_a_runner_submits_detached() {
+    let h = harness(RunnerAt::accepting());
+    let launch = AgentFeatureLaunch {
+        max_cost_usd: Some(5.0),
+        ..agent_launch(Some("runner-1"))
+    };
+
+    let feature = start_feature(&h.ctx, launch)
+        .await
+        .expect("a detached start is submitted")
+        .feature;
+
+    assert!(h.spy.launched().is_none(), "the executor was not called");
+    assert!(h.exec.calls().contains(&"rpc submit_run".to_string()));
+    assert_eq!(feature_ids(&h.ctx), [feature.id.0]);
+}
+
+/// A startable ticket in a fresh Discovery on the harness's project, with
+/// `stored` as its own placement choice.
+fn stored_ticket(ctx: &AppContext, stored: &str) -> Ticket {
+    let discovery = open_discovery(
+        ctx,
+        NewDiscovery {
+            project_id: "p-1".to_string(),
+            title: "placed work".to_string(),
+            agent_kind: "claude-code".to_string(),
+            model: None,
+            effort: None,
+            machine_id: None,
+            staged_attachments: Vec::new(),
+        },
+    )
+    .expect("the discovery opens");
+    let t = Ticket {
+        id: TicketId::from("t-1".to_string()),
+        discovery_id: discovery.id,
+        seq: 1,
+        title: "the ticket".to_string(),
+        description: String::new(),
+        acceptance: Vec::new(),
+        files: Vec::new(),
+        blocked_by: Vec::new(),
+        test_command: None,
+        workflow_id: Some(WorkflowId::from("w-1".to_string())),
+        agent_kind: None,
+        model: None,
+        effort: None,
+        machine_id: Some(MachineId::from(stored)),
+        attachments: Vec::new(),
+        state: TicketState::Unstarted,
+        drop_reason: None,
+        force_start_reason: None,
+        force_started_at: None,
+        feature_id: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+    ctx.tickets
+        .upsert_batch(std::slice::from_ref(&t))
+        .expect("the ticket is stored");
+    t
+}
+
+fn stored_machine(ctx: &AppContext, t: &Ticket) -> Option<MachineId> {
+    ctx.tickets
+        .get(&t.id)
+        .expect("the ticket reads")
+        .expect("the ticket exists")
+        .machine_id
+}
+
+#[tokio::test]
+async fn a_machine_override_starts_one_ticket_launch_detached_and_is_not_saved() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h.ctx, "local");
+
+    let feature = start_ticket(&h.ctx, &t.id, Some("runner-1".to_string()))
+        .await
+        .expect("the ticket starts on the runner")
+        .feature;
+
+    assert!(h.spy.launched().is_none(), "the executor was not called");
+    assert!(h.exec.calls().contains(&"rpc submit_run".to_string()));
+    assert_eq!(feature_ids(&h.ctx), [feature.id.0]);
+    assert_eq!(stored_machine(&h.ctx, &t), Some(MachineId::from("local")));
+}
+
+#[tokio::test]
+async fn a_blank_machine_override_keeps_the_tickets_own_placement() {
+    for blank in ["", "  "] {
+        let h = harness(RunnerAt::accepting());
+        let t = stored_ticket(&h.ctx, "runner-1");
+
+        start_ticket(&h.ctx, &t.id, Some(blank.to_string()))
+            .await
+            .unwrap_or_else(|e| panic!("{blank:?} is no override, got: {e}"));
+
+        assert!(h.spy.launched().is_none(), "{blank:?}: started locally");
+        assert!(
+            h.exec.calls().contains(&"rpc submit_run".to_string()),
+            "{blank:?}"
+        );
+    }
 }

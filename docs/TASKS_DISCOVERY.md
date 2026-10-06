@@ -281,3 +281,61 @@ Both were opened by Phase 6 and answered in Phase 7.
 - **One new utility, `.nested-card`.** §6.5 item 2's `rgba(18,22,30,0.55)`
   card, named once in `src/App.css` beside `glass-panel` rather than inlined at
   each of the four call sites.
+
+## Per-ticket placement — what it decided
+
+PRD §7.4 states the rule; these are the choices it left to implementation.
+
+- **Tickets launch through `application::launch::launch_run`**, the same call
+  the Start Feature modal and MCP `start_feature` make. `tickets::start` and
+  `tickets::force_start` resolve a placement and hand it over; neither knows
+  what a detached run is. The attempt is recorded only after the launch
+  returns, so a refused runner leaves no attempt row behind.
+- **Upgrading re-places nothing.** Before V60 every ticket ran on the
+  project's own compute, and V61 stores `"local"` on every ticket that exists
+  when it runs, so only tickets decomposed afterwards inherit
+  `default_ticket_placement`. Left NULL, an Unstarted ticket in a Discovery
+  opened on a machine other than the project's compute host would have turned
+  detached on upgrade, and been refused on a machine with no compatible
+  runner — with no way back but re-pointing each ticket by hand.
+- **An attempt records where it went.** `ticket_feature_attempts.machine_id`
+  (V61) is written by `record_start` in the same transaction as the start, and
+  is what `TicketFeatureView.placement` reports. Neither neighbour can answer
+  it: the ticket's own `machine_id` is not where a one-launch override sent
+  the run, and the mirror row is missing exactly when a detached start went
+  wrong (`mirror_unrecorded`). An attempt V61 could not place reads as
+  unknown, never as local.
+- **A detached ticket carries no caps.** A ticket has no cost or wall-clock
+  fields, so it launches with `DetachedOptions::default()` — the project's
+  first repository, unattended, and the runner's own default ceiling.
+  Per-ticket caps would be two columns and two editor fields; they wait for a
+  user who asks.
+- **The board reads one source.** Lanes still derive from the ticket's
+  Feature, which for a detached attempt is the shadow row reconcile hydrates.
+  `TicketFeatureView.remote` exposes the mirror row beside it for display,
+  from one `remote_run_mirror.list_for_features()` per board read, scoped to
+  the board's Features, and `derive_board` never sees it. Being display-only,
+  a failed mirror read drops the chips with a warning rather than the board. The cost is lag: a
+  detached ticket that merged while the app was closed sits in flight until
+  the next reconcile, exactly as a detached run launched from the modal does.
+  The lag runs one way only. The desktop `MrMonitor` also writes `merged` onto
+  the shadow and the runner's copy can trail it, so reconcile never replaces a
+  local `merged` (`shadow_mr_state`, `application/remote_runs/reconcile.rs`)
+  — a landed ticket cannot fall back in flight and re-block its dependants.
+  `closed` is not guarded, because a closed PR can be reopened.
+- **One start per ticket at a time, in process.** Probe, spool and submit take
+  seconds, and two starts inside that window would both read `Unstarted` and
+  the second would orphan the first's run. `tickets::launch::start` takes an
+  exclusive claim on the ticket id (`AppContext.ticket_starts`,
+  `application/tickets/starting.rs`) before it reads the ticket, and drops it
+  when the attempt is recorded or the launch fails. A second start — from the
+  board, an MCP `start_ticket`, or a force start, which goes through `start` —
+  is refused as a validation error naming the ticket, before any executor
+  call or runner RPC. The claim is not durable, so a restart forgets it; the
+  Discovery view still disables Start and Force start while its own call is
+  pending, so the refusal is only ever seen by a second surface.
+- **The picker is shared.** `RunPlacementSelect` was lifted out of
+  `StartFeatureModal` so the ticket editor offers the same machines with the
+  same runner verdict. Given a `defaultLabel`, it adds a *Default (…)* entry
+  that writes `NULL` and makes its local entry an explicit `"local"`; the
+  modal passes none, so there local stays `null`.

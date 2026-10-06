@@ -5,16 +5,19 @@
 //! Every function here is reached from a user's explicit act; there is no
 //! scheduler above them and none is coming.
 
+use crate::application::launch::{launch_run, LaunchRequest, LaunchedRun};
 use crate::domain::feature_origin::FeatureOrigin;
-use crate::domain::ids::TicketId;
-use crate::domain::models::{Feature, Ticket, TicketState};
+use crate::domain::ids::{MachineId, TicketId};
+use crate::domain::models::{Ticket, TicketState};
+use crate::domain::run_placement::DetachedOptions;
 use crate::domain::ticket_graph::{derive_board, BlockerReason, TicketStanding};
+use crate::error::AppError;
 use crate::paths::now_ms;
 use crate::ports::discovery::TicketPatch;
 use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
-use super::{attachments, briefing, load, nodes_for};
+use super::{attachments, briefing, load, nodes_for, resolve_ticket_placement};
 
 /// Start a Ticket's current attempt.
 ///
@@ -24,7 +27,38 @@ use super::{attachments, briefing, load, nodes_for};
 /// `None` on agent/model/effort still means inherit, because a Ticket that
 /// chose nothing has nothing else to fall back to; a missing workflow has no
 /// such fallback and is refused.
-pub async fn start(ctx: &AppContext, ticket_id: &TicketId) -> Result<Feature, String> {
+///
+/// `placement_override` applies to this launch only and is never written to
+/// the ticket: a one-off "run this one on the runner" must not silently
+/// become the ticket's choice for its next attempt. A detached run carries no
+/// per-ticket caps — a ticket has no cap fields to read them from.
+///
+/// Nothing is recorded until the launch succeeds, so a refused one leaves the
+/// ticket exactly as startable as it was. A detached run whose PAT was parked,
+/// or that the laptop could not mirror, is still a launched run: it is
+/// recorded like any other, and its notes go back to the caller on the
+/// returned [`LaunchedRun`]. So is a run the ticket itself could not record:
+/// once one exists, an `Err` here would read as "nothing started" and invite
+/// a second, so the failure becomes
+/// [`ticket_unrecorded`](LaunchedRun::ticket_unrecorded) instead.
+///
+/// The whole body runs under the ticket's [`starting`](super::starting) claim,
+/// taken before the ticket is even read: a second start that loaded the row
+/// first would judge it on a state the first start is about to overwrite.
+pub async fn start(
+    ctx: &AppContext,
+    ticket_id: &TicketId,
+    placement_override: Option<MachineId>,
+) -> Result<LaunchedRun, AppError> {
+    let Some(_claim) = ctx.ticket_starts.try_claim(ticket_id) else {
+        let named = load(ctx, ticket_id)
+            .map(|t| format!("#{}", t.seq))
+            .unwrap_or_else(|_| ticket_id.0.clone());
+        return Err(AppError::validation(format!(
+            "ticket {named} is already being started — another start is under way. Wait for it \
+             to finish; the board shows it once it has."
+        )));
+    };
     let ticket = load(ctx, ticket_id)?;
     let siblings = ctx.tickets.list_for_discovery(&ticket.discovery_id)?;
     let (nodes, _) = nodes_for(&siblings, &*ctx.features)?;
@@ -33,63 +67,70 @@ pub async fn start(ctx: &AppContext, ticket_id: &TicketId) -> Result<Feature, St
         .standings
         .iter()
         .find(|s| s.id == ticket.id.0)
-        .ok_or_else(|| format!("ticket not in its own discovery: {}", ticket.id.0))?;
+        .ok_or_else(|| {
+            AppError::internal(format!("ticket not in its own discovery: {}", ticket.id.0))
+        })?;
     if let Some(refusal) = start_refusal(&ticket, standing, &siblings) {
-        return Err(refusal);
+        return Err(AppError::validation(refusal));
     }
 
-    let discovery = ctx
-        .discoveries
-        .get(&ticket.discovery_id)?
-        .ok_or_else(|| format!("discovery not found: {}", ticket.discovery_id.0))?;
+    let discovery = ctx.discoveries.get(&ticket.discovery_id)?.ok_or_else(|| {
+        AppError::not_found(format!("discovery not found: {}", ticket.discovery_id.0))
+    })?;
     let workflow_id = ticket
         .workflow_id
         .as_ref()
         .map(|w| w.0.clone())
         .filter(|w| !w.trim().is_empty())
         .ok_or_else(|| {
-            format!(
+            AppError::validation(format!(
                 "ticket #{} has no workflow. Choose one in the ticket editor before starting it.",
                 ticket.seq
-            )
+            ))
         })?;
+    let resolved = resolve_ticket_placement(ctx, &ticket, placement_override.as_ref())?;
 
-    let feature = ctx
-        .executor
-        .feature_start(FeatureLaunch {
-            project_id: discovery.project_id.0.clone(),
-            workflow_id,
-            title: ticket.title.clone(),
-            description: launch_description(
-                &ticket,
-                &briefing::compose(&ticket, &siblings, &nodes),
-            ),
-            agent_kind: ticket.agent_kind.clone(),
-            model: ticket.model.clone(),
-            effort: ticket.effort,
-            staged_attachments: attachments::staged_for_launch(ctx, &ticket)?,
-            origin: discovery
-                .base_branch
-                .clone()
-                .map(|base| FeatureOrigin::Branch { base })
-                .unwrap_or_default(),
-            ..FeatureLaunch::default()
-        })
-        .await?;
-
-    let now = now_ms();
-    ctx.tickets.supersede_attempts(&ticket.id, now)?;
-    ctx.tickets.record_attempt(&ticket.id, &feature.id, now)?;
-    ctx.tickets.update(
-        &ticket.id,
-        &TicketPatch {
-            state: Some(TicketState::Started),
-            feature_id: Some(Some(feature.id.clone())),
-            ..Default::default()
+    let launch = FeatureLaunch {
+        project_id: discovery.project_id.0.clone(),
+        workflow_id,
+        title: ticket.title.clone(),
+        description: launch_description(&ticket, &briefing::compose(&ticket, &siblings, &nodes)),
+        agent_kind: ticket.agent_kind.clone(),
+        model: ticket.model.clone(),
+        effort: ticket.effort,
+        staged_attachments: attachments::staged_for_launch(ctx, &ticket)?,
+        origin: discovery
+            .base_branch
+            .clone()
+            .map(|base| FeatureOrigin::Branch { base })
+            .unwrap_or_default(),
+        ..FeatureLaunch::default()
+    };
+    let mut launched = launch_run(
+        ctx,
+        LaunchRequest {
+            launch,
+            placement: resolved.placement.clone(),
+            detached: DetachedOptions::default(),
         },
-        now,
-    )?;
-    Ok(feature)
+    )
+    .await?;
+    if let Err(error) = ctx.tickets.record_start(
+        &ticket.id,
+        &launched.feature.id,
+        &resolved.placement,
+        now_ms(),
+    ) {
+        let feature_id = &launched.feature.id.0;
+        tracing::error!(ticket = %ticket.id.0, feature = %feature_id, %error, "ticket run launched but not recorded on the ticket");
+        launched.ticket_unrecorded = Some(format!(
+            "ticket #{} started Feature {feature_id}, but the ticket could not record it \
+             ({error}), so the board still shows it unstarted. The run is going: do not start \
+             the ticket again, which would launch a second run.",
+            ticket.seq
+        ));
+    }
+    Ok(launched)
 }
 
 /// Record why this Ticket is being started past its edges, then start it
@@ -108,23 +149,23 @@ pub async fn force_start(
     ctx: &AppContext,
     ticket_id: &TicketId,
     reason: &str,
-) -> Result<Feature, String> {
+    placement_override: Option<MachineId>,
+) -> Result<LaunchedRun, AppError> {
     let reason = reason.trim();
     if reason.is_empty() {
-        return Err(
+        return Err(AppError::validation(
             "a force start needs a recorded reason: it is what keeps the bypass from \
                     being an unexplained one, for you and for the agent, which is told the same \
-                    reason in its own prerequisite list."
-                .to_string(),
-        );
+                    reason in its own prerequisite list.",
+        ));
     }
     let ticket = load(ctx, ticket_id)?;
     if ticket.state != TicketState::Unstarted {
-        return Err(format!(
+        return Err(AppError::validation(format!(
             "ticket #{} is {}, so there is nothing to force.",
             ticket.seq,
             ticket.state.as_str()
-        ));
+        )));
     }
     ctx.tickets.update(
         ticket_id,
@@ -135,7 +176,7 @@ pub async fn force_start(
         },
         now_ms(),
     )?;
-    start(ctx, ticket_id).await
+    start(ctx, ticket_id, placement_override).await
 }
 
 /// Give up on a Ticket (§6.6).

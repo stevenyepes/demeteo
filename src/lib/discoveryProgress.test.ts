@@ -45,6 +45,7 @@ function ticket(
       agent_kind: null,
       model: null,
       effort: null,
+      machine_id: null,
       attachments: [],
       state: lane === 'dropped' ? 'dropped' : lane === 'blocked' || lane === 'ready' ? 'unstarted' : 'started',
       drop_reason: null,
@@ -60,6 +61,7 @@ function ticket(
       startable: extra.startable ?? lane === 'ready',
       blockers: (extra.unmet ?? []).map((b) => ({ id: b, reason: 'outstanding' as const })),
     },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: extra.feature ?? null,
   };
 }
@@ -69,10 +71,10 @@ function ticket(
 function seededBoard(): DiscoveryBoard {
   const tickets = [
     ticket(1, 'landed', {
-      feature: { id: 'f1', status: 'completed', mr_state: 'merged', mr_url: 'https://x/pull/131' },
+      feature: { id: 'f1', status: 'completed', mr_state: 'merged', mr_url: 'https://x/pull/131', placement: null, remote: null },
     }),
     ticket(2, 'in_flight', {
-      feature: { id: 'f2', status: 'running', mr_state: 'open', mr_url: 'https://x/pull/134' },
+      feature: { id: 'f2', status: 'running', mr_state: 'open', mr_url: 'https://x/pull/134', placement: null, remote: null },
     }),
     ticket(3, 'blocked', { blockedBy: ['t1', 't2'], unmet: ['t2'] }),
     ticket(4, 'ready', { blockedBy: ['t1'] }),
@@ -83,6 +85,8 @@ function seededBoard(): DiscoveryBoard {
   return {
     tickets,
     progress: { blocked: 3, ready: 1, in_flight: 1, landed: 1, dropped: 1, live: 6 },
+    discovery_default: { kind: 'local' },
+    local_host: 'local',
   };
 }
 
@@ -108,7 +112,7 @@ describe('progressText', () => {
     board.progress = { blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 1, live: 0 };
     board.tickets = [
       ticket(1, 'dropped', {
-        feature: { id: 'f1', status: 'completed', mr_state: 'closed', mr_url: 'https://x/pull/9' },
+        feature: { id: 'f1', status: 'completed', mr_state: 'closed', mr_url: 'https://x/pull/9', placement: null, remote: null },
       }),
     ];
     expect(progressText(board.progress)).toBe('0 of 0 landed');

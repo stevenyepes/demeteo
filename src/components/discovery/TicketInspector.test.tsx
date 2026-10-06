@@ -14,7 +14,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { indexTickets } from '../../lib/ticketPresentation';
-import type { Ticket, TicketView } from '../../types';
+import type { Machine, Ticket, TicketView } from '../../types';
 import { TicketInspector } from './TicketInspector';
 
 vi.mock('../../lib/discovery', () => ({
@@ -38,6 +38,7 @@ function ticket(extra: Partial<Ticket> = {}): Ticket {
     agent_kind: 'claude-code',
     model: 'opus',
     effort: 'high',
+    machine_id: null,
     attachments: [],
     state: 'unstarted',
     drop_reason: null,
@@ -54,16 +55,27 @@ function view(row: Ticket, lane: TicketView['standing']['lane'] = 'ready'): Tick
   return {
     ticket: row,
     standing: { id: row.id, lane, startable: lane === 'ready', blockers: [] },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 }
 
-function renderInspector(subject: TicketView) {
+const BUILD_BOX: Machine = {
+  id: 'm-build',
+  name: 'Build box',
+  host: 'build.internal',
+  port: 22,
+  username: 'dev',
+  auth_type: 'key',
+};
+
+function renderInspector(subject: TicketView, machines: readonly Machine[] = []) {
   render(
     <TicketInspector
       view={subject}
       index={indexTickets([subject])}
       workflowName={null}
+      machines={machines}
       onStart={() => {}}
       onForceStart={() => {}}
       onEdit={() => {}}
@@ -85,6 +97,7 @@ describe('TicketInspector', () => {
         view={subject}
         index={indexTickets([subject])}
         workflowName={null}
+        machines={[]}
         busy={false}
         onStart={() => {}}
         onForceStart={() => {}}
@@ -139,5 +152,122 @@ describe('the ticket description', () => {
     const paragraph = screen.getByTestId('agent-markdown').querySelector('p');
     expect(paragraph).not.toBeNull();
     expect(paragraph?.className).toContain('text-slate-400');
+  });
+});
+
+describe('the placement chip', () => {
+  it('marks a placement inherited from the Discovery default', () => {
+    renderInspector(view(ticket()));
+
+    expect(screen.getByText('Local · default')).toBeInTheDocument();
+  });
+
+  it('names the machine of an explicit detached placement, without the marker', () => {
+    const subject: TicketView = {
+      ...view(ticket({ machine_id: 'm-build' })),
+      placement: { placement: { kind: 'detached', machine_id: 'm-build' }, inherited: false },
+    };
+
+    renderInspector(subject, [BUILD_BOX]);
+
+    expect(screen.getByText('Detached · Build box')).toBeInTheDocument();
+    expect(screen.queryByText(/· default/)).toBeNull();
+  });
+
+  it('shows the run mirror status beside a detached attempt', () => {
+    const subject: TicketView = {
+      ...view(ticket({ state: 'started', feature_id: 'f-1' }), 'in_flight'),
+      placement: { placement: { kind: 'detached', machine_id: 'm-gone' }, inherited: true },
+      feature: {
+        id: 'f-1',
+        status: 'running',
+        mr_state: null,
+        mr_url: null,
+        placement: { kind: 'detached', machine_id: 'm-gone' },
+        remote: { machine_id: 'm-gone', run_id: 'r-1', status: 'running' },
+      },
+    };
+
+    renderInspector(subject);
+
+    expect(screen.getByText('Detached · m-gone')).toBeInTheDocument();
+    expect(screen.getByTestId('ticket-run-mirror').textContent).toContain('Running');
+  });
+
+  it('names where a started attempt ran, not the stored placement', () => {
+    const subject: TicketView = {
+      ...view(ticket({ state: 'started', feature_id: 'f-1' }), 'in_flight'),
+      feature: {
+        id: 'f-1',
+        status: 'running',
+        mr_state: null,
+        mr_url: null,
+        placement: { kind: 'detached', machine_id: 'm-build' },
+        remote: { machine_id: 'm-build', run_id: 'r-1', status: 'running' },
+      },
+    };
+
+    renderInspector(subject, [BUILD_BOX]);
+
+    expect(screen.getByText('Detached · Build box')).toBeInTheDocument();
+    expect(screen.queryByText('Local · default')).toBeNull();
+  });
+
+  it('names a detached attempt whose mirror row is missing by its recorded placement', () => {
+    const subject: TicketView = {
+      ...view(ticket({ state: 'started', feature_id: 'f-1' }), 'in_flight'),
+      feature: {
+        id: 'f-1',
+        status: 'running',
+        mr_state: null,
+        mr_url: null,
+        placement: { kind: 'detached', machine_id: 'm-build' },
+        remote: null,
+      },
+    };
+
+    renderInspector(subject, [BUILD_BOX]);
+
+    expect(screen.getByText('Detached · Build box')).toBeInTheDocument();
+    expect(screen.queryByText(/^Local/)).toBeNull();
+  });
+
+  it('labels a started attempt with no recorded placement unknown, never Local', () => {
+    const subject: TicketView = {
+      ...view(ticket({ state: 'started', feature_id: 'f-1' }), 'in_flight'),
+      feature: {
+        id: 'f-1',
+        status: 'running',
+        mr_state: null,
+        mr_url: null,
+        placement: null,
+        remote: null,
+      },
+    };
+
+    renderInspector(subject, [BUILD_BOX]);
+
+    expect(screen.getByText('Placement unknown')).toBeInTheDocument();
+    expect(screen.queryByText(/^Local/)).toBeNull();
+  });
+
+  it('labels a started local attempt Local, without the marker', () => {
+    const subject: TicketView = {
+      ...view(ticket({ state: 'started', feature_id: 'f-1' }), 'in_flight'),
+      placement: { placement: { kind: 'detached', machine_id: 'm-build' }, inherited: true },
+      feature: {
+        id: 'f-1',
+        status: 'running',
+        mr_state: null,
+        mr_url: null,
+        placement: { kind: 'local' },
+        remote: null,
+      },
+    };
+
+    renderInspector(subject, [BUILD_BOX]);
+
+    expect(screen.getByText('Local')).toBeInTheDocument();
+    expect(screen.queryByText(/Detached/)).toBeNull();
   });
 });

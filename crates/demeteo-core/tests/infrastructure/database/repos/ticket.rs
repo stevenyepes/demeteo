@@ -3,7 +3,7 @@
 use super::*;
 use crate::adapters::database::SqliteAdapter;
 use crate::domain::attachment::AttachedFile;
-use crate::domain::ids::WorkflowId;
+use crate::domain::ids::{MachineId, WorkflowId};
 use crate::ports::discovery::DiscoveryPort;
 use rusqlite::Connection;
 
@@ -66,6 +66,7 @@ fn ticket(id: &str, seq: i64) -> Ticket {
         agent_kind: Some("opencode".to_string()),
         model: Some("sonnet".to_string()),
         effort: Some(EffortLevel::Max),
+        machine_id: None,
         attachments: vec![attachment()],
         state: TicketState::Unstarted,
         drop_reason: None,
@@ -98,6 +99,7 @@ fn a_ticket_round_trips_every_column() {
     assert_eq!(read.agent_kind.as_deref(), Some("opencode"));
     assert_eq!(read.model.as_deref(), Some("sonnet"));
     assert_eq!(read.effort, Some(EffortLevel::Max));
+    assert_eq!(read.machine_id, None);
     assert_eq!(read.attachments, vec![attachment()]);
     assert_eq!(read.state, TicketState::Unstarted);
     assert_eq!(read.drop_reason, None);
@@ -202,6 +204,69 @@ fn a_patch_distinguishes_leaving_alone_from_clearing() {
     assert_eq!(read.force_start_reason.as_deref(), Some("no forge remote"));
 }
 
+/// `machine_id` is a nullable column whose NULL means "inherit", so the patch
+/// has to tell three things apart: leave it, set it, and clear it back to the
+/// inherited default. A clear that wrote `"local"` instead would look right on
+/// a local Discovery and pin every other one.
+#[test]
+fn a_ticket_machine_round_trips_and_clears_back_to_null() {
+    let db = db();
+    db.upsert_batch(&[Ticket {
+        machine_id: Some(MachineId::from("m-gpu".to_string())),
+        ..ticket("t-1", 1)
+    }])
+    .unwrap();
+    let read = TicketPort::get(&db, &tid("t-1")).unwrap().unwrap();
+    assert_eq!(read.machine_id, Some(MachineId::from("m-gpu".to_string())));
+    assert_eq!(read.model.as_deref(), Some("sonnet"));
+
+    TicketPort::update(
+        &db,
+        &tid("t-1"),
+        &TicketPatch {
+            title: Some("renamed".to_string()),
+            ..Default::default()
+        },
+        200,
+    )
+    .unwrap();
+    let read = TicketPort::get(&db, &tid("t-1")).unwrap().unwrap();
+    assert_eq!(
+        read.machine_id,
+        Some(MachineId::from("m-gpu".to_string())),
+        "an unmentioned machine stands"
+    );
+
+    TicketPort::update(
+        &db,
+        &tid("t-1"),
+        &TicketPatch {
+            machine_id: Some(Some(MachineId::from("local".to_string()))),
+            ..Default::default()
+        },
+        300,
+    )
+    .unwrap();
+    let read = TicketPort::get(&db, &tid("t-1")).unwrap().unwrap();
+    assert_eq!(read.machine_id, Some(MachineId::from("local".to_string())));
+
+    TicketPort::update(
+        &db,
+        &tid("t-1"),
+        &TicketPatch {
+            machine_id: Some(None),
+            ..Default::default()
+        },
+        400,
+    )
+    .unwrap();
+    let read = TicketPort::get(&db, &tid("t-1")).unwrap().unwrap();
+    assert_eq!(read.machine_id, None);
+    assert_eq!(read.title, "renamed");
+    assert_eq!(read.model.as_deref(), Some("sonnet"));
+    assert_eq!(read.updated_at, 400);
+}
+
 /// How the `mr_monitor` poll gets from a PR transition back to the graph it
 /// unblocks. A ticket that has not started, or one whose attempt was cleared,
 /// must not answer for a feature it does not name.
@@ -237,29 +302,119 @@ fn superseded_attempts_are_kept_and_marked() {
     let f1 = FeatureId::from("f-1".to_string());
     let f2 = FeatureId::from("f-2".to_string());
 
-    db.record_attempt(&tid("t-1"), &f1, 100).unwrap();
-    db.record_attempt(&tid("t-1"), &f1, 999).unwrap();
+    db.record_start(&tid("t-1"), &f1, &RunPlacement::Local, 100)
+        .unwrap();
+    db.record_start(&tid("t-1"), &f1, &RunPlacement::Local, 999)
+        .unwrap();
     let attempts = db.list_attempts(&tid("t-1")).unwrap();
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0].started_at, 100);
     assert_eq!(attempts[0].superseded_at, None);
 
-    db.supersede_attempts(&tid("t-1"), 200).unwrap();
-    db.record_attempt(&tid("t-1"), &f2, 300).unwrap();
+    db.record_start(&tid("t-1"), &f2, &RunPlacement::Local, 300)
+        .unwrap();
     let attempts = db.list_attempts(&tid("t-1")).unwrap();
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[0].feature_id, f1);
-    assert_eq!(attempts[0].superseded_at, Some(200));
+    assert_eq!(attempts[0].superseded_at, Some(300));
     assert_eq!(attempts[1].feature_id, f2);
     assert_eq!(attempts[1].started_at, 300);
     assert_eq!(attempts[1].superseded_at, None);
+    let started = TicketPort::get(&db, &tid("t-1")).unwrap().unwrap();
+    assert_eq!(started.state, TicketState::Started);
+    assert_eq!(started.feature_id, Some(f2));
+    assert_eq!(started.updated_at, 300);
 
-    db.record_attempt(&tid("t-1"), &f1, 400).unwrap();
+    db.record_start(&tid("t-1"), &f1, &RunPlacement::Local, 400)
+        .unwrap();
     assert_eq!(
         db.list_attempts(&tid("t-1")).unwrap()[0].superseded_at,
-        Some(200),
+        Some(300),
         "a closed attempt must not be reopened by re-recording it"
     );
+}
+
+/// An attempt keeps the placement its start resolved, which is the only
+/// record of it once the ticket's own choice or the mirror row disagrees.
+#[test]
+fn an_attempt_records_where_it_was_placed() {
+    let db = db();
+    db.upsert_batch(&[ticket("t-1", 1)]).unwrap();
+    let detached = RunPlacement::Detached {
+        machine_id: MachineId::from("m-1".to_string()),
+    };
+    db.record_start(
+        &tid("t-1"),
+        &FeatureId::from("f-1".to_string()),
+        &detached,
+        100,
+    )
+    .unwrap();
+    db.record_start(
+        &tid("t-1"),
+        &FeatureId::from("f-2".to_string()),
+        &RunPlacement::Local,
+        200,
+    )
+    .unwrap();
+
+    let placed: Vec<Option<MachineId>> = db
+        .list_attempts(&tid("t-1"))
+        .unwrap()
+        .into_iter()
+        .map(|a| a.machine_id)
+        .collect();
+    assert_eq!(
+        placed,
+        vec![
+            Some(MachineId::from("m-1".to_string())),
+            Some(MachineId::from("local".to_string())),
+        ]
+    );
+}
+
+/// The start it records has already launched a run, so a half-applied one —
+/// the old attempt closed with nothing current, or an attempt on a ticket
+/// still `unstarted` — would invite a second run. The last of the three
+/// writes failing must take the first two back with it.
+#[test]
+fn a_start_that_cannot_be_recorded_leaves_the_ticket_as_it_was() {
+    let db = db();
+    db.upsert_batch(&[ticket("t-1", 1)]).unwrap();
+    let f1 = FeatureId::from("f-1".to_string());
+    db.record_start(&tid("t-1"), &f1, &RunPlacement::Local, 100)
+        .unwrap();
+    let before = TicketPort::get(&db, &tid("t-1")).unwrap().unwrap();
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER refuse_start BEFORE UPDATE OF state ON tickets
+             BEGIN SELECT RAISE(ABORT, 'database is full'); END;",
+        )
+        .unwrap();
+    }
+
+    let error = db
+        .record_start(
+            &tid("t-1"),
+            &FeatureId::from("f-2".to_string()),
+            &RunPlacement::Local,
+            200,
+        )
+        .expect_err("the ticket update is refused");
+
+    assert!(error.contains("database is full"), "{error}");
+    let attempts = db.list_attempts(&tid("t-1")).unwrap();
+    assert_eq!(attempts.len(), 1, "{attempts:?}");
+    assert_eq!(attempts[0].feature_id, f1);
+    assert_eq!(
+        attempts[0].superseded_at, None,
+        "the old attempt stays open"
+    );
+    let after = TicketPort::get(&db, &tid("t-1")).unwrap().unwrap();
+    assert_eq!(after.state, before.state);
+    assert_eq!(after.feature_id, before.feature_id);
+    assert_eq!(after.updated_at, before.updated_at);
 }
 
 /// A state this build cannot name reads as started: that is the one of the
@@ -308,8 +463,13 @@ fn an_unreadable_json_column_degrades_to_empty() {
 fn deleting_a_discovery_takes_its_tickets_with_it() {
     let db = db();
     db.upsert_batch(&[ticket("t-1", 1)]).unwrap();
-    db.record_attempt(&tid("t-1"), &FeatureId::from("f-1".to_string()), 100)
-        .unwrap();
+    db.record_start(
+        &tid("t-1"),
+        &FeatureId::from("f-1".to_string()),
+        &RunPlacement::Local,
+        100,
+    )
+    .unwrap();
 
     DiscoveryPort::delete(&db, &did()).unwrap();
     assert!(TicketPort::get(&db, &tid("t-1")).unwrap().is_none());

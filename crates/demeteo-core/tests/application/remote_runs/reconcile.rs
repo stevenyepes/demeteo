@@ -1,6 +1,6 @@
 use super::{
     backfill_local_path, declared_remote_paths, hydrate_shadow_feature, mime_for_path,
-    sequence_state_needs_fetch, shadow_feature_patch, shadow_feature_status,
+    sequence_state_needs_fetch, shadow_feature_patch, shadow_feature_status, shadow_mr_state,
     shadow_step_artifacts_stale,
 };
 use crate::adapters::notification_noop::NoopNotificationAdapter;
@@ -165,13 +165,13 @@ fn the_shadow_patch_mirrors_the_measured_baseline() {
             producer: BaselineProducer::Node,
         }],
     };
-    let patch = shadow_feature_patch(&runner_feature(Some(baseline.clone())));
+    let patch = shadow_feature_patch(&runner_feature(Some(baseline.clone())), None);
     assert_eq!(patch.harness_baseline, Some(Some(baseline)));
 }
 
 #[test]
 fn the_shadow_patch_mirrors_the_branch_the_runner_cut_but_not_the_launch_inputs() {
-    let patch = shadow_feature_patch(&runner_feature(None));
+    let patch = shadow_feature_patch(&runner_feature(None), None);
     assert_eq!(
         patch.resolved_branch,
         Some(Some("demeteo/features/f_shadow".to_string())),
@@ -183,7 +183,7 @@ fn the_shadow_patch_mirrors_the_branch_the_runner_cut_but_not_the_launch_inputs(
 
 #[test]
 fn the_shadow_patch_mirrors_an_unmeasured_baseline_as_absent() {
-    let patch = shadow_feature_patch(&runner_feature(None));
+    let patch = shadow_feature_patch(&runner_feature(None), None);
     assert_eq!(
         patch.harness_baseline,
         Some(None),
@@ -202,8 +202,54 @@ fn the_shadow_patch_mirrors_the_assignment_pins_the_runner_holds() {
         model: Some("opus".to_string()),
         effort: Some(EffortLevel::High),
     }];
-    let patch = shadow_feature_patch(&feature);
+    let patch = shadow_feature_patch(&feature, None);
     assert_eq!(patch.step_overrides, Some(feature.step_overrides));
+}
+
+// ── A landed PR never goes back in flight ────────────────────────────────────
+
+#[test]
+fn a_local_merge_survives_a_runner_that_has_not_seen_it_yet() {
+    // The desktop `MrMonitor` writes `merged` onto the shadow; the runner's
+    // copy may still read `open` for a poll or two.
+    assert_eq!(
+        shadow_mr_state(Some("merged"), Some("open")),
+        Some("merged".to_string())
+    );
+    assert_eq!(
+        shadow_mr_state(Some("merged"), None),
+        Some("merged".to_string())
+    );
+}
+
+#[test]
+fn a_runner_merge_lands_on_the_shadow() {
+    assert_eq!(
+        shadow_mr_state(Some("open"), Some("merged")),
+        Some("merged".to_string())
+    );
+}
+
+#[test]
+fn a_reopened_pr_moves_a_closed_shadow_back_to_open() {
+    assert_eq!(
+        shadow_mr_state(Some("closed"), Some("open")),
+        Some("open".to_string())
+    );
+}
+
+#[test]
+fn the_shadow_patch_keeps_a_local_merge() {
+    let mut feature = runner_feature(None);
+    feature.mr_state = Some("open".to_string());
+    assert_eq!(
+        shadow_feature_patch(&feature, Some("merged")).mr_state,
+        Some(Some("merged".to_string()))
+    );
+    assert_eq!(
+        shadow_feature_patch(&feature, Some("closed")).mr_state,
+        Some(Some("open".to_string()))
+    );
 }
 
 // ── Sequence-state mirror (task list not shown for detached runs) ────────────
@@ -812,5 +858,32 @@ async fn a_pre_clone_credential_park_marks_the_desktop_row_it_cannot_hydrate() {
     assert_eq!(
         ctx.features.get(&feature_id).unwrap().unwrap().status,
         "needs-credentials"
+    );
+}
+
+#[tokio::test]
+async fn hydrate_keeps_a_shadow_the_desktop_saw_merge() {
+    let feature_id = FeatureId::from("f-1".to_string());
+    let (mut ctx, _temp_dir) = make_sequence_test_ctx("local_merge", Ok(serde_json::Value::Null));
+    let mut landed = sequence_test_feature();
+    landed.status = "completed".to_string();
+    landed.mr_state = Some("merged".to_string());
+    ctx.features.add(landed).unwrap();
+    let mut lagging = sequence_test_feature();
+    lagging.status = "completed".to_string();
+    lagging.mr_state = Some("open".to_string());
+    ctx.exec = Arc::new(SequenceRpcStub::new(
+        serde_json::to_value(lagging).unwrap(),
+        serde_json::json!([]),
+        Ok(serde_json::Value::Null),
+    ));
+
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "awaiting_mr")
+        .await
+        .unwrap();
+    assert_eq!(
+        ctx.features.get(&feature_id).unwrap().unwrap().mr_state,
+        Some("merged".to_string()),
+        "a runner that has not seen the merge must not put a landed ticket back in flight"
     );
 }

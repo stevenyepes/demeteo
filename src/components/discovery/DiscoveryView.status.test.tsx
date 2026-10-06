@@ -50,6 +50,8 @@ const detail: DiscoveryDetail = {
 const board: DiscoveryBoard = {
   tickets: [],
   progress: { blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 0, live: 0 },
+  discovery_default: { kind: 'local' },
+  local_host: 'local',
 };
 
 const stored: DiscoveryMessage = {
@@ -227,6 +229,7 @@ describe('the inspector overlay', () => {
       agent_kind: null,
       model: null,
       effort: null,
+      machine_id: null,
       attachments: [],
       state: 'unstarted',
       drop_reason: null,
@@ -237,12 +240,15 @@ describe('the inspector overlay', () => {
       updated_at: 0,
     },
     standing: { id: 't-1', lane: 'ready', startable: true, blockers: [] },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 
   const boardWithTicket: DiscoveryBoard = {
     tickets: [ticketOne],
     progress: { blocked: 0, ready: 1, in_flight: 0, landed: 0, dropped: 0, live: 1 },
+    discovery_default: { kind: 'local' },
+    local_host: 'local',
   };
 
   function mockBoard(withTicket: boolean) {

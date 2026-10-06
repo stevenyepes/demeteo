@@ -34,6 +34,7 @@ function ticketView(title: string): TicketView {
       agent_kind: null,
       model: null,
       effort: null,
+      machine_id: null,
       attachments: [],
       state: 'unstarted',
       drop_reason: null,
@@ -49,6 +50,7 @@ function ticketView(title: string): TicketView {
       startable: false,
       blockers: [{ id: 'b', reason: 'outstanding' }],
     },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 }

@@ -1,0 +1,18 @@
+-- Where a ticket's run is placed: the machine whose `demeteo-runner` takes it
+-- detached, or "local" for the project's own compute.
+--
+-- NULL means "not chosen — inherit the Discovery's default", not "local".
+-- It resolves on read through `domain::run_placement::default_ticket_placement`
+-- (PRD_DISCOVERY.md §7.4). Rows that existed before this column are not left
+-- NULL: V61 stores "local" on them, where they always ran. A default resolved
+-- on read follows the Discovery: a stored copy of it would pin a choice nobody
+-- made.
+--
+-- "local" is therefore stored explicitly when the user picks it. Collapsing
+-- that to NULL would erase the choice and hand the ticket back to the default,
+-- which on a Discovery opened on another machine is detached.
+--
+-- No foreign key to `machines`: deleting a machine must not delete the tickets
+-- that name it, nor silently re-place them. The id stays, and launch refuses
+-- a machine it cannot find, naming it, so the user re-points the ticket.
+ALTER TABLE tickets ADD COLUMN machine_id TEXT;

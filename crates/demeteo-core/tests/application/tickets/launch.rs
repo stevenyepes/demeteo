@@ -8,13 +8,18 @@ use async_trait::async_trait;
 use super::*;
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::application::discovery::{create as open_discovery, NewDiscovery};
-use crate::application::tickets::node_of;
+use crate::application::launch::tests::{harness, Harness, MirrorFailingOn, MirrorWrite, RunnerAt};
+use crate::application::remote_runs::{
+    find_mirror_for_feature, retry_remote_step, RemoteRewind, RewindOverrides,
+};
+use crate::application::tickets::{board, node_of, TicketView};
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
 use crate::domain::feature_origin::FeatureOrigin;
-use crate::domain::ids::{DiscoveryId, ProjectId, TicketId, WorkflowId};
-use crate::domain::models::{EffortLevel, Project};
-use crate::domain::ticket_graph::derive_board;
-use crate::ports::discovery::DiscoveryPatch;
+use crate::domain::ids::{DiscoveryId, FeatureId, MachineId, ProjectId, TicketId, WorkflowId};
+use crate::domain::models::{EffortLevel, Feature, Project};
+use crate::domain::ticket_graph::{derive_board, TicketLane};
+use crate::ports::db::FeaturePatch;
+use crate::ports::discovery::{DiscoveryPatch, TicketPort};
 use crate::ports::step_executor::StepExecutor;
 
 fn ticket(id: &str, seq: i64, title: &str) -> Ticket {
@@ -32,6 +37,7 @@ fn ticket(id: &str, seq: i64, title: &str) -> Ticket {
         agent_kind: None,
         model: None,
         effort: None,
+        machine_id: None,
         attachments: Vec::new(),
         state: TicketState::Unstarted,
         drop_reason: None,
@@ -382,7 +388,7 @@ async fn starting_a_ticket_cuts_from_the_discoverys_base_branch() {
     let spy = SpyExecutor::new();
     ctx.executor = spy.clone();
 
-    start(&ctx, &t.id).await.expect("the ticket starts");
+    start(&ctx, &t.id, None).await.expect("the ticket starts");
 
     let launch = spy
         .captured
@@ -413,7 +419,7 @@ async fn starting_a_ticket_with_no_base_branch_uses_the_default_branch() {
     let spy = SpyExecutor::new();
     ctx.executor = spy.clone();
 
-    start(&ctx, &t.id).await.expect("the ticket starts");
+    start(&ctx, &t.id, None).await.expect("the ticket starts");
 
     let launch = spy
         .captured
@@ -422,4 +428,585 @@ async fn starting_a_ticket_with_no_base_branch_uses_the_default_branch() {
         .clone()
         .expect("feature_start was called");
     assert_eq!(launch.origin, FeatureOrigin::DefaultBranch);
+}
+
+// --- AC4: a detached ticket starts like a local one -----------------------
+
+/// A startable ticket in a Discovery on the harness's local project, with the
+/// harness's workflow and `stored` as its own placement choice.
+fn stored_ticket(h: &Harness, stored: Option<&str>) -> Ticket {
+    let discovery = open_discovery(&h.ctx, opening(&ProjectId::from("p-1"), "placed work"))
+        .expect("the discovery opens");
+    let mut t = launchable_ticket(&discovery.id);
+    t.workflow_id = Some(WorkflowId::from("w-1".to_string()));
+    t.machine_id = stored.map(MachineId::from);
+    h.ctx
+        .tickets
+        .upsert_batch(std::slice::from_ref(&t))
+        .expect("the ticket is stored");
+    t
+}
+
+fn reloaded(h: &Harness, t: &Ticket) -> Ticket {
+    h.ctx
+        .tickets
+        .get(&t.id)
+        .expect("the ticket reads")
+        .expect("the ticket exists")
+}
+
+fn feature_rows(h: &Harness) -> Vec<String> {
+    h.ctx
+        .features
+        .get_all_for_project(&ProjectId::from("p-1"))
+        .expect("features read")
+        .into_iter()
+        .map(|f| f.id.0)
+        .collect()
+}
+
+/// Started, pointing at `feature`, with the one current attempt on it, which
+/// records it was placed on `placed`.
+fn assert_started_on(h: &Harness, t: &Ticket, feature: &Feature, placed: &str) {
+    let after = reloaded(h, t);
+    assert_eq!(after.state, TicketState::Started);
+    assert_eq!(after.feature_id.as_ref(), Some(&feature.id));
+    let attempts = h.ctx.tickets.list_attempts(&t.id).expect("attempts read");
+    assert_eq!(attempts.len(), 1, "{attempts:?}");
+    assert_eq!(attempts[0].feature_id, feature.id);
+    assert_eq!(attempts[0].superseded_at, None);
+    assert_eq!(attempts[0].machine_id, Some(MachineId::from(placed)));
+}
+
+/// Started on the runner: the Feature is the shadow row the mirror points at,
+/// and the step executor never saw the launch.
+fn assert_started_detached(h: &Harness, t: &Ticket, feature: &Feature) {
+    assert_started_on(h, t, feature, "runner-1");
+    assert_eq!(feature_rows(h), std::slice::from_ref(&feature.id.0));
+    let mirrors = h.ctx.remote_run_mirror.list().expect("mirror reads");
+    assert_eq!(mirrors.len(), 1);
+    assert_eq!(
+        mirrors[0].feature_id.as_deref(),
+        Some(feature.id.0.as_str())
+    );
+    assert!(h.spy.launched().is_none(), "the executor is not called");
+}
+
+/// A refused start is as if it had never been asked for.
+fn assert_untouched(h: &Harness, t: &Ticket) {
+    let after = reloaded(h, t);
+    assert_eq!(after.state, TicketState::Unstarted);
+    assert_eq!(after.feature_id, None);
+    assert!(h
+        .ctx
+        .tickets
+        .list_attempts(&t.id)
+        .expect("attempts read")
+        .is_empty());
+    assert_eq!(feature_rows(h), Vec::<String>::new(), "no Feature row");
+    assert!(h.spy.launched().is_none(), "the executor is not called");
+}
+
+#[tokio::test]
+async fn a_stored_detached_ticket_starts_on_the_shadow_feature() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h, Some("runner-1"));
+
+    let feature = start(&h.ctx, &t.id, None)
+        .await
+        .expect("the ticket starts")
+        .feature;
+
+    assert_started_detached(&h, &t, &feature);
+}
+
+#[tokio::test]
+async fn an_override_places_one_launch_and_is_not_saved() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h, Some("local"));
+
+    let feature = start(&h.ctx, &t.id, Some(MachineId::from("runner-1")))
+        .await
+        .expect("the ticket starts")
+        .feature;
+
+    assert_started_detached(&h, &t, &feature);
+    assert_eq!(reloaded(&h, &t).machine_id, Some(MachineId::from("local")));
+}
+
+#[tokio::test]
+async fn a_local_override_beats_a_stored_runner() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h, Some("runner-1"));
+
+    let feature = start(&h.ctx, &t.id, Some(MachineId::from("local")))
+        .await
+        .expect("the ticket starts")
+        .feature;
+
+    assert!(h.spy.launched().is_some(), "the executor ran it");
+    assert_eq!(h.exec.calls(), Vec::<String>::new(), "no RPC");
+    assert_started_on(&h, &t, &feature, "local");
+    assert_eq!(
+        reloaded(&h, &t).machine_id,
+        Some(MachineId::from("runner-1"))
+    );
+}
+
+#[tokio::test]
+async fn a_start_on_an_unknown_machine_leaves_no_trace() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h, Some("runner-gone"));
+
+    let error = start(&h.ctx, &t.id, None)
+        .await
+        .expect_err("an unknown machine is refused");
+
+    assert!(error.to_string().contains("runner-gone"), "{error}");
+    assert_untouched(&h, &t);
+}
+
+#[tokio::test]
+async fn a_start_on_an_incompatible_runner_leaves_no_trace_and_can_be_retried() {
+    let mut h = harness(RunnerAt::reporting("1.2.0-30"));
+    let t = stored_ticket(&h, Some("runner-1"));
+
+    let error = start(&h.ctx, &t.id, None)
+        .await
+        .expect_err("an incompatible runner is refused");
+
+    assert_eq!(error.code(), "runner_incompatible", "{error}");
+    assert_untouched(&h, &t);
+
+    h.ctx.exec = Arc::new(RunnerAt::accepting());
+    let feature = start(&h.ctx, &t.id, None)
+        .await
+        .expect("the retry starts")
+        .feature;
+    assert_started_detached(&h, &t, &feature);
+}
+
+/// A ticket on the runner that is blocked by an unstarted sibling, so only a
+/// force start can launch it.
+fn blocked_detached_ticket(h: &Harness) -> Ticket {
+    let blocker = stored_ticket(h, None);
+    let mut t = blocker.clone();
+    t.id = TicketId::from("t-2".to_string());
+    t.seq = 2;
+    t.blocked_by = vec![blocker.id.clone()];
+    t.machine_id = Some(MachineId::from("runner-1"));
+    h.ctx
+        .tickets
+        .upsert_batch(std::slice::from_ref(&t))
+        .expect("the dependent is stored");
+    t
+}
+
+#[tokio::test]
+async fn a_detached_force_start_records_its_reason_and_starts() {
+    let h = harness(RunnerAt::accepting());
+    let t = blocked_detached_ticket(&h);
+
+    let feature = force_start(&h.ctx, &t.id, "no forge remote", None)
+        .await
+        .expect("the force start launches")
+        .feature;
+
+    assert_started_detached(&h, &t, &feature);
+    assert_eq!(
+        reloaded(&h, &t).force_start_reason.as_deref(),
+        Some("no forge remote")
+    );
+}
+
+#[tokio::test]
+async fn a_refused_detached_force_start_keeps_its_reason() {
+    let h = harness(RunnerAt::reporting("1.2.0-32"));
+    let t = blocked_detached_ticket(&h);
+
+    let error = force_start(&h.ctx, &t.id, "no forge remote", None)
+        .await
+        .expect_err("an incompatible runner is refused");
+
+    assert_eq!(error.code(), "runner_incompatible", "{error}");
+    assert_untouched(&h, &t);
+    assert_eq!(
+        reloaded(&h, &t).force_start_reason.as_deref(),
+        Some("no forge remote")
+    );
+}
+
+/// D8: the runner holds the run, so recording nothing would let the user
+/// submit it a second time. The parked PAT goes back with it, since nothing
+/// else reports it before a reconcile.
+#[tokio::test]
+async fn parked_credentials_still_start_the_ticket() {
+    let h = harness(RunnerAt {
+        accepts_credentials: false,
+        ..RunnerAt::accepting()
+    });
+    let t = stored_ticket(&h, Some("runner-1"));
+
+    let launched = start(&h.ctx, &t.id, None)
+        .await
+        .expect("an accepted run is a started ticket");
+
+    assert!(h
+        .exec
+        .calls()
+        .contains(&"rpc inject_credentials".to_string()));
+    assert_started_detached(&h, &t, &launched.feature);
+    let reason = launched
+        .credentials_parked
+        .expect("the parked PAT is reported");
+    assert!(reason.contains("inject_credentials"), "{reason}");
+    assert_eq!(launched.mirror_unrecorded, None);
+}
+
+#[tokio::test]
+async fn a_clean_detached_start_reports_nothing_degraded() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h, Some("runner-1"));
+
+    let launched = force_start(&h.ctx, &t.id, "no forge remote", None)
+        .await
+        .expect("the ticket starts");
+
+    assert_started_detached(&h, &t, &launched.feature);
+    assert_eq!(launched.credentials_parked, None);
+    assert_eq!(launched.mirror_unrecorded, None);
+}
+
+/// D8: the run is on the runner even when the laptop could not mirror it, so
+/// the attempt is recorded and a second start is refused rather than paying
+/// for the same ticket twice.
+#[tokio::test]
+async fn a_mirror_failure_still_starts_the_ticket_once() {
+    for write in [MirrorWrite::Submitted, MirrorWrite::Status] {
+        let mut h = harness(RunnerAt::accepting());
+        h.ctx.remote_run_mirror = MirrorFailingOn::wrap(h.ctx.remote_run_mirror.clone(), write);
+        let t = stored_ticket(&h, Some("runner-1"));
+
+        let launched = start(&h.ctx, &t.id, None)
+            .await
+            .unwrap_or_else(|error| panic!("{write:?}: an accepted run starts, got {error}"));
+        let reason = launched
+            .mirror_unrecorded
+            .unwrap_or_else(|| panic!("{write:?}: the mirror failure is reported"));
+        assert!(reason.contains(write.method()), "{reason}");
+        let feature = launched.feature;
+
+        assert_started_on(&h, &t, &feature, "runner-1");
+        assert_eq!(feature_rows(&h), std::slice::from_ref(&feature.id.0));
+        let again = start(&h.ctx, &t.id, None)
+            .await
+            .expect_err("a started ticket is not submitted twice");
+        assert!(
+            again.to_string().contains("already been started"),
+            "{again}"
+        );
+        let submits = h
+            .exec
+            .calls()
+            .into_iter()
+            .filter(|call| call == "rpc submit_run")
+            .count();
+        assert_eq!(submits, 1, "{write:?}");
+    }
+}
+
+/// The context's own ticket store, except that recording a start fails — the
+/// local SQLite failure that can land after the run has already launched.
+struct StartUnrecordable {
+    inner: Arc<dyn TicketPort>,
+}
+
+impl StartUnrecordable {
+    fn wrap(inner: Arc<dyn TicketPort>) -> Arc<dyn TicketPort> {
+        Arc::new(Self { inner })
+    }
+}
+
+impl TicketPort for StartUnrecordable {
+    fn list_for_discovery(&self, discovery_id: &DiscoveryId) -> Result<Vec<Ticket>, String> {
+        self.inner.list_for_discovery(discovery_id)
+    }
+    fn get(&self, id: &TicketId) -> Result<Option<Ticket>, String> {
+        self.inner.get(id)
+    }
+    fn upsert_batch(&self, tickets: &[Ticket]) -> Result<(), String> {
+        self.inner.upsert_batch(tickets)
+    }
+    fn update(&self, id: &TicketId, patch: &TicketPatch, now: i64) -> Result<(), String> {
+        self.inner.update(id, patch, now)
+    }
+    fn delete(&self, id: &TicketId) -> Result<(), String> {
+        self.inner.delete(id)
+    }
+    fn next_seq(&self, discovery_id: &DiscoveryId) -> Result<i64, String> {
+        self.inner.next_seq(discovery_id)
+    }
+    fn for_feature(&self, feature_id: &FeatureId) -> Result<Vec<Ticket>, String> {
+        self.inner.for_feature(feature_id)
+    }
+    fn record_start(
+        &self,
+        _: &TicketId,
+        _: &FeatureId,
+        _: &crate::domain::run_placement::RunPlacement,
+        _: i64,
+    ) -> Result<(), String> {
+        Err("database is locked during record_start".to_string())
+    }
+    fn list_attempts(
+        &self,
+        ticket_id: &TicketId,
+    ) -> Result<Vec<crate::domain::models::TicketFeatureAttempt>, String> {
+        self.inner.list_attempts(ticket_id)
+    }
+}
+
+/// The note an unrecorded start must carry: the run that exists, and why the
+/// board will not show it.
+fn assert_unrecorded_note(launched: &LaunchedRun) {
+    let note = launched
+        .ticket_unrecorded
+        .as_deref()
+        .expect("the unrecorded start is reported");
+    assert!(note.contains(&launched.feature.id.0), "{note}");
+    assert!(note.contains("database is locked"), "{note}");
+}
+
+/// The SubmitOutcome contract one layer up: once the runner holds a paid run,
+/// a failed local write is a note on the launch, never an `Err` that invites
+/// the same ticket to be submitted again.
+#[tokio::test]
+async fn an_unrecordable_detached_start_is_still_one_launched_run() {
+    let mut h = harness(RunnerAt::accepting());
+    h.ctx.tickets = StartUnrecordable::wrap(h.ctx.tickets.clone());
+    let t = stored_ticket(&h, Some("runner-1"));
+
+    let launched = start(&h.ctx, &t.id, None)
+        .await
+        .unwrap_or_else(|error| panic!("an accepted run is launched, got {error}"));
+
+    assert_unrecorded_note(&launched);
+    let submits = h
+        .exec
+        .calls()
+        .into_iter()
+        .filter(|call| call == "rpc submit_run")
+        .count();
+    assert_eq!(submits, 1);
+    assert!(h.spy.launched().is_none(), "the executor is not called");
+    assert_eq!(launched.credentials_parked, None);
+    assert_eq!(launched.mirror_unrecorded, None);
+}
+
+#[tokio::test]
+async fn an_unrecordable_local_start_is_still_one_launched_run() {
+    let mut h = harness(RunnerAt::accepting());
+    h.ctx.tickets = StartUnrecordable::wrap(h.ctx.tickets.clone());
+    let t = stored_ticket(&h, Some("local"));
+
+    let launched = start(&h.ctx, &t.id, None)
+        .await
+        .unwrap_or_else(|error| panic!("a started run is launched, got {error}"));
+
+    assert_unrecorded_note(&launched);
+    assert_eq!(h.spy.launch_count(), 1);
+    assert_eq!(h.exec.calls(), Vec::<String>::new(), "no RPC");
+}
+
+fn board_view(h: &Harness, t: &Ticket) -> TicketView {
+    board(&h.ctx, &t.discovery_id)
+        .expect("the board reads")
+        .tickets
+        .into_iter()
+        .find(|v| v.ticket.id == t.id)
+        .expect("the ticket is on its board")
+}
+
+/// D9: the lane is the shadow Feature's, which reconcile hydrates — the board
+/// never consults the mirror to place a detached ticket.
+#[tokio::test]
+async fn a_detached_ticket_lands_and_releases_its_dependent_through_the_shadow() {
+    let h = harness(RunnerAt::accepting());
+    let detached = stored_ticket(&h, Some("runner-1"));
+    let mut dependent = detached.clone();
+    dependent.id = TicketId::from("t-2".to_string());
+    dependent.seq = 2;
+    dependent.blocked_by = vec![detached.id.clone()];
+    dependent.machine_id = None;
+    h.ctx
+        .tickets
+        .upsert_batch(std::slice::from_ref(&dependent))
+        .expect("the dependent is stored");
+
+    let feature = start(&h.ctx, &detached.id, None)
+        .await
+        .expect("the ticket starts")
+        .feature;
+
+    assert_eq!(
+        board_view(&h, &detached).standing.lane,
+        TicketLane::InFlight
+    );
+    assert!(!board_view(&h, &dependent).standing.startable);
+
+    h.ctx
+        .features
+        .update(
+            &feature.id,
+            &FeaturePatch {
+                mr_state: Some(Some("merged".to_string())),
+                ..Default::default()
+            },
+        )
+        .expect("the shadow is hydrated");
+
+    assert_eq!(board_view(&h, &detached).standing.lane, TicketLane::Landed);
+    let released = board_view(&h, &dependent).standing;
+    assert!(released.startable, "{released:?}");
+    assert_eq!(released.lane, TicketLane::Ready);
+}
+
+#[tokio::test]
+async fn a_detached_tickets_card_carries_its_mirror_row() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h, Some("runner-1"));
+    start(&h.ctx, &t.id, None).await.expect("the ticket starts");
+    let mirror = h
+        .ctx
+        .remote_run_mirror
+        .list()
+        .expect("mirror reads")
+        .remove(0);
+    h.ctx
+        .remote_run_mirror
+        .update_status(
+            &mirror.machine_id,
+            &mirror.run_id,
+            "running",
+            None,
+            None,
+            None,
+            None,
+            0,
+            now_ms(),
+        )
+        .expect("the mirror advances");
+
+    let remote = board_view(&h, &t)
+        .feature
+        .expect("a started ticket has a feature")
+        .remote
+        .expect("a detached attempt exposes its mirror row");
+
+    assert_eq!(remote.machine_id, "runner-1");
+    assert_eq!(remote.run_id, mirror.run_id);
+    assert_eq!(remote.status, "running");
+}
+
+/// A Feature is retried in place, and a ticket's shadow Feature reaches its
+/// run the way a UI-launched detached run does: through the mirror row keyed
+/// by the Feature id. The retry records no new attempt on the ticket.
+#[tokio::test]
+async fn a_detached_tickets_shadow_is_retried_through_its_mirror_row() {
+    let h = harness(RunnerAt {
+        accepts_retry: true,
+        ..RunnerAt::accepting()
+    });
+    let t = stored_ticket(&h, Some("runner-1"));
+    let feature = start(&h.ctx, &t.id, None)
+        .await
+        .expect("the ticket starts")
+        .feature;
+    let accepted = h
+        .ctx
+        .remote_run_mirror
+        .list()
+        .expect("mirror reads")
+        .remove(0);
+    let before = h.exec.calls().len();
+
+    let mirror = find_mirror_for_feature(&h.ctx, feature.id.0.clone())
+        .expect("the mirror reads")
+        .expect("the shadow Feature names its run");
+    assert_eq!(mirror.machine_id, "runner-1");
+    assert_eq!(mirror.run_id, accepted.run_id);
+
+    retry_remote_step(
+        &h.ctx,
+        mirror.machine_id,
+        mirror.run_id.clone(),
+        "se-1".to_string(),
+        RewindOverrides::default(),
+        RemoteRewind::Retry,
+    )
+    .await
+    .expect("the retry reaches the runner");
+
+    let retried = h.exec.calls()[before..].to_vec();
+    assert!(
+        retried.contains(&format!("rpc retry_step {} se-1 retry", mirror.run_id)),
+        "{retried:?}"
+    );
+    assert_started_detached(&h, &t, &feature);
+}
+
+/// Two surfaces starting one ticket at once — the board and an MCP
+/// `start_ticket` — would both read it `Unstarted`, and the second would
+/// orphan the first's run. The loser is refused before anything is asked of
+/// the executor or the runner.
+#[tokio::test]
+async fn a_start_already_under_way_refuses_a_second_one_before_any_io() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h, Some("runner-1"));
+    let in_flight = h
+        .ctx
+        .ticket_starts
+        .try_claim(&t.id)
+        .expect("nothing holds the ticket yet");
+
+    for second in [
+        start(&h.ctx, &t.id, None).await,
+        start(&h.ctx, &t.id, Some(MachineId::from("local"))).await,
+    ] {
+        let error = second.expect_err("a second start is refused");
+        assert_eq!(error.code(), "validation", "{error}");
+        assert!(error.to_string().contains("#1"), "{error}");
+        assert!(error.to_string().contains("under way"), "{error}");
+    }
+
+    assert_eq!(h.exec.calls(), Vec::<String>::new(), "no RPC");
+    assert_untouched(&h, &t);
+    drop(in_flight);
+}
+
+/// The claim lives exactly as long as one start: a refused start leaves the
+/// ticket retryable, and a finished one leaves it claimable again.
+#[tokio::test]
+async fn a_start_releases_its_claim_whether_it_launches_or_is_refused() {
+    let mut h = harness(RunnerAt::reporting("1.2.0-30"));
+    let t = stored_ticket(&h, Some("runner-1"));
+
+    start(&h.ctx, &t.id, None)
+        .await
+        .expect_err("an incompatible runner is refused");
+    assert!(
+        h.ctx.ticket_starts.try_claim(&t.id).is_some(),
+        "a refused start released its claim"
+    );
+
+    h.ctx.exec = Arc::new(RunnerAt::accepting());
+    let feature = start(&h.ctx, &t.id, None)
+        .await
+        .expect("the retry starts")
+        .feature;
+    assert_started_detached(&h, &t, &feature);
+    assert!(
+        h.ctx.ticket_starts.try_claim(&t.id).is_some(),
+        "a launched start released its claim"
+    );
 }

@@ -25,7 +25,7 @@ function named(branch: string | null): string | null {
 }
 
 /**
- * Map a selection onto the `start_feature` / `remote_submit_run` arguments.
+ * Map a selection onto the `launch_run` arguments.
  *
  * Both keys are omitted rather than sent as `null` for a selection that states
  * nothing, so the launch payload of a user who never opens this picker is the
