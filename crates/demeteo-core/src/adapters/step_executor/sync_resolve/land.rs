@@ -185,6 +185,8 @@ pub(super) async fn land(
         // banner; one that cannot authenticate is recoverable from nowhere
         // until the provider is reconnected, which is why the failure says
         // which of the two it is.
+        // Pushed from `resolved_cwd`, the tree the resolution was committed in,
+        // so a `pre-push` hook sees what it is judging.
         let credential = crate::adapters::git_push::credential_for_repo(
             &**exec,
             app_settings.as_ref(),

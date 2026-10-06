@@ -217,3 +217,153 @@ fn the_remote_host_and_the_provider_host_share_one_rule() {
         Some(host_without_port("gitlab.local:8443"))
     );
 }
+
+const HOOK_OUTPUT: &str = "running checks\ncargo test: 2 failed\nerror: gate failed";
+const HOOK_CLOSE: &str = "error: failed to push some refs to 'https://github.com/o/r.git'";
+const PUSH_CMD: &str = "git -C /work/wt push origin HEAD:refs/heads/feature";
+
+fn local_shape(output: &str) -> String {
+    format!("Command failed (exit code: Some(1)): {output}")
+}
+
+fn ssh_shape(stderr: &str) -> String {
+    format!("Command failed ({}): {PUSH_CMD}", stderr.trim())
+}
+
+#[test]
+fn a_push_failure_is_classified_from_git_wording() {
+    let hook_local = local_shape(&format!("{HOOK_OUTPUT}\n{HOOK_CLOSE}"));
+    let hook_ssh = ssh_shape(&format!("{HOOK_OUTPUT}\n{HOOK_CLOSE}"));
+    let non_fast_forward = local_shape(&format!(
+        "To https://github.com/o/r.git\n ! [rejected]        main -> main (non-fast-forward)\n{HOOK_CLOSE}"
+    ));
+    let fetch_first = ssh_shape(&format!(
+        "! [rejected]        main -> main (fetch first)\n{HOOK_CLOSE}"
+    ));
+    let remote_rejected = local_shape(&format!(
+        " ! [remote rejected] main -> main (pre-receive hook declined)\n{HOOK_CLOSE}"
+    ));
+    let protected_branch = ssh_shape(&format!(
+        "remote: error: GH006: Protected branch update failed for refs/heads/main.\n{HOOK_CLOSE}"
+    ));
+    let stale_info = local_shape(&format!(
+        " ! [rejected]        main -> main (stale info)\n{HOOK_CLOSE}"
+    ));
+    let local_hook_noise_then_remote = local_shape(&format!(
+        "{HOOK_OUTPUT}\nremote: Resolving deltas: 100%\n{HOOK_CLOSE}"
+    ));
+    let cases: [(&str, PushFailure); 12] = [
+        (&hook_local, PushFailure::HookFailed),
+        (&hook_ssh, PushFailure::HookFailed),
+        (&non_fast_forward, PushFailure::Rejected),
+        (&fetch_first, PushFailure::Rejected),
+        (&remote_rejected, PushFailure::Rejected),
+        (&protected_branch, PushFailure::Rejected),
+        (&stale_info, PushFailure::Rejected),
+        (&local_hook_noise_then_remote, PushFailure::Rejected),
+        (
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+            PushFailure::Credential,
+        ),
+        (
+            &ssh_shape("git@github.com: Permission denied (publickey)."),
+            PushFailure::Credential,
+        ),
+        (
+            &local_shape(
+                "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host",
+            ),
+            PushFailure::Other,
+        ),
+        ("", PushFailure::Other),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(classify_push_failure(error), expected, "for: {error}");
+    }
+}
+
+/// A credential failure outranks a rejection marker: git prints
+/// `remote: Invalid username or password.` before `Authentication failed`.
+#[test]
+fn a_credential_failure_wins_over_a_remote_line() {
+    let error = local_shape(
+        "remote: Invalid username or password.\nfatal: Authentication failed for 'https://…'",
+    );
+    assert_eq!(classify_push_failure(&error), PushFailure::Credential);
+}
+
+/// The SSH adapter appends the command it ran. If that were read as git output,
+/// a command that merely mentions a marker would change the verdict.
+#[test]
+fn the_ssh_command_echo_is_not_read_as_git_output() {
+    let echoing = "Command failed (exit code: 1): git push origin fetch first non-fast-forward";
+    assert_eq!(classify_push_failure(echoing), PushFailure::Other);
+
+    let error = format!(
+        "Command failed ({HOOK_OUTPUT}\n{HOOK_CLOSE}): git push 'stale info' ! [rejected] remote: x"
+    );
+    assert_eq!(classify_push_failure(&error), PushFailure::HookFailed);
+}
+
+#[test]
+fn the_hook_tail_is_the_hook_output_before_the_closing_line() {
+    for error in [
+        local_shape(&format!(
+            "{HOOK_OUTPUT}\n{HOOK_CLOSE}\nhint: Updates were rejected"
+        )),
+        ssh_shape(&format!("{HOOK_OUTPUT}\n{HOOK_CLOSE}")),
+        format!("{HOOK_OUTPUT}\n{HOOK_CLOSE}"),
+    ] {
+        assert_eq!(hook_tail(&error), HOOK_OUTPUT, "for: {error}");
+    }
+}
+
+#[test]
+fn the_hook_tail_never_contains_the_ssh_command_echo() {
+    let error = ssh_shape(&format!("{HOOK_OUTPUT}\n{HOOK_CLOSE}"));
+    assert!(!hook_tail(&error).contains(PUSH_CMD));
+    let silent = ssh_shape("");
+    assert_eq!(silent, format!("Command failed (): {PUSH_CMD}"));
+    assert_eq!(hook_tail(&silent), "");
+    assert_eq!(
+        hook_tail(&format!("Command failed (exit code: 1): {PUSH_CMD}")),
+        ""
+    );
+}
+
+#[test]
+fn a_hook_tail_keeps_only_the_last_forty_lines() {
+    let lines: Vec<String> = (1..=100).map(|n| format!("line {n}")).collect();
+    let error = local_shape(&format!("{}\n{HOOK_CLOSE}", lines.join("\n")));
+    let tail = hook_tail(&error);
+    assert_eq!(tail.lines().count(), 40);
+    assert_eq!(tail.lines().next(), Some("line 61"));
+    assert_eq!(tail.lines().last(), Some("line 100"));
+}
+
+#[test]
+fn exactly_forty_lines_are_kept_whole() {
+    let lines: Vec<String> = (1..=40).map(|n| format!("line {n}")).collect();
+    let hook = lines.join("\n");
+    assert_eq!(hook_tail(&format!("{hook}\n{HOOK_CLOSE}")), hook);
+}
+
+#[test]
+fn a_hook_tail_keeps_only_the_last_4096_bytes() {
+    let long = "x".repeat(10_000);
+    let tail = hook_tail(&local_shape(&format!("{long}end\n{HOOK_CLOSE}")));
+    assert_eq!(tail.len(), 4096);
+    assert!(tail.ends_with("xend"));
+}
+
+/// `é` is two bytes, so a byte cut at an odd offset would land inside one.
+#[test]
+fn a_hook_tail_is_cut_on_a_char_boundary() {
+    for prefix in ["", "a"] {
+        let hook = format!("{prefix}{}", "é".repeat(3000));
+        let tail = hook_tail(&format!("{hook}\n{HOOK_CLOSE}"));
+        assert!(tail.len() <= 4096);
+        assert!(tail.len() >= 4094);
+        assert!(tail.chars().all(|c| c == 'é'));
+    }
+}

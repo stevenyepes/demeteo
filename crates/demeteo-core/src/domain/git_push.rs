@@ -184,6 +184,108 @@ pub fn is_credential_failure(stderr: &str) -> bool {
     SIGNATURES.iter().any(|sig| stderr.contains(sig))
 }
 
+/// Why a push exited non-zero, as far as git's own wording says.
+///
+/// Three of these need three different pieces of advice. `Rejected` means
+/// origin heard the push and refused it, so fetching and syncing again is the
+/// fix; `HookFailed` means a local `pre-push` hook stopped it before anything
+/// left the machine, so syncing again would only run the same hook; `Credential`
+/// is [`is_credential_failure`]. `Other` is everything git phrased some other
+/// way and must not be given advice that only fits one of the three.
+///
+/// Read from git's English wording, like [`is_credential_failure`]; output in
+/// another locale degrades to `Other`, which is the neutral answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushFailure {
+    Credential,
+    HookFailed,
+    Rejected,
+    Other,
+}
+
+const PUSH_FAILED_MARKER: &str = "failed to push some refs";
+
+/// Classify a failed push from the error string an `ExecutionPort` returned.
+///
+/// The order is the decision. A rejection marker is positive evidence that
+/// origin was contacted, and a remote's own `pre-receive` hook ends in the same
+/// `failed to push some refs` line a local `pre-push` hook does — so only a
+/// push with that line and *no* rejection marker is attributed to a local hook.
+pub fn classify_push_failure(error: &str) -> PushFailure {
+    let output = git_output(error);
+    if is_credential_failure(output) {
+        PushFailure::Credential
+    } else if has_rejection_marker(output) {
+        PushFailure::Rejected
+    } else if output.contains(PUSH_FAILED_MARKER) {
+        PushFailure::HookFailed
+    } else {
+        PushFailure::Other
+    }
+}
+
+/// The hook's own output from a [`PushFailure::HookFailed`] error: what
+/// precedes git's closing `error: failed to push some refs` line, bounded to
+/// the last [`HOOK_TAIL_LINES`] lines and [`HOOK_TAIL_BYTES`] bytes — a gate
+/// that runs a whole test suite can print megabytes, and the end is where it says
+/// why it failed.
+pub fn hook_tail(error: &str) -> String {
+    let output = git_output(error);
+    let hook = match output.rfind(&format!("error: {PUSH_FAILED_MARKER}")) {
+        Some(end) => &output[..end],
+        None => output,
+    }
+    .trim_end();
+    let line_start = hook
+        .rmatch_indices('\n')
+        .nth(HOOK_TAIL_LINES - 1)
+        .map_or(0, |(newline, _)| newline + 1);
+    let hook = &hook[line_start..];
+    let mut byte_start = hook.len().saturating_sub(HOOK_TAIL_BYTES);
+    while !hook.is_char_boundary(byte_start) {
+        byte_start += 1;
+    }
+    hook[byte_start..].to_string()
+}
+
+const HOOK_TAIL_LINES: usize = 40;
+const HOOK_TAIL_BYTES: usize = 4096;
+
+fn has_rejection_marker(output: &str) -> bool {
+    const MARKERS: [&str; 5] = [
+        "! [rejected]",
+        "! [remote rejected]",
+        "non-fast-forward",
+        "fetch first",
+        "stale info",
+    ];
+    MARKERS.iter().any(|marker| output.contains(marker))
+        || output.lines().any(|line| line.starts_with("remote:"))
+}
+
+/// Git's output with the transport's wrapper removed.
+///
+/// The two adapters word a failure differently: local is `Command failed (exit
+/// code: Some(1)): <stdout>\n<stderr>`, while SSH puts the stderr *inside* the
+/// parentheses (or `exit code: N` when it is empty) and appends the whole
+/// command after them. That trailing command is not git's output and must not
+/// be matched or shown.
+fn git_output(error: &str) -> &str {
+    let Some(rest) = error.strip_prefix("Command failed (") else {
+        return error;
+    };
+    let Some(rest) = rest.strip_prefix("exit code: ") else {
+        return rest.rfind("): ").map_or(rest, |end| &rest[..end]);
+    };
+    rest.strip_prefix("None): ")
+        .or_else(|| {
+            rest.strip_prefix("Some(")
+                .and_then(|code| code.split_once(")): "))
+                .map(|(_, output)| output)
+        })
+        .unwrap_or("")
+}
+
 /// The environment that stops `git` asking a human anything.
 ///
 /// Neither push-specific nor remote-specific, which is why it is here and not
