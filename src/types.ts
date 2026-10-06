@@ -1705,6 +1705,10 @@ export interface DecomposeProposal {
    *  applied. */
   refusal: string | null;
   violations: ImmutableViolation[];
+  /** Set when the pass ended before there was an answer to read — killed,
+   *  failed, or never started — so there is no plan to review. Optional
+   *  because it reaches the surface from a stored payload. */
+  stopped?: string | null;
   cost_usd: number;
   tokens: number;
 }

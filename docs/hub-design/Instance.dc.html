@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub — Instance detail</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Outfit:wght@500;600;700;800&amp;family=Fira+Code:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#08090c}
+a{color:#22d3ee}a:hover{color:#67e8f9}
+.hub{min-height:100vh;display:flex;flex-wrap:wrap;font-family:'Inter',-apple-system,sans-serif;color:#f3f4f6;-webkit-font-smoothing:antialiased;background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.05) 0%,transparent 60%),radial-gradient(circle at 10% 80%,rgba(6,182,212,.04) 0%,transparent 50%),#08090c}
+.rail{flex:0 0 72px;background:#0d0f14;border-right:1px solid rgba(255,255,255,.05);display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:12px;box-sizing:border-box}
+.logo{font-family:'Outfit',sans-serif;font-weight:800;font-size:24px;color:#06b6d4;text-shadow:0 0 12px rgba(6,182,212,.35);margin-bottom:16px;text-decoration:none}
+.nav{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#9ca3af;border:1px solid transparent;text-decoration:none;position:relative}
+.nav:hover{background:rgba(28,34,46,.85);color:#f3f4f6;border-color:rgba(255,255,255,.05)}
+.nav.on{background:rgba(139,92,246,.25);color:#a78bfa;border-color:rgba(139,92,246,.3);box-shadow:0 0 10px rgba(139,92,246,.25)}
+.badge{position:absolute;top:4px;right:4px;min-width:16px;height:16px;border-radius:8px;background:#f59e0b;color:#1f1300;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px;box-sizing:border-box}
+.avatar{margin-top:auto;width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#8b5cf6,#06b6d4);display:flex;align-items:center;justify-content:center;font-family:'Outfit',sans-serif;font-weight:700;font-size:14px;color:#fff}
+.main{flex:999 1 560px;min-width:0;padding:32px 40px 56px;box-sizing:border-box;display:flex;flex-direction:column;gap:28px}
+.h1{font-family:'Outfit',sans-serif;font-weight:600;font-size:30px;margin:0;letter-spacing:.2px}
+.h2{font-family:'Outfit',sans-serif;font-weight:600;font-size:13px;letter-spacing:.6px;text-transform:uppercase;color:#9ca3af;margin:0}
+.mono{font-family:'Fira Code','JetBrains Mono',monospace}
+.sub{color:#9ca3af;font-size:13px}
+.glass{background:rgba(18,22,30,.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.05);box-shadow:0 8px 32px rgba(0,0,0,.4);border-radius:12px}
+.nested{background:rgba(18,22,30,.55);border:1px solid rgba(255,255,255,.05);border-radius:12px}
+.btn{height:44px;padding:0 16px;border-radius:8px;display:inline-flex;align-items:center;gap:8px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;box-sizing:border-box;white-space:nowrap}
+.btn-p{background:linear-gradient(135deg,#8b5cf6,#7c3aed);color:#fff;border:none;box-shadow:0 0 16px rgba(139,92,246,.3)}
+.btn-s{background:rgba(255,255,255,.04);color:#e5e7eb;border:1px solid rgba(255,255,255,.08)}
+.btn-r{background:rgba(239,68,68,.08);color:#fca5a5;border:1px solid rgba(239,68,68,.3)}
+.btn-sm{height:36px;padding:0 12px;font-size:13px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;border:1px solid;font-size:11px;font-weight:500;white-space:nowrap}
+.p-em{border-color:rgba(16,185,129,.2);background:rgba(16,185,129,.1);color:#6ee7b7}
+.p-am{border-color:rgba(245,158,11,.25);background:rgba(245,158,11,.1);color:#fcd34d}
+.p-sl{border-color:rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:#cbd5e1}
+.p-cy{border-color:rgba(6,182,212,.3);background:rgba(6,182,212,.1);color:#67e8f9}
+.p-vi{border-color:rgba(139,92,246,.3);background:rgba(139,92,246,.1);color:#c4b5fd}
+.p-ru{border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.1);color:#fca5a5}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+.d-em{background:#34d399;box-shadow:0 0 8px rgba(16,185,129,.7);animation:pg 2s ease-in-out infinite}
+.d-am{background:#fbbf24;box-shadow:0 0 8px rgba(245,158,11,.7)}
+.d-sl{background:#64748b}
+.d-cy{background:#22d3ee;box-shadow:0 0 8px rgba(6,182,212,.7);animation:pg 2s ease-in-out infinite}
+@keyframes pg{0%,100%{opacity:1}50%{opacity:.45}}
+.bar{position:absolute;left:0;top:0;bottom:0;width:4px}
+.b-am{background:#f59e0b;box-shadow:0 0 10px rgba(245,158,11,.8)}
+.b-cy{background:#06b6d4;box-shadow:0 0 10px rgba(6,182,212,.8)}
+.b-vi{background:#8b5cf6;box-shadow:0 0 10px rgba(139,92,246,.8)}
+.b-em{background:#10b981;box-shadow:0 0 10px rgba(16,185,129,.8)}
+.tile{width:52px;height:52px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:none}
+.chip{display:inline-flex;align-items:center;height:24px;padding:0 8px;border-radius:6px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.06);font-family:'Fira Code',monospace;font-size:11px;color:#cbd5e1}
+.kv{display:flex;justify-content:space-between;gap:16px;font-size:13px;padding:10px 0;border-top:1px solid rgba(255,255,255,.05)}
+.kv .k{color:#9ca3af}
+.kv .v{font-family:'Fira Code',monospace;color:#e5e7eb;text-align:right;overflow-wrap:anywhere}
+.scope{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-top:1px solid rgba(255,255,255,.05)}
+.mark{width:20px;height:20px;border-radius:6px;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
+.on-m{background:rgba(16,185,129,.15);color:#6ee7b7}
+.off-m{background:rgba(255,255,255,.05);color:#9ca3af}
+.tbl{width:100%;border-collapse:collapse;font-size:13px;min-width:560px}
+.tbl th{text-align:left;font-weight:500;color:#9ca3af;font-size:12px;padding:0 12px 10px 0}
+.tbl td{padding:12px 12px 12px 0;border-top:1px solid rgba(255,255,255,.05);vertical-align:middle}
+.prog{height:4px;border-radius:2px;background:rgba(255,255,255,.06);overflow:hidden}
+.prog span{display:block;height:100%;border-radius:2px}
+</style>
+</helmet>
+<div class="hub">
+
+<nav class="rail" aria-label="Hub">
+  <a class="logo" href="#">D</a>
+  <a class="nav on" href="Main.dc.html" aria-label="Fleet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"></rect><rect width="20" height="8" x="2" y="14" rx="2"></rect><line x1="6" x2="6.01" y1="6" y2="6"></line><line x1="6" x2="6.01" y1="18" y2="18"></line></svg></a>
+  <a class="nav" href="Runs.dc.html" aria-label="Runs and gates, 2 need you"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"></path></svg><span class="badge">2</span></a>
+  <a class="nav" href="#" aria-label="Projects"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.3 7 8.7 5 8.7-5"></path><path d="M12 22V12"></path></svg></a>
+  <a class="nav" href="#" aria-label="Access and tokens"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 3 3L22 7l-3-3"></path></svg></a>
+  <a class="nav" href="#" aria-label="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"></line><line x1="4" x2="4" y1="10" y2="3"></line><line x1="12" x2="12" y1="21" y2="12"></line><line x1="12" x2="12" y1="8" y2="3"></line><line x1="20" x2="20" y1="21" y2="16"></line><line x1="20" x2="20" y1="12" y2="3"></line><line x1="2" x2="6" y1="14" y2="14"></line><line x1="10" x2="14" y1="8" y2="8"></line><line x1="18" x2="22" y1="16" y2="16"></line></svg></a>
+  <div class="avatar" aria-label="Signed in as you">SY</div>
+</nav>
+
+<main class="main">
+  <nav aria-label="Breadcrumb" class="mono" style="font-size: 12px; display: flex; gap: 8px; align-items: center"><a href="Main.dc.html" style="color: #9ca3af; text-decoration: none">Fleet</a><span style="color: #6b7280">/</span><span style="color: #e5e7eb">dev-workstation</span></nav>
+
+  <header style="display: flex; flex-wrap: wrap; gap: 20px; align-items: center">
+    <div class="tile" style="background: rgba(139,92,246,.12); color: #c4b5fd"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"></rect><line x1="8" x2="16" y1="21" y2="21"></line><line x1="12" x2="12" y1="17" y2="21"></line></svg></div>
+    <div style="flex: 1 1 320px; display: flex; flex-direction: column; gap: 6px; min-width: 0">
+      <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap"><h1 class="h1">dev-workstation</h1><span class="pill p-em"><span class="dot d-em"></span>Online</span><span class="pill p-vi">Desktop</span></div>
+      <div class="sub mono">Linux · x86_64 · Demeteo 1.2.0 · paired 3 weeks ago by you</div>
+    </div>
+    <div style="display: flex; gap: 12px; flex-wrap: wrap">
+      <a class="btn btn-s" href="#">Rename</a>
+      <a class="btn btn-p" href="Dispatch.dc.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>Run here</a>
+    </div>
+  </header>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+
+    <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 24px">
+
+      <section class="glass" style="padding: 20px; display: flex; flex-direction: column; gap: 14px" aria-labelledby="live">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 class="h2" id="live">Running now</h2><span class="sub mono" style="font-size: 12px">2 of 4 concurrent</span></div>
+
+        <a href="Runs.dc.html" class="nested" style="position: relative; overflow: hidden; padding: 14px 16px 14px 20px; display: flex; flex-direction: column; gap: 10px; text-decoration: none; color: inherit; box-shadow: inset 0 0 0 1px rgba(245,158,11,.3)">
+          <div class="bar b-am"></div>
+          <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap"><span style="font-family: 'Outfit', sans-serif; font-size: 16px; font-weight: 600">Retry failed webhooks with backoff</span><span class="pill p-am"><span class="dot d-am"></span>Gate needs you</span></div>
+          <div class="sub mono" style="font-size: 12px; display: flex; gap: 16px; flex-wrap: wrap"><span>checkout-api</span><span>feature/webhook-backoff</span><span>Review gate · waiting 14m</span><span>$1.84</span></div>
+          <div class="prog"><span style="width: 80%; background: #f59e0b"></span></div>
+        </a>
+
+        <a href="Runs.dc.html" class="nested" style="position: relative; overflow: hidden; padding: 14px 16px 14px 20px; display: flex; flex-direction: column; gap: 10px; text-decoration: none; color: inherit">
+          <div class="bar b-cy"></div>
+          <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap"><span style="font-family: 'Outfit', sans-serif; font-size: 16px; font-weight: 600">Index search by tenant</span><span class="pill p-cy"><span class="dot d-cy"></span>Running</span></div>
+          <div class="sub mono" style="font-size: 12px; display: flex; gap: 16px; flex-wrap: wrap"><span>search-svc</span><span>feature/tenant-index</span><span>Implement · 2 of 4 tickets</span><span>31m</span><span>$0.62</span></div>
+          <div class="prog"><span style="width: 45%; background: #06b6d4"></span></div>
+        </a>
+      </section>
+
+      <section class="glass" style="padding: 20px; display: flex; flex-direction: column; gap: 14px" aria-labelledby="proj">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap"><h2 class="h2" id="proj">Projects on this instance</h2><span class="sub" style="font-size: 12px">Names and remotes only — local paths stay on the machine</span></div>
+        <div style="overflow-x: auto">
+          <table class="tbl">
+            <thead><tr><th>Project</th><th>Remote</th><th>Default workflow</th><th>Last run</th><th></th></tr></thead>
+            <tbody>
+              <tr><td style="font-weight: 500">checkout-api</td><td class="mono sub" style="font-size: 12px">github.com/acme/checkout-api</td><td class="mono" style="font-size: 12px">feature-standard v7</td><td><span class="pill p-am">Gate needs you</span></td><td style="text-align: right"><a class="btn btn-s btn-sm" href="Dispatch.dc.html">Run</a></td></tr>
+              <tr><td style="font-weight: 500">search-svc</td><td class="mono sub" style="font-size: 12px">github.com/acme/search-svc</td><td class="mono" style="font-size: 12px">feature-standard v7</td><td><span class="pill p-cy">Running</span></td><td style="text-align: right"><a class="btn btn-s btn-sm" href="Dispatch.dc.html">Run</a></td></tr>
+              <tr><td style="font-weight: 500">ledger</td><td class="mono sub" style="font-size: 12px">gitlab.acme.dev/fin/ledger</td><td class="mono" style="font-size: 12px">bugfix-fast v3</td><td><span class="pill p-em">PR ready</span></td><td style="text-align: right"><a class="btn btn-s btn-sm" href="Dispatch.dc.html">Run</a></td></tr>
+              <tr><td style="font-weight: 500">design-tokens</td><td class="mono sub" style="font-size: 12px">github.com/acme/design-tokens</td><td class="mono" style="font-size: 12px">feature-standard v7</td><td><span class="pill p-em">Completed</span></td><td style="text-align: right"><a class="btn btn-s btn-sm" href="Dispatch.dc.html">Run</a></td></tr>
+              <tr><td style="font-weight: 500">infra-scripts</td><td class="mono sub" style="font-size: 12px">github.com/acme/infra-scripts</td><td class="mono" style="font-size: 12px">chore v2</td><td><span class="pill p-ru">Failed</span></td><td style="text-align: right"><a class="btn btn-s btn-sm" href="Dispatch.dc.html">Run</a></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="glass" style="padding: 20px; display: flex; flex-direction: column; gap: 14px" aria-labelledby="harn">
+        <div style="display: flex; justify-content: space-between; align-items: center"><h2 class="h2" id="harn">Harnesses</h2><span class="sub mono" style="font-size: 12px">baseline preflight · 6m ago</span></div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 12px">
+          <div class="nested" style="padding: 14px; display: flex; flex-direction: column; gap: 8px"><div style="display: flex; justify-content: space-between"><span class="mono" style="font-size: 13px">claude-code</span><span class="pill p-em">Ready</span></div><span class="sub" style="font-size: 12px">Signed in on this machine</span></div>
+          <div class="nested" style="padding: 14px; display: flex; flex-direction: column; gap: 8px"><div style="display: flex; justify-content: space-between"><span class="mono" style="font-size: 13px">opencode</span><span class="pill p-em">Ready</span></div><span class="sub" style="font-size: 12px">Signed in on this machine</span></div>
+          <div class="nested" style="padding: 14px; display: flex; flex-direction: column; gap: 8px"><div style="display: flex; justify-content: space-between"><span class="mono" style="font-size: 13px">hermes</span><span class="pill p-sl">Effort unsupported</span></div><span class="sub" style="font-size: 12px">Runs at its configured effort</span></div>
+        </div>
+      </section>
+    </div>
+
+    <aside style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 24px">
+
+      <section class="glass" style="padding: 20px; display: flex; flex-direction: column" aria-labelledby="conn">
+        <h2 class="h2" id="conn" style="margin-bottom: 12px">Connection</h2>
+        <div class="kv"><span class="k">Channel</span><span class="v">outbound wss · 41 ms</span></div>
+        <div class="kv"><span class="k">Last heartbeat</span><span class="v">3s ago</span></div>
+        <div class="kv"><span class="k">Connected since</span><span class="v">09:12 today</span></div>
+        <div class="kv"><span class="k">Event cursor</span><span class="v">offset 18,204 · in sync</span></div>
+        <div class="kv"><span class="k">Install id</span><span class="v">client-7f3a…c19e</span></div>
+        <div class="kv"><span class="k">Device key</span><span class="v">ed25519 · SHA256:Qm4x…8kPw</span></div>
+        <div class="kv"><span class="k">Access token</span><span class="v">rotates every 15 min</span></div>
+      </section>
+
+      <section class="glass" style="padding: 20px; display: flex; flex-direction: column" aria-labelledby="leash">
+        <h2 class="h2" id="leash">What this instance allows</h2>
+        <p class="sub" style="margin: 8px 0 8px; line-height: 1.5">Granted on dev-workstation itself. The Hub can ask for less, never more — to widen it, change it in Demeteo on that machine.</p>
+        <div class="scope"><span class="mark on-m"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span><div style="display: flex; flex-direction: column; gap: 2px"><span class="mono" style="font-size: 13px">read</span><span class="sub" style="font-size: 12px">Status, runs, step progress, costs, gate summaries</span></div></div>
+        <div class="scope"><span class="mark on-m"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span><div style="display: flex; flex-direction: column; gap: 2px"><span class="mono" style="font-size: 13px">spend</span><span class="sub" style="font-size: 12px">Start and cancel runs on its projects</span></div></div>
+        <div class="scope"><span class="mark on-m"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span><div style="display: flex; flex-direction: column; gap: 2px"><span class="mono" style="font-size: 13px">gates</span><span class="sub" style="font-size: 12px">Decide gates from the Hub. Dangerous ones (merge to default branch, over budget) need a passkey each time</span></div></div>
+        <div class="scope"><span class="mark off-m"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path></svg></span><div style="display: flex; flex-direction: column; gap: 2px"><span class="mono" style="font-size: 13px; color: #9ca3af">logs</span><span class="sub" style="font-size: 12px">Stream agent output and diffs to the Hub</span></div></div>
+      </section>
+
+      <section class="glass" style="padding: 20px; display: flex; flex-direction: column; gap: 12px; border-color: rgba(239,68,68,.15)" aria-labelledby="danger">
+        <h2 class="h2" id="danger" style="color: #fca5a5">Unpair</h2>
+        <p class="sub" style="margin: 0; line-height: 1.5">Revokes this instance's tokens now. Runs already going keep running on the machine; the Hub just stops seeing them.</p>
+        <div><a class="btn btn-r btn-sm" href="#">Unpair dev-workstation</a></div>
+      </section>
+    </aside>
+  </div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

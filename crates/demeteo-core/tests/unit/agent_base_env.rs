@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 
@@ -403,14 +402,7 @@ async fn only_a_pipeline_turn_commits_as_the_agent() {
 /// key no machine has, through a `gpg.program` no machine has — so an attempt
 /// to sign fails on every OS rather than prompting.
 fn signing_user(label: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-    let root = std::env::temp_dir().join(format!(
-        "demeteo_agent_git_{label}_{}_{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0),
-    ));
+    let root = crate::support::test_dir::scratch(&format!("demeteo_agent_git_{label}"));
     let repo = root.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     let config = root.join("user.gitconfig");

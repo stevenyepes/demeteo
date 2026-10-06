@@ -8,29 +8,13 @@
 //! one under test.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::adapters::attachment_store::fs::FsAttachmentStore;
 use crate::domain::attachment::{compute_sha256_hex, AttachedFile};
 use crate::ports::attachment_store::AttachmentStore;
 
 fn temp_store() -> (FsAttachmentStore, PathBuf) {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo_attach_cmd_test_{}_{}_{}_{}",
-        nanos,
-        std::process::id(),
-        count,
-        "store",
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = demeteo_core::test_dir::scratch("demeteo_attach_cmd_test_store");
     let store = FsAttachmentStore::new(dir.clone());
     (store, dir)
 }

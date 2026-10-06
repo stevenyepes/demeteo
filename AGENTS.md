@@ -358,7 +358,7 @@ Read the relevant doc before modifying that area.
 | Terminal sessions: feature-scoped terminals, brief, hand-back (designed, not built) | [docs/TERMINAL_SESSIONS_SPEC.md](docs/TERMINAL_SESSIONS_SPEC.md) · plan in [docs/TASKS_TERMINAL_SESSIONS.md](docs/TASKS_TERMINAL_SESSIONS.md) |
 | User stories & agent tasks | [docs/USER_STORIES.md](docs/USER_STORIES.md) |
 | UX spec & journeys | [docs/UX_JOURNEYS.md](docs/UX_JOURNEYS.md) · as-built audit in [docs/ux-audit/](docs/ux-audit/README.md) |
-| Ask Canvas design mockup | [docs/ask-canvas/](docs/ask-canvas/) |
+| Demeteo Hub design mockup (designed, not built) | [docs/hub-design/](docs/hub-design/README.md) |
 | Pipeline/project view redesign plan | [docs/UI_REDESIGN_PLAN.md](docs/UI_REDESIGN_PLAN.md) |
 | Product roadmap & agent-ready stories | [docs/roadmap/](docs/roadmap/README.md) |
 | Known platform issues | [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |

@@ -38,6 +38,10 @@ pub(crate) struct ScriptedExec {
     /// describe a tree that never moved.
     queued_files: Mutex<HashMap<String, Vec<Result<String, String>>>>,
     programs: HashMap<String, Result<String, String>>,
+    /// [`ScriptedExec::queued`] for `run_program`: the same argv answering
+    /// differently the second time, as a `remote get-url` does once another
+    /// process has rewritten the origin between two reads.
+    queued_programs: Mutex<HashMap<String, Vec<Result<String, String>>>>,
     dirs: HashSet<String>,
     /// Watches to trip as a command is issued, which is the one shape a
     /// scripted *answer* cannot produce: a stop that arrives while a command
@@ -45,6 +49,10 @@ pub(crate) struct ScriptedExec {
     stops: HashMap<String, tokio::sync::watch::Sender<bool>>,
     seen: Mutex<Vec<(String, ShellOptions)>>,
     seen_programs: Mutex<Vec<String>>,
+    /// The same calls as `seen_programs`, unrendered. Joining argv by spaces
+    /// drops the env, and an env var a harness is handed (or must *not* be
+    /// handed) is a property of the request, not of its command line.
+    seen_requests: Mutex<Vec<ProgramRequest>>,
     /// Both of the above, interleaved in the order they actually happened.
     ///
     /// The two recorders above are separate so a test over shell commands is
@@ -90,10 +98,12 @@ impl ScriptedExec {
             files: HashMap::new(),
             queued_files: Mutex::new(HashMap::new()),
             programs: HashMap::new(),
+            queued_programs: Mutex::new(HashMap::new()),
             dirs: HashSet::new(),
             stops: HashMap::new(),
             seen: Mutex::new(Vec::new()),
             seen_programs: Mutex::new(Vec::new()),
+            seen_requests: Mutex::new(Vec::new()),
             seen_all: Mutex::new(Vec::new()),
         }
     }
@@ -122,6 +132,25 @@ impl ScriptedExec {
         self
     }
 
+    /// Script successive `run_program` answers for one rendered argv, consumed
+    /// in call order, taking precedence over [`Self::with_programs`]. Errors
+    /// once exhausted, like [`Self::with_queue`].
+    pub(crate) fn with_program_queue(self, program: &str, answers: &[Result<&str, &str>]) -> Self {
+        let queue = answers
+            .iter()
+            .rev()
+            .map(|v| match v {
+                Ok(s) => Ok(s.to_string()),
+                Err(e) => Err(e.to_string()),
+            })
+            .collect();
+        self.queued_programs
+            .lock()
+            .unwrap()
+            .insert(program.to_string(), queue);
+        self
+    }
+
     /// Send `true` on `tx` when `cmd` is issued, before answering it.
     ///
     /// The yield below is load-bearing rather than tidiness:
@@ -133,7 +162,8 @@ impl ScriptedExec {
         self
     }
 
-    /// Declare which absolute paths `get_metadata` reports as directories.
+    /// Declare which absolute paths `get_metadata` reports as directories and
+    /// `create_dir_all` accepts.
     /// Every other path stays an error, so "the code probed somewhere this
     /// test never set up" fails rather than reading as an empty disk.
     pub(crate) fn with_dirs(mut self, dirs: &[&str]) -> Self {
@@ -144,6 +174,11 @@ impl ScriptedExec {
     /// Every `run_program` this double was handed, in call order.
     pub(crate) fn programs(&self) -> Vec<String> {
         self.seen_programs.lock().unwrap().clone()
+    }
+
+    /// Every `run_program` request, whole, in call order.
+    pub(crate) fn requests(&self) -> Vec<ProgramRequest> {
+        self.seen_requests.lock().unwrap().clone()
     }
 
     /// Script `read_file` answers by absolute path. An unscripted path still
@@ -189,10 +224,12 @@ impl ScriptedExec {
             files: self.files,
             queued_files: self.queued_files,
             programs: self.programs,
+            queued_programs: self.queued_programs,
             dirs: self.dirs,
             stops: self.stops,
             seen: self.seen,
             seen_programs: self.seen_programs,
+            seen_requests: self.seen_requests,
             seen_all: self.seen_all,
         }
     }
@@ -237,8 +274,14 @@ impl ExecutionPort for ScriptedExec {
     }
     async fn run_program(&self, _m: &str, request: ProgramRequest) -> Result<String, String> {
         let key = rendered(&request);
+        self.seen_requests.lock().unwrap().push(request);
         self.seen_programs.lock().unwrap().push(key.clone());
         self.seen_all.lock().unwrap().push(key.clone());
+        if let Some(queue) = self.queued_programs.lock().unwrap().get_mut(&key) {
+            return queue
+                .pop()
+                .unwrap_or_else(|| Err(format!("ScriptedExec: queue exhausted for `{key}`")));
+        }
         self.programs
             .get(&key)
             .cloned()
@@ -304,6 +347,12 @@ impl ExecutionPort for ScriptedExec {
         }
         Err(format!("ScriptedExec: unscripted get_metadata `{p}`"))
     }
+    async fn create_dir_all(&self, _m: &str, p: &str) -> Result<(), String> {
+        if self.dirs.contains(p) {
+            return Ok(());
+        }
+        Err(format!("ScriptedExec: unscripted create_dir_all `{p}`"))
+    }
     async fn list_dir(
         &self,
         _m: &str,
@@ -342,3 +391,7 @@ impl ExecutionPort for ScriptedExec {
         Err("unscripted spawn_interactive".into())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/infrastructure/step_executor/scripted_exec.rs"]
+mod tests;

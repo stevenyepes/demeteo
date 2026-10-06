@@ -4,12 +4,7 @@ use super::*;
 use std::io::Write;
 
 fn tmp_path(name: &str, bytes: &[u8]) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "demeteo-runner-arch-test-{name}-{pid}",
-        name = name,
-        pid = std::process::id()
-    ));
+    let p = crate::support::test_dir::scratch("demeteo-runner-arch-test").join(name);
     let mut f = std::fs::File::create(&p).unwrap();
     f.write_all(bytes).unwrap();
     p

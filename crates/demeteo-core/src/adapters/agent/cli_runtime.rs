@@ -14,7 +14,7 @@ use super::trace::TurnTrace;
 use crate::domain::agent_event::{AgentEvent, StopReason};
 use crate::domain::models::{Availability, EffortLevel, SessionInfo};
 use crate::ports::agent_runtime::{
-    AgentContext, AgentRuntime, AgentSession, AgentStartError, StderrHeartbeat,
+    ActivityHeartbeat, AgentContext, AgentRuntime, AgentSession, AgentStartError,
 };
 use crate::ports::execution::InteractiveHandle;
 
@@ -233,7 +233,7 @@ impl AgentRuntime for UnifiedCliRuntime {
                 live_local: Mutex::new(None),
                 live_remote: Mutex::new(None),
                 captured_session_id: Arc::new(Mutex::new(None)),
-                stderr_hb: StderrHeartbeat::new(),
+                activity_hb: ActivityHeartbeat::new(),
                 cumulative_tokens: Arc::new(AtomicU64::new(0)),
                 turn_seq: AtomicU64::new(0),
             };
@@ -252,7 +252,7 @@ pub struct UnifiedCliSession {
     live_local: Mutex<Option<Arc<Mutex<std::process::Child>>>>,
     live_remote: Mutex<Option<Arc<Mutex<Box<dyn InteractiveHandle>>>>>,
     captured_session_id: Arc<Mutex<Option<String>>>,
-    stderr_hb: StderrHeartbeat,
+    activity_hb: ActivityHeartbeat,
     /// Monotonic high-water mark of the session's request footprint
     /// (input + cache_read + cache_creation + output tokens). Updated
     /// as `Usage` / `UsageDelta` / `TurnComplete { usage }` events are
@@ -278,6 +278,9 @@ struct DrainSinks {
     /// The turn's raw capture, `None` unless a developer asked for one
     /// (`adapters::agent::trace`).
     trace: Option<TurnTrace>,
+    /// Beaten here, in the one drain both transports share, so a remote turn
+    /// is kept alive by exactly what keeps a local one alive.
+    activity: ActivityHeartbeat,
 }
 
 impl UnifiedCliSession {
@@ -329,6 +332,7 @@ impl UnifiedCliSession {
             cumulative_tokens: Some(self.cumulative_tokens.clone()),
             agent: self.ctx.binary.clone(),
             trace,
+            activity: self.activity_hb.clone(),
         }
     }
 
@@ -371,7 +375,7 @@ impl UnifiedCliSession {
         }
 
         if let Some(stderr) = stderr {
-            let hb = self.stderr_hb.clone();
+            let hb = self.activity_hb.clone();
             let kind = self.ctx.binary.clone();
             std::thread::spawn(move || {
                 let reader = std::io::BufReader::new(stderr);
@@ -553,8 +557,8 @@ impl AgentSession for UnifiedCliSession {
         Ok(())
     }
 
-    fn stderr_heartbeat(&self) -> Option<StderrHeartbeat> {
-        Some(self.stderr_hb.clone())
+    fn activity_heartbeat(&self) -> Option<ActivityHeartbeat> {
+        Some(self.activity_hb.clone())
     }
 
     fn is_alive(&self) -> bool {
@@ -813,6 +817,7 @@ fn drain_lines<R, F>(
         cumulative_tokens,
         agent,
         mut trace,
+        activity,
     } = sinks;
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
@@ -849,6 +854,7 @@ fn drain_lines<R, F>(
                     continue;
                 }
                 wrote_output = true;
+                activity.beat();
                 // Before the parser, so the capture holds what the agent said
                 // rather than what this runtime recognised — the lines it does
                 // not recognise are the ones worth having.

@@ -24,10 +24,13 @@ export function Modal({ onClose, children, className = '', backdropClassName = '
 
   // Portalled so the backdrop covers the whole window rather than only the
   // content area — see `OverlayPortal` for why being inside <main> isn't enough.
+  // No `backdrop-blur` on a full-window scrim, here or on any other: it re-blurs
+  // the whole window on every frame something animates beneath it (the
+  // `pulse-glow` note in `src/App.css`), and through the dim it barely shows.
   return (
     <OverlayPortal>
       <div
-        className={`fixed inset-0 z-50 flex items-center justify-center bg-[#08090c]/80 backdrop-blur-sm ${backdropClassName}`}
+        className={`fixed inset-0 z-50 flex items-center justify-center bg-[#08090c]/85 ${backdropClassName}`}
         onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
       >
         <div className={className}>

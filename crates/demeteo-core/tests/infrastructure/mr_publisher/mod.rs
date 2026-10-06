@@ -4,6 +4,7 @@ mod branch_publish;
 mod comment;
 mod detail;
 mod list;
+mod push_failure;
 mod target_branch;
 
 use std::collections::HashMap;

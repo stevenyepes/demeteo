@@ -19,7 +19,8 @@ import type { AskCanvas, CanvasNode, EdgeKind } from '../types';
  *
  * A lane is a band spanning every stage, not a row of cells — an empty
  * `(stage, lane)` is space inside its band, which is what
- * `docs/ask-canvas/probe/Main.html` draws and what lets a sparse canvas read
+ * `docs/ask-canvas/probe/Main.html` (in git history) draws and what lets a
+ * sparse canvas read
  * as sparse rather than as a broken table.
  */
 
@@ -32,7 +33,7 @@ const COL_GAP = 40;
  *  they never stack, so no occupant can be hidden behind another. */
 const NODE_GAP = 12;
 /** Space above the first node in a band, which the lane label sits in, and
- *  below the last — the 46/22 split `docs/ask-canvas/probe/Main.html` uses. */
+ *  below the last — the 46/22 split that mockup uses. */
 const BAND_PAD_TOP = 46;
 const BAND_PAD_BOTTOM = 22;
 /** Height of the channel below each band that return edges route through. */

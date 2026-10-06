@@ -185,7 +185,7 @@ export const GateView: React.FC<GateViewProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       {/* Modal Card */}
       {/* Wider than the app's other modals because this one has to show an
           artifact — a task list or a diff at 42rem wraps every line. */}

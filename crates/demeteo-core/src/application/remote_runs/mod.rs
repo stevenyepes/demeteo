@@ -7,6 +7,7 @@ mod credentials;
 mod diff_url;
 mod reconcile;
 mod rpc;
+mod sequence_mirror;
 mod submit;
 mod transport;
 
@@ -23,6 +24,7 @@ pub use control::{
     RemoteRewind, RewindOverrides,
 };
 pub use diff_url::resolve_run_diff_url;
+pub use sequence_mirror::read_sequence_state_mirror;
 pub use submit::SubmitOutcome;
 pub(crate) use submit::{submit_remote_run, SubmitInput};
 pub use transport::{

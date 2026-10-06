@@ -222,11 +222,7 @@ async fn cleanup_dismissal_blocks_a_stale_reconciliation_snapshot() {
     use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
     use crate::ports::remote_run_mirror::RemoteRunMirrorPort;
 
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_cleanup_dismissal_{}",
-        paths::now_ms()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = crate::support::test_dir::scratch("demeteo_test_cleanup_dismissal");
     let mut ctx = build_core_context(
         CoreConfig {
             app_data_dir: temp_dir.clone(),
@@ -389,14 +385,7 @@ async fn cleanup_dismissal_blocks_a_stale_reconciliation_snapshot() {
 async fn watchdog_and_resume_skip_runner_owned_shadows() {
     use crate::ports::remote_run_mirror::RemoteRunMirrorPort;
 
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_watchdog_shadow_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = crate::support::test_dir::scratch("demeteo_test_watchdog_shadow");
     let conn = crate::db::init_db(temp_dir.clone()).expect("init_db failed");
     let db = Arc::new(SqliteAdapter::new(conn).unwrap());
     let registry = Arc::new(AgentRegistry::new(vec![]));
@@ -820,11 +809,8 @@ fn assignment_fixture(
 ) -> (Arc<crate::state::AppContext>, std::path::PathBuf) {
     use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
 
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_remote_assignment_{label}_{}",
-        paths::now_ms()
-    ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir =
+        crate::support::test_dir::scratch(&format!("demeteo_test_remote_assignment_{label}"));
     let mut ctx = build_core_context(
         CoreConfig {
             app_data_dir: temp_dir.clone(),

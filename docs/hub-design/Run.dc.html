@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub — Run view</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Outfit:wght@500;600;700;800&amp;family=Fira+Code:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#08090c}
+a{color:#22d3ee}a:hover{color:#67e8f9}
+.hub{min-height:100vh;display:flex;flex-wrap:wrap;font-family:'Inter',-apple-system,sans-serif;color:#f3f4f6;-webkit-font-smoothing:antialiased;background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.05) 0%,transparent 60%),radial-gradient(circle at 10% 80%,rgba(6,182,212,.04) 0%,transparent 50%),#08090c}
+.rail{flex:0 0 72px;background:#0d0f14;border-right:1px solid rgba(255,255,255,.05);display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:12px;box-sizing:border-box}
+.logo{font-family:'Outfit',sans-serif;font-weight:800;font-size:24px;color:#06b6d4;text-shadow:0 0 12px rgba(6,182,212,.35);margin-bottom:16px;text-decoration:none}
+.nav{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#9ca3af;border:1px solid transparent;text-decoration:none;position:relative}
+.nav.on{background:rgba(139,92,246,.25);color:#a78bfa;border-color:rgba(139,92,246,.3);box-shadow:0 0 10px rgba(139,92,246,.25)}
+.badge{position:absolute;top:4px;right:4px;min-width:16px;height:16px;border-radius:8px;background:#f59e0b;color:#1f1300;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px;box-sizing:border-box}
+.avatar{margin-top:auto;width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#8b5cf6,#06b6d4);display:flex;align-items:center;justify-content:center;font-family:'Outfit',sans-serif;font-weight:700;font-size:14px;color:#fff}
+.main{flex:999 1 560px;min-width:0;padding:28px 36px 48px;box-sizing:border-box;display:flex;flex-direction:column;gap:20px}
+.mono{font-family:'Fira Code','JetBrains Mono',monospace}
+.sub{color:#9ca3af;font-size:13px}
+.h2{font-family:'Outfit',sans-serif;font-weight:600;font-size:13px;letter-spacing:.6px;text-transform:uppercase;color:#9ca3af;margin:0}
+.glass{background:rgba(18,22,30,.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.05);box-shadow:0 8px 32px rgba(0,0,0,.4);border-radius:12px}
+.nested{background:rgba(18,22,30,.55);border:1px solid rgba(255,255,255,.05);border-radius:12px}
+.btn{height:40px;padding:0 14px;border-radius:8px;display:inline-flex;align-items:center;gap:8px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;box-sizing:border-box;white-space:nowrap}
+.btn-s{background:rgba(255,255,255,.04);color:#e5e7eb;border:1px solid rgba(255,255,255,.08)}
+.btn-r{background:rgba(239,68,68,.08);color:#fca5a5;border:1px solid rgba(239,68,68,.3)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;border:1px solid;font-size:11px;font-weight:500;white-space:nowrap}
+.p-em{border-color:rgba(16,185,129,.2);background:rgba(16,185,129,.1);color:#6ee7b7}
+.p-cy{border-color:rgba(6,182,212,.3);background:rgba(6,182,212,.1);color:#67e8f9}
+.p-sl{border-color:rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:#cbd5e1}
+.p-am{border-color:rgba(245,158,11,.25);background:rgba(245,158,11,.1);color:#fcd34d}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+.d-cy{background:#22d3ee;box-shadow:0 0 8px rgba(6,182,212,.7);animation:pg 2s ease-in-out infinite}
+@keyframes pg{0%,100%{opacity:1}50%{opacity:.45}}
+.tog{display:inline-flex;padding:3px;gap:3px;border-radius:9px;background:rgba(10,12,16,.6);border:1px solid rgba(255,255,255,.06)}
+.tog a{height:32px;padding:0 12px;border-radius:6px;display:flex;align-items:center;font-size:12px;font-weight:500;color:#9ca3af;text-decoration:none}
+.tog a.on{background:rgba(6,182,212,.1);color:#67e8f9;box-shadow:inset 0 0 0 1px rgba(6,182,212,.3)}
+.well{background:#050608;border-radius:12px;border:1px solid rgba(255,255,255,.05);padding:28px 20px;display:flex;flex-direction:column;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:20px 20px}
+.rank{display:flex;justify-content:center;gap:16px;flex-wrap:wrap}
+.conn{width:2px;height:22px;margin:0 auto;border-radius:1px}
+.c-done{background:rgba(16,185,129,.45)}
+.c-run{background:rgba(6,182,212,.5)}
+.c-wait{background:rgba(255,255,255,.12)}
+.node{flex:0 1 280px;min-width:200px;text-align:left;font-family:inherit;color:inherit;cursor:pointer;display:flex;flex-direction:column;gap:8px;border-radius:12px;padding:10px 14px;background:rgba(15,23,42,.7);border:1px solid rgba(51,65,85,.6);box-shadow:0 8px 20px rgba(0,0,0,.35);box-sizing:border-box}
+.node.s-em{border-color:rgba(16,185,129,.35)}
+.node.s-cy{border-color:rgba(6,182,212,.5);box-shadow:0 0 18px rgba(6,182,212,.18)}
+.node.s-sl{opacity:.8}
+.node.sel{border-color:rgba(34,211,238,.75);box-shadow:0 0 0 1px rgba(34,211,238,.4),0 0 18px rgba(34,211,238,.25);opacity:1}
+.ico{position:relative;width:32px;height:32px;border-radius:8px;border:1px solid;display:flex;align-items:center;justify-content:center;flex:none}
+.t-cy{background:rgba(6,182,212,.1);border-color:rgba(6,182,212,.3);color:#22d3ee}
+.t-am{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.3);color:#fbbf24}
+.t-vi{background:rgba(139,92,246,.1);border-color:rgba(139,92,246,.3);color:#a78bfa}
+.t-em{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:#34d399}
+.sd{position:absolute;right:-4px;top:-4px;width:10px;height:10px;border-radius:50%;box-shadow:0 0 0 2px #0f172a}
+.sd-em{background:#10b981}
+.sd-cy{background:#22d3ee;animation:pg 2s ease-in-out infinite}
+.sd-sl{background:#64748b}
+.ac{display:flex;gap:4px;flex-wrap:wrap;font-family:'Fira Code',monospace;font-size:10px;padding-left:44px}
+.ac span{padding:1px 6px;border-radius:5px;border:1px solid rgba(255,255,255,.08);color:#cbd5e1;background:rgba(255,255,255,.03);white-space:nowrap}
+.ac.planned span{border-style:dashed;color:#9ca3af}
+.mt{display:flex;gap:10px;padding-left:44px;font-family:'Fira Code',monospace;font-size:10px}
+.row{display:flex;gap:10px;align-items:center;font-size:13px;padding:10px 0;border-top:1px solid rgba(255,255,255,.05)}
+.ev{display:grid;grid-template-columns:64px 1fr auto;gap:12px;font-size:12px;padding:8px 0;border-top:1px solid rgba(255,255,255,.04);align-items:baseline}
+.ev .o{font-family:'Fira Code',monospace;color:#6b7280}
+.ev .t{font-family:'Fira Code',monospace;color:#9ca3af}
+.field{width:100%;box-sizing:border-box;background:#050508;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:0 10px;height:36px;font-family:'Fira Code',monospace;font-size:12px;color:#e2e8f0}
+.kv{display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:8px 0;border-top:1px solid rgba(255,255,255,.05)}
+.kv .k{color:#9ca3af}.kv .v{font-family:'Fira Code',monospace;color:#e5e7eb;text-align:right}
+</style>
+</helmet>
+<div class="hub">
+<nav class="rail" aria-label="Hub">
+  <a class="logo" href="#">D</a>
+  <a class="nav" href="Main.dc.html" aria-label="Fleet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"></rect><rect width="20" height="8" x="2" y="14" rx="2"></rect><line x1="6" x2="6.01" y1="6" y2="6"></line><line x1="6" x2="6.01" y1="18" y2="18"></line></svg></a>
+  <a class="nav on" href="Runs.dc.html" aria-label="Runs and gates, 2 need you"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"></path></svg><span class="badge">2</span></a>
+  <a class="nav" href="#" aria-label="Projects"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.3 7 8.7 5 8.7-5"></path><path d="M12 22V12"></path></svg></a>
+  <a class="nav" href="#" aria-label="Access and tokens"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 3 3L22 7l-3-3"></path></svg></a>
+  <a class="nav" href="#" aria-label="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"></line><line x1="4" x2="4" y1="10" y2="3"></line><line x1="12" x2="12" y1="21" y2="12"></line><line x1="12" x2="12" y1="8" y2="3"></line><line x1="20" x2="20" y1="21" y2="16"></line><line x1="20" x2="20" y1="12" y2="3"></line><line x1="2" x2="6" y1="14" y2="14"></line><line x1="10" x2="14" y1="8" y2="8"></line><line x1="18" x2="22" y1="16" y2="16"></line></svg></a>
+  <div class="avatar" aria-label="Signed in as you">SY</div>
+</nav>
+
+<main class="main">
+  <nav aria-label="Breadcrumb" class="mono" style="font-size: 12px; display: flex; gap: 8px; flex-wrap: wrap"><a href="Runs.dc.html" style="color: #9ca3af; text-decoration: none">Runs</a><span style="color: #6b7280">/</span><a href="Instance.dc.html" style="color: #9ca3af; text-decoration: none">dev-workstation</a><span style="color: #6b7280">/</span><span style="color: #9ca3af">search-svc</span><span style="color: #6b7280">/</span><span style="color: #e5e7eb">Index search by tenant</span></nav>
+
+  <header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; justify-content: space-between">
+    <div style="display: flex; flex-direction: column; gap: 8px; min-width: 0">
+      <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap"><h1 style="margin: 0; font-family: 'Outfit', sans-serif; font-size: 26px; font-weight: 600">Index search by tenant</h1><span class="pill p-cy"><span class="dot d-cy"></span>Running</span></div>
+      <div class="sub mono" style="font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap"><span>feature/tenant-index</span><span>feature-standard v7</span><span>launched from the Hub by you</span><span style="color: #e5e7eb">31m</span><span style="color: #6ee7b7">$0.62</span></div>
+    </div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center">
+      <div class="tog" role="group" aria-label="Run view"><a class="on" href="#">Graph</a><a href="#">Timeline</a></div>
+      <a class="btn btn-s" href="#">Open on dev-workstation</a>
+      <a class="btn btn-r" href="#">Cancel feature</a>
+    </div>
+  </header>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+    <section class="well" style="flex: 999 1 600px; min-width: 0" aria-label="Pipeline graph">
+      <sc-for list="{{ ranks }}" as="r" hint-placeholder-count="6">
+        <sc-if value="{{ r.notFirst }}" hint-placeholder-val="{{ true }}"><div class="conn {{ r.connCls }}"></div></sc-if>
+        <div class="rank">
+          <sc-for list="{{ r.nodes }}" as="n" hint-placeholder-count="1">
+            <button class="node {{ n.cls }}" onClick="{{ n.pick }}" aria-pressed="{{ n.selected }}">
+              <span style="display: flex; align-items: center; gap: 12px; min-width: 0">
+                <span class="ico {{ n.tone }}"><span class="sd {{ n.dot }}"></span><sc-if value="{{ n.isGate }}" hint-placeholder-val="{{ false }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></svg></sc-if><sc-if value="{{ n.isAgent }}" hint-placeholder-val="{{ true }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2M20 14h2M15 13v2M9 13v2"></path></svg></sc-if><sc-if value="{{ n.isSeq }}" hint-placeholder-val="{{ false }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"></path><path d="m3 7 2 2 4-4"></path><path d="M13 6h8M13 12h8M13 18h8"></path></svg></sc-if><sc-if value="{{ n.isFin }}" hint-placeholder-val="{{ false }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" x2="4" y1="22" y2="15"></line></svg></sc-if></span>
+                <span style="display: flex; flex-direction: column; min-width: 0">
+                  <span style="font-size: 14px; font-weight: 500; color: #f1f5f9">{{ n.title }}</span>
+                  <span style="font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; color: {{ n.labelColor }}">{{ n.label }}</span>
+                </span>
+              </span>
+              <sc-if value="{{ n.hasAssign }}" hint-placeholder-val="{{ true }}"><span class="ac {{ n.acCls }}"><span>{{ n.agent }}</span><span>{{ n.model }}</span><span>{{ n.effort }}</span></span></sc-if>
+              <sc-if value="{{ n.hasMeta }}" hint-placeholder-val="{{ false }}"><span class="mt"><span style="color: #34d399">{{ n.cost }}</span><span style="color: #9ca3af">{{ n.time }}</span><span style="color: #fcd34d">{{ n.extra }}</span></span></sc-if>
+            </button>
+          </sc-for>
+        </div>
+      </sc-for>
+      <div class="mono" style="font-size: 10px; color: #9ca3af; text-align: center; margin-top: 18px">↺ Validate loops back to Implement on a failing verdict · up to 3 times</div>
+    </section>
+
+    <aside style="flex: 1 1 380px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+      <section class="glass" style="padding: 18px; display: flex; flex-direction: column; gap: 12px" aria-labelledby="ins">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><h2 class="h2" id="ins">{{ cur.title }}</h2><span class="pill {{ cur.pillCls }}">{{ cur.label }}</span></div>
+
+        <sc-if value="{{ cur.isImpl }}" hint-placeholder-val="{{ true }}">
+          <div style="display: flex; flex-direction: column">
+            <span class="sub" style="font-size: 12px; margin-bottom: 4px">Tickets · 2 of 4 done</span>
+            <div class="row"><span style="color: #34d399"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span><span style="flex: 1">Tenant id on search documents</span><span class="mono sub" style="font-size: 10px">claude-code · 8m · $0.18</span></div>
+            <div class="row"><span style="color: #34d399"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span><span style="flex: 1">Backfill job for existing documents</span><span class="mono sub" style="font-size: 10px">claude-code · 11m · $0.24</span></div>
+            <div class="row"><span class="dot d-cy" style="margin: 0 4px"></span><span style="flex: 1; color: #a5f3fc">Filtered query path and index</span><span class="mono" style="font-size: 10px; color: #67e8f9">claude-code · 6m</span></div>
+            <div class="row"><span style="width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid #4b5563; box-sizing: border-box"></span><span style="flex: 1; color: #9ca3af">Load-test fixture per tenant</span><span class="mono sub" style="font-size: 10px">pending</span></div>
+          </div>
+          <div class="nested" style="padding: 12px 14px; display: flex; gap: 10px; align-items: flex-start">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none; margin-top: 2px"><rect width="18" height="11" x="3" y="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            <span class="sub" style="font-size: 12px; line-height: 1.5">Live agent output stays on dev-workstation — it doesn't share <span class="mono">logs</span>. You see step and ticket events.</span>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ cur.isPending }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 10px">
+            <span class="sub" style="font-size: 12px; line-height: 1.5">Hasn't started. Change who runs it for this run only — takes effect when the step starts.</span>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(110px, 100%), 1fr)); gap: 8px">
+              <select class="field" aria-label="Agent"><option>{{ cur.agent }}</option><option>claude-code</option><option>opencode</option><option>hermes</option></select>
+              <select class="field" aria-label="Model"><option>{{ cur.model }}</option><option>claude-opus-5-5</option><option>claude-sonnet-5</option></select>
+              <select class="field" aria-label="Effort"><option>{{ cur.effort }}</option><option>low</option><option>medium</option><option>high</option></select>
+            </div>
+            <div><a class="btn btn-s" href="#">Apply to this run</a></div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ cur.isDone }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column">
+            <div class="kv"><span class="k">Ran on</span><span class="v">{{ cur.agent }} · {{ cur.model }}</span></div>
+            <div class="kv"><span class="k">Cost · time</span><span class="v">{{ cur.cost }} · {{ cur.time }}</span></div>
+            <div class="kv"><span class="k">Artifact</span><span class="v">{{ cur.artifact }}</span></div>
+          </div>
+          <span class="sub" style="font-size: 12px">The artifact's contents stay on dev-workstation unless it shares <span class="mono">logs</span>.</span>
+        </sc-if>
+
+        <sc-if value="{{ cur.isGateDone }}" hint-placeholder-val="{{ false }}">
+          <div class="kv"><span class="k">Decision</span><span class="v">Approved</span></div>
+          <div class="kv"><span class="k">By</span><span class="v">you · from the Hub · 09:41</span></div>
+        </sc-if>
+
+        <sc-if value="{{ cur.isFinWait }}" hint-placeholder-val="{{ false }}">
+          <span class="sub" style="font-size: 12px; line-height: 1.5">Squashes the branch and opens the PR on dev-workstation once Review diff is approved.</span>
+        </sc-if>
+
+        <sc-if value="{{ cur.isGateWait }}" hint-placeholder-val="{{ false }}">
+          <span class="sub" style="font-size: 12px; line-height: 1.5">A human checkpoint before the squash and PR. It'll show up under Needs you when the run reaches it.</span>
+        </sc-if>
+      </section>
+
+      <section class="glass" style="padding: 18px; display: flex; flex-direction: column" aria-label="Run events">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 6px"><span class="h2">Activity</span><span class="sub mono" style="font-size: 11px">reported by dev-workstation · in sync</span></div>
+        <div class="ev"><span class="o">#18311</span><span>ticket started · Filtered query path and index</span><span class="t">10:46</span></div>
+        <div class="ev"><span class="o">#18290</span><span>ticket completed · Backfill job · tests green</span><span class="t">10:45</span></div>
+        <div class="ev"><span class="o">#18102</span><span>ticket completed · Tenant id on documents</span><span class="t">10:34</span></div>
+        <div class="ev"><span class="o">#17988</span><span>gate decided · Review plan · approved via Hub</span><span class="t">10:26</span></div>
+        <div class="ev"><span class="o">#17940</span><span>step completed · Plan</span><span class="t">10:22</span></div>
+      </section>
+    </aside>
+  </div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1300}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { step: 'impl' };
+  }
+  renderVals() {
+    const S = [
+      { id: 'plan', title: 'Plan', type: 'agent', rank: 0, st: 'done', agent: 'claude-code', model: 'claude-opus-5-5', effort: 'high', cost: '$0.21', time: '4m', artifact: 'implementation-plan.md' },
+      { id: 'gplan', title: 'Review plan', type: 'gate', rank: 1, st: 'gatedone' },
+      { id: 'impl', title: 'Implement', type: 'sequence', rank: 2, st: 'run', agent: 'claude-code', model: 'claude-sonnet-5', effort: 'medium', cost: '$0.42', time: '25m', extra: '2 of 4 tickets' },
+      { id: 'val', title: 'Validate', type: 'agent', rank: 3, st: 'wait', agent: 'claude-code', model: 'claude-opus-5-5', effort: 'high' },
+      { id: 'sec', title: 'Security review', type: 'agent', rank: 3, st: 'wait', agent: 'hermes', model: 'hermes default', effort: 'effort n/a' },
+      { id: 'gdiff', title: 'Review diff', type: 'gate', rank: 4, st: 'gatewait' },
+      { id: 'fin', title: 'Finalize', type: 'finalize', rank: 5, st: 'wait' },
+    ];
+    const TONE = { agent: 't-cy', gate: 't-am', sequence: 't-vi', finalize: 't-em' };
+    const ST = {
+      done: { label: 'Completed', color: '#34d399', cls: 's-em', dot: 'sd-em', pill: 'p-em' },
+      gatedone: { label: 'Approved', color: '#34d399', cls: 's-em', dot: 'sd-em', pill: 'p-em' },
+      run: { label: 'Running', color: '#22d3ee', cls: 's-cy', dot: 'sd-cy', pill: 'p-cy' },
+      wait: { label: 'Pending', color: '#9ca3af', cls: 's-sl', dot: 'sd-sl', pill: 'p-sl' },
+      gatewait: { label: 'Pending', color: '#9ca3af', cls: 's-sl', dot: 'sd-sl', pill: 'p-sl' },
+    };
+    const step = this.state.step;
+    const nodes = S.map((s) => {
+      const m = ST[s.st];
+      return {
+        ...s,
+        isGate: s.type === 'gate', isAgent: s.type === 'agent', isSeq: s.type === 'sequence', isFin: s.type === 'finalize',
+        tone: TONE[s.type], dot: m.dot, label: m.label, labelColor: m.color,
+        selected: s.id === step,
+        cls: m.cls + (s.id === step ? ' sel' : ''),
+        hasAssign: !!s.agent,
+        acCls: s.st === 'wait' ? 'planned' : '',
+        hasMeta: !!s.cost,
+        extra: s.extra || '',
+        pick: () => this.setState({ step: s.id }),
+      };
+    });
+    const ranks = [];
+    nodes.forEach((n) => { (ranks[n.rank] = ranks[n.rank] || []).push(n); });
+    const rankList = ranks.map((r, i) => ({
+      nodes: r,
+      notFirst: i > 0,
+      connCls: i <= 2 ? 'c-done' : i === 3 ? 'c-run' : 'c-wait',
+    }));
+    const c = nodes.find((n) => n.id === step) || nodes[2];
+    const cur = {
+      ...c,
+      pillCls: ST[c.st].pill,
+      isImpl: c.id === 'impl',
+      isPending: c.st === 'wait' && !!c.agent,
+      isDone: c.st === 'done',
+      isGateDone: c.st === 'gatedone',
+      isGateWait: c.st === 'gatewait',
+      isFinWait: c.type === 'finalize',
+    };
+    return { ranks: rankList, cur };
+  }
+}
+</script>
+</body>
+</html>

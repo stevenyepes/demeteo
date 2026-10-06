@@ -170,13 +170,7 @@ fn an_empty_description_falls_back_to_the_title() {
 /// `tests/application/discovery/mod.rs`'s `fixture` uses — as much as
 /// `start` reads off a Project.
 fn ctx_with_project(tag: &str) -> (AppContext, ProjectId) {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-launch-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-launch-{tag}"));
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: dir,

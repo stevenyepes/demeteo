@@ -21,7 +21,8 @@ interface AskThreadSettingsPanelProps {
 }
 
 /**
- * "Thread settings" panel (`docs/ask-canvas/probe/WebAccess.html`). A
+ * "Thread settings" panel (`docs/ask-canvas/probe/WebAccess.html`, in
+ * git history). A
  * thread's harness is fixed at creation — `AskThreadPatch` carries no
  * `agent_kind`, matching `DiscoveryPatch`'s existing precedent — so Agent
  * renders as a label here, never a picker. Model, effort and network are

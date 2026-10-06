@@ -144,12 +144,14 @@ async fn bootstrap_cutting(label: &str, origin: FeatureOrigin, expected: &[Strin
     ran
 }
 
-/// Byte-for-byte the sequence every pre-V41 run issued: the best-effort fetch,
-/// the tracking-ref probe, the ref-only fast-forward, then the cut from
-/// `origin/<default>`.
+/// The sequence every pre-V41 run issued — the best-effort fetch, the
+/// tracking-ref probe, the ref-only fast-forward, then the cut from
+/// `origin/<default>` — behind the one `origin` read that resolves the
+/// credential both fetches share.
 #[tokio::test]
 async fn default_branch_origin_cuts_exactly_as_it_did_before_v41() {
     let expected = [
+        "remote get-url origin".to_string(),
         "fetch origin -- main".to_string(),
         "rev-parse --verify origin/main".to_string(),
         "fetch origin +main:main".to_string(),
@@ -169,6 +171,7 @@ async fn default_branch_origin_cuts_exactly_as_it_did_before_v41() {
 #[tokio::test]
 async fn branch_origin_cuts_from_the_tracking_ref_for_its_base() {
     let expected = [
+        "remote get-url origin".to_string(),
         "fetch origin -- release/2.0".to_string(),
         "branch -f demeteo/features/f-origin_branch origin/release/2.0".to_string(),
     ];
@@ -246,6 +249,7 @@ async fn a_ref_origin_stops_when_its_fetch_fails() {
 async fn ref_origin_fetches_the_refspec_then_cuts_from_it() {
     const FETCHED: &str = "refs/demeteo/origins/pull/42/head";
     let expected = [
+        "remote get-url origin".to_string(),
         format!("fetch origin -- +refs/pull/42/head:{FETCHED}"),
         format!("branch -f demeteo/features/f-origin_ref {FETCHED}"),
     ];

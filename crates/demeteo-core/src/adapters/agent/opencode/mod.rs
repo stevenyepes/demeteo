@@ -409,7 +409,7 @@ pub fn build_opencode_args(
     // real flag; the old `--dangerously-skip-permissions` was a Claude-ism
     // that opencode's arg parser silently ignored.)
     args.push("--auto".to_string());
-    // Logs on stderr feed the orchestrator's stderr heartbeat, so long tool
+    // Logs on stderr feed the orchestrator's activity heartbeat, so long tool
     // runs aren't misread as "agent blocked".
     args.push("--print-logs".to_string());
 

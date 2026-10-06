@@ -28,20 +28,130 @@
 /// every non-MR push in the app came to fail on a project the MR publisher had
 /// touched once.
 pub fn credential_host(remote_url: &str) -> Option<&str> {
-    let rest = remote_url
-        .strip_prefix("https://")
-        .or_else(|| remote_url.strip_prefix("http://"))?;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    let (userinfo, host) = match authority.rsplit_once('@') {
-        Some((user, host)) => (Some(user), host),
-        None => (None, authority),
-    };
+    let remote = HttpRemote::parse(remote_url)?;
     // A colon in the userinfo is a password already in hand.
-    if userinfo.is_some_and(|u| u.contains(':')) {
+    if remote.userinfo.is_some_and(|u| u.contains(':')) {
         return None;
     }
-    let host = host.split(':').next().unwrap_or(host);
+    let host = host_without_port(remote.host_port);
     (!host.is_empty()).then_some(host)
+}
+
+/// `host[:port]` as the bare host — the form git's credential protocol and
+/// [`GitCredential`](crate::adapters::git_push::GitCredential) both name, so a
+/// provider stored as `gitlab.local:8443` still matches what git sends.
+pub fn host_without_port(host_port: &str) -> &str {
+    host_port.split(':').next().unwrap_or(host_port)
+}
+
+/// The same remote with the password dropped from its userinfo, or `None` when
+/// there is nothing to drop.
+///
+/// This is the inverse case of [`credential_host`]: that one declines a URL
+/// that carries a password, this one is what turns such a URL into the
+/// token-free form `credential_host` accepts — `scheme://<user>@host[:port]/…`,
+/// path and query untouched; a password with no user (`https://:tok@host/r`)
+/// leaves no userinfo at all rather than an empty `@host`. A password inline in `origin` sits in
+/// `.git/config` in the clear, so the caller has to move it out before a
+/// credential helper can supply it instead.
+///
+/// `None` is the answer for everything that is not an http(s) URL with a
+/// password: ssh and `git@host:path` authenticate with the user's key, and a
+/// URL already without a password has nothing to rewrite. The latter also makes
+/// the function idempotent — its own output is never rewritten again.
+pub fn token_free_origin(remote_url: &str) -> Option<String> {
+    let remote = HttpRemote::parse(remote_url)?;
+    let (user, _password) = remote.userinfo?.split_once(':')?;
+    let userinfo = if user.is_empty() {
+        String::new()
+    } else {
+        format!("{user}@")
+    };
+    Some(format!(
+        "{}{userinfo}{}{}",
+        remote.scheme, remote.host_port, remote.tail
+    ))
+}
+
+/// The password embedded in an http(s) URL's userinfo, exactly as written —
+/// still percent-encoded if the URL spelled it that way.
+///
+/// Shares `HttpRemote::parse` with [`token_free_origin`], so the two agree on
+/// which URLs carry a password at all: this is `Some` precisely when that one
+/// is. A password containing an unencoded `/`, `?` or `#` ends the authority
+/// early and is therefore never seen — see `docs/KNOWN_ISSUES.md`.
+///
+/// Git decodes the userinfo before it sends it, so a caller comparing against a
+/// stored secret has to try [`percent_decode`] of this value too.
+pub fn embedded_password(remote_url: &str) -> Option<String> {
+    let (_user, password) = HttpRemote::parse(remote_url)?.userinfo?.split_once(':')?;
+    Some(password.to_string())
+}
+
+/// `%XX` escapes decoded, any other byte kept; `None` when the result is not
+/// UTF-8. A malformed escape (`%zz`, a trailing `%`) is left literal, which is
+/// what git does with it.
+pub fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = (bytes[i] == b'%')
+            .then(|| bytes.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match escaped {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Whether the password `remote_url` carries is `secret`, compared both as
+/// written and percent-decoded.
+pub fn embeds_secret(remote_url: &str, secret: &str) -> bool {
+    let Some(raw) = embedded_password(remote_url) else {
+        return false;
+    };
+    raw == secret || percent_decode(&raw).is_some_and(|decoded| decoded == secret)
+}
+
+struct HttpRemote<'a> {
+    scheme: &'static str,
+    userinfo: Option<&'a str>,
+    host_port: &'a str,
+    /// Path, query and fragment, from the first delimiter on.
+    tail: &'a str,
+}
+
+impl<'a> HttpRemote<'a> {
+    fn parse(remote_url: &'a str) -> Option<Self> {
+        let (scheme, rest) = if let Some(rest) = remote_url.strip_prefix("https://") {
+            ("https://", rest)
+        } else {
+            ("http://", remote_url.strip_prefix("http://")?)
+        };
+        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let (authority, tail) = rest.split_at(end);
+        let (userinfo, host_port) = match authority.rsplit_once('@') {
+            Some((user, host)) => (Some(user), host),
+            None => (None, authority),
+        };
+        Some(Self {
+            scheme,
+            userinfo,
+            host_port,
+            tail,
+        })
+    }
 }
 
 /// Whether a failed push failed to *authenticate*, as opposed to being refused
@@ -72,6 +182,108 @@ pub fn is_credential_failure(stderr: &str) -> bool {
         "Permission denied (publickey)",
     ];
     SIGNATURES.iter().any(|sig| stderr.contains(sig))
+}
+
+/// Why a push exited non-zero, as far as git's own wording says.
+///
+/// Three of these need three different pieces of advice. `Rejected` means
+/// origin heard the push and refused it, so fetching and syncing again is the
+/// fix; `HookFailed` means a local `pre-push` hook stopped it before anything
+/// left the machine, so syncing again would only run the same hook; `Credential`
+/// is [`is_credential_failure`]. `Other` is everything git phrased some other
+/// way and must not be given advice that only fits one of the three.
+///
+/// Read from git's English wording, like [`is_credential_failure`]; output in
+/// another locale degrades to `Other`, which is the neutral answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushFailure {
+    Credential,
+    HookFailed,
+    Rejected,
+    Other,
+}
+
+const PUSH_FAILED_MARKER: &str = "failed to push some refs";
+
+/// Classify a failed push from the error string an `ExecutionPort` returned.
+///
+/// The order is the decision. A rejection marker is positive evidence that
+/// origin was contacted, and a remote's own `pre-receive` hook ends in the same
+/// `failed to push some refs` line a local `pre-push` hook does — so only a
+/// push with that line and *no* rejection marker is attributed to a local hook.
+pub fn classify_push_failure(error: &str) -> PushFailure {
+    let output = git_output(error);
+    if is_credential_failure(output) {
+        PushFailure::Credential
+    } else if has_rejection_marker(output) {
+        PushFailure::Rejected
+    } else if output.contains(PUSH_FAILED_MARKER) {
+        PushFailure::HookFailed
+    } else {
+        PushFailure::Other
+    }
+}
+
+/// The hook's own output from a [`PushFailure::HookFailed`] error: what
+/// precedes git's closing `error: failed to push some refs` line, bounded to
+/// the last [`HOOK_TAIL_LINES`] lines and [`HOOK_TAIL_BYTES`] bytes — a gate
+/// that runs a whole test suite can print megabytes, and the end is where it says
+/// why it failed.
+pub fn hook_tail(error: &str) -> String {
+    let output = git_output(error);
+    let hook = match output.rfind(&format!("error: {PUSH_FAILED_MARKER}")) {
+        Some(end) => &output[..end],
+        None => output,
+    }
+    .trim_end();
+    let line_start = hook
+        .rmatch_indices('\n')
+        .nth(HOOK_TAIL_LINES - 1)
+        .map_or(0, |(newline, _)| newline + 1);
+    let hook = &hook[line_start..];
+    let mut byte_start = hook.len().saturating_sub(HOOK_TAIL_BYTES);
+    while !hook.is_char_boundary(byte_start) {
+        byte_start += 1;
+    }
+    hook[byte_start..].to_string()
+}
+
+const HOOK_TAIL_LINES: usize = 40;
+const HOOK_TAIL_BYTES: usize = 4096;
+
+fn has_rejection_marker(output: &str) -> bool {
+    const MARKERS: [&str; 5] = [
+        "! [rejected]",
+        "! [remote rejected]",
+        "non-fast-forward",
+        "fetch first",
+        "stale info",
+    ];
+    MARKERS.iter().any(|marker| output.contains(marker))
+        || output.lines().any(|line| line.starts_with("remote:"))
+}
+
+/// Git's output with the transport's wrapper removed.
+///
+/// The two adapters word a failure differently: local is `Command failed (exit
+/// code: Some(1)): <stdout>\n<stderr>`, while SSH puts the stderr *inside* the
+/// parentheses (or `exit code: N` when it is empty) and appends the whole
+/// command after them. That trailing command is not git's output and must not
+/// be matched or shown.
+fn git_output(error: &str) -> &str {
+    let Some(rest) = error.strip_prefix("Command failed (") else {
+        return error;
+    };
+    let Some(rest) = rest.strip_prefix("exit code: ") else {
+        return rest.rfind("): ").map_or(rest, |end| &rest[..end]);
+    };
+    rest.strip_prefix("None): ")
+        .or_else(|| {
+            rest.strip_prefix("Some(")
+                .and_then(|code| code.split_once(")): "))
+                .map(|(_, output)| output)
+        })
+        .unwrap_or("")
 }
 
 /// The environment that stops `git` asking a human anything.

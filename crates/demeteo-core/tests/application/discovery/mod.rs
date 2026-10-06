@@ -18,13 +18,7 @@ mod publish;
 
 /// A local project with nothing in it, which is as much as `create` reads.
 fn fixture(tag: &str) -> (AppContext, ProjectId) {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-discovery-create-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-discovery-create-{tag}"));
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: dir,

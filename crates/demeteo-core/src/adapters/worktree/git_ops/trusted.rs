@@ -476,19 +476,12 @@ mod tests {
     fn refuses_a_symlink_component_after_opening_root() {
         use std::os::unix::fs::symlink;
 
-        let base =
-            std::env::temp_dir().join(format!("demeteo_trusted_worktree_{}", std::process::id()));
-        let outside = base.with_extension("outside");
-        let _ = std::fs::remove_dir_all(&base);
-        let _ = std::fs::remove_dir_all(&outside);
-        std::fs::create_dir_all(&base).expect("creates root");
-        std::fs::create_dir_all(&outside).expect("creates outside");
-        symlink(&outside, base.join("linked")).expect("creates link");
-        let root = open_root(&base).expect("opens root");
+        let base = crate::test_dir::TestDir::new("demeteo_trusted_worktree");
+        let outside = crate::test_dir::TestDir::new("demeteo_trusted_worktree_outside");
+        symlink(outside.path(), base.path().join("linked")).expect("creates link");
+        let root = open_root(base.path()).expect("opens root");
         let error = open_or_create_dirs(root, &[std::ffi::OsString::from("linked")])
             .expect_err("must not traverse a symlink");
         assert!(error.contains("symlink") || error.contains("Not a directory"));
-        let _ = std::fs::remove_dir_all(&base);
-        let _ = std::fs::remove_dir_all(&outside);
     }
 }

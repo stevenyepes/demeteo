@@ -44,7 +44,8 @@ interface AskThreadViewProps {
 }
 
 /**
- * One project's Ask workspace (`docs/ask-canvas/probe/Main.html`/`Empty.html`):
+ * One project's Ask workspace (`docs/ask-canvas/probe/Main.html`/`Empty.html`,
+ * in git history):
  * the header, the chat column, and the canvas pane beside it. Thin by
  * construction (AGENTS.md §3) — every column is a component built elsewhere;
  * this file only owns which thread is open and the turn-lifecycle events that

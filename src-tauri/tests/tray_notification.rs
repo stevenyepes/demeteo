@@ -53,18 +53,7 @@ use demeteo_lib::commands::app_session::{
 /// Build a real SQLite-backed `AppSettingsRepository` on an isolated temp data
 /// dir, mirroring the on-disk store the app's `AppContext.app_settings` uses.
 fn temp_app_settings() -> (SqliteAdapter, std::path::PathBuf) {
-    // A per-test unique dir under the OS temp root. `Date::now`/rand are not
-    // needed (and are unavailable in some harnesses) — the pid plus an atomic
-    // counter is enough to keep parallel test threads from colliding.
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-tray-notif-test-{}-{}",
-        std::process::id(),
-        n
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = demeteo_core::test_dir::scratch("demeteo-tray-notif-test");
     let conn = demeteo_core::db::init_db(dir.clone()).expect("init temp db");
     // `init_db` opens the file + PRAGMAs; `SqliteAdapter::new` runs migrations
     // so the `app_settings` KV table exists.

@@ -164,13 +164,7 @@ fn clearing_a_field_writes_a_null_rather_than_leaving_it_alone() {
 /// A stored ticket in a fresh local project, which is as much as [`update`]
 /// reads — plus the one remote machine the placement tests choose.
 fn stored_ticket(tag: &str) -> (AppContext, TicketId) {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-ticket-edit-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-ticket-edit-{tag}"));
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: dir,

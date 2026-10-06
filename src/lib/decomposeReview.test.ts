@@ -213,4 +213,15 @@ describe('the notice over a pass awaiting review', () => {
   it('says a pass that changed nothing changed nothing', () => {
     expect(pendingProposalNote(proposal())).toContain('nothing to change');
   });
+
+  it('names why a stopped pass produced no plan, and promises nothing', () => {
+    const note = pendingProposalNote(
+      proposal({ changes: CHANGES, stopped: 'Agent blocked: no output for 600s.' }),
+    );
+
+    expect(note).toContain(
+      'stopped before it produced a plan: Agent blocked: no output for 600s. Nothing',
+    );
+    expect(note).not.toContain('proposed changes');
+  });
 });

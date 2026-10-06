@@ -175,14 +175,7 @@ fn dispatch_order(ctx: &AppContext, feature_id: &FeatureId) -> Vec<String> {
 /// only when `store_v2` is set, then start a feature on it.
 async fn run_diamond(tag: &str, store_v2: bool) -> (AppContext, PathBuf, FeatureId) {
     std::env::set_var(STUB_AGENT_ENV, "1");
-    let tmp = std::env::temp_dir().join(format!(
-        "demeteo-stored-graph-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&tmp).expect("create app data dir");
+    let tmp = crate::support::test_dir::scratch(&format!("demeteo-stored-graph-{tag}"));
     // Wire exactly like `src-tauri/src/lib.rs`: the recorder decorates the UI
     // notifier and is late-bound to `ctx.run_events`, which is what makes the
     // durable log the account of the run this test reads back (P1.13).

@@ -11,10 +11,21 @@
 //! It writes a deliberately token-free URL, so a project that has published
 //! one MR has a remote that no longer authenticates by itself — and every
 //! push that did not know about the helper failed from then on.
+//!
+//! ## Why this pushes from the clone, unlike a sync publish
+//!
+//! A `pre-push` hook runs in the tree the push runs in, and this path pushes
+//! from the project's clone because it does not know the feature's worktree —
+//! only the repository and the branch name. A sync publish does know its
+//! worktree and pushes from there (see `application::sync_session::publish`).
+//! The difference is deliberate and the push is unchanged; only its error is
+//! read, by [`classify_push_failure`](crate::domain::git_push::classify_push_failure),
+//! so a hook that stopped the push is named as one.
 
 use std::sync::Arc;
 
-use crate::adapters::git_push::{push_request, redacted, remote_user, GitCredential};
+use crate::adapters::git_push::{push_failure, push_request, redacted, remote_user, GitCredential};
+use crate::domain::git_push::{classify_push_failure, host_without_port, PushFailure};
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
 
 pub(super) struct BranchPush<'a> {
@@ -72,6 +83,7 @@ pub(super) async fn push_feature_branch(
     let credential = GitCredential {
         user: remote_user,
         pat: push.pat.to_string(),
+        host: host_without_port(push.provider_host).to_string(),
     };
     exec.run_program(
         machine_str,
@@ -79,10 +91,11 @@ pub(super) async fn push_feature_branch(
     )
     .await
     .map_err(|e| {
-        format!(
-            "Failed to push feature branch to origin: {}",
-            redacted(&e, push.pat)
-        )
+        let clean = redacted(&e, push.pat);
+        match classify_push_failure(&clean) {
+            PushFailure::HookFailed => push_failure(&e, Some(&credential)),
+            _ => format!("Failed to push feature branch to origin: {clean}"),
+        }
     })?;
 
     Ok(())

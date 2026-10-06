@@ -106,13 +106,7 @@ fn stored_board(
     discovery_machine: Option<&str>,
     ticket_machine: Option<&str>,
 ) -> (AppContext, Ticket) {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-ticket-board-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-ticket-board-{tag}"));
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: dir,

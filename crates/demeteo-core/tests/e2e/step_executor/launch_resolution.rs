@@ -88,8 +88,7 @@ async fn effort_resolution_reaches_the_agent_per_step() {
 
     std::env::set_var(STUB_AGENT_ENV, "1");
     const REPO_PATH: &str = "demeteo/effort";
-    let tmp = std::env::temp_dir().join(format!("demeteo-effort-e2e-{}", paths::now_ms()));
-    std::fs::create_dir_all(&tmp).expect("app data dir");
+    let tmp = crate::support::test_dir::scratch("demeteo-effort-e2e");
 
     let ctx = build_core_context(
         CoreConfig {

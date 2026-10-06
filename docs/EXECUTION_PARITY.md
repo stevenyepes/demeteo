@@ -229,6 +229,17 @@ directions.** Both need guarding, and one of them is invisible:
 Normalize conservatively: mask only known-volatile spans (absolute worktree
 path, ISO/epoch timestamps, feature/step run-id) and nothing else.
 
+## A `pre-push` hook runs in the tree you push from
+
+Git runs the hook in the working tree the push was issued from, so *where* a
+push runs decides which checkout the hook sees. A sync publish pushes from the
+sync worktree, where the feature's files are, and reports a hook that stopped
+it as a hook failure rather than a rejection. The MR publisher deliberately
+pushes from the clone instead. Neither is to be "fixed" to match the other, and
+neither may bypass the hook with `--no-verify`. The failure classifier is in
+`crates/demeteo-core/src/domain/git_push.rs`; the reason for the MR publisher's
+choice is recorded in `crates/demeteo-core/src/adapters/mr_publisher/push.rs`.
+
 ## Related
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the hexagon and port surface

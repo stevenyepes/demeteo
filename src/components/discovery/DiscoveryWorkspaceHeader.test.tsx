@@ -4,7 +4,7 @@
 // that a refused `setDiscoveryBase` stays inside the still-open editor rather
 // than closing it or reaching `onBaseChanged`.
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -28,6 +28,7 @@ vi.mock('../ui/BackButton', () => ({
   BackButton: () => null,
 }));
 
+import { resizeObserverStubs } from '../../test/setup';
 import { DiscoveryWorkspaceHeader } from './DiscoveryWorkspaceHeader';
 import type { Discovery, DiscoveryBoard, Ticket, TicketView } from '../../types';
 
@@ -197,5 +198,105 @@ describe('DiscoveryWorkspaceHeader base branch', () => {
     expect(setDiscoveryBase).not.toHaveBeenCalled();
     expect(onBaseChanged).not.toHaveBeenCalled();
     expect(screen.queryByRole('radiogroup', { name: 'Base branch' })).toBeNull();
+  });
+});
+
+/** Drive the header's own observer, the way `DiscoveryWorkspaceRow.test.tsx`
+ *  drives the row's: jsdom lays nothing out, so width comes from a stubbed
+ *  `offsetWidth` and a hand-fired tick. */
+function resizeHeaderTo(width: number) {
+  const header = document.querySelector('header');
+  if (!header) throw new Error('no header rendered');
+  Object.defineProperty(header, 'offsetWidth', { configurable: true, value: width });
+  const observer = resizeObserverStubs.find((o) => o.observe.mock.calls.some(([t]) => t === header));
+  if (!observer) throw new Error('no ResizeObserver was registered for the header');
+  act(() => observer.trigger());
+}
+
+describe('DiscoveryWorkspaceHeader density', () => {
+  const integrated = () => discovery({ base_branch: 'feat/integration' });
+
+  it('keeps every action inline when wide', () => {
+    mount({ discovery: integrated(), board: board(ticket(1, 'unstarted')) });
+    resizeHeaderTo(1600);
+
+    expect(screen.getByRole('button', { name: 'Close discovery' })).toBeTruthy();
+    expect(screen.getByTestId('discovery-update-base')).toBeTruthy();
+    expect(screen.getByTestId('discovery-publish-integration')).toBeTruthy();
+    expect(screen.queryByTestId('discovery-actions-trigger')).toBeNull();
+    expect(screen.getByText('1 tickets · 0 started')).toBeTruthy();
+  });
+
+  // The split-screen case: the inline group used to need ~950px it could not
+  // shrink from, so the title collapsed and the last button left the window.
+  it('keeps Decompose inline and moves the rest into the menu at split-screen width', () => {
+    mount({ discovery: integrated(), board: board(ticket(1, 'unstarted')) });
+    resizeHeaderTo(1000);
+
+    expect(screen.getByTestId('discovery-decompose')).toBeTruthy();
+    expect(screen.getByTestId('discovery-actions-trigger')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Close discovery' })).toBeNull();
+    expect(screen.queryByTestId('discovery-update-base')).toBeNull();
+    expect(screen.queryByText('1 tickets · 0 started')).toBeNull();
+  });
+
+  it('opens a menu holding the moved actions, with a disabled item saying why', async () => {
+    const user = userEvent.setup();
+    mount({ discovery: integrated() });
+    resizeHeaderTo(1000);
+
+    const trigger = screen.getByTestId('discovery-actions-trigger');
+    await user.click(trigger);
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    const items = screen.getAllByRole('menuitem').map((item) => item.textContent);
+    expect(items).toEqual([
+      'Update from default branch',
+      'Open integration PROpen a pull request once at least one ticket has landed.',
+      'Close discovery',
+    ]);
+    expect((screen.getByTestId('discovery-publish-integration') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('closes the discovery from the menu', async () => {
+    const user = userEvent.setup();
+    const onToggleOpen = vi.fn();
+    render(
+      <DiscoveryWorkspaceHeader
+        discovery={discovery()}
+        board={board()}
+        turnCount={0}
+        turnRunning={false}
+        onToggleOpen={onToggleOpen}
+        onDecompose={() => {}}
+        decomposing={false}
+        busy={false}
+        projectId="proj-1"
+        onBaseChanged={() => {}}
+        onUpdateBase={() => {}}
+        onPublishIntegration={() => {}}
+      />,
+    );
+    resizeHeaderTo(1000);
+
+    await user.click(screen.getByTestId('discovery-actions-trigger'));
+    await user.click(screen.getByRole('menuitem', { name: 'Close discovery' }));
+
+    expect(onToggleOpen).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('reduces the lifecycle chip to a labelled dot and drops tokens when narrow', () => {
+    mount();
+    resizeHeaderTo(700);
+
+    expect(screen.getByRole('img', { name: 'Interviewing' })).toBeTruthy();
+    expect(screen.queryByTestId('chip')).toBeNull();
+    expect(screen.getByTestId('discovery-stats').textContent).not.toContain('tokens');
   });
 });

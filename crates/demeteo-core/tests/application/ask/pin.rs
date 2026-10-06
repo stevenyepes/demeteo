@@ -16,13 +16,7 @@ use std::sync::{Arc, Mutex};
 /// `list_pinned` and `export_canvas` only ever read `ctx.ask` and
 /// `ctx.artifact_store`, on the same terms [`super::load`] does.
 fn fixture(tag: &str) -> (AppContext, AskThreadId) {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-ask-pin-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-ask-pin-{tag}"));
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: dir,
@@ -296,15 +290,8 @@ async fn exporting_to_a_file_writes_the_export_verbatim() {
     let (ctx, thread_id) = fixture("export-file");
     let message = append(&ctx, &thread_id, message_with_canvas("m-1"));
 
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-ask-export-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).expect("the destination directory is created");
-    let dest = dir.join("journey.json");
+    let dir = crate::support::test_dir::TestDir::new("demeteo-ask-export");
+    let dest = dir.path().join("journey.json");
 
     export_canvas_to_file(&ctx, &thread_id, &message.id, &dest).expect("the export is written");
 
@@ -317,15 +304,13 @@ async fn exporting_to_a_file_writes_the_export_verbatim() {
     assert_eq!(snapshot.canvas, expected);
     assert_eq!(snapshot.message_id, message.id);
 
-    let unwritable = dir.join("no-such-directory").join("journey.json");
+    let unwritable = dir.path().join("no-such-directory").join("journey.json");
     let refused = export_canvas_to_file(&ctx, &thread_id, &message.id, &unwritable)
         .expect_err("a write into a missing directory is refused");
     assert!(
         refused.contains("journey.json"),
         "the rejection names the destination: {refused}"
     );
-
-    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A thread with no pins lists empty.

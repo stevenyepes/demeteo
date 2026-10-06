@@ -38,13 +38,7 @@ fn set_enabled_does_not_panic_off_the_runtime_thread() {
         .expect("build a private tokio runtime");
     let handle = rt.handle().clone();
 
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-mcp-off-runtime-thread-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = demeteo_core::test_dir::scratch("demeteo-mcp-off-runtime-thread");
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: dir,

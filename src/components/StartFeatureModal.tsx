@@ -790,7 +790,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4 select-none"
+      className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-4 select-none"
       onKeyDown={onKey}
     >
       {/* Viewport-capped panel: the form body scrolls internally while the

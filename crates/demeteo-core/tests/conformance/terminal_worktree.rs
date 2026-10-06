@@ -765,10 +765,9 @@ async fn terminal_listing_through_a_symlinked_root(
 
 #[tokio::test]
 async fn local_subprocess_adapter_satisfies_the_terminal_worktree_contract() {
-    let scratch = std::env::temp_dir().join("demeteo-terminal-worktree-conformance");
-    std::fs::create_dir_all(&scratch).expect("creates the local conformance scratch dir");
+    let scratch = crate::support::test_dir::TestDir::new("demeteo-terminal-worktree-conformance");
     let port: Arc<dyn ExecutionPort> = Arc::new(LocalSubprocessAdapter::new());
-    terminal_worktree_contract(port, "local", &scratch.to_string_lossy()).await;
+    terminal_worktree_contract(port, "local", &scratch.path().to_string_lossy()).await;
 }
 
 /// The same assertions against the loopback sshd C2.2 stands up. This is the

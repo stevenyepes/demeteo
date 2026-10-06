@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub architecture</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Outfit:wght@500;600;700&amp;family=Fira+Code:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#08090c}
+</style>
+</helmet>
+<div style="position: relative; width: 1800px; height: 1000px; background: radial-gradient(circle at 40% 45%, rgba(139,92,246,.07) 0%, transparent 55%), #08090c; font-family: 'Inter', -apple-system, sans-serif; color: #f3f4f6; overflow: hidden">
+
+<div style="position: absolute; left: 392px; top: 200px; width: 640px; height: 640px; box-sizing: border-box; border: 1px dashed rgba(139,92,246,.45); background: rgba(139,92,246,.05); border-radius: 16px"></div>
+<div style="position: absolute; left: 1184px; top: 200px; width: 392px; height: 576px; box-sizing: border-box; border: 1px dashed rgba(255,255,255,.08); border-radius: 16px"></div>
+
+<svg width="126" height="8" viewBox="0 0 126 8" preserveAspectRatio="none" style="position: absolute; left: 264px; top: 488px; width: 126px; height: 8px; overflow: visible; fill: none; stroke: #8b5cf6; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><defs><marker id="dc-arrow-head-filled" orient="auto" markerWidth="5" markerHeight="5" refX="3.2" refY="2" overflow="visible"><path d="M0 0 L4 2 L0 4 Z" fill="#8b5cf6" stroke="none" style="fill: context-stroke"></path></marker></defs><path d="M 0 4 L 126 4" marker-end="url(#dc-arrow-head-filled)"></path></svg>
+<svg width="166" height="8" viewBox="0 0 166 8" preserveAspectRatio="none" style="position: absolute; left: 1034px; top: 268px; width: 166px; height: 8px; overflow: visible; fill: none; stroke: #06b6d4; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><defs><marker id="dc-arrow-head-filled" orient="auto" markerWidth="5" markerHeight="5" refX="3.2" refY="2" overflow="visible"><path d="M0 0 L4 2 L0 4 Z" fill="#06b6d4" stroke="none" style="fill: context-stroke"></path></marker></defs><path d="M 166 4 L 0 4" marker-end="url(#dc-arrow-head-filled)"></path></svg>
+<svg width="166" height="8" viewBox="0 0 166 8" preserveAspectRatio="none" style="position: absolute; left: 1034px; top: 412px; width: 166px; height: 8px; overflow: visible; fill: none; stroke: #06b6d4; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><defs><marker id="dc-arrow-head-filled" orient="auto" markerWidth="5" markerHeight="5" refX="3.2" refY="2" overflow="visible"><path d="M0 0 L4 2 L0 4 Z" fill="#06b6d4" stroke="none" style="fill: context-stroke"></path></marker></defs><path d="M 166 4 L 0 4" marker-end="url(#dc-arrow-head-filled)"></path></svg>
+<svg width="166" height="8" viewBox="0 0 166 8" preserveAspectRatio="none" style="position: absolute; left: 1034px; top: 556px; width: 166px; height: 8px; overflow: visible; fill: none; stroke: #06b6d4; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><defs><marker id="dc-arrow-head-filled" orient="auto" markerWidth="5" markerHeight="5" refX="3.2" refY="2" overflow="visible"><path d="M0 0 L4 2 L0 4 Z" fill="#06b6d4" stroke="none" style="fill: context-stroke"></path></marker></defs><path d="M 166 4 L 0 4" marker-end="url(#dc-arrow-head-filled)"></path></svg>
+<svg width="166" height="8" viewBox="0 0 166 8" preserveAspectRatio="none" style="position: absolute; left: 1034px; top: 700px; width: 166px; height: 8px; overflow: visible; fill: none; stroke: #06b6d4; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><defs><marker id="dc-arrow-head-filled" orient="auto" markerWidth="5" markerHeight="5" refX="3.2" refY="2" overflow="visible"><path d="M0 0 L4 2 L0 4 Z" fill="#06b6d4" stroke="none" style="fill: context-stroke"></path></marker></defs><path d="M 166 4 L 0 4" marker-end="url(#dc-arrow-head-filled)"></path></svg>
+<svg width="48" height="8" viewBox="0 0 48 8" preserveAspectRatio="none" style="position: absolute; left: 1560px; top: 268px; width: 48px; height: 8px; overflow: visible; fill: none; stroke: #64748b; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 6 6"><path d="M 0 4 L 48 4"></path></svg>
+<svg width="8" height="432" viewBox="0 0 8 432" preserveAspectRatio="none" style="position: absolute; left: 1604px; top: 272px; width: 8px; height: 432px; overflow: visible; fill: none; stroke: #64748b; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 6 6"><path d="M 4 0 L 4 432"></path></svg>
+<svg width="46" height="8" viewBox="0 0 46 8" preserveAspectRatio="none" style="position: absolute; left: 1562px; top: 700px; width: 46px; height: 8px; overflow: visible; fill: none; stroke: #64748b; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 6 6"><defs><marker id="dc-arrow-head-filled" orient="auto" markerWidth="5" markerHeight="5" refX="3.2" refY="2" overflow="visible"><path d="M0 0 L4 2 L0 4 Z" fill="#64748b" stroke="none" style="fill: context-stroke"></path></marker></defs><path d="M 46 4 L 0 4" marker-end="url(#dc-arrow-head-filled)"></path></svg>
+
+<div style="position: absolute; left: 64px; top: 440px; width: 200px; height: 104px; box-sizing: border-box; padding: 12px; display: flex; align-items: center; justify-content: center; text-align: center; background: rgba(18,22,30,.92); border: 1px solid rgba(139,92,246,.35); border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.4); font-size: 15px; line-height: 22px"><span><b style="font-family: 'Outfit', sans-serif; font-size: 17px">You</b><br><span style="color: #9ca3af; font-size: 13px">any browser, any device</span></span></div>
+
+<div style="position: absolute; left: 424px; top: 284px; width: 280px; height: 96px; box-sizing: border-box; padding: 12px; display: flex; align-items: center; justify-content: center; text-align: center; background: rgba(18,22,30,.92); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; font-size: 15px; line-height: 22px"><span><b>Web app &amp; API</b><br><span style="color: #9ca3af; font-size: 13px">Fleet, Runs, dispatch</span></span></div>
+<div style="position: absolute; left: 728px; top: 284px; width: 280px; height: 96px; box-sizing: border-box; padding: 12px; display: flex; align-items: center; justify-content: center; text-align: center; background: rgba(18,22,30,.92); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; font-size: 15px; line-height: 22px"><span><b>Authorization server</b><br><span style="color: #9ca3af; font-size: 13px">OAuth 2.1 · PKCE · DPoP</span></span></div>
+<div style="position: absolute; left: 424px; top: 444px; width: 280px; height: 96px; box-sizing: border-box; padding: 12px; display: flex; align-items: center; justify-content: center; text-align: center; background: rgba(18,22,30,.92); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; font-size: 15px; line-height: 22px"><span><b>Fleet registry</b><br><span style="color: #9ca3af; font-size: 13px">instances, presence, versions</span></span></div>
+<div style="position: absolute; left: 728px; top: 444px; width: 280px; height: 96px; box-sizing: border-box; padding: 12px; display: flex; align-items: center; justify-content: center; text-align: center; background: rgba(18,22,30,.92); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; font-size: 15px; line-height: 22px"><span><b>Request queue</b><br><span style="color: #9ca3af; font-size: 13px">held until the instance pulls it</span></span></div>
+<div style="position: absolute; left: 424px; top: 604px; width: 584px; height: 96px; box-sizing: border-box; padding: 12px; display: flex; align-items: center; justify-content: center; text-align: center; background: rgba(18,22,30,.92); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; font-size: 15px; line-height: 22px"><span><b>Run mirror</b><br><span style="color: #9ca3af; font-size: 13px">metadata only · keyed by (instance, run, event offset)</span></span></div>
+
+<div style="position: absolute; left: 1200px; top: 224px; width: 360px; height: 96px; box-sizing: border-box; padding: 12px; display: flex; align-items: center; justify-content: center; text-align: center; background: rgba(18,22,30,.92); border: 1px solid rgba(139,92,246,.3); border-radius: 12px; font-size: 15px; line-height: 22px"><span><b>studio-mbp</b><br><span style="color: #9ca3af; font-size: 13px">Demeteo desktop · macOS</span></span></div>
+<div style="position: absolute; left: 1200px; top: 368px; width: 360px; height: 96px; box-sizing: border-box; padding: 12px; display: flex; align-items: center; justify-content: center; text-align: center; background: rgba(18,22,30,.92); border: 1px solid rgba(139,92,246,.3); border-radius: 12px; font-size: 15px; line-height: 22px"><span><b>dev-workstation</b><br><span style="color: #9ca3af; font-size: 13px">Demeteo desktop · Linux</span></span></div>
+<div style="position: absolute; left: 1200px; top: 512px; width: 360px; height: 96px; box-sizing: border-box; padding: 12px; display: flex; align-items: center; justify-content: center; text-align: center; background: rgba(18,22,30,.92); border: 1px solid rgba(139,92,246,.3); border-radius: 12px; font-size: 15px; line-height: 22px"><span><b>win-buildbox</b><br><span style="color: #9ca3af; font-size: 13px">Demeteo desktop · Windows</span></span></div>
+<div style="position: absolute; left: 1200px; top: 656px; width: 360px; height: 96px; box-sizing: border-box; padding: 12px; display: flex; align-items: center; justify-content: center; text-align: center; background: rgba(18,22,30,.92); border: 1px solid rgba(6,182,212,.35); border-radius: 12px; font-size: 15px; line-height: 22px"><span><b>runner-eu-1</b><br><span style="color: #9ca3af; font-size: 13px">demeteo-runner · Linux · detached runs</span></span></div>
+
+<div style="position: absolute; left: 64px; top: 64px; font-family: 'Outfit', sans-serif; font-size: 30px; font-weight: 600">Every instance dials out. The Hub never dials in.</div>
+<div style="position: absolute; left: 64px; top: 112px; width: 1100px; font-size: 15px; line-height: 22px; color: #9ca3af">Desktops sit behind NAT and laptops sleep, so the Hub cannot reach them — and doesn't try. Each instance holds one outbound connection; the Hub's requests ride back down it and the instance decides.</div>
+<div style="position: absolute; left: 416px; top: 224px; font-family: 'Outfit', sans-serif; font-size: 14px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: #c4b5fd">Demeteo Hub · holds no secrets</div>
+<div style="position: absolute; left: 1208px; top: 172px; font-family: 'Outfit', sans-serif; font-size: 14px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: #9ca3af">Instances · they decide</div>
+<div style="position: absolute; left: 268px; top: 464px; width: 120px; text-align: center; font-size: 13px; line-height: 16px; color: #c4b5fd">HTTPS · passkey</div>
+<div style="position: absolute; left: 1060px; top: 244px; width: 112px; text-align: center; font-size: 13px; line-height: 16px; color: #67e8f9">outbound wss</div>
+<div style="position: absolute; left: 1620px; top: 472px; width: 112px; font-size: 13px; line-height: 16px; color: #9ca3af">SSH, as today<br>git token per run</div>
+<div style="position: absolute; left: 1200px; top: 792px; width: 400px; font-size: 13px; line-height: 20px; color: #9ca3af">Tokens are short-lived and bound to a device key made on each machine. A stolen token is useless without that machine's keyring.</div>
+<div style="position: absolute; left: 392px; top: 880px; width: 1184px; height: 56px; box-sizing: border-box; padding: 12px 20px; display: flex; align-items: center; gap: 12px; background: rgba(16,185,129,.06); border: 1px solid rgba(16,185,129,.25); border-radius: 12px; font-size: 14px; color: #a7f3d0"><span><b>Never leaves an instance:</b> provider API keys · git tokens · harness sign-ins · local paths · transcripts and diffs (unless that instance turns <span style="font-family: 'Fira Code', monospace">logs</span> on)</span></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1800,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

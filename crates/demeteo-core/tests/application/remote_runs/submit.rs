@@ -295,15 +295,14 @@ fn machine(id: &str, auth_type: &str) -> Machine {
     }
 }
 
-/// A context in which every step before the RPC would succeed: the machine,
-/// this app's version, the project, its repository and provider, the
-/// workflow, and a PAT seeded into the process-wide credential cache under a
-/// provider id no other test uses.
-fn submittable_ctx(exec: Arc<RunnerAt>) -> (AppContext, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("demeteo-submit-gate-{}", crate::paths::new_id()));
+/// A context in which every step before the RPC would succeed: the project,
+/// its repository and provider, the workflow, and a PAT seeded into the
+/// process-wide credential cache under a provider id no other test uses.
+fn submittable_ctx(exec: Arc<RunnerAt>) -> (AppContext, crate::support::test_dir::TestDir) {
+    let dir = crate::support::test_dir::TestDir::new("demeteo-submit-gate");
     let mut ctx = build_core_context(
         CoreConfig {
-            app_data_dir: dir.clone(),
+            app_data_dir: dir.path().to_path_buf(),
             execution_mode: ExecutionMode::LocalOnly,
         },
         Arc::new(NoopNotificationAdapter),
@@ -366,7 +365,7 @@ fn submittable_ctx(exec: Arc<RunnerAt>) -> (AppContext, std::path::PathBuf) {
 #[tokio::test]
 async fn a_mismatched_runner_is_refused_before_any_side_effect() {
     let exec = Arc::new(RunnerAt::new("1.2.0-30"));
-    let (ctx, dir) = submittable_ctx(exec.clone());
+    let (ctx, _dir) = submittable_ctx(exec.clone());
     let mut input = submit_input(None, None);
     input.launch.staged_attachments = vec![StagedAttachmentInput {
         source_path: String::new(),
@@ -391,8 +390,6 @@ async fn a_mismatched_runner_is_refused_before_any_side_effect() {
         0,
         "a refused submit leaves no shadow feature row"
     );
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// The gate's other half: this build's runner is let through to the submit
@@ -400,7 +397,7 @@ async fn a_mismatched_runner_is_refused_before_any_side_effect() {
 #[tokio::test]
 async fn a_runner_on_this_build_is_let_through_to_the_submit() {
     let exec = Arc::new(RunnerAt::new(APP_VERSION));
-    let (ctx, dir) = submittable_ctx(exec.clone());
+    let (ctx, _dir) = submittable_ctx(exec.clone());
 
     let result = submit_remote_run(&ctx, submit_input(None, None)).await;
 
@@ -409,8 +406,6 @@ async fn a_runner_on_this_build_is_let_through_to_the_submit() {
         "a matching runner must not be refused"
     );
     assert_eq!(exec.calls(), ["rpc health", "rpc submit_run"]);
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// D7: nothing about the machine has been asked over the wire, and nothing
@@ -444,35 +439,29 @@ async fn assert_refused_untouched(ctx: &AppContext, exec: &RunnerAt, machine_id:
 #[tokio::test]
 async fn an_unknown_machine_is_refused_before_any_rpc() {
     let exec = Arc::new(RunnerAt::new(APP_VERSION));
-    let (ctx, dir) = submittable_ctx(exec.clone());
+    let (ctx, _dir) = submittable_ctx(exec.clone());
 
     let message = assert_refused_untouched(&ctx, &exec, "runner-gone").await;
 
     assert!(message.contains("runner-gone"), "{message}");
     assert!(message.contains("Machines settings"), "{message}");
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
 async fn the_local_id_is_refused_before_any_rpc() {
     let exec = Arc::new(RunnerAt::new(APP_VERSION));
-    let (ctx, dir) = submittable_ctx(exec.clone());
+    let (ctx, _dir) = submittable_ctx(exec.clone());
 
     assert_refused_untouched(&ctx, &exec, "local").await;
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
 async fn a_machine_row_for_the_desktop_is_refused_before_any_rpc() {
     let exec = Arc::new(RunnerAt::new(APP_VERSION));
-    let (ctx, dir) = submittable_ctx(exec.clone());
+    let (ctx, _dir) = submittable_ctx(exec.clone());
     ctx.machines.add(machine("this-laptop", "local")).unwrap();
 
     assert_refused_untouched(&ctx, &exec, "this-laptop").await;
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// The version comes from the context, and a context nobody set it on must
@@ -480,7 +469,7 @@ async fn a_machine_row_for_the_desktop_is_refused_before_any_rpc() {
 #[tokio::test]
 async fn an_unset_app_version_is_refused_before_the_submit() {
     let exec = Arc::new(RunnerAt::new(APP_VERSION));
-    let (mut ctx, dir) = submittable_ctx(exec.clone());
+    let (mut ctx, _dir) = submittable_ctx(exec.clone());
     ctx.app_version = crate::state::AppVersion::default();
 
     let result = submit_remote_run(&ctx, submit_input(None, None)).await;
@@ -490,8 +479,6 @@ async fn an_unset_app_version_is_refused_before_the_submit() {
     };
     assert_eq!(error.code(), "runner_incompatible");
     assert!(!exec.calls().iter().any(|call| call == "rpc submit_run"));
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 fn shadow_ids(ctx: &AppContext) -> Vec<String> {
@@ -508,7 +495,7 @@ fn shadow_ids(ctx: &AppContext) -> Vec<String> {
 #[tokio::test]
 async fn a_supplied_feature_id_is_the_shadow_and_mirror_id() {
     let exec = Arc::new(RunnerAt::accepting(APP_VERSION));
-    let (ctx, dir) = submittable_ctx(exec.clone());
+    let (ctx, _dir) = submittable_ctx(exec.clone());
     let mut input = submit_input(None, None);
     input.launch.feature_id = Some("f-ticket-7".to_string());
 
@@ -520,8 +507,6 @@ async fn a_supplied_feature_id_is_the_shadow_and_mirror_id() {
     assert_eq!(mirrors.len(), 1);
     assert_eq!(mirrors[0].feature_id.as_deref(), Some("f-ticket-7"));
     assert_eq!(exec.submitted_spec()["feature_id"], "f-ticket-7");
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// D6: nobody is attached to a detached run, so the request never asks for
@@ -530,14 +515,13 @@ async fn a_supplied_feature_id_is_the_shadow_and_mirror_id() {
 async fn every_submitted_run_is_unattended() {
     for unattended in [None, Some(true)] {
         let exec = Arc::new(RunnerAt::accepting(APP_VERSION));
-        let (ctx, dir) = submittable_ctx(exec.clone());
+        let (ctx, _dir) = submittable_ctx(exec.clone());
         let mut input = submit_input(None, None);
         input.detached.unattended = unattended;
 
         let _ = submit_remote_run(&ctx, input).await;
 
         assert_eq!(exec.submitted_spec()["unattended"], true, "{unattended:?}");
-        let _ = std::fs::remove_dir_all(dir);
     }
 }
 
@@ -546,7 +530,7 @@ async fn every_submitted_run_is_unattended() {
 #[tokio::test]
 async fn a_credential_failure_after_an_accepted_submit_parks_the_run() {
     let exec = Arc::new(RunnerAt::accepting(APP_VERSION));
-    let (ctx, dir) = submittable_ctx(exec.clone());
+    let (ctx, _dir) = submittable_ctx(exec.clone());
 
     let outcome = submit_remote_run(&ctx, submit_input(None, None))
         .await
@@ -564,8 +548,6 @@ async fn a_credential_failure_after_an_accepted_submit_parks_the_run() {
     assert_eq!(mirrors.len(), 1);
     assert_eq!(mirrors[0].run_id, outcome.run_id);
     assert_eq!(mirrors[0].feature_id.as_deref(), Some(&*outcome.feature_id));
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// D8 again, for the laptop's own bookkeeping: a mirror write failing after
@@ -575,7 +557,7 @@ async fn a_credential_failure_after_an_accepted_submit_parks_the_run() {
 async fn a_mirror_failure_after_an_accepted_submit_is_named_not_raised() {
     for write in [MirrorWrite::Submitted, MirrorWrite::Status] {
         let exec = Arc::new(RunnerAt::accepting(APP_VERSION));
-        let (mut ctx, dir) = submittable_ctx(exec.clone());
+        let (mut ctx, _dir) = submittable_ctx(exec.clone());
         ctx.remote_run_mirror = MirrorFailingOn::wrap(ctx.remote_run_mirror.clone(), write);
 
         let outcome = submit_remote_run(&ctx, submit_input(None, None))
@@ -594,7 +576,5 @@ async fn a_mirror_failure_after_an_accepted_submit_is_named_not_raised() {
             "{write:?}"
         );
         assert_eq!(shadow_ids(&ctx), std::slice::from_ref(&outcome.feature_id));
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 }

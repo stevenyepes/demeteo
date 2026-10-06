@@ -1,17 +1,18 @@
 //! Per-run git askpass (docs/REMOTE_EXECUTION.md M4.3,
 //! docs/REMOTE_EXECUTION.md §6.2 hardening).
 //!
-//! The M1 stopgap embedded the PAT straight into the clone/push URL
-//! (`https://x-access-token:{pat}@host/...`), which puts the secret in
+//! Embedding the PAT in the clone/push URL
+//! (`https://x-access-token:{pat}@host/...`) would put the secret in
 //! the child process's argv — visible to any local user via `ps aux` or
-//! `/proc/<pid>/cmdline`, and liable to end up in shell history. This
-//! module replaces that: the runner spawns `git` directly (bypassing the
-//! generic `ExecutionPort` shell-string API, which has no way to set
-//! per-child env without embedding it in the command string) with
-//! `GIT_ASKPASS` pointed at a small, secret-free helper script. The PAT
-//! itself only ever exists as an env var on that one `git` child process
-//! — never in the URL, never in the command line, never written to the
-//! runner's disk.
+//! `/proc/<pid>/cmdline`, and liable to end up in shell history. The runner
+//! avoids that by spawning `git` directly (bypassing the generic
+//! `ExecutionPort` shell-string API, which has no way to set per-child env
+//! without embedding it in the command string) with `GIT_ASKPASS` pointed at a
+//! small, secret-free helper script. So on the runner the PAT only ever exists
+//! as an env var on that one `git` child process — never in the URL, never in
+//! argv, never written to the runner's disk. That is a statement about the
+//! runner's own spawn only; the desktop-over-SSH path renders its env into the
+//! remote command string and is described in docs/REMOTE_EXECUTION.md §6.2.
 //!
 //! The askpass script is written once (its contents contain no secret)
 //! and reused for every run.

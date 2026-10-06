@@ -37,10 +37,15 @@ async fn drift_git(
     let ahead =
         format!("git -C {repo_dir} rev-list --count origin/{base}..refs/heads/{feature_branch}");
     let fetch_cmd = format!("git -C {repo_dir} fetch origin -- {base}");
+    let origin_probe = format!("git -C {repo_dir} remote get-url origin");
 
     let exec = Arc::new(ScriptedExec::new(&[]).with_programs(&[
         (behind.as_str(), Ok("4")),
         (ahead.as_str(), Ok("1")),
+        (
+            origin_probe.as_str(),
+            Ok("git@github.com:acme/widgets.git\n"),
+        ),
         (fetch_cmd.as_str(), fetch),
     ]));
     let (executor, db) =
@@ -94,7 +99,9 @@ async fn a_fetch_happens_only_when_it_was_asked_for() {
     )
     .await;
     assert!(
-        !quiet.iter().any(|argv| argv.contains(" fetch ")),
+        !quiet
+            .iter()
+            .any(|argv| argv.contains(" fetch ") || argv.contains("get-url")),
         "an unasked-for fetch is a network round trip per row on the project view: {quiet:?}"
     );
     assert!(

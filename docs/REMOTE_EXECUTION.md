@@ -221,9 +221,15 @@ Demeteo injects the **Provider Instance PAT it already holds**, per run.
 
 This is not new behavior — it relocates an existing pattern. Today
 `GitOpsHelper::clone_repository` (`adapters/worktree/git_ops/clone.rs`) reads the
-PAT from the keyring on the laptop and ships it to a remote machine embedded in
-the clone URL (`https://x-access-token:{pat}@host/repo`) over the SSH-executed
-command. The runner design keeps this injection model but tightens one thing:
+PAT from the keyring on the laptop and hands it to git through a credential
+helper while cloning a token-free URL (`https://x-access-token@host/repo`), so
+the PAT is in neither the clone URL nor the stored `origin`, and is not in the
+argv of the `git` process. That is narrowed, not closed: over the SSH transport
+the helper's env is rendered into the remote `sh -c` command string
+(`shell::export_prefix`), so the PAT is still visible in the remote command
+line for the life of that git invocation — as long as the clone, for a clone.
+The runner design keeps this injection model under the stricter rule, which is
+the design target the SSH path does not yet meet:
 **the PAT must not land in the remote command line or URL** (where it is visible
 in the runner's `ps`, shell history, and logs). Use an in-memory per-run
 credential helper / askpass instead. Per run:

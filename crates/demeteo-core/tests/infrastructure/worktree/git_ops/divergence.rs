@@ -1,6 +1,17 @@
 use super::super::common::*;
-use super::{base_fetch_request, count_divergence, measured_divergence, patch_equivalence};
+use super::{
+    base_fetch_request, count_divergence, measured_divergence, patch_equivalence, refresh_base_ref,
+    BASE_FETCH_TIMEOUT,
+};
+use crate::adapters::database::SqliteAdapter;
+use crate::adapters::git_push::{credential_helper, GitCredential, PAT_ENV_VAR, USER_ENV_VAR};
+use crate::adapters::step_executor::scripted_exec::ScriptedExec;
+use crate::domain::ids::ProviderId;
+use crate::domain::models::ProviderInstance;
+use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::ExecutionPort;
+use rusqlite::Connection;
+use std::sync::Arc;
 
 /// Commits on `feature/f-1` that `origin/feature/f-1` does not carry, as the
 /// classification is asked to read `git cherry` against.
@@ -478,7 +489,7 @@ async fn a_merge_commit_the_cherry_never_printed_is_not_a_reset() {
 /// it hangs instead of breaking.
 #[test]
 fn the_base_fetch_can_neither_ask_nor_run_forever() {
-    let request = base_fetch_request("/repos/demeteo", "master");
+    let request = base_fetch_request("/repos/demeteo", "master", None);
 
     assert_eq!(
         request.env.get("GIT_TERMINAL_PROMPT").map(String::as_str),
@@ -496,4 +507,129 @@ fn the_base_fetch_can_neither_ask_nor_run_forever() {
         request.timeout.is_some(),
         "an origin that accepts the connection and says nothing would hold the read"
     );
+}
+
+const BASE_PAT: &str = "ghp-not-a-real-token";
+
+fn credential() -> GitCredential {
+    GitCredential {
+        user: "x-access-token",
+        pat: BASE_PAT.to_string(),
+        host: "github.com".to_string(),
+    }
+}
+
+/// The deadline is the base fetch's own, not the shared builder's: the shared
+/// fetch has none, and a credential must not cost the user's wait its ceiling.
+#[test]
+fn a_credentialed_base_fetch_carries_the_helper_and_keeps_its_deadline() {
+    let request = base_fetch_request("/repos/demeteo", "master", Some(&credential()));
+
+    let helper = format!("credential.helper={}", credential_helper());
+    assert!(request.args.contains(&helper), "{:?}", request.args);
+    assert_eq!(
+        request.env.get(PAT_ENV_VAR).map(String::as_str),
+        Some(BASE_PAT)
+    );
+    assert_eq!(
+        request.env.get(USER_ENV_VAR).map(String::as_str),
+        Some("x-access-token")
+    );
+    assert_eq!(
+        request.env.get("GIT_TERMINAL_PROMPT").map(String::as_str),
+        Some("0")
+    );
+    assert_eq!(request.timeout, Some(BASE_FETCH_TIMEOUT));
+    assert!(!request.args.iter().any(|a| a.contains(BASE_PAT)));
+}
+
+#[test]
+fn an_uncredentialed_base_fetch_installs_no_helper_and_keeps_its_deadline() {
+    let request = base_fetch_request("/repos/demeteo", "master", None);
+
+    assert!(!request
+        .args
+        .iter()
+        .any(|a| a.starts_with("credential.helper")));
+    assert!(!request.env.contains_key(PAT_ENV_VAR));
+    assert_eq!(request.timeout, Some(BASE_FETCH_TIMEOUT));
+    assert_eq!(
+        request.args,
+        ["-C", "/repos/demeteo", "fetch", "origin", "--", "master"]
+    );
+}
+
+fn db_with_provider(provider_id: &str) -> Arc<SqliteAdapter> {
+    let db = Arc::new(SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap());
+    db.add_provider_instance(ProviderInstance {
+        id: ProviderId::from(provider_id),
+        kind: "github".to_string(),
+        host: "github.com".to_string(),
+        username: "someone".to_string(),
+        avatar_url: String::new(),
+        created_at: 0,
+    })
+    .unwrap();
+    db
+}
+
+/// `refresh_base_ref` against a strict double that knows the origin probe
+/// (answering `probe`) and both spellings of the fetch.
+async fn refresh_against(
+    probe: Result<&str, &str>,
+    provider_id: &str,
+) -> (bool, Vec<crate::ports::execution::ProgramRequest>) {
+    let credentialed = format!(
+        "git -C /repos/demeteo -c credential.helper= -c credential.helper={} fetch --no-recurse-submodules origin -- master",
+        credential_helper()
+    );
+    let exec = Arc::new(ScriptedExec::new(&[]).with_programs(&[
+        ("git -C /repos/demeteo remote get-url origin", probe),
+        ("git -C /repos/demeteo fetch origin -- master", Ok("")),
+        (credentialed.as_str(), Ok("")),
+    ]));
+    let fetched = refresh_base_ref(
+        &*exec,
+        &*db_with_provider(provider_id),
+        "local",
+        "/repos/demeteo",
+        "master",
+    )
+    .await;
+    (fetched, exec.requests())
+}
+
+#[tokio::test]
+async fn refreshing_the_base_of_a_github_origin_fetches_with_the_credential_and_the_deadline() {
+    crate::credential_cache::set("prov-base-match", BASE_PAT);
+
+    let (fetched, requests) = refresh_against(
+        Ok("https://x-access-token@github.com/acme/demeteo\n"),
+        "prov-base-match",
+    )
+    .await;
+
+    assert!(fetched);
+    assert_eq!(requests.len(), 2, "one probe, one fetch: {requests:?}");
+    assert_eq!(
+        requests[1].env.get(PAT_ENV_VAR).map(String::as_str),
+        Some(BASE_PAT)
+    );
+    assert_eq!(requests[1].timeout, Some(BASE_FETCH_TIMEOUT));
+}
+
+/// A probe that fails is a fetch without a helper, never a refusal and never
+/// a wait: the drift read must carry on exactly as it did before there was a
+/// credential to look up.
+#[tokio::test]
+async fn an_unreadable_origin_still_fetches_without_a_helper() {
+    let (fetched, requests) = refresh_against(Err("not a git repository"), "prov-base-bad").await;
+
+    assert!(fetched);
+    let fetch = requests.last().expect("the fetch was issued");
+    assert!(!fetch
+        .args
+        .iter()
+        .any(|a| a.starts_with("credential.helper")));
+    assert_eq!(fetch.timeout, Some(BASE_FETCH_TIMEOUT));
 }

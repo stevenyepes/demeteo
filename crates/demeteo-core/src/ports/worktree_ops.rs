@@ -484,6 +484,15 @@ pub trait WorktreeOpsPort: Send + Sync {
         repo_dir: &str,
     ) -> Result<usize, String>;
 
+    /// Rewrite a legacy `origin` that embeds a password to its token-free form
+    /// when the clone is opened, so a clone no run ever follows is still
+    /// scrubbed.
+    ///
+    /// Best-effort by contract: it returns nothing and never fails a bootstrap.
+    /// The default does nothing, so an implementation with no `origin` to
+    /// migrate need not mention it.
+    async fn scrub_origin_credentials(&self, _machine_id: Option<&str>, _repo_dir: &str) {}
+
     /// Detect the worktree strategy and return it.
     async fn detect_worktree_strategy(
         &self,

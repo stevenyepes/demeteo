@@ -244,25 +244,11 @@ pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workd
     }
 }
 
-/// Create a fresh, unique, writable temp directory for a local run and
-/// return its absolute path. Kept local to the suite so the assertions
-/// don't depend on any external temp-dir crate.
-fn fresh_local_workdir() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("demeteo-exec-contract-{nanos}"));
-    std::fs::create_dir_all(&dir).expect("failed to create local conformance workdir");
-    dir.to_string_lossy().into_owned()
-}
-
 #[tokio::test]
 async fn local_subprocess_adapter_satisfies_the_contract() {
-    let workdir = fresh_local_workdir();
+    let workdir = crate::support::test_dir::TestDir::new("demeteo-exec-contract");
     let port: Arc<dyn ExecutionPort> = Arc::new(LocalSubprocessAdapter::new());
-    exec_contract(port, "local", &workdir).await;
-    let _ = std::fs::remove_dir_all(&workdir);
+    exec_contract(port, "local", &workdir.path().to_string_lossy()).await;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -395,8 +381,8 @@ async fn ssh_client_adapter_satisfies_the_contract() {
     let machine_id = "ssh-conformance";
     let port = ssh_target::adapter(&t, t.port, machine_id);
 
-    // Ensure the workdir exists, mirroring `fresh_local_workdir` for the local
-    // leg — the shared `exec_contract` assumes a pre-existing writable dir.
+    // Ensure the workdir exists, mirroring the local leg's `TestDir` —
+    // the shared `exec_contract` assumes a pre-existing writable dir.
     port.run_command(machine_id, &format!("mkdir -p {}", t.workdir))
         .await
         .expect("failed to create the remote conformance workdir");

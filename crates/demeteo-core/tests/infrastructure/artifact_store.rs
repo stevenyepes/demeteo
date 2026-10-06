@@ -2,21 +2,9 @@ use super::*;
 use crate::domain::artifact::{Artifact, ArtifactSource};
 use crate::domain::ask_canvas::{AskCanvas, CanvasKind, PinnedCanvasSnapshot};
 
-fn temp_store() -> (FsArtifactStore, PathBuf) {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo_artifact_test_{}_{}_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-        std::process::id(),
-        count,
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let store = FsArtifactStore::new(dir.clone());
+fn temp_store() -> (FsArtifactStore, crate::support::test_dir::TestDir) {
+    let dir = crate::support::test_dir::TestDir::new("demeteo_artifact_test");
+    let store = FsArtifactStore::new(dir.path().to_path_buf());
     (store, dir)
 }
 

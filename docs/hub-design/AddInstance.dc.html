@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hub — Add an instance</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Outfit:wght@500;600;700;800&amp;family=Fira+Code:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#08090c}
+a{color:#22d3ee}a:hover{color:#67e8f9}
+.hub{min-height:100vh;display:flex;flex-wrap:wrap;font-family:'Inter',-apple-system,sans-serif;color:#f3f4f6;-webkit-font-smoothing:antialiased;background:radial-gradient(circle at 70% 30%,rgba(139,92,246,.05) 0%,transparent 60%),radial-gradient(circle at 10% 80%,rgba(6,182,212,.04) 0%,transparent 50%),#08090c}
+.rail{flex:0 0 72px;background:#0d0f14;border-right:1px solid rgba(255,255,255,.05);display:flex;flex-direction:column;align-items:center;padding:20px 0;gap:12px;box-sizing:border-box}
+.logo{font-family:'Outfit',sans-serif;font-weight:800;font-size:24px;color:#06b6d4;text-shadow:0 0 12px rgba(6,182,212,.35);margin-bottom:16px;text-decoration:none}
+.nav{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#9ca3af;border:1px solid transparent;text-decoration:none;position:relative}
+.nav.on{background:rgba(139,92,246,.25);color:#a78bfa;border-color:rgba(139,92,246,.3);box-shadow:0 0 10px rgba(139,92,246,.25)}
+.badge{position:absolute;top:4px;right:4px;min-width:16px;height:16px;border-radius:8px;background:#f59e0b;color:#1f1300;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px;box-sizing:border-box}
+.avatar{margin-top:auto;width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#8b5cf6,#06b6d4);display:flex;align-items:center;justify-content:center;font-family:'Outfit',sans-serif;font-weight:700;font-size:14px;color:#fff}
+.main{flex:999 1 560px;min-width:0;padding:32px 40px 56px;box-sizing:border-box;display:flex;flex-direction:column;gap:24px;max-width:1240px}
+.h1{font-family:'Outfit',sans-serif;font-weight:600;font-size:30px;margin:0;letter-spacing:.2px}
+.h2{font-family:'Outfit',sans-serif;font-weight:600;font-size:13px;letter-spacing:.6px;text-transform:uppercase;color:#9ca3af;margin:0}
+.mono{font-family:'Fira Code','JetBrains Mono',monospace}
+.sub{color:#9ca3af;font-size:13px}
+.glass{background:rgba(18,22,30,.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.05);box-shadow:0 8px 32px rgba(0,0,0,.4);border-radius:12px}
+.nested{background:rgba(18,22,30,.55);border:1px solid rgba(255,255,255,.05);border-radius:12px}
+.well{background:#050608;border:1px solid rgba(255,255,255,.05);border-radius:10px}
+.btn{height:44px;padding:0 16px;border-radius:8px;display:inline-flex;align-items:center;gap:8px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;box-sizing:border-box;white-space:nowrap}
+.btn-p{background:linear-gradient(135deg,#8b5cf6,#7c3aed);color:#fff;border:none;box-shadow:0 0 16px rgba(139,92,246,.3)}
+.btn-s{background:rgba(255,255,255,.04);color:#e5e7eb;border:1px solid rgba(255,255,255,.08)}
+.btn-sm{height:36px;padding:0 12px;font-size:13px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;border:1px solid;font-size:11px;font-weight:500;white-space:nowrap}
+.p-vi{border-color:rgba(139,92,246,.3);background:rgba(139,92,246,.1);color:#c4b5fd}
+.p-am{border-color:rgba(245,158,11,.25);background:rgba(245,158,11,.1);color:#fcd34d}
+.p-cy{border-color:rgba(6,182,212,.3);background:rgba(6,182,212,.1);color:#67e8f9}
+.tabs{display:flex;flex-wrap:wrap;gap:12px}
+.tab{flex:1 1 280px;min-height:88px;text-align:left;cursor:pointer;font-family:inherit;color:inherit;padding:16px;border-radius:12px;background:rgba(18,22,30,.55);border:1px solid rgba(255,255,255,.05);display:flex;gap:14px;align-items:center;box-sizing:border-box}
+.tab:hover{background:rgba(28,34,46,.85)}
+.tab.on{background:rgba(139,92,246,.1);border-color:rgba(139,92,246,.5);box-shadow:0 0 14px rgba(139,92,246,.2)}
+.tile{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex:none}
+.step{display:flex;gap:14px;align-items:flex-start}
+.num{width:26px;height:26px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-family:'Fira Code',monospace;font-size:12px;background:rgba(139,92,246,.15);color:#c4b5fd}
+.code{font-family:'Fira Code',monospace;font-size:13px;color:#67e8f9;padding:12px 14px;overflow-x:auto;white-space:nowrap}
+.field{height:56px;border-radius:10px;background:rgba(10,12,16,.6);border:1px solid rgba(255,255,255,.1);color:#f3f4f6;font-family:'Fira Code',monospace;font-size:24px;letter-spacing:6px;text-align:center;box-sizing:border-box;width:100%;max-width:320px}
+.scope{display:flex;gap:10px;align-items:center;font-size:13px;padding:8px 0;border-top:1px solid rgba(255,255,255,.05)}
+.cb{width:18px;height:18px;accent-color:#8b5cf6;flex:none}
+</style>
+</helmet>
+<div class="hub">
+
+<nav class="rail" aria-label="Hub">
+  <a class="logo" href="#">D</a>
+  <a class="nav on" href="Main.dc.html" aria-label="Fleet"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"></rect><rect width="20" height="8" x="2" y="14" rx="2"></rect><line x1="6" x2="6.01" y1="6" y2="6"></line><line x1="6" x2="6.01" y1="18" y2="18"></line></svg></a>
+  <a class="nav" href="Runs.dc.html" aria-label="Runs and gates, 2 need you"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"></path></svg><span class="badge">2</span></a>
+  <a class="nav" href="#" aria-label="Projects"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.3 7 8.7 5 8.7-5"></path><path d="M12 22V12"></path></svg></a>
+  <a class="nav" href="#" aria-label="Access and tokens"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 3 3L22 7l-3-3"></path></svg></a>
+  <a class="nav" href="#" aria-label="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"></line><line x1="4" x2="4" y1="10" y2="3"></line><line x1="12" x2="12" y1="21" y2="12"></line><line x1="12" x2="12" y1="8" y2="3"></line><line x1="20" x2="20" y1="21" y2="16"></line><line x1="20" x2="20" y1="12" y2="3"></line><line x1="2" x2="6" y1="14" y2="14"></line><line x1="10" x2="14" y1="8" y2="8"></line><line x1="18" x2="22" y1="16" y2="16"></line></svg></a>
+  <div class="avatar" aria-label="Signed in as you">SY</div>
+</nav>
+
+<main class="main">
+  <nav aria-label="Breadcrumb" class="mono" style="font-size: 12px; display: flex; gap: 8px"><a href="Main.dc.html" style="color: #9ca3af; text-decoration: none">Fleet</a><span style="color: #6b7280">/</span><span style="color: #e5e7eb">Add an instance</span></nav>
+  <header style="display: flex; flex-direction: column; gap: 8px"><h1 class="h1">Add an instance</h1><span class="sub">Pairing always starts on the machine. The Hub never connects to it — the instance connects out, and you approve it here.</span></header>
+
+  <div class="tabs" role="tablist" aria-label="Instance kind">
+    <button class="tab {{ deskCls }}" role="tab" aria-selected="{{ isDesk }}" onClick="{{ pickDesk }}">
+      <span class="tile" style="background: rgba(139,92,246,.12); color: #c4b5fd"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"></path></svg></span>
+      <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 16px">Desktop app</span><span class="sub" style="font-size: 12px">Demeteo on macOS, Linux or Windows</span></span>
+    </button>
+    <button class="tab {{ runCls }}" role="tab" aria-selected="{{ isRun }}" onClick="{{ pickRun }}">
+      <span class="tile" style="background: rgba(6,182,212,.12); color: #67e8f9"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"></rect><rect width="20" height="8" x="2" y="14" rx="2"></rect><line x1="6" x2="6.01" y1="6" y2="6"></line><line x1="6" x2="6.01" y1="18" y2="18"></line></svg></span>
+      <span style="display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 16px">Remote runner</span><span class="sub" style="font-size: 12px">demeteo-runner on a Linux host</span></span>
+    </button>
+  </div>
+
+  <sc-if value="{{ isDesk }}" hint-placeholder-val="{{ true }}">
+  <div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+    <section class="glass" style="flex: 1 1 420px; min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 22px" aria-label="Steps">
+      <div class="step"><span class="num">1</span><div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><span style="font-weight: 500">In Demeteo, open Settings › Hub</span><span class="sub">Demeteo 1.2.0 or newer, on the machine you want to add.</span></div></div>
+      <div class="step"><span class="num">2</span><div style="display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1"><span style="font-weight: 500">Paste this Hub's address</span>
+        <div class="well" style="display: flex; align-items: center"><span class="code" style="flex: 1">https://[YOUR HUB URL]</span><a class="btn btn-s btn-sm" href="#" style="margin-right: 6px">Copy</a></div></div></div>
+      <div class="step"><span class="num">3</span><div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><span style="font-weight: 500">Click Connect</span><span class="sub" style="line-height: 1.5">Your browser opens on this Hub to approve. Demeteo creates a device key in the OS keyring first; only its public half ever leaves the machine.</span></div></div>
+      <div class="nested" style="padding: 14px 16px; font-size: 13px; color: #d1d5db; line-height: 1.5">Is your browser on another machine? Choose <b>Pair with a code</b> in Demeteo instead, then enter the code it shows at <span class="mono">[YOUR HUB URL]/pair</span> from any browser.</div>
+    </section>
+
+    <section class="glass" style="flex: 1 1 380px; min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 8px 32px rgba(0,0,0,.4), inset 0 0 0 1px rgba(139,92,246,.3)" aria-labelledby="ask">
+      <div style="display: flex; justify-content: space-between; align-items: center"><h2 class="h2" id="ask" style="color: #c4b5fd">Approve this instance?</h2><span class="sub mono" style="font-size: 11px">expires in 4:12</span></div>
+      <div style="display: flex; gap: 14px; align-items: center">
+        <span class="tile" style="background: rgba(139,92,246,.12); color: #c4b5fd"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"></path></svg></span>
+        <div style="display: flex; flex-direction: column; gap: 4px"><span style="font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 18px">studio-mbp</span><span class="sub mono" style="font-size: 12px">macOS 15.5 · aarch64 · Demeteo 1.2.0</span></div>
+      </div>
+      <div class="nested" style="padding: 12px 14px; display: flex; flex-direction: column; gap: 6px">
+        <span class="sub" style="font-size: 12px">Device key — check it matches what Demeteo shows</span>
+        <span class="mono" style="font-size: 15px; color: #67e8f9; letter-spacing: .5px">SHA256:Qm4x · 7Hc2 · 8kPw</span>
+      </div>
+      <div style="display: flex; flex-direction: column">
+        <span class="sub" style="font-size: 12px; margin-bottom: 6px">It offers the Hub — chosen on the machine, you can only narrow it</span>
+        <label class="scope"><input class="cb" type="checkbox" checked><span class="mono">read</span><span class="sub" style="font-size: 12px">status, runs, costs, gate summaries</span></label>
+        <label class="scope"><input class="cb" type="checkbox" checked><span class="mono">spend</span><span class="sub" style="font-size: 12px">start and cancel runs</span></label>
+      </div>
+      <div style="display: flex; gap: 12px; flex-wrap: wrap"><a class="btn btn-p" href="Main.dc.html">Add to fleet</a><a class="btn btn-s" href="#">Deny</a></div>
+    </section>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ isRun }}" hint-placeholder-val="{{ false }}">
+  <div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+    <section class="glass" style="flex: 1 1 420px; min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 22px" aria-label="Steps">
+      <div class="step"><span class="num">1</span><div style="display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1"><span style="font-weight: 500">On the runner host, as the runner's user</span>
+        <div class="well" style="display: flex; align-items: center"><span class="code" style="flex: 1">demeteo-runner hub pair https://[YOUR HUB URL]</span><a class="btn btn-s btn-sm" href="#" style="margin-right: 6px">Copy</a></div>
+        <span class="sub" style="line-height: 1.5">It prints a code and waits. Nothing to paste back into the host — no token travels over your clipboard.</span></div></div>
+      <div class="step"><span class="num">2</span><div style="display: flex; flex-direction: column; gap: 10px; min-width: 0; flex: 1"><label for="uc" style="font-weight: 500">Enter the code it prints</label>
+        <input class="field" id="uc" value="WDJB-MJHT" autocomplete="off"></div></div>
+      <div class="nested" style="padding: 14px 16px; font-size: 13px; color: #d1d5db; line-height: 1.5">Already driving this runner from a desktop over SSH? Pair it from that desktop's <b>Settings › Machines</b> — Demeteo runs step 1 over SSH and the runner keeps serving the desktop as before.</div>
+    </section>
+
+    <section class="glass" style="flex: 1 1 380px; min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px" aria-labelledby="how">
+      <h2 class="h2" id="how">What changes on the runner</h2>
+      <div style="display: flex; flex-direction: column; gap: 12px; font-size: 13px; line-height: 1.55; color: #d1d5db">
+        <span>It opens one outbound <span class="mono">wss</span> connection to the Hub. It still listens on no port.</span>
+        <span>The Hub becomes one more client of the runner, with its own client id — it sees only runs it started, like any desktop.</span>
+        <span>Its refresh token lives in the runner's credential store, bound to a device key generated on the host.</span>
+        <span>Git credentials are not part of pairing. They still arrive per run from a desktop's keyring, and a run parks as <span class="pill p-am" style="padding: 1px 6px">Needs credentials</span> until one does.</span>
+      </div>
+    </section>
+  </div>
+  </sc-if>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { kind: 'desk' };
+  }
+  renderVals() {
+    const isDesk = this.state.kind === 'desk';
+    return {
+      isDesk,
+      isRun: !isDesk,
+      deskCls: isDesk ? 'on' : '',
+      runCls: isDesk ? '' : 'on',
+      pickDesk: () => this.setState({ kind: 'desk' }),
+      pickRun: () => this.setState({ kind: 'run' }),
+    };
+  }
+}
+</script>
+</body>
+</html>

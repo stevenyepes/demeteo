@@ -16,13 +16,7 @@ use crate::domain::models::{Project, Ticket, TicketState};
 /// which this gives real (rather than faked) implementations of, so nothing
 /// here needs a hand-rolled execution-port double.
 fn fixture(tag: &str) -> AppContext {
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-agent-surface-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-agent-surface-{tag}"));
     build_core_context(
         CoreConfig {
             app_data_dir: dir,

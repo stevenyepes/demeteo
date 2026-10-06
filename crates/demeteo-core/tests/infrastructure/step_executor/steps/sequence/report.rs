@@ -7,13 +7,7 @@ use crate::adapters::artifact_store::fs::FsArtifactStore;
 use crate::domain::sequence::report::{ObservedCommand, ObservedStatus};
 
 fn temp_store() -> FsArtifactStore {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo_impl_report_{}_{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = crate::support::test_dir::scratch("demeteo_impl_report");
     FsArtifactStore::new(dir)
 }
 

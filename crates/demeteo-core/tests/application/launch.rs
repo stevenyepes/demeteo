@@ -475,7 +475,7 @@ impl Drop for Harness {
 /// repository and provider, the workflow, and a PAT under a provider id no
 /// other test uses.
 pub(crate) fn harness(exec: RunnerAt) -> Harness {
-    let dir = std::env::temp_dir().join(format!("demeteo-launch-run-{}", crate::paths::new_id()));
+    let dir = crate::support::test_dir::scratch("demeteo-launch-run");
     let exec = Arc::new(exec);
     let spy = SpyExecutor::new();
     let mut ctx = build_core_context(

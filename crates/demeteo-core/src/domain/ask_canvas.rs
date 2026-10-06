@@ -1,5 +1,5 @@
 //! The structured diagram an Ask turn may carry, alongside its prose
-//! (`docs/ask-canvas/probe/Nodes.html`).
+//! (`docs/ask-canvas/probe/Nodes.html`, in git history).
 //!
 //! Synchronous and total, per the rule on [`crate::domain`].
 //!
@@ -21,9 +21,9 @@ use std::collections::HashMap;
 
 use crate::domain::models::ask::{AskMessage, CanvasPathVerdict};
 
-/// Where a node sits and what it does, fixed vocabulary matching
-/// `docs/ask-canvas/probe/Nodes.html`'s four node tones. Ruby is never a
-/// node role — it is reserved for failure/stopped states elsewhere in the
+/// Where a node sits and what it does, fixed vocabulary matching the four
+/// node tones of `docs/ask-canvas/probe/Nodes.html` (in git history). Ruby
+/// is never a node role — it is reserved for failure/stopped states elsewhere in the
 /// app (see `App.css`'s ruby tokens), so a fifth variant must not be added
 /// without updating that surface first, nor without
 /// [`canvas_block_vocabulary`], which is the only place a model is told
@@ -104,7 +104,7 @@ pub struct CanvasEdge {
 /// declared up front, then nodes naming their cell.
 ///
 /// Stages and lanes are authored groupings, not something the topology
-/// could infer — `docs/ask-canvas/probe/Nodes.html`'s "01 · Orchestrator",
+/// could infer — the mockup's (`Nodes.html`, above) "01 · Orchestrator",
 /// "02 · Policy & fence" stages and "01 · The person", "02 · Demeteo" lanes
 /// exist because a layout algorithm has no swimlane concept, and one lane
 /// cell is deliberately left with no node in it to read "nobody is acting

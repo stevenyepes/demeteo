@@ -1,6 +1,7 @@
 use super::{
     backfill_local_path, declared_remote_paths, hydrate_shadow_feature, mime_for_path,
-    shadow_feature_patch, shadow_feature_status, shadow_mr_state, shadow_step_artifacts_stale,
+    sequence_state_needs_fetch, shadow_feature_patch, shadow_feature_status, shadow_mr_state,
+    shadow_step_artifacts_stale,
 };
 use crate::adapters::notification_noop::NoopNotificationAdapter;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
@@ -260,7 +261,24 @@ fn the_shadow_patch_keeps_a_local_merge() {
 struct SequenceRpcStub {
     feature: serde_json::Value,
     steps: serde_json::Value,
-    sequence_state: Result<serde_json::Value, String>,
+    sequence_state: std::sync::Mutex<Result<serde_json::Value, String>>,
+    /// Every `if_revision` the laptop sent, in call order.
+    if_revisions: std::sync::Mutex<Vec<Option<String>>>,
+}
+
+impl SequenceRpcStub {
+    fn new(
+        feature: serde_json::Value,
+        steps: serde_json::Value,
+        sequence_state: Result<serde_json::Value, String>,
+    ) -> Self {
+        Self {
+            feature,
+            steps,
+            sequence_state: std::sync::Mutex::new(sequence_state),
+            if_revisions: std::sync::Mutex::new(Vec::new()),
+        }
+    }
 }
 
 #[async_trait]
@@ -315,12 +333,20 @@ impl ExecutionPort for SequenceRpcStub {
         &self,
         _machine_id: &str,
         method: &str,
-        _params: serde_json::Value,
+        params: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         match method {
             "get_feature" => Ok(self.feature.clone()),
             "list_steps" => Ok(self.steps.clone()),
-            "get_sequence_state" => self.sequence_state.clone(),
+            "get_sequence_state" => {
+                self.if_revisions.lock().unwrap().push(
+                    params
+                        .get("if_revision")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                );
+                self.sequence_state.lock().unwrap().clone()
+            }
             other => Err(format!("unexpected runner RPC {other}")),
         }
     }
@@ -393,19 +419,17 @@ fn sequence_test_step() -> StepExecution {
 
 /// Builds an `AppContext` backed by a real (tempdir) `SqliteAdapter), with
 /// `ctx.exec` swapped for `SequenceRpcStub`, and seeds the one project the
-/// hydrate call needs. Returns the tempdir too so the caller can clean it up.
+/// hydrate call needs. Returns the tempdir guard too, which removes it on drop.
 fn make_sequence_test_ctx(
     label: &str,
     sequence_state: Result<serde_json::Value, String>,
-) -> (AppContext, std::path::PathBuf) {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "demeteo_test_hydrate_sequence_state_{label}_{}",
-        crate::paths::now_ms()
+) -> (AppContext, crate::support::test_dir::TestDir) {
+    let temp_dir = crate::support::test_dir::TestDir::new(&format!(
+        "demeteo_test_hydrate_sequence_state_{label}"
     ));
-    std::fs::create_dir_all(&temp_dir).unwrap();
     let mut ctx = build_core_context(
         CoreConfig {
-            app_data_dir: temp_dir.clone(),
+            app_data_dir: temp_dir.path().to_path_buf(),
             execution_mode: ExecutionMode::LocalOnly,
         },
         Arc::new(NoopNotificationAdapter),
@@ -424,11 +448,11 @@ fn make_sequence_test_ctx(
             created_at: 0,
         })
         .unwrap();
-    ctx.exec = Arc::new(SequenceRpcStub {
-        feature: serde_json::to_value(sequence_test_feature()).unwrap(),
-        steps: serde_json::to_value(vec![sequence_test_step()]).unwrap(),
+    ctx.exec = Arc::new(SequenceRpcStub::new(
+        serde_json::to_value(sequence_test_feature()).unwrap(),
+        serde_json::to_value(vec![sequence_test_step()]).unwrap(),
         sequence_state,
-    });
+    ));
     (ctx, temp_dir)
 }
 
@@ -468,7 +492,7 @@ async fn hydrate_shadow_feature_mirrors_sequence_state_for_a_sequence_step() {
         },
         subtask_runs: vec![subtask_row],
     };
-    let (ctx, temp_dir) = make_sequence_test_ctx(
+    let (ctx, _temp_dir) = make_sequence_test_ctx(
         "mirrors",
         Ok(serde_json::to_value(&sequence_state).unwrap()),
     );
@@ -501,8 +525,6 @@ async fn hydrate_shadow_feature_mirrors_sequence_state_for_a_sequence_step() {
     assert_eq!(runs[0].subtask_id, "t1");
     assert_eq!(runs[0].status, "completed");
     assert_eq!(runs[0].cost_usd, 0.42);
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 /// Version skew: an older deployed runner has no `get_sequence_state` handler
@@ -517,7 +539,7 @@ async fn hydrate_shadow_feature_leaves_sequence_tables_untouched_without_get_seq
     let step_execution_id = StepExecutionId::from("se-1".to_string());
     let node_id = "s-implement";
 
-    let (ctx, temp_dir) = make_sequence_test_ctx(
+    let (ctx, _temp_dir) = make_sequence_test_ctx(
         "method_not_found",
         Err("unknown method: get_sequence_state".to_string()),
     );
@@ -551,8 +573,198 @@ async fn hydrate_shadow_feature_leaves_sequence_tables_untouched_without_get_seq
         ctx.features.step_get(&step_execution_id).unwrap().is_some(),
         "the step shadow itself must still hydrate normally"
     );
+}
 
-    let _ = std::fs::remove_dir_all(temp_dir);
+fn subtask_row(id: &str, subtask_id: &str, status: &str, started_at: i64) -> SubtaskRunMirrorRow {
+    SubtaskRunMirrorRow {
+        id: id.to_string(),
+        subtask_id: subtask_id.to_string(),
+        agent_id: Some("claude-code".to_string()),
+        worktree_path: "/work/f-1".to_string(),
+        branch: "feature/f-1".to_string(),
+        status: status.to_string(),
+        cost_usd: 0.1,
+        tokens: 100,
+        error_message: None,
+        started_at,
+        ended_at: (status != "running").then_some(started_at + 10),
+        plan_epoch: Some("e-1".to_string()),
+        plan_cycle: Some(2),
+    }
+}
+
+fn two_ticket_state(rows: Vec<SubtaskRunMirrorRow>) -> SequenceStateMirror {
+    SequenceStateMirror {
+        plan_json: Some(
+            r#"{"tasks":[{"id":"t1","title":"one"},{"id":"t2","title":"two"}]}"#.to_string(),
+        ),
+        checkpoint: SequenceCheckpoint {
+            landed_task_ids: rows
+                .iter()
+                .filter(|r| r.status == "completed")
+                .map(|r| r.subtask_id.clone())
+                .collect(),
+            anchor_sha: Some("abc123".to_string()),
+            produced: None,
+        },
+        subtask_runs: rows,
+    }
+}
+
+/// The stale-list reproduction: the runner advances through tickets while
+/// the step row's status and counters stay exactly as they were (it rolls
+/// them up only when the attempt ends), so nothing at step level says the
+/// task list moved. The second poll must still pick up the new rows.
+#[tokio::test]
+async fn a_running_sequence_mirrors_tickets_that_advance_under_unchanged_step_counters() {
+    let step_execution_id = StepExecutionId::from("se-1".to_string());
+    let interrupted = two_ticket_state(vec![subtask_row("sr-a", "t1", "interrupted", 1_000)]);
+    let (ctx, _temp_dir) =
+        make_sequence_test_ctx("advance", Ok(serde_json::to_value(&interrupted).unwrap()));
+    let stub = Arc::new(SequenceRpcStub::new(
+        serde_json::to_value(sequence_test_feature()).unwrap(),
+        serde_json::to_value(vec![sequence_test_step()]).unwrap(),
+        Ok(serde_json::to_value(&interrupted).unwrap()),
+    ));
+    let mut ctx = ctx;
+    ctx.exec = stub.clone();
+
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "running")
+        .await
+        .unwrap();
+
+    let advanced = two_ticket_state(vec![
+        subtask_row("sr-a", "t1", "interrupted", 1_000),
+        subtask_row("sr-b", "t1", "completed", 2_000),
+        subtask_row("sr-c", "t2", "running", 3_000),
+    ]);
+    *stub.sequence_state.lock().unwrap() = Ok(serde_json::to_value(&advanced).unwrap());
+
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "running")
+        .await
+        .unwrap();
+
+    let statuses: Vec<(String, String)> = ctx
+        .features
+        .subtask_runs_mirror_for_step(&step_execution_id)
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.subtask_id, r.status))
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![
+            ("t1".to_string(), "interrupted".to_string()),
+            ("t1".to_string(), "completed".to_string()),
+            ("t2".to_string(), "running".to_string()),
+        ]
+    );
+}
+
+/// The bandwidth half: what the laptop reads back out of its own mirror
+/// must hash to exactly what the runner sent, or `if_revision` never
+/// matches and every poll resends the whole plan. Rows sharing a
+/// `started_at` are included because their order is the easy thing to
+/// lose on a round trip.
+#[tokio::test]
+async fn a_mirrored_sequence_state_round_trips_to_the_runners_revision() {
+    let state = two_ticket_state(vec![
+        subtask_row("sr-b", "t2", "completed", 1_000),
+        subtask_row("sr-a", "t1", "completed", 1_000),
+    ]);
+    let (mut ctx, _temp_dir) =
+        make_sequence_test_ctx("round_trip", Ok(serde_json::to_value(&state).unwrap()));
+    let stub = Arc::new(SequenceRpcStub::new(
+        serde_json::to_value(sequence_test_feature()).unwrap(),
+        serde_json::to_value(vec![sequence_test_step()]).unwrap(),
+        Ok(serde_json::to_value(&state).unwrap()),
+    ));
+    ctx.exec = stub.clone();
+    let feature_id = FeatureId::from("f-1".to_string());
+
+    // The runner answers from its own table, which orders ties the same way.
+    let runner_side = {
+        let mut sorted = state.clone();
+        sorted
+            .subtask_runs
+            .sort_by(|a, b| (a.started_at, &a.id).cmp(&(b.started_at, &b.id)));
+        sorted
+    };
+
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "running")
+        .await
+        .unwrap();
+    let local = super::super::read_sequence_state_mirror(
+        &*ctx.features,
+        &*ctx.sequence_resume,
+        &feature_id,
+        "s-implement",
+    )
+    .unwrap();
+    assert_eq!(local.revision(), runner_side.revision());
+
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "running")
+        .await
+        .unwrap();
+    assert_eq!(
+        stub.if_revisions.lock().unwrap().last().cloned().flatten(),
+        Some(runner_side.revision()),
+        "the second poll must offer the mirrored revision so the runner can skip the payload"
+    );
+}
+
+#[tokio::test]
+async fn an_unchanged_reply_leaves_the_mirror_as_it_was() {
+    let step_execution_id = StepExecutionId::from("se-1".to_string());
+    let state = two_ticket_state(vec![subtask_row("sr-a", "t1", "running", 1_000)]);
+    let (mut ctx, _temp_dir) =
+        make_sequence_test_ctx("unchanged", Ok(serde_json::to_value(&state).unwrap()));
+    let stub = Arc::new(SequenceRpcStub::new(
+        serde_json::to_value(sequence_test_feature()).unwrap(),
+        serde_json::to_value(vec![sequence_test_step()]).unwrap(),
+        Ok(serde_json::to_value(&state).unwrap()),
+    ));
+    ctx.exec = stub.clone();
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "running")
+        .await
+        .unwrap();
+
+    *stub.sequence_state.lock().unwrap() = Ok(serde_json::json!({ "unchanged": true }));
+    hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "running")
+        .await
+        .unwrap();
+
+    let runs = ctx
+        .features
+        .subtask_runs_for_step(&step_execution_id)
+        .unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, "running");
+}
+
+#[test]
+fn only_a_running_sequence_is_asked_on_every_poll() {
+    assert!(sequence_state_needs_fetch(false, false, "running"));
+    for settled in [
+        "completed",
+        "failed",
+        "interrupted",
+        "pending",
+        "awaiting_gate",
+    ] {
+        assert!(
+            !sequence_state_needs_fetch(false, false, settled),
+            "{settled}"
+        );
+        assert!(
+            sequence_state_needs_fetch(false, true, settled),
+            "{settled}"
+        );
+        assert!(
+            sequence_state_needs_fetch(true, false, settled),
+            "{settled}"
+        );
+    }
 }
 
 // ── Run-level blocks on the shadow's status ──────────────────────────────────
@@ -597,15 +809,15 @@ fn an_unblocked_run_mirrors_the_runner_feature_verbatim() {
 #[tokio::test]
 async fn hydrate_shows_a_credential_park_until_the_run_moves_on() {
     let feature_id = FeatureId::from("f-1".to_string());
-    let (mut ctx, temp_dir) =
+    let (mut ctx, _temp_dir) =
         make_sequence_test_ctx("credential_park", Ok(serde_json::Value::Null));
     let mut finished = sequence_test_feature();
     finished.status = "completed".to_string();
-    ctx.exec = Arc::new(SequenceRpcStub {
-        feature: serde_json::to_value(finished).unwrap(),
-        steps: serde_json::json!([]),
-        sequence_state: Ok(serde_json::Value::Null),
-    });
+    ctx.exec = Arc::new(SequenceRpcStub::new(
+        serde_json::to_value(finished).unwrap(),
+        serde_json::json!([]),
+        Ok(serde_json::Value::Null),
+    ));
 
     hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "needs-credentials")
         .await
@@ -624,22 +836,21 @@ async fn hydrate_shows_a_credential_park_until_the_run_moves_on() {
         "completed",
         "once credentials land, the update branch must follow the runner again"
     );
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 #[tokio::test]
 async fn a_pre_clone_credential_park_marks_the_desktop_row_it_cannot_hydrate() {
     let feature_id = FeatureId::from("f-1".to_string());
-    let (mut ctx, temp_dir) = make_sequence_test_ctx("pre_clone_park", Ok(serde_json::Value::Null));
+    let (mut ctx, _temp_dir) =
+        make_sequence_test_ctx("pre_clone_park", Ok(serde_json::Value::Null));
     let mut submitted = sequence_test_feature();
     submitted.status = "pending".to_string();
     ctx.features.add(submitted).unwrap();
-    ctx.exec = Arc::new(SequenceRpcStub {
-        feature: serde_json::Value::Null,
-        steps: serde_json::json!([]),
-        sequence_state: Ok(serde_json::Value::Null),
-    });
+    ctx.exec = Arc::new(SequenceRpcStub::new(
+        serde_json::Value::Null,
+        serde_json::json!([]),
+        Ok(serde_json::Value::Null),
+    ));
 
     hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "needs-credentials")
         .await
@@ -648,14 +859,12 @@ async fn a_pre_clone_credential_park_marks_the_desktop_row_it_cannot_hydrate() {
         ctx.features.get(&feature_id).unwrap().unwrap().status,
         "needs-credentials"
     );
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 #[tokio::test]
 async fn hydrate_keeps_a_shadow_the_desktop_saw_merge() {
     let feature_id = FeatureId::from("f-1".to_string());
-    let (mut ctx, temp_dir) = make_sequence_test_ctx("local_merge", Ok(serde_json::Value::Null));
+    let (mut ctx, _temp_dir) = make_sequence_test_ctx("local_merge", Ok(serde_json::Value::Null));
     let mut landed = sequence_test_feature();
     landed.status = "completed".to_string();
     landed.mr_state = Some("merged".to_string());
@@ -663,11 +872,11 @@ async fn hydrate_keeps_a_shadow_the_desktop_saw_merge() {
     let mut lagging = sequence_test_feature();
     lagging.status = "completed".to_string();
     lagging.mr_state = Some("open".to_string());
-    ctx.exec = Arc::new(SequenceRpcStub {
-        feature: serde_json::to_value(lagging).unwrap(),
-        steps: serde_json::json!([]),
-        sequence_state: Ok(serde_json::Value::Null),
-    });
+    ctx.exec = Arc::new(SequenceRpcStub::new(
+        serde_json::to_value(lagging).unwrap(),
+        serde_json::json!([]),
+        Ok(serde_json::Value::Null),
+    ));
 
     hydrate_shadow_feature(&ctx, "m-1", "r-1", "p-1", "f-1", "awaiting_mr")
         .await
@@ -677,6 +886,4 @@ async fn hydrate_keeps_a_shadow_the_desktop_saw_merge() {
         Some("merged".to_string()),
         "a runner that has not seen the merge must not put a landed ticket back in flight"
     );
-
-    let _ = std::fs::remove_dir_all(temp_dir);
 }

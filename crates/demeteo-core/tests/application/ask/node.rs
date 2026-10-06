@@ -22,13 +22,7 @@ use crate::ports::execution::{ExecutionPort, InteractiveHandle, SftpEntry};
 /// it; a remote-machine test never touches it, since the remote path is
 /// resolved entirely through a fake [`ExecutionPort`]).
 async fn fixture(tag: &str) -> (AppContext, ProjectId, std::path::PathBuf) {
-    let base = std::env::temp_dir().join(format!(
-        "demeteo-ask-node-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let base = crate::support::test_dir::scratch(&format!("demeteo-ask-node-{tag}"));
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: base,

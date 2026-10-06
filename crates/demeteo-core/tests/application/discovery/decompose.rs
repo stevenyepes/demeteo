@@ -292,6 +292,7 @@ fn a_proposal_survives_being_written_down_and_read_back() {
         refused: vec!["a cycle, answered".to_string()],
         refusal: None,
         violations: Vec::new(),
+        stopped: None,
         cost_usd: 0.5,
         tokens: 1234,
     };
@@ -317,13 +318,7 @@ fn applying(tag: &str) -> (AppContext, DiscoveryId) {
     use crate::domain::ids::ProjectId;
     use crate::domain::models::Project;
 
-    let dir = std::env::temp_dir().join(format!(
-        "demeteo-decompose-apply-{tag}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("the clock is after the epoch")
-            .as_nanos()
-    ));
+    let dir = crate::support::test_dir::scratch(&format!("demeteo-decompose-apply-{tag}"));
     let ctx = build_core_context(
         CoreConfig {
             app_data_dir: dir,
@@ -407,4 +402,49 @@ async fn applying_a_plan_writes_no_machine_and_keeps_a_chosen_one() {
         .expect("the addition is written");
     assert_eq!(new.title, "ticket 9");
     assert_eq!(new.machine_id, None);
+}
+
+/// A pass killed mid-turn has no answer to show, but it is kept: the asks
+/// before it were billed, and the surface that pressed Decompose may be gone.
+#[test]
+fn a_stopped_pass_is_proposed_with_its_reason_and_what_it_spent() {
+    let rows = vec![row("keep", 1)];
+    let asked = Asked {
+        refused: vec!["a cycle".to_string()],
+        cost_usd: 0.75,
+        tokens: 900,
+        ..Asked::default()
+    }
+    .stop("Agent blocked: no output for 600s".to_string());
+
+    let stopped = proposal_for(
+        &DiscoveryId::from("d-1".to_string()),
+        &rows,
+        &choices(),
+        Vec::new(),
+        asked,
+    );
+
+    assert_eq!(
+        stopped.stopped.as_deref(),
+        Some("Agent blocked: no output for 600s")
+    );
+    assert_eq!(stopped.cost_usd, 0.75);
+    assert_eq!(stopped.tokens, 900);
+    assert_eq!(stopped.refused, vec!["a cycle".to_string()]);
+    assert!(stopped.tickets.is_empty() && stopped.changes.is_empty());
+    assert!(stopped.refusal.is_none());
+}
+
+/// Stored payloads outlive the build that wrote them (V50). One written before
+/// a pass could stop must still read as the pass it was.
+#[test]
+fn a_proposal_stored_before_passes_could_stop_still_reads_back() {
+    let legacy = r#"{"discovery_id":"d-1","first_pass":true,"tickets":[],"changes":[],
+        "locked":[],"refused":[],"refusal":null,"violations":[],"cost_usd":0.2,"tokens":10}"#;
+
+    let read = decode(legacy).expect("a legacy proposal reads back");
+
+    assert_eq!(read.discovery_id, "d-1");
+    assert!(read.stopped.is_none());
 }
