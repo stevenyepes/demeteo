@@ -87,6 +87,10 @@ export function useFeatureMr(input: {
     setPublishing(true);
     try {
       const result = await publishMr({ projectId, featureId, draft: false });
+      if (result?.url) {
+        setMrUrl(result.url);
+        setMrState(result.state as MrState);
+      }
       const url = result?.url ?? '(unknown)';
       const state = result?.state ?? 'open';
       await messageDialog(
