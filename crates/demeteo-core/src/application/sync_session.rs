@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::adapters::step_executor::sync_worktree::discard_sync_worktree;
 use crate::application::sync_turns::SyncTurns;
+use crate::domain::git_push::{classify_push_failure, PushFailure};
 use crate::domain::harness_failure::{classify_exec_failure, HarnessExecFailure};
 use crate::domain::ids::FeatureId;
 use crate::domain::sync_session::{
@@ -222,6 +223,10 @@ pub async fn publish(
         return Ok(None);
     };
     let (session, feature_status, liveness) = (read.session, read.feature_status, read.liveness);
+    let worktree_present = read
+        .reading
+        .as_ref()
+        .is_some_and(|r| r.probe.worktree_exists);
     if session.pushed_at.is_some() {
         return Ok(Some(view(session, &feature_status, liveness)));
     }
@@ -236,21 +241,28 @@ pub async fn publish(
             "This sync recorded no resolution commit, so there is nothing to publish.".to_string(),
         );
     };
-    // From the clone rather than the sync worktree. Linked worktrees share the
-    // refs and the remotes, so both push the same branch — but the worktree is
-    // the throwaway, and it is gone the moment this succeeds.
+    // A pre-push hook runs in the tree it is pushed from, and the hook that
+    // matters is the one the resolution was made under, so the push is made from
+    // the sync worktree while it is still there. The clone is the fallback for a
+    // session with no worktree of its own, or whose worktree is gone. Linked
+    // worktrees share refs and remotes, so `push_landed` can ask the clone. The
+    // worktree is discarded only after both the push and `push_landed` succeed.
+    let push_dir = match session.worktree_path.as_deref() {
+        Some(worktree) if worktree != session.repo_dir && worktree_present => worktree.to_string(),
+        _ => session.repo_dir.clone(),
+    };
     let credential = crate::adapters::git_push::credential_for_repo(
         &**exec,
         &**app_settings,
         &session.machine_id,
-        &session.repo_dir,
+        &push_dir,
     )
     .await;
     if let Err(e) = exec
         .run_program(
             &session.machine_id,
             crate::adapters::git_push::push_request(
-                &session.repo_dir,
+                &push_dir,
                 &session.feature_branch,
                 false,
                 credential.as_ref(),
@@ -259,19 +271,25 @@ pub async fn publish(
         .await
     {
         return Err(match classify_exec_failure(&e) {
-            // A push git could not authenticate never reached origin, so "the
-            // branch moved, fetch and sync again" is advice that cannot work —
-            // and for a while it was the only thing the user was told.
-            HarnessExecFailure::NonZeroExit
-                if crate::domain::git_push::is_credential_failure(&e) =>
-            {
-                crate::adapters::git_push::push_failure(&e, credential.as_ref())
-            }
-            HarnessExecFailure::NonZeroExit => format!(
-                "origin refused the push. The branch may have moved since the resolution was \
-                 made — fetch and sync again before publishing.\n\n{}",
-                e
-            ),
+            HarnessExecFailure::NonZeroExit => match classify_push_failure(&e) {
+                // A push that never authenticated, or that a local hook
+                // stopped, never reached origin — "the branch moved, fetch and
+                // sync again" is advice that cannot work for either, and for a
+                // while it was the only thing the user was told.
+                PushFailure::Credential | PushFailure::HookFailed => {
+                    crate::adapters::git_push::push_failure(&e, credential.as_ref())
+                }
+                PushFailure::Rejected => format!(
+                    "origin refused the push. The branch may have moved since the resolution \
+                     was made — fetch and sync again before publishing.\n\n{}",
+                    e
+                ),
+                PushFailure::Other => format!(
+                    "The push to origin/{} failed, so the resolution is still unpublished.\n\n{}",
+                    session.feature_branch,
+                    crate::adapters::git_push::push_failure(&e, credential.as_ref())
+                ),
+            },
             HarnessExecFailure::Transport | HarnessExecFailure::Timeout => format!(
                 "The push to origin/{} never reached a verdict, so the resolution is still \
                  unpublished: {}",

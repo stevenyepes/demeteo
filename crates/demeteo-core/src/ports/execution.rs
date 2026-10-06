@@ -565,3 +565,10 @@ mod command_node;
 #[cfg(test)]
 #[path = "../../tests/conformance/resume_fingerprint.rs"]
 mod resume_fingerprint;
+
+/// Sync-publish hook gate: a resolution is pushed from the sync worktree, so
+/// the repository's pre-push hook that runs is the worktree's, not the
+/// clone's. Real git and a local bare origin. Included the same `#[path]` way.
+#[cfg(test)]
+#[path = "../../tests/conformance/sync_publish_hook.rs"]
+mod sync_publish_hook;

@@ -335,22 +335,33 @@ pub(crate) fn redacted(message: &str, pat: &str) -> String {
 /// A failed push, said in the words of whichever half of it went wrong, with
 /// any token the message carried removed.
 ///
-/// The two readings are not interchangeable advice: a remote that refused a
+/// The three readings are not interchangeable advice: a remote that refused a
 /// push heard it, and fetching usually fixes what it objected to; a push that
 /// never got past the credential exchange will fail again identically after any
-/// number of fetches. Telling the user the second was the first is what sent
-/// them round that loop.
+/// number of fetches; and one a local `pre-push` hook stopped never left the
+/// machine, so only the hook's own output says what to fix. Telling the user
+/// the second was the first is what sent them round that loop.
+///
+/// The hook's output is the repository's own and unbounded, so it is cut down
+/// by [`hook_tail`](crate::domain::git_push::hook_tail) — after redaction, so a
+/// token the cut would have split cannot survive it.
 pub(crate) fn push_failure(error: &str, credential: Option<&GitCredential>) -> String {
+    use crate::domain::git_push::{classify_push_failure, hook_tail, PushFailure};
+
     let clean = redacted(error, credential.map(|c| c.pat.as_str()).unwrap_or(""));
-    if crate::domain::git_push::is_credential_failure(&clean) {
-        return format!(
+    match classify_push_failure(&clean) {
+        PushFailure::Credential => format!(
             "Git could not authenticate to origin, so nothing was pushed. \
              Connect the provider or refresh its token in Preferences → Providers, \
              then try again.\n\n{}",
             clean
-        );
+        ),
+        PushFailure::HookFailed => format!(
+            "The repository's pre-push hook failed, so nothing reached origin.\n\n{}",
+            hook_tail(&clean)
+        ),
+        PushFailure::Rejected | PushFailure::Other => clean,
     }
-    clean
 }
 
 fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> ProgramRequest {

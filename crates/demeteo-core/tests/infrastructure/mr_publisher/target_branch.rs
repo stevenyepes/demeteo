@@ -21,11 +21,11 @@ use crate::ports::db::{AppSettingsRepository, FeatureRepository, ProjectReposito
 use crate::ports::execution::ProgramRequest;
 use crate::ports::mr_publisher::MrPublisher;
 
-const PROJECT: &str = "p-1";
-const REPO_PATH: &str = "acme/widget";
-const FEATURE: &str = "f-1";
-const PAT: &str = "not-a-real-token";
-const SOURCE_BRANCH: &str = "demeteo/features/f-1";
+pub(super) const PROJECT: &str = "p-1";
+pub(super) const REPO_PATH: &str = "acme/widget";
+pub(super) const FEATURE: &str = "f-1";
+pub(super) const PAT: &str = "not-a-real-token";
+pub(super) const SOURCE_BRANCH: &str = "demeteo/features/f-1";
 
 const GITHUB_URL: &str = "https://api.github.com/repos/acme/widget/pulls";
 const GITLAB_URL: &str = "https://gitlab.com/api/v4/projects/acme%2Fwidget/merge_requests";
@@ -33,7 +33,7 @@ const GITLAB_URL: &str = "https://gitlab.com/api/v4/projects/acme%2Fwidget/merge
 /// The project has no settings row, so the publisher falls back to
 /// `fetch_default_settings` — whose `default_branch` is `main` and whose
 /// `branch_prefix` yields [`SOURCE_BRANCH`].
-fn seeded(kind: &str, host: &str) -> Arc<SqliteAdapter> {
+pub(super) fn seeded(kind: &str, host: &str) -> Arc<SqliteAdapter> {
     let adapter = Arc::new(SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap());
     let pid = ProjectId::from(PROJECT.to_string());
 
@@ -75,7 +75,7 @@ fn seeded(kind: &str, host: &str) -> Arc<SqliteAdapter> {
     adapter
 }
 
-fn add_feature(adapter: &SqliteAdapter, origin: FeatureOrigin, diff_base: Option<&str>) {
+pub(super) fn add_feature(adapter: &SqliteAdapter, origin: FeatureOrigin, diff_base: Option<&str>) {
     let mut feature: Feature = serde_json::from_value(serde_json::json!({
         "id": FEATURE,
         "project_id": PROJECT,
@@ -104,6 +104,15 @@ fn rendered(request: &ProgramRequest) -> String {
 /// else, so a publisher that pushed something other than the run's branch
 /// fails here rather than reaching the assertion with a default.
 fn push_exec(remote_user: &str, host: &str) -> Arc<ScriptedExec> {
+    push_exec_answering(remote_user, host, Ok(""))
+}
+
+/// [`push_exec`] with the push itself answering `push_answer`.
+pub(super) fn push_exec_answering(
+    remote_user: &str,
+    host: &str,
+    push_answer: Result<&str, &str>,
+) -> Arc<ScriptedExec> {
     let dir = crate::paths::repo_target_dir_local(std::path::Path::new("/tmp"), PROJECT, REPO_PATH)
         .to_string_lossy()
         .to_string();
@@ -121,7 +130,7 @@ fn push_exec(remote_user: &str, host: &str) -> Arc<ScriptedExec> {
     let push = rendered(&push_request(&dir, SOURCE_BRANCH, true, Some(&credential)));
     Arc::new(
         ScriptedExec::new(&[])
-            .with_programs(&[(set_url.as_str(), Ok("")), (push.as_str(), Ok(""))]),
+            .with_programs(&[(set_url.as_str(), Ok("")), (push.as_str(), push_answer)]),
     )
 }
 
@@ -144,7 +153,7 @@ async fn publish(
         .expect("the provider answered a created request");
 }
 
-fn options(target_branch: Option<&str>) -> PublishOptions {
+pub(super) fn options(target_branch: Option<&str>) -> PublishOptions {
     PublishOptions {
         draft: false,
         title: None,
@@ -153,7 +162,7 @@ fn options(target_branch: Option<&str>) -> PublishOptions {
     }
 }
 
-fn github_http() -> Arc<FakeHttpClient> {
+pub(super) fn github_http() -> Arc<FakeHttpClient> {
     Arc::new(FakeHttpClient::new().reply(
         GITHUB_URL,
         201,
