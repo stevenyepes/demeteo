@@ -176,7 +176,11 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   const mr = useFeatureMr({
     featureId,
     projectId,
-    status: run.status,
+    // The row's status, not the step-derived one: publishing moves the row
+    // from `awaiting_mr` to `completed` while every step was already
+    // completed, so the derived status never changes and the MR is never
+    // re-read.
+    status: run.featureStatus,
     reload: run.reload,
     navigate,
   });

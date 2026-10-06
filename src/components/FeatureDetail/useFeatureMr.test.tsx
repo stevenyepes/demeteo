@@ -43,3 +43,30 @@ describe('useFeatureMr cleanup', () => {
     expect(navigate).toHaveBeenCalledWith({ kind: 'home' });
   });
 });
+
+describe('useFeatureMr publish', () => {
+  it('shows the link as soon as the publish returns, without a status change', async () => {
+    backend({
+      feature_get: () => ({ id: 'f-1', mr_url: null, mr_state: 'none' }),
+      publish_mr: () => ({
+        url: 'https://github.com/o/r/pull/7',
+        state: 'open',
+        number: 7,
+        provider_kind: 'github',
+        provider_host: 'github.com',
+      }),
+    });
+    const { result } = renderHook(
+      () => useFeatureMr({ featureId: 'f-1', projectId: 'proj-1', status: 'completed', reload: vi.fn(), navigate: vi.fn() }),
+      { wrapper: ProjectProvider },
+    );
+    await waitFor(() => expect(result.current.mrState).toBe('none'));
+
+    await act(async () => {
+      await result.current.handlePublishClick();
+    });
+
+    expect(result.current.mrUrl).toBe('https://github.com/o/r/pull/7');
+    expect(result.current.mrState).toBe('open');
+  });
+});
