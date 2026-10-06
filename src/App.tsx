@@ -33,6 +33,7 @@ import CommandPalette from "./components/CommandPalette";
 import DocsPanel from "./components/DocsPanel";
 import type { Feature, Project, Provider } from "./types";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useFollowFeatureProject } from "./hooks/useFollowFeatureProject";
 import { useLaunchRun } from "./hooks/useLaunchRun";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { MouseNavigationBridge } from "./hooks/useMouseNavigation";
@@ -113,6 +114,8 @@ function AppInner() {
   // cycling list with the new feature so the user can immediately step
   // through it with Cmd+G; the `feature_status_changed` listener is
   // idempotent so the entry is patched in place, not duplicated.
+  useFollowFeatureProject();
+
   const launchRun = useLaunchRun({
     projectId: currentProjectId,
     onLaunched: (feature) =>
