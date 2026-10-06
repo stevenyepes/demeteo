@@ -18,6 +18,11 @@ import { resizeObserverStubs } from '../../test/setup';
 import { DiscoveryWorkspaceRow } from './DiscoveryWorkspaceRow';
 import type { DiscoveryStreamStore } from './useDiscoveryStream';
 
+vi.mock('../../context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../context')>()),
+  useNavigation: () => ({ navigate: vi.fn() }),
+}));
+
 vi.mocked(invoke).mockImplementation(((cmd: string) => {
   switch (cmd) {
     case 'list_agents':
@@ -69,6 +74,7 @@ function ticket(seq: number): TicketView {
       agent_kind: null,
       model: null,
       effort: null,
+      machine_id: null,
       attachments: [],
       state: 'unstarted',
       drop_reason: null,
@@ -79,6 +85,7 @@ function ticket(seq: number): TicketView {
       updated_at: 0,
     },
     standing: { id: `t-${seq}`, lane: 'ready', startable: true, blockers: [] },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 }
@@ -114,7 +121,9 @@ function Harness({ pending = false }: { pending?: boolean } = {}) {
       workflows={[]}
       workflowName={null}
       busy={false}
-      machineId={DISCOVERY.machine_id}
+      machines={[]}
+      discoveryDefault={{ kind: 'local' }}
+      localHost="local"
       onEditorClose={() => setEditingId(null)}
       onInspectorClose={() => setSelectedId(null)}
       onEditorSaved={() => {}}

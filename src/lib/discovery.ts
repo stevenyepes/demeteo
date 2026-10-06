@@ -9,7 +9,7 @@ import type {
   DiscoveryMessage,
   DiscoverySummary,
   EffortLevel,
-  Feature,
+  LaunchedRun,
   Ticket,
   TicketEdit,
 } from "../types";
@@ -25,10 +25,12 @@ import type { MrInfo } from "./featureDetail";
  * Typed IPC wrappers for Discovery and its Tickets — the commands in
  * `src-tauri/src/commands/discovery.rs` and `src-tauri/src/commands/tickets.rs`.
  *
- * **Rejections are plain strings.** Every command here returns
- * `Result<T, String>`, not the `AppError` envelope `commands/features.rs`
- * uses, so `asAppError` matches none of them and a caller wanting to show one
- * goes through `formatError`.
+ * **Rejections are plain strings**, except from `ticket_start` and
+ * `ticket_force_start`. Every other command here returns `Result<T, String>`,
+ * so `asAppError` matches none of them and a caller wanting to show one goes
+ * through `formatError`. The two starts go through `launch_run` and reject
+ * with its `AppError`, so a detached refusal keeps `runner_incompatible` for
+ * `isRunnerIncompatibleError`.
  */
 
 /**
@@ -288,16 +290,25 @@ export async function getTicketBriefing(ticketId: string): Promise<string> {
   return invoke<string>("ticket_briefing", { ticketId });
 }
 
-/** Mirrors `ticket_start`. */
-export async function startTicket(ticketId: string): Promise<Feature> {
-  return invoke<Feature>("ticket_start", { ticketId });
+/** Mirrors `ticket_start`. `machineId` places this one launch and is never
+ *  saved onto the ticket; omitted, the ticket's own placement applies. */
+export async function startTicket(ticketId: string, machineId?: string): Promise<LaunchedRun> {
+  return invoke<LaunchedRun>("ticket_start", { ticketId, machineId: machineId ?? null });
 }
 
 /** Mirrors `ticket_force_start`. The reason is not decoration: it reaches the
  *  agent in its own prerequisite briefing, which is what stops a bypass from
- *  becoming an unexplained one. */
-export async function forceStartTicket(ticketId: string, reason: string): Promise<Feature> {
-  return invoke<Feature>("ticket_force_start", { ticketId, reason });
+ *  becoming an unexplained one. `machineId` is as for {@link startTicket}. */
+export async function forceStartTicket(
+  ticketId: string,
+  reason: string,
+  machineId?: string,
+): Promise<LaunchedRun> {
+  return invoke<LaunchedRun>("ticket_force_start", {
+    ticketId,
+    reason,
+    machineId: machineId ?? null,
+  });
 }
 
 /** Mirrors `ticket_drop`. */

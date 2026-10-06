@@ -34,27 +34,30 @@ function Providers({ children }: { children: React.ReactNode }) {
 
 const params: LaunchRunParams = { workflowId: 'wf-1', title: 'Ship it', description: '' };
 
-const transports: { transport: string; launch: Partial<LaunchRunParams>; answers: Record<string, () => unknown> }[] = [
-  {
-    transport: 'local',
-    launch: { machineId: undefined },
-    answers: {
-      start_feature: () => ({ id: 'f-1', project_id: 'proj-1', title: 'Ship it', status: 'bootstrapping' }),
-    },
-  },
-  {
-    transport: 'detached',
-    launch: { machineId: 'm-1' },
-    answers: {
-      remote_submit_run: () => ({ run_id: 'r-1', machine_id: 'm-1', status: 'pending', feature_id: 'f-1' }),
-    },
-  },
+const launched = { id: 'f-1', project_id: 'proj-1', title: 'Ship it', status: 'bootstrapping' };
+
+const transports: { transport: string; launch: Partial<LaunchRunParams> }[] = [
+  { transport: 'local', launch: { machineId: undefined } },
+  { transport: 'detached', launch: { machineId: 'm-1' } },
 ];
 
+/** What reached Rust: round-tripped through JSON, so an unstated optional key
+ *  must be absent, not `null`. */
+function launchPayloads(): unknown[] {
+  return vi
+    .mocked(invoke)
+    .mock.calls.filter(([cmd]) => cmd === 'launch_run')
+    .map(([, payload]) => JSON.parse(JSON.stringify(payload)));
+}
+
+function invokedCommands(): string[] {
+  return vi.mocked(invoke).mock.calls.map(([cmd]) => cmd);
+}
+
 describe('useLaunchRun', () => {
-  it.each(transports)('shows a $transport launch in the rail before its first status event', async ({ launch, answers }) => {
+  it.each(transports)('shows a $transport launch in the rail before its first status event', async ({ launch }) => {
     backend({
-      ...answers,
+      launch_run: () => launched,
       feature_status_rollup: () => [{ project_id: 'proj-1', status: 'bootstrapping', count: 1 }],
     });
     const { result } = renderHook(
@@ -71,41 +74,103 @@ describe('useLaunchRun', () => {
     );
   });
 
-  it('submits a detached launch as the single `args` object the Rust command deserializes', async () => {
-    backend({
-      remote_submit_run: () => ({ run_id: 'r-1', machine_id: 'm-1', status: 'pending', feature_id: 'f-1' }),
-      feature_status_rollup: () => [],
+  it('returns the Feature `launch_run` answers with, unaltered, and lands on it', async () => {
+    const shadow = { ...launched, status: 'pending', total_cost: 0, duration: '0s', created_at: 7 };
+    backend({ launch_run: () => shadow, feature_status_rollup: () => [] });
+    const { result } = renderHook(
+      () => ({ launchRun: useLaunchRun({ projectId: 'proj-1' }), navigation: useNavigation() }),
+      { wrapper: Providers },
+    );
+
+    await act(async () => {
+      expect(await result.current.launchRun({ ...params, machineId: 'm-1' })).toEqual(shadow);
     });
+
+    expect(result.current.navigation.view).toMatchObject({ kind: 'detail', featureId: 'f-1' });
+  });
+
+  it('sends a local launch as the single `launch_run` args object, with no detached-only key set', async () => {
+    backend({ launch_run: () => launched, feature_status_rollup: () => [] });
     const { result } = renderHook(() => useLaunchRun({ projectId: 'proj-1' }), { wrapper: Providers });
 
     await act(async () => {
-      await result.current({ ...params, machineId: 'm-1', targetRepos: ['repo-1'], maxWallClockMins: 10 });
+      await result.current(params);
     });
 
-    const submit = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'remote_submit_run');
-    // Round-tripped through JSON because that is what reaches Rust: an
-    // unstated `origin`/`diffBaseBranch` must be absent, not `null`.
-    expect(JSON.parse(JSON.stringify(submit?.[1]))).toEqual({
-      args: {
-        machineId: 'm-1',
-        projectId: 'proj-1',
-        workflowId: 'wf-1',
-        title: 'Ship it',
-        description: '',
-        agentKind: null,
-        model: null,
-        effort: null,
-        commitArtifacts: null,
-        loopIterations: null,
-        maxBudgetUsd: null,
-        stepOverrides: null,
-        stagedAttachments: [],
-        targetRepoId: 'repo-1',
-        unattended: false,
-        maxCostUsd: null,
-        maxWallClockSecs: 600,
+    expect(launchPayloads()).toEqual([
+      {
+        args: {
+          machineId: null,
+          projectId: 'proj-1',
+          workflowId: 'wf-1',
+          title: 'Ship it',
+          description: '',
+          agentKind: null,
+          model: null,
+          effort: null,
+          commitArtifacts: null,
+          loopIterations: null,
+          maxBudgetUsd: null,
+          stepOverrides: null,
+          stagedAttachments: [],
+          targetRepoId: null,
+          maxCostUsd: null,
+          maxWallClockSecs: null,
+        },
       },
+    ]);
+    expect(invokedCommands().filter((cmd) => cmd !== 'feature_status_rollup')).toEqual(['launch_run']);
+  });
+
+  it('sends a detached launch through the same command, mapping its first repo and minutes', async () => {
+    backend({ launch_run: () => launched, feature_status_rollup: () => [] });
+    const { result } = renderHook(() => useLaunchRun({ projectId: 'proj-1' }), { wrapper: Providers });
+
+    await act(async () => {
+      await result.current({
+        ...params,
+        machineId: 'm-1',
+        targetRepos: ['repo-1', 'repo-2'],
+        maxCostUsd: 5,
+        maxWallClockMins: 10,
+      });
     });
+
+    // `unattended` is absent: Rust defaults a detached run to unattended.
+    expect(launchPayloads()).toEqual([
+      {
+        args: {
+          machineId: 'm-1',
+          projectId: 'proj-1',
+          workflowId: 'wf-1',
+          title: 'Ship it',
+          description: '',
+          agentKind: null,
+          model: null,
+          effort: null,
+          commitArtifacts: null,
+          loopIterations: null,
+          maxBudgetUsd: null,
+          stepOverrides: null,
+          stagedAttachments: [],
+          targetRepoId: 'repo-1',
+          maxCostUsd: 5,
+          maxWallClockSecs: 600,
+        },
+      },
+    ]);
+    expect(invokedCommands().filter((cmd) => cmd !== 'feature_status_rollup')).toEqual(['launch_run']);
+  });
+
+  it('passes an explicit `unattended` through untouched', async () => {
+    backend({ launch_run: () => launched, feature_status_rollup: () => [] });
+    const { result } = renderHook(() => useLaunchRun({ projectId: 'proj-1' }), { wrapper: Providers });
+
+    await act(async () => {
+      await result.current({ ...params, machineId: 'm-1', unattended: true });
+    });
+
+    expect(launchPayloads()).toMatchObject([{ args: { machineId: 'm-1', unattended: true } }]);
   });
 
   describe('a refused detached submit', () => {
@@ -140,7 +205,7 @@ describe('useLaunchRun', () => {
         if (cmd === 'remote_runner_compatibility') {
           return Promise.resolve({ verdict: 'compatible', version: '1.1.0', channel: 'stable', message: 'ok' });
         }
-        if (cmd === 'remote_submit_run') return Promise.reject(refusal);
+        if (cmd === 'launch_run') return Promise.reject(refusal);
         return Promise.reject(new Error(`unexpected command ${cmd}`));
       });
       await fetchRunnerCompatibility('m-1');
@@ -176,7 +241,7 @@ describe('useLaunchRun', () => {
 
     it('keeps no draft when the refused launch did not come from the Start Feature modal', async () => {
       vi.mocked(invoke).mockImplementation((cmd: string) =>
-        cmd === 'remote_submit_run'
+        cmd === 'launch_run'
           ? Promise.reject({ kind: 'runner_incompatible', message, compatibility: behind })
           : Promise.reject(new Error(`unexpected command ${cmd}`)),
       );
@@ -195,7 +260,7 @@ describe('useLaunchRun', () => {
 
     it('reports any other refusal through the generic path', async () => {
       vi.mocked(invoke).mockImplementation((cmd: string) =>
-        cmd === 'remote_submit_run'
+        cmd === 'launch_run'
           ? Promise.reject({ kind: 'transport', message: 'ssh: connection refused' })
           : Promise.reject(new Error(`unexpected command ${cmd}`)),
       );
@@ -212,6 +277,84 @@ describe('useLaunchRun', () => {
       expect(toast.action).toBeUndefined();
       expect(result.current.navigation.view).not.toEqual({ kind: 'settings' });
       act(() => result.current.bus.clear());
+    });
+  });
+
+  describe('a run the runner accepted but left degraded', () => {
+    function render() {
+      return renderHook(
+        () => ({ launchRun: useLaunchRun({ projectId: 'proj-1' }), navigation: useNavigation(), bus: useErrorBus() }),
+        { wrapper: Providers },
+      );
+    }
+
+    it('still lands on the Feature and leaves a sticky notice that offers Runs', async () => {
+      const parked = { ...launched, status: 'pending', credentials_parked: 'unscripted rpc inject_credentials' };
+      backend({ launch_run: () => parked, feature_status_rollup: () => [] });
+      const { result } = render();
+
+      await act(async () => {
+        expect(await result.current.launchRun({ ...params, machineId: 'm-1' })).not.toBeNull();
+      });
+
+      expect(result.current.navigation.view).toMatchObject({ kind: 'detail', featureId: 'f-1' });
+      expect(result.current.bus.toasts).toHaveLength(1);
+      const toast = result.current.bus.toasts[0];
+      expect(toast.message).toContain('unscripted rpc inject_credentials');
+      expect(toast.message).toContain('Needs credentials');
+      expect(toast.dismissable).toBe(false);
+      expect(toast.action?.label).toBe('Open runs');
+
+      act(() => toast.action?.onClick());
+
+      expect(result.current.navigation.view).toEqual({ kind: 'remote-inbox' });
+      act(() => result.current.bus.clear());
+    });
+
+    it('says an unrecorded run will not be reported on', async () => {
+      const unrecorded = { ...launched, mirror_unrecorded: 'database is locked during upsert_submitted' };
+      backend({ launch_run: () => unrecorded, feature_status_rollup: () => [] });
+      const { result } = render();
+
+      await act(async () => {
+        expect(await result.current.launchRun({ ...params, machineId: 'm-1' })).not.toBeNull();
+      });
+
+      expect(result.current.navigation.view).toMatchObject({ kind: 'detail', featureId: 'f-1' });
+      expect(result.current.bus.toasts).toHaveLength(1);
+      expect(result.current.bus.toasts[0]).toMatchObject({ kind: 'database' });
+      expect(result.current.bus.toasts[0].message).toContain('database is locked during upsert_submitted');
+      act(() => result.current.bus.clear());
+    });
+
+    it('warns against a second start when the ticket could not record its run', async () => {
+      const unrecorded = { ...launched, ticket_unrecorded: 'ticket #3 started Feature f-1, but the disk is full' };
+      backend({ launch_run: () => unrecorded, feature_status_rollup: () => [] });
+      const { result } = render();
+
+      await act(async () => {
+        expect(await result.current.launchRun(params)).not.toBeNull();
+      });
+
+      expect(result.current.navigation.view).toMatchObject({ kind: 'detail', featureId: 'f-1' });
+      expect(result.current.bus.toasts).toHaveLength(1);
+      const toast = result.current.bus.toasts[0];
+      expect(toast).toMatchObject({ kind: 'database', dismissable: false });
+      expect(toast.message).toContain('ticket #3 started Feature f-1');
+      expect(toast.message).toContain('Do not start the ticket again');
+      act(() => result.current.bus.clear());
+    });
+
+    it.each(transports)('posts nothing for a clean $transport launch', async ({ launch }) => {
+      backend({ launch_run: () => launched, feature_status_rollup: () => [] });
+      const { result } = render();
+
+      await act(async () => {
+        expect(await result.current.launchRun({ ...params, ...launch })).not.toBeNull();
+      });
+
+      expect(result.current.navigation.view).toMatchObject({ kind: 'detail', featureId: 'f-1' });
+      expect(result.current.bus.toasts).toEqual([]);
     });
   });
 });

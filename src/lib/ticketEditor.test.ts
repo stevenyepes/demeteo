@@ -28,6 +28,7 @@ function ticket(extra: Partial<Ticket> = {}): Ticket {
     agent_kind: 'claude-code',
     model: 'opus',
     effort: 'high',
+    machine_id: null,
     attachments: [],
     state: 'unstarted',
     drop_reason: null,
@@ -44,6 +45,7 @@ function view(row: Ticket): TicketView {
   return {
     ticket: row,
     standing: { id: row.id, lane: 'ready', startable: true, blockers: [] },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 }
@@ -75,6 +77,7 @@ describe('the save payload', () => {
       'description',
       'effort',
       'files',
+      'machine_id',
       'model',
       'test_command',
       'title',
@@ -109,7 +112,17 @@ describe('the save payload', () => {
       agent_kind: row.agent_kind,
       model: row.model,
       effort: row.effort,
+      machine_id: row.machine_id,
     });
+  });
+
+  // `null` inherits the Discovery's default and `"local"` overrides it, so the
+  // two must survive the form as different values.
+  it.each([null, 'local', 'm-gpu-box'])('round-trips a placement of %s', (machineId) => {
+    const row = ticket({ machine_id: machineId });
+
+    expect(editOf(draftOf(row)).machine_id).toBe(machineId);
+    expect(isDirty(draftOf(row), row)).toBe(false);
   });
 });
 

@@ -130,6 +130,16 @@ runner persists the spec to its own DB → spawns the driver → returns the han
 (R9); the laptop mirrors by `(machine_id, run_id)` and reconciles by event
 offset.
 
+**There is one way in.** The Start Feature modal, a Discovery ticket's start
+(PRD_DISCOVERY §7.4) and MCP's `start_feature`/`start_ticket` all reach this
+lifecycle only through `application::launch::launch_run`, naming a
+`RunPlacement` and nothing more. `submit_remote_run` is `pub(crate)` and
+`launch_run` is its only caller, so its refusal gate — unknown or
+local machine, then the runner-version check — runs before anything is
+written, whichever surface asked. No caller inspects how a placement will be
+carried; a new launch surface that called the submit directly would be the
+second route this exists to prevent.
+
 ---
 
 ## 5. Unattended & the two-layer security model

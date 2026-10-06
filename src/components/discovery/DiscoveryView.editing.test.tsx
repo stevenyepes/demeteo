@@ -56,6 +56,7 @@ function ticket(id: string, seq: number, title: string): Ticket {
     agent_kind: null,
     model: null,
     effort: null,
+    machine_id: null,
     attachments: [],
     state: 'unstarted',
     drop_reason: null,
@@ -71,6 +72,7 @@ function makeView(id: string, seq: number, title: string): TicketView {
   return {
     ticket: ticket(id, seq, title),
     standing: { id, lane: 'ready', startable: true, blockers: [] },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 }
@@ -78,6 +80,8 @@ function makeView(id: string, seq: number, title: string): TicketView {
 const board: DiscoveryBoard = {
   tickets: [makeView('t-1', 1, 'First ticket'), makeView('t-2', 2, 'Second ticket')],
   progress: { blocked: 0, ready: 2, in_flight: 0, landed: 0, dropped: 0, live: 2 },
+  discovery_default: { kind: 'local' },
+  local_host: 'local',
 };
 
 beforeEach(() => {

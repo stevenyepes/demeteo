@@ -27,6 +27,7 @@ function ticket(id: string, seq: number): TicketView {
       agent_kind: null,
       model: null,
       effort: null,
+      machine_id: null,
       attachments: [],
       state: 'unstarted',
       drop_reason: null,
@@ -37,6 +38,7 @@ function ticket(id: string, seq: number): TicketView {
       updated_at: 0,
     },
     standing: { id, lane: 'ready', startable: true, blockers: [] },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 }

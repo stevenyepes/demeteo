@@ -6,6 +6,8 @@ import type {
   Discovery,
   DiscoveryBoard,
   DiscoveryMessageView,
+  Machine,
+  RunPlacement,
   TicketProgress,
   TicketView,
   WorkflowWithSteps,
@@ -46,7 +48,12 @@ interface DiscoveryWorkspaceRowProps {
   workflows: WorkflowWithSteps[];
   workflowName: string | null;
   busy: boolean;
-  machineId: string;
+  machines: readonly Machine[];
+  /** `null` until the board has answered, which is also when nothing can be
+   *  open in the editor. */
+  discoveryDefault: RunPlacement | null;
+  /** `DiscoveryBoard.local_host`, `null` alongside `discoveryDefault`. */
+  localHost: string | null;
   onEditorClose: () => void;
   onInspectorClose: () => void;
   onEditorSaved: (board: DiscoveryBoard) => void;
@@ -94,7 +101,9 @@ export function DiscoveryWorkspaceRow({
   workflows,
   workflowName,
   busy,
-  machineId,
+  machines,
+  discoveryDefault,
+  localHost,
   onEditorClose,
   onInspectorClose,
   onEditorSaved,
@@ -114,14 +123,16 @@ export function DiscoveryWorkspaceRow({
   const stacked = layoutMode === 'stacked';
   const interviewCollapsed = interviewHidden && !stacked;
 
-  const pane = editing ? (
+  const pane = editing && discoveryDefault && localHost !== null ? (
     <TicketEditorDrawer
       key={editing.ticket.id}
       view={editing}
       index={index}
       siblings={tickets}
       workflows={workflows}
-      machineId={machineId}
+      machines={machines}
+      discoveryDefault={discoveryDefault}
+      localHost={localHost}
       busy={busy}
       onClose={onEditorClose}
       onSaved={onEditorSaved}
@@ -137,6 +148,7 @@ export function DiscoveryWorkspaceRow({
         view={selected}
         index={index}
         workflowName={workflowName}
+        machines={machines}
         busy={busy}
         onStart={onInspectorStart}
         onForceStart={onInspectorForceStart}

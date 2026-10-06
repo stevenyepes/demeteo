@@ -23,7 +23,9 @@ import { OriginPicker } from './StartFeatureModal/OriginPicker';
 import { runOriginArgs, type OriginSelection } from '../lib/runOrigin';
 import { blocksLaunch } from '../lib/runnerCompatibility';
 import { useRunnerCompatibility } from '../hooks/useRunnerCompatibility';
-import { RunnerVersionNotice } from './RunnerVersionNotice';
+import { RunPlacementSelect } from './discovery/RunPlacementSelect';
+import { DetachedCapsFields } from './DetachedCapsFields';
+import { NO_CAP, parseDetachedCap } from '../lib/detachedCaps';
 import type { StartFeatureSeed } from '../context/UIStateContext';
 import type { WorkflowDefinitionV2 } from './canvas/types';
 
@@ -74,7 +76,9 @@ interface StartFeatureModalProps {
     model?: string;
     /** Feature-wide reasoning effort chosen at launch. Unset = inherit. */
     effort?: EffortLevel;
-    targetRepos: string[];
+    /** Set only for a detached run, which clones one of them; a local run
+     *  works in every repository the project has. */
+    targetRepos?: string[];
     commitArtifacts?: boolean;
     /** Per-run override of the loop iteration budget (migration V13). */
     loopIterations?: number;
@@ -94,8 +98,7 @@ interface StartFeatureModalProps {
     /**
      * Run this feature on a remote `demeteo-runner` instead of locally
      * (docs/REMOTE_EXECUTION.md M6.1). `undefined`/`'local'` means
-     * "run here" — the existing `start_feature` path. Any other value
-     * is a machine id the parent resolves via `remote_submit_run`.
+     * "run here". Any other value is a machine id `launch_run` submits to.
      */
     machineId?: string;
     /** R6/R7: auto-approve safe gates, park dangerous ones. Only
@@ -246,11 +249,8 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
   // one remaining asymmetry is that a detached run clones a single
   // repository, annotated on the repo picker below.
   const detached = machineId !== '';
-  const {
-    report: runnerReport,
-    loading: runnerChecking,
-    refresh: reprobeRunner,
-  } = useRunnerCompatibility(machineId);
+  const runnerCompatibility = useRunnerCompatibility(machineId);
+  const { report: runnerReport, refresh: reprobeRunner } = runnerCompatibility;
   // Attached-remote is a project-level setting, not a per-run choice:
   // a machine-less launch on such a project executes over SSH with the
   // desktop app orchestrating. Stated in "Where to run" as a fact.
@@ -718,17 +718,22 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
     ? attachments.filter((a) => a.size > DETACHED_ATTACHMENT_CAP)
     : [];
 
+  const costCap = detached ? parseDetachedCap(maxCostUsd, 'cost') : NO_CAP;
+  const wallClockCap = detached ? parseDetachedCap(maxWallClockMins, 'wallClock') : NO_CAP;
+
   const canLaunch =
     title.trim().length > 0 &&
     description.trim().length > 0 &&
     workflowId !== '' &&
     oversizedForDetached.length === 0 &&
+    costCap.error === null &&
+    wallClockCap.error === null &&
     !blocksLaunch(runnerReport) &&
     (repositories.length === 0 || selectedRepoIds.length > 0);
 
   const launch = () => {
     if (!canLaunch) return;
-    const targetRepos = selectedRepoIds;
+    const targetRepos = detached ? selectedRepoIds : undefined;
     const commitArtifactsArg =
       commitArtifacts === 'inherit'
         ? undefined
@@ -744,9 +749,6 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       .filter((o) => o.agent_kind || o.model || o.effort);
     const loopArg = loopIterations.trim() ? parseInt(loopIterations, 10) : undefined;
     const budgetArg = maxBudgetUsd.trim() ? parseFloat(maxBudgetUsd) : undefined;
-    const costArg = detached && maxCostUsd.trim() ? parseFloat(maxCostUsd) : undefined;
-    const wallClockArg =
-      detached && maxWallClockMins.trim() ? parseInt(maxWallClockMins, 10) : undefined;
     // Only a refusal re-probes: the submit gate just proved the verdict that
     // enabled Start wrong. Any other failure says nothing about the runner, and
     // re-probes nothing even once that verdict has outlived its TTL.
@@ -770,8 +772,8 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
       // Detached runs are always unattended — they can't block on a human
       // (Demeteo may be closed). Never send `false` for a detached run.
       unattended: detached ? true : undefined,
-      maxCostUsd: Number.isFinite(costArg as number) ? costArg : undefined,
-      maxWallClockMins: Number.isFinite(wallClockArg as number) ? wallClockArg : undefined,
+      maxCostUsd: costCap.value,
+      maxWallClockMins: wallClockCap.value,
       ...runOriginArgs(originSelection),
     })).then((outcome) => {
       if (outcome === 'runner_refused') reprobeRunner();
@@ -912,26 +914,26 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               executes is as fundamental as what it runs, and burying the
               remote/unattended entry point made it invisible. */}
           <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
-            <label className="flex items-center gap-1.5 text-[11px] font-mono text-slate-300 mb-1.5 uppercase tracking-wider">
+            <label
+              htmlFor="start-feature-placement"
+              className="flex items-center gap-1.5 text-[11px] font-mono text-slate-300 mb-1.5 uppercase tracking-wider"
+            >
               <Server className="w-3.5 h-3.5 text-cyan-400" />
               Where to run
             </label>
             {remoteMachines.length > 0 ? (
               <>
-                <select
-                  value={machineId}
-                  onChange={(e) => setMachineId(e.target.value)}
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
-                >
-                  <option value="">
-                    {attachedRemote ? `Project machine — ${remoteHost ?? 'remote host'} (SSH)` : 'This machine'}
-                  </option>
-                  {remoteMachines.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name} — detached
-                    </option>
-                  ))}
-                </select>
+                <RunPlacementSelect
+                  id="start-feature-placement"
+                  machines={machines}
+                  value={machineId || null}
+                  onChange={(next) => setMachineId(next ?? '')}
+                  localLabel={
+                    attachedRemote ? `Project machine — ${remoteHost ?? 'remote host'} (SSH)` : 'This machine'
+                  }
+                  compatibility={runnerCompatibility}
+                  onOpenMachineSettings={leaveForMachineSettings}
+                />
                 {!machineId && attachedRemote && (
                   <p className="text-[10px] font-mono text-cyan-300/80 mt-1.5 leading-relaxed">
                     Attached — executes on {remoteHost ?? 'the project machine'} over SSH with Demeteo
@@ -947,13 +949,6 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                       </span>
                       ; you can close Demeteo and the run continues.
                     </p>
-                    <RunnerVersionNotice
-                      report={runnerReport}
-                      variant="blocking"
-                      onRecheck={reprobeRunner}
-                      checking={runnerChecking}
-                      onOpenSettings={leaveForMachineSettings}
-                    />
                     <div className="flex items-start gap-2 rounded-lg bg-cyan-500/[0.07] border border-cyan-500/20 px-3 py-2">
                       <MoonStar className="w-3.5 h-3.5 text-cyan-300 mt-0.5 shrink-0" />
                       <p className="text-[10px] font-mono text-slate-400 leading-relaxed">
@@ -964,35 +959,14 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                         caps below to bound spend and runtime.
                       </p>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
-                            Max cost (USD)
-                          </label>
-                          <input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={maxCostUsd}
-                            onChange={(e) => setMaxCostUsd(e.target.value)}
-                            placeholder="no cap"
-                            className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">
-                            Max wall-clock (min)
-                          </label>
-                          <input
-                            type="number"
-                            min={0}
-                            value={maxWallClockMins}
-                            onChange={(e) => setMaxWallClockMins(e.target.value)}
-                            placeholder="no cap"
-                            className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
-                          />
-                        </div>
-                    </div>
+                    <DetachedCapsFields
+                      maxCostUsd={maxCostUsd}
+                      onMaxCostUsdChange={setMaxCostUsd}
+                      costCap={costCap}
+                      maxWallClockMins={maxWallClockMins}
+                      onMaxWallClockMinsChange={setMaxWallClockMins}
+                      wallClockCap={wallClockCap}
+                    />
                   </div>
                 )}
               </>
@@ -1304,7 +1278,11 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
         </div>
         <div className="px-6 py-4 border-t border-white/5 bg-[#050508] shrink-0 flex justify-between items-center">
           <span className="text-[10px] text-slate-500 font-mono">
-            {canLaunch ? '⌘/Ctrl + Enter to launch' : 'Fill in title, description, and workflow to launch'}
+            {canLaunch
+              ? '⌘/Ctrl + Enter to launch'
+              : costCap.error || wallClockCap.error
+                ? 'Fix the run caps to launch'
+                : 'Fill in title, description, and workflow to launch'}
           </span>
           <div className="flex gap-3">
             <button

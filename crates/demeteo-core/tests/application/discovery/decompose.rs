@@ -33,6 +33,7 @@ fn row(id: &str, seq: i64) -> Ticket {
         agent_kind: None,
         model: None,
         effort: None,
+        machine_id: None,
         attachments: Vec::new(),
         state: TicketState::Unstarted,
         drop_reason: None,
@@ -305,4 +306,105 @@ fn a_proposal_survives_being_written_down_and_read_back() {
     assert_eq!(read.changes[0].id, written.changes[0].id);
     assert_eq!(read.refused, written.refused);
     assert_eq!(read.tokens, 1234);
+}
+
+/// A Discovery on a stored local project, built through the real composition
+/// root so [`apply`] reads and writes the same tables a run does.
+fn applying(tag: &str) -> (AppContext, DiscoveryId) {
+    use crate::adapters::notification_noop::NoopNotificationAdapter;
+    use crate::application::discovery::{create, NewDiscovery};
+    use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+    use crate::domain::ids::ProjectId;
+    use crate::domain::models::Project;
+
+    let dir = std::env::temp_dir().join(format!(
+        "demeteo-decompose-apply-{tag}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is after the epoch")
+            .as_nanos()
+    ));
+    let ctx = build_core_context(
+        CoreConfig {
+            app_data_dir: dir,
+            execution_mode: ExecutionMode::LocalOnly,
+        },
+        Arc::new(NoopNotificationAdapter),
+        tokio::runtime::Handle::current(),
+    );
+    let project_id = ProjectId::from(format!("p-{tag}"));
+    ctx.projects
+        .add(Project {
+            id: project_id.clone(),
+            name: "name fixture".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 0,
+        })
+        .expect("the project is stored");
+    let discovery = create(
+        &ctx,
+        NewDiscovery {
+            project_id: project_id.as_str().to_string(),
+            title: "plan".to_string(),
+            agent_kind: "claude-code".to_string(),
+            model: None,
+            effort: None,
+            machine_id: None,
+            staged_attachments: Vec::new(),
+        },
+    )
+    .expect("the discovery opens");
+    (ctx, discovery.id)
+}
+
+/// Placement is the user's choice, never the plan's: an added ticket lands
+/// with none, so it inherits the Discovery's default, and a revision leaves a
+/// machine someone picked by hand where it was.
+#[tokio::test]
+async fn applying_a_plan_writes_no_machine_and_keeps_a_chosen_one() {
+    let (ctx, discovery_id) = applying("machine");
+    let chosen = crate::domain::ids::MachineId::from("m-gpu".to_string());
+    ctx.tickets
+        .upsert_batch(&[Ticket {
+            discovery_id: discovery_id.clone(),
+            machine_id: Some(chosen.clone()),
+            ..row("t-1", 1)
+        }])
+        .expect("the stored ticket is written");
+
+    let mut revised = as_written(&row("t-1", 1));
+    revised.title = "revised".to_string();
+    let added = as_written(&row("t-9", 9));
+    apply(
+        &ctx,
+        DecomposeApply {
+            discovery_id: discovery_id.as_str().to_string(),
+            tickets: vec![revised, added],
+            accept: vec!["t-1".to_string(), "t-9".to_string()],
+        },
+    )
+    .expect("the plan applies");
+
+    let rows = ctx
+        .tickets
+        .list_for_discovery(&discovery_id)
+        .expect("the tickets read back");
+    assert_eq!(rows.len(), 2);
+    let kept = rows
+        .iter()
+        .find(|t| t.id.0 == "t-1")
+        .expect("the revised ticket stands");
+    assert_eq!(kept.title, "revised");
+    assert_eq!(kept.machine_id, Some(chosen));
+    let new = rows
+        .iter()
+        .find(|t| t.id.0 != "t-1")
+        .expect("the addition is written");
+    assert_eq!(new.title, "ticket 9");
+    assert_eq!(new.machine_id, None);
 }

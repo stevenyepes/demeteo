@@ -29,6 +29,7 @@ function ticket(
       agent_kind: null,
       model: null,
       effort: null,
+      machine_id: null,
       attachments: [],
       state: lane === 'dropped' ? 'dropped' : lane === 'blocked' || lane === 'ready' ? 'unstarted' : 'started',
       drop_reason: null,
@@ -44,6 +45,7 @@ function ticket(
       startable: extra.startable ?? lane === 'ready',
       blockers: (extra.unmet ?? []).map((b) => ({ id: b, reason: 'outstanding' as const })),
     },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: extra.feature ?? null,
   };
 }
@@ -76,7 +78,7 @@ describe('discoveryIntegrationActions', () => {
   describe('showControls', () => {
     it('is false when base_branch is null, independent of ticket state', () => {
       const merged = ticket(1, 'landed', {
-        feature: { id: 'f1', status: 'completed', mr_state: 'merged', mr_url: 'https://x/pull/1' },
+        feature: { id: 'f1', status: 'completed', mr_state: 'merged', mr_url: 'https://x/pull/1', placement: null, remote: null },
       });
       const result = discoveryIntegrationActions(discovery({ base_branch: null }), [merged]);
       expect(result.showControls).toBe(false);
@@ -96,14 +98,14 @@ describe('discoveryIntegrationActions', () => {
     });
 
     it('is enabled with some unmerged tickets', () => {
-      const tickets = [ticket(1, 'in_flight', { feature: { id: 'f1', status: 'running', mr_state: 'open', mr_url: 'https://x/pull/1' } })];
+      const tickets = [ticket(1, 'in_flight', { feature: { id: 'f1', status: 'running', mr_state: 'open', mr_url: 'https://x/pull/1', placement: null, remote: null } })];
       const result = discoveryIntegrationActions(discovery(), tickets);
       expect(result.sync.enabled).toBe(true);
       expect(result.sync.reason).toBeNull();
     });
 
     it('is enabled with some merged tickets', () => {
-      const tickets = [ticket(1, 'landed', { feature: { id: 'f1', status: 'completed', mr_state: 'merged', mr_url: 'https://x/pull/1' } })];
+      const tickets = [ticket(1, 'landed', { feature: { id: 'f1', status: 'completed', mr_state: 'merged', mr_url: 'https://x/pull/1', placement: null, remote: null } })];
       const result = discoveryIntegrationActions(discovery(), tickets);
       expect(result.sync.enabled).toBe(true);
       expect(result.sync.reason).toBeNull();
@@ -120,8 +122,8 @@ describe('discoveryIntegrationActions', () => {
     it('is disabled with a reason when every ticket has no feature or an unmerged one', () => {
       const tickets = [
         ticket(1, 'ready'),
-        ticket(2, 'in_flight', { feature: { id: 'f2', status: 'running', mr_state: 'open', mr_url: 'https://x/pull/2' } }),
-        ticket(3, 'in_flight', { feature: { id: 'f3', status: 'running', mr_state: null, mr_url: null } }),
+        ticket(2, 'in_flight', { feature: { id: 'f2', status: 'running', mr_state: 'open', mr_url: 'https://x/pull/2', placement: null, remote: null } }),
+        ticket(3, 'in_flight', { feature: { id: 'f3', status: 'running', mr_state: null, mr_url: null, placement: null, remote: null } }),
       ];
       const result = discoveryIntegrationActions(discovery(), tickets);
       expect(result.publish.enabled).toBe(false);
@@ -130,8 +132,8 @@ describe('discoveryIntegrationActions', () => {
 
     it('is enabled with a null reason when at least one ticket has a merged feature, even with others unmerged or dropped', () => {
       const tickets = [
-        ticket(1, 'landed', { feature: { id: 'f1', status: 'completed', mr_state: 'merged', mr_url: 'https://x/pull/1' } }),
-        ticket(2, 'in_flight', { feature: { id: 'f2', status: 'running', mr_state: 'open', mr_url: 'https://x/pull/2' } }),
+        ticket(1, 'landed', { feature: { id: 'f1', status: 'completed', mr_state: 'merged', mr_url: 'https://x/pull/1', placement: null, remote: null } }),
+        ticket(2, 'in_flight', { feature: { id: 'f2', status: 'running', mr_state: 'open', mr_url: 'https://x/pull/2', placement: null, remote: null } }),
         ticket(3, 'dropped'),
       ];
       const result = discoveryIntegrationActions(discovery(), tickets);
@@ -143,7 +145,7 @@ describe('discoveryIntegrationActions', () => {
     // unconditional `enabled: true` for publish.
     it('is disabled for a non-empty, all-unmerged board', () => {
       const tickets = [
-        ticket(1, 'in_flight', { feature: { id: 'f1', status: 'running', mr_state: 'open', mr_url: 'https://x/pull/1' } }),
+        ticket(1, 'in_flight', { feature: { id: 'f1', status: 'running', mr_state: 'open', mr_url: 'https://x/pull/1', placement: null, remote: null } }),
         ticket(2, 'ready'),
         ticket(3, 'blocked', { blockedBy: ['t2'], unmet: ['t2'] }),
       ];

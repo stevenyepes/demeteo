@@ -12,13 +12,41 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TicketEditorDrawer } from './TicketEditorDrawer';
 import { indexTickets } from '../../lib/ticketPresentation';
-import type { DiscoveryBoard, Ticket, TicketView } from '../../types';
+import type {
+  DiscoveryBoard,
+  Machine,
+  RunnerCompatibilityReport,
+  RunPlacement,
+  Ticket,
+  TicketView,
+} from '../../types';
+
+const { navigate, reports } = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  reports: new Map<string, RunnerCompatibilityReport>(),
+}));
 
 vi.mock('../../lib/discovery', () => ({
   getTicketBriefing: vi.fn(async () => 'DSC-2 has not landed.'),
-  updateTicket: vi.fn(async () => ({ tickets: [], progress: EMPTY_PROGRESS }) as DiscoveryBoard),
+  updateTicket: vi.fn(
+    async () =>
+      ({ tickets: [], progress: EMPTY_PROGRESS, discovery_default: { kind: 'local' }, local_host: 'local' }) as DiscoveryBoard,
+  ),
   addTicketAttachment: vi.fn(),
   removeTicketAttachment: vi.fn(),
+}));
+
+vi.mock('../../hooks/useRunnerCompatibility', () => ({
+  useRunnerCompatibility: (machineId: string) => ({
+    report: reports.get(machineId) ?? null,
+    loading: false,
+    refresh: () => {},
+  }),
+}));
+
+vi.mock('../../context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../context')>()),
+  useNavigation: () => ({ navigate }),
 }));
 
 vi.mock('../../lib/agentModels', () => ({
@@ -31,9 +59,16 @@ vi.mock('../../lib/agentCatalog', () => ({
   effortLevelsFor: () => ['low', 'medium', 'high'],
 }));
 
+const box: Machine = { id: 'machine-box', name: 'box', host: 'box.lan', port: 22, username: 'dev', auth_type: 'key' };
+const laptop: Machine = { id: 'local', name: 'laptop', host: '', port: 0, username: '', auth_type: 'local' };
+
 const EMPTY_PROGRESS = { blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 0, live: 0 };
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  navigate.mockClear();
+  reports.clear();
+});
 
 function ticket(extra: Partial<Ticket> = {}): Ticket {
   return {
@@ -50,6 +85,7 @@ function ticket(extra: Partial<Ticket> = {}): Ticket {
     agent_kind: 'claude-code',
     model: 'opus',
     effort: 'high',
+    machine_id: null,
     attachments: [],
     state: 'unstarted',
     drop_reason: null,
@@ -66,19 +102,26 @@ function view(row: Ticket, lane: TicketView['standing']['lane'] = 'ready'): Tick
   return {
     ticket: row,
     standing: { id: row.id, lane, startable: lane === 'ready', blockers: [] },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 }
 
-function renderDrawer(subject: TicketView) {
+function renderDrawer(
+  subject: TicketView,
+  discoveryDefault: RunPlacement = { kind: 'local' },
+  localHost = 'local',
+) {
   const onSaved = vi.fn();
-  render(
+  const drawer = (shown: TicketView) => (
     <TicketEditorDrawer
-      view={subject}
+      view={shown}
       index={indexTickets([subject])}
       siblings={[subject]}
       workflows={[]}
-      machineId="local"
+      machines={[box, laptop]}
+      discoveryDefault={discoveryDefault}
+      localHost={localHost}
       busy={false}
       onClose={() => {}}
       onSaved={onSaved}
@@ -86,9 +129,10 @@ function renderDrawer(subject: TicketView) {
       onStart={() => {}}
       onForceStart={() => {}}
       onDrop={() => {}}
-    />,
+    />
   );
-  return { onSaved };
+  const { rerender } = render(drawer(subject));
+  return { onSaved, rerender: (next: TicketView) => rerender(drawer(next)) };
 }
 
 describe('a locked ticket', () => {
@@ -152,6 +196,7 @@ describe('an unstarted ticket', () => {
       agent_kind: 'claude-code',
       model: 'opus',
       effort: 'high',
+      machine_id: null,
     });
   });
 
@@ -161,12 +206,211 @@ describe('an unstarted ticket', () => {
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'A new title' } });
     fireEvent.click(screen.getByTestId('ticket-save'));
 
-    await waitFor(() => expect(onSaved).toHaveBeenCalledWith({ tickets: [], progress: EMPTY_PROGRESS }));
+    await waitFor(() =>
+      expect(onSaved).toHaveBeenCalledWith({
+        tickets: [],
+        progress: EMPTY_PROGRESS,
+        discovery_default: { kind: 'local' },
+        local_host: 'local',
+      }),
+    );
   });
 
   it('shows what its agent will be told, composed by the backend', async () => {
     renderDrawer(view(ticket()));
 
     await waitFor(() => expect(screen.getByText('DSC-2 has not landed.')).toBeTruthy());
+  });
+});
+
+describe('where a ticket runs', () => {
+  async function savedMachineId(subject: TicketView, choice: string): Promise<unknown> {
+    const { updateTicket } = await import('../../lib/discovery');
+    vi.mocked(updateTicket).mockClear();
+    renderDrawer(subject);
+
+    fireEvent.change(screen.getByLabelText('Where to run'), { target: { value: choice } });
+    fireEvent.click(screen.getByTestId('ticket-save'));
+
+    await waitFor(() => expect(updateTicket).toHaveBeenCalled());
+    return vi.mocked(updateTicket).mock.calls[0][1].machine_id;
+  }
+
+  it('offers Default named by the Discovery default, Local, and each remote machine detached', () => {
+    renderDrawer(
+      {
+        ...view(ticket()),
+        placement: { placement: { kind: 'detached', machine_id: box.id }, inherited: true },
+      },
+      { kind: 'detached', machine_id: box.id },
+    );
+
+    const options = screen.getAllByRole('option').filter((o) => o.closest('#ticket-placement'));
+    expect(options.map((o) => o.textContent)).toEqual([
+      'Default (Detached · box)',
+      'Local',
+      'box — detached',
+    ]);
+  });
+
+  it('names Default from the board even when no ticket in the plan inherits', () => {
+    renderDrawer(
+      {
+        ...view(ticket({ machine_id: 'local' })),
+        placement: { placement: { kind: 'local' }, inherited: false },
+      },
+      { kind: 'detached', machine_id: box.id },
+    );
+
+    const options = screen.getAllByRole('option').filter((o) => o.closest('#ticket-placement'));
+    expect(options[0].textContent).toBe('Default (Detached · box)');
+  });
+
+  it('saves a chosen machine as its id', async () => {
+    expect(await savedMachineId(view(ticket()), box.id)).toBe(box.id);
+  });
+
+  it('saves Default as null', async () => {
+    const explicit: TicketView = {
+      ...view(ticket({ machine_id: box.id })),
+      placement: { placement: { kind: 'detached', machine_id: box.id }, inherited: false },
+    };
+    expect(await savedMachineId(explicit, '')).toBeNull();
+  });
+
+  it('saves Local as an explicit "local"', async () => {
+    expect(await savedMachineId(view(ticket()), 'local')).toBe('local');
+  });
+
+  it('is read-only on a locked ticket', () => {
+    renderDrawer(view(ticket({ state: 'started', feature_id: 'f-1' }), 'in_flight'));
+
+    expect(screen.getByLabelText('Where to run').hasAttribute('disabled')).toBe(true);
+  });
+
+  it('routes an incompatible runner to machine settings, as the Launch dialog does', () => {
+    reports.set(box.id, {
+      verdict: 'runner_behind',
+      runner: '1.1.0',
+      runner_channel: 'stable',
+      app: '1.2.0',
+      app_channel: 'stable',
+      message: 'demeteo-runner 1.1.0 (stable) on box is older than Demeteo 1.2.0 (stable).',
+    });
+    renderDrawer(view(ticket()));
+
+    fireEvent.change(screen.getByLabelText('Where to run'), { target: { value: box.id } });
+    fireEvent.click(screen.getByRole('button', { name: 'Open machine settings' }));
+
+    expect(navigate).toHaveBeenCalledWith({ kind: 'settings' });
+  });
+});
+
+// The Discovery's own host is `'local'` in every render here, so a probe sent
+// there instead of to the draft's placement shows up as that id.
+describe('the agent and model probe', () => {
+  const BUILD_HOST = 'machine-build';
+
+  async function probedMachines(): Promise<string[]> {
+    const { getAgentModels } = await import('../../lib/agentModels');
+    return vi.mocked(getAgentModels).mock.calls.map(([machineId]) => machineId);
+  }
+
+  afterEach(async () => {
+    const { getAgentModels } = await import('../../lib/agentModels');
+    vi.mocked(getAgentModels).mockClear();
+  });
+
+  it('asks the project compute host when the draft runs Local', async () => {
+    renderDrawer(view(ticket()), { kind: 'local' }, BUILD_HOST);
+
+    await waitFor(async () => expect(await probedMachines()).toEqual([BUILD_HOST]));
+  });
+
+  it('asks the detached machine a Default draft resolves to', async () => {
+    renderDrawer(view(ticket()), { kind: 'detached', machine_id: box.id }, BUILD_HOST);
+
+    await waitFor(async () => expect(await probedMachines()).toEqual([box.id]));
+  });
+
+  it('re-probes on the machine the placement is changed to', async () => {
+    renderDrawer(view(ticket()), { kind: 'detached', machine_id: 'machine-gpu' }, BUILD_HOST);
+    await waitFor(async () => expect(await probedMachines()).toEqual(['machine-gpu']));
+
+    fireEvent.change(screen.getByLabelText('Where to run'), { target: { value: box.id } });
+    await waitFor(async () => expect((await probedMachines()).slice(-1)[0]).toBe(box.id));
+
+    fireEvent.change(screen.getByLabelText('Where to run'), { target: { value: 'local' } });
+    await waitFor(async () => expect((await probedMachines()).slice(-1)[0]).toBe(BUILD_HOST));
+  });
+});
+
+// `ticket_start` launches the *stored* row, so a Start pressed beside an
+// unsaved draft would run on choices the drawer no longer shows — most
+// expensively a placement, where the picker has just shown a compatibility
+// verdict for a machine that will not be used.
+describe('starting from the drawer', () => {
+  const HINT = 'Save the ticket to start it with these choices.';
+
+  function disabled(testId: string): boolean {
+    return screen.getByTestId(testId).hasAttribute('disabled');
+  }
+
+  it('holds Start while the placement is unsaved, and releases it once saved', () => {
+    const { rerender } = renderDrawer(view(ticket()));
+    expect(disabled('ticket-primary-action')).toBe(false);
+    expect(screen.queryByText(HINT)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Where to run'), { target: { value: box.id } });
+
+    expect(disabled('ticket-primary-action')).toBe(true);
+    expect(screen.getByText(HINT)).toBeTruthy();
+
+    rerender(view(ticket({ machine_id: box.id, updated_at: 1 })));
+
+    expect(disabled('ticket-primary-action')).toBe(false);
+    expect(screen.queryByText(HINT)).toBeNull();
+  });
+
+  it('holds Force start while the placement is unsaved, and leaves Drop alone', () => {
+    renderDrawer(view(ticket(), 'blocked'));
+    expect(disabled('ticket-force-start')).toBe(false);
+
+    fireEvent.change(screen.getByLabelText('Where to run'), { target: { value: box.id } });
+
+    expect(disabled('ticket-force-start')).toBe(true);
+    expect(disabled('ticket-drop')).toBe(false);
+    expect(screen.getByText(HINT)).toBeTruthy();
+  });
+
+  it('holds a force start already being confirmed when the draft moves under it', () => {
+    renderDrawer(view(ticket(), 'blocked'));
+    fireEvent.click(screen.getByTestId('ticket-force-start'));
+    fireEvent.change(screen.getByLabelText('Reason for bypassing the prerequisites'), {
+      target: { value: 'Merged out of band this morning.' },
+    });
+    expect(disabled('ticket-force-confirm')).toBe(false);
+
+    fireEvent.change(screen.getByLabelText('Where to run'), { target: { value: box.id } });
+
+    expect(disabled('ticket-force-confirm')).toBe(true);
+  });
+
+  it('holds Start for any unsaved field, not the placement alone', () => {
+    renderDrawer(view(ticket()));
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'A new title' } });
+
+    expect(disabled('ticket-primary-action')).toBe(true);
+    expect(screen.getByText(HINT)).toBeTruthy();
+  });
+
+  it('releases Start once the draft matches the stored ticket again', () => {
+    renderDrawer(view(ticket()));
+
+    fireEvent.change(screen.getByLabelText('Where to run'), { target: { value: box.id } });
+    fireEvent.change(screen.getByLabelText('Where to run'), { target: { value: '' } });
+
+    expect(disabled('ticket-primary-action')).toBe(false);
   });
 });

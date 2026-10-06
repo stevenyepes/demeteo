@@ -13,11 +13,12 @@
 //! without a database (AGENTS.md §3).
 
 use crate::domain::attachment::AttachedFile;
-use crate::domain::ids::{DiscoveryId, FeatureId, ProjectId, TicketId, WorkflowId};
+use crate::domain::ids::{DiscoveryId, FeatureId, MachineId, ProjectId, TicketId, WorkflowId};
 use crate::domain::models::{
     Discovery, DiscoveryMessage, DiscoveryStatus, EffortLevel, Ticket, TicketFeatureAttempt,
     TicketState,
 };
+use crate::domain::run_placement::RunPlacement;
 
 /// The fields one transition may change on a [`Discovery`].
 ///
@@ -108,6 +109,7 @@ pub struct TicketPatch {
     pub agent_kind: Option<Option<String>>,
     pub model: Option<Option<String>>,
     pub effort: Option<Option<EffortLevel>>,
+    pub machine_id: Option<Option<MachineId>>,
     pub attachments: Option<Vec<AttachedFile>>,
     pub state: Option<TicketState>,
     pub drop_reason: Option<Option<String>>,
@@ -143,17 +145,21 @@ pub trait TicketPort: Send + Sync {
     /// A `Vec` because nothing in the schema makes it at most one, and a
     /// caller that assumed otherwise would silently skip a graph.
     fn for_feature(&self, feature_id: &FeatureId) -> Result<Vec<Ticket>, String>;
-    /// Record a Feature as this Ticket's attempt. Idempotent on
+    /// Record that this Ticket was started as `feature_id`, placed at
+    /// `placement`: close every other open attempt, add this one as current,
+    /// and mark the ticket `started` naming it — all or none. Idempotent on
     /// `(ticket, feature)`.
-    fn record_attempt(
+    ///
+    /// One write, not three, because the run it records has already been
+    /// launched: a half-applied start reads as an `Unstarted` ticket with no
+    /// current attempt, which invites a second paid run of the same ticket.
+    fn record_start(
         &self,
         ticket_id: &TicketId,
         feature_id: &FeatureId,
+        placement: &RunPlacement,
         now: i64,
     ) -> Result<(), String>;
-    /// Close every attempt still open on this Ticket, which is what makes room
-    /// for a new current one.
-    fn supersede_attempts(&self, ticket_id: &TicketId, now: i64) -> Result<(), String>;
     /// Every Feature this Ticket has been run as, oldest first. The audit §7.1
     /// asks for is only an audit if something can read it back.
     fn list_attempts(&self, ticket_id: &TicketId) -> Result<Vec<TicketFeatureAttempt>, String>;

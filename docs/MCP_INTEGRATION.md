@@ -48,6 +48,7 @@ alternative in full.
 | Human consent screen (`McpConsentView.tsx`) and grant list with revocation (`McpGrantsTab.tsx`) | built |
 | Settings toggle and port (`mcp_server_enabled`, `mcp_server_port`) | built; the toggle sits in the MCP grants tab |
 | Per-grant **project list** | **not built** — see §9 |
+| Per-grant **machine list** | **not built** — a `spend` grant can launch on any registered machine; see §9 |
 | Refresh tokens | none by design; the 30-day lifetime is a default, open — see §5 and §9 |
 | The CLI (`docs/roadmap/stories/D1-cli-read-trigger.md`) | not built; the seam it would use is |
 
@@ -293,7 +294,7 @@ Three scopes, split by **consequence**, not by resource.
 | Scope | What it lets a client do | What it costs |
 |---|---|---|
 | `read` | Observe projects, features, steps, failure verdicts, pending gates, discovery boards, run events | nothing — no state changes, no spend |
-| `spend` | Start a Feature or a Ticket's attempt | **money and agent time** — a run consumes provider budget until it finishes or is stopped |
+| `spend` | Start a Feature or a Ticket's attempt, here or on any registered machine | **money and agent time** — a run consumes provider budget until it finishes or is stopped |
 | `configure` | Create a Project; change a Project's run shape | **future behaviour** — how later runs are shaped, never their ceiling (§7.1) |
 
 Scopes are a **flat set**. `spend` does not imply `read`; a grant holds exactly
@@ -331,8 +332,8 @@ must not drift.
 | `run_events_since` | `read` | Durable run events after an offset, ascending |
 | `create_workspace_project` | `configure` | Register a Project and its repositories — **rows only**: no clone, no bootstrap, no settings row, so the Project stays `bootstrapping` and `apply_run_shape_patch` refuses it until it is bootstrapped |
 | `apply_run_shape_patch` | `configure` | Write the run-shape subset of a Project's settings (§7.1) |
-| `start_feature` | `spend` | Start a Feature run; returns a handle as soon as the executor accepts it |
-| `start_ticket` | `spend` | Start a Ticket's current attempt |
+| `start_feature` | `spend` | Start a Feature run, on the project's own compute or detached on a named machine; returns a handle as soon as the run is accepted |
+| `start_ticket` | `spend` | Start a Ticket's current attempt where the Ticket is placed, or on a machine named for this launch only |
 
 **Reads span every project.** `list_features` and `list_pending_gates` with no
 `project_id` fan out across all of them.
@@ -340,10 +341,91 @@ must not drift.
 `list_pending_gates` is a **read**. It lets a client *see* that a Gate is waiting;
 it does not conflict with the permanent exclusion of Gate approval (§8).
 
-`start_feature` takes only `project_id`, `workflow_id`, `title` and
-`description` (`AgentFeatureLaunch`). Agent, model, effort, step overrides, origin and
-budget are absent on purpose: they are the run's own business, not a caller's to
-set from outside.
+`start_feature` takes `project_id`, `workflow_id`, `title` and `description`
+(`AgentFeatureLaunch`), plus five optional placement arguments:
+
+| Argument | Meaning |
+|---|---|
+| `machine_id` | A registered remote machine's id submits the run detached to that machine's `demeteo-runner`. Omitted, `""` or `"local"` runs it on the project's own compute, exactly as before the argument existed |
+| `target_repo_id` | Detached only: the repository to run in; defaults to the project's first |
+| `unattended` | Detached only; `false` is refused (below) |
+| `max_cost_usd` | Detached only: a spend cap in US dollars, finite and above zero |
+| `max_wall_clock_secs` | Detached only: a wall-clock cap in seconds, above zero |
+
+`start_ticket` takes `ticket_id` and an optional `machine_id` that overrides the
+Ticket's placement **for that one launch** and is never saved on the Ticket.
+`"local"` forces the project's own compute; omitted or `""` uses the Ticket's own
+placement, whose default and precedence are `domain/run_placement.rs`. A Ticket
+carries no caps, so a detached Ticket launches with the defaults: the first
+repository, unattended, no caps.
+
+Both tools reach the run through `application::launch::launch_run`, the same
+function the UI uses, so a launch from MCP is placed, refused and recorded exactly
+as one from the app.
+
+Agent, model, effort, step overrides and origin stay absent on purpose: they are
+the project's run shape (§7.1), not a caller's to set per launch.
+
+**Detached-only options are a contract, not a hint.** Caps and `unattended` are
+accepted because they can only *bound* a run, never widen it:
+
+- **Caps only bound spend.** A cap is a ceiling the detached run stops at. It
+  cannot raise what the grant already allows — starting the run is the spend, and
+  `spend` authorises it — and `default_max_budget_usd` stays out of reach (§7.1).
+- **Detached is always unattended.** Nobody is attached to a runner session to
+  answer a Gate, so `unattended` omitted or `true` sends `true`, and
+  **`unattended: false` with a machine is refused** rather than launched into a
+  run that would wait forever.
+- **Detached-only options without a machine are refused**, not silently dropped:
+  a caller that sends a cap believes the run is capped.
+
+**A remote launch needs scope `spend`, and nothing more.** That is a decision, not
+an omission:
+
+- **Same consequence class.** A detached run spends money and agent time, which is
+  exactly what `spend` prices on the consent screen (§6); where the compute sits
+  does not change what the user is agreeing to pay for.
+- **Scope is keyed by tool name.** `required_scope` maps a tool to one scope; it
+  never reads arguments, and the guard checks the grant before the arguments are
+  parsed.
+- **An argument-aware scope would change existing grants.** A `spend` grant a
+  user already approved would silently stop covering `start_feature` with a
+  `machine_id`, or a new scope would need a consent-screen change and new
+  `oauth_grants` values. What a `spend` grant can reach as built is open (§9).
+
+**A refused launch creates nothing.** Each of these returns `isError: true` with
+the reason in the text, before a Feature row, a run, a spooled attachment or a
+recorded Ticket attempt exists, and before any credential leaves the app:
+
+- an unknown `machine_id` — the text names the id;
+- a `machine_id` registered as this desktop rather than a remote machine;
+- a machine whose `demeteo-runner` is missing, or reports a version other than
+  this app's build;
+- a machine that cannot be reached to read that version;
+- any detached-only option refused above.
+
+A failure *after* the runner accepted the probe — the submit call itself erroring
+— is also `isError: true`, but the placeholder Feature it had written is left
+marked failed rather than deleted, so the attempt stays visible.
+
+**A run the runner accepted is never an error**, even when what follows the
+acceptance goes wrong: an `isError` would invite a retry, and a retry submits the
+same paid run twice. Both tools return the Feature's fields at the top level of
+`structuredContent`, unchanged, and add a key for each way an accepted run is
+degraded. Each key is a string giving the cause, and is absent unless that state
+holds — so a client that reads only the Feature reads every result as before:
+
+| Key | Present when | What it means for the run |
+|---|---|---|
+| `credentials_parked` | The runner accepted the run but its git credentials could not be delivered | The run waits as `needs-credentials` until they are re-sent from the app; it does not proceed on its own |
+| `mirror_unrecorded` | The runner accepted the run but the app could not record it locally | The run proceeds on the runner, but reconcile cannot follow a run the app never recorded, so the app will not report on it |
+| `ticket_unrecorded` | `start_ticket` launched the run, local or detached, but the ticket could not record it | The run proceeds and the text names its Feature id, but the board still shows the ticket unstarted. Do not start it again: that launches a second run |
+
+`credentials_parked` and `mirror_unrecorded` are set only for a detached run; a
+local launch never carries either. `ticket_unrecorded` is set only by
+`start_ticket`, whatever the placement. Their text is scrubbed of
+credential-shaped content and bounded, as `error_message` is. Report any of them
+to the human: none is something a client can repair through this surface.
 
 A tool result carries `structuredContent` and an `isError` flag. An operation
 that fails returns `isError: true` on HTTP `200`; a missing or insufficient
@@ -464,12 +546,18 @@ Open means unresolved. Nothing below is decided.
    `project_id` to anything on the grant, and the consent screen does not ask. As
    built, a `configure` or `spend` grant can write to any Project. Tracked in
    [`OPEN_QUESTIONS.md` §19](OPEN_QUESTIONS.md#19-must-an-mcp-write-name-a-project-listed-on-the-grant).
-2. **The CLI's relationship to the running app** — an app-attached command, or a
+2. **Must a remote launch name a machine listed on the grant?** The same gap, one
+   axis over. `start_feature` and `start_ticket` take a `machine_id` (§7), and a
+   `spend` grant can send a run to **any registered machine** — `GrantRecord` has
+   no machine list either, and the consent screen does not name machines. Keeping
+   `spend` as the scope for remote launches was decided (§7); whether a grant
+   should also be narrowed to particular machines was not.
+3. **The CLI's relationship to the running app** — an app-attached command, or a
    short-lived single-writer process? See §3.
-3. **`server/discover`'s shape** is unverified (§4).
-4. **The 30-day lifetime** and the absence of refresh tokens are defaults, not
+4. **`server/discover`'s shape** is unverified (§4).
+5. **The 30-day lifetime** and the absence of refresh tokens are defaults, not
    measured choices (§5).
-5. **Unauthenticated registration** relies on the consent screen alone (§5); a
+6. **Unauthenticated registration** relies on the consent screen alone (§5); a
    client's `client_name` is self-asserted and unchecked.
 
 ---

@@ -71,6 +71,7 @@ function ticket(seq: number, state: Ticket['state']): TicketView {
       agent_kind: null,
       model: null,
       effort: null,
+      machine_id: null,
       attachments: [],
       state,
       drop_reason: null,
@@ -81,6 +82,7 @@ function ticket(seq: number, state: Ticket['state']): TicketView {
       updated_at: 0,
     },
     standing: { id: `t${seq}`, lane: 'ready', startable: false, blockers: [] },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 }
@@ -89,6 +91,8 @@ function board(...tickets: TicketView[]): DiscoveryBoard {
   return {
     tickets,
     progress: { blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 0, live: tickets.length },
+    discovery_default: { kind: 'local' },
+    local_host: 'local',
   };
 }
 

@@ -34,7 +34,10 @@ pub(super) const NOTIFY_ON: &[&str] = &[
 /// and mirroring them back would let the runner's copy overwrite the local
 /// pin. `resolved_branch` is not one of them — the runner cuts the branch, so
 /// its name is an answer only the runner has.
-fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
+///
+/// `local_mr_state` is the shadow row's current value, for
+/// [`shadow_mr_state`].
+fn shadow_feature_patch(feature: &Feature, local_mr_state: Option<&str>) -> FeaturePatch {
     FeaturePatch {
         effort: None,
         status: Some(feature.status.clone()),
@@ -44,7 +47,7 @@ fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
         agent_kind: Some(feature.agent_kind.clone()),
         model: Some(feature.model.clone()),
         mr_url: Some(feature.mr_url.clone()),
-        mr_state: Some(feature.mr_state.clone()),
+        mr_state: Some(shadow_mr_state(local_mr_state, feature.mr_state.as_deref())),
         pr_title: Some(feature.pr_title.clone()),
         pr_body: Some(feature.pr_body.clone()),
         // The runner measured the baseline and the runner's own validate read
@@ -61,6 +64,24 @@ fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
         diff_base_branch: None,
         resolved_branch: Some(feature.resolved_branch.clone()),
     }
+}
+
+/// The `mr_state` a detached run's shadow row keeps, given its current value
+/// and the runner's.
+///
+/// The runner is not the only writer: the desktop `MrMonitor` polls the forge
+/// and writes `merged` onto the shadow itself, and the runner's copy can lag
+/// it by a poll or more. A landed ticket's lane, and every dependant it
+/// released, derive from this column, so a lagging copy must never move it
+/// back in flight. A merge is irreversible on every forge, so a local
+/// `merged` is never overwritten. `closed` gets no such guard: a closed PR can be
+/// reopened, and the runner seeing `open` again is the truth.
+pub(super) fn shadow_mr_state(local: Option<&str>, runner: Option<&str>) -> Option<String> {
+    match local {
+        Some("merged") => local,
+        _ => runner,
+    }
+    .map(str::to_string)
 }
 
 /// The status a detached run's shadow row shows, given the runner's own
@@ -141,11 +162,12 @@ pub(super) async fn hydrate_shadow_feature(
     let steps: Vec<StepExecution> = serde_json::from_value(steps_value)
         .map_err(|error| format!("shadow steps decode: {error}"))?;
     let feature_id = feature.id.clone();
-    if ctx.features.get(&feature_id)?.is_none() {
-        ctx.features.add(feature.clone())?;
-    } else {
-        ctx.features
-            .update(&feature_id, &shadow_feature_patch(&feature))?;
+    match ctx.features.get(&feature_id)? {
+        None => ctx.features.add(feature.clone())?,
+        Some(local) => ctx.features.update(
+            &feature_id,
+            &shadow_feature_patch(&feature, local.mr_state.as_deref()),
+        )?,
     }
 
     let store = FsArtifactStore::new(ctx.app_data_dir.clone());

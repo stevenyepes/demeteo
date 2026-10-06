@@ -80,6 +80,15 @@ pub trait RemoteRunMirrorPort: Send + Sync {
     fn delete_for_feature(&self, feature_id: &str) -> Result<(), String>;
     fn get(&self, machine_id: &str, run_id: &str) -> Result<Option<RemoteRunMirror>, String>;
     fn list(&self) -> Result<Vec<RemoteRunMirror>, String>;
+    /// The runs mirrored for `feature_ids`, most recently *submitted*
+    /// (`created_at`) first — unlike [`Self::list`], whose `updated_at` order
+    /// lets a reconcile of an older run overtake a newer submit. An empty
+    /// slice yields no rows.
+    ///
+    /// Sized for one board: the SQLite adapter binds a parameter per id, so a
+    /// slice past SQLite's bound-parameter limit (32 766 in the bundled build)
+    /// is an `Err`, not a partial answer.
+    fn list_for_features(&self, feature_ids: &[&str]) -> Result<Vec<RemoteRunMirror>, String>;
 }
 
 /// The `release_feature_cache` RPC of the `demeteo-runner` on `machine_id`,

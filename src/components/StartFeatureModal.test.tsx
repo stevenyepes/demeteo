@@ -500,6 +500,128 @@ describe('StartFeatureModal runner compatibility', () => {
     },
   );
 
+  describe('repository selection', () => {
+    const repo = { id: 'repo-1', repo_path: '/src/app', provider_id: 'provider-1' };
+
+    function renderWithRepo() {
+      const onLaunch = vi.fn();
+      render(
+        <StartFeatureModal
+          isOpen
+          projectId="project-1"
+          repositories={[repo]}
+          onClose={vi.fn()}
+          onLaunch={onLaunch}
+        />,
+      );
+      return onLaunch;
+    }
+
+    // `launch_run` refuses a target repo on a local launch, as it does every
+    // other detached-only option.
+    it('sends no target repo for a run on this machine', async () => {
+      mockBackend(reports.compatible);
+      const onLaunch = renderWithRepo();
+      await fillIn();
+      await waitFor(() => expect(launchButton()).toBeEnabled());
+
+      fireEvent.click(launchButton());
+
+      expect(onLaunch).toHaveBeenCalledOnce();
+      expect(onLaunch.mock.calls[0][0]).toMatchObject({ targetRepos: undefined, unattended: undefined });
+    });
+
+    it('sends the selected repo for a detached run', async () => {
+      mockBackend(reports.compatible);
+      const onLaunch = renderWithRepo();
+      await fillIn();
+      await pickMachine(box.id);
+      await waitFor(() => expect(launchButton()).toBeEnabled());
+
+      fireEvent.click(launchButton());
+
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({ machineId: box.id, targetRepos: [repo.id], unattended: true }),
+      );
+    });
+  });
+
+  // `launch_run` refuses a non-positive cap, and dropping one instead would
+  // launch an uncapped paid run the user meant to bound.
+  describe('detached caps', () => {
+    const costCap = () => screen.getByLabelText(/max cost/i);
+    const wallClockCap = () => screen.getByLabelText(/max wall-clock/i);
+
+    async function detachedAndReady() {
+      mockBackend(reports.compatible);
+      const onLaunch = renderModal();
+      await fillIn();
+      await pickMachine(box.id);
+      await waitFor(() => expect(launchButton()).toBeEnabled());
+      return onLaunch;
+    }
+
+    it.each([
+      ['cost', '0', costCap, /greater than 0/i],
+      ['cost', '-5', costCap, /greater than 0/i],
+      ['cost', 'abc', costCap, /greater than 0/i],
+      ['wall-clock', '0', wallClockCap, /whole number of minutes/i],
+      ['wall-clock', '-1', wallClockCap, /whole number of minutes/i],
+      ['wall-clock', '1.5', wallClockCap, /whole number of minutes/i],
+      ['wall-clock', 'soon', wallClockCap, /whole number of minutes/i],
+    ])('flags a %s cap of %s and refuses to launch', async (_name, value, field, message) => {
+      const onLaunch = await detachedAndReady();
+
+      fireEvent.change(field(), { target: { value } });
+
+      expect(screen.getByText(message)).toBeInTheDocument();
+      expect(field()).toHaveAttribute('aria-invalid', 'true');
+      expect(launchButton()).toBeDisabled();
+      fireEvent.click(launchButton());
+      fireEvent.keyDown(field(), { key: 'Enter', ctrlKey: true });
+      expect(onLaunch).not.toHaveBeenCalled();
+    });
+
+    it('sends positive caps unchanged', async () => {
+      const onLaunch = await detachedAndReady();
+
+      fireEvent.change(costCap(), { target: { value: '2.5' } });
+      fireEvent.change(wallClockCap(), { target: { value: '45' } });
+      fireEvent.click(launchButton());
+
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({ machineId: box.id, maxCostUsd: 2.5, maxWallClockMins: 45 }),
+      );
+    });
+
+    it('treats blank caps as no cap', async () => {
+      const onLaunch = await detachedAndReady();
+
+      fireEvent.change(costCap(), { target: { value: '0' } });
+      fireEvent.change(costCap(), { target: { value: '  ' } });
+      expect(launchButton()).toBeEnabled();
+      fireEvent.click(launchButton());
+
+      expect(onLaunch).toHaveBeenCalledOnce();
+      expect(onLaunch.mock.calls[0][0]).toMatchObject({
+        maxCostUsd: undefined,
+        maxWallClockMins: undefined,
+      });
+    });
+
+    it('stops blocking launch once the run is no longer detached', async () => {
+      const onLaunch = await detachedAndReady();
+      fireEvent.change(costCap(), { target: { value: '0' } });
+      expect(launchButton()).toBeDisabled();
+
+      fireEvent.change(screen.getByDisplayValue(/box — detached/i), { target: { value: '' } });
+
+      await waitFor(() => expect(launchButton()).toBeEnabled());
+      fireEvent.click(launchButton());
+      expect(onLaunch.mock.calls[0][0]).toMatchObject({ maxCostUsd: undefined });
+    });
+  });
+
   it('does not block launch while the probe is still in flight', async () => {
     const probe = mockBackend(undefined);
     renderModal();

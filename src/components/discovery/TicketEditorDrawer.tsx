@@ -15,9 +15,12 @@ import {
   type TicketDraft,
 } from '../../lib/ticketEditor';
 import { stateLabel, ticketTone, type TicketIndex } from '../../lib/ticketPresentation';
+import { draftPlacement, placementHost } from '../../lib/ticketPlacement';
 import type {
   ConfigOptionValue,
   DiscoveryBoard,
+  Machine,
+  RunPlacement,
   TicketView,
   WorkflowWithSteps,
 } from '../../types';
@@ -29,15 +32,19 @@ import { TicketAttachmentsCard } from './TicketAttachmentsCard';
 import { TicketEdgesCard } from './TicketEdgesCard';
 import { TicketFieldList } from './TicketFieldList';
 import { TicketForceStart } from './TicketForceStart';
+import { TicketPlacementField } from './TicketPlacementField';
 
 interface TicketEditorDrawerProps {
   view: TicketView;
   index: TicketIndex;
   siblings: readonly TicketView[];
   workflows: readonly WorkflowWithSteps[];
-  /** Where the models are probed — the Discovery's own host, which is the one
-   *  that will answer. */
-  machineId: string;
+  /** Every configured machine, for the placement picker. */
+  machines: readonly Machine[];
+  discoveryDefault: RunPlacement;
+  /** `DiscoveryBoard.local_host`. Models are probed on the machine the draft's
+   *  placement runs on, which for Local is this — not the Discovery's host. */
+  localHost: string;
   busy: boolean;
   onClose: () => void;
   /** `ticket_update` returns the whole board, because an edited edge moves the
@@ -70,7 +77,9 @@ export function TicketEditorDrawer({
   index,
   siblings,
   workflows,
-  machineId,
+  machines,
+  discoveryDefault,
+  localHost,
   busy,
   onClose,
   onSaved,
@@ -128,13 +137,15 @@ export function TicketEditorDrawer({
   // biome-ignore lint/correctness/useExhaustiveDependencies: `updated_at` is what makes the briefing stale; it is a dependency of the fetch, not of the callback.
   useEffect(() => readBriefing(), [readBriefing, updatedAt]);
 
+  const probeHost = placementHost(draftPlacement(draft.machineId, discoveryDefault), localHost);
+
   useEffect(() => {
     if (!draft.agentKind) {
       setModels([]);
       return;
     }
     let cancelled = false;
-    getAgentModels(machineId, draft.agentKind)
+    getAgentModels(probeHost, draft.agentKind)
       .then((list) => {
         if (!cancelled) setModels(list ?? []);
       })
@@ -144,7 +155,7 @@ export function TicketEditorDrawer({
     return () => {
       cancelled = true;
     };
-  }, [machineId, draft.agentKind]);
+  }, [probeHost, draft.agentKind]);
 
   function set<K extends keyof TicketDraft>(key: K, value: TicketDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -329,6 +340,13 @@ export function TicketEditorDrawer({
                 label: `effort: ${EFFORT_LABELS[level].toLowerCase()}`,
               }))}
             />
+            <TicketPlacementField
+              discoveryDefault={discoveryDefault}
+              machines={machines}
+              value={draft.machineId}
+              disabled={disabled}
+              onChange={(value) => set('machineId', value)}
+            />
           </div>
         </div>
 
@@ -352,6 +370,7 @@ export function TicketEditorDrawer({
           view={view}
           index={index}
           busy={disabled}
+          needsSave={dirty}
           onStart={onStart}
           onForceStart={onForceStart}
           onDrop={onDrop}

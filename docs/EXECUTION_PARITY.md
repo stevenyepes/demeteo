@@ -72,6 +72,16 @@ worked example:
   propagated verbatim. A control silently succeeding against a runner that
   ignored it is the exact divergence this document exists to forbid.
 
+Starting a run holds to the same rule from the other end. The UI, Discovery
+tickets and MCP all launch through `application::launch::launch_run`, which
+holds the only `match` on `RunPlacement`; no caller branches on transport, or
+even on placement. A placement is a destination, not a transport —
+`RunPlacement::Local` is the project's own compute through the step executor,
+whether that is a subprocess or SSH, and `Detached` hands the run to that
+machine's runner — so the match chooses *who drives* the run, never *how a
+command reaches the machine*. Two launch surfaces given the same placement
+therefore produce the same run, and a refusal reads the same on each.
+
 ## Platform is not transport
 
 The guarantee quantifies over **transports**, not over machines. Two transports

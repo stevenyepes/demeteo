@@ -417,6 +417,7 @@ fn write(
             agent_kind: ticket.body.agent_kind.clone(),
             model: ticket.body.model.clone(),
             effort: ticket.body.effort,
+            machine_id: None,
             attachments: Vec::new(),
             state: TicketState::Unstarted,
             drop_reason: None,
