@@ -284,6 +284,16 @@ pub enum DomainEvent {
     /// [`NotificationKind::CachesReclaimed`]: crate::domain::models::NotificationKind::CachesReclaimed
     CachesReclaimed { project_id: String, message: String },
 
+    /// The live half of a [`NotificationKind::RunnerBranchStale`] row, so the
+    /// bell refreshes without waiting for its next read.
+    ///
+    /// [`NotificationKind::RunnerBranchStale`]: crate::domain::models::NotificationKind::RunnerBranchStale
+    RunnerBranchStale {
+        project_id: String,
+        feature_id: String,
+        message: String,
+    },
+
     /// Where a cache sweep has got to — the background one and one asked for
     /// from Storage alike, since an on-demand sweep queues behind a running
     /// one and the only honest progress to show meanwhile is that one's. A

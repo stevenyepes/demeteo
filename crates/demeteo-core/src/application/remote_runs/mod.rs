@@ -1,4 +1,5 @@
 mod attachments;
+mod branch_refresh;
 mod cache_release;
 mod client_id;
 mod compatibility;
@@ -11,6 +12,9 @@ mod sequence_mirror;
 mod submit;
 mod transport;
 
+pub use branch_refresh::{
+    refresh_runner_branch, with_runner_branch_refresh, BranchRefreshPorts, RunnerBranchRpc,
+};
 pub use cache_release::{
     pending_runner_releases, release_on_runner, retry_pending_runner_releases, RunnerCacheRpc,
 };

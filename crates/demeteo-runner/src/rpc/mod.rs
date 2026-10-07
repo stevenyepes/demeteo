@@ -12,6 +12,7 @@
 //! response per line out — simple enough to test with `nc -U` or a raw
 //! socket client, no RPC framework dependency.
 
+mod branch;
 mod credentials;
 mod gates;
 mod lifecycle;
@@ -178,6 +179,9 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         "set_step_assignment" => lifecycle::set_step_assignment(svc, req.params, cid)
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+        "refresh_feature_branch" => branch::refresh_feature_branch(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         other => Err(format!("unknown method: {}", other)),

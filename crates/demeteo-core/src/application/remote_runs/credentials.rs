@@ -11,6 +11,21 @@ pub(super) async fn inject_pat_for_run(
     run_id: &str,
     row: &RemoteRunMirror,
 ) -> Result<(), AppError> {
+    let pat = pat_for_run(ctx, row)?;
+
+    remote_rpc(
+        ctx,
+        machine_id,
+        "inject_credentials",
+        serde_json::json!({ "run_id": run_id, "git_pat": pat }),
+    )
+    .await
+    .map_err(AppError::from)?;
+    Ok(())
+}
+
+/// The git provider PAT of the laptop project `row` was submitted from.
+pub(super) fn pat_for_run(ctx: &AppContext, row: &RemoteRunMirror) -> Result<String, AppError> {
     let project_id = row.project_id.clone().ok_or_else(|| {
         AppError::from("Run has no project on record; cannot resolve its git provider".to_string())
     })?;
@@ -32,17 +47,7 @@ pub(super) async fn inject_pat_for_run(
             AppError::from("Repository's git provider instance is not configured".to_string())
         })?;
     let git_ops = GitOpsHelper::new(ctx.app_settings.clone(), ctx.exec.clone());
-    let pat = git_ops
+    git_ops
         .get_provider_pat(&provider.id.0)
-        .map_err(AppError::from)?;
-
-    remote_rpc(
-        ctx,
-        machine_id,
-        "inject_credentials",
-        serde_json::json!({ "run_id": run_id, "git_pat": pat }),
-    )
-    .await
-    .map_err(AppError::from)?;
-    Ok(())
+        .map_err(AppError::from)
 }
