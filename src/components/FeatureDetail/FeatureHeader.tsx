@@ -41,6 +41,9 @@ interface FeatureHeaderProps {
    *  publish now lives in that one pane, so the rules for when each is offered
    *  are spelled once, where the buttons are. */
   onOpenSync: () => void;
+  /** False once the pull request is merged or closed: a merge into this
+   *  branch can no longer reach one, so the header stops offering it. */
+  syncOffered?: boolean;
   onPublish: () => void;
   onCleanup: () => void;
   /** Fetch `origin/<base>` and count again. This is the only press in the app
@@ -92,6 +95,7 @@ export function FeatureHeader({
   onBrowseCode,
   onCancelFeature,
   onOpenSync,
+  syncOffered = true,
   onPublish,
   onCleanup,
   onRefreshDrift,
@@ -217,6 +221,7 @@ export function FeatureHeader({
           )}
           {(status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'awaiting_mr') && (
             <>
+              {syncOffered && (
               <button
                 onClick={onOpenSync}
                 data-testid="open-sync"
@@ -226,6 +231,7 @@ export function FeatureHeader({
                 <GitBranch className="w-3.5 h-3.5" />
                 {syncBadge > 0 ? `Sync · ${syncBadge}` : 'Sync'}
               </button>
+              )}
               {/* The finalize step opens the PR itself at the end of a run,
                   so once there is a URL the only useful action is to go
                   look at it. Publishing by hand stays available for features

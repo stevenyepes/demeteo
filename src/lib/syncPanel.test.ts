@@ -698,6 +698,39 @@ describe('describeSyncPanel', () => {
   });
 });
 
+describe('a settled pull request', () => {
+  /** A merge into a branch whose request the forge has finished with can no
+   *  longer reach one, whatever the count says. */
+  it.each(['merged', 'closed'] as const)('offers no sync once the request is %s', (settled) => {
+    const model = panel({ session: null, drift: drift(4), canSync: true, settled });
+
+    expect(model.state).toBe('request_settled');
+    expect(model.chipLabel).toBe(settled === 'merged' ? 'PR merged' : 'PR closed');
+    expect(model.badge).toBe(0);
+    expect(model.actions).toEqual([]);
+  });
+
+  it('settles a resolution origin already has, which is a finished sync too', () => {
+    const model = panel({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 }),
+      drift: drift(4),
+      canSync: true,
+      settled: 'merged',
+    });
+
+    expect(model.state).toBe('request_settled');
+    expect(intents(model)).not.toContain('sync');
+  });
+
+  /** The merge is still on disk, and abort is the only thing that removes it. */
+  it('leaves a live conflict its way out', () => {
+    const model = panel({ session: session(), drift: null, canSync: true, settled: 'merged' });
+
+    expect(model.state).toBe('conflicted');
+    expect(intents(model)).toContain('abort');
+  });
+});
+
 describe('syncIntentMovesBranch', () => {
   /** The drift read is suspended while one of these is in flight. `refresh`
    *  *is* the read, and suspending on it superseded the fetch that press had

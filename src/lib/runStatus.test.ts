@@ -20,6 +20,8 @@ const FEATURE_STATUSES: { status: string; label: string; active: boolean }[] = [
   { status: 'failed', label: 'Failed', active: false },
   { status: 'cancelled', label: 'Cancelled', active: false },
   { status: 'published', label: 'Published', active: false },
+  { status: 'merged', label: 'Merged', active: false },
+  { status: 'pr_closed', label: 'PR closed', active: false },
 ];
 
 describe('featureRunStatus / runStatusMeta', () => {
@@ -46,7 +48,7 @@ describe('featureRunStatus / runStatusMeta', () => {
 // MrPublisher sets `status = 'completed'` and the MR fields in one write, so
 // `status` alone cannot distinguish a shipped run from a bare one.
 describe('published beats completed', () => {
-  it.each(['draft', 'open', 'merged'])("resolves mr_state='%s' to 'published'", (mrState) => {
+  it.each(['draft', 'open'])("resolves mr_state='%s' to 'published'", (mrState) => {
     const feature: FeatureRunStatusFields = {
       status: 'completed',
       mr_url: 'https://github.com/acme/repo/pull/7',
@@ -57,14 +59,40 @@ describe('published beats completed', () => {
     expect(runStatusMeta(featureRunStatus(feature)).label).toBe('Published');
   });
 
-  it('falls through to the feature status when the PR closed without merging', () => {
+  it("resolves mr_state='merged' to its own status, so the list tells it from an open PR", () => {
+    const feature: FeatureRunStatusFields = {
+      status: 'completed',
+      mr_url: 'https://github.com/acme/repo/pull/7',
+      mr_state: 'MERGED',
+    };
+
+    expect(featureRunStatus(feature)).toBe('merged');
+    expect(runStatusMeta(featureRunStatus(feature)).label).toBe('Merged');
+  });
+
+  it('keeps a replayed merged run at its own status while it runs', () => {
     expect(
-      featureRunStatus({
-        status: 'completed',
-        mr_url: 'https://github.com/acme/repo/pull/7',
-        mr_state: 'closed',
-      }),
-    ).toBe('completed');
+      featureRunStatus({ status: 'running', mr_url: 'https://github.com/acme/repo/pull/7', mr_state: 'merged' }),
+    ).toBe('running');
+  });
+
+  it('labels a PR closed without merging, rather than leaving it at completed', () => {
+    const feature: FeatureRunStatusFields = {
+      status: 'completed',
+      mr_url: 'https://github.com/acme/repo/pull/7',
+      mr_state: 'closed',
+    };
+
+    expect(featureRunStatus(feature)).toBe('pr_closed');
+    expect(runStatusMeta(featureRunStatus(feature)).label).toBe('PR closed');
+  });
+
+  /** The list is scanned for what is left to merge; a shared tone made that a
+   *  matter of reading every label. */
+  it('gives published, merged and closed three different tones', () => {
+    const tones = ['published', 'merged', 'pr_closed'].map((s) => runStatusMeta(s).tone);
+
+    expect(new Set(tones).size).toBe(3);
   });
 
   it('does not treat a half-populated MR as published', () => {
