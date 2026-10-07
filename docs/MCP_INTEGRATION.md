@@ -331,7 +331,7 @@ must not drift.
 | `run_events_since` | `read` | Durable run events after an offset, ascending |
 | `create_workspace_project` | `configure` | Register a Project and its repositories — **rows only**: no clone, no bootstrap, no settings row, so the Project stays `bootstrapping` and `apply_run_shape_patch` refuses it until it is bootstrapped |
 | `apply_run_shape_patch` | `configure` | Write the run-shape subset of a Project's settings (§7.1) |
-| `start_feature` | `spend` | Start a Feature run; returns a handle as soon as the executor accepts it |
+| `start_feature` | `spend` | Start a Feature run, optionally with attachments (§7.2); returns a handle as soon as the executor accepts it |
 | `start_ticket` | `spend` | Start a Ticket's current attempt |
 
 **Reads span every project.** `list_features` and `list_pending_gates` with no
@@ -340,10 +340,11 @@ must not drift.
 `list_pending_gates` is a **read**. It lets a client *see* that a Gate is waiting;
 it does not conflict with the permanent exclusion of Gate approval (§8).
 
-`start_feature` takes only `project_id`, `workflow_id`, `title` and
-`description` (`AgentFeatureLaunch`). Agent, model, effort, step overrides, origin and
-budget are absent on purpose: they are the run's own business, not a caller's to
-set from outside.
+`start_feature` takes `project_id`, `workflow_id`, `title` and `description`, plus an
+optional `attachments` array (`AgentFeatureLaunch`, §7.2). Agent, model, effort,
+step overrides, origin and budget are absent on purpose: they are the run's own
+business, not a caller's to set from outside. Attachments are the one input that
+is the caller's own, so they are the exception.
 
 A tool result carries `structuredContent` and an `isError` flag. An operation
 that fails returns `isError: true` on HTTP `200`; a missing or insufficient
@@ -398,6 +399,85 @@ workflow identifier that could read as a flag or carries whitespace. A field add
 to the patch has to be traced to its sinks, not only judged by its name.
 
 ---
+
+### 7.2 Attachments on `start_feature`
+
+Each `attachments` item names its bytes one of two ways, never both and never
+neither:
+
+- **`path`** — an absolute path **on the Demeteo host**, not on the caller's
+  machine. The file is read by Demeteo; a relative path is refused.
+- **`content_base64`** — the bytes inline, standard padded base64, with a required
+  `filename`. `mime` is optional on both forms.
+
+Accepted types are the nine the UI accepts, decided once by
+`resolve_attachment_type` in `crates/demeteo-core/src/application/attachments.rs`.
+This surface is stricter than the UI: there is no extension fallback for an
+unrecognised mime, and the content must match the signature of the type it was
+accepted as.
+
+**Where the type comes from differs by form.** Inline, the supplied `mime` wins
+and the `filename` extension is the fallback. By `path`, the type is derived from
+the file's own name **and** the name of the file a symlink resolves to; a `mime`
+may only confirm it, so a `filename` or `mime` cannot turn a `credentials` file
+into text. A symlink whose target has a different type than its own name is
+refused with the generic unreadable-path message, so `notes.txt` linked to an
+extensionless file is not text. A path inside Demeteo's own data directory is
+refused, the path is canonicalised first so a symlink does not walk around that
+either, and the file is read through a bounded reader rather than trusting its
+reported length. The batch byte cap is charged for the bytes actually read, never
+for the length the file system reports, so a file that reports `0` still counts.
+`agent_attachment_forbidden_roots` in that same file says which entries are
+forbidden and what that leaves open.
+
+A TIFF by `path` is stored under the file's own extension whatever `filename`
+says; `image/tiff` has no `ext_for_mime` entry on purpose (§24 item 4 in
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md#24-what-is-left-open-by-attachments-on-the-mcp-start_feature)).
+
+The limits are `MAX_ATTACHMENT_BYTES` (per file), `MAX_ATTACHMENTS_PER_FEATURE`
+(after dedup by content hash), `MAX_AGENT_ATTACHMENT_BATCH_BYTES` (distinct
+bytes per call) and `MAX_AGENT_ATTACHMENT_ITEMS` (raw items per call, duplicates
+included, checked before any file is read), all in that same file.
+
+Inline content is also bounded by the transport: a request body over
+`MAX_BODY_BYTES` in `crates/demeteo-core/src/adapters/mcp/protocol.rs` (2 MiB)
+is refused with `413` before any of this runs. Base64 inflates by a third, so
+about 1.5 MiB of raw bytes fits inline; anything larger should go by `path`.
+
+**All or nothing.** The whole batch is validated and decoded before the Feature
+is started. If an attachment is invalid the call returns `isError: true` on HTTP
+`200`, the message begins `attachments[i]:` with the item's index, and no
+Feature row exists. Count and batch-size refusals name no index. A wrongly
+typed `attachments` value is a malformed argument and stays `InvalidParams`.
+
+**The returned handle's `attachments` is empty.** The Feature row is inserted
+`bootstrapping` first; the bootstrap tail commits the attachments afterwards.
+Read `get_feature` for the committed list. All-or-nothing covers an *invalid
+attachment*, not a store fault: a write that fails after validation (disk full)
+can still leave a `bootstrapping` Feature row, as it does on the UI path.
+
+**`source_filename` is the caller's raw string.** The manifest records it as given;
+it is sanitised only for the stored name, and is never used as a path. Over MCP it
+is caller-controlled rather than a browser's file name, so any renderer must
+escape it.
+
+**Detached runs have a tighter cap.** Once MCP launches can be placed on a machine
+(today `start_feature` always launches locally; [OPEN_QUESTIONS §24](OPEN_QUESTIONS.md#24-what-is-left-open-by-attachments-on-the-mcp-start_feature)
+item 6), such a launch goes through
+`spool_attachments` (`crates/demeteo-core/src/application/remote_runs/attachments.rs`),
+which refuses a file over `MAX_DETACHED_ATTACHMENT_BYTES` (25 MiB) there, not
+`MAX_ATTACHMENT_BYTES`. This surface does not pre-check it. The shape this surface
+stages (empty `source_path`, bytes in memory, the caller's `filename`) is driven
+through `spool_attachments` by
+`an_mcp_inline_attachment_reaches_the_runner_as_it_was_sent` and the over-cap
+refusal by `an_inline_attachment_over_the_detached_cap_is_refused_before_anything_is_written`,
+both in `crates/demeteo-core/tests/application/remote_runs/attachments.rs`, so
+delivery of the spooled bytes to a remote machine is covered by a test. The
+runner-side materialise step is **not** exercised with an MCP-shaped item; it is
+covered only through the existing UI-attachment path.
+
+`path` is a host-file-read reachable from a `spend` grant; §9 states how far
+the guard goes.
 
 ## 8. What is excluded, and whether permanently
 
@@ -471,6 +551,16 @@ Open means unresolved. Nothing below is decided.
    measured choices (§5).
 5. **Unauthenticated registration** relies on the consent screen alone (§5); a
    client's `client_name` is self-asserted and unchecked.
+6. **`path` turns a `spend` grant into a host-file-read.** A caller can name any
+   absolute path the Demeteo process can read. The guard narrows what that
+   yields — a regular file only, a strictly allowed type whose content must match
+   its signature, the size caps in §7.2, and error text that echoes only the
+   caller's own string. The data-directory refusal, the type derived from the real
+   file name and the bounded read are specified in §7.2. It does not close the
+   hole: a readable accepted-type file outside the data directory is still
+   attached and then visible to the run's agent. There is no path allow-list. Same family as question 1: a write's reach is
+   wider than its grant says. See
+   [`OPEN_QUESTIONS.md` §19](OPEN_QUESTIONS.md#19-must-an-mcp-write-name-a-project-listed-on-the-grant).
 
 ---
 

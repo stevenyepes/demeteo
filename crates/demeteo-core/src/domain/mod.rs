@@ -33,6 +33,7 @@ pub mod discovery_host;
 pub mod discovery_question;
 pub mod ecosystem;
 pub mod expr;
+pub mod feature_launch;
 pub mod feature_origin;
 pub(crate) mod finalize;
 pub mod fix_destination;

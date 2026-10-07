@@ -19,6 +19,8 @@
 //! dependency graph tight. `compute_sha256_hex` is exposed for tests
 //! and for callers that need the hash of an already-read buffer.
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -89,6 +91,40 @@ pub fn ext_for_mime(mime: &str) -> Option<&'static str> {
         "application/json" => Some("json"),
         "application/pdf" => Some("pdf"),
         _ => None,
+    }
+}
+
+/// The name a path-form attachment is stored under.
+///
+/// A type with a canonical extension (`ext_for_mime`) never reads the name's
+/// extension, so the caller's filename passes through. A type without one —
+/// `image/tiff` — takes its extension from the name, and on the path form
+/// there is a real file whose own extension is the truer signal: the caller's
+/// filename keeps its stem and loses its extension to the basename's, so a
+/// caller-typed string cannot choose the store key. `image/tiff` is deliberately
+/// not in `ext_for_mime`: UI-dropped TIFFs already sit in the store under their
+/// own extension, and `resolved_ext` is the lookup key.
+pub fn path_form_stored_name(mime: &str, basename: &str, filename: Option<&str>) -> String {
+    let Some(filename) = filename else {
+        return basename.to_string();
+    };
+    if ext_for_mime(mime).is_some() {
+        return filename.to_string();
+    }
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("attachment");
+    match Path::new(basename)
+        .extension()
+        .and_then(|s| s.to_str())
+        .filter(|e| !e.contains(['/', '\\']))
+    {
+        Some(ext) => format!("{stem}.{}", ext.to_ascii_lowercase()),
+        // Unreachable from `agent_path_type`, which derives the mime from the
+        // basename's extension; kept so a future caller cannot smuggle one in.
+        None => stem.replace('.', "_"),
     }
 }
 
@@ -167,11 +203,42 @@ pub fn mime_for_ext(ext: &str) -> Option<&'static str> {
         "jpg" | "jpeg" => Some("image/jpeg"),
         "gif" => Some("image/gif"),
         "webp" => Some("image/webp"),
+        "tif" | "tiff" => Some("image/tiff"),
         "txt" => Some("text/plain"),
         "md" | "markdown" => Some("text/markdown"),
         "json" => Some("application/json"),
         "pdf" => Some("application/pdf"),
         _ => None,
+    }
+}
+
+/// A declared mime reduced to its bare `type/subtype`: trimmed, lower-cased,
+/// parameters (`; charset=utf-8`) dropped.
+pub fn normalize_mime(raw: &str) -> String {
+    let essence = raw.split(';').next().unwrap_or("");
+    essence.trim().to_ascii_lowercase()
+}
+
+const PDF_MARKER_WINDOW: usize = 1024;
+
+/// Whether `bytes` carry the magic number (or, for text types, the shape) of
+/// the already-normalized `mime`. A mime with no rule here is `false`: the
+/// caller decided the type is allowed, this only vouches for the content.
+pub fn content_matches_mime(mime: &str, bytes: &[u8]) -> bool {
+    match mime {
+        "image/png" => bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+        "image/jpeg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP".as_slice()),
+        "image/tiff" => bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*"),
+        "application/pdf" => bytes
+            .windows(5)
+            .take(PDF_MARKER_WINDOW)
+            .any(|w| w == b"%PDF-"),
+        "text/plain" | "text/markdown" | "application/json" => {
+            !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok()
+        }
+        _ => false,
     }
 }
 
