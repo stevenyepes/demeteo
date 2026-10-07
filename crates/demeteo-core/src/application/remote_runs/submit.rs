@@ -2,54 +2,44 @@ use super::attachments::{cleanup_attachment_spool, mark_placeholder_failed, spoo
 use super::compatibility::ensure_runner_compatible;
 use super::rpc::{json_str, remote_rpc};
 use crate::adapters::worktree::git_ops::GitOpsHelper;
-use crate::application::attachments::StagedAttachmentInput;
-use crate::domain::feature_origin::FeatureOrigin;
-use crate::domain::ids::{FeatureId, ProjectId, WorkflowId};
+use crate::domain::ids::{FeatureId, MachineId, ProjectId, WorkflowId};
 use crate::domain::models::{
-    EffortLevel, Feature, ProjectSettings, ProviderInstance, Repository, StepOverride,
-    WorkflowVersion,
+    Feature, ProjectSettings, ProviderInstance, Repository, WorkflowVersion,
 };
+use crate::domain::run_placement::{detached_target_refusal, DetachedOptions};
 use crate::domain::run_spec::{RunBudget, RunOrigin, RunSpec, RunSpecAttachment, RunSpecProvider};
 use crate::error::AppError;
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
-pub struct SubmitInput {
-    pub machine_id: String,
-    pub project_id: String,
-    pub workflow_id: String,
-    pub title: String,
-    pub description: String,
-    pub agent_kind: Option<String>,
-    pub model: Option<String>,
-    pub effort: Option<EffortLevel>,
-    pub commit_artifacts: Option<bool>,
-    pub loop_iterations: Option<u32>,
-    pub max_budget_usd: Option<f64>,
-    pub step_overrides: Option<Vec<StepOverride>>,
-    pub staged_attachments: Option<Vec<StagedAttachmentInput>>,
-    pub target_repo_id: Option<String>,
-    pub unattended: bool,
-    pub max_cost_usd: Option<f64>,
-    pub max_wall_clock_secs: Option<u64>,
-    /// Where the run's branch is cut from. `None` — a launch that chose
-    /// nothing, or a frontend older than the picker — is
-    /// [`FeatureOrigin::DefaultBranch`], which is what every detached run did
-    /// before V41.
-    pub origin: Option<FeatureOrigin>,
-    /// What the run's review diff is measured against and what its PR targets,
-    /// when that is not where it started. See
-    /// [`FeatureOrigin::base_branch`].
-    pub diff_base_branch: Option<String>,
-    /// This app's own build, read from the running bundle by the caller; the
-    /// runner must be exactly this build to accept a submit.
-    pub app_version: String,
+/// A detached launch is the same [`FeatureLaunch`] a local one starts from,
+/// plus the options only a detached run reads, so the two field lists cannot
+/// drift. `launch.feature_id`, when given, is the shadow Feature's id.
+pub(crate) struct SubmitInput {
+    pub machine_id: MachineId,
+    pub launch: FeatureLaunch,
+    pub detached: DetachedOptions,
 }
 
+/// Once `submit_run` is accepted the run exists and is spending, so nothing
+/// after it may turn the submit into an `Err` (D8): a caller that saw one
+/// would record no attempt and let the same run be submitted again. What
+/// went wrong after acceptance is carried here instead.
 pub struct SubmitOutcome {
     pub run_id: String,
     pub machine_id: String,
     pub status: String,
     pub feature_id: String,
+    /// The shadow row as it was written, so the caller never has to read it
+    /// back after acceptance.
+    pub feature: Feature,
+    /// Why the run is waiting for its PAT, when the runner accepted it but
+    /// `inject_credentials` failed. `reinject_credentials` is the recovery.
+    pub credentials_parked: Option<String>,
+    /// Why the accepted run's mirror row is missing or was left unupdated.
+    /// Reconcile hydrates only runs the mirror knows, so a missing row keeps
+    /// the run out of the inbox for good.
+    pub mirror_unrecorded: Option<String>,
 }
 
 struct ResolvedWorkflow {
@@ -124,11 +114,11 @@ fn resolve_workflow_steps(
     })
 }
 
-fn resolve_run_budget(input: &SubmitInput) -> Option<RunBudget> {
-    if input.max_cost_usd.is_some() || input.max_wall_clock_secs.is_some() {
+fn resolve_run_budget(detached: &DetachedOptions) -> Option<RunBudget> {
+    if detached.max_cost_usd.is_some() || detached.max_wall_clock_secs.is_some() {
         Some(RunBudget {
-            max_cost_usd: input.max_cost_usd,
-            max_wall_clock_secs: input.max_wall_clock_secs,
+            max_cost_usd: detached.max_cost_usd,
+            max_wall_clock_secs: detached.max_wall_clock_secs,
         })
     } else {
         None
@@ -151,7 +141,6 @@ struct ResolvedSubmit {
     attachments: Vec<RunSpecAttachment>,
     budget: Option<RunBudget>,
     feature_id: String,
-    step_overrides: Vec<StepOverride>,
     now: i64,
 }
 
@@ -165,39 +154,40 @@ impl ResolvedSubmit {
     /// is hydrated over it. A placeholder saying `DefaultBranch` for a run
     /// launched on a PR is wrong for that entire window, and wrong again
     /// whenever hydration cannot reach the runner.
-    fn shadow_feature(&self, input: &SubmitInput) -> Feature {
+    fn shadow_feature(&self, launch: &FeatureLaunch) -> Feature {
         Feature {
-            effort: input.effort,
+            effort: launch.effort,
             id: FeatureId::from(self.feature_id.clone()),
             project_id: self.project_id.clone(),
             workflow_id: Some(self.workflow.id.clone()),
             workflow_version_id: Some(self.workflow.version.id.clone()),
-            title: input.title.clone(),
-            description: input.description.clone(),
+            title: launch.title.clone(),
+            description: launch.description.clone(),
             status: "pending".to_string(),
             total_cost: 0.0,
             duration: "0s".to_string(),
             tokens: 0,
             created_at: self.now,
-            agent_kind: input.agent_kind.clone(),
-            model: input.model.clone(),
+            agent_kind: launch.agent_kind.clone(),
+            model: launch.model.clone(),
             mr_url: None,
             mr_state: Some("none".to_string()),
             pr_title: None,
             pr_body: None,
-            commit_artifacts: input.commit_artifacts,
-            loop_iterations: input.loop_iterations,
-            max_budget_usd: input.max_budget_usd,
-            step_overrides: self.step_overrides.clone(),
+            commit_artifacts: launch.commit_artifacts,
+            loop_iterations: launch.loop_iterations,
+            max_budget_usd: launch.max_budget_usd,
+            step_overrides: launch.step_overrides.clone(),
             attachments: Vec::new(),
             harness_baseline: None,
-            origin: input.origin.clone().unwrap_or_default(),
-            diff_base_branch: input.diff_base_branch.clone(),
+            origin: launch.origin.clone(),
+            diff_base_branch: launch.diff_base_branch.clone(),
             resolved_branch: None,
         }
     }
 
-    /// The spec the runner executes.
+    /// The spec the runner executes. It is always unattended — see
+    /// [`crate::domain::run_placement`].
     ///
     /// `origin` rides as [`RunOrigin::Supported`] — the arm a runner of any
     /// version either honours or refuses by name
@@ -205,57 +195,72 @@ impl ResolvedSubmit {
     /// smaller version of the same thing: it tells the runner this launch
     /// chose nothing, and a run launched on a PR head would start from the
     /// default branch with nothing anywhere reporting a disagreement.
-    fn run_spec(&self, input: &SubmitInput) -> RunSpec {
+    fn run_spec(&self, launch: &FeatureLaunch) -> RunSpec {
         RunSpec {
-            effort: input.effort,
+            effort: launch.effort,
             feature_id: Some(self.feature_id.clone()),
-            title: input.title.clone(),
-            description: input.description.clone(),
+            title: launch.title.clone(),
+            description: launch.description.clone(),
             provider: self.provider.clone(),
             repo_path: self.repo_path.clone(),
             workflow_json: self.workflow.json.clone(),
-            agent_kind: input.agent_kind.clone(),
-            model: input.model.clone(),
-            loop_iterations: input.loop_iterations,
-            max_budget_usd: input.max_budget_usd,
-            step_overrides: self.step_overrides.clone(),
-            commit_artifacts: input.commit_artifacts,
+            agent_kind: launch.agent_kind.clone(),
+            model: launch.model.clone(),
+            loop_iterations: launch.loop_iterations,
+            max_budget_usd: launch.max_budget_usd,
+            step_overrides: launch.step_overrides.clone(),
+            commit_artifacts: launch.commit_artifacts,
             attachments: self.attachments.clone(),
-            unattended: input.unattended,
+            unattended: true,
             budget: self.budget.clone(),
             project_settings: self.project_settings.clone(),
-            origin: input.origin.clone().map(RunOrigin::Supported),
-            diff_base_branch: input.diff_base_branch.clone(),
+            origin: Some(RunOrigin::Supported(launch.origin.clone())),
+            diff_base_branch: launch.diff_base_branch.clone(),
         }
     }
 }
 
-/// Refuses a runner that is not this app's build before anything else: a
-/// refused run must leave no placeholder row and no spooled attachment, and
-/// must never have been handed the PAT. Only this entry point is gated —
-/// status, retry and reconcile of a run already on the runner are not, so a
-/// runner upgraded mid-run does not strand it.
-pub async fn submit_remote_run(
+/// Refuses, before anything else, a machine that cannot take a detached run
+/// — this desktop, or an id with no `Machine` row — and then a runner that is
+/// not this app's build ([`crate::state::AppVersion`]): a refused run must
+/// leave no placeholder row and no spooled attachment, and must never have
+/// been handed the PAT. Only this entry point is gated — status, retry and
+/// reconcile of a run already on the runner are not, so a runner upgraded
+/// mid-run does not strand it.
+pub(crate) async fn submit_remote_run(
     ctx: &AppContext,
-    mut input: SubmitInput,
+    input: SubmitInput,
 ) -> Result<SubmitOutcome, AppError> {
-    ensure_runner_compatible(&*ctx.exec, &input.machine_id, &input.app_version).await?;
-    let project_id = ProjectId::from(input.project_id.clone());
-    let repo = resolve_target_repo(ctx, &project_id, input.target_repo_id.as_deref())?;
+    let SubmitInput {
+        machine_id,
+        mut launch,
+        detached,
+    } = input;
+    let machine = ctx
+        .machines
+        .get_machine(&machine_id)
+        .map_err(AppError::from)?;
+    if let Some(refusal) = detached_target_refusal(&machine_id, machine.as_ref()) {
+        return Err(AppError::validation(refusal));
+    }
+    let machine_id = machine_id.as_str();
+    ensure_runner_compatible(&*ctx.exec, machine_id, ctx.app_version.get()).await?;
+    let project_id = ProjectId::from(launch.project_id.clone());
+    let repo = resolve_target_repo(ctx, &project_id, detached.target_repo_id.as_deref())?;
     let provider = resolve_target_provider(ctx, &repo)?;
-    let workflow = resolve_workflow_steps(ctx, &input.workflow_id)?;
+    let workflow = resolve_workflow_steps(ctx, &launch.workflow_id)?;
     let pat = GitOpsHelper::new(ctx.app_settings.clone(), ctx.exec.clone())
         .get_provider_pat(&provider.id.0)
         .map_err(AppError::from)?;
-    let budget = resolve_run_budget(&input);
+    let budget = resolve_run_budget(&detached);
     let run_id = make_run_id();
-    let staged = input.staged_attachments.take().unwrap_or_default();
+    let staged = std::mem::take(&mut launch.staged_attachments);
     let had_attachments = !staged.is_empty();
-    let attachments = match spool_attachments(ctx, &input.machine_id, &run_id, staged).await {
+    let attachments = match spool_attachments(ctx, machine_id, &run_id, staged).await {
         Ok(attachments) => attachments,
         Err(error) => {
             if had_attachments {
-                cleanup_attachment_spool(ctx, &input.machine_id, &run_id).await;
+                cleanup_attachment_spool(ctx, machine_id, &run_id).await;
             }
             return Err(AppError::from(error));
         }
@@ -272,23 +277,26 @@ pub async fn submit_remote_run(
         project_settings: ctx.projects.get_settings(&project_id).ok().flatten(),
         attachments,
         budget,
-        feature_id: format!("f-{}", crate::paths::new_id()),
-        step_overrides: input.step_overrides.take().unwrap_or_default(),
+        feature_id: launch
+            .feature_id
+            .clone()
+            .unwrap_or_else(|| format!("f-{}", crate::paths::new_id())),
         now: crate::paths::now_ms(),
     };
     let feature_id = resolved.feature_id.clone();
     let now = resolved.now;
-    if let Err(error) = ctx.features.add(resolved.shadow_feature(&input)) {
+    let shadow = resolved.shadow_feature(&launch);
+    if let Err(error) = ctx.features.add(shadow.clone()) {
         if had_attachments {
-            cleanup_attachment_spool(ctx, &input.machine_id, &run_id).await;
+            cleanup_attachment_spool(ctx, machine_id, &run_id).await;
         }
         return Err(AppError::from(error));
     }
 
-    let spec = resolved.run_spec(&input);
+    let spec = resolved.run_spec(&launch);
     let submitted = match remote_rpc(
         ctx,
-        &input.machine_id,
+        machine_id,
         "submit_run",
         serde_json::json!({ "run_id": run_id, "spec": spec }),
     )
@@ -298,7 +306,7 @@ pub async fn submit_remote_run(
         Err(error) => {
             mark_placeholder_failed(ctx, &feature_id);
             if had_attachments {
-                cleanup_attachment_spool(ctx, &input.machine_id, &run_id).await;
+                cleanup_attachment_spool(ctx, machine_id, &run_id).await;
             }
             return Err(AppError::from(error));
         }
@@ -309,48 +317,46 @@ pub async fn submit_remote_run(
             .unwrap_or_else(|| "the runner rejected this run".to_string());
         mark_placeholder_failed(ctx, &feature_id);
         if had_attachments {
-            cleanup_attachment_spool(ctx, &input.machine_id, &run_id).await;
+            cleanup_attachment_spool(ctx, machine_id, &run_id).await;
         }
         return Err(AppError::from(error));
     }
 
-    ctx.remote_run_mirror
+    let mirror_unrecorded = ctx
+        .remote_run_mirror
         .upsert_submitted(
-            &input.machine_id,
+            machine_id,
             &run_id,
-            Some(&input.project_id),
+            Some(&launch.project_id),
             Some(&feature_id),
-            &input.title,
+            &launch.title,
             now,
         )
-        .map_err(AppError::from)?;
-    ctx.remote_run_mirror
-        .update_status(
-            &input.machine_id,
-            &run_id,
-            &status,
-            None,
-            None,
-            None,
-            None,
-            0,
-            now,
-        )
-        .map_err(AppError::from)?;
-    remote_rpc(
+        .and_then(|_| {
+            ctx.remote_run_mirror
+                .update_status(machine_id, &run_id, &status, None, None, None, None, 0, now)
+        })
+        .err();
+    if let Some(error) = &mirror_unrecorded {
+        tracing::warn!(machine = %machine_id, run = %run_id, %error, "remote run accepted but not mirrored");
+    }
+    let credentials_parked = remote_rpc(
         ctx,
-        &input.machine_id,
+        machine_id,
         "inject_credentials",
         serde_json::json!({ "run_id": run_id, "git_pat": pat }),
     )
     .await
-    .map_err(AppError::from)?;
+    .err();
 
     Ok(SubmitOutcome {
         run_id,
-        machine_id: input.machine_id,
+        machine_id: machine_id.to_string(),
         status,
         feature_id,
+        feature: shadow,
+        credentials_parked,
+        mirror_unrecorded,
     })
 }
 

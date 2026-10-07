@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::attachment::AttachedFile;
-use crate::domain::ids::{DiscoveryId, FeatureId, TicketId, WorkflowId};
+use crate::domain::ids::{DiscoveryId, FeatureId, MachineId, TicketId, WorkflowId};
 use crate::domain::models::EffortLevel;
 
 /// One unit of planned work, as the row holds it.
@@ -44,6 +44,12 @@ pub struct Ticket {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<EffortLevel>,
+    /// Where this Ticket runs when started. `None` is "not chosen", which
+    /// inherits [`default_ticket_placement`](crate::domain::run_placement::default_ticket_placement);
+    /// `Some("local")` is an explicit local choice, not the same thing. The
+    /// precedence is [`ticket_placement`](crate::domain::run_placement::ticket_placement)'s.
+    #[serde(default)]
+    pub machine_id: Option<MachineId>,
     /// Staged here and committed to the Feature when the Ticket starts (§9.3):
     /// there is no `feature_id` to attach them to until then, so a Ticket that
     /// is never started never writes an attachment row.
@@ -118,4 +124,10 @@ pub struct TicketFeatureAttempt {
     /// `None` while this is the attempt [`Ticket::feature_id`] names.
     #[serde(default)]
     pub superseded_at: Option<i64>,
+    /// Where the launch that made this attempt placed it, as
+    /// [`RunPlacement::machine_id`](crate::domain::run_placement::RunPlacement::machine_id)
+    /// spells it. `None` only for an attempt recorded before V61 that the
+    /// migration could not place.
+    #[serde(default)]
+    pub machine_id: Option<MachineId>,
 }

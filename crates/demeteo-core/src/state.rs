@@ -41,7 +41,35 @@ use crate::ports::step_executor::{GatePresenter, StepExecutor};
 use crate::ports::sync_session::SyncSessionPort;
 use crate::ports::worktree_ops::WorktreeOpsPort;
 use serde::Serialize;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// The desktop app's own version, as the bundle reports it.
+///
+/// Must be set from Tauri's `package_info().version`, never from
+/// `CARGO_PKG_VERSION`/`env!`: only the former carries the nightly override
+/// (`0.1.0-32`), so the manifest version would pass a nightly app against a
+/// stable runner (#201).
+///
+/// A shared cell rather than a `String` because `build_core_context` clones
+/// the context into the MCP listener before `lib.rs` has the version in hand;
+/// a value copied in at construction would leave that clone holding nothing.
+///
+/// Unset reads as `""`, which [`crate::domain::runner_version::assess`]
+/// cannot parse and answers `Unknown` — a refusal, so a launch is never assumed
+/// compatible with a runner because the version was missing.
+#[derive(Clone, Default)]
+pub struct AppVersion(Arc<OnceLock<String>>);
+
+impl AppVersion {
+    pub fn get(&self) -> &str {
+        self.0.get().map_or("", String::as_str)
+    }
+
+    /// The first value wins; a later call is ignored.
+    pub fn set(&self, version: String) {
+        let _ = self.0.set(version);
+    }
+}
 
 /// The single bag of ports every Tauri command can depend on.
 ///
@@ -187,6 +215,12 @@ pub struct AppContext {
     /// of each dependency, never stored (§6.3).
     pub tickets: Arc<dyn TicketPort>,
 
+    /// The Tickets with a start in flight in this process
+    /// ([`crate::application::tickets::starting`]). Nothing durable may hold
+    /// it, for [`SyncTurns`](crate::application::sync_turns::SyncTurns)'s
+    /// reason.
+    pub ticket_starts: Arc<crate::application::tickets::starting::StartingTickets>,
+
     /// The out-of-band syncs running in this process
     /// ([`crate::application::sync_turns`]). Half of what
     /// [`sync_liveness`](crate::domain::sync_session::sync_liveness) needs, and
@@ -229,6 +263,9 @@ pub struct AppContext {
     /// between the axum handler and the command the same way `presenter`/
     /// `notif` are shared between the step executor and commands today.
     pub mcp_consent: Arc<McpConsentWaiterRegistry>,
+
+    /// Set only by the desktop app; see [`AppVersion`].
+    pub app_version: AppVersion,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";
@@ -283,3 +320,7 @@ pub struct AgentCatalogEntry {
     /// carry why the answer is about Demeteo and not about the harness.
     pub personalization: crate::ports::agent_runtime::PersonalizationSupport,
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/state.rs"]
+mod tests;

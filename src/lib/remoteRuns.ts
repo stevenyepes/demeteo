@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { FeatureOrigin, RemoteRunMirror, RunEvent } from "../types";
+import type { RemoteRunMirror, RunEvent } from "../types";
 
 export async function listMirroredRuns(): Promise<RemoteRunMirror[]> {
   return invoke<RemoteRunMirror[]>("remote_list_mirrored_runs");
@@ -11,52 +11,6 @@ export async function listMirroredRuns(): Promise<RemoteRunMirror[]> {
  *  {@link listMirroredRuns}. */
 export async function reconcileRuns(): Promise<RemoteRunMirror[]> {
   return invoke<RemoteRunMirror[]>("remote_reconcile_runs");
-}
-
-/** What `remote_submit_run` resolves with — the Rust `RemoteRunHandle`. */
-export interface RemoteRunHandle {
-  run_id: string;
-  machine_id: string;
-  status: string;
-  feature_id: string;
-}
-
-/**
- * Hand a run to a machine's runner. The shadow Feature named by
- * `feature_id` is inserted before the RPC, so it exists even if the
- * submission then fails — the reconcile loop, not this call, is what
- * hydrates it.
- *
- * `targetRepoId` is singular by design: a detached run clones exactly one
- * repository, unlike a local run.
- */
-export async function submitRemoteRun(input: {
-  machineId: string;
-  projectId: string;
-  workflowId: string;
-  title: string;
-  description: string;
-  agentKind: string | null;
-  model: string | null;
-  effort: string | null;
-  commitArtifacts: boolean | null;
-  loopIterations: number | null;
-  maxBudgetUsd: number | null;
-  stepOverrides: unknown[] | null;
-  stagedAttachments: unknown[] | null;
-  targetRepoId: string | null;
-  unattended: boolean;
-  maxCostUsd: number | null;
-  maxWallClockSecs: number | null;
-  /** Where the run's branch is cut from, and what its diff is measured
-   *  against (migration V41). Left `undefined` — not `null` — when unstated,
-   *  so JSON serialization drops the key entirely and a detached launch that
-   *  names neither carries the payload that shipped before the origin
-   *  picker. */
-  origin?: FeatureOrigin;
-  diffBaseBranch?: string;
-}): Promise<RemoteRunHandle> {
-  return invoke<RemoteRunHandle>("remote_submit_run", { args: input });
 }
 
 /** The mirror row for a feature, or `null` when the feature ran locally. */

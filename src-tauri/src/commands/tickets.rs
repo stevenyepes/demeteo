@@ -5,9 +5,12 @@
 //! tickets and their derived board from one call so the graph and the board
 //! cannot disagree (§9.2).
 
+use crate::application::launch::LaunchedRun;
 use crate::domain::attachment::AttachedFile;
 use crate::domain::ids::{DiscoveryId, TicketId};
-use crate::domain::models::{Feature, Ticket};
+use crate::domain::models::Ticket;
+use crate::domain::run_placement::placement_override;
+use crate::error::AppError;
 use crate::state::AppContext;
 use demeteo_core::application::discovery;
 use demeteo_core::application::tickets::edit::TicketEdit;
@@ -42,12 +45,19 @@ pub fn ticket_update(
     tickets::edit::update(&ctx, &TicketId::from(ticket_id), &edit)
 }
 
+/// `machine_id` places this one launch and is not saved onto the ticket.
 #[tauri::command]
 pub async fn ticket_start(
     ctx: State<'_, AppContext>,
     ticket_id: String,
-) -> Result<Feature, String> {
-    tickets::launch::start(&ctx, &TicketId::from(ticket_id)).await
+    machine_id: Option<String>,
+) -> Result<LaunchedRun, AppError> {
+    tickets::launch::start(
+        &ctx,
+        &TicketId::from(ticket_id),
+        placement_override(machine_id.as_deref()),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -55,8 +65,15 @@ pub async fn ticket_force_start(
     ctx: State<'_, AppContext>,
     ticket_id: String,
     reason: String,
-) -> Result<Feature, String> {
-    tickets::launch::force_start(&ctx, &TicketId::from(ticket_id), &reason).await
+    machine_id: Option<String>,
+) -> Result<LaunchedRun, AppError> {
+    tickets::launch::force_start(
+        &ctx,
+        &TicketId::from(ticket_id),
+        &reason,
+        placement_override(machine_id.as_deref()),
+    )
+    .await
 }
 
 #[tauri::command]

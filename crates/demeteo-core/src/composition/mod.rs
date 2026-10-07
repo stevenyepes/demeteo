@@ -19,7 +19,7 @@ use crate::ports::agent_execution::AgentExecutionPort;
 use crate::ports::agent_runtime::AgentRuntime;
 use crate::ports::execution::ExecutionPort;
 use crate::ports::notification::NotificationPort;
-use crate::state::AppContext;
+use crate::state::{AppContext, AppVersion};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -361,6 +361,7 @@ pub fn build_core_context(
         discovery_turns: Arc::new(application::discovery::running::RunningTurns::default()),
         ask_turns: Arc::new(application::ask::running::RunningTurns::default()),
         tickets: tickets_repo,
+        ticket_starts: Arc::new(application::tickets::starting::StartingTickets::default()),
         sync_turns,
         remote_run_mirror_guard: Arc::new(tokio::sync::Mutex::new(())),
         run_view,
@@ -369,6 +370,7 @@ pub fn build_core_context(
         oauth_clients,
         oauth_grants,
         mcp_consent,
+        app_version: AppVersion::default(),
     };
 
     // The MCP listener is the first background task that needs the *whole*

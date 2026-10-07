@@ -44,6 +44,7 @@ function ticket(
       agent_kind: null,
       model: null,
       effort: null,
+      machine_id: null,
       attachments: [],
       state: overrides.state ?? 'unstarted',
       drop_reason: overrides.dropReason ?? null,
@@ -62,8 +63,9 @@ function ticket(
         reason: 'outstanding',
       })),
     },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: overrides.mrUrl
-      ? { id: `f-${id}`, status: 'completed', mr_state: 'closed', mr_url: overrides.mrUrl }
+      ? { id: `f-${id}`, status: 'completed', mr_state: 'closed', mr_url: overrides.mrUrl, placement: null, remote: null }
       : null,
   };
 }

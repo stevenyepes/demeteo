@@ -10,10 +10,11 @@
 //! It does not widen what a plan may say. §5.2's rule that nothing invalid
 //! reaches a stored row is about the row, not about who wrote it.
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
-use crate::domain::ids::{TicketId, WorkflowId};
+use crate::domain::ids::{MachineId, TicketId, WorkflowId};
 use crate::domain::models::{EffortLevel, Ticket};
+use crate::domain::run_placement::detached_target_refusal;
 use crate::domain::ticket_graph::{validate_ticket_graph, ProposedTicket};
 use crate::paths::now_ms;
 use crate::ports::discovery::TicketPatch;
@@ -30,7 +31,8 @@ use super::{board, is_locked, load, DiscoveryBoard};
 /// absent key and an explicit `null` as the same `None` unless a caller
 /// installs a helper for it, so a partial shape would turn *clear the model*
 /// into *keep the model* with nothing to show for it. Requiring the key makes
-/// a caller that forgot one fail at the boundary instead.
+/// a caller that forgot one fail at the boundary instead — which serde does
+/// not do for an `Option` field on its own, hence [`required`] on each.
 ///
 /// `seq`, `state`, the drop and force-start reasons and the attachment
 /// manifest are absent because none of them is a field of the work: §5.3
@@ -42,11 +44,32 @@ pub struct TicketEdit {
     pub acceptance: Vec<String>,
     pub files: Vec<String>,
     pub blocked_by: Vec<String>,
+    #[serde(deserialize_with = "required")]
     pub test_command: Option<String>,
+    #[serde(deserialize_with = "required")]
     pub workflow_id: Option<String>,
+    #[serde(deserialize_with = "required")]
     pub agent_kind: Option<String>,
+    #[serde(deserialize_with = "required")]
     pub model: Option<String>,
+    #[serde(deserialize_with = "required")]
     pub effort: Option<EffortLevel>,
+    /// Where the ticket runs: `None` inherits the Discovery's default,
+    /// `"local"` opts out of a detached one, and any other value names a
+    /// `Machine` row (`domain::run_placement::ticket_placement`).
+    #[serde(deserialize_with = "required")]
+    pub machine_id: Option<String>,
+}
+
+/// An `Option` whose key must be present, `null` being its `None`. Serde
+/// derive reads a missing `Option` field as `None` unless the field names a
+/// `deserialize_with`, in which case a missing key is a "missing field" error.
+fn required<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
 }
 
 impl TicketEdit {
@@ -73,6 +96,7 @@ impl TicketEdit {
             agent_kind: chosen(&self.agent_kind),
             model: chosen(&self.model),
             effort: self.effort,
+            machine_id: chosen(&self.machine_id),
         }
     }
 
@@ -100,6 +124,7 @@ impl TicketEdit {
             agent_kind: Some(self.agent_kind.clone()),
             model: Some(self.model.clone()),
             effort: Some(self.effort),
+            machine_id: Some(self.machine_id.clone().map(MachineId::from)),
             ..Default::default()
         }
     }
@@ -121,6 +146,11 @@ pub fn update(
     let edit = edit.normalized();
     if let Some(refusal) = refusal(&ticket, &siblings, &edit) {
         return Err(refusal);
+    }
+    let machine_id = edit.machine_id.clone().map(MachineId::from);
+    match &machine_id {
+        Some(target) if machine_id != ticket.machine_id => refuse_detached_target(ctx, target)?,
+        _ => {}
     }
     ctx.tickets.update(ticket_id, &edit.patch(), now_ms())?;
     board(ctx, &ticket.discovery_id)
@@ -194,6 +224,31 @@ fn graph_refusal(ticket: &Ticket, siblings: &[Ticket], edges: &[String]) -> Opti
         })
         .collect();
     validate_ticket_graph(&resulting).map(|reason| format!("this edit cannot be saved: {reason}"))
+}
+
+/// Refuse a placement a detached launch would refuse — an id no row carries,
+/// or a row that is this desktop — in the sentence that launch would give.
+/// Without it the id is stored and the refusal waits for a launch, where the
+/// user is no longer looking at the field that caused it.
+///
+/// Only a placement the edit *changes* is checked. The drawer echoes the
+/// stored one on every save, so checking that too would refuse a title edit
+/// over a field the user never touched once its machine's row is deleted;
+/// [`crate::application::launch::launch_run`] refuses the stale id at Start,
+/// before any side effect.
+///
+/// `"local"` is checked first because [`detached_target_refusal`] refuses it:
+/// as a detached target it names the desktop, but as a ticket placement it is
+/// the explicit opt-out of a detached default.
+fn refuse_detached_target(ctx: &AppContext, machine_id: &MachineId) -> Result<(), String> {
+    if machine_id.is_local() {
+        return Ok(());
+    }
+    let row = ctx.machines.get_machine(machine_id)?;
+    match detached_target_refusal(machine_id, row.as_ref()) {
+        Some(refusal) => Err(refusal),
+        None => Ok(()),
+    }
 }
 
 fn entries(items: &[String]) -> Vec<String> {

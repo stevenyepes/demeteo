@@ -194,3 +194,62 @@ fn delete_for_absent_feature_is_a_successful_no_op() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].feature_id.as_deref(), Some("f-existing"));
 }
+
+#[test]
+fn list_for_features_returns_only_the_named_features_rows() {
+    let adapter = setup();
+    adapter
+        .upsert_submitted("m1", "r1", None, Some("f-a"), "a", 1000)
+        .unwrap();
+    adapter
+        .upsert_submitted("m2", "r2", None, Some("f-b"), "b", 1000)
+        .unwrap();
+    adapter
+        .upsert_submitted("m1", "r3", None, Some("f-c"), "c", 1000)
+        .unwrap();
+    adapter
+        .upsert_submitted("m1", "r4", None, None, "unattached", 1000)
+        .unwrap();
+
+    let mut runs: Vec<String> = adapter
+        .list_for_features(&["f-a", "f-b", "f-unknown"])
+        .unwrap()
+        .into_iter()
+        .map(|row| row.run_id)
+        .collect();
+    runs.sort();
+    assert_eq!(runs, ["r1", "r2"]);
+}
+
+#[test]
+fn list_for_features_of_no_features_returns_nothing() {
+    let adapter = setup();
+    adapter
+        .upsert_submitted("m1", "r1", None, Some("f-a"), "a", 1000)
+        .unwrap();
+    assert!(adapter.list_for_features(&[]).unwrap().is_empty());
+}
+
+/// A later *update* to an older run must not make it the feature's latest —
+/// the order is by submit time, which `list()`'s `updated_at` order is not.
+#[test]
+fn list_for_features_orders_by_submit_time_not_last_update() {
+    let adapter = setup();
+    adapter
+        .upsert_submitted("m1", "r-old", None, Some("f-a"), "old", 1000)
+        .unwrap();
+    adapter
+        .upsert_submitted("m1", "r-new", None, Some("f-a"), "new", 2000)
+        .unwrap();
+    adapter
+        .update_status("m1", "r-old", "failed", None, None, None, None, 0, 3000)
+        .unwrap();
+
+    let runs: Vec<String> = adapter
+        .list_for_features(&["f-a"])
+        .unwrap()
+        .into_iter()
+        .map(|row| row.run_id)
+        .collect();
+    assert_eq!(runs, ["r-new", "r-old"]);
+}

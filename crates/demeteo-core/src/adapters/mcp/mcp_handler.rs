@@ -206,12 +206,16 @@ async fn handle_tools_call(
 /// is the one point where that text leaves for a party the user has not seen.
 /// Bounded too, since the column has no length limit and a list of rows would
 /// otherwise carry it once per row.
+///
+/// A launch's notes ([`crate::application::launch::LaunchedRun`]) are the same
+/// kind of text — a runner's or SQLite's own error, from a call that carried
+/// the PAT — so they get the same treatment.
 fn bound_error_messages(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, inner) in map.iter_mut() {
                 match inner {
-                    Value::String(message) if key == "error_message" => {
+                    Value::String(message) if ERROR_TEXT_KEYS.contains(&key.as_str()) => {
                         let scrubbed = scrub_secrets(message);
                         *message = tail_log(&scrubbed, ERROR_MESSAGE_BUDGET_BYTES).text;
                     }
@@ -225,6 +229,13 @@ fn bound_error_messages(value: &mut Value) {
 }
 
 const ERROR_MESSAGE_BUDGET_BYTES: usize = 2 * LOG_TAIL_BUDGET_BYTES;
+
+const ERROR_TEXT_KEYS: [&str; 4] = [
+    "error_message",
+    "credentials_parked",
+    "mirror_unrecorded",
+    "ticket_unrecorded",
+];
 
 fn parse<T: DeserializeOwned>(value: Value) -> Result<T, DispatchError> {
     serde_json::from_value(value).map_err(|e| DispatchError::InvalidParams(e.to_string()))
@@ -402,14 +413,22 @@ async fn dispatch(ctx: &AppContext, name: &str, arguments: Value) -> Result<Valu
                                 filename: a.filename,
                             })
                             .collect(),
+                        machine_id: args.machine_id,
+                        target_repo_id: args.target_repo_id,
+                        unattended: args.unattended,
+                        max_cost_usd: args.max_cost_usd,
+                        max_wall_clock_secs: args.max_wall_clock_secs,
                     },
                 )
                 .await,
             )
         }
         "start_ticket" => {
-            let args: TicketArgs = parse(arguments)?;
-            to_json(agent_surface::start_ticket(ctx, &TicketId::from(args.ticket_id)).await)
+            let args: StartTicketArgs = parse(arguments)?;
+            to_json(
+                agent_surface::start_ticket(ctx, &TicketId::from(args.ticket_id), args.machine_id)
+                    .await,
+            )
         }
         other => Err(DispatchError::Failed(format!(
             "tool {other:?} has a required scope but no dispatch arm"
@@ -535,6 +554,25 @@ struct StartFeatureArgs {
     description: String,
     #[serde(default)]
     attachments: Vec<AttachmentArg>,
+    /// Where to run: a remote machine's id submits the run detached to that
+    /// machine's demeteo-runner. Omit it, or pass "" or "local", to run on the
+    /// project's own compute as before.
+    #[serde(default)]
+    machine_id: Option<String>,
+    /// Detached runs only: the repository to run in. Defaults to the
+    /// project's first repository.
+    #[serde(default)]
+    target_repo_id: Option<String>,
+    /// Detached runs only. A detached run is always unattended, so `false`
+    /// is refused.
+    #[serde(default)]
+    unattended: Option<bool>,
+    /// Detached runs only: a spend cap in US dollars, above zero.
+    #[serde(default)]
+    max_cost_usd: Option<f64>,
+    /// Detached runs only: a wall-clock cap in seconds, above zero.
+    #[serde(default)]
+    max_wall_clock_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -554,8 +592,14 @@ struct AttachmentArg {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct TicketArgs {
+struct StartTicketArgs {
     ticket_id: String,
+    /// Where to run this one launch: a remote machine's id submits it
+    /// detached to that machine's demeteo-runner, and "local" runs it on the
+    /// project's own compute. Never saved on the ticket. Omit it, or pass "",
+    /// to use the ticket's own placement.
+    #[serde(default)]
+    machine_id: Option<String>,
 }
 
 fn tool_descriptor(name: &str, description: &str, schema: schemars::Schema) -> Value {
@@ -623,7 +667,9 @@ fn tool_catalog() -> Value {
         tool_descriptor(
             "start_feature",
             concat!(
-                "Start a Feature run. Optional `attachments` (files the agent should see) ",
+                "Start a Feature run. Runs on the project's own compute unless machine_id names a remote machine, which submits it detached to that machine's runner; the detached-only options are refused without one. ",
+                "Returns the Feature; a detached run the runner accepted but that is degraded also carries credentials_parked (its git credentials were not delivered) or mirror_unrecorded (Demeteo could not record it). ",
+                "Optional `attachments` (files the agent should see) ",
                 "accept png, jpg/jpeg, gif, webp, tiff, pdf, txt, md and json. ",
                 "The type is the `mime` when one is given, otherwise the filename extension; ",
                 "for `path` it comes from the real file name and a `mime` must agree with it. ",
@@ -643,8 +689,8 @@ fn tool_catalog() -> Value {
         ),
         tool_descriptor(
             "start_ticket",
-            "Start a Ticket's current attempt.",
-            schemars::schema_for!(TicketArgs),
+            "Start a Ticket's current attempt, where the ticket is placed. machine_id overrides that placement for this launch only and is never saved on the ticket. Returns the Feature, with the same optional credentials_parked and mirror_unrecorded notes as start_feature, and ticket_unrecorded when the run started but the ticket could not record it — do not start that ticket again.",
+            schemars::schema_for!(StartTicketArgs),
         ),
     ])
 }
@@ -668,6 +714,10 @@ mod revocation_tests;
 #[cfg(test)]
 #[path = "../../../tests/adapters/mcp/pagination.rs"]
 mod pagination_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/adapters/mcp/start_placement.rs"]
+mod start_placement_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/adapters/mcp/read_redaction.rs"]

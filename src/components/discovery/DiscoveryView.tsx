@@ -7,13 +7,11 @@ import {
   decomposeDiscovery,
   discardProposal,
   dropTicket,
-  forceStartTicket,
   getDiscovery,
   getDiscoveryBoard,
   publishIntegrationMr,
   reopenDiscovery,
   sendDiscoveryTurn,
-  startTicket,
   syncDiscoveryBase,
   type DiscoveryTurnCompletedPayload,
   type DiscoveryTurnStatusPayload,
@@ -31,6 +29,7 @@ import type {
   DiscoveryBoard,
   DiscoveryDetail,
   DiscoveryMessageView,
+  Machine,
   WorkflowWithSteps,
 } from '../../types';
 import { DecomposeModal } from './DecomposeModal';
@@ -39,6 +38,7 @@ import { DiscoveryWorkspaceRow } from './DiscoveryWorkspaceRow';
 import { PendingProposalNotice } from './PendingProposalNotice';
 import { TurnCompleteToast } from './TurnCompleteToast';
 import { useDiscoveryStream } from './useDiscoveryStream';
+import { useTicketLaunch } from './useTicketLaunch';
 
 interface DiscoveryViewProps {
   discoveryId: string;
@@ -100,7 +100,7 @@ export function DiscoveryView({
   // completion event knows, and nothing stores it, so this is what the
   // workspace heard while it was open and never a claim about older turns.
   const [reseeded, setReseeded] = useState<ReadonlySet<string>>(() => new Set());
-  const [machineName, setMachineName] = useState<string | null>(null);
+  const [machines, setMachines] = useState<Machine[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowWithSteps[]>([]);
   const [proposal, setProposal] = useState<DecomposeProposal | null>(null);
   const [decomposing, setDecomposing] = useState(false);
@@ -155,9 +155,8 @@ export function DiscoveryView({
     if (!machineId) return;
     let cancelled = false;
     listMachines()
-      .then((machines) => {
-        if (cancelled) return;
-        setMachineName(machines.find((m) => m.id === machineId)?.name ?? null);
+      .then((list) => {
+        if (!cancelled) setMachines(list);
       })
       .catch(() => {});
     return () => {
@@ -287,18 +286,23 @@ export function DiscoveryView({
     }
   }
 
-  async function runAction(action: () => Promise<unknown>) {
+  async function runAction(
+    action: () => Promise<unknown>,
+    reportFailure: (cause: unknown) => void = (cause) => setActionError(formatError(cause)),
+  ) {
     setBusy(true);
     setActionError(null);
     try {
       await action();
       await refresh();
     } catch (cause) {
-      setActionError(formatError(cause));
+      reportFailure(cause);
     } finally {
       setBusy(false);
     }
   }
+
+  const launch = useTicketLaunch({ runAction, setActionError });
 
   /**
    * Ask for a proposal (§5.1). The **user** decides when, and it is available
@@ -400,7 +404,9 @@ export function DiscoveryView({
         discovery={detail.discovery}
         messages={detail.messages}
         blocks={blocks}
-        machineLabel={machineName ?? detail.discovery.machine_id}
+        machineLabel={
+          machines.find((m) => m.id === detail.discovery.machine_id)?.name ?? detail.discovery.machine_id
+        }
         pending={pending || sending}
         store={store}
         onSend={(text) => void send(text)}
@@ -417,21 +423,19 @@ export function DiscoveryView({
           selected?.ticket.workflow_id ? (workflowNames[selected.ticket.workflow_id] ?? null) : null
         }
         busy={busy}
-        machineId={detail.discovery.machine_id}
+        machines={machines}
+        discoveryDefault={board?.discovery_default ?? null}
+        localHost={board?.local_host ?? null}
         onEditorClose={() => setEditingId(null)}
         onInspectorClose={closeInspector}
         onEditorSaved={setBoard}
-        onEditorStart={() => editing && void runAction(() => startTicket(editing.ticket.id))}
-        onEditorForceStart={(reason) =>
-          editing && void runAction(() => forceStartTicket(editing.ticket.id, reason))
-        }
+        onEditorStart={() => editing && launch.start(editing)}
+        onEditorForceStart={(reason) => editing && launch.forceStart(editing, reason)}
         onEditorDrop={(reason) =>
           editing && void runAction(() => dropTicket(editing.ticket.id, reason))
         }
-        onInspectorStart={() => selected && void runAction(() => startTicket(selected.ticket.id))}
-        onInspectorForceStart={(reason) =>
-          selected && void runAction(() => forceStartTicket(selected.ticket.id, reason))
-        }
+        onInspectorStart={() => selected && launch.start(selected)}
+        onInspectorForceStart={(reason) => selected && launch.forceStart(selected, reason)}
         onInspectorEdit={() => selected && setEditingId(selected.ticket.id)}
         onInspectorOpenFeature={(featureId) =>
           selected && onOpenFeature?.(featureId, selected.ticket.title)

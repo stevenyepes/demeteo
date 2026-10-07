@@ -69,6 +69,7 @@ pub(crate) mod review_base;
 pub mod review_entrypoint;
 pub mod rework;
 pub mod run_control;
+pub mod run_placement;
 pub mod run_spec;
 pub mod runner_cache_release;
 pub mod runner_version;

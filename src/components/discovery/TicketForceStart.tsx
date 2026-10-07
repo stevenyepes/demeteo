@@ -12,6 +12,12 @@ interface TicketForceStartProps {
   view: TicketView;
   index: TicketIndex;
   busy: boolean;
+  /** The editor's draft differs from the stored row. `ticket_start` launches
+   *  the stored row, so a launch from here would run on choices no longer on
+   *  screen — the placement among them. Passing the draft as a one-launch
+   *  override instead would run on a placement that is never saved, which a
+   *  reload would then contradict. Drop launches nothing and stays open. */
+  needsSave: boolean;
   onStart: () => void;
   onForceStart: (reason: string) => void;
   onDrop: (reason: string) => void;
@@ -36,6 +42,7 @@ export function TicketForceStart({
   view,
   index,
   busy,
+  needsSave,
   onStart,
   onForceStart,
   onDrop,
@@ -50,6 +57,11 @@ export function TicketForceStart({
     return prerequisite ? ticketLabel(prerequisite.ticket.seq) : 'an unknown ticket';
   });
   const short = reason.trim().length < MIN_REASON;
+  const saveHint = needsSave && (
+    <span className="text-[11px] text-slate-500">
+      Save the ticket to start it with these choices.
+    </span>
+  );
 
   if (view.ticket.state === 'dropped') return null;
 
@@ -122,7 +134,7 @@ export function TicketForceStart({
             <button
               type="button"
               data-testid={dropping ? 'ticket-drop-confirm' : 'ticket-force-confirm'}
-              disabled={short || busy}
+              disabled={short || busy || (needsSave && !dropping)}
               onClick={() => (dropping ? onDrop(reason.trim()) : onForceStart(reason.trim()))}
               className={
                 dropping
@@ -148,13 +160,14 @@ export function TicketForceStart({
               {short ? 'A reason is required.' : 'Recorded on the ticket.'}
             </span>
           </div>
+          {!dropping && saveHint && <div className="mt-2">{saveHint}</div>}
         </div>
       ) : (
         <div className="flex items-center gap-2.5">
           <button
             type="button"
             data-testid="ticket-primary-action"
-            disabled={action.kind !== 'start' || busy}
+            disabled={action.kind !== 'start' || busy || needsSave}
             onClick={onStart}
             className="btn-primary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
           >
@@ -164,13 +177,14 @@ export function TicketForceStart({
             <button
               type="button"
               data-testid="ticket-force-start"
-              disabled={busy}
+              disabled={busy || needsSave}
               onClick={() => setPhase('forcing')}
               className="rounded-md border border-amber-500/25 bg-amber-500/[0.08] px-[18px] py-2.5 text-[13px] font-medium text-amber-400 transition hover:bg-amber-500/[0.14] disabled:cursor-not-allowed disabled:opacity-35"
             >
               Force start&hellip;
             </button>
           )}
+          {saveHint}
           <button
             type="button"
             data-testid="ticket-drop"

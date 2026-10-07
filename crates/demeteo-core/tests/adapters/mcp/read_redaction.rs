@@ -25,7 +25,29 @@ fn error_messages_are_scrubbed_and_bounded_wherever_they_sit_in_a_result() {
     assert!(step.ends_with("final line"), "the tail is what survives");
     assert_eq!(
         value["steps"][0]["note"], secret,
-        "only `error_message` fields are touched"
+        "only error-text keys are touched"
     );
     assert!(value["steps"][1]["error_message"].is_null());
+}
+
+#[test]
+fn a_launchs_degraded_state_notes_are_scrubbed_like_error_messages() {
+    let secret = "ghp_0123456789abcdefABCDEF0123456789abcdef";
+    let mut value = json!({
+        "id": "f-1",
+        "credentials_parked": format!("inject_credentials refused git_pat {secret}"),
+        "mirror_unrecorded": format!("database is locked near {secret}"),
+        "ticket_unrecorded": format!("database is full near {secret}"),
+    });
+
+    bound_error_messages(&mut value);
+
+    for key in [
+        "credentials_parked",
+        "mirror_unrecorded",
+        "ticket_unrecorded",
+    ] {
+        let note = value[key].as_str().unwrap();
+        assert!(!note.contains(secret), "{key}: {note}");
+    }
 }

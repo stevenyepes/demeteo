@@ -7,12 +7,14 @@ pub use crate::application::attachments::AgentAttachment;
 use crate::application::attachments::{
     agent_attachment_forbidden_roots, resolve_agent_attachments,
 };
+use crate::application::launch::{launch_run, LaunchRequest, LaunchedRun};
 use crate::application::projects::{self, ProjectConfig};
 use crate::application::tickets;
 use crate::domain::feature_launch::refuse_blank_launch_text;
 use crate::domain::ids::{MachineId, ProjectId, TicketId, WorkflowId};
 use crate::domain::models::project::RunShapePatch;
-use crate::domain::models::{Feature, Project, ProjectSettings};
+use crate::domain::models::{Project, ProjectSettings};
+use crate::domain::run_placement::{placement_from_raw, placement_override, DetachedOptions};
 use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
 
@@ -65,23 +67,36 @@ pub fn create_workspace_project(
 }
 
 /// What an external caller chooses when starting a Feature directly, rather
-/// than through a Ticket. Attachments are the caller's input; run shape is not:
-/// agent/model/effort, step overrides, origin and budget stay the run's own
-/// business, not a caller's to set from outside.
+/// than through a Ticket — deliberately narrower than [`FeatureLaunch`]:
+/// agent/model/effort, step overrides and origin are the project's run shape,
+/// not a caller's to set from outside. Attachments are the caller's input.
+///
+/// The caller does choose *where* the run goes. An absent, blank or
+/// local-meaning `machine_id` is local and any other id is detached, through
+/// [`placement_from_raw`]. The four remaining fields are
+/// [`DetachedOptions`]: the caps only bound spend on a detached run, which is
+/// always unattended, and sending any of them with a local placement is
+/// refused rather than dropped ([`crate::domain::run_placement`]).
 pub struct AgentFeatureLaunch {
     pub project_id: String,
     pub workflow_id: String,
     pub title: String,
     pub description: String,
     pub attachments: Vec<AgentAttachment>,
+    pub machine_id: Option<String>,
+    pub target_repo_id: Option<String>,
+    pub unattended: Option<bool>,
+    pub max_cost_usd: Option<f64>,
+    pub max_wall_clock_secs: Option<u64>,
 }
 
-/// Start a Feature run. Returns as soon as the executor has accepted the
-/// launch — the returned [`Feature`] is a handle, not a finished run.
+/// Start a Feature run. Returns as soon as the run was accepted — by the
+/// executor, or by the machine's runner — so the returned
+/// [`LaunchedRun`]'s Feature is a handle, not a finished run.
 pub async fn start_feature(
     ctx: &AppContext,
     launch: AgentFeatureLaunch,
-) -> Result<Feature, String> {
+) -> Result<LaunchedRun, String> {
     // Blank text is refused before any file is read, with the words
     // `feature_start` uses. `feature_start` inserts the bootstrapping Feature
     // row before it stages anything, so an attachment refusal has to happen
@@ -113,21 +128,40 @@ pub async fn start_feature(
             .await
             .map_err(|e| e.to_string())??
     };
-    ctx.executor
-        .feature_start(FeatureLaunch {
+    let placement = placement_from_raw(launch.machine_id.as_deref());
+    let request = LaunchRequest {
+        launch: FeatureLaunch {
             project_id: launch.project_id,
             workflow_id: launch.workflow_id,
             title: launch.title,
             description: launch.description,
             staged_attachments,
             ..FeatureLaunch::default()
-        })
-        .await
+        },
+        placement,
+        detached: DetachedOptions {
+            target_repo_id: launch.target_repo_id,
+            unattended: launch.unattended,
+            max_cost_usd: launch.max_cost_usd,
+            max_wall_clock_secs: launch.max_wall_clock_secs,
+        },
+    };
+    launch_run(ctx, request).await.map_err(|e| e.to_string())
 }
 
 /// Start a Ticket's current attempt.
-pub async fn start_ticket(ctx: &AppContext, ticket_id: &TicketId) -> Result<Feature, String> {
-    tickets::launch::start(ctx, ticket_id).await
+///
+/// `machine_id` places this one launch and is never stored on the ticket
+/// ([`tickets::launch::start`]). An absent or blank one is no override — the
+/// ticket's own placement applies — whereas `"local"` overrides to local.
+pub async fn start_ticket(
+    ctx: &AppContext,
+    ticket_id: &TicketId,
+    machine_id: Option<String>,
+) -> Result<LaunchedRun, String> {
+    tickets::launch::start(ctx, ticket_id, placement_override(machine_id.as_deref()))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Apply a [`RunShapePatch`] to a project's settings, persist the result, and

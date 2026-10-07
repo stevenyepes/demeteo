@@ -84,7 +84,7 @@ function mockBackend(opts: {
         return Promise.resolve([]);
       case 'remote_runner_compatibility':
         return probe((args as { machineId: string }).machineId);
-      case 'remote_submit_run':
+      case 'launch_run':
         return submit();
       default:
         return Promise.resolve(undefined);

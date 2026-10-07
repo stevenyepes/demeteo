@@ -40,8 +40,8 @@ Twelve tools, each answering one kind of question:
 | `run_events_since` | "What's happened on this Feature's run since I last checked?" |
 | `create_workspace_project` | "Register a new project (and its repos) in this workspace." — rows only: nothing is cloned or bootstrapped, so `apply_run_shape_patch` refuses the project until the app bootstraps it |
 | `apply_run_shape_patch` | "Change a project's default agent/model/effort/workflow/artifact settings." |
-| `start_feature` | "Kick off a new Feature run." — spends money, see below |
-| `start_ticket` | "Kick off a Ticket's current attempt." — spends money, see below |
+| `start_feature` | "Kick off a new Feature run." — spends money, see below; `machine_id` sends it detached to that registered machine, omit it to run on the project's own compute |
+| `start_ticket` | "Kick off a Ticket's current attempt." — spends money, see below; runs where the Ticket is placed unless `machine_id` overrides it for this launch only |
 
 A cross-project question — "which projects have running pipelines", "is
 anything waiting for approval" — is a **single** `list_features` or
@@ -116,6 +116,18 @@ trips and more context for a question the verdict usually already answers.
 the executor *accepts* the launch — that row is a handle to a run in progress,
 not a report that the run finished. A tool response returning successfully
 means only "the run was accepted to start," never "the run is done."
+
+An accepted detached run may come back with `credentials_parked` or
+`mirror_unrecorded` beside the Feature's fields. Either means the run was
+launched but is degraded — stuck waiting for credentials, or untracked by the
+app. Tell the human; do **not** start it again, which would launch a second
+paid run.
+
+| Key | Set by | Means |
+|---|---|---|
+| `credentials_parked` | either tool, detached only | The run waits for git credentials the app must re-send |
+| `mirror_unrecorded` | either tool, detached only | The app is not tracking the run |
+| `ticket_unrecorded` | `start_ticket`, any placement | The run started (its Feature id is in the text) but the ticket still reads unstarted — do **not** call `start_ticket` for it again |
 
 To track progress after launch, poll `run_events_since` with the `from_offset`
 integer it takes as an argument — an offset cursor into that Feature's durable

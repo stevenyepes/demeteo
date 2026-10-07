@@ -1,4 +1,4 @@
-use rusqlite::params;
+use rusqlite::{params, params_from_iter};
 
 use crate::ports::remote_run_mirror::{RemoteRunMirror, RemoteRunMirrorPort};
 
@@ -150,6 +150,26 @@ impl RemoteRunMirrorPort for SqliteAdapter {
             list.push(r.map_err(|e| e.to_string())?);
         }
         Ok(list)
+    }
+
+    fn list_for_features(&self, feature_ids: &[&str]) -> Result<Vec<RemoteRunMirror>, String> {
+        if feature_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = vec!["?"; feature_ids.len()].join(", ");
+        let conn = self.conn.lock()?;
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {} FROM remote_run_mirror WHERE feature_id IN ({}) \
+                 ORDER BY created_at DESC, updated_at DESC",
+                SELECT_COLS, placeholders
+            ))
+            .map_err(|e| e.to_string())?;
+        let iter = stmt
+            .query_map(params_from_iter(feature_ids), row_to_mirror)
+            .map_err(|e| e.to_string())?;
+        iter.collect::<rusqlite::Result<_>>()
+            .map_err(|e| e.to_string())
     }
 }
 
