@@ -33,7 +33,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::application::agent_surface::{self, AgentFeatureLaunch};
+use crate::application::agent_surface::{self, AgentAttachment, AgentFeatureLaunch};
 use crate::application::projects::{ProjectConfig, RepositoryConfig};
 use crate::application::tickets::TicketView;
 use crate::domain::ids::{DiscoveryId, FeatureId, ProjectId, StepExecutionId, TicketId};
@@ -403,6 +403,16 @@ async fn dispatch(ctx: &AppContext, name: &str, arguments: Value) -> Result<Valu
                         workflow_id: args.workflow_id,
                         title: args.title,
                         description: args.description,
+                        attachments: args
+                            .attachments
+                            .into_iter()
+                            .map(|a| AgentAttachment {
+                                path: a.path,
+                                content_base64: a.content_base64,
+                                mime: a.mime,
+                                filename: a.filename,
+                            })
+                            .collect(),
                         machine_id: args.machine_id,
                         target_repo_id: args.target_repo_id,
                         unattended: args.unattended,
@@ -542,6 +552,8 @@ struct StartFeatureArgs {
     workflow_id: String,
     title: String,
     description: String,
+    #[serde(default)]
+    attachments: Vec<AttachmentArg>,
     /// Where to run: a remote machine's id submits the run detached to that
     /// machine's demeteo-runner. Omit it, or pass "" or "local", to run on the
     /// project's own compute as before.
@@ -561,6 +573,22 @@ struct StartFeatureArgs {
     /// Detached runs only: a wall-clock cap in seconds, above zero.
     #[serde(default)]
     max_wall_clock_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AttachmentArg {
+    /// Absolute path of a file on the machine running Demeteo (not the client's machine).
+    #[serde(default)]
+    path: Option<String>,
+    /// File bytes, standard base64. Counts against the 2 MiB request limit.
+    #[serde(default)]
+    content_base64: Option<String>,
+    /// One of the accepted types. Optional; derived from `filename`/`path` when absent.
+    #[serde(default)]
+    mime: Option<String>,
+    /// Required with `content_base64`. Optional with `path` (defaults to its basename).
+    #[serde(default)]
+    filename: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -638,7 +666,25 @@ fn tool_catalog() -> Value {
         ),
         tool_descriptor(
             "start_feature",
-            "Start a Feature run. Runs on the project's own compute unless machine_id names a remote machine, which submits it detached to that machine's runner; the detached-only options are refused without one. Returns the Feature; a detached run the runner accepted but that is degraded also carries credentials_parked (its git credentials were not delivered) or mirror_unrecorded (Demeteo could not record it).",
+            concat!(
+                "Start a Feature run. Runs on the project's own compute unless machine_id names a remote machine, which submits it detached to that machine's runner; the detached-only options are refused without one. ",
+                "Returns the Feature; a detached run the runner accepted but that is degraded also carries credentials_parked (its git credentials were not delivered) or mirror_unrecorded (Demeteo could not record it). ",
+                "Optional `attachments` (files the agent should see) ",
+                "accept png, jpg/jpeg, gif, webp, tiff, pdf, txt, md and json. ",
+                "The type is the `mime` when one is given, otherwise the filename extension; ",
+                "for `path` it comes from the real file name and a `mime` must agree with it. ",
+                "Each item takes exactly one of `path` or `content_base64`, and inline ",
+                "`content_base64` needs a `filename`. ",
+                "A call carries at most 20 items, and a feature takes at most 10 files after sha256 dedup. ",
+                "A file given by `path` may be up to 100 MiB; `path` must be absolute and is ",
+                "resolved on the Demeteo host, not on the client's machine, and a path inside ",
+                "Demeteo's own data directory is refused. ",
+                "Inline `content_base64` must fit the whole request under 2 MiB, ",
+                "about 1.5 MiB of file bytes. ",
+                "An invalid attachment refuses the whole call and starts nothing. ",
+                "The returned handle shows attachments empty until the run bootstraps; ",
+                "read get_feature to see them.",
+            ),
             schemars::schema_for!(StartFeatureArgs),
         ),
         tool_descriptor(
@@ -680,3 +726,7 @@ mod read_redaction_tests;
 #[cfg(test)]
 #[path = "../../../tests/adapters/mcp/skill_catalog_parity.rs"]
 mod skill_catalog_parity_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/adapters/mcp/start_attachments.rs"]
+mod start_attachments_tests;

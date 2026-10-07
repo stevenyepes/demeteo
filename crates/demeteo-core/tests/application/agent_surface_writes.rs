@@ -1,7 +1,10 @@
 // Tests extracted from `crates/demeteo-core/src/application/agent_surface/writes.rs`
 // (mirrored-tests convention). `super` = that module.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
 
 use super::*;
 use crate::adapters::notification_noop::NoopNotificationAdapter;
@@ -10,8 +13,10 @@ use crate::application::discovery::{create as open_discovery, NewDiscovery};
 use crate::application::launch::tests::{harness, RunnerAt};
 use crate::application::projects::RepositoryConfig;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
+use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::WorkflowId;
-use crate::domain::models::{EffortLevel, Project, ProviderInstance, Ticket, TicketState};
+use crate::domain::models::{EffortLevel, Feature, Project, ProviderInstance, Ticket, TicketState};
+use crate::ports::step_executor::StepExecutor;
 
 /// A fully wired `AppContext` over a fresh temp-dir SQLite database — same
 /// shape as `tests/application/agent_surface.rs`'s `fixture`.
@@ -187,12 +192,383 @@ async fn a_hostile_artifact_subdir_is_refused_and_nothing_is_saved() {
     assert_eq!(reloaded.artifact_subdir, initial.artifact_subdir);
 }
 
+/// Captures the [`FeatureLaunch`] `start_feature` builds and counts
+/// `feature_start` calls; every other method is unreachable from this seam.
+struct SpyExecutor {
+    captured: Mutex<Option<FeatureLaunch>>,
+    calls: AtomicUsize,
+}
+
+impl SpyExecutor {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            captured: Mutex::new(None),
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    fn launch(&self) -> FeatureLaunch {
+        self.captured
+            .lock()
+            .expect("lock is not poisoned")
+            .clone()
+            .expect("feature_start was called")
+    }
+}
+
+#[async_trait]
+impl StepExecutor for SpyExecutor {
+    async fn feature_start(&self, launch: FeatureLaunch) -> Result<Feature, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let feature = Feature {
+            id: crate::domain::ids::FeatureId::from("f-1".to_string()),
+            project_id: ProjectId::from(launch.project_id.clone()),
+            workflow_id: None,
+            workflow_version_id: None,
+            title: launch.title.clone(),
+            description: launch.description.clone(),
+            status: "running".to_string(),
+            total_cost: 0.0,
+            duration: String::new(),
+            tokens: 0,
+            created_at: 0,
+            agent_kind: None,
+            model: None,
+            effort: None,
+            mr_url: None,
+            mr_state: None,
+            pr_title: None,
+            pr_body: None,
+            commit_artifacts: None,
+            loop_iterations: None,
+            max_budget_usd: None,
+            step_overrides: Vec::new(),
+            attachments: Vec::new(),
+            harness_baseline: None,
+            origin: FeatureOrigin::DefaultBranch,
+            diff_base_branch: None,
+            resolved_branch: None,
+        };
+        *self.captured.lock().expect("lock is not poisoned") = Some(launch);
+        Ok(feature)
+    }
+
+    async fn feature_pause(&self, _: &str) -> Result<(), String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn feature_resume(&self, _: &str) -> Result<(), String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn feature_cancel(&self, _: &str) -> Result<(), String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn step_get(&self, _: &str) -> Result<crate::domain::models::StepExecution, String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn step_retry(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+        _: Option<EffortLevel>,
+    ) -> Result<(), crate::error::AppError> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn step_set_assignment(
+        &self,
+        _: &str,
+        _: crate::domain::step_assignment::StepAssignment,
+    ) -> Result<(), crate::error::AppError> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn replay_from_step(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+        _: Option<EffortLevel>,
+    ) -> Result<(), String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn step_list_for_run(
+        &self,
+        _: &str,
+    ) -> Result<Vec<crate::domain::models::StepExecution>, String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn feature_sync(
+        &self,
+        _: &str,
+    ) -> Result<crate::ports::step_executor::SyncOutcomeView, String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn feature_drift(
+        &self,
+        _: &str,
+        _: bool,
+    ) -> Result<crate::domain::models::FeatureDrift, String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn feature_reconcile(
+        &self,
+        _: &str,
+        _: crate::domain::upstream_feature::DivergenceReconcile,
+    ) -> Result<Option<crate::ports::sync_session::SyncSessionView>, String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn feature_divergence(
+        &self,
+        _: &str,
+    ) -> Result<Option<crate::domain::models::FeatureDivergence>, String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn feature_resolve_sync_conflicts(
+        &self,
+        _: &str,
+        _: &crate::domain::sync_resolver::SyncResolverChoice,
+    ) -> Result<crate::ports::step_executor::SyncOutcomeView, String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn feature_continue_sync(
+        &self,
+        _: &str,
+    ) -> Result<crate::ports::step_executor::SyncOutcomeView, String> {
+        panic!("unexpected StepExecutor call")
+    }
+    async fn feature_sync_resolver(
+        &self,
+        _: &str,
+    ) -> Result<crate::ports::step_executor::SyncResolverView, String> {
+        panic!("unexpected StepExecutor call")
+    }
+}
+
+fn launch_of(attachments: Vec<AgentAttachment>) -> AgentFeatureLaunch {
+    AgentFeatureLaunch {
+        project_id: "p-1".to_string(),
+        workflow_id: "wf-1".to_string(),
+        title: "a title".to_string(),
+        description: "a description".to_string(),
+        attachments,
+        machine_id: None,
+        target_repo_id: None,
+        unattended: None,
+        max_cost_usd: None,
+        max_wall_clock_secs: None,
+    }
+}
+
+#[tokio::test]
+async fn a_refused_attachment_creates_no_feature_and_never_reaches_the_executor() {
+    let mut ctx = fixture("start-refused");
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+    let missing =
+        crate::support::test_dir::scratch("demeteo-agent-surface-writes-missing").join("nope.png");
+
+    let result = start_feature(
+        &ctx,
+        launch_of(vec![AgentAttachment {
+            path: Some(missing.to_string_lossy().into_owned()),
+            ..AgentAttachment::default()
+        }]),
+    )
+    .await;
+
+    assert!(result.is_err());
+    assert_eq!(spy.calls(), 0);
+    assert!(ctx
+        .features
+        .get_all_for_project(&ProjectId::from("p-1".to_string()))
+        .unwrap()
+        .is_empty());
+}
+
+fn seed_project(ctx: &AppContext) {
+    ctx.projects.add(project("p-1")).unwrap();
+}
+
+fn seed_workflow(ctx: &AppContext) {
+    ctx.workflows
+        .create(crate::domain::models::Workflow {
+            id: WorkflowId::from("wf-1".to_string()),
+            name: "wf".to_string(),
+            description: String::new(),
+            is_starter: false,
+            created_at: 0,
+            updated_at: 0,
+            schedule: None,
+        })
+        .unwrap();
+}
+
+fn inline_png() -> AgentAttachment {
+    AgentAttachment {
+        content_base64: Some("iVBORw0KGgotbm90LWEtcmVhbC1pbWFnZQ==".to_string()),
+        filename: Some("a.png".to_string()),
+        ..AgentAttachment::default()
+    }
+}
+
+#[tokio::test]
+async fn an_unknown_project_with_attachments_is_refused_and_starts_nothing() {
+    let mut ctx = fixture("start-unknown-project");
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+    seed_workflow(&ctx);
+
+    let result = start_feature(&ctx, launch_of(vec![inline_png()])).await;
+
+    assert_eq!(result.unwrap_err(), "project not found");
+    assert_eq!(spy.calls(), 0);
+}
+
+#[tokio::test]
+async fn an_unknown_workflow_with_attachments_is_refused_and_starts_nothing() {
+    let mut ctx = fixture("start-unknown-workflow");
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+    seed_project(&ctx);
+
+    let result = start_feature(&ctx, launch_of(vec![inline_png()])).await;
+
+    assert_eq!(result.unwrap_err(), "workflow not found");
+    assert_eq!(spy.calls(), 0);
+}
+
+#[tokio::test]
+async fn project_and_workflow_are_checked_before_any_attachment_is_resolved() {
+    let mut ctx = fixture("start-lookup-first");
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+    let missing =
+        crate::support::test_dir::scratch("demeteo-agent-surface-writes-lookup").join("nope.png");
+
+    let result = start_feature(
+        &ctx,
+        launch_of(vec![AgentAttachment {
+            path: Some(missing.to_string_lossy().into_owned()),
+            ..AgentAttachment::default()
+        }]),
+    )
+    .await;
+
+    assert_eq!(result.unwrap_err(), "project not found");
+    assert_eq!(spy.calls(), 0);
+}
+
+#[tokio::test]
+async fn known_project_and_workflow_with_attachments_reach_the_executor() {
+    let mut ctx = fixture("start-known");
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+    seed_project(&ctx);
+    seed_workflow(&ctx);
+
+    start_feature(&ctx, launch_of(vec![inline_png()]))
+        .await
+        .unwrap();
+
+    assert_eq!(spy.calls(), 1);
+    assert_eq!(spy.launch().staged_attachments.len(), 1);
+}
+
+#[tokio::test]
+async fn an_unknown_project_without_attachments_still_reaches_feature_start() {
+    let mut ctx = fixture("start-unknown-no-attachments");
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+
+    start_feature(&ctx, launch_of(Vec::new())).await.unwrap();
+
+    assert_eq!(spy.calls(), 1);
+}
+
+#[tokio::test]
+async fn omitting_attachments_launches_exactly_what_it_did_before() {
+    let mut ctx = fixture("start-no-attachments");
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+
+    start_feature(&ctx, launch_of(Vec::new())).await.unwrap();
+
+    let got = spy.launch();
+    let expected = FeatureLaunch {
+        project_id: "p-1".to_string(),
+        workflow_id: "wf-1".to_string(),
+        title: "a title".to_string(),
+        description: "a description".to_string(),
+        ..FeatureLaunch::default()
+    };
+    assert_eq!(format!("{got:?}"), format!("{expected:?}"));
+    assert!(got.staged_attachments.is_empty());
+}
+
+#[tokio::test]
+async fn a_valid_inline_attachment_reaches_the_executor_as_bytes() {
+    use base64::Engine as _;
+    let png: &[u8] = b"\x89PNG\r\n\x1a\n-not-a-real-image";
+    let mut ctx = fixture("start-inline");
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+    seed_project(&ctx);
+    seed_workflow(&ctx);
+
+    start_feature(
+        &ctx,
+        launch_of(vec![AgentAttachment {
+            content_base64: Some(base64::engine::general_purpose::STANDARD.encode(png)),
+            filename: Some("shot.png".to_string()),
+            ..AgentAttachment::default()
+        }]),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(spy.calls(), 1);
+    let staged = spy.launch().staged_attachments;
+    assert_eq!(staged.len(), 1);
+    assert_eq!(staged[0].bytes.as_deref(), Some(png));
+    assert!(staged[0].source_path.is_empty());
+}
+
+#[tokio::test]
+async fn blank_text_is_refused_before_any_attachment_is_resolved() {
+    let missing =
+        crate::support::test_dir::scratch("demeteo-agent-surface-writes-blank").join("nope.png");
+    let bad_attachment = || {
+        vec![AgentAttachment {
+            path: Some(missing.to_string_lossy().into_owned()),
+            ..AgentAttachment::default()
+        }]
+    };
+
+    let mut ctx = fixture("start-blank-title");
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+    let mut launch = launch_of(bad_attachment());
+    launch.title = "  ".to_string();
+    let e = start_feature(&ctx, launch).await.unwrap_err();
+    assert_eq!(e, "Feature title cannot be empty.");
+
+    let mut launch = launch_of(bad_attachment());
+    launch.description = String::new();
+    let e = start_feature(&ctx, launch).await.unwrap_err();
+    assert_eq!(e, "Feature description cannot be empty.");
+    assert_eq!(spy.calls(), 0);
+}
+
 fn agent_launch(machine_id: Option<&str>) -> AgentFeatureLaunch {
     AgentFeatureLaunch {
         project_id: "p-1".to_string(),
         workflow_id: "w-1".to_string(),
         title: "Ship it".to_string(),
         description: "Started over MCP".to_string(),
+        attachments: Vec::new(),
         machine_id: machine_id.map(str::to_string),
         target_repo_id: None,
         unattended: None,

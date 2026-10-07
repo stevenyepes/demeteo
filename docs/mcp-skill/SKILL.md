@@ -74,6 +74,24 @@ tools and from reasoning; only call one of those four when performing the
 write, the config change, or starting a run is the thing actually being asked
 for.
 
+## Attaching files to a Feature
+
+Attach files to `start_feature` when the request leans on material the agent
+can't derive from the repo — a screenshot of the bug, a spec PDF, a sample
+payload. Don't attach what the repo already holds, and don't attach to get a
+look at a file yourself: attachments reach the run's agent, not you.
+
+A `path` is a path on the **Demeteo machine**, not on yours. A file that exists
+only where you are running can't be named that way; send it inline instead.
+Each item takes exactly one of `path` or `content_base64`, and inline needs a
+`filename`. A path under Demeteo's own data directory is refused. When both
+would work, prefer `path` — inline bytes ride in the request body,
+inflated by base64, and the whole request must stay under 2 MiB.
+
+Limits in one line: nine types (images, PDF, text, markdown, JSON), at most 10
+files, about 1.5 MiB per file inline, 100 MiB per file by `path`. A launch with
+an invalid attachment starts nothing — fix the item the error names and call again.
+
 ## Failure triage
 
 For "why did this fail," call `get_failure_verdict` first. It returns a

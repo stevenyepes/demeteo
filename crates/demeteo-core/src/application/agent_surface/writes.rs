@@ -3,10 +3,15 @@
 //! this file adds no new business logic, only the narrower entry points an
 //! external caller needs.
 
+pub use crate::application::attachments::AgentAttachment;
+use crate::application::attachments::{
+    agent_attachment_forbidden_roots, resolve_agent_attachments,
+};
 use crate::application::launch::{launch_run, LaunchRequest, LaunchedRun};
 use crate::application::projects::{self, ProjectConfig};
 use crate::application::tickets;
-use crate::domain::ids::{MachineId, ProjectId, TicketId};
+use crate::domain::feature_launch::refuse_blank_launch_text;
+use crate::domain::ids::{MachineId, ProjectId, TicketId, WorkflowId};
 use crate::domain::models::project::RunShapePatch;
 use crate::domain::models::{Project, ProjectSettings};
 use crate::domain::run_placement::{placement_from_raw, placement_override, DetachedOptions};
@@ -64,7 +69,7 @@ pub fn create_workspace_project(
 /// What an external caller chooses when starting a Feature directly, rather
 /// than through a Ticket — deliberately narrower than [`FeatureLaunch`]:
 /// agent/model/effort, step overrides and origin are the project's run shape,
-/// not a caller's to set from outside.
+/// not a caller's to set from outside. Attachments are the caller's input.
 ///
 /// The caller does choose *where* the run goes. An absent, blank or
 /// local-meaning `machine_id` is local and any other id is detached, through
@@ -77,6 +82,7 @@ pub struct AgentFeatureLaunch {
     pub workflow_id: String,
     pub title: String,
     pub description: String,
+    pub attachments: Vec<AgentAttachment>,
     pub machine_id: Option<String>,
     pub target_repo_id: Option<String>,
     pub unattended: Option<bool>,
@@ -91,6 +97,37 @@ pub async fn start_feature(
     ctx: &AppContext,
     launch: AgentFeatureLaunch,
 ) -> Result<LaunchedRun, String> {
+    // Blank text is refused before any file is read, with the words
+    // `feature_start` uses. `feature_start` inserts the bootstrapping Feature
+    // row before it stages anything, so an attachment refusal has to happen
+    // here, ahead of the launch.
+    refuse_blank_launch_text(&launch.title, &launch.description)?;
+    let staged_attachments = if launch.attachments.is_empty() {
+        Vec::new()
+    } else {
+        // A bad project or workflow is refused before a byte is read. Only on
+        // this path: `feature_start` itself does not refuse either up front,
+        // and a launch without attachments must keep behaving as it did.
+        if ctx
+            .projects
+            .get_project(&ProjectId::from(launch.project_id.clone()))?
+            .is_none()
+        {
+            return Err("project not found".to_string());
+        }
+        if ctx
+            .workflows
+            .get(&WorkflowId::from(launch.workflow_id.clone()))?
+            .is_none()
+        {
+            return Err("workflow not found".to_string());
+        }
+        let items = launch.attachments;
+        let forbidden = agent_attachment_forbidden_roots(&ctx.app_data_dir, &ctx.workspace_dir);
+        tokio::task::spawn_blocking(move || resolve_agent_attachments(items, &forbidden))
+            .await
+            .map_err(|e| e.to_string())??
+    };
     let placement = placement_from_raw(launch.machine_id.as_deref());
     let request = LaunchRequest {
         launch: FeatureLaunch {
@@ -98,6 +135,7 @@ pub async fn start_feature(
             workflow_id: launch.workflow_id,
             title: launch.title,
             description: launch.description,
+            staged_attachments,
             ..FeatureLaunch::default()
         },
         placement,
