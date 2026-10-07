@@ -75,9 +75,8 @@ pub(super) fn call(
     channel
         .write_all(line.as_bytes())
         .map_err(|e| format!("Failed to write control-RPC request: {}", e))?;
-    channel
-        .flush()
-        .map_err(|e| format!("Failed to flush control-RPC request: {}", e))?;
+    // Not `flush()` — ssh2 maps it to libssh2's inbound-discard, which could
+    // drop a reply that arrived early.
     // Half-close our write side so the runner's line-reader loop sees
     // EOF right after our one request and closes its side in turn —
     // that's what unblocks the `read_to_string` below.

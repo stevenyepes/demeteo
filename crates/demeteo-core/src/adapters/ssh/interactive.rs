@@ -23,7 +23,8 @@ impl InteractiveHandle for RemoteChannelHandle {
         let mut channel = self.channel.lock().unwrap();
         channel.write_all(line.as_bytes())?;
         channel.write_all(b"\n")?;
-        channel.flush()?;
+        // No `flush()`: on an ssh2 channel that is `libssh2_channel_flush_ex`,
+        // which discards the agent's unread output rather than sending ours.
         Ok(line.len() + 1)
     }
 
