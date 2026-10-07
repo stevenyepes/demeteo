@@ -1,7 +1,7 @@
 use crate::domain::models::Machine;
 use crate::state::AppContext;
 use portable_pty::PtySize;
-use std::io::Write;
+use std::io::{self, Write};
 use std::sync::atomic::Ordering;
 use tauri::{ipc::Channel, AppHandle, Emitter, Runtime, State};
 
@@ -11,6 +11,7 @@ use super::model::{
     checked_pty_size, SessionInfo, SessionKeepalive, SessionState, WriteSink, DEFAULT_TERM_COLS,
     DEFAULT_TERM_ROWS,
 };
+use super::nonblocking::{retry_would_block, write_all_retrying, WOULD_BLOCK_BUDGET};
 use super::transport::{start_local_pty, start_ssh_session};
 
 #[tauri::command]
@@ -46,13 +47,14 @@ pub fn write_terminal_session(
     if let Some(active) = sessions.get(&session_id) {
         match &active.write_sink {
             WriteSink::Ssh(ch) => {
-                let mut chan = ch
-                    .lock()
-                    .map_err(|_| "Failed to lock channel".to_string())?;
-                chan.write_all(data.as_bytes())
-                    .map_err(|e| format!("Failed to write to terminal: {}", e))?;
-                chan.flush()
-                    .map_err(|e| format!("Failed to flush terminal: {}", e))?;
+                let ch = ch.clone();
+                drop(sessions);
+                write_all_retrying(data.as_bytes(), WOULD_BLOCK_BUDGET, |chunk| {
+                    ch.lock()
+                        .map_err(|_| io::Error::other("terminal channel lock poisoned"))?
+                        .write(chunk)
+                })
+                .map_err(|e| format!("Failed to write to terminal: {}", e))?;
             }
             WriteSink::LocalPty(writer) => {
                 let mut w = writer
@@ -91,11 +93,13 @@ pub fn resize_terminal_session(
     if let Some(active) = sessions.get(&session_id) {
         match &active.write_sink {
             WriteSink::Ssh(ch) => {
-                let mut chan = ch
-                    .lock()
-                    .map_err(|_| "Failed to lock channel".to_string())?;
-                chan.request_pty_size(cols as u32, rows as u32, None, None)
-                    .map_err(|e| format!("Failed to resize terminal: {}", e))?;
+                retry_would_block(WOULD_BLOCK_BUDGET, || {
+                    ch.lock()
+                        .map_err(|_| io::Error::other("terminal channel lock poisoned"))?
+                        .request_pty_size(cols as u32, rows as u32, None, None)
+                        .map_err(io::Error::from)
+                })
+                .map_err(|e| format!("Failed to resize terminal: {}", e))?;
             }
             WriteSink::LocalPty(_) => {
                 if let Ok(keepalive) = active._keepalive.lock() {

@@ -4,6 +4,7 @@ mod commands;
 mod drain;
 mod hooks;
 mod model;
+mod nonblocking;
 mod start;
 mod transport;
 
