@@ -65,6 +65,7 @@ pub mod permission;
 pub mod platform_context;
 pub mod prompt_budget;
 pub mod prompt_context;
+pub mod push_lease;
 pub mod restart_reconcile;
 pub(crate) mod review_base;
 pub mod review_entrypoint;

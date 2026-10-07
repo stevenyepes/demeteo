@@ -678,7 +678,7 @@ impl GitOpsHelper {
                             crate::adapters::git_push::push_request(
                                 &wt_path,
                                 feature_branch,
-                                false,
+                                None,
                                 credential.as_ref(),
                             ),
                         )

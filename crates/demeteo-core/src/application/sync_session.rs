@@ -264,7 +264,7 @@ pub async fn publish(
             crate::adapters::git_push::push_request(
                 &push_dir,
                 &session.feature_branch,
-                false,
+                None,
                 credential.as_ref(),
             ),
         )

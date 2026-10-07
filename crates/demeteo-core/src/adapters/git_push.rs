@@ -227,14 +227,15 @@ pub(crate) fn credential_env(
 
 /// The push invocation, assembled where a test can read it.
 ///
-/// `force` is the merge-request publisher's alone, and is spelled at the call
+/// `lease` is the merge-request publisher's alone, and is spelled at the call
 /// site rather than defaulted here: it re-points a branch that was squashed
 /// under an open MR, which is what that path means to do and what every other
-/// push must never do to a branch a person may have committed to since.
+/// push must never do to a branch a person may have committed to since. It is
+/// a lease and never a bare `-f` — see [`crate::domain::push_lease`].
 pub(crate) fn push_request(
     repo_dir: &str,
     branch: &str,
-    force: bool,
+    lease: Option<&crate::domain::push_lease::PushLease>,
     credential: Option<&GitCredential>,
 ) -> ProgramRequest {
     let mut args = vec!["-C".to_string(), repo_dir.to_string()];
@@ -242,8 +243,8 @@ pub(crate) fn push_request(
         args.extend(credential_args());
     }
     args.push("push".to_string());
-    if force {
-        args.push("-f".to_string());
+    if let Some(lease) = lease {
+        args.push(lease.flag());
     }
     args.extend(["origin".to_string(), branch.to_string()]);
 

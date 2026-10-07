@@ -200,7 +200,7 @@ pub(super) async fn land(
                 crate::adapters::git_push::push_request(
                     resolved_cwd,
                     feature_branch,
-                    false,
+                    None,
                     credential.as_ref(),
                 ),
             )

@@ -15,8 +15,22 @@ fn credential() -> GitCredential {
     }
 }
 
+const LEASED: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+fn lease(branch: &str) -> crate::domain::push_lease::PushLease {
+    crate::domain::push_lease::PushLease {
+        branch: branch.to_string(),
+        expected: Some(LEASED.to_string()),
+    }
+}
+
 fn request() -> ProgramRequest {
-    push_request("/w/repo", "demeteo/f-1", true, Some(&credential()))
+    push_request(
+        "/w/repo",
+        "demeteo/f-1",
+        Some(&lease("demeteo/f-1")),
+        Some(&credential()),
+    )
 }
 
 /// The whole reason the token moved out of the URL and off the disk: nothing
@@ -153,7 +167,7 @@ fn redaction_of_an_empty_secret_is_the_identity() {
 /// Demeteo had a token for it.
 #[test]
 fn an_uncredentialed_push_installs_no_helper_but_still_cannot_be_asked() {
-    let req = push_request("/w/repo", "demeteo/f-1", false, None);
+    let req = push_request("/w/repo", "demeteo/f-1", None, None);
 
     assert!(
         !req.args.iter().any(|a| a.starts_with("credential.helper")),
@@ -170,21 +184,26 @@ fn an_uncredentialed_push_installs_no_helper_but_still_cannot_be_asked() {
     );
 }
 
-/// Force is the merge-request publisher's alone.
+/// Force is the merge-request publisher's alone, and even there it is leased.
 ///
 /// Every other push in the app aims at a branch a person may have committed to
-/// since — a resolution, a clean sync merge, the Publish button — and `-f`
+/// since — a resolution, a clean sync merge, the Publish button — and forcing
 /// there would overwrite their work with Demeteo's idea of the branch.
 #[test]
-fn only_the_caller_that_asks_for_it_force_pushes() {
-    assert!(push_request("/w/repo", "b", true, None)
-        .args
+fn only_the_caller_that_asks_for_it_force_pushes_and_never_blindly() {
+    let forced = push_request("/w/repo", "b", Some(&lease("b")), None).args;
+    let plain = push_request("/w/repo", "b", None, None).args;
+
+    assert!(forced
         .iter()
-        .any(|a| a == "-f"));
-    assert!(!push_request("/w/repo", "b", false, None)
-        .args
-        .iter()
-        .any(|a| a == "-f"));
+        .any(|a| a == &format!("--force-with-lease=refs/heads/b:{LEASED}")));
+    assert!(!plain.iter().any(|a| a.starts_with("--force")));
+    for args in [&forced, &plain] {
+        assert!(
+            !args.iter().any(|a| a == "-f" || a == "--force"),
+            "{args:?}"
+        );
+    }
 }
 
 /// A push git could not authenticate is diagnosed as one, and says what to do.
@@ -344,7 +363,7 @@ fn a_credentialed_force_push_is_exactly_this_argv_and_env() {
             "-c".to_string(),
             format!("credential.helper={}", credential_helper()),
             "push".to_string(),
-            "-f".to_string(),
+            format!("--force-with-lease=refs/heads/demeteo/f-1:{LEASED}"),
             "origin".to_string(),
             "demeteo/f-1".to_string(),
         ]
@@ -359,7 +378,7 @@ fn a_credentialed_force_push_is_exactly_this_argv_and_env() {
 
 #[test]
 fn an_uncredentialed_push_is_exactly_this_argv_and_env() {
-    let req = push_request("/w/repo", "b", false, None);
+    let req = push_request("/w/repo", "b", None, None);
 
     assert_eq!(
         req.args,

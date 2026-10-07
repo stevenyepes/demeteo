@@ -5,7 +5,8 @@
 //! reasoning for why the PAT rides an inline helper rather than the URL or a
 //! file on disk. What stays here is the part that is about a *merge request*:
 //! resolving the target directory, re-pointing `origin` at the provider's
-//! HTTPS URL, and force-pushing a branch that was squashed under an open MR.
+//! HTTPS URL, and force-pushing a branch that was squashed under an open MR —
+//! under a lease, never a bare `-f` ([`crate::domain::push_lease`]).
 //!
 //! The `remote set-url` is the reason `git_push` exists as a shared module.
 //! It writes a deliberately token-free URL, so a project that has published
@@ -26,6 +27,7 @@ use std::sync::Arc;
 
 use crate::adapters::git_push::{push_failure, push_request, redacted, remote_user, GitCredential};
 use crate::domain::git_push::{classify_push_failure, host_without_port, PushFailure};
+use crate::domain::push_lease::{is_stale_lease, lease_from_tracking, tracking_query};
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
 
 pub(super) struct BranchPush<'a> {
@@ -77,9 +79,17 @@ pub(super) async fn push_feature_branch(
     .await
     .map_err(|e| format!("Failed to update remote origin URL: {}", e))?;
 
-    // `force` so a retried or replayed feature can update a branch it already
+    // Forced so a retried or replayed feature can update a branch it already
     // pushed — the one push in the app that may, and the reason
-    // `push_request` takes the flag rather than assuming it.
+    // `push_request` takes the lease rather than assuming one.
+    let tracking = exec
+        .run_program(
+            machine_str,
+            git_request(&target_dir, tracking_query(push.source_branch)),
+        )
+        .await
+        .map_err(|e| format!("Failed to read origin/{}: {e}", push.source_branch))?;
+    let lease = lease_from_tracking(push.source_branch, &tracking);
     let credential = GitCredential {
         user: remote_user,
         pat: push.pat.to_string(),
@@ -87,11 +97,19 @@ pub(super) async fn push_feature_branch(
     };
     exec.run_program(
         machine_str,
-        push_request(&target_dir, push.source_branch, true, Some(&credential)),
+        push_request(
+            &target_dir,
+            push.source_branch,
+            Some(&lease),
+            Some(&credential),
+        ),
     )
     .await
     .map_err(|e| {
         let clean = redacted(&e, push.pat);
+        if is_stale_lease(&clean) {
+            return lease.refusal();
+        }
         match classify_push_failure(&clean) {
             PushFailure::HookFailed => push_failure(&e, Some(&credential)),
             _ => format!("Failed to push feature branch to origin: {clean}"),
@@ -101,12 +119,12 @@ pub(super) async fn push_feature_branch(
     Ok(())
 }
 
-fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> ProgramRequest {
+fn git_request<S: Into<String>, const N: usize>(repo_dir: &str, args: [S; N]) -> ProgramRequest {
     ProgramRequest {
         executable: "git".to_string(),
         args: [
             vec!["-C".to_string(), repo_dir.to_string()],
-            args.into_iter().map(str::to_string).collect(),
+            args.into_iter().map(Into::into).collect(),
         ]
         .concat(),
         ..ProgramRequest::default()
