@@ -130,6 +130,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
   const [diffOriginal, setDiffOriginal] = useState<string>('');
   const [diffModified, setDiffModified] = useState<string>('');
   const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
 
   const [refreshing, setRefreshing] = useState(false);
   const nodesRef = useRef<FileNode[]>([]);
@@ -223,6 +224,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     setDiffPath(file.path);
     setDiffStatus(file.status);
     setDiffLoading(true);
+    setDiffError(null);
     try {
       const [original, modified] = await Promise.all([
         file.status === 'A'
@@ -245,8 +247,11 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
       setDiffOriginal(original);
       setDiffModified(modified);
     } catch (err) {
+      // Never as the modified side's content: that renders as a file the range
+      // added, whose body happens to be an error message.
       setDiffOriginal('');
-      setDiffModified(formatError(err));
+      setDiffModified('');
+      setDiffError(formatError(err));
     } finally {
       setDiffLoading(false);
     }
@@ -481,8 +486,12 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
               </div>
             )}
 
+            {diffPath && !diffLoading && diffError && (
+              <div className="p-6 text-xs text-rose-400 font-mono whitespace-pre-wrap break-all select-text">{diffError}</div>
+            )}
+
             {/* Side-by-side diff editor */}
-            {diffPath && !diffLoading && (
+            {diffPath && !diffLoading && !diffError && (
               <DiffEditor
                 height="100%"
                 language={activeLang}

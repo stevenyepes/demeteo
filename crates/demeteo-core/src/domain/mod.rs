@@ -35,6 +35,7 @@ pub mod ecosystem;
 pub mod expr;
 pub mod feature_launch;
 pub mod feature_origin;
+pub mod file_at_ref;
 pub(crate) mod finalize;
 pub mod fix_destination;
 pub(crate) mod gate;
