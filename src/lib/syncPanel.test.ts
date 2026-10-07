@@ -743,6 +743,7 @@ describe('reviewTarget', () => {
       defaultBranch: 'origin/master',
       baseRef: 'aaaaaaa1111',
       headRef: 'c0ffeec2222',
+      changesOnly: false,
     });
   });
 
@@ -752,6 +753,8 @@ describe('reviewTarget', () => {
     );
 
     expect(target?.worktreePath).toBe('/repos/demeteo');
+    // That clone has another branch checked out, so its disk is not this ref.
+    expect(target?.changesOnly).toBe(true);
   });
 
   it('has no target without a recorded pre-merge tip', () => {

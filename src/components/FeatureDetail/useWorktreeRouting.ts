@@ -178,6 +178,7 @@ export function useWorktreeRouting(input: {
           baseRef: at.baseRef,
           headRef: at.headRef,
           initialTab: 'changes',
+          changesOnly: at.changesOnly,
         },
         featureId,
         featureTitle,

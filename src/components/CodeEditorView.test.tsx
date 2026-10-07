@@ -54,6 +54,7 @@ function mount(over: Record<string, unknown> = {}) {
 
 describe('CodeEditorView', () => {
   beforeEach(() => {
+    listDir.mockClear();
     gitChangedFiles.mockReset();
     gitChangedFiles.mockResolvedValue([]);
   });
@@ -97,5 +98,15 @@ describe('CodeEditorView', () => {
     gitChangedFiles.mockClear();
     mount();
     expect(gitChangedFiles).not.toHaveBeenCalled();
+  });
+
+  /** A review opened in a clone with another branch checked out: its disk is
+   *  not the ref under review, so nothing may list it as if it were. */
+  it('lists no files from disk when the checkout is not the head ref', async () => {
+    mount({ baseRef: 'aaaaaaa1111', headRef: 'c0ffeec2222', initialTab: 'files', changesOnly: true });
+
+    expect(await screen.findByText('No changes vs aaaaaaa')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Files' })).not.toBeInTheDocument();
+    expect(listDir).not.toHaveBeenCalled();
   });
 });

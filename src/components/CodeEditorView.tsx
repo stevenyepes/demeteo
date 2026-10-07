@@ -36,6 +36,8 @@ interface CodeEditorViewProps {
   baseRef?: string;
   headRef?: string;
   initialTab?: 'files' | 'changes';
+  /** Hide the Files tab: see `EditorContext.changesOnly`. */
+  changesOnly?: boolean;
 }
 
 type SidebarTab = 'files' | 'changes';
@@ -100,10 +102,11 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
   baseRef,
   headRef,
   initialTab,
+  changesOnly = false,
 }) => {
   const diffBase = baseRef ?? defaultBranch;
   const diffHead = headRef ?? branch;
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>(initialTab ?? 'files');
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>(changesOnly ? 'changes' : (initialTab ?? 'files'));
 
   // ── File tree state ───────────────────────────────────────────────
   const [nodes, setNodes] = useState<FileNode[]>([]);
@@ -143,6 +146,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
   }, [machineId]);
 
   const loadRoot = useCallback(async () => {
+    if (changesOnly) return;
     setTreeLoading(true);
     setTreeError(null);
     try {
@@ -152,7 +156,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     } finally {
       setTreeLoading(false);
     }
-  }, [loadDir, worktreePath]);
+  }, [loadDir, worktreePath, changesOnly]);
 
   useEffect(() => { loadRoot(); }, [loadRoot]);
 
@@ -325,6 +329,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
         <div className="w-56 shrink-0 border-r border-white/5 bg-[#0d0f14]/50 flex flex-col overflow-hidden">
           {/* Tab switcher */}
           <div className="flex border-b border-white/5 shrink-0">
+            {!changesOnly && (
             <button
               onClick={() => setSidebarTab('files')}
               className={`flex-1 py-2 text-[10px] uppercase font-bold tracking-widest transition-colors ${
@@ -335,6 +340,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
             >
               Files
             </button>
+            )}
             <button
               onClick={() => setSidebarTab('changes')}
               className={`flex-1 py-2 text-[10px] uppercase font-bold tracking-widest transition-colors flex items-center justify-center gap-1 ${

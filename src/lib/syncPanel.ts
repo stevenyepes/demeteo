@@ -736,6 +736,8 @@ export interface DiffTarget {
   defaultBranch: string;
   baseRef: string;
   headRef: string;
+  /** The checkout does not have `headRef` checked out. */
+  changesOnly: boolean;
 }
 
 /**
@@ -748,7 +750,9 @@ export interface DiffTarget {
  * on the runner and git refused a range naming a commit it never had. So the
  * refs and the repository come from one row, in one value. The sync worktree
  * while it exists, because it has the merge checked out; `repo_dir` after,
- * which shares its object store and so still resolves both refs.
+ * which shares its object store and so still resolves both refs — but has
+ * some other branch checked out, so only the Changes tab, which reads refs
+ * rather than the disk, is true there.
  *
  * `null` without a recorded pre-merge tip — see `reviewActions`.
  */
@@ -761,6 +765,7 @@ export function reviewTarget(session: SyncSessionView): DiffTarget | null {
     defaultBranch: session.base_branch,
     baseRef: session.head_before,
     headRef: session.merge_commit_sha,
+    changesOnly: session.worktree_path === null,
   };
 }
 

@@ -50,6 +50,7 @@ describe('openDiffRange', () => {
       defaultBranch: 'origin/master',
       baseRef: 'aaaaaaa1111',
       headRef: 'c0ffeec2222',
+      changesOnly: true,
     });
 
     await waitFor(() => expect(views).toHaveLength(1));
@@ -65,6 +66,7 @@ describe('openDiffRange', () => {
         baseRef: 'aaaaaaa1111',
         headRef: 'c0ffeec2222',
         initialTab: 'changes',
+        changesOnly: true,
       },
       featureId: 'f-1',
       featureTitle: 'Add a metric strip',

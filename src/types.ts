@@ -80,6 +80,9 @@ export interface EditorContext {
   headRef?: string;
   /** Which sidebar tab opens. Omitted = 'files'. */
   initialTab?: 'files' | 'changes';
+  /** The checkout on disk is not `headRef`, so the Files tab — which reads
+   *  the disk — would show some other branch under this one's name. */
+  changesOnly?: boolean;
 }
 
 export interface WorkflowSummary {
