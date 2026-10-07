@@ -371,7 +371,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
                   <Loader2 className="w-4 h-4 text-violet-400 animate-spin" />
                 </div>
               ) : changesError ? (
-                <div className="p-3 text-xs text-rose-400 font-mono">{changesError}</div>
+                <div className="p-3 text-xs text-rose-400 font-mono whitespace-pre-wrap break-all select-text" title={changesError}>{changesError}</div>
               ) : changedFiles.length === 0 ? (
                 <div className="py-8 px-3 text-[10px] text-slate-600 uppercase tracking-widest text-center">
                   No changes vs {refLabel(diffBase)}

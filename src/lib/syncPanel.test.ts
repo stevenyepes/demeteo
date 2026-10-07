@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   describeSyncPanel,
   isReadOnlySyncIntent,
+  reviewTarget,
   syncIntentMovesBranch,
   type SyncIntent,
   type SyncPanelInput,
@@ -728,6 +729,33 @@ describe('a settled pull request', () => {
 
     expect(model.state).toBe('conflicted');
     expect(intents(model)).toContain('abort');
+  });
+});
+
+describe('reviewTarget', () => {
+  it('reviews in the sync worktree while it exists, where the merge is checked out', () => {
+    const target = reviewTarget(session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222' }));
+
+    expect(target).toEqual({
+      machineId: 'local',
+      worktreePath: '/repos/demeteo_wt_sync_feature-f-1',
+      branch: 'feature/f-1',
+      defaultBranch: 'origin/master',
+      baseRef: 'aaaaaaa1111',
+      headRef: 'c0ffeec2222',
+    });
+  });
+
+  it('falls back to the clone the worktree shared its objects with', () => {
+    const target = reviewTarget(
+      session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', worktree_path: null }),
+    );
+
+    expect(target?.worktreePath).toBe('/repos/demeteo');
+  });
+
+  it('has no target without a recorded pre-merge tip', () => {
+    expect(reviewTarget(session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', head_before: null }))).toBeNull();
   });
 });
 

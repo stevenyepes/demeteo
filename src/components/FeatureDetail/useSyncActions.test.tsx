@@ -184,10 +184,22 @@ describe('useSyncActions', () => {
 
     act('review');
 
-    expect(openDiffRange).toHaveBeenCalledWith({
-      baseRef: 'aaaaaaa1111',
-      headRef: 'c0ffeec2222',
+    expect(openDiffRange).toHaveBeenCalledWith(
+      expect.objectContaining({ baseRef: 'aaaaaaa1111', headRef: 'c0ffeec2222' }),
+    );
+  });
+
+  /** The refs are only meaningful in the clone the sync ran in. */
+  it('reviews in the machine and checkout the session recorded', () => {
+    const { act, openDiffRange } = mount({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', worktree_path: null }),
     });
+
+    act('review');
+
+    expect(openDiffRange).toHaveBeenCalledWith(
+      expect.objectContaining({ machineId: 'local', worktreePath: '/repos/demeteo' }),
+    );
   });
 
   /** The pre-merge tip is unrecoverable once the merge lands, so a session

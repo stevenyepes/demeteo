@@ -728,6 +728,42 @@ function resolvingArm(base: PanelBase, session: SyncSessionView): SyncPanelModel
   };
 }
 
+/** A ref pair and the checkout that holds both. */
+export interface DiffTarget {
+  machineId: string;
+  worktreePath: string;
+  branch: string;
+  defaultBranch: string;
+  baseRef: string;
+  headRef: string;
+}
+
+/**
+ * Where a resolution is reviewed: the clone the sync ran in, never the
+ * feature's own worktree.
+ *
+ * The two differ for a detached run. Its sync runs in the laptop's shadow
+ * clone while its code lives on the runner, and an unpublished merge commit
+ * exists only in the first — routed through the run's worktree, the diff ran
+ * on the runner and git refused a range naming a commit it never had. So the
+ * refs and the repository come from one row, in one value. The sync worktree
+ * while it exists, because it has the merge checked out; `repo_dir` after,
+ * which shares its object store and so still resolves both refs.
+ *
+ * `null` without a recorded pre-merge tip — see `reviewActions`.
+ */
+export function reviewTarget(session: SyncSessionView): DiffTarget | null {
+  if (session.head_before === null || session.merge_commit_sha === null) return null;
+  return {
+    machineId: session.machine_id,
+    worktreePath: session.worktree_path ?? session.repo_dir,
+    branch: session.feature_branch,
+    defaultBranch: session.base_branch,
+    baseRef: session.head_before,
+    headRef: session.merge_commit_sha,
+  };
+}
+
 /**
  * The diff a resolution is reviewed as is `head_before..merge_commit_sha`, and
  * nothing else. `merge_commit_sha^` names the pre-merge tip only while the
@@ -739,7 +775,7 @@ function resolvingArm(base: PanelBase, session: SyncSessionView): SyncPanelModel
  * one against a guess.
  */
 function reviewActions(session: SyncSessionView): SyncAction[] {
-  const reviewable = session.head_before !== null && session.merge_commit_sha !== null;
+  const reviewable = reviewTarget(session) !== null;
   const actions: SyncAction[] = [];
   if (reviewable) {
     actions.push({
