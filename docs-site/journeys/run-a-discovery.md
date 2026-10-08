@@ -42,7 +42,7 @@ A Discovery stays open after decomposing. **Decompose again** proposes changes o
 
 ## 4. The ticket graph
 
-![Ticket graph with ready and blocked tickets, and the ticket editor open on a ticket's files, attachments and execution settings](../assets/screenshots/ticket-editor.png)
+![A decomposed Discovery mid-run (20 of 52 landed, 2 in flight), with a ready ticket's detail and its Start ticket button open on the right](../assets/screenshots/discovery-ticket-graph.png)
 
 Tickets appear as a **Graph** (what depends on what) or a **Board** with one lane per state:
 
@@ -58,6 +58,8 @@ A prerequisite counts as satisfied when its feature's PR is **merged or closed**
 
 Select a ticket to inspect it — description, prerequisites, workflow, acceptance criteria, and **what its agent will be told** — and **Edit** it. Until it starts, every field is editable: title, description, acceptance, files, test command, prerequisite edges, attachments for the agent that implements it, and its execution settings (**workflow, agent, model, effort**, and the machine it runs on). A ticket locks once it has a feature.
 
+![Ticket editor modal on a landed ticket, locked because it has a feature: title, description, acceptance criteria, files, test command and attachments](../assets/screenshots/ticket-editor.png)
+
 ## 5. Start ready tickets
 
 **Start ticket** on a ready ticket creates a feature from the ticket's own workflow, agent, model and effort, and runs it like any other pipeline — gates included. Pick any ready tickets and run them side by side; each gets its own branch and worktree. Demeteo shows what is startable but **never starts a ticket on its own**.
@@ -65,8 +67,6 @@ Select a ticket to inspect it — description, prerequisites, workflow, acceptan
 - **Placement**: a ticket runs locally, or *detached* on a machine's `demeteo-runner`. Unless you choose, it inherits from the Discovery's machine.
 - Every started ticket's prompt says, per prerequisite, whether it landed or was dropped, so the agent doesn't build on work that never reached its base.
 - **Force start…** starts a blocked ticket anyway, and **Drop** gives up on one; both ask for a reason that is recorded on the ticket. A dropped ticket releases the tickets that depend on it. In a project with no forge remote, this is how the graph is driven.
-
-![A decomposed Discovery mid-run (20 of 52 landed, 2 in flight), with a ready ticket's detail and its Start ticket button open on the right](../assets/screenshots/discovery-ticket-graph.png)
 
 ## Integration branch and closing
 

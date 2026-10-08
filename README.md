@@ -52,10 +52,12 @@ re-planning never renumbers.
 ![Proposed changes: schema-valid ticket list with workflow and prerequisite chips, and an "Apply 52 of 52 changes" button](docs-site/assets/screenshots/discovery-proposed-changes.png)
 
 Each ticket starts only when the ones it depends on have landed, and says what it is
-waiting on. Pick any ready tickets and run them in parallel — each gets its own worktree,
-agent, model and effort.
+waiting on. Until it starts, every ticket is yours to edit — title, description,
+acceptance criteria, file scope, test command, attachments, and its own workflow, agent,
+model and effort. Then pick any ready tickets and run them in parallel, each in its own
+worktree; once a ticket has a feature it locks, and changes go in a follow-up ticket.
 
-![Ticket graph with ready and blocked tickets, and the ticket editor open on its execution settings](docs-site/assets/screenshots/ticket-editor.png)
+![Ticket editor modal on a landed, locked ticket: title, description, acceptance criteria, files, test command and attachments](docs-site/assets/screenshots/ticket-editor.png)
 
 ### 3 · Pipeline — every ticket takes the same path
 
