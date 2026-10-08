@@ -1,5 +1,5 @@
 // The claim this file defends: `widthMode`/`hidden` are additive-only —
-// omitting them renders exactly today's fixed-560px column, and `hidden`
+// omitting them renders the column sized off the row's `--interview-w`, and `hidden`
 // hides via class + `aria-hidden` without unmounting (AGENTS.md §3, "no
 // unmounting" in this ticket's own spec).
 
@@ -60,11 +60,11 @@ function rootDiv(container: HTMLElement): HTMLElement {
 }
 
 describe('InterviewColumn', () => {
-  it('renders the fixed 560px column when widthMode/hidden are omitted', () => {
+  it('sizes off the row’s interview-width variable when widthMode/hidden are omitted', () => {
     const { container } = renderColumn();
 
     const root = rootDiv(container);
-    expect(root.className).toContain('w-[560px]');
+    expect(root.style.width).toBe('var(--interview-w)');
     expect(root.className).toContain('shrink-0');
     expect(root.className).toContain('border-r');
     expect(root.className).toContain('border-white/5');

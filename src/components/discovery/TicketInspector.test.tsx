@@ -1,7 +1,7 @@
 // `TicketOverlayPanel`'s backdrop is pointer-events-none (§3.2.1), so once the
 // inspector floats as an overlay in 'overlay-inspector'/'stacked' mode, Escape
 // is its only dismiss path unless the panel itself carries a visible control.
-// This pins that control the same way `TicketEditorDrawer.test.tsx` would pin
+// This pins that control the same way `TicketEditorModal.test.tsx` would pin
 // its own Close/Discard button, mirroring the pattern this ticket copies.
 //
 // The description is model-authored (`docs/PRD_DISCOVERY.md`'s discovery

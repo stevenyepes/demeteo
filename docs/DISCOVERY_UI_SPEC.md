@@ -30,9 +30,9 @@ which are reproduced under each artboard below.
    *structural* (the 72/260 rail+sidebar grid) are called out as such and must
    be kept; the outer `width:`/`height:` on the artboard root is scaffolding
    and must be dropped. The one exception is the workspace row's own three
-   columns (§3.2): the 560 px interview / 360 px inspector widths are this
-   artboard's widest-case layout, not an unconditional rule — the row degrades
-   through three modes as it narrows, per `src/components/discovery/discoveryLayout.ts`.
+   columns (§3.2): the 560 px interview width is this artboard's, not the
+   app's — the interview is user-resizable — and the row degrades through
+   three modes as it narrows, per `src/components/discovery/discoveryLayout.ts`.
 2. **The mock stylesheets are throwaway.** Each mock re-declares its own `.glass`,
    `.chip`, `.btn-p`, `.fld` etc. inside a `<helmet><style>` block. **None of
    those class names exist in `src/App.css`** — writing `class="glass"` or
@@ -408,7 +408,7 @@ describes the two narrower modes.
 │ Workspace header (flex:none, 14px 24px, bottom border)        │
 ├────────────────┬───────────────────────────┬──────────────────┤
 │ Interview      │ Ticket graph / board      │ Inspector        │
-│ width 560 fixed│ flex:1, min-width:0       │ width 360 fixed  │
+│ user-resizable │ flex:1, min-width:0       │ width 360 fixed  │
 │ flex:none      │                           │ flex:none        │
 │ right border   │  38px sub-header          │ left border      │
 │                │  ──────────────────────   │ sticky sub-header│
@@ -429,35 +429,31 @@ modes with `pickDiscoveryLayout`, both in
 `src/components/discovery/discoveryLayout.ts` — that module is the source of
 truth for the exact width thresholds; they are not restated here.
 
-- **`'three-up'`** — the row is wide enough for all three columns at once.
-  This is the layout diagrammed above: 560 px interview, flexible ticket
-  graph/board pane, and the 360 px inspector (or the 760 px `TicketEditorDrawer`
-  when a ticket is being edited) in-row as the third column.
+- **`'three-up'`** — the row is wide enough for all three columns at once,
+  at the width the user dragged the interview to. This is the layout
+  diagrammed above: the interview, the flexible ticket graph/board pane, and
+  the 360 px inspector in-row as the third column.
 - **`'overlay-inspector'`** — the row is too narrow for a third column but
-  still fits Interview and the ticket graph/board pane side by side. Those two
-  stay in-row; the inspector or editor no longer takes a column and instead
-  renders in `TicketOverlayPanel` (`src/components/discovery/TicketOverlayPanel.tsx`),
-  a portalled panel docked to the right edge of the workspace, floating over
-  the ticket pane rather than displacing it.
+  still fits Interview (narrowed to its minimum if need be) and the ticket
+  graph/board pane side by side. Those two stay in-row; the inspector renders
+  in `TicketOverlayPanel` (`src/components/discovery/TicketOverlayPanel.tsx`),
+  floating over the right edge of the ticket pane. It is anchored to the
+  workspace row, not the window, so it starts below the workspace header in
+  every mode — the same position and height as the in-row column.
 - **`'stacked'`** — the row is too narrow to hold Interview and the ticket
   graph/board pane side by side. A segmented control lets the user toggle
   which one is visible; both remain mounted (`InterviewColumn`/`TicketColumn`
   take a `hidden` prop rather than being unmounted, so an in-progress
   interview draft and the graph's zoom state survive a toggle). The inspector
-  or editor still renders in the same `TicketOverlayPanel` as
-  `'overlay-inspector'`, docked over whichever pane is currently visible.
+  floats in the same `TicketOverlayPanel` as `'overlay-inspector'`.
 
-In both `'overlay-inspector'` and `'stacked'`, `TicketEditorDrawer`'s 760 px
-width (§5.1) is presented inside `TicketOverlayPanel` as a permanent overlay,
-never as an in-row column — only `'three-up'` gives the editor or inspector
-its own column.
+The ticket editor (§5) takes no part in this ladder: it is a modal sized to
+the window, so the row only ever seats the 360 px inspector.
 
-`TicketOverlayPanel`'s backdrop is `pointer-events-none` so it never blocks
-clicks aimed at Interview or the ticket graph/board pane behind it — which
-means there is no backdrop click-to-dismiss. The overlay is closed by pressing
-Escape, or by the visible `Close` button in the panel's own sub-header
-(`TicketEditorDrawer` shows `Close`/`Discard` there; `TicketInspector` shows
-`Close`) — never by clicking outside it.
+Nothing is selected when a discovery opens; the inspector appears only for a
+ticket the user picks. The floating inspector has no backdrop, so the
+interview and graph behind it stay live — and there is no click-outside
+dismiss. It closes on Escape or its own `Close` button.
 
 ### 3.3 Workspace header
 
@@ -481,13 +477,16 @@ Right cluster (`gap:18px; flex:none`):
   (`<path d="M12 3v18">` + `<path d="m8 7-4 4 4 4">` + `<path d="m16 7 4 4-4 4">`),
   `gap:8px`.
 
-### 3.4 Interview column (560 px in `'three-up'`)
+### 3.4 Interview column (user-resizable)
 
-`width:560px; flex:none; column; border-right:1px solid rgba(255,255,255,0.05);
-background: rgba(11,13,18,0.4); min-height:0`. This is the `'three-up'` width
-(§3.2.1); in `'stacked'` mode `InterviewColumn` instead takes the row's full
-width (its `widthMode="full"` prop), and in either narrower mode it may carry
-`hidden` rather than being unmounted.
+`flex:none; column; border-right:1px solid rgba(255,255,255,0.05);
+background: rgba(11,13,18,0.4); min-height:0`. Its width is the user's: a
+divider on its right edge (`InterviewResizeHandle`) drags it, or moves it by
+arrow key, between the bounds in `discoveryLayout.ts`, and the choice persists
+as the `ui.discovery_interview_width` preference. The graph's minimum always
+outranks it on a narrow row. In `'stacked'` mode `InterviewColumn` instead
+takes the row's full width (its `widthMode="full"` prop), and in either
+narrower mode it may carry `hidden` rather than being unmounted.
 
 #### 3.4.1 Column sub-header (38 px)
 
@@ -1265,7 +1264,8 @@ No loading, applying, or schema-invalid state is drawn.
 
 ## 5. Ticket — edit and force start
 
-`TicketEdit.dc.html` · 760 × 1560 (a tall scrolling panel, not a dialog).
+`TicketEdit.dc.html` · 760 × 1560. The artboard draws a tall drawer; the app
+presents the same content as a modal (§5.1).
 
 **Annotation (canvas.json):** *"§4.6 + §6.5 + §7.2 — attachments are the launch
 dropzone verbatim, staged until the ticket starts. Switch the model to
@@ -1275,21 +1275,31 @@ reason: the agent briefing near the bottom picks all three up."*
 ### 5.1 Purpose and placement
 
 The full editor for one Ticket, reached from **Edit** in the inspector (§3.6.8)
-or **Force start with a reason…**. Its frame is an inspector-shaped panel —
-`width:760px; background:#0d0f14; border-left:1px solid rgba(255,255,255,0.05);
-overflow-y:auto` — i.e. a **wider replacement for the 360 px inspector**, or a
-right-hand drawer over the workspace. Not centred, not a modal.
+or **Force start with a reason…**. It is a **centered modal** (`Modal.tsx`),
+`min(880px, 100vw - 48px)` wide and at most the window's height less 48 px:
+a header, a scrolling body, and a pinned action footer.
 
-### 5.2 Sticky action header (44 px)
+Not the drawer the artboard draws. A 760 px column had to be seated by the
+workspace row (§3.2.1), and at half a screen it squeezed the graph under its
+minimum while the graph's floating zoom controls covered Start, which sat at
+the bottom of a long scroll. Editing does not need the graph in view — edges
+are picked in the form (§5.6) — so the editor takes the window instead.
 
-`padding: 0 20px; height:44px; background: rgba(18,22,30,0.6); border-bottom:1px
-solid rgba(255,255,255,0.05); position:sticky; top:0; z-index:3;
-backdrop-filter: blur(12px)`.
+A dirty form does not close on Escape or a backdrop click; Discard is the only
+way to throw the edit away.
 
-Left (`gap:10px`): id in Fira Code 12px `#9ca3af` (**`DSC-3`**), chip
-**`Blocked`** (amber, with dot), chip **`Unstarted`** (slate).
-Right (`gap:8px`): `btn-s` **`Discard`** and `btn-p` **`Save ticket`**, both at
-`padding:6px 12px…6px 14px; font-size:12px`.
+### 5.2 Header and action footer
+
+The header (38 px sub-header) carries the id, the state chip, **`Unstarted`**
+or **`Locked`**, an amber **`Unsaved changes`** marker while the form is
+dirty, and an icon-only close button.
+
+The footer, outside the scroller, is one action bar: **`Drop ticket…`** on the
+far left, then **`Discard`**, **`Save ticket`**, **`Force start…`** (blocked
+tickets only) and the primary **`Start ticket`** on the right. Start and
+Force start stay disabled while the form is dirty, with the hint
+**"Save before starting."** — `ticket_start` launches the stored row, not the
+form. A locked ticket shows no Discard or Save.
 
 ### 5.3 Body
 

@@ -10,7 +10,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { TicketEditorDrawer } from './TicketEditorDrawer';
+import { TicketEditorModal } from './TicketEditorModal';
 import { indexTickets } from '../../lib/ticketPresentation';
 import type {
   DiscoveryBoard,
@@ -114,7 +114,7 @@ function renderDrawer(
 ) {
   const onSaved = vi.fn();
   const drawer = (shown: TicketView) => (
-    <TicketEditorDrawer
+    <TicketEditorModal
       view={shown}
       index={indexTickets([subject])}
       siblings={[subject]}
@@ -350,7 +350,7 @@ describe('the agent and model probe', () => {
 // expensively a placement, where the picker has just shown a compatibility
 // verdict for a machine that will not be used.
 describe('starting from the drawer', () => {
-  const HINT = 'Save the ticket to start it with these choices.';
+  const HINT = 'Save before starting.';
 
   function disabled(testId: string): boolean {
     return screen.getByTestId(testId).hasAttribute('disabled');

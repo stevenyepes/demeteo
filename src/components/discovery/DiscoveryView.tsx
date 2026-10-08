@@ -49,19 +49,12 @@ interface DiscoveryViewProps {
   onOpenFeature?: (featureId: string, featureTitle: string) => void;
   /**
    * Which ticket the inspector is showing, held on the route so it survives
-   * back/forward rather than resetting on every remount.
-   *
-   * Optional *and* nullable, and the two are not interchangeable — the same
-   * contract `AppView`'s `detail` arm documents for `selectedStepId`. Absent
-   * means nothing has chosen yet, so the auto-select effect below seeds one;
-   * `null` means the user closed the inspector, and it must stay closed
-   * (`DISCOVERY_UI_SPEC.md` §3.2.1's overlay would otherwise reopen itself).
-   * Collapsing absent to `null` anywhere upstream makes the close stick
-   * forever; collapsing it the other way makes the close do nothing.
+   * back/forward rather than resetting on every remount. Absent and `null`
+   * both mean no inspector: nothing is selected until the user picks a ticket.
+   * Opening a discovery used to seed the first ticket, which put a panel over
+   * the graph before the user had asked for one.
    */
   selectedTicketId?: string | null;
-  /** All three states are writable, `undefined` included — see above for why
-   *  "nothing to seed from yet" cannot be spelled `null`. */
   onSelectTicket: (ticketId: string | null | undefined) => void;
 }
 
@@ -235,22 +228,12 @@ export function DiscoveryView({
   );
 
   useEffect(() => {
-    // An explicit close stays closed; only the absent case seeds. A selection
-    // whose ticket has since been dropped is stale rather than closed, so it
-    // falls through to be re-seeded.
-    if (selectedTicketId === null) return;
-    if (selectedTicketId !== undefined && index.has(selectedTicketId)) return;
-    if (tickets.length === 0) {
-      // Nothing to seed from — and the board is empty on the first render of
-      // every discovery, before `discovery_board` answers. Writing `null` here
-      // reads as a close, so the inspector would stay shut for the rest of the
-      // session once the real board arrived. Drop a stale id back to unset
-      // instead, and leave an already-unset one alone.
-      if (selectedTicketId !== undefined) onSelectTicket(undefined);
-      return;
-    }
-    onSelectTicket(tickets[0].ticket.id);
-  }, [tickets, index, selectedTicketId, onSelectTicket]);
+    // A ticket dropped from the plan leaves a selection that names nothing;
+    // close it rather than hold an inspector open over no ticket. Only once
+    // the board has answered — before that, every id is unknown.
+    if (!board || selectedTicketId == null) return;
+    if (!index.has(selectedTicketId)) onSelectTicket(null);
+  }, [board, index, selectedTicketId, onSelectTicket]);
 
   const closeInspector = useCallback(() => {
     onSelectTicket(null);

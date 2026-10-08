@@ -223,6 +223,7 @@ async function openReadyTicket(start: () => Promise<unknown>) {
       </NavigationProvider>
     </ErrorBusProvider>,
   );
+  fireEvent.click((await view.findAllByTestId('ticket-node'))[0]);
   const button = await view.findByRole('button', { name: 'Start ticket' });
   return { view, button };
 }
