@@ -175,7 +175,7 @@ async fn publish_runs_the_sync_worktrees_pre_push_hook_not_the_clones() {
     // checkout is refused by the hook, so the hook demonstrably fires here and
     // the success below is not a hook that never ran.
     let refused = exec
-        .run_program(MACHINE, push_request(&fx.repo, FEATURE_BRANCH, false, None))
+        .run_program(MACHINE, push_request(&fx.repo, FEATURE_BRANCH, None, None))
         .await
         .expect_err("the clone's hook must refuse a push made from main");
     assert!(

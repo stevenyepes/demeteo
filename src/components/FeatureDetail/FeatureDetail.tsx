@@ -3,7 +3,8 @@ import { RefreshCw, ShieldAlert } from 'lucide-react';
 import type { AppView } from '../../types';
 import type { NavigationMode } from '../../context/NavigationContext';
 import { DEFAULT_DENSITY } from '../../lib/density';
-import { TERMINAL_STATUSES } from '../../lib/runStatus';
+import { featureRunStatus, runStatusMeta, TERMINAL_STATUSES } from '../../lib/runStatus';
+import { settledRequest } from '../../lib/staleness';
 import { isOutOfBandStep } from '../../lib/featureSync';
 import { describeSyncPanel, syncIntentMovesBranch } from '../../lib/syncPanel';
 import { densityPref, inspectorWidthPref } from '../../lib/uiPrefs';
@@ -191,10 +192,24 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   // side. `syncIntentMovesBranch` is what keeps the pane's own Refresh out of
   // that gate — suspending the read on *any* pending intent superseded the very
   // fetch that press had just paid for.
+  //
+  // Nor once the pull request is merged or closed, which is also why it waits
+  // for the row: `mrState` is `null` until it has been read, and a fetch
+  // started before then would count a branch nobody can sync.
+  const settled = settledRequest(mr.mrState);
   const { drift, refresh: refreshDrift, refreshing: refreshingDrift } = useFeatureDrift({
     featureId,
-    enabled: TERMINAL_STATUSES.includes(run.status) && !syncIntentMovesBranch(sync.pending),
+    enabled:
+      TERMINAL_STATUSES.includes(run.status) &&
+      !syncIntentMovesBranch(sync.pending) &&
+      mr.mrState !== null &&
+      settled === null,
   });
+  // The PR's state, folded in the way the project list folds it, so a run
+  // reads the same on both. Only a promotion replaces the step-derived meta,
+  // which also carries `Review ready`.
+  const shownStatus = featureRunStatus({ status: run.status, mr_url: mr.mrUrl, mr_state: mr.mrState });
+  const headerStatusMeta = shownStatus === run.status ? run.statusMeta : runStatusMeta(shownStatus);
   const syncModel = useMemo(
     () =>
       describeSyncPanel({
@@ -203,8 +218,9 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         divergence: sync.divergence,
         canSync: TERMINAL_STATUSES.includes(run.status),
         pending: sync.pending,
+        settled,
       }),
-    [sync.session, sync.divergence, drift, run.status, sync.pending],
+    [sync.session, sync.divergence, drift, run.status, sync.pending, settled],
   );
   const syncResolver = useSyncResolverOverrides({
     featureId,
@@ -564,7 +580,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         featureId={featureId}
         featureTitle={run.featureTitle}
         status={run.status}
-        statusMeta={run.statusMeta}
+        statusMeta={headerStatusMeta}
         currentProject={currentProject}
         remoteRun={remote.remoteRun}
         remoteMachineName={remote.remoteMachineName}
@@ -584,6 +600,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         onBrowseCode={routing.openEditor}
         onCancelFeature={rerun.handleCancelFeature}
         onOpenSync={openSync}
+        syncOffered={settled === null || syncModel.badge > 0}
         onPublish={mr.handlePublishClick}
         onCleanup={() => mr.handleCleanup()}
       />

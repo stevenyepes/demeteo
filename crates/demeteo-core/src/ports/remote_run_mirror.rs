@@ -102,3 +102,16 @@ pub trait RunnerCachePort: Send + Sync {
         reason: crate::domain::runner_cache_release::CacheReleaseReason,
     ) -> Result<(), String>;
 }
+
+/// The `refresh_feature_branch` RPC of the `demeteo-runner` on `machine_id`,
+/// for a run this client submitted there. `git_pat` authenticates the one
+/// fetch the runner makes and is not kept.
+#[async_trait::async_trait]
+pub trait RunnerBranchPort: Send + Sync {
+    async fn refresh_feature_branch(
+        &self,
+        machine_id: &str,
+        run_id: &str,
+        git_pat: Option<&str>,
+    ) -> Result<crate::domain::runner_branch_refresh::BranchRefreshOutcome, String>;
+}

@@ -13,19 +13,25 @@
  * hunk is something the feature added, and "No changes vs master" is a flat
  * falsehood in the one screen state a reviewer most needs to trust.
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChangedFile } from '../lib/files';
 
 const gitChangedFiles = vi.fn<(input: unknown) => Promise<ChangedFile[]>>();
 const listDir = vi.fn(async () => []);
+const gitFileAtRef = vi.fn<(input: unknown) => Promise<string>>();
+
+vi.mock('@monaco-editor/react', () => ({
+  default: () => null,
+  DiffEditor: (props: { original: string; modified: string }) => (
+    <pre data-testid="diff-editor">{`${props.original}|${props.modified}`}</pre>
+  ),
+}));
 
 vi.mock('../lib/files', () => ({
   gitChangedFiles: (input: unknown) => gitChangedFiles(input),
-  gitFileAtRef: async () => {
-    throw new Error('no file was opened in these tests');
-  },
+  gitFileAtRef: (input: unknown) => gitFileAtRef(input),
   listDir: () => listDir(),
   readFile: async () => {
     throw new Error('no file was read in these tests');
@@ -54,6 +60,7 @@ function mount(over: Record<string, unknown> = {}) {
 
 describe('CodeEditorView', () => {
   beforeEach(() => {
+    listDir.mockClear();
     gitChangedFiles.mockReset();
     gitChangedFiles.mockResolvedValue([]);
   });
@@ -97,5 +104,28 @@ describe('CodeEditorView', () => {
     gitChangedFiles.mockClear();
     mount();
     expect(gitChangedFiles).not.toHaveBeenCalled();
+  });
+
+  /** A review opened in a clone with another branch checked out: its disk is
+   *  not the ref under review, so nothing may list it as if it were. */
+  it('lists no files from disk when the checkout is not the head ref', async () => {
+    mount({ baseRef: 'aaaaaaa1111', headRef: 'c0ffeec2222', initialTab: 'files', changesOnly: true });
+
+    expect(await screen.findByText('No changes vs aaaaaaa')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Files' })).not.toBeInTheDocument();
+    expect(listDir).not.toHaveBeenCalled();
+  });
+
+  /** A side git could not read is an error, not a file whose body is the
+   *  error — which the diff rendered as a file the range added. */
+  it('shows a diff that could not be read as an error, not as content', async () => {
+    gitChangedFiles.mockResolvedValue([{ path: 'src/lib.rs', status: 'M' }]);
+    gitFileAtRef.mockRejectedValue(new Error("cannot read 'src/lib.rs' at revision 'c0ffeec2222'"));
+    mount({ baseRef: 'aaaaaaa1111', headRef: 'c0ffeec2222', initialTab: 'changes' });
+
+    fireEvent.click(await screen.findByTitle('src/lib.rs'));
+
+    expect(await screen.findByText(/cannot read 'src\/lib.rs'/)).toBeInTheDocument();
+    expect(screen.queryByTestId('diff-editor')).not.toBeInTheDocument();
   });
 });

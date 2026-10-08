@@ -16,6 +16,7 @@ use demeteo_core::domain::models::{
     Feature, GateDecision, MrInfo, ProjectSettings, ProviderInstance, PublishOptions, StepConfig,
     WorktreeStrategy,
 };
+use demeteo_core::domain::push_lease;
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
 use demeteo_core::ports::db::FeatureRepository;
@@ -839,7 +840,7 @@ async fn await_terminal_and_push_inner(
 /// is the branch nobody cut for any origin whose name does not come from the
 /// feature id at all. Pushing a branch that does not exist fails loudly; the
 /// worse shape is pushing one that does and belongs to a different run.
-fn branch_to_push(
+pub(crate) fn branch_to_push(
     features: &dyn FeatureRepository,
     feature_id: &FeatureId,
     branch_prefix: &str,
@@ -898,26 +899,52 @@ async fn push_feature_branch(
     .await
     .map_err(|e| format!("failed to update remote origin URL: {}", e))?;
 
-    git_askpass::run_git(
-        &svc.askpass_path,
-        &[
-            "-C".to_string(),
-            target_dir_str,
-            "push".to_string(),
-            "-f".to_string(),
-            "origin".to_string(),
-            branch.clone(),
-        ],
-        Some(pat),
-    )
-    .await
-    .map_err(|e| format!("failed to push feature branch to origin: {}", e))?;
+    push_leased(&svc.askpass_path, &target_dir_str, &branch, pat).await?;
 
     eprintln!(
         "[demeteo-runner] pushed feature branch {} to origin",
         branch
     );
     Ok(branch)
+}
+
+/// Force-push `branch` from `repo_dir`, leased against the clone's own
+/// remote-tracking ref ([`demeteo_core::domain::push_lease`]). Forced because a
+/// retried or replayed run re-points a branch it pushed before, and leased
+/// because a sync published from the desktop since must not be overwritten.
+pub(crate) async fn push_leased(
+    askpass_path: &std::path::Path,
+    repo_dir: &str,
+    branch: &str,
+    pat: &str,
+) -> Result<(), String> {
+    let mut query = vec!["-C".to_string(), repo_dir.to_string()];
+    query.extend(push_lease::tracking_query(branch));
+    let tracking = git_askpass::run_git(askpass_path, &query, None)
+        .await
+        .map_err(|e| format!("failed to read origin/{branch} before the push: {e}"))?;
+    let lease = push_lease::lease_from_tracking(branch, &tracking);
+    git_askpass::run_git(
+        askpass_path,
+        &[
+            "-C".to_string(),
+            repo_dir.to_string(),
+            "push".to_string(),
+            lease.flag(),
+            "origin".to_string(),
+            branch.to_string(),
+        ],
+        Some(pat),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| {
+        if push_lease::is_stale_lease(&e) {
+            lease.refusal()
+        } else {
+            format!("failed to push feature branch to origin: {}", e)
+        }
+    })
 }
 
 #[cfg(test)]

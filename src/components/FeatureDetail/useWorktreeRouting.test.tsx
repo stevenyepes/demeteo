@@ -26,37 +26,47 @@ vi.mock('../../context', () => ({
 import { useWorktreeRouting } from './useWorktreeRouting';
 
 describe('openDiffRange', () => {
-  it('carries the ref pair and the tab into the editor view', async () => {
-    getFeatureWorktree.mockResolvedValue({
-      machine_id: 'local',
-      worktree_path: '/repos/demeteo_wt_f-1',
-      branch: 'feature/f-1',
-      default_branch: 'master',
-    });
+  /** A sync's merge exists in the clone that made it, and for a detached run
+   *  that is not the runner's worktree — asking the runner where the code is
+   *  ran the diff in a repository that did not have the commit. */
+  it('opens the checkout it is handed, even for a detached run', async () => {
+    getFeatureWorktree.mockRejectedValue(new Error('feature worktree must not be used'));
+    getRemoteWorktree.mockRejectedValue(new Error('runner worktree must not be used'));
     const views: AppView[] = [];
     const { result } = renderHook(() =>
       useWorktreeRouting({
         featureId: 'f-1',
         featureTitle: 'Add a metric strip',
         projectId: 'p-1',
-        remoteRun: null,
+        remoteRun: { machine_id: 'box-1', run_id: 'r-1' } as RemoteRunMirror,
         navigate: view => views.push(view),
       }),
     );
 
-    await result.current.openDiffRange({ baseRef: 'aaaaaaa1111', headRef: 'c0ffeec2222' });
+    result.current.openDiffRange({
+      machineId: 'local',
+      worktreePath: '/repos/demeteo_wt_sync_feature-f-1',
+      branch: 'feature/f-1',
+      defaultBranch: 'origin/master',
+      baseRef: 'aaaaaaa1111',
+      headRef: 'c0ffeec2222',
+      changesOnly: true,
+    });
 
     await waitFor(() => expect(views).toHaveLength(1));
+    expect(getRemoteWorktree).not.toHaveBeenCalled();
+    expect(getFeatureWorktree).not.toHaveBeenCalled();
     expect(views[0]).toEqual({
       kind: 'editor',
       editorContext: {
         machineId: 'local',
-        worktreePath: '/repos/demeteo_wt_f-1',
+        worktreePath: '/repos/demeteo_wt_sync_feature-f-1',
         branch: 'feature/f-1',
-        defaultBranch: 'master',
+        defaultBranch: 'origin/master',
         baseRef: 'aaaaaaa1111',
         headRef: 'c0ffeec2222',
         initialTab: 'changes',
+        changesOnly: true,
       },
       featureId: 'f-1',
       featureTitle: 'Add a metric strip',

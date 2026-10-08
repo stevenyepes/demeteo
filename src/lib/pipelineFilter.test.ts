@@ -43,7 +43,7 @@ describe('segmentFor', () => {
     expect(segmentFor(row('f', 'bootstrapping', 1))).toBe('active');
   });
 
-  it.each(['completed', 'published', 'awaiting_mr', 'pr_ready', 'failed', 'error', 'over-budget', 'cancelled', 'unreachable'])(
+  it.each(['completed', 'published', 'merged', 'pr_closed', 'awaiting_mr', 'pr_ready', 'failed', 'error', 'over-budget', 'cancelled', 'unreachable'])(
     'puts %s in done',
     (status) => {
       expect(segmentFor(row('f', status, 1))).toBe('done');

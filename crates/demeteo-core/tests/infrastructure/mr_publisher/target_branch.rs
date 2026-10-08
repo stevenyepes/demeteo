@@ -127,11 +127,24 @@ pub(super) fn push_exec_answering(
         pat: PAT.to_string(),
         host: "github.com".to_string(),
     };
-    let push = rendered(&push_request(&dir, SOURCE_BRANCH, true, Some(&credential)));
-    Arc::new(
-        ScriptedExec::new(&[])
-            .with_programs(&[(set_url.as_str(), Ok("")), (push.as_str(), push_answer)]),
-    )
+    let tracking = format!(
+        "git -C {dir} for-each-ref --format=%(refname) %(objectname) refs/remotes/origin/{SOURCE_BRANCH}"
+    );
+    let lease = crate::domain::push_lease::PushLease {
+        branch: SOURCE_BRANCH.to_string(),
+        expected: None,
+    };
+    let push = rendered(&push_request(
+        &dir,
+        SOURCE_BRANCH,
+        Some(&lease),
+        Some(&credential),
+    ));
+    Arc::new(ScriptedExec::new(&[]).with_programs(&[
+        (set_url.as_str(), Ok("")),
+        (tracking.as_str(), Ok("")),
+        (push.as_str(), push_answer),
+    ]))
 }
 
 async fn publish(

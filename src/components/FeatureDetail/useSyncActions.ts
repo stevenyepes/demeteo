@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 
-import type { SyncIntent } from '../../lib/syncPanel';
+import { reviewTarget, type DiffTarget, type SyncIntent } from '../../lib/syncPanel';
 import type { SyncResolverSelection } from './useSyncResolverOverrides';
 import type { SyncSession } from './useSyncSession';
 
@@ -17,7 +17,7 @@ export function useSyncActions(input: {
   sync: SyncSession;
   resolver: SyncResolverSelection;
   refreshDrift: () => void;
-  openDiffRange: (refs: { baseRef: string; headRef: string }) => void;
+  openDiffRange: (target: DiffTarget) => void;
   /** Show the resolver's own step row and the output streaming into it. */
   showResolverStream: () => void;
   /** Start a shell in a checkout named outright — the sync worktree is not one
@@ -83,12 +83,8 @@ export function useSyncActions(input: {
           refreshDrift();
           return;
         case 'review': {
-          // `head_before..merge_commit_sha`, never `merge_commit_sha^`: a
-          // resolver that added a follow-up commit makes the first parent that
-          // commit's parent, and the review then omits the merge itself.
-          const base = sync.session?.head_before;
-          const head = sync.session?.merge_commit_sha;
-          if (base && head) void openDiffRange({ baseRef: base, headRef: head });
+          const target = sync.session ? reviewTarget(sync.session) : null;
+          if (target) openDiffRange(target);
           return;
         }
         case 'watch':

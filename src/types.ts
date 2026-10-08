@@ -80,6 +80,9 @@ export interface EditorContext {
   headRef?: string;
   /** Which sidebar tab opens. Omitted = 'files'. */
   initialTab?: 'files' | 'changes';
+  /** The checkout on disk is not `headRef`, so the Files tab — which reads
+   *  the disk — would show some other branch under this one's name. */
+  changesOnly?: boolean;
 }
 
 export interface WorkflowSummary {
@@ -795,7 +798,8 @@ export type NotificationKind =
   | 'merge_conflict'
   | 'retry_budget_exhausted'
   | 'environment_not_ready'
-  | 'caches_reclaimed';
+  | 'caches_reclaimed'
+  | 'runner_branch_stale';
 
 /** Mirrors the Rust `Notification` struct on the `notifications`
  *  table. `feature_url` is a relative deep link; the bell decides
@@ -814,6 +818,14 @@ export interface Notification {
 /** A background sweep deleted leaked caches or worktrees of a project. */
 export interface CachesReclaimedEvent {
   project_id: string;
+  message: string;
+}
+
+/** A desktop sync reached origin, but the runner holding the detached run
+ *  could not bring its own copy of the branch up to date. */
+export interface RunnerBranchStaleEvent {
+  project_id: string;
+  feature_id: string;
   message: string;
 }
 

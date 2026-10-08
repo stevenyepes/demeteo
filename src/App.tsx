@@ -456,6 +456,7 @@ function AppInner() {
               baseRef={view.editorContext.baseRef}
               headRef={view.editorContext.headRef}
               initialTab={view.editorContext.initialTab}
+              changesOnly={view.editorContext.changesOnly}
             />
           )}
 

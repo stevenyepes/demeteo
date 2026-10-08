@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   describeSyncPanel,
   isReadOnlySyncIntent,
+  reviewTarget,
   syncIntentMovesBranch,
   type SyncIntent,
   type SyncPanelInput,
@@ -695,6 +696,69 @@ describe('describeSyncPanel', () => {
       }
       expect(model.showResolver).toBe(false);
     });
+  });
+});
+
+describe('a settled pull request', () => {
+  /** A merge into a branch whose request the forge has finished with can no
+   *  longer reach one, whatever the count says. */
+  it.each(['merged', 'closed'] as const)('offers no sync once the request is %s', (settled) => {
+    const model = panel({ session: null, drift: drift(4), canSync: true, settled });
+
+    expect(model.state).toBe('request_settled');
+    expect(model.chipLabel).toBe(settled === 'merged' ? 'PR merged' : 'PR closed');
+    expect(model.badge).toBe(0);
+    expect(model.actions).toEqual([]);
+  });
+
+  it('settles a resolution origin already has, which is a finished sync too', () => {
+    const model = panel({
+      session: session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', pushed_at: 1800 }),
+      drift: drift(4),
+      canSync: true,
+      settled: 'merged',
+    });
+
+    expect(model.state).toBe('request_settled');
+    expect(intents(model)).not.toContain('sync');
+  });
+
+  /** The merge is still on disk, and abort is the only thing that removes it. */
+  it('leaves a live conflict its way out', () => {
+    const model = panel({ session: session(), drift: null, canSync: true, settled: 'merged' });
+
+    expect(model.state).toBe('conflicted');
+    expect(intents(model)).toContain('abort');
+  });
+});
+
+describe('reviewTarget', () => {
+  it('reviews in the sync worktree while it exists, where the merge is checked out', () => {
+    const target = reviewTarget(session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222' }));
+
+    expect(target).toEqual({
+      machineId: 'local',
+      worktreePath: '/repos/demeteo_wt_sync_feature-f-1',
+      branch: 'feature/f-1',
+      defaultBranch: 'origin/master',
+      baseRef: 'aaaaaaa1111',
+      headRef: 'c0ffeec2222',
+      changesOnly: false,
+    });
+  });
+
+  it('falls back to the clone the worktree shared its objects with', () => {
+    const target = reviewTarget(
+      session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', worktree_path: null }),
+    );
+
+    expect(target?.worktreePath).toBe('/repos/demeteo');
+    // That clone has another branch checked out, so its disk is not this ref.
+    expect(target?.changesOnly).toBe(true);
+  });
+
+  it('has no target without a recorded pre-merge tip', () => {
+    expect(reviewTarget(session({ status: 'resolved', merge_commit_sha: 'c0ffeec2222', head_before: null }))).toBeNull();
   });
 });
 

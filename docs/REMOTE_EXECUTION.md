@@ -121,6 +121,7 @@ Control RPC methods (over the SSH-tunneled unix socket, R4):
 | `decide_gate(run_id, gate_id, decision)` | Clear a **parked** gate remotely from the laptop. |
 | `cancel_run(run_id)` | The only way to stop a run (R8). |
 | `release_feature_cache(run_id, reason)` | The laptop saw the run's PR `merged`/`closed`, or the user `dismissed` the feature — the runner can't see either once its PAT is wiped (§6.2). Records it on the runner's own feature row, then frees the dependency cache if `domain::cache_release` agrees. Refused while the run is `pending`/`running`; idempotent. |
+| `refresh_feature_branch(run_id, git_pat?)` | A desktop sync of the run reached origin. Fast-forwards the runner's clone of the run's branch — and its `origin/<branch>`, which the terminal push's `--force-with-lease` reads — to origin's tip. Refused while the run row is unsettled (`pending`/`running`/`needs-credentials`), and for runner commits origin lacks or a dirty checkout; never resets. `git_pat` serves the one fetch and is not stored. Decision in `domain::runner_branch_refresh`. |
 | `health()` | Heartbeat + version + capacity. |
 
 **Lifecycle:** laptop composes the spec (description, workflow, agent/model,

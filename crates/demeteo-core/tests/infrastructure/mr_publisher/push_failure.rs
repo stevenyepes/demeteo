@@ -75,3 +75,21 @@ async fn a_push_origin_would_not_authenticate_keeps_the_publish_framing() {
     );
     assert!(said.contains("could not read Password"), "{said}");
 }
+
+/// A push its lease refused says origin moved, not that the push failed: a
+/// retry from the same clone can only fail the same way.
+#[tokio::test]
+async fn a_push_its_lease_refused_names_the_moved_branch() {
+    let said = publish_failing(
+        "Command failed (exit code: Some(1)): To https://github.com/acme/widget\n \
+         ! [rejected]        demeteo/features/f-1 -> demeteo/features/f-1 (stale info)\n\
+         error: failed to push some refs to 'https://github.com/acme/widget'",
+    )
+    .await;
+
+    assert!(
+        said.starts_with("origin/demeteo/features/f-1 has moved since this clone last pushed it"),
+        "{said}"
+    );
+    assert!(said.contains("expected it absent"), "{said}");
+}

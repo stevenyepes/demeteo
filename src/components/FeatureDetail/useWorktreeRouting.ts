@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import type { AppView, RemoteRunMirror } from '../../types';
+import type { DiffTarget } from '../../lib/syncPanel';
 import { useErrorBus } from '../../lib/errorBus';
 import { useTerminalPanel } from '../../context';
 import { getFeatureWorktree, getRemoteWorktree } from '../../lib/featureDetail';
@@ -160,33 +161,30 @@ export function useWorktreeRouting(input: {
     [navigate, featureId, featureTitle],
   );
 
-  // Open the editor's Changes tab on an explicit pair of refs. Same
-  // `resolveWorktreeInfo` as `openEditor`, so a detached run still resolves the
-  // runner's own path; declared after it for the same TDZ reason
-  // `openEditorForPath` is.
+  // Open the editor's Changes tab on an explicit pair of refs, in the checkout
+  // the caller names. Never through `resolveWorktreeInfo`: refs are only
+  // meaningful in a repository that has them, and for a detached run the
+  // runner's worktree does not have a sync's unpublished merge — see
+  // `reviewTarget`.
   const openDiffRange = useCallback(
-    async ({ baseRef, headRef }: { baseRef: string; headRef: string }) => {
-      try {
-        const info = await resolveWorktreeInfo();
-        navigate({
-          kind: 'editor',
-          editorContext: {
-            machineId: info.machine_id,
-            worktreePath: info.worktree_path,
-            branch: info.branch,
-            defaultBranch: info.default_branch,
-            baseRef,
-            headRef,
-            initialTab: 'changes',
-          },
-          featureId,
-          featureTitle,
-        });
-      } catch (err) {
-        reportError(err);
-      }
+    (at: DiffTarget) => {
+      navigate({
+        kind: 'editor',
+        editorContext: {
+          machineId: at.machineId,
+          worktreePath: at.worktreePath,
+          branch: at.branch,
+          defaultBranch: at.defaultBranch,
+          baseRef: at.baseRef,
+          headRef: at.headRef,
+          initialTab: 'changes',
+          changesOnly: at.changesOnly,
+        },
+        featureId,
+        featureTitle,
+      });
     },
-    [resolveWorktreeInfo, navigate, featureId, featureTitle, reportError],
+    [navigate, featureId, featureTitle],
   );
 
   return {

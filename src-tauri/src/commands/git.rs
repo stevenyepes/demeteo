@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::paths;
 use crate::state::AppContext;
+use demeteo_core::domain::file_at_ref::{self, FileAtRef};
 use serde::Serialize;
 use tauri::State;
 
@@ -54,8 +55,9 @@ pub async fn git_changed_files(
     Ok(files)
 }
 
-/// Return the content of `file_path` at `git_ref` in the worktree.
-/// Returns an empty string when the file didn't exist at that ref (new file).
+/// Return the content of `file_path` at `git_ref` in the worktree: empty when
+/// the revision resolves but has no such path (a side of an add or delete),
+/// an error for anything else — see [`file_at_ref`].
 #[tauri::command]
 pub async fn git_file_at_ref(
     ctx: State<'_, AppContext>,
@@ -64,16 +66,32 @@ pub async fn git_file_at_ref(
     git_ref: String,
     file_path: String,
 ) -> Result<String, AppError> {
-    let cmd = format!(
-        "git -C {} show {}:{} 2>/dev/null || true",
-        paths::shell_escape_posix(&worktree_path),
+    let worktree = paths::shell_escape_posix(&worktree_path);
+    let list_cmd = format!(
+        "git -C {} ls-tree -z --full-tree {} -- {}",
+        worktree,
         paths::shell_escape_posix(&git_ref),
         paths::shell_escape_posix(&file_path),
     );
-    let output = ctx
-        .exec
-        .run_command(&machine_id, &cmd)
+    let listing = ctx.exec.run_command(&machine_id, &list_cmd).await;
+    let oid = match file_at_ref::classify(
+        listing.as_deref().map_err(String::as_str),
+        &git_ref,
+        &file_path,
+    )
+    .map_err(AppError::from)?
+    {
+        FileAtRef::Absent => return Ok(String::new()),
+        FileAtRef::Blob { oid } => oid,
+    };
+
+    let show_cmd = format!(
+        "git -C {} cat-file blob {}",
+        worktree,
+        paths::shell_escape_posix(&oid),
+    );
+    ctx.exec
+        .run_command(&machine_id, &show_cmd)
         .await
-        .map_err(AppError::from)?;
-    Ok(output)
+        .map_err(AppError::from)
 }
