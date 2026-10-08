@@ -87,8 +87,8 @@ The default workflow has ten steps:
 
 | | |
 |---|---|
-| ![Implement Tickets panel: the original decomposition and a rework round, each ticket with its cost, beside harness gates before vs. now](assets/screenshots/pipeline-implement-tickets.png) | ![critic-review.md: a findings table and a PASS_WITH_NOTES verdict](assets/screenshots/critic-review.png) |
-| **Implement** — the ticket list, per-ticket cost, rework rounds, and harness results *at the base commit vs. this run*. | **Critic** — what's wrong, how it was resolved, and a verdict. |
+| ![Implement Tickets panel: the original decomposition and two rework rounds, every ticket landed with its cost](assets/screenshots/pipeline-implement-tickets.png) | ![critic-review.md: each acceptance criterion with its status and the evidence in the code](assets/screenshots/critic-review.png) |
+| **Implement** — one fresh agent per ticket, each with its cost; validation failures come back as rework rounds. | **Critic** — reads the landed code, not just the reports, and checks every acceptance criterion against evidence. |
 
 ## Running a non-default workflow
 

@@ -2,7 +2,7 @@
 
 **A desktop control plane for coding agents.** Describe what you want built; Demeteo interviews you, breaks the work into dependency-gated tickets, runs each one through a reviewable pipeline of agents in its own Git worktree, and stops at human-approval **Gates** before anything merges. You make the calls — the agents do the execution.
 
-![A decomposed Discovery: the interview on the left, the dependency-gated ticket graph in the centre, a landed ticket's detail on the right](assets/screenshots/discovery-ticket-graph.png)
+![A decomposed Discovery: the interview on the left, the dependency-gated ticket graph in the centre (20 of 52 landed, 2 in flight), and a ready ticket's detail with Start ticket on the right](assets/screenshots/discovery-ticket-graph.png)
 
 [Get started](getting-started.md){ .md-button }
 [View on GitHub](https://github.com/stevenyepes/demeteo){ .md-button .md-button--primary }

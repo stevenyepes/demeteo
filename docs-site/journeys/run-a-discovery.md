@@ -66,7 +66,7 @@ Select a ticket to inspect it — description, prerequisites, workflow, acceptan
 - Every started ticket's prompt says, per prerequisite, whether it landed or was dropped, so the agent doesn't build on work that never reached its base.
 - **Force start…** starts a blocked ticket anyway, and **Drop** gives up on one; both ask for a reason that is recorded on the ticket. A dropped ticket releases the tickets that depend on it. In a project with no forge remote, this is how the graph is driven.
 
-![A decomposed Discovery with every ticket landed, and a landed ticket's detail open on the right](../assets/screenshots/discovery-ticket-graph.png)
+![A decomposed Discovery mid-run (20 of 52 landed, 2 in flight), with a ready ticket's detail and its Start ticket button open on the right](../assets/screenshots/discovery-ticket-graph.png)
 
 ## Integration branch and closing
 

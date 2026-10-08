@@ -5,7 +5,7 @@ interviews you, breaks the work into dependency-gated tickets, runs each one thr
 reviewable pipeline of agents in its own Git worktree, and stops at human-approval
 **Gates** before anything merges. You make the calls — the agents do the execution.
 
-![A decomposed Discovery: the interview on the left, the dependency-gated ticket graph in the centre, a landed ticket's detail on the right](docs-site/assets/screenshots/discovery-ticket-graph.png)
+![A decomposed Discovery: the interview on the left, the dependency-gated ticket graph in the centre (20 of 52 landed, 2 in flight), and a ready ticket's detail with Start ticket on the right](docs-site/assets/screenshots/discovery-ticket-graph.png)
 
 Works with **Claude Code, Codex, OpenCode, Hermes and pi**, locally, on a machine over
 SSH, or on a headless runner. Built with Tauri v2 (Rust) + React 19 (TypeScript). MIT licensed.
@@ -66,10 +66,10 @@ the result to a **critic** agent whose only job is finding what the others got w
 
 | | |
 |---|---|
-| ![Feature pipeline with a "1 gate needs you" banner and the step graph](docs-site/assets/screenshots/pipeline-gate-needs-you.png) | ![Implement Tickets panel with each task landed, plus harness gates before vs. now](docs-site/assets/screenshots/pipeline-implement-tickets.png) |
-| **Pipeline view** — live step graph, elapsed time, cost and tokens; a banner when a gate is waiting on you. | **Implement** — the decomposed task list, per-task cost, rework rounds, and harness results *before this feature vs. now*. |
-| ![critic-review.md: a findings table and a PASS_WITH_NOTES verdict](docs-site/assets/screenshots/critic-review.png) | ![Browse Code: changed-file tree and a side-by-side diff](docs-site/assets/screenshots/browse-code-diff.png) |
-| **Critic** — what's wrong, why it matters, how to fix it, and a verdict. | **Browse Code** — the feature branch's diff, in the app. |
+| ![Feature pipeline with a "1 gate needs you" banner and the step graph](docs-site/assets/screenshots/pipeline-gate-needs-you.png) | ![Implement Tickets panel: the original decomposition and two rework rounds, every ticket landed with its cost](docs-site/assets/screenshots/pipeline-implement-tickets.png) |
+| **Pipeline view** — live step graph, elapsed time, cost and tokens; a banner when a gate is waiting on you. | **Implement** — one fresh agent per ticket, each with its cost; validation failures come back as rework rounds. |
+| ![critic-review.md: each acceptance criterion with its status and the evidence in the code](docs-site/assets/screenshots/critic-review.png) | ![Browse Code: changed-file tree and a side-by-side diff](docs-site/assets/screenshots/browse-code-diff.png) |
+| **Critic** — reads the landed code, not just the reports, and checks every acceptance criterion against evidence. | **Browse Code** — the feature branch's diff, in the app. |
 
 ### 4 · Gates — you decide what merges
 
