@@ -38,7 +38,7 @@ Press <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Enter</kbd> (or click **Launch featu
 
 The feature opens in its run view:
 
-![A feature pipeline: header metrics, a "1 gate needs you" banner, the step graph, and the selected gate's attempt history](../assets/screenshots/pipeline-gate-needs-you.png)
+![A remote, detached feature pipeline: header metrics, a "1 gate needs you" banner, the step graph, the selected Approve Merge / Publish gate, and the runner's Approve / Reject in Activity](../assets/screenshots/pipeline-gate-needs-you.png)
 
 - **Header** — status, where it runs, and live **elapsed time, cost, tokens and cache reads**; **Code with Agent** (an interactive agent session in the feature's worktree) and **Browse Code** (the feature branch's diff, read-only).
 - **Initial prompt** and any **attachments**.

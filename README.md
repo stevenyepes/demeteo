@@ -68,8 +68,8 @@ the result to a **critic** agent whose only job is finding what the others got w
 
 | | |
 |---|---|
-| ![Feature pipeline with a "1 gate needs you" banner and the step graph](docs-site/assets/screenshots/pipeline-gate-needs-you.png) | ![Implement Tickets panel: the original decomposition and two rework rounds, every ticket landed with its cost](docs-site/assets/screenshots/pipeline-implement-tickets.png) |
-| **Pipeline view** — live step graph, elapsed time, cost and tokens; a banner when a gate is waiting on you. | **Implement** — one fresh agent per ticket, each with its cost; validation failures come back as rework rounds. |
+| ![A remote, detached feature pipeline with a "1 gate needs you" banner, the step graph, and the ship gate selected](docs-site/assets/screenshots/pipeline-gate-needs-you.png) | ![Implement Tickets panel: the original decomposition and two rework rounds, every ticket landed with its cost](docs-site/assets/screenshots/pipeline-implement-tickets.png) |
+| **Pipeline view** — live step graph, elapsed time, cost and tokens; a banner when a gate is waiting on you. This run is detached on a remote runner and renders the same as a local one. | **Implement** — one fresh agent per ticket, each with its cost; validation failures come back as rework rounds. |
 | ![critic-review.md: each acceptance criterion with its status and the evidence in the code](docs-site/assets/screenshots/critic-review.png) | ![Browse Code: changed-file tree and a side-by-side diff](docs-site/assets/screenshots/browse-code-diff.png) |
 | **Critic** — reads the landed code, not just the reports, and checks every acceptance criterion against evidence. | **Browse Code** — the feature branch's diff, in the app. |
 

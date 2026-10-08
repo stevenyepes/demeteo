@@ -65,7 +65,7 @@ A project's home has three tabs — **Pipelines**, **Discovery** and **Ask**.
 
 The pipeline runs on its own until it reaches a **Gate**. A banner says *GATE NEEDS YOU*, and the project shows *Gate needs you* in the sidebar. Open the gate, read the artifacts the earlier steps wrote, and choose **Approve step**, **Redirect / Loop** (with feedback), or **Abort feature**.
 
-![A feature pipeline with a "1 gate needs you" banner and its step graph, the Approve Merge / Publish gate selected](assets/screenshots/pipeline-gate-needs-you.png)
+![A remote, detached feature pipeline with a "1 gate needs you" banner and its step graph, the Approve Merge / Publish gate selected](assets/screenshots/pipeline-gate-needs-you.png)
 
 If you'd rather not be asked at every gate, set **gate autonomy** per project — see [Settings](settings.md#agent-strategy-policies).
 

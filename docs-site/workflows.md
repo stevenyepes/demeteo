@@ -70,7 +70,7 @@ An automatic approval never redirects or rejects. A run detached to a remote run
 
 The default workflow has ten steps:
 
-![Feature pipeline with a "1 gate needs you" banner and the Standard pipeline's step graph](assets/screenshots/pipeline-gate-needs-you.png)
+![A remote, detached feature pipeline with a "1 gate needs you" banner and the Standard pipeline's step graph](assets/screenshots/pipeline-gate-needs-you.png)
 
 | # | Step | Kind | What it does |
 |---|------|------|--------------|
