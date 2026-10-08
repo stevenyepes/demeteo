@@ -34,6 +34,9 @@ export interface MetricProps {
   tone?: RunStatusTone;
   tooltip?: string;
   className?: string;
+  /** Value then label on one baseline (`42m elapsed`), for a strip that is a
+   *  line of text rather than a card of tiles. */
+  inline?: boolean;
 }
 
 export function Metric({
@@ -42,10 +45,37 @@ export function Metric({
   tone,
   tooltip,
   className = '',
+  inline = false,
 }: MetricProps): React.ReactElement {
   const reserve = useRef({ label, chars: 0 });
   if (reserve.current.label !== label) reserve.current = { label, chars: 0 };
   reserve.current.chars = Math.max(reserve.current.chars, value.length);
+
+  const valueEl = (
+    <span
+      data-testid="metric-value"
+      style={{ minWidth: `${reserve.current.chars}ch` }}
+      className={`${inline ? 'text-xs' : 'text-sm'} font-mono font-bold tabular-nums leading-none whitespace-nowrap ${
+        tone ? TONE_TEXT[tone] : 'text-white'
+      }`}
+    >
+      {value}
+    </span>
+  );
+
+  if (inline) {
+    return (
+      <div
+        data-testid="metric"
+        data-metric={label}
+        title={tooltip}
+        className={`flex shrink-0 items-baseline gap-1.5 ${className}`}
+      >
+        {valueEl}
+        <span className="font-mono text-xs lowercase leading-none text-slate-500">{label}</span>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -57,15 +87,7 @@ export function Metric({
       <span className="text-[10px] font-bold uppercase tracking-wider leading-none text-slate-500">
         {label}
       </span>
-      <span
-        data-testid="metric-value"
-        style={{ minWidth: `${reserve.current.chars}ch` }}
-        className={`text-sm font-mono font-bold tabular-nums leading-none whitespace-nowrap ${
-          tone ? TONE_TEXT[tone] : 'text-white'
-        }`}
-      >
-        {value}
-      </span>
+      {valueEl}
     </div>
   );
 }
@@ -81,11 +103,14 @@ export function Metric({
  * names stacked translucency as a budget rather than a free finish. A metric
  * strip is chrome inside chrome, and was never a card of its own.
  */
-export type MetricStripVariant = 'panel' | 'inset';
+export type MetricStripVariant = 'panel' | 'inset' | 'line';
 
+/** `line` is no surface at all: a strip of inline metrics read as a sentence
+ *  under a title, where any box would be chrome around four numbers. */
 const SURFACE: Record<MetricStripVariant, string> = {
-  panel: 'glass-panel',
-  inset: 'rounded-xl border border-white/5 bg-white/[0.03]',
+  panel: 'glass-panel px-4 py-2',
+  inset: 'rounded-xl border border-white/5 bg-white/[0.03] px-4 py-2',
+  line: '',
 };
 
 export interface MetricStripProps {
@@ -102,7 +127,7 @@ export function MetricStrip({
   return (
     <div
       data-testid="metric-strip"
-      className={`${SURFACE[variant]} inline-flex flex-wrap items-center gap-x-5 gap-y-2 min-w-0 px-4 py-2 ${className}`}
+      className={`${SURFACE[variant]} inline-flex flex-wrap items-center gap-x-5 gap-y-2 min-w-0 ${className}`}
     >
       {children}
     </div>

@@ -108,7 +108,7 @@ describe('FeatureHeader collapsed variant', () => {
     renderHeader();
 
     expect(screen.getByText('ID: feat-1')).toBeInTheDocument();
-    expect(screen.getByTestId('feature-header')).toHaveClass('py-6');
+    expect(screen.getByTestId('feature-header')).toHaveClass('py-4');
     expect(screen.getByRole('heading', { name: 'Add a metric strip' })).toHaveClass('text-xl');
   });
 
@@ -117,7 +117,7 @@ describe('FeatureHeader collapsed variant', () => {
 
     expect(screen.queryByText('ID: feat-1')).toBeNull();
     expect(screen.getByTestId('feature-header')).toHaveClass('py-3');
-    expect(screen.getByTestId('feature-header')).not.toHaveClass('py-6');
+    expect(screen.getByTestId('feature-header')).not.toHaveClass('py-4');
     expect(screen.getByRole('heading', { name: 'Add a metric strip' })).toHaveClass('text-lg');
   });
 
@@ -299,5 +299,56 @@ describe('the header entry into the Sync pane', () => {
     renderHeader({ status: 'running' });
 
     expect(screen.queryByTestId('open-sync')).toBeNull();
+  });
+});
+
+/**
+ * The header ranks its actions instead of listing them: one filled primary,
+ * the worktree tools as icons, the rare ones behind `⋯`. These pin the ranking,
+ * because the regression it replaces — every action a filled button in its own
+ * tone — compiles and renders without complaint.
+ */
+describe('the header action ranking', () => {
+  it('carries the published PR inline, with its state, instead of a row below', () => {
+    renderHeader({
+      status: 'completed',
+      statusMeta: runStatusMeta('completed'),
+      mrUrl: 'https://example.test/pr/16',
+      mrState: 'open',
+    });
+
+    const link = screen.getByTestId('header-pr-link');
+    expect(link).toHaveAttribute('href', 'https://example.test/pr/16');
+    expect(link).toHaveTextContent('PR open');
+  });
+
+  it('keeps cleanup and the PR refresh behind the overflow menu', async () => {
+    const onCleanup = vi.fn();
+    const onRefreshMrState = vi.fn();
+    renderHeader({
+      status: 'completed',
+      statusMeta: runStatusMeta('completed'),
+      mrUrl: 'https://example.test/pr/16',
+      onCleanup,
+      onRefreshMrState,
+    });
+
+    expect(screen.queryByRole('menuitem', { name: 'Cleanup' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Cleanup' }));
+    expect(onCleanup).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Refresh PR state' }));
+    expect(onRefreshMrState).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the primary action the only filled colour', () => {
+    renderHeader({ status: 'completed', statusMeta: runStatusMeta('completed'), mrUrl: null });
+
+    const filled = Array.from(screen.getByTestId('feature-header').querySelectorAll('button, a'))
+      .filter((el) => /(^|\s)bg-(violet|cyan|emerald|rose)-600(\s|$)/.test(el.className))
+      .map((el) => el.textContent?.trim());
+    expect(filled).toEqual(['Publish MR']);
   });
 });

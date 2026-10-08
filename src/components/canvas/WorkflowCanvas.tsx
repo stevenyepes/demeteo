@@ -48,6 +48,7 @@ import {
   layoutSizeKey,
   needsMiniMap,
   planLayout,
+  runViewport,
   FIT_PADDING,
   MAX_ZOOM,
   MIN_ZOOM,
@@ -170,7 +171,8 @@ function CanvasInner({
 
   const [nodes, setNodes, onNodesChange] = useNodesState(base.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(base.edges);
-  const { fitView, getEdges, getNodes, screenToFlowPosition, zoomIn, zoomOut } = useReactFlow();
+  const { fitView, getEdges, getNodes, getNodesBounds, screenToFlowPosition, setViewport, zoomIn, zoomOut } =
+    useReactFlow();
   const { layout, running } = useElkLayout();
   const nodesInitialized = useNodesInitialized();
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -296,7 +298,27 @@ function CanvasInner({
 
   // The minimap earns its space on node count *or* on a fit scale too low to
   // read the labels at — the second case is what a responsive box introduces.
-  const showMiniMap = needsMiniMap(plan, nodes.length);
+  // Design mode only: a run graph is never fitted below `RUN_MIN_FIT_ZOOM` and
+  // pans on scroll, and there the map sat in the pane's corner covering the
+  // run's last steps — the ones a finished run is read for.
+  const showMiniMap = design && needsMiniMap(plan, nodes.length);
+
+  /** Fit the graph to the pane. A run graph stops at a readable scale and
+   *  opens on its first steps (`runViewport`); anything that fits above that
+   *  scale, and every design graph, takes the plain fit. */
+  const fitToPane = useCallback(
+    (duration: number) => {
+      if (!design && containerSize) {
+        const viewport = runViewport(getNodesBounds(getNodes()), containerSize);
+        if (viewport) {
+          void setViewport(viewport, { duration });
+          return;
+        }
+      }
+      void fitView({ ...FIT_VIEW_OPTIONS, duration });
+    },
+    [design, containerSize, getNodesBounds, getNodes, setViewport, fitView],
+  );
 
   const sizeKey = layoutSizeKey(nodes);
   // A node not yet measured — a new definition's, or one first mounted — has no
@@ -337,11 +359,9 @@ function CanvasInner({
         }),
       );
       // Let React Flow commit the new positions before fitting the viewport.
-      window.requestAnimationFrame(
-        () => void fitView({ ...FIT_VIEW_OPTIONS, duration: opts.duration ?? 300 }),
-      );
+      window.requestAnimationFrame(() => fitToPane(opts.duration ?? 300));
     },
-    [plan, getEdges, getNodes, layout, setNodes, fitView],
+    [plan, getEdges, getNodes, layout, setNodes, fitToPane],
   );
 
   /** Run mode always orients for the space it has; design mode never does.
@@ -364,7 +384,7 @@ function CanvasInner({
     if (!autoArrange || !nodesInitialized || !measured || !containerSize) return;
     const applied = appliedRef.current;
     if (autoLayoutAction(applied, plan.direction, sizeKey) === 'fit') {
-      void fitView({ ...FIT_VIEW_OPTIONS, duration: 200 });
+      fitToPane(200);
       return;
     }
     void runAutoLayout({ duration: applied ? 300 : 0 });
@@ -378,7 +398,7 @@ function CanvasInner({
     containerSize,
     plan,
     sizeKey,
-    fitView,
+    fitToPane,
     runAutoLayout,
   ]);
 
@@ -639,6 +659,10 @@ function CanvasInner({
         elementsSelectable
         fitView
         fitViewOptions={FIT_VIEW_OPTIONS}
+        // A run graph is allowed to overflow its pane (`RUN_MIN_FIT_ZOOM`), so
+        // the wheel scrolls it the way the rest of the run view scrolls;
+        // pinch or Ctrl+wheel still zooms.
+        panOnScroll={!design}
         proOptions={{ hideAttribution: true }}
         minZoom={MIN_ZOOM}
         maxZoom={MAX_ZOOM}
@@ -666,7 +690,7 @@ function CanvasInner({
             </button>
             <button
               type="button"
-              onClick={() => void fitView({ ...FIT_VIEW_OPTIONS, duration: 300 })}
+              onClick={() => fitToPane(300)}
               className="flex h-7 w-7 items-center justify-center text-slate-300 transition-colors hover:bg-slate-800/70 hover:text-white"
               title="Fit view"
               aria-label="Fit view"

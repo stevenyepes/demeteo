@@ -19,6 +19,8 @@ import {
   needsMiniMap,
   pickDirection,
   planLayout,
+  RUN_MIN_FIT_ZOOM,
+  runViewport,
   type AppliedLayout,
   type ContainerSize,
 } from './layoutDirection';
@@ -372,5 +374,39 @@ describe('everyNodeMeasured', () => {
     expect(everyNodeMeasured([{ id: 'a' }, { id: 'b', measured: { width: 1, height: 1 } }])).toBe(
       false,
     );
+  });
+});
+
+describe('runViewport', () => {
+  const PANE: ContainerSize = { width: 700, height: 1000 };
+
+  it('leaves a graph that fits above the floor to an ordinary fitView', () => {
+    expect(runViewport({ x: 0, y: 0, width: 300, height: 600 }, PANE)).toBeNull();
+  });
+
+  it('pins a tall chain at the floor and opens on its first steps', () => {
+    // Eleven 120px cards with 64px between layers: ~2000 flow px tall, which
+    // fit-to-view would draw at ~0.45 in this pane.
+    const vp = runViewport({ x: 40, y: 10, width: 340, height: 2000 }, PANE);
+    expect(vp).not.toBeNull();
+    expect(vp?.zoom).toBe(RUN_MIN_FIT_ZOOM);
+    // Top of the graph sits a margin below the pane's top edge…
+    expect(10 * RUN_MIN_FIT_ZOOM + (vp?.y ?? 0)).toBeGreaterThan(0);
+    expect(10 * RUN_MIN_FIT_ZOOM + (vp?.y ?? 0)).toBeLessThan(40);
+    // …and the axis it still fits on is centred, not anchored.
+    const left = 40 * RUN_MIN_FIT_ZOOM + (vp?.x ?? 0);
+    const right = PANE.width - (left + 340 * RUN_MIN_FIT_ZOOM);
+    expect(Math.abs(left - right)).toBeLessThan(1);
+  });
+
+  it('anchors a wide graph at its left edge when it overflows horizontally', () => {
+    const vp = runViewport({ x: 0, y: 0, width: 4000, height: 200 }, PANE);
+    expect(vp?.x).toBeGreaterThan(0);
+    expect(vp?.x).toBeLessThan(40);
+  });
+
+  it('answers null for an unmeasured box rather than a viewport at infinity', () => {
+    expect(runViewport({ x: 0, y: 0, width: 300, height: 600 }, { width: 0, height: 0 })).toBeNull();
+    expect(runViewport({ x: 0, y: 0, width: 0, height: 0 }, PANE)).toBeNull();
   });
 });

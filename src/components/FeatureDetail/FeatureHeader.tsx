@@ -1,11 +1,12 @@
-import { Cpu, GitBranch, GitPullRequest, RefreshCw, Terminal } from 'lucide-react';
-import type { FeatureDrift, Project, RemoteRunMirror } from '../../types';
+import { Code2, Cpu, ExternalLink, GitBranch, GitPullRequest, RefreshCw, Terminal } from 'lucide-react';
+import type { FeatureDrift, MrState, Project, RemoteRunMirror } from '../../types';
 import { runStatusMeta, TERMINAL_STATUSES } from '../../lib/runStatus';
 import { describeStaleness, REFRESH_HINT } from '../../lib/staleness';
 import { formatCost, formatTokens } from '../../lib/utils';
 import { BackButton } from '../ui/BackButton';
 import { Chip } from '../ui/Chip';
 import { Metric, MetricStrip } from '../ui/MetricStrip';
+import { OverflowMenu, type OverflowMenuItem } from '../ui/OverflowMenu';
 
 interface FeatureHeaderProps {
   featureId: string;
@@ -32,6 +33,10 @@ interface FeatureHeaderProps {
   /** A fetch of the base ref is in flight, asked for from this header. */
   driftRefreshing?: boolean;
   mrUrl: string | null;
+  /** The pull request's state as last read from the provider, shown beside
+   *  its link. The row that used to carry it under the header is gone. */
+  mrState?: MrState | null;
+  onRefreshMrState?: () => void;
   /** Quieter chrome for a scrolled run column; `lib/headerCollapse.ts` decides it. */
   collapsed?: boolean;
   onOpenTerminalTab: () => void;
@@ -55,21 +60,25 @@ interface FeatureHeaderProps {
 }
 
 /**
- * Title on the left, telemetry + actions on the right — one row while both
- * fit, stacked once they don't. Nothing here is `shrink-0` at the group
- * level: a run with every action available (sync / publish / cleanup) is
- * wider than a half-window, and it should wrap rather than push the header
- * off-screen.
+ * Two lines: identity, status and actions on the first; telemetry on the
+ * second. It was a two-column block whose right half stacked a four-tile
+ * metric card over five buttons, which at half a window wrapped into three
+ * rows and pushed the run down by the height of a card.
  *
- * Collapsed is the same header, quieter — it gives back the id line, half the
- * vertical padding and one title size step, and nothing else. Status, transport,
- * telemetry and the actions are the reason someone scrolls back up to this, so
- * hiding them would trade one scroll for another; every element that survives
- * keeps its position, which makes the change a restyle rather than a remount.
- * The transition stays on padding: this element is `backdrop-blur-md` over a
- * translucent surface, and animating `box-shadow` or `scale` on one of those
- * cost a WKWebView GPU incident already — src/App.css records it above
- * `pulse-glow`.
+ * Actions are ranked rather than listed. One primary — the thing a finished
+ * run is waiting on (open the PR, or publish one) — carries the only filled
+ * colour; the worktree tools are icon buttons; the rare ones (cleanup, refresh
+ * the PR state, copy the id) sit in an overflow menu. Five filled buttons in
+ * five tones read as five equally urgent things, and §4 of AGENTS.md gives
+ * those tones meanings no button here has.
+ *
+ * Collapsed is the same header, quieter — half the vertical padding, one title
+ * size step, and no id. Status, transport, telemetry and the actions are the
+ * reason someone scrolls back up to this, so they stay where they were, which
+ * makes the change a restyle rather than a remount. The transition stays on
+ * padding: this element is `backdrop-blur-md` over a translucent surface, and
+ * animating `box-shadow` or `scale` on one of those cost a WKWebView GPU
+ * incident already — src/App.css records it above `pulse-glow`.
  */
 export function FeatureHeader({
   featureId,
@@ -90,6 +99,8 @@ export function FeatureHeader({
   drift,
   driftRefreshing = false,
   mrUrl,
+  mrState = null,
+  onRefreshMrState,
   collapsed = false,
   onOpenTerminalTab,
   onBrowseCode,
@@ -101,92 +112,198 @@ export function FeatureHeader({
   onRefreshDrift,
 }: FeatureHeaderProps) {
   const staleness = describeStaleness(drift);
+  const finished =
+    status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'awaiting_mr';
+  const live = status === 'running' || status === 'verifying';
+
+  const overflow: OverflowMenuItem[] = [];
+  if (mrUrl && onRefreshMrState) {
+    overflow.push({ label: 'Refresh PR state', onSelect: onRefreshMrState, title: 'Refresh MR state from the provider' });
+  }
+  if (finished || status === 'gated') {
+    overflow.push({
+      label: 'Cleanup',
+      onSelect: () => onCleanup(),
+      title:
+        status === 'gated'
+          ? "Apply the project's feature_lifecycle (archive / keep / auto_delete). Useful when a feature is stuck at a gate with a failed earlier step."
+          : "Apply the project's feature_lifecycle (archive / keep / auto_delete)",
+    });
+  }
+  overflow.push({
+    label: 'Copy feature ID',
+    onSelect: () => void navigator.clipboard?.writeText(featureId),
+    title: featureId,
+  });
 
   return (
     <div
       data-testid="feature-header"
       className={`px-6 ${
-        collapsed ? 'py-3' : 'py-6'
-      } border-b border-white/5 bg-[#0d0f14]/80 flex flex-wrap items-start justify-between gap-x-6 gap-y-4 backdrop-blur-md transition-[padding] duration-200 ease-out motion-reduce:transition-none`}
+        collapsed ? 'py-3' : 'py-4'
+      } border-b border-white/5 bg-[#0d0f14]/80 flex flex-col gap-1.5 backdrop-blur-md transition-[padding] duration-200 ease-out motion-reduce:transition-none`}
     >
-      <div className="space-y-1 min-w-0 flex-1">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <BackButton />
           <h1
             className={`${
               collapsed ? 'text-lg' : 'text-xl'
-            } font-bold font-heading text-white tracking-wide line-clamp-2 break-words min-w-0 flex-1 transition-[font-size] duration-200 ease-out motion-reduce:transition-none`}
+            } min-w-[8rem] shrink truncate font-bold font-heading text-white tracking-wide transition-[font-size] duration-200 ease-out motion-reduce:transition-none`}
             title={featureTitle}
           >
             {featureTitle}
           </h1>
-          <Chip status={status} tone={statusMeta.tone} pulse={statusMeta.active}>
-            {statusMeta.label}
-          </Chip>
-          {/* Transport badge: where this run executes. A detached run is live
-              while its mirror is non-terminal; attached-remote is a
-              project-level fact; everything else is a plain local run.
-              Cyan for either remote flavour, slate for local — a transport is
-              not a run status, so it takes a tone directly rather than
-              resolving one. */}
-          <Chip
-            tone={remoteRun || currentProject?.compute_type === 'remote' ? 'cyan' : 'slate'}
-            icon={<Cpu className="w-3 h-3" />}
-            pulse={remoteRun !== null && !TERMINAL_STATUSES.includes(remoteRun.status)}
-            title={
-              remoteRun
-                ? `Detached run on ${remoteMachineName ?? remoteRun.machine_id}${
-                    TERMINAL_STATUSES.includes(remoteRun.status) ? '' : ' — live'
-                  }`
-                : currentProject?.compute_type === 'remote'
-                ? `Executes on ${currentProject.remote_host ?? 'the project machine'} over SSH, orchestrated by this app`
-                : 'Executes on this machine'
-            }
-          >
-            {remoteRun
-              ? 'Remote · Detached'
-              : currentProject?.compute_type === 'remote'
-              ? 'Remote · SSH'
-              : 'Local'}
-          </Chip>
-          {staleness && (
-            <button
-              type="button"
-              onClick={onRefreshDrift}
-              disabled={!onRefreshDrift || driftRefreshing}
-              data-testid="drift-refresh"
-              className="rounded-full transition disabled:cursor-default enabled:hover:brightness-125"
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <Chip status={status} tone={statusMeta.tone} pulse={statusMeta.active}>
+              {statusMeta.label}
+            </Chip>
+            {/* Transport badge: where this run executes. A detached run is live
+                while its mirror is non-terminal; attached-remote is a
+                project-level fact; everything else is a plain local run.
+                Cyan for either remote flavour, slate for local — a transport is
+                not a run status, so it takes a tone directly rather than
+                resolving one. */}
+            <Chip
+              tone={remoteRun || currentProject?.compute_type === 'remote' ? 'cyan' : 'slate'}
+              icon={<Cpu className="w-3 h-3" />}
+              pulse={remoteRun !== null && !TERMINAL_STATUSES.includes(remoteRun.status)}
               title={
-                onRefreshDrift
-                  ? `${staleness.title} ${driftRefreshing ? 'Fetching…' : REFRESH_HINT}`
-                  : staleness.title
+                remoteRun
+                  ? `Detached run on ${remoteMachineName ?? remoteRun.machine_id}${
+                      TERMINAL_STATUSES.includes(remoteRun.status) ? '' : ' — live'
+                    }`
+                  : currentProject?.compute_type === 'remote'
+                  ? `Executes on ${currentProject.remote_host ?? 'the project machine'} over SSH, orchestrated by this app`
+                  : 'Executes on this machine'
               }
             >
-              <Chip
-                tone={staleness.tone}
-                dot={false}
-                icon={driftRefreshing ? <RefreshCw className="w-3 h-3 animate-spin" /> : undefined}
+              {remoteRun
+                ? 'Remote · Detached'
+                : currentProject?.compute_type === 'remote'
+                ? 'Remote · SSH'
+                : 'Local'}
+            </Chip>
+            {staleness && (
+              <button
+                type="button"
+                onClick={onRefreshDrift}
+                disabled={!onRefreshDrift || driftRefreshing}
+                data-testid="drift-refresh"
+                className="whitespace-nowrap rounded-full transition disabled:cursor-default enabled:hover:brightness-125"
+                title={
+                  onRefreshDrift
+                    ? `${staleness.title} ${driftRefreshing ? 'Fetching…' : REFRESH_HINT}`
+                    : staleness.title
+                }
               >
-                {staleness.label}
-              </Chip>
+                <Chip
+                  tone={staleness.tone}
+                  dot={false}
+                  icon={driftRefreshing ? <RefreshCw className="w-3 h-3 animate-spin" /> : undefined}
+                >
+                  {staleness.label}
+                </Chip>
+              </button>
+            )}
+            {mrUrl && (
+              <a
+                href={mrUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="header-pr-link"
+                title={mrUrl}
+                className="flex items-center gap-1 whitespace-nowrap font-mono text-xs text-cyan-400 transition hover:text-cyan-300"
+              >
+                <GitPullRequest className="h-3.5 w-3.5" />
+                PR {mrState ?? 'unknown'}
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
+          </div>
+        </div>
+
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {live && (
+            <button
+              onClick={onCancelFeature}
+              className="h-8 px-3 border border-rose-500/30 bg-rose-600/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition"
+            >
+              Cancel Feature
             </button>
           )}
+          {finished && syncOffered && (
+            <button
+              onClick={onOpenSync}
+              data-testid="open-sync"
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 text-xs font-semibold text-slate-200 transition hover:bg-white/[0.08]"
+              title="Show this branch's sync: how far behind it is, any conflict, and what to do about it"
+            >
+              <GitBranch className="w-3.5 h-3.5" />
+              {syncBadge > 0 ? `Sync · ${syncBadge}` : 'Sync'}
+            </button>
+          )}
+          <button
+            onClick={onOpenTerminalTab}
+            aria-label="Code with Agent"
+            title="Code with Agent — open an interactive agent coding session in this feature's worktree"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-slate-400 transition hover:bg-white/[0.08] hover:text-cyan-300"
+          >
+            <Terminal className="w-4 h-4" />
+          </button>
+          <button
+            onClick={onBrowseCode}
+            aria-label="Browse Code"
+            title="Browse Code — the feature branch, read-only"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-slate-400 transition hover:bg-white/[0.08] hover:text-cyan-300"
+          >
+            <Code2 className="w-4 h-4" />
+          </button>
+          <OverflowMenu label="More actions" items={overflow} />
+          {/* The finalize step opens the PR itself at the end of a run, so once
+              there is a URL the only useful action is to go look at it.
+              Publishing by hand stays available for features whose run never
+              produced one. */}
+          {finished &&
+            (mrUrl ? (
+              <a
+                href={mrUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-3.5 text-xs font-bold text-white transition hover:bg-violet-500"
+                title="Open the pull request in your browser"
+              >
+                <GitPullRequest className="w-3.5 h-3.5" />
+                View PR
+              </a>
+            ) : (
+              <button
+                onClick={onPublish}
+                disabled={publishing}
+                className="flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-3.5 text-xs font-bold text-white transition hover:bg-violet-500 disabled:opacity-40"
+                title="Open a PR/MR for review. The title and description are written by the agent; there is nothing to fill in."
+              >
+                {publishing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitPullRequest className="w-3.5 h-3.5" />}
+                Publish MR
+              </button>
+            ))}
         </div>
-        {!collapsed && <p className="text-xs text-slate-400 truncate">ID: {featureId}</p>}
       </div>
 
-      <div className="flex min-w-0 flex-col items-end gap-3">
-        <MetricStrip variant="inset" className="justify-end">
-          <Metric label="Elapsed" value={duration} />
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 pl-11">
+        <MetricStrip variant="line">
+          <Metric inline label="Elapsed" value={duration} />
           <Metric
+            inline
             label="Cost"
             value={formatCost(totalCost)}
             tone="emerald"
             tooltip={`${totalCost.toFixed(4)} USD across ${stepCount} steps`}
           />
-          <Metric label="Tokens" value={formatTokens(tokens)} tone="cyan" />
+          <Metric inline label="Tokens" value={formatTokens(tokens)} tone="cyan" />
           {cacheReadTokens > 0 && (
             <Metric
+              inline
               label="Cache Reads"
               value={formatTokens(cacheReadTokens)}
               tone="violet"
@@ -194,89 +311,7 @@ export function FeatureHeader({
             />
           )}
         </MetricStrip>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <button
-            onClick={onOpenTerminalTab}
-            className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-300 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
-            title="Open an interactive agent coding session in this feature's worktree"
-          >
-            <Terminal className="w-3.5 h-3.5" />
-            Code with Agent
-          </button>
-          <button
-            onClick={onBrowseCode}
-            className="px-4 py-2 bg-violet-600/20 hover:bg-violet-600 border border-violet-500/30 text-violet-300 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
-            title="Browse the feature branch code in read-only mode"
-          >
-            <GitBranch className="w-3.5 h-3.5" />
-            Browse Code
-          </button>
-          {(status === 'running' || status === 'verifying') && (
-            <button
-              onClick={onCancelFeature}
-              className="px-4 py-2 bg-rose-600/20 hover:bg-rose-600 border border-rose-500/30 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition duration-300"
-            >
-              Cancel Feature
-            </button>
-          )}
-          {(status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'awaiting_mr') && (
-            <>
-              {syncOffered && (
-              <button
-                onClick={onOpenSync}
-                data-testid="open-sync"
-                className="px-4 py-2 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
-                title="Show this branch's sync: how far behind it is, any conflict, and what to do about it"
-              >
-                <GitBranch className="w-3.5 h-3.5" />
-                {syncBadge > 0 ? `Sync · ${syncBadge}` : 'Sync'}
-              </button>
-              )}
-              {/* The finalize step opens the PR itself at the end of a run,
-                  so once there is a URL the only useful action is to go
-                  look at it. Publishing by hand stays available for features
-                  whose run never produced one. */}
-              {mrUrl ? (
-                <a
-                  href={mrUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 text-emerald-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5"
-                  title="Open the pull request in your browser"
-                >
-                  <GitPullRequest className="w-3.5 h-3.5" />
-                  View PR
-                </a>
-              ) : (
-                <button
-                  onClick={onPublish}
-                  disabled={publishing}
-                  className="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 text-emerald-400 hover:text-white rounded-lg text-xs font-bold transition duration-300 disabled:opacity-40 flex items-center gap-1.5"
-                  title="Open a PR/MR for review. The title and description are written by the agent; there is nothing to fill in."
-                >
-                  {publishing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitPullRequest className="w-3.5 h-3.5" />}
-                  Publish MR
-                </button>
-              )}
-              <button
-                onClick={() => onCleanup()}
-                className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs font-bold transition duration-300"
-                title="Apply the project's feature_lifecycle (archive / keep / auto_delete)"
-              >
-                Cleanup
-              </button>
-            </>
-          )}
-          {status === 'gated' && (
-            <button
-              onClick={() => onCleanup()}
-              className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-lg text-xs font-bold transition duration-300"
-              title="Apply the project's feature_lifecycle (archive / keep / auto_delete). Useful when a feature is stuck at a gate with a failed earlier step."
-            >
-              Cleanup
-            </button>
-          )}
-        </div>
+        {!collapsed && <span className="truncate font-mono text-xs text-slate-600">ID: {featureId}</span>}
       </div>
     </div>
   );

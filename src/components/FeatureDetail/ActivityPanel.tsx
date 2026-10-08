@@ -30,6 +30,7 @@ interface ActivityPanelProps {
   terminal: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  variant?: 'card' | 'chip';
 }
 
 /**
@@ -58,6 +59,7 @@ export function ActivityPanel({
   terminal,
   open,
   onOpenChange,
+  variant = 'card',
 }: ActivityPanelProps): React.ReactElement {
   const [error, setError] = useState<string>('');
   const [consecutiveFailures, setConsecutiveFailures] = useState(0);
@@ -128,6 +130,7 @@ export function ActivityPanel({
   return (
     <Disclosure
       title="Activity"
+      variant={variant}
       open={open}
       onOpenChange={onOpenChange}
       icon={<Radio className={`w-4 h-4 ${TONE_TEXT[sync.tone]}`} aria-hidden="true" />}
@@ -136,14 +139,14 @@ export function ActivityPanel({
           {/* Capped rather than `sm:`-gated: this sits in a pane whose width the
               viewport does not describe (§0), so a breakpoint would hide it on a
               narrow pane in a wide window and keep it on a wide pane in a narrow one. */}
-          {remote && (
+          {remote && variant === 'card' && (
             <span className="max-w-[12rem] truncate font-mono text-[10px] text-slate-500">
               {remote.machineName} · run {remote.run.run_id}
             </span>
           )}
           <span
             data-testid="activity-sync"
-            title={sync.hint}
+            title={remote && variant === 'chip' ? `${remote.machineName} · run ${remote.run.run_id} — ${sync.hint}` : sync.hint}
             className={`flex items-center gap-1.5 font-mono text-[10px] ${TONE_TEXT[sync.tone]}`}
           >
             <span

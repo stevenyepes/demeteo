@@ -4,7 +4,7 @@
  * Sync grew five surfaces here, one per phase, and each was correct alone. The
  * failure mode of consolidating them is the one no compiler catches: a retired
  * banner that is still rendered somewhere reads as a second, contradictory
- * answer beside the pane — so this pins the strip down to the pull request.
+ * answer beside the pane — so this pins the strip down to the one nudge left.
  */
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
@@ -12,14 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { FeatureStatusBanners } from './FeatureStatusBanners';
 
 function mount(status = 'completed') {
-  return render(
-    <FeatureStatusBanners
-      status={status}
-      mrUrl={null}
-      mrState={null}
-      onRefreshMrState={() => {}}
-    />,
-  );
+  return render(<FeatureStatusBanners status={status} />);
 }
 
 describe('FeatureStatusBanners', () => {
@@ -38,15 +31,8 @@ describe('FeatureStatusBanners', () => {
     expect(screen.getByText(/no PR was opened/i)).toBeInTheDocument();
   });
 
-  it('shows the published request row', () => {
-    render(
-      <FeatureStatusBanners
-        status="completed"
-        mrUrl="https://example.test/pr/1"
-        mrState="open"
-        onRefreshMrState={() => {}}
-      />,
-    );
-    expect(screen.getByRole('link', { name: /example.test/ })).toBeInTheDocument();
+  it('renders nothing for a finished run that has nothing to nudge about', () => {
+    const { container } = mount('completed');
+    expect(container).toBeEmptyDOMElement();
   });
 });
