@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Lock } from 'lucide-react';
+import { Lock, X } from 'lucide-react';
 
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
 import { getAgentModels, modelSupportsImages } from '../../lib/agentModels';
@@ -25,6 +25,7 @@ import type {
   WorkflowWithSteps,
 } from '../../types';
 import { Chip } from '../ui/Chip';
+import { Modal } from '../ui/Modal';
 import { FieldLabel } from '../ui/FieldLabel';
 import { ColumnSubHeader } from './ColumnSubHeader';
 import { LabelledSelect } from './LabelledSelect';
@@ -34,7 +35,7 @@ import { TicketFieldList } from './TicketFieldList';
 import { TicketForceStart } from './TicketForceStart';
 import { TicketPlacementField } from './TicketPlacementField';
 
-interface TicketEditorDrawerProps {
+interface TicketEditorModalProps {
   view: TicketView;
   index: TicketIndex;
   siblings: readonly TicketView[];
@@ -58,21 +59,30 @@ interface TicketEditorDrawerProps {
 
 /**
  * The full editor for one Ticket (`DISCOVERY_UI_SPEC.md` §5, PRD §5.4) — a
- * wider right-hand drawer in place of the 360 px inspector, not a modal.
+ * centered modal sized to the window.
+ *
+ * Not a drawer beside the graph: a 760 px column had to be seated by the
+ * workspace row's layout ladder, and at half a screen it squeezed the graph
+ * under its minimum while the graph's floating zoom controls covered Start.
+ * Editing does not need the graph in view — edges are picked in the form — so
+ * the editor takes the window and the row only ever seats the 360 px inspector.
+ * The actions live in a footer outside the scroller, so Save and Start are
+ * never below the fold.
  *
  * **A locked ticket is shown as locked, not allowed to fail on save.** §5.4
  * locks a Ticket the moment it has a Feature; its run is already working
  * against the plan as it stands, so every control below goes read-only and the
  * save button is not drawn at all. Letting the form take the edit and the
  * backend refuse it would be the same rule enforced one round trip later, and
- * with the user's typing thrown away.
+ * with the user's typing thrown away. For the same reason a dirty form does not
+ * close on Escape or a backdrop click: Discard is the only way to throw it away.
  *
  * **The save is the whole ticket.** Every key of `TicketEdit` is required on
  * the wire — serde reads an absent key and an explicit `null` the same way —
  * so there is no patch shape here and no per-field dirty tracking to build one
  * out of.
  */
-export function TicketEditorDrawer({
+export function TicketEditorModal({
   view,
   index,
   siblings,
@@ -87,7 +97,7 @@ export function TicketEditorDrawer({
   onStart,
   onForceStart,
   onDrop,
-}: TicketEditorDrawerProps): React.ReactElement {
+}: TicketEditorModalProps): React.ReactElement {
   const { ticket } = view;
   const locked = isTicketLocked(ticket);
 
@@ -176,34 +186,51 @@ export function TicketEditorDrawer({
   const dirty = isDirty(draft, ticket);
   const disabled = locked || saving || busy;
 
+  const saveControls = !locked && (
+    <>
+      <button type="button" onClick={onClose} className="btn-secondary text-[13px]">
+        Discard
+      </button>
+      <button
+        type="button"
+        data-testid="ticket-save"
+        disabled={!dirty || disabled}
+        onClick={() => void save()}
+        className="btn-secondary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
+      >
+        {saving ? 'Saving…' : 'Save ticket'}
+      </button>
+    </>
+  );
+
   return (
+    <Modal onClose={dirty ? undefined : onClose}>
     <div
       data-testid="ticket-editor"
-      className="flex w-[760px] min-h-0 shrink-0 flex-col overflow-y-auto border-l border-white/5 bg-[#0d0f14]"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Edit ${ticketLabel(ticket.seq)}`}
+      className="flex max-h-[calc(100vh-48px)] w-[min(880px,calc(100vw-48px))] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0d0f14] shadow-[0_30px_80px_rgba(0,0,0,0.6)]"
     >
-      <ColumnSubHeader title={ticketLabel(ticket.seq)} sticky>
+      <ColumnSubHeader title={ticketLabel(ticket.seq)}>
         <Chip size="sm" tone={ticketTone(view, index)} dot>
           {stateLabel(view)}
         </Chip>
         <Chip size="sm" tone="slate">
           {locked ? 'Locked' : 'Unstarted'}
         </Chip>
-        <button type="button" onClick={onClose} className="btn-secondary text-xs">
-          {locked ? 'Close' : 'Discard'}
+        {dirty && <span className="font-mono text-[10px] text-amber-300">Unsaved changes</span>}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={locked ? 'Close the editor' : 'Discard and close the editor'}
+          className="rounded p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-white"
+        >
+          <X className="h-4 w-4" />
         </button>
-        {!locked && (
-          <button
-            type="button"
-            data-testid="ticket-save"
-            disabled={!dirty || disabled}
-            onClick={() => void save()}
-            className="btn-primary text-xs disabled:cursor-not-allowed disabled:opacity-35"
-          >
-            {saving ? 'Saving…' : 'Save ticket'}
-          </button>
-        )}
       </ColumnSubHeader>
 
+      <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="flex flex-col gap-3.5 p-5">
         {locked ? (
           <p
@@ -366,6 +393,10 @@ export function TicketEditorDrawer({
           </p>
         </div>
 
+      </div>
+      </div>
+
+      <div className="shrink-0 border-t border-white/5 bg-[#0b0d12] px-5 py-3.5">
         <TicketForceStart
           view={view}
           index={index}
@@ -374,10 +405,12 @@ export function TicketEditorDrawer({
           onStart={onStart}
           onForceStart={onForceStart}
           onDrop={onDrop}
+          saveControls={saveControls || null}
         />
       </div>
     </div>
+    </Modal>
   );
 }
 
-export default TicketEditorDrawer;
+export default TicketEditorModal;

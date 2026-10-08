@@ -15,6 +15,7 @@ import { NO_TURN } from '../../lib/discoveryActivity';
 import { indexTickets } from '../../lib/ticketPresentation';
 import type { Discovery, TicketView } from '../../types';
 import { resizeObserverStubs } from '../../test/setup';
+import { DEFAULT_INTERVIEW_WIDTH, INTERVIEW_KEYBOARD_STEP } from './discoveryLayout';
 import { DiscoveryWorkspaceRow } from './DiscoveryWorkspaceRow';
 import type { DiscoveryStreamStore } from './useDiscoveryStream';
 
@@ -153,7 +154,7 @@ function resizeTo(width: number, height = 800) {
 }
 
 describe('DiscoveryWorkspaceRow', () => {
-  it('three-up (>=1280px): the inspector is an in-row sibling, no overlay', () => {
+  it('three-up (>=1160px at the default interview width): the inspector is an in-row sibling, no overlay', () => {
     render(<Harness />);
     const row = resizeTo(1400);
 
@@ -164,28 +165,26 @@ describe('DiscoveryWorkspaceRow', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Workspace pane' })).not.toBeInTheDocument();
   });
 
-  it('overlay-inspector (920-1279px): selecting/editing renders through TicketOverlayPanel while Interview/Tickets stay in-row', async () => {
+  it('overlay-inspector (700-1159px): the inspector floats inside the row, the editor opens as a window-level modal', async () => {
     const user = userEvent.setup();
     render(<Harness />);
     resizeTo(1000);
 
-    // The inspector renders, but outside the row — through the portalled panel.
+    // Anchored to the row, not portalled to the window: it starts below the
+    // workspace header exactly where the in-flow column would.
     const row = screen.getByTestId('discovery-workspace-row');
-    const overlayBackdrop = screen.getByLabelText('Ticket inspector');
-    expect(row.contains(overlayBackdrop)).toBe(false);
-    expect(overlayBackdrop).toContainElement(screen.getByTestId('ticket-verdict'));
+    const overlay = screen.getByLabelText('Ticket inspector');
+    expect(row).toContainElement(overlay);
+    expect(overlay).toContainElement(screen.getByTestId('ticket-verdict'));
 
     // Interview and Tickets remain in-row, neither hidden.
     const composer = screen.getByTestId('interview-composer');
     expect(composer.closest('[aria-hidden="true"]')).toBeNull();
-    expect(row.contains(composer)).toBe(true);
     const ticketView = document.querySelector('[aria-label="Ticket view"]');
     expect(ticketView?.closest('[aria-hidden="true"]')).toBeNull();
-    expect(row.contains(ticketView)).toBe(true);
 
-    // The overlay's backdrop must not intercept clicks/keystrokes aimed at the
-    // row: drive an actual interaction at the composer and at a ticket node
-    // while the inspector overlay is open, not just a containment check.
+    // The floating panel must not intercept what is aimed at the row: drive an
+    // actual interaction at the composer and at a ticket node while it is open.
     await user.type(composer, 'a draft while the overlay is open');
     expect(composer).toHaveValue('a draft while the overlay is open');
 
@@ -196,9 +195,48 @@ describe('DiscoveryWorkspaceRow', () => {
 
     await user.click(screen.getByTestId('ticket-edit'));
 
-    const editorBackdrop = screen.getByLabelText('Ticket editor');
-    expect(row.contains(editorBackdrop)).toBe(false);
-    expect(editorBackdrop).toContainElement(screen.getByTestId('ticket-editor'));
+    const editor = screen.getByTestId('ticket-editor');
+    expect(row.contains(editor)).toBe(false);
+    expect(editor).toHaveAttribute('aria-modal', 'true');
+  });
+
+  it('the editor is the same modal in three-up: it never takes a column from the row', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const row = resizeTo(1400);
+
+    await user.click(screen.getByTestId('ticket-edit'));
+
+    expect(row.contains(screen.getByTestId('ticket-editor'))).toBe(false);
+  });
+
+  it('the interview divider resizes from the keyboard and writes the width onto the row', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const row = resizeTo(1400);
+
+    const divider = screen.getByRole('separator', { name: 'Resize the interview' });
+    expect(divider).toHaveAttribute('aria-valuenow', String(DEFAULT_INTERVIEW_WIDTH));
+    expect(row.style.getPropertyValue('--interview-w')).toBe(`${DEFAULT_INTERVIEW_WIDTH}px`);
+
+    divider.focus();
+    await user.keyboard('{ArrowRight}');
+
+    const grown = DEFAULT_INTERVIEW_WIDTH + INTERVIEW_KEYBOARD_STEP;
+    expect(divider).toHaveAttribute('aria-valuenow', String(grown));
+    expect(row.style.getPropertyValue('--interview-w')).toBe(`${grown}px`);
+  });
+
+  it('offers no divider while the interview is hidden or stacked', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    resizeTo(1400);
+
+    await user.click(screen.getByTestId('interview-hide'));
+    expect(screen.queryByRole('separator', { name: 'Resize the interview' })).toBeNull();
+
+    resizeTo(600);
+    expect(screen.queryByRole('separator', { name: 'Resize the interview' })).toBeNull();
   });
 
   it.each([
@@ -218,7 +256,7 @@ describe('DiscoveryWorkspaceRow', () => {
     expect(screen.queryByTestId('ticket-verdict')).not.toBeInTheDocument();
   });
 
-  it('stacked (<920px): exactly one pane visible, toggling preserves the other pane’s state', async () => {
+  it('stacked (<700px): exactly one pane visible, toggling preserves the other pane’s state', async () => {
     const user = userEvent.setup();
     render(<Harness />);
     resizeTo(600);
@@ -314,7 +352,7 @@ describe('DiscoveryWorkspaceRow', () => {
     expect(screen.getByTestId('interview-composer').closest('[aria-hidden="true"]')).not.toBeNull();
   });
 
-  it('a resize crossing back above 920px during a stacked session shows both panes again', () => {
+  it('a resize crossing back above 700px during a stacked session shows both panes again', () => {
     render(<Harness />);
     resizeTo(600);
     expect(screen.getByRole('radiogroup', { name: 'Workspace pane' })).toBeInTheDocument();

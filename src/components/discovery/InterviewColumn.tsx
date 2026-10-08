@@ -8,6 +8,7 @@ import type { Discovery, DiscoveryMessageView, QuestionOption } from '../../type
 import { Chip } from '../ui/Chip';
 import { ColumnSubHeader } from './ColumnSubHeader';
 import { ConfinementBanner } from './ConfinementBanner';
+import { INTERVIEW_WIDTH_VAR } from './InterviewResizeHandle';
 import { InterviewComposer } from './InterviewComposer';
 import { InterviewTranscript } from './InterviewTranscript';
 import type { DiscoveryStreamStore } from './useDiscoveryStream';
@@ -25,8 +26,9 @@ interface InterviewColumnProps {
   onSend: (text: string) => void;
   /** Re-read the Discovery — its attachments are what the composer edits. */
   onRefresh: () => void;
-  /** `'fixed'` (default) keeps today's 560px column; `'full'` is for the
-   *  `'stacked'` layout's sole-visible pane. */
+  /** `'fixed'` (default) sizes off the row's `INTERVIEW_WIDTH_VAR`, which the
+   *  divider beside it owns; `'full'` is for the `'stacked'` layout's
+   *  sole-visible pane. */
   widthMode?: 'fixed' | 'full';
   /** Hides via class + `aria-hidden`, not unmounting — the draft and scroll
    *  position must survive a `'stacked'`-mode toggle. */
@@ -81,7 +83,8 @@ export function InterviewColumn({
 
   return (
     <div
-      className={`flex ${widthMode === 'full' ? 'w-full min-w-0 flex-1' : 'w-[560px] shrink-0 border-r border-white/5'} min-h-0 flex-col bg-[#0b0d12]/40 ${hidden ? 'hidden' : ''}`}
+      className={`flex ${widthMode === 'full' ? 'w-full min-w-0 flex-1' : 'shrink-0 border-r border-white/5'} min-h-0 flex-col bg-[#0b0d12]/40 ${hidden ? 'hidden' : ''}`}
+      style={widthMode === 'full' ? undefined : { width: `var(${INTERVIEW_WIDTH_VAR})` }}
       aria-hidden={hidden ? 'true' : undefined}
     >
       <ColumnSubHeader title="Interview">

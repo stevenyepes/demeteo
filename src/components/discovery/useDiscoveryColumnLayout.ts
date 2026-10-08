@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 
-import { type DiscoveryLayoutMode, type DiscoveryRowSize, pickDiscoveryLayout } from './discoveryLayout';
+import {
+  DEFAULT_INTERVIEW_WIDTH,
+  type DiscoveryLayoutMode,
+  type DiscoveryRowSize,
+  pickDiscoveryLayout,
+} from './discoveryLayout';
 
 /**
  * Measures the discovery workspace row and hands `pickDiscoveryLayout` the
@@ -15,7 +20,11 @@ import { type DiscoveryLayoutMode, type DiscoveryRowSize, pickDiscoveryLayout } 
  * by a `prev`-returning identity check, so a resize drag doesn't cascade a
  * re-render per frame (`useRunColumnLayout.ts`'s pattern).
  */
-export function useDiscoveryColumnLayout(interviewHidden = false): {
+export function useDiscoveryColumnLayout(
+  interviewHidden = false,
+  interviewWidth = DEFAULT_INTERVIEW_WIDTH,
+): {
+  rowEl: HTMLDivElement | null;
   setRowEl: (el: HTMLDivElement | null) => void;
   rowSize: DiscoveryRowSize | null;
   layoutMode: DiscoveryLayoutMode;
@@ -36,5 +45,10 @@ export function useDiscoveryColumnLayout(interviewHidden = false): {
     return () => observer.disconnect();
   }, [rowEl]);
 
-  return { setRowEl, rowSize, layoutMode: pickDiscoveryLayout(rowSize, interviewHidden) };
+  return {
+    rowEl,
+    setRowEl,
+    rowSize,
+    layoutMode: pickDiscoveryLayout(rowSize, interviewHidden, interviewWidth),
+  };
 }

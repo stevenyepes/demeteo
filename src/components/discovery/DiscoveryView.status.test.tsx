@@ -267,16 +267,19 @@ describe('the inspector overlay', () => {
     });
   }
 
-  it('auto-selects the first ticket once the board loads, opening the inspector', async () => {
+  it('opens with no ticket selected, so no inspector covers the graph', async () => {
     mockBoard(true);
     const view = await openWorkspace();
 
-    await waitFor(() => expect(view.getByTestId('ticket-verdict')).toBeInTheDocument());
+    await view.findAllByTestId('ticket-node');
+    await act(async () => {});
+    expect(view.queryByTestId('ticket-verdict')).not.toBeInTheDocument();
   });
 
-  it('Escape closes the inspector, and the auto-select effect does not reopen it', async () => {
+  it('opens the inspector on a picked ticket, and Escape closes it for good', async () => {
     mockBoard(true);
     const view = await openWorkspace();
+    fireEvent.click((await view.findAllByTestId('ticket-node'))[0]);
     await waitFor(() => expect(view.getByTestId('ticket-verdict')).toBeInTheDocument());
 
     await act(async () => {
@@ -284,7 +287,6 @@ describe('the inspector overlay', () => {
     });
     expect(view.queryByTestId('ticket-verdict')).not.toBeInTheDocument();
 
-    // Give the auto-select effect another render to try to fight the close.
     await act(async () => {});
     expect(view.queryByTestId('ticket-verdict')).not.toBeInTheDocument();
   });

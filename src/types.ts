@@ -171,11 +171,9 @@ export type AppView =
    *  it before `discovery_get` answers, exactly as `detail` carries
    *  `featureTitle`.
    *
-   *  `selectedTicketId` is which ticket the inspector is showing, and carries
-   *  the same absent-vs-`null` contract `selectedStepId` documents above:
-   *  absent means "nothing has chosen yet, seed one", `null` means "the user
-   *  closed it". `DiscoveryView`'s auto-select effect reads that difference, so
-   *  normalising one to the other here collapses it silently. */
+   *  `selectedTicketId` is which ticket the inspector is showing; absent and
+   *  `null` both mean none. Nothing seeds it — the inspector opens only on a
+   *  ticket the user picked. */
   | {
       kind: 'discovery';
       discoveryId: string;
