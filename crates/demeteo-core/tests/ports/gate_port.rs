@@ -63,9 +63,23 @@ impl GateRepository for InMemoryGates {
                 decision: None,
                 feedback: None,
                 created_at,
+                auto_approved: false,
             });
         row.decision = Some(decision.to_string());
         row.feedback = feedback.map(str::to_string);
+        row.auto_approved = false;
+        Ok(())
+    }
+
+    fn approve_by_policy(
+        &self,
+        step_execution_id: &StepExecutionId,
+        created_at: i64,
+    ) -> Result<(), String> {
+        self.upsert_decision(step_execution_id, "approve", None, created_at)?;
+        if let Some(row) = self.rows.lock().unwrap().get_mut(&step_execution_id.0) {
+            row.auto_approved = true;
+        }
         Ok(())
     }
 
@@ -78,6 +92,7 @@ impl GateRepository for InMemoryGates {
         if let Some(row) = self.rows.lock().unwrap().get_mut(&step_execution_id.0) {
             row.decision = Some(decision.to_string());
             row.feedback = feedback.map(str::to_string);
+            row.auto_approved = false;
         }
         Ok(())
     }
@@ -136,6 +151,7 @@ fn question(created_at: i64) -> GateDecision {
         decision: None,
         feedback: None,
         created_at,
+        auto_approved: false,
     }
 }
 
@@ -177,5 +193,39 @@ fn create_keeps_the_answer_to_an_earlier_question() {
 
         let row = gates.latest_for_step(&se()).unwrap().unwrap();
         assert_eq!(row.decision.as_deref(), Some("approve"), "{name}");
+    });
+}
+
+/// A policy approval must read back as one — it is what keeps the gate
+/// decision log from presenting it to a validator as a person's sign-off.
+#[test]
+fn a_policy_approval_reads_back_as_the_policys() {
+    against_every_impl(|gates, name| {
+        gates.create(question(1)).unwrap();
+        gates.approve_by_policy(&se(), 2).unwrap();
+
+        let row = gates.latest_for_step(&se()).unwrap().unwrap();
+        assert_eq!(row.decision.as_deref(), Some("approve"), "{name}");
+        assert!(
+            row.auto_approved,
+            "{name}: policy approval read as a person's"
+        );
+    });
+}
+
+/// A person deciding over a policy approval owns the row from then on.
+#[test]
+fn a_human_decision_clears_the_policy_mark() {
+    against_every_impl(|gates, name| {
+        gates.approve_by_policy(&se(), 1).unwrap();
+        gates
+            .upsert_decision(&se(), "approve", Some("looked at it"), 2)
+            .unwrap();
+
+        let row = gates.latest_for_step(&se()).unwrap().unwrap();
+        assert!(
+            !row.auto_approved,
+            "{name}: a person's decision kept the policy mark"
+        );
     });
 }

@@ -62,6 +62,7 @@ pub(crate) fn gate_decision_log(
                 .map_or(d.step_execution_id.0.as_str(), |se| se.step_id.0.as_str()),
             decision: d.decision.as_deref().unwrap_or_default(),
             feedback: d.feedback.as_deref(),
+            auto_approved: d.auto_approved,
         })
         .collect();
     render_gate_decision_log(&rows)

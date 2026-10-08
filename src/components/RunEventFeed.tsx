@@ -195,6 +195,8 @@ export function describeEvent(
       return { label: fallbackLabel, detail: String(p?.decision ?? ''), tone: 'default' };
     case 'gate_required':
       return { label: fallbackLabel, detail: '', tone: 'warn' };
+    case 'gate_auto_approved':
+      return { label: fallbackLabel, detail: 'by project policy', tone: 'default' };
     case 'parked':
     case 'over_budget':
     case 'needs_credentials':

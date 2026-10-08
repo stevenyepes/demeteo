@@ -153,7 +153,6 @@ export function useCreateZeroBootstrap(): UseCreateZeroBootstrapApi {
         branch_prefix: 'demeteo/features/',
         test_command: null,
         pr_template: strategy.pr_template ?? null,
-        conflict_policy: 'always_gate',
         feature_lifecycle: 'archive',
         default_agent_kind: input.agentKind || null,
         default_model: input.model || null,

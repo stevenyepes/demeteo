@@ -240,6 +240,7 @@ async fn test_executor_gate_decide() {
             decision: None,
             feedback: None,
             created_at: now,
+            auto_approved: false,
         })
         .unwrap();
 

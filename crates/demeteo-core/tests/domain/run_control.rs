@@ -141,6 +141,7 @@ fn gate_row(decision: Option<&str>) -> GateDecision {
         decision: decision.map(|d| d.to_string()),
         feedback: None,
         created_at: 0,
+        auto_approved: false,
     }
 }
 

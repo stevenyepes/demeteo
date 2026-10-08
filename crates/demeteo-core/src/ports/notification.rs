@@ -258,6 +258,9 @@ pub enum DomainEvent {
         step_execution_id: StepExecutionId,
         decision: String,
         feedback: Option<String>,
+        /// The project's gate autonomy gave this approval, not a person.
+        #[serde(default)]
+        auto_approved: bool,
     },
 
     /// A pull request reached a terminal state and, with it, one or more

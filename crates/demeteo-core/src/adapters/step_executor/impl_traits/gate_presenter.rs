@@ -83,6 +83,7 @@ impl GatePresenter for DagStepExecutor {
             step_execution_id: se_id.clone(),
             decision: decision.to_string(),
             feedback: feedback.map(|s| s.to_string()),
+            auto_approved: false,
         });
 
         let gd = GateDecision {
@@ -91,6 +92,7 @@ impl GatePresenter for DagStepExecutor {
             decision: Some(decision.to_string()),
             feedback: feedback.map(|s| s.to_string()),
             created_at: paths::now_ms(),
+            auto_approved: false,
         };
 
         // 2. Fast path: if the driver is alive and waiting on this

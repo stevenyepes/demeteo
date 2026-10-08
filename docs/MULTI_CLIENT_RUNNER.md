@@ -114,8 +114,9 @@ coupling the port seam to a multi-client concern.)*
 any port.** Merge rule:
 - **Client wins** for all tunables: `branch_prefix`, `test_command`,
   `build_command`, `coverage_command`, `conventions_file`, `pr_template`,
-  `harnesses`, `prepare_command`, `extra_writable_paths`, `conflict_policy`,
-  `feature_lifecycle`, `default_*`, `artifact_subdir`, `commit_artifacts`.
+  `harnesses`, `prepare_command`, `extra_writable_paths`, `gate_autonomy`
+  (raised to at least `review` for an unattended run), `feature_lifecycle`,
+  `default_*`, `artifact_subdir`, `commit_artifacts`.
 - **Runner detection wins** for `default_branch` (it read `origin/HEAD` on the
   *actual* clone; ground truth for the checkout). Fall back to the spec's
   `default_branch`, then `"main"`.

@@ -1,3 +1,4 @@
+use crate::domain::gate_autonomy::GateAutonomy;
 use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId, WorkflowId};
 use crate::domain::models::EffortLevel;
 use serde::{Deserialize, Serialize};
@@ -87,7 +88,11 @@ pub struct WorktreeStrategy {
 pub struct ProjectSettings {
     pub project_id: ProjectId,
     pub worktree_strategy: WorktreeStrategy,
-    pub conflict_policy: String,
+    /// Which gates approve themselves. Read live at each gate rather than
+    /// snapshotted at launch, like every other project default a run reads
+    /// mid-flight. See [`GateAutonomy`] and migration V62.
+    #[serde(default)]
+    pub gate_autonomy: GateAutonomy,
     pub feature_lifecycle: String,
     #[serde(default)]
     pub default_agent_kind: Option<String>,

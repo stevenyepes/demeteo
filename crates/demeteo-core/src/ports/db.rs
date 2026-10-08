@@ -655,6 +655,14 @@ pub trait GateRepository: Send + Sync {
         feedback: Option<&str>,
         created_at: i64,
     ) -> Result<(), String>;
+    /// Record an approval granted by the project's gate autonomy rather than
+    /// a person. Upserts like [`upsert_decision`](Self::upsert_decision) and
+    /// marks the row `auto_approved`; every human write clears that mark.
+    fn approve_by_policy(
+        &self,
+        step_execution_id: &StepExecutionId,
+        created_at: i64,
+    ) -> Result<(), String>;
     /// Legacy UPDATE-only path kept for callers that want to differentiate
     /// "row must exist" from "create-or-update". Prefer `upsert_decision`
     /// in new code.

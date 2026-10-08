@@ -5,6 +5,7 @@ import { HarnessesSection } from './HarnessesSection';
 import { useSettings } from './ProjectSettingsContext';
 import { UNSET_DEFAULT_WORKFLOW_HINT } from '../../lib/workflowDefault';
 import { DEFAULT_CACHE_IDLE_TTL_DAYS, parseCacheIdleTtlDays } from '../../lib/cacheIdleTtl';
+import { isGateAutonomy } from '../../lib/gateAutonomy';
 
 export function StrategyTab() {
   const s = useSettings();
@@ -46,12 +47,13 @@ export function StrategyTab() {
           <Settings className="w-4 h-4 text-cyan-400" /> Automation Policies
         </h3>
         <div>
-          <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Conflict Resolution Policy</label>
-          <select value={s.conflictPolicy} onChange={e => s.setConflictPolicy(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50">
-            <option value="always_gate">Always Gate (Requires approval)</option>
-            <option value="auto_agent">Auto Agent First (Cascade to manual)</option>
-            <option value="auto_human">Immediate Manual Merge</option>
+          <label htmlFor="gate-autonomy" className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Gate approvals</label>
+          <select id="gate-autonomy" value={s.gateAutonomy} onChange={e => { const v = e.target.value; if (isGateAutonomy(v)) s.setGateAutonomy(v); }} className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-cyan-500/50">
+            <option value="attended">Ask at every gate</option>
+            <option value="review">Auto-approve review gates, ask before shipping</option>
+            <option value="full">Auto-approve every gate, including publishing the PR</option>
           </select>
+          <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">Which gates let a run continue without you. The ship gate — the one its workflow marks dangerous — is what opens the pull request; every other gate is a review gate. An automatic approval never redirects or rejects, so the run's own validation and critic steps are the only check left. A run on a remote runner always approves review gates on its own, since nobody is attached to answer them.</p>
         </div>
         <div>
           <label className="block text-xs font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Completed Feature Lifecycle</label>

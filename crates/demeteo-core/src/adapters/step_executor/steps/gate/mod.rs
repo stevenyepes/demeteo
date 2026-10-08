@@ -5,6 +5,7 @@ use crate::adapters::step_executor::gate_waiter::GateWaiter;
 use crate::adapters::step_executor::steps::StepOutcome;
 use crate::domain::gate::decision::{classify, GateVerdict};
 use crate::domain::gate::redirect::resolve_redirect_target;
+use crate::domain::gate_autonomy::GateAutonomy;
 use crate::domain::ids::GateDecisionId;
 use crate::domain::models::{GateDecision, StepConfig, StepExecution};
 use crate::paths;
@@ -12,8 +13,10 @@ use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
 
 mod redirect_reset;
+mod without_waiting;
 
 use redirect_reset::{reset_gate_target, GateWriters, RedirectReset};
+use without_waiting::{decided_without_waiting, Unasked};
 
 use crate::adapters::step_executor::gate_park::GATE_POLL_INTERVAL;
 
@@ -100,6 +103,44 @@ impl ExecutionDriver {
             cache_creation_input_tokens: None,
         });
 
+        // ── Reconciliation, then autonomy: did a decision already arrive
+        // while we were dead, or does the project approve this gate on its
+        // own? Either way nobody is asked, so this precedes parking — which
+        // would raise a "needs you" nobody can act on and kill the
+        // feature's sessions for an idle gap that never happens. This is
+        // what makes the system self-healing across app restarts and races.
+        if let Some(unasked) = decided_without_waiting(
+            &*self.gates,
+            &step_exec.id,
+            self.gate_autonomy(),
+            _step_conf.is_dangerous_gate(),
+            paths::now_ms(),
+        ) {
+            if let Unasked::ApprovedByPolicy(_) = &unasked {
+                let _ = self.notif.emit(&DomainEvent::GateDecided {
+                    feature_id: self.f_id.clone(),
+                    step_execution_id: step_exec.id.clone(),
+                    decision: "approve".to_string(),
+                    feedback: None,
+                    auto_approved: true,
+                });
+            }
+            let mut ctx = GateDecisionContext {
+                step_exec,
+                step_conf: _step_conf,
+                step_execs,
+                prev_artifact_path: &prev_artifact_path,
+                prev_artifact_paths: &prev_artifact_paths,
+                accumulated_cost,
+                step_start,
+            };
+            return self.apply_gate_decision(unasked.decision(), &mut ctx);
+        }
+
+        // Only now insert the undecided row. Inserted earlier, a gate the
+        // policy approves would sit pending for a moment, and the detached
+        // runner's poll reads a pending gate as one held for a person.
+        //
         // Ensure the gate_decisions row exists. `create` is idempotent
         // for the typical case (driver is mid-run); for the resume case
         // (`startup_watchdog` already inserted a row, or a previous run
@@ -111,32 +152,10 @@ impl ExecutionDriver {
             decision: None,
             feedback: None,
             created_at: paths::now_ms(),
+            auto_approved: false,
         };
         let _ = self.gates.create(gate_dec);
 
-        // ── Reconciliation: did a decision already arrive while we
-        // were dead? The DB row is the source of truth, so we always
-        // check it before registering a fresh waiter. This is what
-        // makes the system self-healing across app restarts and races.
-        let recorded = self.gates.latest_for_step(&step_exec.id).ok().flatten();
-        if let Some(rec) = recorded {
-            if rec.decision.is_some() {
-                let mut ctx = GateDecisionContext {
-                    step_exec,
-                    step_conf: _step_conf,
-                    step_execs,
-                    prev_artifact_path: &prev_artifact_path,
-                    prev_artifact_paths: &prev_artifact_paths,
-                    accumulated_cost,
-                    step_start,
-                };
-                return self.apply_gate_decision(&rec, &mut ctx);
-            }
-        }
-
-        // After reconciliation, not before: a decision that was already in
-        // the row completes the gate without waiting, and parking the
-        // feature for it would announce a "needs you" nobody can act on.
         self.park_feature();
 
         let _ = self.notif.emit(&DomainEvent::GateRequired {
@@ -193,6 +212,18 @@ impl ExecutionDriver {
             step_start,
         };
         self.apply_gate_decision(&decision, &mut ctx)
+    }
+
+    /// The project's [`GateAutonomy`], read live. A read that fails answers
+    /// [`GateAutonomy::Attended`] — an unreadable policy asks.
+    fn gate_autonomy(&self) -> GateAutonomy {
+        self.features
+            .get(&self.f_id)
+            .ok()
+            .flatten()
+            .and_then(|f| self.projects.get_settings(&f.project_id).ok().flatten())
+            .map(|s| s.gate_autonomy)
+            .unwrap_or_default()
     }
 
     /// Apply a recorded or freshly-delivered gate decision. Pure

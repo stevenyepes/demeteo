@@ -472,6 +472,7 @@ async fn list_pending_gates_paginates_to_exhaustion() {
                 decision: None,
                 feedback: None,
                 created_at: 0,
+                auto_approved: false,
             })
             .unwrap();
     }

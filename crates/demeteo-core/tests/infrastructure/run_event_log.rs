@@ -126,8 +126,19 @@ fn translation_maps_narrative_events() {
                 step_execution_id: StepExecutionId::new("se-2"),
                 decision: "approve".into(),
                 feedback: None,
+                auto_approved: false,
             },
             "gate_decided",
+        ),
+        (
+            DomainEvent::GateDecided {
+                feature_id: feature(),
+                step_execution_id: StepExecutionId::new("se-2"),
+                decision: "approve".into(),
+                feedback: None,
+                auto_approved: true,
+            },
+            "gate_auto_approved",
         ),
         (
             DomainEvent::BootstrapProgress {

@@ -91,10 +91,10 @@ pub(super) async fn get_status(
     if let Some(fid) = run.feature_id.as_ref() {
         if let Ok(Some(feature)) = svc.ctx.features.get(&FeatureId::from(fid.clone())) {
             mr_url = feature.mr_url.clone();
+            // Every pending gate is parked for a person: the engine approves
+            // what the run's gate autonomy allows before it inserts the row.
             if let Ok(Some(gate_dec)) = svc.ctx.presenter.gate_pending_for_run(fid).await {
-                if crate::run::gate_is_dangerous(&svc.ctx, &feature, &gate_dec) {
-                    parked_gate_id = Some(gate_dec.step_execution_id.as_str().to_string());
-                }
+                parked_gate_id = Some(gate_dec.step_execution_id.as_str().to_string());
             }
         }
     }
