@@ -13,7 +13,9 @@ Open a GitHub issue with:
 - OS and version
 - Steps to reproduce
 - What you expected vs. what happened
-- Relevant logs from `~/.local/share/demeteo/` (Linux) or the platform equivalent
+- Relevant logs — `demeteo.log.<date>` (rotated daily) in `~/.local/share/com.stvcloud.demeteo/`
+  (Linux, or `$XDG_DATA_HOME/com.stvcloud.demeteo/`), `%LOCALAPPDATA%\com.stvcloud.demeteo\`
+  (Windows), or `~/Library/Application Support/com.stvcloud.demeteo.dev/` (macOS)
 
 ## Feature requests
 
@@ -23,11 +25,27 @@ Open a GitHub issue describing the use case, not just the feature. If a feature 
 
 ### Setup
 
+Prerequisites:
+
+- **Node.js 24** — the version every CI workflow uses.
+- **Rust via rustup** — `rust-toolchain.toml` pins the toolchain (currently 1.97.0, with
+  `clippy` and `rustfmt`); rustup installs it on first use, so don't override it.
+- **Tauri v2 system dependencies** for your OS — see the
+  [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). On Debian/Ubuntu that is
+  the list `pr-checks.yml` installs (`libwebkit2gtk-4.1-dev`, `libappindicator3-dev`,
+  `librsvg2-dev`, `patchelf`, `libssl-dev`, `libdbus-1-dev`, `pkg-config`).
+
 ```bash
 git clone https://github.com/stevenyepes/demeteo
 cd demeteo
-npm install
+npm install          # also wires the git hooks (core.hooksPath .githooks)
+npm run dev:tauri    # run the app against an isolated dev database
 ```
+
+Use `npm run dev:tauri`, not `npm run tauri dev`: only the former passes
+`src-tauri/tauri.dev.conf.json`, which gives the dev build its own app identifier
+(`com.stvcloud.demeteo.dev`) so it never touches the installed app's database. If the GPU
+path misbehaves, use `npm run dev:tauri:sw`.
 
 ### Branching
 
@@ -42,14 +60,15 @@ git checkout -b your-name/short-description
 Follow the conventions in [§3 of AGENTS.md](AGENTS.md). Key points:
 
 **TypeScript / React**
-- Named exports only — no default exports
+- One component per file; extract when a file passes ~400 LOC
 - No `any` — use `unknown` + a type guard if the shape is uncertain
 - All Tauri commands called through typed wrappers in `src/lib/` — never call `invoke()` raw in a component
 
 **Rust**
 - No `.unwrap()` or `.expect()` in production paths — use `?` or match
-- Run `cargo fmt` and `cargo clippy -- -D warnings` before committing
-- DB access goes through `src-tauri/src/db.rs` — no raw `rusqlite` calls in commands
+- Run `cargo fmt --all` before committing; clippy runs as `--workspace --all-targets -- -D warnings`
+  on the pinned toolchain — `npm run checks` runs it exactly as CI does
+- DB access goes through the repositories in `crates/demeteo-core/src/adapters/database/` — no raw `rusqlite` calls in commands
 
 ### Commit messages
 
@@ -118,16 +137,23 @@ Before opening a PR, run the full gate:
 npm run checks
 ```
 
-This is the same script CI runs (`scripts/checks.sh`, invoked by
-[`pr-checks.yml`](.github/workflows/pr-checks.yml)), so a green run locally means a
-green run inline on the PR. It covers `tsc --noEmit`, `biome check .`, `cargo fmt --check`, `cargo clippy
---all-targets -D warnings` on the pinned toolchain, the demeteo + core + runner test
-suites, the gate-feedback repro, and commitlint over `origin/master..HEAD`. Running a
-subset — `cargo test` alone, say — will not tell you whether CI is green.
+This is `scripts/checks.sh`, the same script CI runs: [`pr-checks.yml`](.github/workflows/pr-checks.yml)
+invokes it as two jobs (`frontend`, `rust`), and commitlint runs in
+[`Lint Commits`](.github/workflows/lint-commits.yml). It covers `tsc --noEmit`, `biome check .`,
+the class-name gate (`scripts/check-classes.mjs`), the Vitest frontend suite,
+`cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings` on the pinned
+toolchain, `cargo doc` intra-doc links, `scripts/check-doc-refs.sh`, the demeteo + core +
+runner test suites, and commitlint over `origin/master..HEAD`. Running a subset —
+`cargo test` alone, say — will not tell you whether CI is green.
 
 Nothing runs it for you: the `pre-push` hook is deliberately inert, so run it before
 pushing. `scripts/checks.sh frontend` and `scripts/checks.sh rust` are the two halves CI
 runs as separate jobs, useful while iterating; the no-argument form is the gate.
+
+Two things `npm run checks` cannot see, both covered in [§7 of AGENTS.md](AGENTS.md): the
+Docker-based `ExecutionPort` conformance suites (run them when you touch an execution
+transport or the step executor), and `#[cfg(windows)]` code (`scripts/check-windows.sh`).
+CI's `cross-os` job type-checks and runs the core tests on macOS and Windows.
 
 If your change has UI or runtime surface, also confirm the app boots clean:
 
@@ -143,7 +169,7 @@ npm run dev:tauri   # no console errors
   limit, so keep it under about 64 characters and use the description for context
 - Reference any related issue with `Closes #N`
 - If your change touches a Gate-policy area (migrations, Tauri capabilities, agent spawn logic, worktree merge), say so explicitly in the PR description
-- Every PR runs the [`PR Checks` workflow](.github/workflows/pr-checks.yml) — the same `scripts/checks.sh` as `npm run checks` above, so any failure you see inline on the PR reproduces locally. It runs on `master` too, after every merge, and that run is what warms the Rust caches every PR reads.
+- Every PR runs the [`PR Checks` workflow](.github/workflows/pr-checks.yml) — the same `scripts/checks.sh` as `npm run checks` above (as `frontend` and `rust` jobs), plus the `cross-os` and `conformance` jobs, so a `frontend` or `rust` failure you see inline on the PR reproduces locally. It runs on `master` too, after every merge, and that run is what warms the Rust caches every PR reads.
 - Commit subjects and the PR title are linted by [`Lint Commits`](.github/workflows/lint-commits.yml); the title is what a squash merge becomes, so keep it under 72 characters and conventional.
 
 ## What we won't merge
