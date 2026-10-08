@@ -75,6 +75,7 @@ pub mod run_placement;
 pub mod run_spec;
 pub mod runner_branch_refresh;
 pub mod runner_cache_release;
+pub mod runner_publish;
 pub mod runner_version;
 pub mod seed_space;
 pub mod sequence;

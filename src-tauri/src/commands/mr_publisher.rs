@@ -3,8 +3,9 @@
 use crate::error::AppError;
 use tauri::State;
 
+use crate::application::remote_runs::{publish_feature, PublishOutcome};
 use crate::domain::ids::FeatureId;
-use crate::domain::models::{MrInfo, PublishOptions};
+use crate::domain::models::PublishOptions;
 use crate::domain::mr_summary::MrSummary;
 use crate::state::AppContext;
 
@@ -16,17 +17,14 @@ pub async fn publish_mr(
     draft: Option<bool>,
     title: Option<String>,
     body: Option<String>,
-) -> Result<MrInfo, AppError> {
+) -> Result<PublishOutcome, AppError> {
     let options = PublishOptions {
         draft: draft.unwrap_or(false),
         title,
         body,
         target_branch: None,
     };
-    ctx.mr_publisher
-        .publish_mr(&project_id, &FeatureId::from(feature_id), options)
-        .await
-        .map_err(AppError::from)
+    publish_feature(&ctx, &project_id, &FeatureId::from(feature_id), options).await
 }
 
 #[tauri::command]

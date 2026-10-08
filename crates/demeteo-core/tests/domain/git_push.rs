@@ -252,7 +252,10 @@ fn a_push_failure_is_classified_from_git_wording() {
     let local_hook_noise_then_remote = local_shape(&format!(
         "{HOOK_OUTPUT}\nremote: Resolving deltas: 100%\n{HOOK_CLOSE}"
     ));
-    let cases: [(&str, PushFailure); 12] = [
+    let missing_branch = local_shape(&format!(
+        "error: src refspec demeteo/features/f-1 does not match any\n{HOOK_CLOSE}"
+    ));
+    let cases: [(&str, PushFailure); 13] = [
         (&hook_local, PushFailure::HookFailed),
         (&hook_ssh, PushFailure::HookFailed),
         (&non_fast_forward, PushFailure::Rejected),
@@ -261,6 +264,8 @@ fn a_push_failure_is_classified_from_git_wording() {
         (&protected_branch, PushFailure::Rejected),
         (&stale_info, PushFailure::Rejected),
         (&local_hook_noise_then_remote, PushFailure::Rejected),
+        // git refuses a branch the clone lacks before any hook runs.
+        (&missing_branch, PushFailure::Other),
         (
             "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
             PushFailure::Credential,
