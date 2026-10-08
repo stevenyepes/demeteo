@@ -49,11 +49,14 @@ describe('useFeatureMr publish', () => {
     backend({
       feature_get: () => ({ id: 'f-1', mr_url: null, mr_state: 'none' }),
       publish_mr: () => ({
-        url: 'https://github.com/o/r/pull/7',
-        state: 'open',
-        number: 7,
-        provider_kind: 'github',
-        provider_host: 'github.com',
+        kind: 'opened',
+        mr: {
+          url: 'https://github.com/o/r/pull/7',
+          state: 'open',
+          number: 7,
+          provider_kind: 'github',
+          provider_host: 'github.com',
+        },
       }),
     });
     const { result } = renderHook(
@@ -68,5 +71,26 @@ describe('useFeatureMr publish', () => {
 
     expect(result.current.mrUrl).toBe('https://github.com/o/r/pull/7');
     expect(result.current.mrState).toBe('open');
+  });
+
+  it('leaves the link alone when the runner holding the run publishes it', async () => {
+    backend({
+      feature_get: () => ({ id: 'f-1', mr_url: null, mr_state: 'none' }),
+      publish_mr: () => ({ kind: 'on_runner', machine_id: 'm-1', run_id: 'run-1' }),
+    });
+    const reload = vi.fn();
+    const { result } = renderHook(
+      () => useFeatureMr({ featureId: 'f-1', projectId: 'proj-1', status: 'awaiting_mr', reload, navigate: vi.fn() }),
+      { wrapper: ProjectProvider },
+    );
+    await waitFor(() => expect(result.current.mrState).toBe('none'));
+
+    await act(async () => {
+      await result.current.handlePublishClick();
+    });
+
+    expect(result.current.mrUrl).toBeNull();
+    expect(result.current.mrState).toBe('none');
+    expect(reload).toHaveBeenCalled();
   });
 });

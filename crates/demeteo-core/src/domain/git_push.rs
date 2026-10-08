@@ -204,6 +204,7 @@ pub enum PushFailure {
 }
 
 const PUSH_FAILED_MARKER: &str = "failed to push some refs";
+const NO_SUCH_REF_MARKER: &str = "error: src refspec ";
 
 /// Classify a failed push from the error string an `ExecutionPort` returned.
 ///
@@ -211,13 +212,18 @@ const PUSH_FAILED_MARKER: &str = "failed to push some refs";
 /// origin was contacted, and a remote's own `pre-receive` hook ends in the same
 /// `failed to push some refs` line a local `pre-push` hook does — so only a
 /// push with that line and *no* rejection marker is attributed to a local hook.
+///
+/// git also closes with that line when it never got as far as a hook: a branch
+/// the clone does not have is `error: src refspec <b> does not match any`, read
+/// before `pre-push` runs. That is `Other` — calling it a hook failure sent the
+/// user to look for a hook that never ran.
 pub fn classify_push_failure(error: &str) -> PushFailure {
     let output = git_output(error);
     if is_credential_failure(output) {
         PushFailure::Credential
     } else if has_rejection_marker(output) {
         PushFailure::Rejected
-    } else if output.contains(PUSH_FAILED_MARKER) {
+    } else if output.contains(PUSH_FAILED_MARKER) && !output.contains(NO_SUCH_REF_MARKER) {
         PushFailure::HookFailed
     } else {
         PushFailure::Other

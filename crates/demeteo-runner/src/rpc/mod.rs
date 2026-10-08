@@ -17,6 +17,7 @@ mod credentials;
 mod gates;
 mod lifecycle;
 mod ownership;
+mod publish;
 mod reads;
 
 use crate::services::RunnerServices;
@@ -182,6 +183,9 @@ async fn dispatch(svc: &Arc<RunnerServices>, req: Request) -> Response {
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         "refresh_feature_branch" => branch::refresh_feature_branch(svc, req.params, cid)
+            .await
+            .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
+        "publish_run" => publish::publish_run(svc, req.params, cid)
             .await
             .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string())),
         other => Err(format!("unknown method: {}", other)),

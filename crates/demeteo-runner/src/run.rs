@@ -20,6 +20,8 @@ use demeteo_core::domain::push_lease;
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
 use demeteo_core::ports::db::FeatureRepository;
+use demeteo_core::ports::run_events::RunEventsPort;
+use demeteo_core::ports::runner_run::RunnerRunPort;
 use demeteo_core::state::AppContext;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -84,6 +86,49 @@ pub(crate) fn emit(ctx: &AppContext, run_id: &str, kind: &str, payload: impl Ser
             "[demeteo-runner] warning: failed to append '{}' event for run {}: {}",
             kind, run_id, e
         );
+    }
+}
+
+/// Record where a background run ended: its `runner_runs` status and, when
+/// it ended in an `Err`, a `failed` event carrying the error.
+///
+/// Every task that drives a run — submit, retry, the credential resume, the
+/// restart reconciliation — ends here. The event is not optional: the laptop
+/// mirrors a detached run through its event log, and a failure that only
+/// reaches the status row shows there as a run that stopped at its last
+/// event. The credential resume used to be one of those, so a terminal push
+/// refused by the target repo's pre-push hook read as a finished run.
+pub(crate) fn settle_run(
+    run_events: &dyn RunEventsPort,
+    runner_runs: &dyn RunnerRunPort,
+    run_id: &str,
+    result: Result<RunOutcome, String>,
+) {
+    let now = paths::now_ms();
+    let written = match result {
+        Ok(outcome) => runner_runs.update_status(
+            run_id,
+            &outcome.status,
+            outcome.project_id.as_deref(),
+            outcome.feature_id.as_deref(),
+            None,
+            outcome.pushed_branch.as_deref(),
+            now,
+        ),
+        Err(e) => {
+            if let Err(log) = run_events.append(
+                run_id,
+                "failed",
+                serde_json::to_string(&e).ok().as_deref(),
+                now,
+            ) {
+                eprintln!("[demeteo-runner] warning: failed to append 'failed' event for run {run_id}: {log}");
+            }
+            runner_runs.update_status(run_id, "failed", None, None, Some(&e), None, now)
+        }
+    };
+    if let Err(e) = written {
+        eprintln!("[demeteo-runner] warning: failed to record the outcome of run {run_id}: {e}");
     }
 }
 

@@ -87,14 +87,21 @@ export function useFeatureMr(input: {
     setPublishing(true);
     try {
       const result = await publishMr({ projectId, featureId, draft: false });
-      if (result?.url) {
-        setMrUrl(result.url);
-        setMrState(result.state as MrState);
+      if (result.kind === 'on_runner') {
+        await messageDialog(
+          'The runner holding this run is pushing its branch and opening the PR. ' +
+            'The push runs the repository\'s pre-push hook, so it can take a while — ' +
+            'the activity feed shows the result.',
+          { title: 'Publishing on the runner', kind: 'info' },
+        );
+        reload();
+        return;
       }
-      const url = result?.url ?? '(unknown)';
-      const state = result?.state ?? 'open';
+      const { mr } = result;
+      setMrUrl(mr.url);
+      setMrState(mr.state as MrState);
       await messageDialog(
-        `MR/PR opened (state: ${state}).\n\n${url}`,
+        `MR/PR opened (state: ${mr.state}).\n\n${mr.url}`,
         { title: 'Published', kind: 'info' },
       );
       reload();

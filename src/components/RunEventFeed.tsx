@@ -43,6 +43,8 @@ const EVENT_KIND_LABEL: Record<string, string> = {
   pushed: 'Branch pushed',
   pr_opened: 'PR opened',
   pr_open_failed: 'PR failed to open',
+  failed: 'Run failed',
+  publish_requested: 'Publish requested',
   cancelled: 'Cancelled',
   // Per-step telemetry from the engine's DomainEvent stream (P1.13 locally,
   // the runner's RunEventBridge for remote). Structured JSON payloads.

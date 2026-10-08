@@ -316,3 +316,67 @@ fn a_missing_feature_stops_the_push_instead_of_naming_a_branch() {
 
     assert!(branch_to_push(&db, &FeatureId::from("f-gone"), PREFIX).is_err());
 }
+
+use super::{settle_run, RunOutcome};
+use demeteo_core::ports::run_events::RunEventsPort;
+use demeteo_core::ports::runner_run::RunnerRunPort;
+
+fn run_db(label: &str) -> SqliteAdapter {
+    let dir = demeteo_core::test_dir::scratch(&format!("demeteo_runner_settle_{label}"));
+    let db = SqliteAdapter::new(demeteo_core::db::init_db(dir).expect("init_db"))
+        .expect("migrations run");
+    db.get_or_create("run-1", "{}", "", 1)
+        .expect("seed the run");
+    db
+}
+
+/// The laptop learns a detached run's ending from its event log, so a run
+/// that ended in an error must say so there, not only on its status row.
+#[test]
+fn a_run_that_errors_leaves_a_failed_event_beside_its_status() {
+    let db = run_db("err");
+
+    settle_run(&db, &db, "run-1", Err("pre-push hook refused".to_string()));
+
+    let run = RunnerRunPort::get(&db, "run-1")
+        .expect("read")
+        .expect("row");
+    assert_eq!(run.status, "failed");
+    assert_eq!(run.error.as_deref(), Some("pre-push hook refused"));
+    let events = db.list_since("run-1", 0).expect("events");
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].kind, "failed");
+    assert!(
+        events[0]
+            .payload_json
+            .as_deref()
+            .unwrap_or("")
+            .contains("pre-push hook refused"),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn a_run_that_settles_records_its_outcome_and_no_event() {
+    let db = run_db("ok");
+
+    settle_run(
+        &db,
+        &db,
+        "run-1",
+        Ok(RunOutcome {
+            project_id: Some("p-1".to_string()),
+            feature_id: Some("f-1".to_string()),
+            status: "pr_ready".to_string(),
+            pushed_branch: Some("demeteo/features/f-1".to_string()),
+            pr_url: Some("https://example.invalid/pr/1".to_string()),
+        }),
+    );
+
+    let run = RunnerRunPort::get(&db, "run-1")
+        .expect("read")
+        .expect("row");
+    assert_eq!(run.status, "pr_ready");
+    assert_eq!(run.pushed_branch.as_deref(), Some("demeteo/features/f-1"));
+    assert!(db.list_since("run-1", 0).expect("events").is_empty());
+}
