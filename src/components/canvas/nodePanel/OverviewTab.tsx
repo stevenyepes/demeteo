@@ -37,11 +37,14 @@ export function OverviewTab({
 }) {
   return (
     <div className="h-full space-y-5 overflow-y-auto px-5 py-4">
-      <div className="grid grid-cols-3 gap-3">
-        <Stat label="Attempts" value={run ? String(Math.max(attempts.length, 1)) : '—'} />
-        <Stat label="Total cost" value={formatCost(run?.costUsd)} />
+      {/* One line, not three tiles: the header above already carries the run's
+          totals in the same shape, and three bordered cards for three short
+          numbers were the heaviest thing in a pane meant for the attempt list. */}
+      <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-slate-500">
+        <Stat label="attempts" value={run ? String(Math.max(attempts.length, 1)) : '—'} />
+        <Stat label="total cost" value={formatCost(run?.costUsd)} />
         <Stat
-          label="Duration"
+          label="duration"
           value={run?.wallClockSecs != null ? formatDuration(run.wallClockSecs) : '—'}
         />
       </div>
@@ -68,10 +71,9 @@ export function OverviewTab({
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2">
-      <div className="text-[9px] font-bold uppercase tracking-widest text-slate-500">{label}</div>
-      <div className="mt-0.5 font-mono text-sm text-slate-200">{value}</div>
-    </div>
+    <span>
+      <span className="text-slate-200">{value}</span> {label}
+    </span>
   );
 }
 

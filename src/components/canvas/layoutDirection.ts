@@ -71,6 +71,64 @@ export const MIN_GRAPH_BOX_PX = 448;
  *  earns its space regardless of how few nodes there are. */
 export const MINIMAP_MIN_SCALE = 0.55;
 
+/**
+ * The lowest scale a *run* graph is fitted at — about where a node's title
+ * stops being readable on the run card.
+ *
+ * Fit-to-view has no floor of its own, and a long chain in a pane narrower
+ * than the window answers it by shrinking every card to an unreadable strip
+ * with most of the pane empty beside it. Run mode stops at this scale instead
+ * and lets the graph overflow: the pane pans on scroll (`panOnScroll`), so
+ * the remainder is a wheel away rather than a zoom-and-squint away. Design
+ * mode keeps the plain fit, where the whole shape matters more than any label.
+ */
+export const RUN_MIN_FIT_ZOOM = 0.7;
+
+/** Margin, in screen px, kept between the pane's edge and a graph anchored to it. */
+const ANCHOR_MARGIN = 24;
+
+export interface FlowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface Viewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+/**
+ * Where a run graph's viewport should sit, or `null` when an ordinary fit
+ * already lands at or above `RUN_MIN_FIT_ZOOM` — the caller then calls
+ * `fitView` as before, so a graph that fits is unaffected.
+ *
+ * Below the floor it is pinned there, and each axis decides on its own: an
+ * axis the graph still fits on is centred, as a fit would; one it overflows
+ * is anchored at its *start*, so the first steps — the ones the run begins
+ * with — are what the pane opens on. Centring an overflowing axis, which is
+ * what `fitView({ minZoom })` does, opens mid-run with both ends cut off.
+ */
+export function runViewport(bounds: FlowBounds, container: ContainerSize): Viewport | null {
+  if (bounds.width <= 0 || bounds.height <= 0 || container.width <= 0 || container.height <= 0) return null;
+  const fit = Math.min(
+    (container.width * FIT_PADDING) / bounds.width,
+    (container.height * FIT_PADDING) / bounds.height,
+    MAX_ZOOM,
+  );
+  if (fit >= RUN_MIN_FIT_ZOOM) return null;
+  const zoom = RUN_MIN_FIT_ZOOM;
+  const place = (start: number, size: number, box: number) =>
+    size * zoom <= box ? (box - size * zoom) / 2 - start * zoom : ANCHOR_MARGIN - start * zoom;
+  return {
+    x: place(bounds.x, bounds.width, container.width),
+    y: place(bounds.y, bounds.height, container.height),
+    zoom,
+  };
+}
+
 /** Node count at which the minimap appears on size alone — the pre-existing
  *  `WorkflowCanvas` threshold, now decided here with the rest of the plan. */
 export const MINIMAP_NODE_THRESHOLD = 8;

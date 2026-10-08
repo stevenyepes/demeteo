@@ -525,6 +525,30 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
    *  row's the moment it was also deciding the inspector's. */
   const surfaceHeightPx = inspectorLayout === 'side' || !graph.graphMode ? null : graphBoxPx;
 
+  /** The run's own controls. Stacked, they end the meta column's chip row, so
+   *  they cost no row of their own; split, the meta column is a side track and
+   *  they sit in `chromeRow` above the panes, which `useRunColumnLayout`
+   *  measures as the chrome above the graph. The gap below is `pb-6` rather
+   *  than a margin so it lands inside `offsetHeight`; as a margin it is space
+   *  the hook cannot see and hands to the graph twice. The density control
+   *  belongs to the timeline's rows, so it appears only where there are rows to
+   *  compact, and the row disappears entirely rather than reserving height for
+   *  nothing. */
+  const hasViewControls = graph.canShowGraph || !graph.graphMode;
+  const viewControls = hasViewControls && (
+    <>
+      {graph.canShowGraph && <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} />}
+      {!graph.graphMode && (
+        <DensityToggle value={density} onChange={setDensity} ariaLabel="Timeline density" />
+      )}
+    </>
+  );
+  const chromeRow = hasViewControls && (
+    <div ref={setToggleChromeEl} className="flex flex-wrap items-center justify-between gap-3 pb-6">
+      {viewControls}
+    </div>
+  );
+
   const metaColumn = (
     <RunMetaColumn
       runLayout={runLayout}
@@ -544,22 +568,9 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       harnessEvidence={run.harnessEvidence}
       harnessOpen={harnessOpen}
       onHarnessOpenChange={onHarnessOpenChange}
+      featureDescription={run.featureDescription}
+      trailing={viewControls || undefined}
     />
-  );
-
-  /** The run's own controls, and the element `useRunColumnLayout` measures as
-   *  the chrome above the graph. The gap below is `pb-6` rather than a margin so
-   *  it lands inside `offsetHeight`; as a margin it is space the hook cannot see
-   *  and hands to the graph twice. The density control belongs to the timeline's
-   *  rows, so it appears only where there are rows to compact, and the row
-   *  disappears entirely rather than reserving height for nothing. */
-  const chromeRow = (graph.canShowGraph || !graph.graphMode) && (
-    <div ref={setToggleChromeEl} className="flex flex-wrap items-center justify-between gap-3 pb-6">
-      {graph.canShowGraph && <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} />}
-      {!graph.graphMode && (
-        <DensityToggle value={density} onChange={setDensity} ariaLabel="Timeline density" />
-      )}
-    </div>
   );
 
   const panes = (
@@ -596,6 +607,8 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         driftRefreshing={refreshingDrift}
         onRefreshDrift={refreshDrift}
         mrUrl={mr.mrUrl}
+        mrState={mr.mrState}
+        onRefreshMrState={mr.refreshMrState}
         onOpenTerminalTab={routing.handleOpenTerminalTab}
         onBrowseCode={routing.openEditor}
         onCancelFeature={rerun.handleCancelFeature}
@@ -605,12 +618,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         onCleanup={() => mr.handleCleanup()}
       />
 
-      <FeatureStatusBanners
-        status={run.status}
-        mrUrl={mr.mrUrl}
-        mrState={mr.mrState}
-        onRefreshMrState={mr.refreshMrState}
-      />
+      <FeatureStatusBanners status={run.status} />
 
       {/* Above the run rather than inside it: a gate is the run asking a
           question, and it was previously findable only by scrolling to the card
@@ -631,7 +639,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         onLaunch={launchFixRun}
       />
 
-      <InitialPromptPanel featureDescription={run.featureDescription} />
+      {runLayout === 'split' && <InitialPromptPanel featureDescription={run.featureDescription} />}
 
       <AttachmentsPanel
         attachments={attachments.attachments}
@@ -694,11 +702,10 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
               </>
             ) : (
               <>
-                {/* Stacked, the meta panels *are* the graph's chrome and read
-                    above it, so the toggle stays next to the surface it switches
-                    rather than being hoisted away from it. */}
+                {/* Stacked, the meta panels *are* the graph's chrome: one chip
+                    row that also carries the view toggle, directly above the
+                    surface it switches. */}
                 {metaColumn}
-                {chromeRow}
                 {panes}
               </>
             )}

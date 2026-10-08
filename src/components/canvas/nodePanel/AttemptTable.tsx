@@ -37,7 +37,7 @@ export function AttemptTable({
           <span>{error}</span>
         </div>
       ) : attempts.length === 0 ? (
-        <EmptyHint>No attempt rows recorded.</EmptyHint>
+        <p className="text-xs text-slate-500">No attempt rows recorded.</p>
       ) : (
         <div className="overflow-hidden rounded-xl border border-white/5">
           <table className="w-full border-collapse text-left text-xs">

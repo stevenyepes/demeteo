@@ -30,6 +30,7 @@ against — read it as the starting position, not as the tree.
 | 4 — project view | done, **confirmed visually 2026-08-10** | |
 | 5 — activity & motion | done, **confirmed visually 2026-08-10** | |
 | 6 — keyboard & persistence | code complete, **never rendered** | |
+| — | unplanned: compact chrome — two-line header with one primary action + overflow, PR row folded into it, prompt/activity/harness as a chip row carrying the view toggle (stacked only), run graph floored at `RUN_MIN_FIT_ZOOM` and panning on scroll with no minimap, inspector stats on one line | branch `feat/pipeline-compact-chrome` |
 
 **The Phase 2 deferral is closed.** The sticky collapsed header on scroll landed in
 Phase 3 (`lib/headerCollapse.ts` + `FeatureDetail/useHeaderCollapse.ts`), which is
