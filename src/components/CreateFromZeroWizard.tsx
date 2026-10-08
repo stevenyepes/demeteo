@@ -272,12 +272,10 @@ const CreateFromZeroWizard: React.FC = () => {
                 branchPrefix={form.branchPrefix}
                 testCommand={form.testCommand}
                 prTemplate={form.prTemplate}
-                conflictPolicy={form.conflictPolicy}
                 featureLifecycle={form.featureLifecycle}
                 onDefaultBranchChange={form.setDefaultBranch}
                 onBranchPrefixChange={form.setBranchPrefix}
                 onTestCommandChange={form.setTestCommand}
-                onConflictPolicyChange={form.setConflictPolicy}
                 onFeatureLifecycleChange={form.setFeatureLifecycle}
               />
             )}

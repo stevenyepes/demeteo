@@ -63,7 +63,6 @@ function scriptIpc(_scenario: Scenario) {
       harnesses: null,
       validation_gates: null,
     },
-    conflict_policy: 'always_gate',
     feature_lifecycle: 'archive',
   });
 
@@ -240,7 +239,6 @@ describe('proceedWithReBootstrap — defaultBranch/branchPrefix precedence', () 
               harnesses: null,
               validation_gates: null,
             },
-            conflict_policy: 'always_gate',
             feature_lifecycle: 'archive',
           };
         },

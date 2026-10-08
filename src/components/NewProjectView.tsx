@@ -49,7 +49,6 @@ const NewProjectView = () => {
     // detected harness map, its gate selection and its prepare command
     // invisible the moment the wizard finished (HB3).
     const [detected, setDetected] = useState<WorktreeStrategy | null>(null);
-    const [conflictPolicy, setConflictPolicy] = useState('always_gate');
     const [featureLifecycle, setFeatureLifecycle] = useState('archive');
 
     const fetchRepos = async () => {
@@ -214,7 +213,6 @@ const NewProjectView = () => {
                 branch_prefix: branchPrefix,
                 test_command: testCommand || null,
                 pr_template: prTemplate || null,
-                conflict_policy: conflictPolicy,
                 feature_lifecycle: featureLifecycle,
                 harnesses: detected?.harnesses ?? null,
                 validation_gates: detected?.validation_gates ?? null,
@@ -670,18 +668,6 @@ const NewProjectView = () => {
                                     </div>
                                 ) : null}
 
-                                <div>
-                                    <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Conflict Resolution Policy</label>
-                                    <select 
-                                        value={conflictPolicy} 
-                                        onChange={e => setConflictPolicy(e.target.value)}
-                                        className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
-                                    >
-                                        <option value="always_gate">Always Gate (Requires approval)</option>
-                                        <option value="auto_agent">Auto Agent First (Cascade to manual)</option>
-                                        <option value="auto_human">Immediate Manual Merge</option>
-                                    </select>
-                                </div>
 
                                 <div>
                                     <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Completed Feature Lifecycle</label>

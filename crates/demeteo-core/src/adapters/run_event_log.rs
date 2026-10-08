@@ -205,9 +205,14 @@ pub fn run_event_record(event: &DomainEvent) -> Option<RunEventRecord> {
             step_execution_id,
             decision,
             feedback,
+            auto_approved,
         } => RunEventRecord {
             feature_id: feature_id.0.clone(),
-            kind: "gate_decided",
+            kind: if *auto_approved {
+                "gate_auto_approved"
+            } else {
+                "gate_decided"
+            },
             payload: serde_json::json!({
                 "step_execution_id": step_execution_id.as_str(),
                 "decision": decision,

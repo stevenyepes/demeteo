@@ -19,7 +19,7 @@ const mockedInvoke = vi.mocked(invoke);
 const STORED = {
   project_id: 'p-1',
   worktree_strategy: { default_branch: 'main', branch_prefix: 'demeteo/features/' },
-  conflict_policy: 'always_gate',
+  gate_autonomy: 'full',
   feature_lifecycle: 'archive',
   default_agent_kind: 'opencode',
   default_model: 'sonnet',
@@ -57,6 +57,14 @@ describe('saveProjectSettings', () => {
       sync_resolver_effort: 'low',
       cache_idle_ttl_days: 0,
     });
+  });
+
+  // Dropped here, every bootstrap or wizard save would quietly put a project
+  // that ships on its own back to asking at every gate.
+  it('carries the stored gate autonomy across a save that never mentions it', async () => {
+    await saveProjectSettings('p-1', { default_branch: 'trunk' });
+
+    expect(written()).toMatchObject({ gate_autonomy: 'full' });
   });
 
   it('writes an explicit null through rather than treating it as absent', async () => {

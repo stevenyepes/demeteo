@@ -201,6 +201,16 @@ pub fn run(conn: &mut Connection) -> Result<(), DbError> {
     // Where each ticket attempt was placed (V61). NULL reads as unknown.
     add_column_if_missing(conn, "ticket_feature_attempts", "machine_id", "TEXT")?;
 
+    // Which gates approve themselves (V62). Nullable, and NULL reads as
+    // attended — see the migration's header.
+    add_column_if_missing(conn, "project_settings", "gate_autonomy", "TEXT")?;
+    add_column_if_missing(
+        conn,
+        "gate_decisions",
+        "auto_approved",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+
     Ok(())
 }
 

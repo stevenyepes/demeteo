@@ -49,7 +49,6 @@ function scriptIpc(scenario: Scenario) {
     get_proposed_strategy: () => ({
       project_id: PROJECT_ID,
       worktree_strategy: { default_branch: 'main', branch_prefix: 'demeteo/features/' },
-      conflict_policy: 'always_gate',
       feature_lifecycle: 'archive',
       default_agent_kind: null,
       default_model: null,

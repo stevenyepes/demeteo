@@ -91,6 +91,7 @@ fn answered(decision: &str, feedback: Option<&str>) -> GateDecision {
         decision: Some(decision.to_string()),
         feedback: feedback.map(str::to_string),
         created_at: 1,
+        auto_approved: false,
     }
 }
 

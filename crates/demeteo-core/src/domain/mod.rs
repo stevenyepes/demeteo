@@ -39,6 +39,7 @@ pub mod file_at_ref;
 pub(crate) mod finalize;
 pub mod fix_destination;
 pub(crate) mod gate;
+pub mod gate_autonomy;
 pub mod gate_decision_log;
 pub mod git_push;
 pub mod harness_attribution;

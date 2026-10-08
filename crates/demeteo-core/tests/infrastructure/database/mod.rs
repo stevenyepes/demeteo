@@ -1,5 +1,6 @@
 use super::SqliteAdapter;
 use crate::domain::feature_origin::FeatureOrigin;
+use crate::domain::gate_autonomy::GateAutonomy;
 use crate::domain::ids::{FeatureId, MachineId, ProjectId, ProviderId, RepositoryId, WorkflowId};
 use crate::domain::models::{
     EffortLevel, Feature, Project, ProjectSettings, ProjectWorkflowOverride, Repository,
@@ -253,7 +254,7 @@ fn project_settings_default_effort_round_trips() {
             prepare_command: None,
             extra_writable_paths: Vec::new(),
         },
-        conflict_policy: "manual".to_string(),
+        gate_autonomy: Default::default(),
         feature_lifecycle: "keep".to_string(),
         default_agent_kind: None,
         default_model: None,
@@ -328,7 +329,7 @@ fn project_settings_default_workflow_id_round_trips() {
             prepare_command: Some("npm ci".to_string()),
             extra_writable_paths: Vec::new(),
         },
-        conflict_policy: "manual".to_string(),
+        gate_autonomy: Default::default(),
         feature_lifecycle: "keep".to_string(),
         default_agent_kind: None,
         default_model: None,
@@ -420,7 +421,7 @@ fn project_settings_harnesses_and_validation_gates_round_trip() {
             prepare_command: None,
             extra_writable_paths: Vec::new(),
         },
-        conflict_policy: "manual".to_string(),
+        gate_autonomy: Default::default(),
         feature_lifecycle: "keep".to_string(),
         default_agent_kind: None,
         default_model: None,
@@ -497,7 +498,7 @@ fn project_settings_review_entrypoint_round_trips() {
             prepare_command: None,
             extra_writable_paths: Vec::new(),
         },
-        conflict_policy: "manual".to_string(),
+        gate_autonomy: Default::default(),
         feature_lifecycle: "keep".to_string(),
         default_agent_kind: None,
         default_model: None,
@@ -703,4 +704,52 @@ fn test_feature_status_rollup_counts_live_features_per_project_and_status() {
         counts("p_roll_quiet").is_empty(),
         "a project with no features contributes no row at all"
     );
+}
+
+/// V62 adds `gate_autonomy`, V63 drops `conflict_policy`: the settings upsert
+/// must name only columns that exist, and the new one must survive it. The
+/// column is placed where `conflict_policy` was in both statements, so a slip
+/// in either would also shift `feature_lifecycle`.
+#[test]
+fn project_settings_gate_autonomy_round_trips_without_the_dropped_column() {
+    let conn = Connection::open_in_memory().unwrap();
+    let adapter = SqliteAdapter::new(conn).unwrap();
+    let pid = ProjectId::from("p_settings_gates".to_string());
+    adapter
+        .add(Project {
+            id: pid.clone(),
+            name: "gate autonomy settings".to_string(),
+            compute_type: "local".to_string(),
+            remote_host: None,
+            status: "idle".to_string(),
+            nodes: 0,
+            spend: 0.0,
+            tokens: 0,
+            created_at: 1000,
+        })
+        .unwrap();
+
+    let columns: Vec<String> = {
+        let conn = adapter.conn.lock().unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(project_settings)").unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert!(columns.iter().any(|c| c == "gate_autonomy"), "{columns:?}");
+    assert!(
+        !columns.iter().any(|c| c == "conflict_policy"),
+        "{columns:?}"
+    );
+
+    let mut settings = crate::adapters::step_executor::setup::fetch_default_settings();
+    settings.project_id = pid.clone();
+    settings.feature_lifecycle = "keep".to_string();
+    settings.gate_autonomy = GateAutonomy::Full;
+    adapter.save_settings(settings).unwrap();
+
+    let saved = adapter.get_settings(&pid).unwrap().unwrap();
+    assert_eq!(saved.gate_autonomy, GateAutonomy::Full);
+    assert_eq!(saved.feature_lifecycle, "keep");
 }

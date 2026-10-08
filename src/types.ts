@@ -626,6 +626,8 @@ export interface GateDecision {
   decision?: 'approve' | 'redirect' | 'cancel' | string | null;
   feedback?: string | null;
   created_at: number;
+  /** The project's gate autonomy approved it; nobody looked. */
+  auto_approved?: boolean;
 }
 
 export interface Feature {
@@ -1215,10 +1217,17 @@ export interface WorktreeStrategy {
   extra_writable_paths?: string[] | null;
 }
 
+/** `attended`: every gate waits for a person. `review`: review gates approve
+ *  themselves and the ship gate (which publishes the PR) waits. `full`: every
+ *  gate approves itself. A detached run never runs below `review`. */
+export type GateAutonomy = 'attended' | 'review' | 'full';
+
 export interface ProjectSettingsData {
   project_id: string;
   worktree_strategy: WorktreeStrategy;
-  conflict_policy: string;
+  /** Which gates approve themselves. Absent reads as `attended`. See
+   *  `domain::gate_autonomy` and migration V62. */
+  gate_autonomy?: GateAutonomy;
   feature_lifecycle: string;
   default_agent_kind?: string | null;
   default_model?: string | null;

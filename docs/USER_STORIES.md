@@ -115,7 +115,7 @@
 - [x] Resolve a conflicting step merge inline: `steps/conflict_pass` spends one agent turn in the step's own worktree, then retries the merge.
 - [x] Resolve a sync conflict on demand: `feature_resolve_sync_conflicts` spawns a fresh resolution agent, commits the resolution, and (optionally) replays the named step so validation re-runs on the merged tree.
 - [x] Surface the conflict UI inside the existing `GateView` — there is **no dedicated Monaco 3-way component** in v1. The gate shows the file list, lets the user retry, abort, or hand-roll a manual edit via the in-app terminal.
-- [ ] Make the "Conflict Resolution Policy" project setting real or remove it: the dropdown is stored but nothing reads it (see decision 20's "known loose end").
+- [x] Make the "Conflict Resolution Policy" project setting real or remove it — removed (decision 57): the dropdown is stored but nothing reads it (see decision 20's "known loose end").
 
 ## Story 8: Workflow Authoring
 **Description:** As a user, I want to create and edit workflow templates to define custom execution steps, conditions, and agent assignments.

@@ -27,7 +27,7 @@ impl SettingsDouble {
             settings: Some(ProjectSettings {
                 project_id: ProjectId::from(P_ID.to_string()),
                 worktree_strategy: strategy,
-                conflict_policy: "manual".to_string(),
+                gate_autonomy: Default::default(),
                 feature_lifecycle: "keep".to_string(),
                 default_agent_kind: None,
                 default_model: None,

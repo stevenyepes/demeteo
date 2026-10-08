@@ -340,6 +340,7 @@ async fn one_feature_with_a_pending_gate_is_named_and_the_other_active_feature_i
             decision: None,
             feedback: None,
             created_at: 0,
+            auto_approved: false,
         })
         .unwrap();
 
