@@ -171,6 +171,9 @@ impl ExecutionDriver {
         } else {
             append_retry_feedback_section(prompt, effective_retry_ctx.as_ref())
         };
+        // A task turn gets no Operating Boundary (it implements, and the fence
+        // is everything), so the conduct block is its only engine preamble.
+        let prompt = crate::domain::step_conduct::inject_turn_conduct(&prompt, capability);
         let prompt = format!(
             "{}{}{}",
             platform_placement.prefix, review_placement.prefix, prompt
