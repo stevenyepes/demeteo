@@ -121,7 +121,47 @@ this repaints.
 GPU path. WebKit treats `0` as enabled (`AcceleratedBackingStore.cpp`
 compares against `"0"`), and Demeteo leaves an already-set variable
 alone. Try it after a WebKitGTK upgrade; the banner says which path is
-active.
+active. On 2.54.1 it brings the runaway straight back, so test it under a
+memory cap (`systemd-run --user --scope -p MemoryMax=3G -p
+MemorySwapMax=0 env WEBKIT_DISABLE_DMABUF_RENDERER=0 demeteo`). Without
+`MemorySwapMax=0` the cap only moves the growth into swap.
+
+**What was ruled out** on 2.54.1, each with the DMA-BUF renderer left on:
+`WEBKIT_SKIA_ENABLE_CPU_RENDERING=1` (GPU compositing, CPU painting),
+`WEBKIT_DISABLE_DMABUF_ATLAS=1`, and both together. All three hit a
+3 GB cap within seconds, like the plain GPU path. The runaway also
+depends on how much the window renders: against a database with a
+couple of dozen features the GPU path stayed flat, and against one with
+over a hundred it ran away every time. Reproduce against real data;
+a small dev database proves nothing.
+
+**Workaround: downgrade WebKitGTK.** If the CPU path is too slow for
+your display, typically 4K, high refresh rate, or fractional scaling,
+go back to 2.52.x and re-enable the GPU path. On Arch-based distros,
+with the old package still in the pacman cache:
+
+```bash
+# 1. Install the last 2.52 release from the cache
+sudo pacman -U /var/cache/pacman/pkg/webkit2gtk-4.1-2.52.6-1-x86_64.pkg.tar.zst
+
+# 2. Hold it back: add webkit2gtk-4.1 to IgnorePkg in /etc/pacman.conf
+#    IgnorePkg = webkit2gtk-4.1
+
+# 3. Start Demeteo with the GPU path re-enabled, through a local launcher
+sed 's/^Exec=demeteo$/Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=0 demeteo/' \
+  /usr/share/applications/demeteo.desktop > ~/.local/share/applications/demeteo.desktop
+```
+
+Do step 3 only after the downgrade: on 2.54.1 that launcher triggers
+the runaway with no memory cap. The startup banner should then read
+`GPU rendering via DMA-BUF`. Other distros need the equivalent: the
+previous `webkit2gtk-4.1` package, a version hold, and the same
+variable in the launcher.
+
+The hold has a cost. You miss WebKitGTK security fixes for every app
+on the system that links it, and a later bump of a library it links
+against, such as ICU, can stop it loading. To undo it, remove the
+`IgnorePkg` entry, upgrade, and delete the local launcher.
 
 **What would close it:** an upstream fix, or keeping DMA-BUF while
 turning off the `UseSkiaForComposition` feature through
