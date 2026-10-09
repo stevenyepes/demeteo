@@ -572,3 +572,10 @@ mod resume_fingerprint;
 #[cfg(test)]
 #[path = "../../tests/conformance/sync_publish_hook.rs"]
 mod sync_publish_hook;
+
+/// Push-prepare hook gate: a push made from the clone installs the project's
+/// dependencies first when a pre-push hook would judge them, and only then.
+/// Real git and a local bare origin. Included the same `#[path]` way.
+#[cfg(test)]
+#[path = "../../tests/conformance/push_prepare_hook.rs"]
+mod push_prepare_hook;

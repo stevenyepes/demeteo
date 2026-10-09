@@ -52,7 +52,7 @@ fn backup_ref_for(feature_branch: &str) -> String {
 /// and `Path::join` then rewrites with a backslash. The hook that name no
 /// longer reaches is silently never run, so every squashed message goes
 /// unvalidated on exactly that topology.
-fn hook_path_on(repo_dir: &str, reported: &str, windows_host: bool) -> Option<String> {
+pub(crate) fn hook_path_on(repo_dir: &str, reported: &str, windows_host: bool) -> Option<String> {
     let reported = reported.trim();
     if reported.is_empty() {
         return None;

@@ -365,6 +365,72 @@ pub(crate) fn push_failure(error: &str, credential: Option<&GitCredential>) -> S
     }
 }
 
+/// Run the project's `prepare_command` in `repo_dir` when that tree has a
+/// `pre-push` hook, so the hook judges the branch with its dependencies
+/// installed.
+///
+/// The terminal push and the MR publisher push from the project's clone, and
+/// nothing else ever prepares the clone: every step runs `prepare_command` in
+/// its own worktree, and dependency caches are seeded *from* the clone, never
+/// into it. A hook that runs the repo's gate (`scripts/checks.sh`) then fails
+/// its own toolchain preflight on a missing `node_modules` and refuses a
+/// branch whose gates passed — a detached run ended with every step green and
+/// no PR. Skipping the hook instead is ruled out (docs/EXECUTION_PARITY.md).
+///
+/// No hook, no prepare: installing into the clone on every push would cost a
+/// push that nothing checks. A failed prepare is returned rather than pushed
+/// through, because the hook would only fail again with a less useful message.
+pub async fn prepare_push_tree(
+    exec: &dyn ExecutionPort,
+    app_settings: &dyn AppSettingsRepository,
+    machine_str: &str,
+    repo_dir: &str,
+    prepare_command: Option<&str>,
+) -> Result<(), String> {
+    let Some(cmd) = prepare_command.map(str::trim).filter(|c| !c.is_empty()) else {
+        return Ok(());
+    };
+    let Ok(reported) = exec
+        .run_program(
+            machine_str,
+            git_request(repo_dir, ["rev-parse", "--git-path", "hooks/pre-push"]),
+        )
+        .await
+    else {
+        return Ok(());
+    };
+    let Some(hook) = crate::adapters::worktree::git_ops::squash::hook_path_on(
+        repo_dir,
+        &reported,
+        crate::paths::targets_windows_host(machine_str),
+    ) else {
+        return Ok(());
+    };
+    if !exec
+        .is_executable(machine_str, &hook)
+        .await
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    exec.run_command_with(
+        machine_str,
+        &crate::domain::harness_outcome::merge_stderr_into_stdout(cmd),
+        crate::adapters::step_executor::harness_shell::harness_shell_options(
+            app_settings,
+            repo_dir,
+        ),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| {
+        format!(
+            "The repository has a pre-push hook, and `{cmd}` (the project's prepare command) \
+             failed in {repo_dir}, so the branch was not pushed.\n\n{e}"
+        )
+    })
+}
+
 fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> ProgramRequest {
     ProgramRequest {
         executable: "git".to_string(),

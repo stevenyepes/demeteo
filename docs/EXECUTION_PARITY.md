@@ -236,7 +236,10 @@ push runs decides which checkout the hook sees. A sync publish pushes from the
 sync worktree, where the feature's files are, and reports a hook that stopped
 it as a hook failure rather than a rejection. The MR publisher deliberately
 pushes from the clone instead. Neither is to be "fixed" to match the other, and
-neither may bypass the hook with `--no-verify`. The failure classifier is in
+neither may bypass the hook with `--no-verify`. Nothing else ever prepares the
+clone, so a push from it first runs the project's `prepare_command` there when a
+hook will judge it (`prepare_push_tree` in `crates/demeteo-core/src/adapters/git_push.rs`);
+without that, a hook that runs the repo's gate refuses a branch whose gates passed. The failure classifier is in
 `crates/demeteo-core/src/domain/git_push.rs`; the reason for the MR publisher's
 choice is recorded in `crates/demeteo-core/src/adapters/mr_publisher/push.rs`.
 

@@ -887,6 +887,14 @@ async fn push_feature_branch(
     .await
     .map_err(|e| format!("failed to update remote origin URL: {}", e))?;
 
+    demeteo_core::adapters::git_push::prepare_push_tree(
+        svc.ctx.exec.as_ref(),
+        svc.ctx.app_settings.as_ref(),
+        demeteo_core::domain::ids::LOCAL_MACHINE,
+        &target_dir_str,
+        settings.worktree_strategy.prepare_command.as_deref(),
+    )
+    .await?;
     push_leased(&svc.askpass_path, &target_dir_str, &branch, pat).await?;
 
     eprintln!(
