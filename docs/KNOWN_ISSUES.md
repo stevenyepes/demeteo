@@ -26,7 +26,7 @@ tracked as
 and
 [tauri-apps/tauri#14924](https://github.com/tauri-apps/tauri/issues/14924).
 
-**Auto-detected fix:** `src-tauri/src/lib.rs:90-112` (`configure_linux_gpu_env`)
+**Auto-detected fix:** `configure_linux_gpu_env` in `src-tauri/src/lib.rs`
 detects the NVIDIA proprietary driver via
 `/proc/driver/nvidia/version` and sets:
 
@@ -35,6 +35,7 @@ detects the NVIDIA proprietary driver via
 | `GBM_BACKEND` | `nvidia-drm` | Force the GBM buffer API (NVIDIA 495+ supports both GBM and EGLStreams; GBM is correct here) |
 | `__GLX_VENDOR_LIBRARY_NAME` | `nvidia` | Pin GLX to NVIDIA's ICD |
 | `__NV_DISABLE_EXPLICIT_SYNC` | `1` | Skip the `linux-drm-syncobj-v1` path that triggers Error 71 |
+| `WEBKIT_DISABLE_DMABUF_RENDERER` | `1` | Avoid the WebKitGTK 2.54 runaway described below |
 
 This is applied only when NVIDIA is detected and only if the
 user hasn't already set those variables. macOS, Windows, and
@@ -67,12 +68,70 @@ default, opt-in when broken."
 one of these lines on Linux:
 
 ```
-[demeteo] NVIDIA detected: GPU rendering enabled (explicit sync off)
+[demeteo] NVIDIA detected: explicit sync off, DMA-BUF renderer off, CPU rasterization
+[demeteo] NVIDIA detected: explicit sync off, GPU rendering via DMA-BUF
 [demeteo] GPU rendering disabled via DEMETEO_DISABLE_GPU
 ```
 
 No banner means non-NVIDIA Linux and WebKitGTK defaults are in
 effect.
+
+### WebKitGTK 2.54 runs away on NVIDIA's GPU path
+
+**Symptom:** after a distro upgrade from `webkit2gtk-4.1` 2.52.6 to
+2.54.1 (NVIDIA 615.71.09, Wayland), the app paints its skeletons and
+then freezes. `WebKitWebProcess` sits at 100% CPU and grows by about
+430 MB/s, past 25 GB within a minute. The Rust side is idle, so the
+log shows nothing, and the stall looks like a hung `Promise.allSettled`
+in the frontend.
+
+**What was measured** on that host, same binary and same database:
+
+| Environment | Web process after ~20 s |
+|---|---|
+| NVIDIA defaults above, DMA-BUF renderer on | 100% CPU, 8.5 GB and climbing |
+| `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` (GPU render, SHM hand-off) | 100% CPU, 12.7 GB at 30 s |
+| `WEBKIT_DISABLE_DMABUF_RENDERER=1` | 0% at rest, ~375 MB |
+| `DEMETEO_DISABLE_GPU=1` | 0% at rest, ~400 MB |
+
+Forcing shared-memory hand-off does not help, so the fault is in the
+web process's GPU rendering, not in how frames reach the window.
+
+**Why 2.54:** no upstream bug matches this yet. The 2.53/2.54 cycle
+replaced the web-process compositor with Skia's GPU backend, added a
+GPU atlas written through DMA-BUF mappings, and switched to
+damage-only composition ([2.54 highlights][wk254], [2.54.1][wk2541]).
+All of that runs only on the DMA-BUF path, which is consistent with the
+table but is an inference, not a bisected cause. A
+[report against another WebKitGTK app][sink78] shows the same driver
+and the same 2.52 → 2.54 regression, with a different symptom.
+
+**The fix and its cost:** `configure_linux_gpu_env` now also sets
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` on NVIDIA. In 2.54 this does more
+than give up zero-copy: with no DMA-BUF transport WebKit turns
+hardware acceleration off, and the web process rasterizes on the CPU
+into shared memory. At rest that costs nothing measurable. Anything
+that repaints — a running CSS animation, scrolling, a streaming
+terminal — rasterizes on the CPU, so expect more CPU during motion
+than the GPU path used before 2.54. Visuals are unchanged.
+`backdrop-filter` blur on the glass cards is the most expensive thing
+this repaints.
+
+**Opting back in:** `WEBKIT_DISABLE_DMABUF_RENDERER=0` restores the
+GPU path. WebKit treats `0` as enabled (`AcceleratedBackingStore.cpp`
+compares against `"0"`), and Demeteo leaves an already-set variable
+alone. Try it after a WebKitGTK upgrade; the banner says which path is
+active.
+
+**What would close it:** an upstream fix, or keeping DMA-BUF while
+turning off the `UseSkiaForComposition` feature through
+`webkit_settings_set_feature_enabled` on the webview. That second
+route needs the `webkit2gtk` crate as a direct dependency, and that
+WebKit's Skia compositor is the cause has not been confirmed.
+
+[wk254]: https://webkitgtk.org/2026/09/16/webkitgtk-2.54-highlights.html
+[wk2541]: https://webkitgtk.org/2026/10/02/webkitgtk2.54.1-released.html
+[sink78]: https://github.com/NC1107/sink/issues/78
 
 ## Agents behave as though Windows were Linux
 
