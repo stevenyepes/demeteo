@@ -148,6 +148,11 @@ sudo rpm -i demeteo-*.rpm                           # Fedora / RHEL / openSUSE
 chmod +x demeteo_*.AppImage && ./demeteo_*.AppImage # any distro
 ```
 
+> **Laggy UI on NVIDIA?** WebKitGTK 2.54 runs away on NVIDIA's GPU path, so Demeteo
+> renders on the CPU there, which is slow on 4K or high-refresh displays. The fix is to
+> downgrade WebKitGTK to 2.52 and re-enable the GPU path — steps in
+> [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#webkitgtk-254-runs-away-on-nvidias-gpu-path).
+
 **macOS (Apple Silicon)** — open the `.dmg` and drag Demeteo to Applications. Intel Macs
 are not supported.
 
