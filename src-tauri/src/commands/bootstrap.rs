@@ -31,15 +31,20 @@ pub fn save_project_settings(
     settings: ProjectSettings,
 ) -> Result<(), AppError> {
     let project_id_typed = ProjectId::from(project_id);
-    // Save to DB
+    let project = ctx
+        .projects
+        .get_project(&project_id_typed)
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::validation("Project not found"))?;
     ctx.projects
         .save_settings(settings)
         .map_err(AppError::from)?;
 
-    // Set project status to idle (workspace build complete)
-    ctx.projects
-        .update_status(&project_id_typed, "idle")
-        .map_err(AppError::from)?;
+    if project.status == "bootstrapping" {
+        ctx.projects
+            .update_status(&project_id_typed, "idle")
+            .map_err(AppError::from)?;
+    }
 
     Ok(())
 }
