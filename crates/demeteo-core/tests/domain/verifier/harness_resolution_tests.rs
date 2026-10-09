@@ -331,6 +331,7 @@ fn step_with_verifier(id: &str, declared: &[&str]) -> crate::domain::models::Ste
             instructions: String::new(),
             harness_names: declared.iter().map(|s| s.to_string()).collect(),
             verdict_key: "verdict".to_string(),
+            when_nothing_ran: Default::default(),
         }),
         ..Default::default()
     }

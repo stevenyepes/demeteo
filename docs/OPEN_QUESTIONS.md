@@ -293,7 +293,7 @@ If a deferred item's premise has changed (e.g., multi-feature concurrency become
 
 **What closing it would take:** either no `environment` advice under `NotConfigured` for a step that declares nothing to configure, or a non-failing disposition for `environment` on a review step. Both are policy changes in `domain/` (`harness_outcome.rs`, `verifier/`), which is why the starter only overrides the advice in prose. Either must cover the correction re-ask too. A non-failing disposition does so by construction; withdrawing the advice does not, because the re-ask offers `environment` from its own menu, independent of the `NotConfigured` block, and a change that stops at the first turn fixes two sources of three and leaves the re-ask able to end the review `failed`.
 
-**Status: open.** The test that renders the verifier prompt pins the override on the first turn only, where it cannot silently drift out of order. The re-ask is a separate turn that test never renders; a test beside `correction_prompt` pins that the re-ask still advises `environment` and that the starter still carries the sentence pre-empting it. Both are requests to the model, not a guarantee.
+**Status: closed (2026-10-09, decision 58).** `VerifierConfig.when_nothing_ran` (`environment` by default, `pass`) is read where the verdict is read — `steps/agent/verdict.rs::verdict_disposition` and the dedicated verifier turn — and applies only when the harness outcome is `NotConfigured`. The review starter's gate step sets `pass`, so an `environment` answer there is the step's pass whichever of the three engine texts produced it, the correction re-ask included. The prose override and the two tests that pinned it are gone; `tests/domain/verifier/nothing_ran.rs` pins the policy.
 
 ---
 

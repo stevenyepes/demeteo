@@ -66,6 +66,17 @@ Whether a gate waits for you at all is a per-project setting, **gate autonomy**:
 
 An automatic approval never redirects or rejects. A run detached to a remote runner always runs with at least `review`, because nobody is attached to answer a review gate.
 
+## What every agent prompt carries
+
+The template is only the middle of what an agent reads. The orchestrator wraps it, in this order, so that a template stored long ago still gets the current engine contract:
+
+- An **Operating Boundary** naming what the step's capability may not do (write outside `artifacts/`, run a shell, reach the network), mirrored by a real filesystem fence.
+- A **conduct block**: the turn is unattended, so a reply that ends on a plan or a question has done nothing; claims in the report are audited against tool results from the session; an implement turn holds the task's scope and reports anything else as a follow-up.
+- The **artifact contract** — the files the step is expected to produce and where.
+- For a verifying step, the **Harness Results** the orchestrator already captured and the **verdict** menu (`pass`, `fail`, `environment`, `evidence`). A verifier's `when_nothing_ran` field says whether an absent harness is terminal (the default) or a pass for a step that judges nothing the project must configure.
+
+Prompts state goals, contracts and the reasons for constraints rather than step-by-step methods: current models plan better than a hand-written script, and read pressure language literally.
+
 ## The Standard Feature Pipeline
 
 The default workflow has ten steps:
@@ -76,10 +87,10 @@ The default workflow has ten steps:
 |---|------|------|--------------|
 | 1 | **Measure Harness Baseline** | `command` | Runs the project's harness on the base commit, so later results read as *before this feature vs. now*. |
 | 2 | **Research Codebase** | `agent` | A senior-architect pass: every file likely to change, the patterns the implementation must follow, a risk register, and any external dependencies. Output: `artifacts/research-report.md`. |
-| 3 | **Draft Implementation Spec** | `agent` | Turns the research report into a binding spec — 3–7 testable acceptance criteria plus the changes, testing strategy, constraints and open questions. Everything downstream is judged against it. Output: `artifacts/implementation-spec.md`. |
+| 3 | **Draft Implementation Spec** | `agent` | Turns the research report into a binding spec — 3–7 testable acceptance criteria, each tagged by how it is proved (`[code]`, `[harness]`, `[process]`), plus the changes, testing strategy, constraints and open questions. Everything downstream is judged against it. Output: `artifacts/implementation-spec.md`. |
 | 4 | **Decompose Into Tickets** | `agent` | Breaks the spec into an ordered list of tickets sized for one agent session each, every acceptance criterion covered, with its own acceptance, test command and `blocked_by` dependencies. Output: `artifacts/task-list.json`. |
 | 5 | **Review Tickets & Spec Before Implementation** | `gate` | **You** read the spec and the ticket list and approve (implementation starts), redirect (your feedback re-enters the spec or ticket step), or abort. This is the moment to fix a bad decomposition — before any code is written. |
-| 6 | **Implement Tickets** | `sequence` | Executes the approved ticket list in order: each ticket gets a fresh agent session in the same worktree, sees the spec, the research report, and the record of already-committed tickets, and commits before the next starts. |
+| 6 | **Implement Tickets** | `sequence` | Executes the approved ticket list in order: each ticket gets a fresh agent session in the same worktree, sees the spec, the research report, and the record of already-committed tickets — including the `## Handoff` note each earlier ticket's agent left for whoever runs next — and is committed by the orchestrator before the next starts. |
 | 7 | **Validate, Test & Security Scan** | `agent` | A QA pass that interprets the project's harness output (already executed by the orchestrator), checks each acceptance criterion, scans for hardcoded secrets / TODOs / unhandled errors, and emits a **READY TO SHIP / BLOCKED** verdict. A failure goes back to the ticket step, which writes a short *rework* list — one ticket per defect — rather than re-implementing the feature. |
 | 8 | **Critic Review** | `agent` | An adversarial review across correctness, spec compliance, security, performance, test coverage, and code quality. Emits **Critical / Major / Minor** issues and a **PASS / PASS_WITH_NOTES / FAIL** verdict. |
 | 9 | **Approve Merge / Publish** | `gate` *(dangerous)* | **You** review the validation and critic reports and approve, redirect, or abort. Marked *dangerous* because approving lets the run publish to your remote. |

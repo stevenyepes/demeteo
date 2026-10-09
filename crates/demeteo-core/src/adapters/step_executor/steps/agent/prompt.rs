@@ -15,7 +15,7 @@
 //! 3. user attachments (`[attachment — <name>]`)
 //! 4. the retry-feedback safety net
 //! 5. the artifact contract
-//! 6. the Operating Boundary block
+//! 6. the conduct block, then the Operating Boundary block in front of it
 //! 7. the platform block, then the review-base block
 //!
 //! and then, once the worktree exists and only then:
@@ -367,13 +367,16 @@ impl ExecutionDriver {
 
         // Prepend the capability's prohibitive Operating Boundary block —
         // the prompt-level mirror of the OS fence and tool policy. Keeps a
-        // redirected non-implementation step from "just fixing" code.
+        // redirected non-implementation step from "just fixing" code. The
+        // conduct block goes on first so it reads after the boundary: what
+        // the turn may not do, then how it works inside that.
         let capability = step_conf.effective_capability();
         let profile = crate::domain::permission::resolve_profile(
             capability,
             step_conf.allow_network,
             step_conf.allow_shell,
         );
+        let prompt = crate::domain::step_conduct::inject_turn_conduct(&prompt, capability);
         let prompt = crate::adapters::step_executor::artifacts::inject_operating_boundary(
             &prompt, capability, &profile,
         );

@@ -93,7 +93,7 @@
           ]
         },
         "verifier": {
-          "description": "Optional harness/verifier turn run after the agent turn; a FAIL verdict feeds the retry policy.",
+          "description": "Optional harness/verifier turn run after the agent turn; a FAIL verdict feeds the retry policy. `when_nothing_ran` (`environment` | `pass`) says what an ENVIRONMENT verdict means when no harness is configured: terminal by default, or a pass for a step that judges nothing the project must configure.",
           "type": [
             "object",
             "null"
@@ -231,7 +231,7 @@
           ]
         },
         "verifier": {
-          "description": "Optional harness/verifier turn run after the list lands; a FAIL verdict feeds the retry policy targeted at the tasks owning the implicated files.",
+          "description": "Optional harness/verifier turn run after the list lands; a FAIL verdict feeds the retry policy targeted at the tasks owning the implicated files. `when_nothing_ran` (`environment` | `pass`) says what an ENVIRONMENT verdict means when no harness is configured.",
           "type": [
             "object",
             "null"

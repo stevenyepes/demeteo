@@ -65,7 +65,11 @@ pub(super) static AGENT_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
                 "verifier": {
                     "type": ["object", "null"],
                     "description": "Optional harness/verifier turn run after \
-                        the agent turn; a FAIL verdict feeds the retry policy."
+                        the agent turn; a FAIL verdict feeds the retry policy. \
+                        `when_nothing_ran` (`environment` | `pass`) says what \
+                        an ENVIRONMENT verdict means when no harness is \
+                        configured: terminal by default, or a pass for a step \
+                        that judges nothing the project must configure."
                 },
                 "capability": {
                     "type": ["string", "null"],

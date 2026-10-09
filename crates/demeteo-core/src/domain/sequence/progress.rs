@@ -48,6 +48,12 @@ pub struct TaskContribution {
     /// only one task in a list may be the one that writes the report — so
     /// this is evidence for the step-wide judgement, never a verdict.
     pub satisfied_decls: Vec<String>,
+    /// What this task's agent left for the next one
+    /// ([`extract_handoff`](crate::domain::sequence::handoff::extract_handoff)).
+    /// Not part of [`produced`](Self::produced): the checkpoint records what a
+    /// task delivered, and on a resume the note is re-read from the task's
+    /// own report fragment instead.
+    pub handoff: Option<String>,
 }
 
 impl TaskContribution {

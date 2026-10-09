@@ -64,6 +64,33 @@ pub(crate) fn store_implementation_report(
         .ok()
 }
 
+/// The handoff note each landed ticket left, keyed by ticket id, read back
+/// from the step's report fragments.
+///
+/// This is how a note crosses an attempt boundary: a resumed or reworked
+/// list seeds its "already done" block from the plan, which carries no agent
+/// output, and the fragment is the one durable copy of the reply. A fragment
+/// whose self-report holds no handoff contributes nothing. Free over the
+/// store alone, like [`store_implementation_report`].
+pub(crate) fn ticket_handoffs(
+    store: &dyn ArtifactStore,
+    feature_id: &str,
+    step_id: &str,
+) -> std::collections::HashMap<String, String> {
+    let Ok(refs) = store.list_for_step(feature_id, step_id) else {
+        return Default::default();
+    };
+    refs.iter()
+        .filter(|r| is_fragment_ref(r))
+        .filter_map(|r| store.get(r).ok())
+        .filter_map(|body| serde_json::from_str::<TicketReport>(&body).ok())
+        .filter_map(|f| {
+            crate::domain::sequence::handoff::extract_handoff(&f.self_reported)
+                .map(|note| (f.ticket_id, note))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "../../../../../tests/infrastructure/step_executor/steps/sequence/report.rs"]
 mod tests;
