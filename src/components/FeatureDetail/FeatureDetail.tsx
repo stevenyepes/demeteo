@@ -618,7 +618,10 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         onCleanup={() => mr.handleCleanup()}
       />
 
-      <FeatureStatusBanners status={run.status} />
+      <FeatureStatusBanners
+        status={run.status}
+        publishError={remote.remoteRun?.status === 'failed' ? remote.remoteRun.error : null}
+      />
 
       {/* Above the run rather than inside it: a gate is the run asking a
           question, and it was previously findable only by scrolling to the card

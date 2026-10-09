@@ -21,13 +21,17 @@
 //! worktree and pushes from there (see `application::sync_session::publish`).
 //! The difference is deliberate and the push is unchanged; only its error is
 //! read, by [`classify_push_failure`](crate::domain::git_push::classify_push_failure),
-//! so a hook that stopped the push is named as one.
+//! so a hook that stopped the push is named as one. The clone is prepared
+//! first when it has a hook to satisfy — see [`prepare_push_tree`].
 
 use std::sync::Arc;
 
-use crate::adapters::git_push::{push_failure, push_request, redacted, remote_user, GitCredential};
+use crate::adapters::git_push::{
+    prepare_push_tree, push_failure, push_request, redacted, remote_user, GitCredential,
+};
 use crate::domain::git_push::{classify_push_failure, host_without_port, PushFailure};
 use crate::domain::push_lease::{is_stale_lease, lease_from_tracking, tracking_query};
+use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
 
 pub(super) struct BranchPush<'a> {
@@ -40,10 +44,12 @@ pub(super) struct BranchPush<'a> {
     pub provider_host: &'a str,
     pub pat: &'a str,
     pub source_branch: &'a str,
+    pub prepare_command: Option<&'a str>,
 }
 
 pub(super) async fn push_feature_branch(
     exec: &Arc<dyn ExecutionPort>,
+    app_settings: &dyn AppSettingsRepository,
     push: &BranchPush<'_>,
 ) -> Result<(), String> {
     // Resolve target directory of the repository.
@@ -90,6 +96,14 @@ pub(super) async fn push_feature_branch(
         .await
         .map_err(|e| format!("Failed to read origin/{}: {e}", push.source_branch))?;
     let lease = lease_from_tracking(push.source_branch, &tracking);
+    prepare_push_tree(
+        exec.as_ref(),
+        app_settings,
+        machine_str,
+        &target_dir,
+        push.prepare_command,
+    )
+    .await?;
     let credential = GitCredential {
         user: remote_user,
         pat: push.pat.to_string(),

@@ -11,8 +11,8 @@ import { describe, expect, it } from 'vitest';
 
 import { FeatureStatusBanners } from './FeatureStatusBanners';
 
-function mount(status = 'completed') {
-  return render(<FeatureStatusBanners status={status} />);
+function mount(status = 'completed', publishError: string | null = null) {
+  return render(<FeatureStatusBanners status={status} publishError={publishError} />);
 }
 
 describe('FeatureStatusBanners', () => {
@@ -34,5 +34,17 @@ describe('FeatureStatusBanners', () => {
   it('renders nothing for a finished run that has nothing to nudge about', () => {
     const { container } = mount('completed');
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("names a detached run's failed push and shows the hook's output", () => {
+    mount(
+      'awaiting_mr',
+      'failed to push feature branch to origin:\n\u001b[1;31m✖ preflight failed\u001b[0m\n  - node_modules/.bin/tsc — run \'npm ci\'\nerror: failed to push some refs',
+    );
+    expect(screen.getByText(/the publish failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/workflow has no finalize step/i)).toBeNull();
+    const output = screen.getByText(/node_modules\/\.bin\/tsc/);
+    expect(output.textContent).toContain('✖ preflight failed');
+    expect(output.textContent).not.toContain('\u001b');
   });
 });
