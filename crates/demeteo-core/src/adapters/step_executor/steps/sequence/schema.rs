@@ -55,7 +55,9 @@ pub(super) static SEQUENCE_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value>
                     "description": "Optional harness/verifier turn run after \
                         the list lands; a FAIL verdict feeds the retry \
                         policy targeted at the tasks owning the implicated \
-                        files."
+                        files. `when_nothing_ran` (`environment` | `pass`) \
+                        says what an ENVIRONMENT verdict means when no \
+                        harness is configured."
                 },
                 "capability": {
                     "type": ["string", "null"],

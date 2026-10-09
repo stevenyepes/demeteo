@@ -154,6 +154,7 @@ fn verifying_step(id: &str, names: &[&str]) -> StepConfig {
             instructions: String::new(),
             harness_names: names.iter().map(|n| n.to_string()).collect(),
             verdict_key: "verdict".to_string(),
+            when_nothing_ran: Default::default(),
         }),
         ..StepConfig::default()
     }
