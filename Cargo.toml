@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/demeteo-core", "crates/demeteo-runner"]
+members = ["src-tauri", "crates/demeteo-core", "crates/demeteo-runner", "crates/demeteo-hub"]
 
 # Single source of truth for the version every crate reports. All three
 # members inherit this via `version.workspace = true`, so `CARGO_PKG_VERSION`

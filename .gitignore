@@ -47,3 +47,10 @@ ds-bundle/
 
 # Design canvas scratch — the durable capture is docs/DISCOVERY_UI_SPEC.md
 ui-mocks/
+
+# Demeteo Hub deploy bundle: operator secrets and OpenBao material never enter git
+deploy/hub/.env
+deploy/hub/openbao/data/
+deploy/hub/openbao/*.keys
+deploy/hub/openbao/*unseal*
+deploy/hub/openbao/*init*.json
