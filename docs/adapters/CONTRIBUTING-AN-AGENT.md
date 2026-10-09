@@ -44,7 +44,7 @@ stream output) as the closest template, or `opencode`/`hermes` for the
 canonical enum. Add your variant, its kebab string, and include it in `ALL`:
 
 ```rust
-pub enum AgentKind { Opencode, Hermes, ClaudeCode, /* + */ Yourname }
+pub enum AgentKind { Opencode, Hermes, ClaudeCode, Codex, Pi, /* + */ Yourname }
 
 // as_str():   AgentKind::Yourname => "yourname",
 // parse():    "yourname" => Some(AgentKind::Yourname),
