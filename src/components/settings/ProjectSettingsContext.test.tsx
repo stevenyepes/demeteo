@@ -306,21 +306,24 @@ describe('handleSave — the rail row it writes', () => {
     return JSON.parse(screen.getByTestId('project-row').textContent ?? 'null');
   }
 
-  it('carries telemetry through untouched while still writing the fields the Settings tab reads back', async () => {
-    await mount({ status: 'idle', nodes: SEEDED_NODES, remoteHost: '' });
+  it('keeps the project row untouched when only settings change', async () => {
+    await mount({ status: 'active', nodes: SEEDED_NODES });
 
     expect(projectRow().nodes).toBe(SEEDED_NODES);
+    await userEvent.selectOptions(screen.getByLabelText('Gate approvals'), 'review');
 
     await userEvent.click(screen.getByRole('button', { name: /Save Changes/ }));
 
-    await waitFor(() => expect(projectRow().repos).toBe(0));
+    await waitFor(() => expect(mockedInvoke.mock.calls.some(([name]) => name === 'save_project_settings')).toBe(true));
+    expect(mockedInvoke.mock.calls.some(([name]) => name === 'bootstrap_project')).toBe(false);
+    expect(mockedInvoke.mock.calls.some(([name]) => name === 'update_project')).toBe(false);
+    expect(mockedInvoke.mock.calls.some(([name]) => name === 'set_agent_configs')).toBe(false);
 
     expect(projectRow()).toMatchObject({
       name: 'Demeteo',
-      status: 'idle',
+      status: 'active',
       nodes: SEEDED_NODES,
       compute_type: 'local',
-      remote_host: null,
     });
   });
 });
