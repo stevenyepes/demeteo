@@ -61,7 +61,24 @@ fn done(id: &str, files: &[&str]) -> CompletedTask {
         id: id.to_string(),
         title: format!("{id} title"),
         files: files.iter().map(|f| (*f).to_string()).collect(),
+        handoff: None,
     }
+}
+
+/// A ticket's agent left a note for the next one. The fresh session that
+/// runs next has no other way to learn it, so it goes under the ticket's own
+/// line, indented into the same bullet.
+#[test]
+fn a_handoff_is_rendered_under_the_ticket_that_left_it() {
+    let mut landed = vec![done("ticket-01", &["a.rs"]), done("ticket-02", &[])];
+    landed[0].handoff = Some("the port trait is a stub;\nticket 2 fills it in".into());
+    let out = format_completed_tasks(&landed, PlanKind::Greenfield, false);
+    assert_eq!(
+        out,
+        "- [ticket-01] ticket-01 title (already committed; touched a.rs)\n  \
+         Handoff from this ticket: the port trait is a stub;\n  ticket 2 fills it in\n\
+         - [ticket-02] ticket-02 title (already committed)"
+    );
 }
 
 #[test]

@@ -16,6 +16,7 @@
 //! persisting, emitting.
 
 pub mod checkpoint;
+pub mod handoff;
 pub mod outcome;
 pub mod progress;
 pub mod report;
