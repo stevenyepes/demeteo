@@ -1,0 +1,5 @@
+{
+  "v": 1,
+  "request_id": "req-9b2e42",
+  "outcome": { "result": "refused", "reason": "gate_not_pending" }
+}

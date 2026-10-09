@@ -252,6 +252,20 @@ for being a new concept — a Workflow in a Project's tree would need its own
 versioning story, and [decision 38](DECISIONS.md#1-the-locked-decisions) already
 pins a Feature to a Workflow *version*.
 
+The wire types cannot strip a local path themselves: a Workflow version's
+`steps_json` and `definition_json`, and a Project's `remote_url`, are strings
+the protocol crate carries unchanged. The desktop snapshot builder strips them
+before it constructs a snapshot:
+
+| Field | What the builder removes |
+|---|---|
+| Each step's `cwd`, in both Workflow documents | the whole field — it names a directory in the instance's tree |
+| Any other local path in a Workflow document | the same |
+| `remote_url` | userinfo (`https://user:token@host/…` → `https://host/…`); a Git token never leaves an instance (§3) |
+
+A step's `command` and prompt templates are not on that list, and are not safe
+either — §11.
+
 ### Queued requests
 
 A request for an instance that is offline waits on the Hub. When the instance
@@ -266,27 +280,48 @@ trusts (§6).
 
 ### 6.1 The envelope
 
-**Every Hub → instance request is one envelope, signed by the Hub.** The shape is a
-JWS compact serialisation (RFC 7515): the instance verifies the signature over the
-**exact bytes received** and only then parses the payload. There is no
-canonicalisation step to disagree about.
+**Every Hub → instance request is one envelope, signed by the Hub.** It travels as
+JSON in the shape `SignedRequest` in `crates/demeteo-hub-protocol` parses:
 
 <!-- EXAMPLE: new -->
 
 ```
 {
+  "v":           1,
   "request_id":  "Zk3m0R8pQnVx2tL5aYw9bA",   // 128 random bits, base64url
   "instance_id": "i-7f3a9c",
-  "kind":        "start_feature",
   "issued_at":   1791019800,                  // Unix seconds
   "expires_at":  1791020400,
-  "body":        { … }                        // per kind, below
+  "payload": {
+    "kind":      "start_feature",
+    "body":      { …, "max_budget_cents": 1250, … }   // per kind, below
+  },
+  "signature":   "…"                          // the Hub's, base64url
 }
 ```
 
+**What is signed is not the JSON.** It is the pre-image `SignedRequest::signing_bytes`
+builds: the label `demeteo-hub/v1/request`, then every field above except
+`signature`, each length-prefixed or fixed-width and big-endian. The Hub builds
+those bytes from the request it is about to send, then hashes and signs them with
+its request-signing key. The instance parses the JSON, rebuilds the same bytes from
+the parsed request, and verifies the signature against the key it pinned at pairing
+(§4). The byte layout is specified once, in the module rustdoc of
+[`canonical.rs`](../crates/demeteo-hub-protocol/src/canonical.rs) and on
+`signing_bytes`, and is not repeated here.
+
+JSON is never signed because key order, whitespace and number spelling are not
+stable across two serialisers. Instead, both ends compile against that one encoder,
+so there is a single definition of the bytes and no second implementation to
+disagree with it. That holds only while every signed value survives a JSON round
+trip bit-for-bit, so **every signed number is an integer**: the budget is
+`max_budget_cents`, never dollars as a float. A parsed float need not reproduce the
+bits the Hub signed, and a request whose bytes differ fails verification and is
+dropped without a `result`. Do not add a float to any payload.
+
 | Property | Rule |
 |---|---|
-| Signature | the Hub's request-signing key, the one pinned at pairing (§4). A request that does not verify is dropped without a `result` |
+| Signature | the Hub's request-signing key, the one pinned at pairing (§4), over `signing_bytes`. A request that does not verify is dropped without a `result` |
 | `request_id` | **single-use**. The instance records every id it accepts in its own SQLite (an id is not a secret) for at least as long as it can still be unexpired, and refuses a repeat, including across a restart |
 | `expires_at` | checked against **the instance's clock**. An expired request is answered `expired` and has no effect |
 | `instance_id` | must equal this instance's id, so one instance's request cannot be replayed at another |
@@ -416,34 +451,49 @@ The WebAuthn challenge commits to six fields, in this order:
 | 5 | `request_id` | the envelope — so an assertion cannot outlive its request |
 | 6 | `expires_at` | the envelope |
 
-**Canonicalisation** is fixed so that two implementations cannot disagree:
+**The pre-image** is what `gate_challenge` in
+[`canonical.rs`](../crates/demeteo-hub-protocol/src/canonical.rs) returns — the
+same encoder as the envelope's, so the Hub that asks the browser for an assertion
+and the instance that checks it build one byte string from one definition. Its
+rustdoc holds the byte layout; this section does not restate it.
 
-- UTF-8 text, one line per field, `key=value`, lines separated by a single LF
-  (`0x0A`), **no trailing LF**.
-- The first line is the literal `demeteo-hub/v1/gate`. The prefix names the purpose
-  and the version, so an assertion made for one purpose can never be accepted for
-  another (the two passkey prefixes are below).
-- Keys are exactly the names above, in exactly that order.
-- Values are used verbatim. An id value containing a control character (including
-  CR and LF) is refused, so no value can smuggle a line. `expires_at` is a decimal
-  integer of Unix seconds with no sign and no leading zeros.
-- The challenge is the **SHA-256 of those bytes**, passed to WebAuthn as 32 bytes
-  and carried as base64url without padding.
+- It opens with the label `demeteo-hub/v1/gate` and the protocol version. The label
+  names the purpose, so an assertion made for one purpose can never be accepted for
+  another: the two passkey challenges open with `demeteo-hub/v1/endorse` and
+  `demeteo-hub/v1/revoke` (below), and the envelope's pre-image with
+  `demeteo-hub/v1/request`.
+- The six fields follow in the table's order. Every string is length-prefixed, so
+  no value can shift bytes into its neighbour and an id needs no character
+  restrictions to be safe. `decision` is a tag byte and `expires_at` a fixed-width
+  integer of Unix seconds, so neither has a spelling to disagree about.
+- The challenge is the **SHA-256 of the pre-image**, passed to WebAuthn as 32 bytes
+  and carried as base64url without padding. The crate returns the pre-image only;
+  hashing it is the caller's job.
 
 <!-- EXAMPLE: new -->
 
+For `instance_id` `i-7f3a9c`, `feature_id` `f-1791004167577`, `step_execution_id`
+`se-0042`, `approve`, `request_id` `Zk3m0R8pQnVx2tL5aYw9bA` and `expires_at`
+`1791020400`, the pre-image is these 104 bytes, in hex:
+
 ```
-demeteo-hub/v1/gate
-instance_id=i-7f3a9c
-feature_id=f-1791004167577
-step_execution_id=se-0042
-decision=approve
-request_id=Zk3m0R8pQnVx2tL5aYw9bA
-expires_at=1791020400
+0000001364656d6574656f2d6875622f76312f67617465        label
+00000001                                              version 1
+00000008692d376633613963                              instance_id
+0000000f662d31373931303034313637353737                feature_id
+0000000773652d30303432                                step_execution_id
+01                                                    decision: approve
+000000165a6b336d30523870516e567832744c35615977396241  request_id
+000000006ac0cd70                                      expires_at
 ```
 
-For those bytes the challenge is `__BHzSCIgnw6Cacbl0GFZYDbc58Mkr_IkalU7C-sO0A`. The
-values are made up; the digest is real and is the test vector for the rule above.
+and the challenge is `ss9J2G8tlsYSapyixbEJ-ruL5ykKX4OTGBZeezoMZZY`. The values are
+made up; the digest is real and is the test vector for the rule above.
+`gate_challenge_matches_the_hub_md_vector` in
+[`tests/signing.rs`](../crates/demeteo-hub-protocol/tests/signing.rs) pins the same
+pre-image byte for byte, so an encoder change that would invalidate this vector
+fails that test. The digest itself is computed outside the crate, which has no
+hashing dependency: change the bytes and recompute it here.
 
 ### What the desktop verifies
 
@@ -485,7 +535,8 @@ two request kinds, and neither is authorised by the Hub:
   request can leave the instance with nothing it trusts.
 
 Both assertions bind `instance_id`, `request_id` and `expires_at` the way a gate's
-does; the exact field lists are the protocol crate's to fix (§11).
+does; the exact field lists are those of `endorsement_challenge` and
+`revocation_challenge` in `canonical.rs`, and remain defaults (§11).
 
 **Rejected: accepting each new passkey manually on every desktop.** It would hold
 the property and make adding a phone a trip to every machine, which in practice is
@@ -624,6 +675,15 @@ should raise it, not pick.
 10. **Where the desktop-side client sits in the hexagon.** It must obey
     [AGENTS.md §3](../AGENTS.md) — no business logic in `commands/` — and which
     port it hangs from is a build ticket's call.
+11. **Whether a step's `command` and prompt templates may cross at all.** They
+    travel inside a Workflow snapshot's documents, and decision 59 needs them:
+    a `RunSpec` cannot be built without the command and the prompt (§10). But
+    both are user-authored text that may embed a local path or a credential
+    (`curl -H "Authorization: Bearer …"`), which no field-level strip can
+    detect. Sending them, redacting them, or sending a projection without them
+    — the last re-decides decision 59 — is open. The snapshot builder's settled
+    obligations, `cwd` and `remote_url` userinfo, are in §5; the Hub-client
+    build ticket owns both those and this question.
 
 ---
 

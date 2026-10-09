@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "request_id": "req-a06",
+  "instance_id": "inst-7f3a9c",
+  "issued_at": 1790000050,
+  "expires_at": 1790000350,
+  "payload": {
+    "kind": "passkey_revocation",
+    "body": { "credential_id": "cred-N9x8Y7", "assertion": { "credential_id": "cred-A1b2C3", "authenticator_data": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAQ", "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0", "signature": "MEUCIQDq8w1x" } }
+  },
+  "signature": "c2lnbmVkLWJ5LWh1Yg"
+}

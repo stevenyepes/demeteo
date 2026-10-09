@@ -1,0 +1,37 @@
+{
+  "v": 1,
+  "projects": [
+    {
+      "id": "p-1790213898404",
+      "name": "demeteo",
+      "remote_url": "https://github.com/stvcloud/demeteo.git"
+    },
+    {
+      "id": "p-1790213898999",
+      "name": "scratch",
+      "remote_url": null
+    }
+  ],
+  "workflows": [
+    {
+      "id": "wv-1",
+      "workflow_id": "wf-feature",
+      "version": 3,
+      "steps_json": "[{\"id\":\"s-research\",\"kind\":\"agent\"}]",
+      "definition_json": "{\"nodes\":[],\"edges\":[]}",
+      "note": "added research step",
+      "created_at": 1790213898
+    }
+  ],
+  "run_shape": [
+    {
+      "project_id": "p-1790213898404",
+      "default_agent_kind": "claude-code",
+      "default_model": "claude-sonnet-5-5",
+      "default_effort": "high",
+      "default_workflow_id": "wf-feature",
+      "default_loop_iterations": 2,
+      "default_max_budget_cents": 1250
+    }
+  ]
+}

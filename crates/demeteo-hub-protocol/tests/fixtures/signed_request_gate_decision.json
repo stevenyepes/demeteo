@@ -1,0 +1,18 @@
+{
+  "v": 1,
+  "request_id": "req-a04",
+  "instance_id": "inst-7f3a9c",
+  "issued_at": 1790000030,
+  "expires_at": 1790000330,
+  "payload": {
+    "kind": "gate_decision",
+    "body": {
+      "feature_id": "f-1791043410984",
+      "step_execution_id": "se-5521",
+      "decision": "approve",
+      "feedback": "Looks good to me.",
+      "assertion": { "credential_id": "cred-A1b2C3", "authenticator_data": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAQ", "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0", "signature": "MEUCIQDq8w1x" }
+    }
+  },
+  "signature": "c2lnbmVkLWJ5LWh1Yg"
+}
