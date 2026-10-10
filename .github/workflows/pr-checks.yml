@@ -163,8 +163,8 @@ jobs:
       - name: Rust clippy (--all-targets -D warnings)
         run: cargo clippy --workspace --exclude demeteo-runner --all-targets -- -D warnings
 
-      - name: Core tests
-        run: cargo test -p demeteo-core
+      - name: Core + hub-protocol tests
+        run: cargo test -p demeteo-core -p demeteo-hub-protocol
 
   # The two parity gates, in one job because they share everything expensive:
   # the same loopback sshd image (each script builds it; the second build is a

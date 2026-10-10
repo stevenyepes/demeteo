@@ -163,9 +163,9 @@ step "Rust clippy (--workspace --all-targets -D warnings)"
 # lint reads a `//` comment at all.
 step "Rust doc links (cargo doc --no-deps)"
 if [[ "$RUNNER_SUPPORTED" == 1 ]]; then
-  cargo doc --no-deps -p demeteo-core -p demeteo-runner -p demeteo-hub
+  cargo doc --no-deps -p demeteo-core -p demeteo-hub -p demeteo-hub-protocol -p demeteo-runner
 else
-  cargo doc --no-deps -p demeteo-core -p demeteo-hub
+  cargo doc --no-deps -p demeteo-core -p demeteo-hub -p demeteo-hub-protocol
   step "Runner docs — skipped (Linux-only binary; host: $HOST_TRIPLE)"
 fi
 
@@ -178,14 +178,15 @@ scripts/check-test-temp-dirs.sh
 step "Rust tests (cargo test)"
 ( cd src-tauri && cargo test )
 
-# Core, runner and hub live in the workspace but `cargo test` from src-tauri only runs
-# the demeteo package (cargo scopes to the cwd's package). Test them explicitly
-# so a change to either crate is actually exercised locally.
-step "Core + runner + hub tests"
+# Core, hub, hub-protocol and runner live in the workspace but `cargo test` from
+# src-tauri only runs the demeteo package (cargo scopes to the cwd's package).
+# Test them explicitly so a change to any of them is actually exercised locally;
+# clippy's `--all-targets` compiles these tests but never runs them.
+step "Core + hub + hub-protocol + runner tests"
 if [[ "$RUNNER_SUPPORTED" == 1 ]]; then
-  cargo test -p demeteo-core -p demeteo-runner -p demeteo-hub
+  cargo test -p demeteo-core -p demeteo-hub -p demeteo-hub-protocol -p demeteo-runner
 else
-  cargo test -p demeteo-core -p demeteo-hub
+  cargo test -p demeteo-core -p demeteo-hub -p demeteo-hub-protocol
   step "Runner tests — skipped (Linux-only binary; host: $HOST_TRIPLE)"
 fi
 

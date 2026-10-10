@@ -92,3 +92,10 @@ path = "tests/adapters/mcp/gating.rs"
 [[test]]
 name = "mcp_bind_off_runtime_thread"
 path = "tests/adapters/mcp/bind_off_runtime_thread.rs"
+
+# Spike (docs/HUB_SSH_CERT_SPIKE.md): `#[ignore]`d, driven by
+# tests/conformance/ssh_cert/run-ssh-cert-spike.sh. Its own target so it never
+# joins the `--lib` binary and needs no feature flag.
+[[test]]
+name = "ssh_cert"
+path = "tests/conformance/ssh_cert.rs"
