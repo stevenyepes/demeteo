@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/demeteo-core", "crates/demeteo-runner", "crates/demeteo-hub-protocol"]
+members = ["src-tauri", "crates/demeteo-core", "crates/demeteo-runner", "crates/demeteo-hub", "crates/demeteo-hub-protocol"]
 
-# Single source of truth for the version every crate reports. All four
+# Single source of truth for the version every crate reports. All five
 # members inherit this via `version.workspace = true`, so `CARGO_PKG_VERSION`
 # — and therefore `demeteo-runner --version`'s fallback — is always the real
 # product version, not a per-crate value that drifts. `promote.yml` bumps

@@ -408,18 +408,20 @@ src/                              # React frontend
 └── docs/                          # Bundled user-facing help markdown (out of scope for engineering docs)
 ```
 
-### Workspace crates and the Hub (decided, not built)
+### Workspace crates and the Hub (partly built)
 
 The tree above is `src-tauri/` only. The shared core and the remote runner live
 in `crates/demeteo-core` and `crates/demeteo-runner`. The Demeteo Hub — a hosted
-browser control plane over many instances — adds three more, **none of which exists
-yet**:
+browser control plane over many instances — adds three more. Only `crates/demeteo-hub`
+exists so far, and only in part (storage, the `KeyService` port, `/healthz` and static
+serving, plus the Compose bundle in `deploy/hub`); the protocol crate, `hub-web/`, auth and
+the WebSocket are not built:
 
 | Path | What it is |
 |---|---|
-| `crates/demeteo-hub` | the axum server |
-| `crates/demeteo-hub-protocol` | serde-only wire types shared by the desktop client and the Hub; it does not depend on `demeteo-core` |
-| `hub-web/` | a second Vite entry in this repo, reusing `src/components/canvas` and the `src/App.css` tokens |
+| `crates/demeteo-hub` | the axum server — partly built |
+| `crates/demeteo-hub-protocol` | serde-only wire types shared by the desktop client and the Hub; it does not depend on `demeteo-core` — not built |
+| `hub-web/` | a second Vite entry in this repo, reusing `src/components/canvas` and the `src/App.css` tokens — not built |
 
 The Hub does not link `demeteo-core` in v1. Where the desktop's client for it sits in the
 hexagon above is open ([HUB.md §11](HUB.md#11-what-is-not-decided)); the Hub never

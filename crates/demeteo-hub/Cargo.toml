@@ -1,0 +1,33 @@
+[package]
+name = "demeteo-hub"
+version.workspace = true
+description = "Hosted Hub: tenant-scoped Postgres storage, Transit key service and static web serving"
+license = "MIT"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1"
+axum = "0.8"
+base64 = "0.22"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+# Postgres only. Turning features off does not decouple this from SQLite:
+# Cargo checks `links` uniqueness at resolution time, optional dependencies
+# included, so sqlx-sqlite's libsqlite3-sys is in the graph regardless and must
+# equal the one `demeteo-core`'s rusqlite pins. Bump sqlx here and rusqlite in
+# crates/demeteo-core/Cargo.toml together. No TLS feature:
+# Postgres sits on the compose-internal network, and a second rustls provider
+# next to reqwest's panics at first use.
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros", "uuid", "time"] }
+thiserror = "2"
+time = "0.3"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+[lints]
+workspace = true

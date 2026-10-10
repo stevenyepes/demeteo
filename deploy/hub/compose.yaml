@@ -1,0 +1,69 @@
+name: demeteo-hub
+
+services:
+  hub:
+    build:
+      context: ../..
+      dockerfile: deploy/hub/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-demeteo}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/hub/.env}@postgres:5432/${POSTGRES_DB:-demeteo_hub}
+      DEMETEO_HUB_BIND: ${DEMETEO_HUB_BIND:-0.0.0.0:8080}
+      DEMETEO_HUB_PUBLIC_URL: ${DEMETEO_HUB_PUBLIC_URL:-https://localhost}
+      DEMETEO_HUB_RP_ID: ${DEMETEO_HUB_RP_ID:-localhost}
+      OPENBAO_ADDR: ${OPENBAO_ADDR:-http://openbao:8200}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN:-}
+      DEMETEO_HUB_TRANSIT_MOUNT: ${DEMETEO_HUB_TRANSIT_MOUNT:-transit}
+      DEMETEO_HUB_TRANSIT_KEY: ${DEMETEO_HUB_TRANSIT_KEY:-demeteo-hub}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-demeteo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/hub/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-demeteo_hub}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  openbao:
+    image: openbao/openbao:2.4.1
+    restart: unless-stopped
+    command: ["server"]
+    cap_add:
+      - IPC_LOCK
+    environment:
+      BAO_API_ADDR: ${BAO_API_ADDR:-http://openbao:8200}
+    volumes:
+      - ./openbao/config.hcl:/openbao/config/config.hcl:ro
+      - openbao-data:/openbao/file
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment:
+      DEMETEO_HUB_DOMAIN: ${DEMETEO_HUB_DOMAIN:-localhost}
+      DEMETEO_HUB_UPSTREAM: ${DEMETEO_HUB_UPSTREAM:-hub:8080}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - hub
+
+volumes:
+  postgres-data:
+  openbao-data:
+  caddy-data:
+  caddy-config:

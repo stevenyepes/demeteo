@@ -41,10 +41,10 @@ full.
 
 | Part | State |
 |---|---|
-| `crates/demeteo-hub` (axum server) | **not built** — the crate does not exist |
+| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, and static serving of the browser bundle. Pairing, auth, request handling and the WebSocket are **not built** |
 | `crates/demeteo-hub-protocol` (wire types) | **not built** — the crate does not exist |
 | `hub-web/` (second Vite entry) | **not built** — the directory does not exist |
-| The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **not built** |
+| The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
 | Desktop side: device key, pairing, Settings › Hub tab, socket client | **not built** |
 | Desktop side: passkey pin set, request verification, local ceilings | **not built** |
 | An instance-wide read over `run_events` | **not built** — the read surface is per Feature today (§5) |
@@ -592,7 +592,8 @@ material for attachments (§6.3).
 
 | Path | What it is |
 |---|---|
-| `crates/demeteo-hub` | the axum server — **not built** |
+| `crates/demeteo-hub` | the axum server — storage, `KeyService` and `/healthz` plus static serving **built**; auth and the socket **not built** |
+| `deploy/hub` | the Compose bundle, Dockerfile and operator README — **built** |
 | `crates/demeteo-hub-protocol` | **serde-only** wire types shared by the desktop client and the Hub — **not built** |
 | `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **not built** |
 
