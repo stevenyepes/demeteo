@@ -32,7 +32,7 @@ fn an_interactive_login_shell_is_l_i_c_with_job_control_off_and_env_inside_the_b
             "-l",
             "-i",
             "-c",
-            "set +m; export TOKEN='s'\\''quote'; npm test"
+            "set +m; printf '\\036demeteo:body\\036'; export TOKEN='s'\\''quote'; npm test"
         ]
     );
 }
@@ -41,8 +41,34 @@ fn an_interactive_login_shell_is_l_i_c_with_job_control_off_and_env_inside_the_b
 fn a_non_interactive_login_shell_drops_the_i_and_the_job_control_prefix() {
     assert_eq!(
         shell_args("npm test", &ShellOptions::login()),
-        vec!["-l", "-c", "npm test"]
+        vec!["-l", "-c", "printf '\\036demeteo:body\\036'; npm test"]
     );
+}
+
+/// The one claim about the marker no string comparison can make: that a real
+/// `printf` turns the octal spelling into exactly the bytes `command_stdout`
+/// cuts at. The profile is played by a `printf` ahead of the body, since what
+/// an account's own dotfiles print is not this suite's to depend on.
+#[cfg(unix)]
+#[test]
+fn what_a_profile_printed_ahead_of_the_body_is_not_the_commands_output() {
+    let args = shell_args("echo hello", &ShellOptions::login());
+    let body = args.last().expect("a body is always the last argument");
+
+    let out = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "printf '\\033]1337;ShellIntegrationVersion=13\\007'; {body}"
+        ))
+        .output()
+        .expect("sh runs");
+
+    assert!(
+        out.stdout.starts_with(b"\x1b]1337"),
+        "the profile's bytes did reach the pipe: {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(shell::command_stdout(true, &out.stdout), b"hello\n");
 }
 
 #[test]
@@ -64,7 +90,12 @@ fn the_working_directory_never_reaches_the_body() {
     };
     assert_eq!(
         shell_args("npm test", &opts),
-        vec!["-l", "-i", "-c", "set +m; npm test"]
+        vec![
+            "-l",
+            "-i",
+            "-c",
+            "set +m; printf '\\036demeteo:body\\036'; npm test"
+        ]
     );
 }
 
@@ -93,7 +124,15 @@ fn on_unix_a_login_body_runs_under_the_accounts_own_shell() {
 
     let (_, args) = shell_invocation("npm test", &ShellOptions::login_interactive())
         .expect("a Unix host always has a shell to name");
-    assert_eq!(args, vec!["-l", "-i", "-c", "set +m; npm test"]);
+    assert_eq!(
+        args,
+        vec![
+            "-l",
+            "-i",
+            "-c",
+            "set +m; printf '\\036demeteo:body\\036'; npm test"
+        ]
+    );
 
     let (program, args) = shell_invocation("npm test", &ShellOptions::default())
         .expect("a Unix host always has a shell to name");

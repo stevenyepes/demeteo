@@ -77,6 +77,10 @@ const BASE_MOVES: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 diff --name-
 /// The project's own checks, as `ProjectSettings.test_command` holds them.
 const CHECKS: &str = "npm run checks:code";
 const PREPARE: &str = "npm ci";
+/// The same two as the adapter is handed them: the gate merges the streams
+/// (`merge_stderr_into_stdout`), so that is the string a double is asked for.
+const CHECKS_RUN: &str = "(\nnpm run checks:code\n) 2>&1";
+const PREPARE_RUN: &str = "(\nnpm ci\n) 2>&1";
 
 /// A path inside the sync worktree as `ensure_conflict_markers_removed` builds
 /// it, which is not the same string on every host.
@@ -1375,7 +1379,7 @@ async fn a_hand_resolved_tree_that_does_not_build_is_not_committed() {
             (PORCELAIN, Ok("")),
             (MERGE_HEAD, Ok("b1b2b3b\n")),
             (
-                CHECKS,
+                CHECKS_RUN,
                 Err("Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments"),
             ),
         ])
@@ -1908,7 +1912,7 @@ async fn a_resolution_the_projects_checks_reddened_is_not_committed_or_pushed() 
             (PORCELAIN, Ok("")),
             (MERGE_HEAD, Ok("b1b2b3b\n")),
             (
-                CHECKS,
+                CHECKS_RUN,
                 Err("Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments"),
             ),
         ])),
@@ -1961,7 +1965,7 @@ async fn a_resolution_the_projects_checks_reddened_is_not_committed_or_pushed() 
 #[tokio::test]
 async fn the_checks_run_before_anything_is_staged() {
     let p = ports(
-        happy_path_with(&[(CHECKS, Ok("all checks passed"))]),
+        happy_path_with(&[(CHECKS_RUN, Ok("all checks passed"))]),
         vec![Arc::new(ScriptedRuntime::default())],
     );
     open_conflicted(&p.db);
@@ -1981,7 +1985,7 @@ async fn the_checks_run_before_anything_is_staged() {
     .expect("a green gate lets the resolution through");
 
     let calls = p.scripted.calls();
-    let checks = calls.iter().position(|c| c == CHECKS);
+    let checks = calls.iter().position(|c| c == CHECKS_RUN);
     let staged = calls.iter().position(|c| c == ADD_ALL);
     assert!(
         matches!((checks, staged), (Some(c), Some(s)) if c < s),
@@ -1997,7 +2001,7 @@ async fn the_checks_run_before_anything_is_staged() {
 async fn checks_the_transport_cut_short_still_land_the_resolution() {
     let dead = transport_dead();
     let p = ports(
-        happy_path_with(&[(CHECKS, Err(dead.as_str()))]),
+        happy_path_with(&[(CHECKS_RUN, Err(dead.as_str()))]),
         vec![Arc::new(ScriptedRuntime::default())],
     );
     open_conflicted(&p.db);
@@ -2019,7 +2023,7 @@ async fn checks_the_transport_cut_short_still_land_the_resolution() {
     assert!(resolved.published);
     let calls = p.scripted.calls();
     assert!(
-        calls.contains(&CHECKS.to_string()),
+        calls.contains(&CHECKS_RUN.to_string()),
         "the gate has to have run for this to be about the gate: {calls:?}"
     );
 }
@@ -2032,7 +2036,7 @@ async fn checks_the_transport_cut_short_still_land_the_resolution() {
 #[tokio::test]
 async fn the_checks_run_in_the_worktree_under_the_projects_deadline() {
     let p = ports(
-        happy_path_with(&[(CHECKS, Ok(""))]),
+        happy_path_with(&[(CHECKS_RUN, Ok(""))]),
         vec![Arc::new(ScriptedRuntime::default())],
     );
     open_conflicted(&p.db);
@@ -2056,7 +2060,7 @@ async fn the_checks_run_in_the_worktree_under_the_projects_deadline() {
         .options()
         .into_iter()
         .zip(p.scripted.commands())
-        .find(|(_, cmd)| cmd == CHECKS)
+        .find(|(_, cmd)| cmd == CHECKS_RUN)
         .map(|(opts, _)| opts)
         .expect("the checks were run");
     assert_eq!(
@@ -2084,7 +2088,10 @@ async fn the_checks_run_in_the_worktree_under_the_projects_deadline() {
 async fn prepare_runs_before_the_agent_is_ever_prompted() {
     let runtime = Arc::new(ScriptedRuntime::default());
     let p = ports(
-        happy_path_with(&[(PREPARE, Ok("added 900 packages")), (CHECKS, Ok(""))]),
+        happy_path_with(&[
+            (PREPARE_RUN, Ok("added 900 packages")),
+            (CHECKS_RUN, Ok("")),
+        ]),
         vec![runtime.clone()],
     );
     open_conflicted(&p.db);
@@ -2104,7 +2111,7 @@ async fn prepare_runs_before_the_agent_is_ever_prompted() {
     .expect("a green gate lets the resolution through");
 
     let calls = p.scripted.calls();
-    let prepared = calls.iter().position(|c| c == PREPARE);
+    let prepared = calls.iter().position(|c| c == PREPARE_RUN);
     let spawned = calls.iter().position(|c| c == BASE_MOVES);
     assert!(
         matches!((prepared, spawned), (Some(p), Some(s)) if p < s),
@@ -2125,7 +2132,10 @@ async fn prepare_runs_before_the_agent_is_ever_prompted() {
 #[tokio::test]
 async fn prepare_runs_exactly_once_per_resolution() {
     let p = ports(
-        happy_path_with(&[(PREPARE, Ok("added 900 packages")), (CHECKS, Ok(""))]),
+        happy_path_with(&[
+            (PREPARE_RUN, Ok("added 900 packages")),
+            (CHECKS_RUN, Ok("")),
+        ]),
         vec![Arc::new(ScriptedRuntime::default())],
     );
     open_conflicted(&p.db);
@@ -2146,12 +2156,12 @@ async fn prepare_runs_exactly_once_per_resolution() {
 
     let calls = p.scripted.calls();
     assert_eq!(
-        calls.iter().filter(|c| *c == PREPARE).count(),
+        calls.iter().filter(|c| *c == PREPARE_RUN).count(),
         1,
         "{calls:?}"
     );
     assert_eq!(
-        calls.iter().filter(|c| *c == CHECKS).count(),
+        calls.iter().filter(|c| *c == CHECKS_RUN).count(),
         1,
         "{calls:?}"
     );
@@ -2166,7 +2176,7 @@ async fn prepare_runs_exactly_once_per_resolution() {
 #[tokio::test]
 async fn an_unprepared_tree_lands_the_resolution_without_running_the_harness() {
     let p = ports(
-        happy_path_with(&[(PREPARE, Err("npm ERR! network ETIMEDOUT"))]),
+        happy_path_with(&[(PREPARE_RUN, Err("npm ERR! network ETIMEDOUT"))]),
         vec![Arc::new(ScriptedRuntime::default())],
     );
     open_conflicted(&p.db);
@@ -2188,7 +2198,7 @@ async fn an_unprepared_tree_lands_the_resolution_without_running_the_harness() {
     assert!(resolved.published);
     let calls = p.scripted.calls();
     assert!(
-        !calls.iter().any(|c| c == CHECKS),
+        !calls.iter().any(|c| c == CHECKS_RUN),
         "a harness run here would report the missing install as a broken merge: {calls:?}"
     );
 }
@@ -2199,7 +2209,7 @@ async fn an_unprepared_tree_lands_the_resolution_without_running_the_harness() {
 async fn an_unprepared_turn_hands_the_agent_the_unprepared_prompt() {
     let runtime = Arc::new(ScriptedRuntime::default());
     let p = ports(
-        happy_path_with(&[(PREPARE, Err("npm ERR! network ETIMEDOUT"))]),
+        happy_path_with(&[(PREPARE_RUN, Err("npm ERR! network ETIMEDOUT"))]),
         vec![runtime.clone()],
     );
     open_conflicted(&p.db);
@@ -2236,7 +2246,7 @@ async fn a_stop_during_prepare_spawns_no_agent() {
     let runtime = Arc::new(ScriptedRuntime::default());
     let (tx, rx) = watch::channel(false);
     let p = ports(
-        happy_path_with(&[(PREPARE, Ok("added 900 packages"))]).with_stop_on(PREPARE, tx),
+        happy_path_with(&[(PREPARE_RUN, Ok("added 900 packages"))]).with_stop_on(PREPARE_RUN, tx),
         vec![runtime.clone()],
     );
     open_conflicted(&p.db);
@@ -2259,7 +2269,7 @@ async fn a_stop_during_prepare_spawns_no_agent() {
 
     assert!(matches!(outcome, Err(ResolveSyncError::Cancelled(_))));
     assert!(
-        p.scripted.calls().iter().any(|c| c == PREPARE),
+        p.scripted.calls().iter().any(|c| c == PREPARE_RUN),
         "the stop has to have reached prepare for this to be about prepare: {:?}",
         p.scripted.calls()
     );
@@ -2839,7 +2849,7 @@ async fn a_red_gate_runs_a_repair_turn_carrying_the_compiler_output() {
     let runtime = Arc::new(ScriptedRuntime::default());
     let p = ports(
         happy_path().with_queue(
-            CHECKS,
+            CHECKS_RUN,
             &[
                 Err("Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments"),
                 Ok("all checks passed"),
@@ -2900,7 +2910,7 @@ async fn a_repair_round_is_handed_what_is_left_of_the_budget() {
     let runtime = Arc::new(ScriptedRuntime::default());
     let p = ports(
         happy_path().with_queue(
-            CHECKS,
+            CHECKS_RUN,
             &[
                 Err("Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments"),
                 Ok("all checks passed"),
@@ -2952,7 +2962,7 @@ async fn a_second_red_gate_refuses_rather_than_buying_a_third_turn() {
         "Command failed (exit code: Some(101)): error[E0061]: this function takes 3 arguments";
     let runtime = Arc::new(ScriptedRuntime::default());
     let p = ports(
-        happy_path().with_queue(CHECKS, &[Err(red), Err(red)]),
+        happy_path().with_queue(CHECKS_RUN, &[Err(red), Err(red)]),
         vec![runtime.clone()],
     );
     open_conflicted(&p.db);
@@ -3009,7 +3019,7 @@ async fn a_later_resolution_is_not_told_about_the_one_before_it() {
     let runtime = Arc::new(ScriptedRuntime::default());
     let p = ports(
         happy_path()
-            .with_queue(CHECKS, &[Err(red), Err(red), Ok("all checks passed")])
+            .with_queue(CHECKS_RUN, &[Err(red), Err(red), Ok("all checks passed")])
             // Two resolutions, and the second opens on a re-merged tree — so the
             // file is marked again for it. Between them: the first turn clears
             // the markers, the repair round the red gate buys re-reads the same

@@ -135,11 +135,13 @@ pub struct ShellOptions {
     /// (what the user sees when they SSH in) finds it.
     ///
     /// Kept *opt-in and separate* from `login_shell` because an interactive
-    /// shell sources the full `~/.bashrc`, which on some machines echoes a
-    /// banner to stdout — fine for a probe or an agent spawn whose stdout is a
-    /// stream, but corrupting for commands whose stdout is parsed
-    /// (`resolve_home`, model probes). Only callers that need the tool-manager
-    /// PATH (the availability probe, the agent spawn) set this.
+    /// shell sources the full `~/.bashrc`, which costs a caller that needs no
+    /// tool-manager PATH everything that file does. What it *prints* is not
+    /// the reason: a profile's stdout never reaches the result of
+    /// `run_command_with` on any login shell
+    /// ([`BODY_MARKER`](crate::shared::shell::BODY_MARKER)). It does still
+    /// reach [`ExecutionPort::spawn_interactive`], whose stdout is a stream
+    /// nobody cuts.
     pub interactive: bool,
     /// Working directory the command runs in. `None` means "the adapter's
     /// default cwd" (local: the GUI process's cwd; SSH: the login
@@ -246,7 +248,12 @@ pub trait InteractiveHandle: Send + Sync {
 ///    `run_command` is `run_command_with(.., ShellOptions::default())`.
 /// 2. **Loud, uniform failure (D3).** A command that cannot run, or runs
 ///    non-zero, is always `Err` — never `Ok("")`. The `Err` string always
-///    includes the captured stderr. A *transport/connection* failure (the
+///    includes what the command printed, stdout and stderr both: a suite
+///    reports its failures on whichever it likes, and a caller that merged
+///    them has left stderr empty. What a login shell's *profile* printed is
+///    in neither `Ok` nor `Err` — see
+///    [`BODY_MARKER`](crate::shared::shell::BODY_MARKER). A
+///    *transport/connection* failure (the
 ///    machine could not be reached) is distinguishable from a
 ///    *command* failure (it ran, exited non-zero) by the
 ///    [`TRANSPORT_ERROR_PREFIX`] on the former.

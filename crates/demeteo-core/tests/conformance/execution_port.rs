@@ -8,7 +8,8 @@
 //!
 //! * write → read round-trip (`write_file`/`read_file`);
 //! * `cwd` honoured by `run_command_with`;
-//! * non-zero exit ⇒ `Err` carrying stderr (D3) — never `Ok("")`;
+//! * non-zero exit ⇒ `Err` carrying stderr and stdout (D3) — never `Ok("")`;
+//! * a login shell's stdout is the command's alone, whatever its profile prints;
 //! * missing file ⇒ `Err`, not `Ok("")` (D3);
 //! * `list_dir` entry shape (name/is_dir, `.`/`..` filtered);
 //! * `resolve_platform` answers on every transport (no default, no guess);
@@ -133,6 +134,32 @@ pub async fn exec_contract(port: Arc<dyn ExecutionPort>, machine_id: &str, workd
         err.contains("boom-on-stderr"),
         "the Err must carry the command's stderr, got: {err}",
     );
+
+    // --- …and its stdout, which is where a merged `( … ) 2>&1` puts all of it
+    // Computed rather than echoed: the SSH leg appends the command it ran to
+    // the `Err`, so a literal would be found there whether or not the output
+    // was.
+    let err = port
+        .run_command(machine_id, "echo boom-on-stdout-$((40 + 2)); exit 3")
+        .await
+        .expect_err("a non-zero exit must be Err, never Ok(\"\")");
+    assert!(
+        err.contains("boom-on-stdout-42"),
+        "the Err must carry the command's stdout, got: {err}",
+    );
+
+    // --- a login shell's stdout is the command's, and nothing else --------
+    // Whatever the account's profile prints ahead of the body is cut, and the
+    // marker it is cut at never reaches the caller. Exact, not `contains`: the
+    // failure this guards is bytes *around* the answer.
+    for opts in [ShellOptions::login(), ShellOptions::login_interactive()] {
+        let shape = if opts.interactive { "-l -i" } else { "-l" };
+        let out = port
+            .run_command_with(machine_id, "printf 'only-this'", opts)
+            .await
+            .unwrap_or_else(|e| panic!("a login shell ({shape}) runs a printf: {e}"));
+        assert_eq!(out, "only-this", "login shell ({shape}) stdout");
+    }
 
     // --- missing file ⇒ Err, not Ok(\"\") --------------------------------
     let missing = format!("{base}/definitely-does-not-exist-xyz.txt");

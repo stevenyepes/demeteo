@@ -26,8 +26,13 @@ that, and they are the reason the code looks the way it does:
   data in `ShellOptions` and every adapter honours every field identically. This
   is why `run_command_with` exists and why raw `run_command` should only appear
   where the documented default is genuinely intended.
+- **A command's stdout is the command's.** A login shell sources the account's
+  profile before it runs anything, and whatever that prints (iTerm2's shell
+  integration, a banner, a version manager's notice) lands on the same pipe.
+  Every login body therefore starts by printing `shared::shell::BODY_MARKER`,
+  and both adapters return only what follows it.
 - **Failures are loud and uniform.** A command that cannot run, or runs
-  non-zero, is always `Err` carrying stderr — never `Ok("")`, never swallowed by
+  non-zero, is always `Err` carrying its stdout and stderr — never `Ok("")`, never swallowed by
   `.ok()?` or `unwrap_or_default()`. Transport failures are distinguishable by
   message prefix (`TRANSPORT_ERROR_PREFIX`) so the verifier can treat them as
   non-retryable infrastructure rather than as a code regression.

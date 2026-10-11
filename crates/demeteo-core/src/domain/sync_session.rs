@@ -626,19 +626,24 @@ pub fn remaining_conflicts_refusal(declared: usize, remaining: &[(String, usize)
 /// file listing; the count before it already carries the scale.
 const REMAINING_FILES_NAMED: usize = 8;
 
-const GATE_OUTPUT_HEAD_BYTES: usize = 12_000;
-const GATE_OUTPUT_TAIL_BYTES: usize = 2_000;
+const GATE_OUTPUT_HEAD_BYTES: usize = 7_000;
+const GATE_OUTPUT_TAIL_BYTES: usize = 7_000;
 
-/// The first errors and the last summary line, which is the whole of what a
+/// The first errors and the last of the run, which is the whole of what a
 /// reader — human or agent — acts on.
 ///
 /// A `cargo` or `tsc` run answers in megabytes. Every byte of it reaches
 /// SQLite through
 /// [`SyncSessionPatch::from_resolution`](crate::ports::sync_session::SyncSessionPatch::from_resolution)
-/// and, on a repair round, a context window. Head-weighted because the first
-/// errors are the cause and the rest are consequences; the tail survives
-/// because the last line of a cargo/npm/pytest run is the count. Cut on line
-/// boundaries, since half a diagnostic reads as a different diagnostic.
+/// and, on a repair round, a context window. Neither end can be given up for
+/// the other, because which one holds the cause depends on the command. A
+/// compiler leads with it: the first errors are the cause and the rest are
+/// consequences. A gate that runs stages until one fails ends with it: the
+/// head is every stage that passed, and the failing tests are named in the
+/// last screen. This was 12k/2k, and a red `cargo test` at the end of a
+/// seven-stage script then kept the type-check banner and `error: test failed`
+/// with the names cut out between them. Cut on line boundaries, since half a
+/// diagnostic reads as a different diagnostic.
 pub fn gate_output_excerpt(error: &str) -> String {
     fn boundary_at_or_below(s: &str, mut i: usize) -> usize {
         while i > 0 && !s.is_char_boundary(i) {
