@@ -429,7 +429,7 @@ server states a version, and the client's own logic decides whether to
 proceed — which is exactly the diagnostic value the original decision wanted
 "in case of a legacy client," just implemented at the layer the protocol
 already provides for it instead of a preemptive server-side guess. Demeteo's
-twelve-tool surface doesn't vary across recent revisions, so there is nothing
+fifteen-tool surface doesn't vary across recent revisions, so there is nothing
 for the server to gate on in the first place.
 
 ### 19 — Workflow authoring UX

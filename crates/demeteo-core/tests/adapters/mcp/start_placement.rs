@@ -93,13 +93,31 @@ fn start_ticket_schema_lists_machine_id_as_optional() {
 }
 
 #[test]
-fn start_tools_keep_spend_scope_and_the_catalog_keeps_twelve_tools() {
+fn start_ticket_schema_lists_its_bounds_as_optional() {
+    let entry = catalog_entry("start_ticket");
+    let schema = &entry["inputSchema"];
+    let required = required_names(schema);
+
+    for name in ["max_cost_usd", "max_wall_clock_secs", "max_in_flight"] {
+        let property = &schema["properties"][name];
+        assert!(
+            property["description"]
+                .as_str()
+                .is_some_and(|d| !d.is_empty()),
+            "{name} is missing or undescribed: {schema}"
+        );
+        assert!(!required.contains(&name), "{name} must not be required");
+    }
+}
+
+#[test]
+fn start_tools_keep_spend_scope_and_the_catalog_keeps_fifteen_tools() {
     assert_eq!(required_scope("start_feature"), Some(Scope::Spend));
     assert_eq!(required_scope("start_ticket"), Some(Scope::Spend));
     assert_eq!(
         super::tool_catalog().as_array().map(Vec::len),
-        Some(12),
-        "machine_id is an argument, not a new tool"
+        Some(15),
+        "a placement or a bound is an argument, not a new tool"
     );
 }
 
@@ -307,4 +325,119 @@ async fn a_clean_start_feature_carries_no_degraded_state_key() {
             );
         }
     }
+}
+
+/// A startable ticket on the harness's project, stored as placed on
+/// `runner-1`, with `siblings_in_flight` started tickets beside it.
+fn placed_ticket(
+    h: &crate::application::launch::tests::Harness,
+    siblings_in_flight: i64,
+) -> String {
+    use crate::application::discovery::{create as open_discovery, NewDiscovery};
+    use crate::domain::ids::{MachineId, TicketId, WorkflowId};
+    use crate::domain::models::{Ticket, TicketState};
+
+    let discovery = open_discovery(
+        &h.ctx,
+        NewDiscovery {
+            project_id: "p-1".to_string(),
+            title: "bounded work".to_string(),
+            agent_kind: "claude-code".to_string(),
+            model: None,
+            effort: None,
+            machine_id: None,
+            staged_attachments: Vec::new(),
+        },
+    )
+    .expect("the discovery opens");
+    let ticket = |seq: i64, state| Ticket {
+        id: TicketId::from(format!("t-{seq}")),
+        discovery_id: discovery.id.clone(),
+        seq,
+        title: format!("ticket {seq}"),
+        description: String::new(),
+        acceptance: Vec::new(),
+        files: Vec::new(),
+        blocked_by: Vec::new(),
+        test_command: None,
+        workflow_id: Some(WorkflowId::from("w-1".to_string())),
+        agent_kind: None,
+        model: None,
+        effort: None,
+        machine_id: Some(MachineId::from("runner-1")),
+        attachments: Vec::new(),
+        state,
+        drop_reason: None,
+        force_start_reason: None,
+        force_started_at: None,
+        feature_id: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+    let mut tickets = vec![ticket(1, TicketState::Unstarted)];
+    tickets.extend((0..siblings_in_flight).map(|i| ticket(i + 2, TicketState::Started)));
+    h.ctx
+        .tickets
+        .upsert_batch(&tickets)
+        .expect("the tickets are stored");
+    "t-1".to_string()
+}
+
+/// A `tools/call` of `start_ticket` over `h`, as a `spend` grant. Returns the
+/// whole response.
+async fn start_ticket_over(
+    h: &crate::application::launch::tests::Harness,
+    arguments: Value,
+) -> Value {
+    let (addr, resource) = serve(h.ctx.clone()).await;
+    let token = "token-spend-start-ticket";
+    seed_spend_grant(&h.ctx, token, &resource);
+    reqwest::Client::new()
+        .post(format!("http://{addr}/mcp"))
+        .bearer_auth(token)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "start_ticket", "arguments": arguments },
+        }))
+        .send()
+        .await
+        .expect("request /mcp")
+        .json()
+        .await
+        .expect("response is JSON")
+}
+
+#[tokio::test]
+async fn start_ticket_sends_its_caps_to_the_runner() {
+    let h = harness(RunnerAt::accepting());
+    let ticket_id = placed_ticket(&h, 0);
+
+    let body = start_ticket_over(
+        &h,
+        json!({ "ticket_id": ticket_id, "max_cost_usd": 3.0, "max_wall_clock_secs": 120 }),
+    )
+    .await;
+
+    assert_eq!(body["result"]["isError"], json!(false), "got: {body}");
+    let submitted = h.exec.submitted();
+    assert_eq!(submitted.len(), 1, "{submitted:?}");
+    assert_eq!(submitted[0]["budget"]["max_cost_usd"], json!(3.0));
+    assert_eq!(submitted[0]["budget"]["max_wall_clock_secs"], json!(120));
+}
+
+#[tokio::test]
+async fn start_ticket_at_its_in_flight_bound_is_a_tool_error_and_submits_nothing() {
+    let h = harness(RunnerAt::accepting());
+    let ticket_id = placed_ticket(&h, 2);
+
+    let body = start_ticket_over(&h, json!({ "ticket_id": ticket_id, "max_in_flight": 2 })).await;
+
+    assert_eq!(body["result"]["isError"], json!(true), "got: {body}");
+    let text = body["result"]["content"][0]["text"]
+        .as_str()
+        .expect("a tool error carries text");
+    assert!(text.contains("max_in_flight = 2"), "got: {text}");
+    assert_eq!(h.exec.submitted().len(), 0, "nothing reached the runner");
 }

@@ -306,7 +306,7 @@ async fn a_read_only_grant_lists_the_full_catalog() {
     let tools = body["result"]["tools"]
         .as_array()
         .expect("result.tools is an array");
-    assert_eq!(tools.len(), 12);
+    assert_eq!(tools.len(), 15);
     assert!(tools
         .iter()
         .any(|t| t["name"] == "start_feature" && t["inputSchema"].is_object()));

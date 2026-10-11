@@ -720,6 +720,16 @@ fn stored_ticket(ctx: &AppContext, stored: &str) -> Ticket {
     t
 }
 
+fn ticket_launch(t: &Ticket, machine_id: Option<&str>) -> AgentTicketLaunch {
+    AgentTicketLaunch {
+        ticket_id: t.id.0.clone(),
+        machine_id: machine_id.map(str::to_string),
+        max_cost_usd: None,
+        max_wall_clock_secs: None,
+        max_in_flight: None,
+    }
+}
+
 fn stored_machine(ctx: &AppContext, t: &Ticket) -> Option<MachineId> {
     ctx.tickets
         .get(&t.id)
@@ -733,7 +743,7 @@ async fn a_machine_override_starts_one_ticket_launch_detached_and_is_not_saved()
     let h = harness(RunnerAt::accepting());
     let t = stored_ticket(&h.ctx, "local");
 
-    let feature = start_ticket(&h.ctx, &t.id, Some("runner-1".to_string()))
+    let feature = start_ticket(&h.ctx, ticket_launch(&t, Some("runner-1")))
         .await
         .expect("the ticket starts on the runner")
         .feature;
@@ -750,7 +760,7 @@ async fn a_blank_machine_override_keeps_the_tickets_own_placement() {
         let h = harness(RunnerAt::accepting());
         let t = stored_ticket(&h.ctx, "runner-1");
 
-        start_ticket(&h.ctx, &t.id, Some(blank.to_string()))
+        start_ticket(&h.ctx, ticket_launch(&t, Some(blank)))
             .await
             .unwrap_or_else(|e| panic!("{blank:?} is no override, got: {e}"));
 
@@ -760,4 +770,116 @@ async fn a_blank_machine_override_keeps_the_tickets_own_placement() {
             "{blank:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_tickets_caps_reach_the_runner_as_the_runs_budget() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h.ctx, "runner-1");
+
+    start_ticket(
+        &h.ctx,
+        AgentTicketLaunch {
+            max_cost_usd: Some(7.5),
+            max_wall_clock_secs: Some(900),
+            ..ticket_launch(&t, None)
+        },
+    )
+    .await
+    .expect("the capped ticket starts");
+
+    let submitted = h.exec.submitted();
+    assert_eq!(submitted.len(), 1, "{submitted:?}");
+    assert_eq!(submitted[0]["budget"]["max_cost_usd"], 7.5, "{submitted:?}");
+    assert_eq!(
+        submitted[0]["budget"]["max_wall_clock_secs"], 900,
+        "{submitted:?}"
+    );
+}
+
+/// A cap on a run that would not honour it is refused, not dropped: the
+/// caller that sent it believes the run is capped.
+#[tokio::test]
+async fn a_cap_on_a_ticket_that_resolves_local_is_refused_and_starts_nothing() {
+    for (cost, secs, named) in [
+        (Some(5.0), None, "max_cost_usd"),
+        (None, Some(60), "max_wall_clock_secs"),
+    ] {
+        let h = harness(RunnerAt::accepting());
+        let t = stored_ticket(&h.ctx, "local");
+
+        let err = start_ticket(
+            &h.ctx,
+            AgentTicketLaunch {
+                max_cost_usd: cost,
+                max_wall_clock_secs: secs,
+                ..ticket_launch(&t, None)
+            },
+        )
+        .await
+        .expect_err("a cap on a local run is refused");
+
+        assert!(err.contains(named), "got: {err}");
+        assert!(h.spy.launched().is_none(), "{named}: the executor ran");
+        assert_eq!(h.exec.calls(), Vec::<String>::new(), "{named}");
+        assert_eq!(feature_ids(&h.ctx), Vec::<String>::new(), "{named}");
+        let after = h.ctx.tickets.get(&t.id).unwrap().unwrap();
+        assert_eq!(after.state, TicketState::Unstarted, "{named}");
+    }
+}
+
+/// A second ticket in `t`'s Discovery that is already in flight: started,
+/// with no settled pull request.
+fn in_flight_sibling(ctx: &AppContext, t: &Ticket) -> Ticket {
+    let sibling = Ticket {
+        id: TicketId::from("t-2".to_string()),
+        seq: 2,
+        state: TicketState::Started,
+        ..t.clone()
+    };
+    ctx.tickets
+        .upsert_batch(std::slice::from_ref(&sibling))
+        .expect("the sibling is stored");
+    sibling
+}
+
+#[tokio::test]
+async fn a_start_bounded_at_the_in_flight_count_is_refused_and_starts_nothing() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h.ctx, "runner-1");
+    in_flight_sibling(&h.ctx, &t);
+
+    let err = start_ticket(
+        &h.ctx,
+        AgentTicketLaunch {
+            max_in_flight: Some(1),
+            ..ticket_launch(&t, None)
+        },
+    )
+    .await
+    .expect_err("one is in flight and the bound is one");
+
+    assert!(err.contains("max_in_flight = 1"), "got: {err}");
+    assert!(err.contains("#1"), "got: {err}");
+    assert_eq!(h.exec.calls(), Vec::<String>::new(), "no RPC");
+    assert_eq!(feature_ids(&h.ctx), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_start_bounded_above_the_in_flight_count_goes_ahead() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h.ctx, "runner-1");
+    in_flight_sibling(&h.ctx, &t);
+
+    start_ticket(
+        &h.ctx,
+        AgentTicketLaunch {
+            max_in_flight: Some(2),
+            ..ticket_launch(&t, None)
+        },
+    )
+    .await
+    .expect("one is in flight and the bound is two");
+
+    assert!(h.exec.calls().contains(&"rpc submit_run".to_string()));
 }

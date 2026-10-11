@@ -48,8 +48,8 @@ fn every_catalog_tool_name_appears_in_the_skill() {
 
     assert_eq!(
         names.len(),
-        12,
-        "expected exactly twelve tools in tool_catalog(), found {}: {names:?}",
+        15,
+        "expected exactly fifteen tools in tool_catalog(), found {}: {names:?}",
         names.len()
     );
 
@@ -69,18 +69,21 @@ fn every_catalog_tool_name_appears_in_the_skill() {
 /// The "Spend vs. read" section once claimed every
 /// tool but `start_feature`/`start_ticket` "changes nothing," which is false
 /// for `create_workspace_project` and `apply_run_shape_patch` — both are free
-/// of charge but persist a real write. Guards against that overclaim
-/// regressing.
+/// of charge but persist a real write — and for `refresh_discovery_prs`,
+/// which is `read`-scoped and records what the forge says. Guards against
+/// that overclaim regressing.
 #[test]
 fn spend_vs_read_does_not_overclaim_free_reads() {
-    const READ_ONLY_TOOLS: [&str; 8] = [
+    const READ_ONLY_TOOLS: [&str; 10] = [
         "list_projects",
         "list_features",
         "get_feature",
         "list_step_attempts",
         "get_failure_verdict",
         "list_pending_gates",
+        "list_discoveries",
         "get_discovery_board",
+        "list_machines",
         "run_events_since",
     ];
 
@@ -93,10 +96,10 @@ fn spend_vs_read_does_not_overclaim_free_reads() {
     }
     assert_eq!(
         names.len(),
-        READ_ONLY_TOOLS.len() + 4,
-        "expected the read-only set plus create_workspace_project, \
-         apply_run_shape_patch, start_feature, and start_ticket to cover the \
-         full catalog, found {}: {names:?}",
+        READ_ONLY_TOOLS.len() + 5,
+        "expected the read-only set plus refresh_discovery_prs, \
+         create_workspace_project, apply_run_shape_patch, start_feature, and \
+         start_ticket to cover the full catalog, found {}: {names:?}",
         names.len()
     );
 
@@ -112,6 +115,23 @@ fn spend_vs_read_does_not_overclaim_free_reads() {
         "SKILL.md must name both create_workspace_project and \
          apply_run_shape_patch when distinguishing cost from side effects"
     );
+    let spend_vs_read = &SKILL_MD[SKILL_MD
+        .find("## Spend vs. read")
+        .expect("SKILL.md has a \"## Spend vs. read\" heading")..];
+    let free_reads = &spend_vs_read[..spend_vs_read
+        .find("changes nothing")
+        .expect("the section still names the tools that change nothing")];
+    assert!(
+        !free_reads.contains("refresh_discovery_prs"),
+        "refresh_discovery_prs records pull-request state, so SKILL.md must \
+         not list it among the reads that change nothing"
+    );
+    assert!(
+        spend_vs_read.contains("refresh_discovery_prs"),
+        "SKILL.md's \"Spend vs. read\" section must say what \
+         refresh_discovery_prs writes"
+    );
+
     assert!(
         SKILL_MD.contains("real, persisted write"),
         "SKILL.md must distinguish \"free of charge\" from \"changes nothing\" \

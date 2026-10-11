@@ -49,13 +49,8 @@ pub fn start_mr_monitor(ports: MrMonitorPorts, runtime: &tokio::runtime::Handle)
 }
 
 async fn check_mr_states(ports: &MrMonitorPorts) -> Result<(), String> {
-    let features = &*ports.features;
     let mr_publisher = &*ports.mr_publisher;
-    let notifications = &*ports.notifications;
-    let notif = &*ports.notif;
-    let tickets = &*ports.tickets;
-    let discoveries = &*ports.discoveries;
-    let open = features.list_with_open_mr()?;
+    let open = ports.features.list_with_open_mr()?;
     eprintln!("[MrMonitor] found {} feature(s) with open MR", open.len());
     for feature in &open {
         let url = match &feature.mr_url {
@@ -77,50 +72,71 @@ async fn check_mr_states(ports: &MrMonitorPorts) -> Result<(), String> {
             }
         };
 
-        eprintln!("[MrMonitor] feature {} state = {}", feature.id.0, new_state);
-        let recorded = match new_state.as_str() {
-            "open" => false,
-            "merged" => {
-                record_mr_state(feature, &new_state, features, notifications, notif)?;
-                true
-            }
-            _ => record_mr_state(feature, &new_state, features, notifications, notif).is_ok(),
-        };
+        apply_polled_state(ports, feature, &new_state).await?;
+    }
+    Ok(())
+}
 
-        if recorded && releasable_after_mr_poll(&feature.status, &new_state) {
-            let settled = Feature {
-                mr_state: Some(new_state.clone()),
-                ..feature.clone()
-            };
-            if let Err(e) = ports.cache.release(&settled).await {
-                eprintln!(
-                    "[MrMonitor] dependency cache release failed for feature {}: {}",
-                    feature.id.0, e
-                );
-            }
+/// Everything a poll does once the forge has answered for `feature`: record
+/// the state, release the dependency cache a settled PR no longer needs, and
+/// recompute the Discoveries the Feature gates.
+///
+/// Shared with an on-demand refresh
+/// ([`crate::application::tickets::refresh`]) because a settle is not only a
+/// column write. A refresh that recorded `merged` by itself would take the
+/// Feature out of `list_with_open_mr` for good, and the cache release and the
+/// dependents' notice this loop owes it would never happen.
+pub async fn apply_polled_state(
+    ports: &MrMonitorPorts,
+    feature: &Feature,
+    new_state: &str,
+) -> Result<(), String> {
+    let features = &*ports.features;
+    let notifications = &*ports.notifications;
+    let notif = &*ports.notif;
+    eprintln!("[MrMonitor] feature {} state = {}", feature.id.0, new_state);
+    let recorded = match new_state {
+        "open" => false,
+        "merged" => {
+            record_mr_state(feature, new_state, features, notifications, notif)?;
+            true
         }
+        _ => record_mr_state(feature, new_state, features, notifications, notif).is_ok(),
+    };
 
-        // Placed here rather than inside `record_merged` because `closed`
-        // never reaches that function and releases dependents just as
-        // `merged` does (`docs/PRD_DISCOVERY.md` §6.4), and because the
-        // recompute must not inherit that function's notification-keyed
-        // guard — see `release_dependents` for which hazard that guard
-        // forces a choice between. A failure here is logged, not
-        // propagated: the poll owes the remaining features their turn.
-        if new_state == "merged" || new_state == "closed" {
-            if let Err(e) = crate::application::tickets::release::release_dependents(
-                feature,
-                tickets,
-                discoveries,
-                features,
-                notifications,
-                notif,
-            ) {
-                eprintln!(
-                    "[MrMonitor] ticket recompute failed for feature {}: {}",
-                    feature.id.0, e
-                );
-            }
+    if recorded && releasable_after_mr_poll(&feature.status, new_state) {
+        let settled = Feature {
+            mr_state: Some(new_state.to_string()),
+            ..feature.clone()
+        };
+        if let Err(e) = ports.cache.release(&settled).await {
+            eprintln!(
+                "[MrMonitor] dependency cache release failed for feature {}: {}",
+                feature.id.0, e
+            );
+        }
+    }
+
+    // Placed here rather than inside `record_merged` because `closed`
+    // never reaches that function and releases dependents just as
+    // `merged` does (`docs/PRD_DISCOVERY.md` §6.4), and because the
+    // recompute must not inherit that function's notification-keyed
+    // guard — see `release_dependents` for which hazard that guard
+    // forces a choice between. A failure here is logged, not
+    // propagated: the poll owes the remaining features their turn.
+    if new_state == "merged" || new_state == "closed" {
+        if let Err(e) = crate::application::tickets::release::release_dependents(
+            feature,
+            &*ports.tickets,
+            &*ports.discoveries,
+            features,
+            notifications,
+            notif,
+        ) {
+            eprintln!(
+                "[MrMonitor] ticket recompute failed for feature {}: {}",
+                feature.id.0, e
+            );
         }
     }
     Ok(())

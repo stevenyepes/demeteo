@@ -16,6 +16,7 @@ pub mod attachments;
 pub mod briefing;
 pub mod edit;
 pub mod launch;
+pub mod refresh;
 pub mod release;
 pub mod starting;
 
@@ -62,6 +63,9 @@ pub struct TicketFeatureView {
     pub status: String,
     pub mr_state: Option<String>,
     pub mr_url: Option<String>,
+    /// The branch the attempt works on and its pull request is opened from.
+    /// `None` until the run has cut one.
+    pub branch: Option<String>,
     /// Where this attempt was placed, as its start recorded it. `None` when
     /// that is unknown — an attempt predating the record, or a read of it
     /// that failed — and never inferred from [`Self::remote`] being absent:
@@ -87,6 +91,9 @@ pub struct DiscoveryBoard {
     /// In [`Ticket::seq`] order, which the port guarantees.
     pub tickets: Vec<TicketView>,
     pub progress: TicketProgress,
+    /// The branch every ticket is cut from and reviewed against (§7.3).
+    /// `None` is the project's default branch, as it is on the row.
+    pub base_branch: Option<String>,
     /// What a ticket left on Default runs on, shipped on its own because a
     /// ticket holding a stored choice cannot say it, and a plan where every
     /// ticket does would otherwise leave Default unnamed.
@@ -171,6 +178,7 @@ pub fn board(ctx: &AppContext, discovery_id: &DiscoveryId) -> Result<DiscoveryBo
                 status: f.status,
                 mr_state: f.mr_state,
                 mr_url: f.mr_url,
+                branch: f.resolved_branch,
             }),
         })
         .collect();
@@ -178,6 +186,7 @@ pub fn board(ctx: &AppContext, discovery_id: &DiscoveryId) -> Result<DiscoveryBo
     Ok(DiscoveryBoard {
         tickets: views,
         progress: derived.progress,
+        base_branch: discovery.base_branch,
         discovery_default: default,
         local_host,
     })
