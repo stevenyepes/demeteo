@@ -217,3 +217,137 @@ jobs:
 
       - name: Run topology equivalence suite (local + SSH)
         run: crates/demeteo-core/tests/conformance/run-topology-conformance.sh
+
+  # The Hub against the services it is deployed with. `scripts/checks.sh` runs
+  # `cargo test -p demeteo-hub`, but the tenancy and OpenBao round-trip tests
+  # are `#[ignore]`d there because they need a live Postgres and an unsealed
+  # OpenBao; this job is the only place they run. Separate from `rust` because
+  # it needs Docker, and checks.sh has to stay runnable without it.
+  #
+  # Compose rather than `services:` containers, for two reasons. A service
+  # container starts before checkout, so `deploy/hub/openbao/config.hcl` cannot
+  # be mounted into it, and `services:` has no key for the `server` command the
+  # image needs. And the point is to bring the stack up the way an operator
+  # does: the real compose.yaml, then deploy/hub/README.md's init, unseal,
+  # Transit, policy and token steps in the README's order — so a README that
+  # stops working fails here rather than on someone's host.
+  #
+  # The image is built to prove the Dockerfile's COPY allow-list still covers
+  # the workspace, then discarded with the runner. Nothing here can publish
+  # it: no registry login, and the workflow's token is `contents: read`. No
+  # layer cache either — a cold release build is cheaper than another entry
+  # against the 10 GB cap the header describes.
+  hub:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        # Explicitly `bash`, which Actions runs with `-o pipefail`; the default
+        # shell omits it, and a failed `bao … | jq` would then read as success.
+        shell: bash
+    env:
+      # A throwaway for a database that lives one job; compose refuses every
+      # command without it. Must stay URL-safe (deploy/hub/README.md).
+      POSTGRES_PASSWORD: hub-ci-throwaway
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Resolve pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> src-tauri/target"
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+          cache-on-failure: true
+
+      - name: Start Postgres and OpenBao
+        working-directory: deploy/hub
+        run: docker compose -f compose.yaml -f compose.test.yaml up -d --wait postgres openbao
+
+      # Parsing the unseal keys and root token in a script is acceptable only
+      # because this OpenBao and everything it wraps are gone when the job
+      # ends. The README's "First run" section is the rule for a real one.
+      - name: Initialise and unseal OpenBao, enable Transit, mint the Hub token
+        working-directory: deploy/hub
+        run: |
+          # Bare `-e BAO_TOKEN` forwards the caller's value, so the root token
+          # never sits on a command line. Stdin stays attached for the policy
+          # heredoc — which is why nothing below pipes into a `while read`:
+          # the first `bao` in the loop body would swallow the rest of the pipe.
+          bao() {
+            docker compose exec -T -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN openbao bao "$@"
+          }
+
+          # `up --wait` returns once the container is running (the service has
+          # no healthcheck), which is before the listener accepts. `bao status`
+          # exits 2 for "reachable and sealed" and 1 for "could not connect".
+          rc=1
+          for _ in $(seq 1 30); do
+            bao status >/dev/null 2>&1 && rc=0 || rc=$?
+            if [ "$rc" -eq 2 ]; then break; fi
+            sleep 1
+          done
+          if [ "$rc" -ne 2 ]; then
+            echo "::error::OpenBao was not reachable and sealed within 30s (bao status exited $rc)"
+            docker compose logs openbao
+            exit 1
+          fi
+
+          init=$(bao operator init -format=json)
+          jq -r '(.unseal_keys_b64[], .unseal_keys_hex[]?, .root_token) | "::add-mask::\(.)"' <<<"$init"
+
+          for key in $(jq -r '.unseal_keys_b64[]' <<<"$init"); do
+            bao operator unseal "$key" >/dev/null
+            if bao status >/dev/null; then break; fi
+          done
+          bao status
+
+          BAO_TOKEN=$(jq -er '.root_token' <<<"$init")
+          export BAO_TOKEN
+          bao secrets enable transit
+          bao write -f transit/keys/demeteo-hub
+
+          bao policy write demeteo-hub - <<'EOF'
+          path "transit/encrypt/demeteo-hub"          { capabilities = ["update"] }
+          path "transit/decrypt/demeteo-hub"          { capabilities = ["update"] }
+          path "transit/datakey/plaintext/demeteo-hub" { capabilities = ["update"] }
+          EOF
+
+          hub_token=$(bao token create -policy=demeteo-hub -period=720h -format=json | jq -er '.auth.client_token')
+          echo "::add-mask::$hub_token"
+          echo "OPENBAO_TOKEN=$hub_token" >> "$GITHUB_ENV"
+
+      - name: Hub protocol tests
+        run: cargo test -p demeteo-hub-protocol
+
+      # OPENBAO_TOKEN arrives through GITHUB_ENV from the step above, and is
+      # the least-privilege token rather than root on purpose: the run then
+      # proves the README's three-path policy is all the adapter needs.
+      - name: Hub tests, including the Postgres- and OpenBao-backed ones
+        env:
+          DEMETEO_HUB_TEST_DATABASE_URL: postgres://demeteo:${{ env.POSTGRES_PASSWORD }}@127.0.0.1:5432/demeteo_hub
+          OPENBAO_ADDR: http://127.0.0.1:8200
+          DEMETEO_HUB_TRANSIT_KEY: demeteo-hub
+        run: cargo test -p demeteo-hub -- --include-ignored
+
+      - name: Build the Hub image (not pushed)
+        working-directory: deploy/hub
+        run: docker compose build hub
+
+      - name: Service logs
+        if: failure()
+        working-directory: deploy/hub
+        run: docker compose logs postgres openbao

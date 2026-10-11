@@ -183,24 +183,49 @@ Caddy obtains and renews the certificate through ACME, which needs:
 ## Running the ignored tests
 
 The tenancy and OpenBao round-trip tests need live services, so they are `#[ignore]`d and a
-plain `cargo test` skips them. Bring up Postgres and an unsealed OpenBao with Transit and the
-key set up as above, then:
+plain `cargo test` skips them. `compose.yaml` publishes neither Postgres nor OpenBao, so start
+the two through the test override, which publishes both on `127.0.0.1` only:
 
 ```bash
-export DEMETEO_HUB_TEST_DATABASE_URL=postgres://<user>:<password>@<host>:<port>/<db>
-export OPENBAO_ADDR=<address reachable from the host>
+docker compose -f compose.yaml -f compose.test.yaml up -d --wait postgres openbao
+```
+
+Adding the override to services that are already up recreates their containers, so OpenBao
+comes back sealed. Initialise or unseal it, and set up Transit, the key and the token as above,
+then:
+
+```bash
+export DEMETEO_HUB_TEST_DATABASE_URL=postgres://<user>:<password>@127.0.0.1:5432/<db>
+export OPENBAO_ADDR=http://127.0.0.1:8200
 export OPENBAO_TOKEN=<the least-privilege token>
 export DEMETEO_HUB_TRANSIT_KEY=demeteo-hub
 cargo test -p demeteo-hub -- --ignored
 ```
 
+`--ignored` runs only the seven live tests; CI passes `--include-ignored` to run them with the
+rest. Run a later `docker compose up` from a different shell, or `unset OPENBAO_ADDR` first: an
+exported value outranks `.env`, and the Hub container would be told to find OpenBao on its own
+loopback.
+
 The least-privilege token is enough. The missing-key test asserts only that OpenBao refuses a
 key the Hub was not given; with the policy above that refusal is the ACL layer's 403, which
 the test accepts alongside an unknown-key error from a broader token.
 
-The compose file publishes neither Postgres nor OpenBao, so from the host you need a
-temporary port mapping or a `docker compose run` of your own. A later ticket adds a CI job
-that runs these; until then they are run by hand.
+### In CI
+
+The `hub` job in `.github/workflows/pr-checks.yml` does all of this on every pull request and
+on every push to `master`: it starts `postgres` and `openbao` through the override, runs the
+init, unseal, Transit, policy and token steps of this guide in order, then
+`cargo test -p demeteo-hub-protocol` and `cargo test -p demeteo-hub -- --include-ignored`, and
+finally builds the image from `deploy/hub/Dockerfile` and discards it — nothing is pushed.
+
+It is deliberately not part of `scripts/checks.sh`: `npm run checks` has to run on a machine
+without Docker, so a green local run says nothing about these seven tests.
+
+The job reads the unseal keys and the root token out of `bao operator init` in a script. That
+is acceptable only because its OpenBao exists for one job and wraps nothing worth keeping.
+Never do the same for a deployment; [First run](#first-run-initialise-openbao) is the rule
+there.
 
 ## What this deployment does not protect
 

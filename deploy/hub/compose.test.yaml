@@ -1,0 +1,15 @@
+# Test-only override: publishes Postgres and OpenBao on the host's loopback so
+# `cargo test -p demeteo-hub -- --include-ignored` can reach them from outside
+# the compose network. It takes effect only when named explicitly —
+#   docker compose -f compose.yaml -f compose.test.yaml up -d --wait postgres openbao
+# — because Compose auto-loads `compose.override.yaml` and nothing else, so a
+# plain `docker compose up -d` never publishes these ports.
+#
+# 127.0.0.1 is the whole fence. OpenBao's listener is plain HTTP on the
+# reasoning in `openbao/config.hcl`, which assumes 8200 is unreachable from
+# off the host; a bare "8200:8200" would bind every interface and break it.
+services:
+  postgres:
+    ports: ["127.0.0.1:5432:5432"]
+  openbao:
+    ports: ["127.0.0.1:8200:8200"]
