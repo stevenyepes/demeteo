@@ -1,0 +1,41 @@
+// Loaded by the fetch override in `biome.jsonc`, whose include list is the
+// whole of this file's scope — nothing here knows a path. That override's
+// `noRestrictedGlobals` entry refuses the bare `fetch(…)`; this refuses the
+// spellings that reach the same function as a property, which that rule
+// cannot see.
+//
+// The object is deliberately not restricted to `window`, `globalThis` and
+// `self`: `const w = window; w.fetch(…)` would then pass. The cost is that a
+// property named `fetch` on anything is refused in those files, and that is
+// the intended reading — a view has no business holding one.
+//
+// The destructuring patterns are not just a third spelling. `const { fetch } =
+// globalThis` makes `fetch` a local binding, and `noRestrictedGlobals` stops
+// reporting every bare call in that scope, so without them one line disarms
+// the other rule.
+//
+// Keyed and destructured forms are matched by node kind because snippets do
+// not cover them: a keyed snippet matches one quote style and one of `[` and
+// `?.[` at a time, and `const { $bindings } = $source` matched only a single
+// un-aliased property. The regexes match the whole key, so `refetch` and
+// `fetchAll` pass.
+//
+// The message is the `deniedGlobals` text in `biome.jsonc`, character for
+// character, so both mechanisms read as one rule.
+language js
+
+or {
+  `$object.fetch`,
+  `$object?.fetch`,
+  JsComputedMemberExpression(member = $key) where { $key <: r"[\"'`]fetch[\"'`]" },
+  JsObjectBindingPatternProperty(member = $key) where { $key <: r"\[?\s*[\"'`]?fetch[\"'`]?\s*\]?" },
+  JsObjectBindingPatternShorthandProperty(identifier = $key) where { $key <: r"fetch" },
+  JsObjectAssignmentPatternProperty(member = $key) where { $key <: r"\[?\s*[\"'`]?fetch[\"'`]?\s*\]?" },
+  JsObjectAssignmentPatternShorthandProperty(identifier = $key) where { $key <: r"fetch" }
+} as $access where {
+  register_diagnostic(
+    span = $access,
+    message = "AGENTS.md §3: reach the Hub through a typed wrapper in hub-web/src/lib/ — never fetch() from a view or component.",
+    severity = "error"
+  )
+}

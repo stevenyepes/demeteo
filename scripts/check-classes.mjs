@@ -19,8 +19,11 @@
  * leaves no trace on the call sites.
  *
  * So: compile the real stylesheet, collect the class selectors it emits,
- * collect the class names src/ puts in a class attribute, and fail on the
- * difference.
+ * collect the class names the tree puts in a class attribute, and fail on the
+ * difference. A tree is a directory holding its own `App.css` entry: `src/`
+ * for the desktop app and `hub-web/src` for the Hub's browser UI, one run each.
+ * `hub-web/src/App.css` imports `src/App.css`, so both resolve against the same
+ * tokens while each is judged only on the classes its own files use.
  *
  * ## Why it is narrow
  *
@@ -72,6 +75,7 @@
  *
  * Usage:
  *   node scripts/check-classes.mjs                 # check src/
+ *   node scripts/check-classes.mjs hub-web/src     # check the Hub's browser UI
  *   node scripts/check-classes.mjs <dir> --debug    # …and list what was suppressed
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
