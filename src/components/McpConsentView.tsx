@@ -26,7 +26,8 @@ interface McpConsentRequestedPayload {
  *  tag beside it stays the literal scope name. */
 const SCOPE_COST: Record<string, string> = {
   read: "Can see every project, feature, run and failure. Changes nothing, costs nothing.",
-  spend: "Can start runs. Costs money and agent time until each run finishes or is stopped.",
+  spend:
+    "Can start runs, retry steps, choose a step's model, and send a run back for rework. Costs money and agent time until each run finishes or is stopped.",
   configure: "Can register projects and change how later runs are set up.",
 };
 

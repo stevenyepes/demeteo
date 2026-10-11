@@ -48,8 +48,8 @@ fn every_catalog_tool_name_appears_in_the_skill() {
 
     assert_eq!(
         names.len(),
-        15,
-        "expected exactly fifteen tools in tool_catalog(), found {}: {names:?}",
+        18,
+        "expected exactly eighteen tools in tool_catalog(), found {}: {names:?}",
         names.len()
     );
 
@@ -96,10 +96,11 @@ fn spend_vs_read_does_not_overclaim_free_reads() {
     }
     assert_eq!(
         names.len(),
-        READ_ONLY_TOOLS.len() + 5,
+        READ_ONLY_TOOLS.len() + 8,
         "expected the read-only set plus refresh_discovery_prs, \
-         create_workspace_project, apply_run_shape_patch, start_feature, and \
-         start_ticket to cover the full catalog, found {}: {names:?}",
+         create_workspace_project, apply_run_shape_patch, start_feature, \
+         start_ticket, retry_step, set_step_assignment and rework_from_critic \
+         to cover the full catalog, found {}: {names:?}",
         names.len()
     );
 

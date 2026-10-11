@@ -306,13 +306,21 @@ impl RunShapePatch {
         ];
         for (field, value) in identifiers {
             if let Some(v) = value {
-                if v.starts_with('-') || v.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                if !is_plain_identifier(v) {
                     return Err(RunShapePatchError::Identifier(field));
                 }
             }
         }
         Ok(())
     }
+}
+
+/// Whether an agent, model or workflow identifier from an external caller is
+/// safe to store. One that starts with `-` reads as a flag where a harness
+/// takes it as an argv value, and none of the three legitimately carries
+/// whitespace or a control character.
+pub fn is_plain_identifier(value: &str) -> bool {
+    !value.starts_with('-') && !value.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// Copies `patch`'s nine fields onto `settings`, returning every other
