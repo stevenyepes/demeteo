@@ -266,11 +266,12 @@ element just inherits, so a heading renders in `body`'s Inter and only an eye
 catches it. §4 has the mechanism that makes it silent.
 
 - **`scripts/check-classes.mjs`** (inside `npm run checks`) compiles the
-  stylesheet and fails on a design-system class `src/` uses that resolves to no
-  rule. It matches a class *selector*, not a bare token — `font-display: block`
-  is a real property in the `@font-face` rule of `src/App.css`, so a substring
-  grep "finds" a `font-display` utility that has never existed. Check by hand the
-  same way, and never blind-replace one of these names across the tree.
+  stylesheet and fails on a design-system class `src/` or `hub-web/src` uses
+  that resolves to no rule. It matches a class *selector*, not a bare token —
+  `font-display: block` is a real property in the `@font-face` rule of
+  `src/App.css`, so a substring grep "finds" a `font-display` utility that has
+  never existed. Check by hand the same way, and never blind-replace one of
+  these names across the tree.
 
 ### The parity gates are not in `npm run checks`
 

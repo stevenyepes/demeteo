@@ -14,7 +14,8 @@
 # Usage:
 #   scripts/checks.sh                 # run every gate, including commitlint
 #   scripts/checks.sh --skip-commitlint
-#   scripts/checks.sh frontend        # tsc, biome, class names, vitest — no Rust
+#   scripts/checks.sh frontend        # tsc, biome, class names (src/ + hub-web/src),
+#                                     # vitest, hub-web build — no Rust
 #   scripts/checks.sh rust            # fmt, clippy, doc, doc-refs, tests — no Node gates
 #   npm run checks:code               # every gate EXCEPT commitlint — see below
 #   CHECKS_SKIP_COMMITLINT=1 ...      # same, via env
@@ -90,6 +91,7 @@ if [ "$RUN_FRONTEND" = "1" ]; then
   need_node_bin tsc
   need_node_bin biome
   need_node_bin vitest
+  need_node_bin vite
 fi
 if [ "$RUN_RUST" = "1" ]; then
   need_host_bin cargo "install Rust via rustup"
@@ -129,8 +131,21 @@ step "Frontend lint (biome check)"
 step "Frontend class names (used vs defined)"
 node scripts/check-classes.mjs
 
+# A second run rather than a wider one: the gate judges a tree against the
+# sheet its own `App.css` compiles to, and hub-web's entry stylesheet is not
+# the desktop's.
+step "hub-web class names (used vs defined)"
+node scripts/check-classes.mjs hub-web/src
+
 step "Frontend tests (vitest run)"
 "$BIN/vitest" run
+
+# Here because nothing else builds it: `npm run build` and the Tauri bundle
+# only ever build the desktop entry, and tsc, Biome and Vitest all pass on an
+# entry Vite cannot bundle. Without this step a broken hub-web is found by
+# whoever deploys the Hub.
+step "hub-web build (vite build --config vite.hub-web.config.ts)"
+"$BIN/vite" build --config vite.hub-web.config.ts
 
 fi
 

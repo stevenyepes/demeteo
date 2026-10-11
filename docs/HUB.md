@@ -43,7 +43,7 @@ full.
 |---|---|
 | `crates/demeteo-hub` (axum server) | **not built** — the crate does not exist |
 | `crates/demeteo-hub-protocol` (wire types) | **not built** — the crate does not exist |
-| `hub-web/` (second Vite entry) | **not built** — the directory does not exist |
+| `hub-web/` (second Vite entry) | **app shell only** — placeholder routes (Fleet, Instance, Runs, Run, Dispatch, AddInstance) with no data wiring yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` will serve the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **not built** |
 | Desktop side: device key, pairing, Settings › Hub tab, socket client | **not built** |
 | Desktop side: passkey pin set, request verification, local ceilings | **not built** |
@@ -594,7 +594,7 @@ material for attachments (§6.3).
 |---|---|
 | `crates/demeteo-hub` | the axum server — **not built** |
 | `crates/demeteo-hub-protocol` | **serde-only** wire types shared by the desktop client and the Hub — **not built** |
-| `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **not built** |
+| `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **app shell only**: placeholder routes (Fleet, Instance, Runs, Run, Dispatch, AddInstance), no data wiring yet, and no view renders the canvas yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`, and `demeteo-hub` will serve the directory its configuration names |
 
 **Rejected: the Hub linking `demeteo-core` in v1.** `demeteo-core` brings `libssh2`,
 git plumbing and `rusqlite`. A hosted container would ship all three for code that
