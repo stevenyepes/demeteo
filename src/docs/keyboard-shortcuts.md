@@ -20,6 +20,9 @@ help overlay (`F1`) actually bind — if the two ever disagree, believe the over
 | `Cmd/Ctrl + W` | Close current modal / pop navigation |
 | `Cmd/Ctrl + ,` | Open Settings |
 | `Cmd/Ctrl + B` | Toggle sidebar |
+| `Cmd/Ctrl + =` | Zoom in (`+` works too) |
+| `Cmd/Ctrl + -` | Zoom out |
+| `Cmd/Ctrl + 0` | Reset zoom to 100% |
 | `Cmd/Ctrl + \`` | Open the Terminals view |
 | `Cmd/Ctrl + Shift + \`` | New terminal (from the Terminals view) |
 | `Cmd/Ctrl + R` | Reload data for the current view |
@@ -54,8 +57,12 @@ mean different things bare and modified.
 |---------|--------|
 | `XButton1` (mouse back) | Navigate back |
 | `XButton2` (mouse forward) | Navigate forward |
+| `Ctrl + scroll` / trackpad pinch | Zoom the window in or out, one step at a time |
 
 The XButton1 and XButton2 gestures wired by `MouseNavigationBridge` integrate with the same in-app navigation stack as the keyboard shortcuts above — the back/forward history is shared across both input modes.
+
+Zoom moves through fixed levels from 50% to 200% and is remembered across restarts.
+Over a graph, scroll and pinch zoom the graph instead of the window.
 
 ## Tips
 

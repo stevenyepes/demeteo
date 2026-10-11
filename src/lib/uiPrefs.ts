@@ -46,6 +46,7 @@ import {
   type PipelineSegment,
   type PipelineSort,
 } from './pipelineFilter';
+import { DEFAULT_UI_ZOOM, decodeUiZoom } from './uiZoom';
 
 export const UI_PREF_WRITE_DEBOUNCE_MS = 400;
 
@@ -78,7 +79,7 @@ export interface UiPrefSpec<T> {
 }
 
 /**
- * Build one preference. The six below are its call sites; it is exported so the
+ * Build one preference. The definitions below are its call sites; it is exported so the
  * arming and debounce rules can be exercised on an instance no earlier test has
  * read, which is the only place either is observable.
  */
@@ -232,6 +233,13 @@ export const pipelineSortPref: UiPref<PipelineSort> = definePref({
   encode: (value) => value,
 });
 
+export const uiZoomPref: UiPref<number> = definePref({
+  key: 'ui.zoom',
+  fallback: DEFAULT_UI_ZOOM,
+  decode: decodeUiZoom,
+  encode: (value) => String(value),
+});
+
 /**
  * Every preference this module defines, so a caller that has to reach all of
  * them does not maintain its own list — `src/test/setup.ts` drains their
@@ -245,5 +253,6 @@ export const UI_PREFS: readonly UiPref<unknown>[] = [
   runViewModePref,
   pipelineSegmentPref,
   pipelineSortPref,
+  uiZoomPref,
 ] as UiPref<unknown>[];
 

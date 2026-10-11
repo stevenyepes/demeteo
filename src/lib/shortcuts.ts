@@ -242,6 +242,31 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
       'Cmd/Ctrl + ` (open Terminals view).',
     category: 'view',
   },
+  // Shift is left out of these three on purpose — `uiZoomKeyAction` is what
+  // binds them, and it accepts `+` and `=` alike. The registry shows one chord.
+  {
+    id: 'cmd-equals-zoom-in',
+    chords: [{ primary: true, shift: false, alt: false, key: '=' }],
+    label: 'Zoom in',
+    description:
+      'Make the whole window one step larger. Ctrl + scroll or a trackpad ' +
+      'pinch does the same outside a graph.',
+    category: 'view',
+  },
+  {
+    id: 'cmd-minus-zoom-out',
+    chords: [{ primary: true, shift: false, alt: false, key: '-' }],
+    label: 'Zoom out',
+    description: 'Make the whole window one step smaller.',
+    category: 'view',
+  },
+  {
+    id: 'cmd-0-reset-zoom',
+    chords: [{ primary: true, shift: false, alt: false, key: '0' }],
+    label: 'Reset zoom',
+    description: 'Return the window to 100%. The level is remembered across restarts.',
+    category: 'view',
+  },
   {
     id: 'cmd-g-next-feature',
     chords: [{ primary: true, shift: false, alt: false, key: 'g' }],
