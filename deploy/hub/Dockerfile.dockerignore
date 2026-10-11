@@ -1,0 +1,13 @@
+.git
+node_modules
+docs-site
+artifacts
+src-tauri/target
+**/target
+# Operator secrets: deploy/hub/.env holds the database password and the
+# OpenBao token, and deploy/hub/openbao/ may hold unseal material. The build
+# needs nothing under deploy/.
+**/.env
+**/.env.*
+!**/.env.example
+deploy/

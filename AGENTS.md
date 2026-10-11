@@ -360,7 +360,7 @@ Read the relevant doc before modifying that area.
 | Terminal sessions: feature-scoped terminals, brief, hand-back (designed, not built) | [docs/TERMINAL_SESSIONS_SPEC.md](docs/TERMINAL_SESSIONS_SPEC.md) · plan in [docs/TASKS_TERMINAL_SESSIONS.md](docs/TASKS_TERMINAL_SESSIONS.md) |
 | User stories & agent tasks | [docs/USER_STORIES.md](docs/USER_STORIES.md) |
 | UX spec & journeys | [docs/UX_JOURNEYS.md](docs/UX_JOURNEYS.md) · as-built audit in [docs/ux-audit/](docs/ux-audit/README.md) |
-| Demeteo Hub: trust model, pairing, socket, requests, gate decisions (decided, not built) | [docs/HUB.md](docs/HUB.md) |
+| Demeteo Hub: trust model, pairing, socket, requests, gate decisions (server scaffold built in `crates/demeteo-hub`; the rest decided, not built) | [docs/HUB.md](docs/HUB.md) |
 | Demeteo Hub design mockup (decided, not built; parts superseded) | [docs/hub-design/](docs/hub-design/README.md) |
 | Pipeline/project view redesign plan | [docs/UI_REDESIGN_PLAN.md](docs/UI_REDESIGN_PLAN.md) |
 | Product roadmap & agent-ready stories | [docs/roadmap/](docs/roadmap/README.md) |
