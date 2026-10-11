@@ -308,6 +308,10 @@ the plan moved on. §7.2 is what stops that becoming a lie told to the next agen
 
 Two properties come with reading `mr_state`: roughly **two minutes of latency**
 between a merge and the unblock, and a hard dependence on `mr_url` existing.
+The latency is the poll's, not the rule's: `application/tickets/refresh.rs`
+reads one Discovery's unsettled pull requests on demand and settles them through
+the same path, which is what the MCP `refresh_discovery_prs` tool calls
+([`MCP_INTEGRATION.md` §7](MCP_INTEGRATION.md)).
 
 ### 6.5 No PR means blocked
 
@@ -584,7 +588,7 @@ Migrations that only add tables and columns are not Gate items.
 | Deferred | Why it was parked |
 |----------|-------------------|
 | Cross-Discovery and Ticket→Feature edges | §6.2 — deletion, provenance and readiness would all span aggregates |
-| Auto-starting ready tickets; a concurrency ceiling | No ceiling exists for *any* run today; it is a pre-existing gap, not this feature's |
+| Auto-starting ready tickets; a concurrency ceiling | No ceiling exists for *any* run today; it is a pre-existing gap, not this feature's. A caller may bound **one start** by the Discovery's in-flight count (`StartBounds::max_in_flight`, `application/tickets/launch.rs`); that refuses a start somebody asked for, and is neither a stored ceiling nor a scheduler |
 | Per-Discovery budget cap | §8.5 |
 | Switching agent or model mid-Discovery | §4.4 makes it free later; not exposed in the first cut |
 | Committing the spec to a branch, and a PR for it | §4.7 — revisit once it is known whether ticket agents miss it |

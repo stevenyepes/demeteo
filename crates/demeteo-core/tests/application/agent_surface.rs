@@ -10,6 +10,7 @@ use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{GateDecisionId, StepId, TicketId};
 use crate::domain::models::{Project, Ticket, TicketState};
+use crate::ports::discovery::DiscoveryPatch;
 
 /// A fully wired `AppContext` over a fresh temp-dir SQLite database — every
 /// read in this module only ever touches repository ports and `run_view`,
@@ -450,4 +451,139 @@ async fn run_events_since_a_later_offset_excludes_events_at_or_below_it() {
     let events = run_events_since(&ctx, &feature_id, first_offset).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, "kind-b");
+}
+
+#[tokio::test]
+async fn listing_discoveries_scopes_to_a_project_or_unions_them_all() {
+    let (ctx, first) = ctx_with_project("discoveries");
+    let second = ProjectId::from("p-other".to_string());
+    ctx.projects.add(project(second.as_str())).unwrap();
+    let a = open_discovery(&ctx, opening(&first, "first plan")).expect("a opens");
+    let b = open_discovery(&ctx, opening(&second, "second plan")).expect("b opens");
+
+    let scoped = list_discoveries(&ctx, Some(&second)).unwrap();
+    assert_eq!(
+        scoped.iter().map(|d| &d.id).collect::<Vec<_>>(),
+        [&b.id],
+        "only the named project's"
+    );
+
+    let mut all: Vec<_> = list_discoveries(&ctx, None)
+        .unwrap()
+        .into_iter()
+        .map(|d| (d.id.0, d.project_id.0, d.title))
+        .collect();
+    all.sort();
+    let mut expected = vec![
+        (a.id.0, first.0, "first plan".to_string()),
+        (b.id.0, second.0, "second plan".to_string()),
+    ];
+    expected.sort();
+    assert_eq!(all, expected);
+}
+
+#[tokio::test]
+async fn a_listed_discovery_and_its_board_name_the_base_branch() {
+    let (ctx, project_id) = ctx_with_project("base-branch");
+    let discovery =
+        open_discovery(&ctx, opening(&project_id, "integration")).expect("the discovery opens");
+
+    assert_eq!(list_discoveries(&ctx, None).unwrap()[0].base_branch, None);
+    assert_eq!(
+        get_discovery_board(&ctx, &discovery.id)
+            .unwrap()
+            .base_branch,
+        None,
+        "no base is the project's default branch"
+    );
+
+    ctx.discoveries
+        .update(
+            &discovery.id,
+            &DiscoveryPatch {
+                base_branch: Some(Some("feat/integration".to_string())),
+                ..Default::default()
+            },
+            1,
+        )
+        .expect("the base branch is stored");
+
+    let named = Some("feat/integration".to_string());
+    assert_eq!(list_discoveries(&ctx, None).unwrap()[0].base_branch, named);
+    assert_eq!(
+        get_discovery_board(&ctx, &discovery.id)
+            .unwrap()
+            .base_branch,
+        named
+    );
+}
+
+#[tokio::test]
+async fn a_started_tickets_card_names_the_branch_its_run_cut() {
+    let (ctx, project_id) = ctx_with_project("head-branch");
+    let discovery =
+        open_discovery(&ctx, opening(&project_id, "branches")).expect("the discovery opens");
+    let mut cut = feature("f-cut", &project_id);
+    cut.resolved_branch = Some("demeteo/f-cut".to_string());
+    ctx.features.add(cut).unwrap();
+    ctx.features.add(feature("f-uncut", &project_id)).unwrap();
+    let mut with_branch = ticket("t-1", &discovery.id, 1, TicketState::Started);
+    with_branch.feature_id = Some(FeatureId::from("f-cut".to_string()));
+    let mut before_cut = ticket("t-2", &discovery.id, 2, TicketState::Started);
+    before_cut.feature_id = Some(FeatureId::from("f-uncut".to_string()));
+    ctx.tickets
+        .upsert_batch(&[with_branch, before_cut])
+        .unwrap();
+
+    let board = get_discovery_board(&ctx, &discovery.id).unwrap();
+    let branches: Vec<Option<String>> = board
+        .tickets
+        .iter()
+        .map(|t| t.feature.as_ref().expect("a started ticket").branch.clone())
+        .collect();
+
+    assert_eq!(branches, [Some("demeteo/f-cut".to_string()), None]);
+}
+
+/// A `read` grant spans every project, so what a machine row says beyond its
+/// id and name must not ride out on this list.
+#[tokio::test]
+async fn listing_machines_names_placements_and_none_of_the_connection_details() {
+    let ctx = fixture("machines");
+    for existing in ctx.machines.get_machines().unwrap() {
+        ctx.machines.delete(&existing.id).unwrap();
+    }
+    let mut remote = crate::application::launch::tests::machine("runner-1", "key");
+    remote.host = "runner.internal.example".to_string();
+    remote.username = "deploy".to_string();
+    remote.key_path = Some("/home/me/.ssh/id_runner".to_string());
+    remote.notify_webhook_url = Some("https://hooks.example/T0/secret".to_string());
+    ctx.machines.add(remote).unwrap();
+    ctx.machines
+        .add(crate::application::launch::tests::machine("desk", "local"))
+        .unwrap();
+
+    let mut machines = list_machines(&ctx).unwrap();
+    machines.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+
+    assert_eq!(
+        machines.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["desk", "runner-1"]
+    );
+    assert_eq!(machines[0].placement, RunPlacement::Local);
+    assert_eq!(
+        machines[1].placement,
+        RunPlacement::Detached {
+            machine_id: MachineId::from("runner-1")
+        }
+    );
+    let wire = serde_json::to_string(&machines).unwrap();
+    for hidden in [
+        "runner.internal.example",
+        "deploy",
+        "id_runner",
+        "hooks.example",
+    ] {
+        assert!(!wire.contains(hidden), "{hidden} left on the wire: {wire}");
+    }
 }

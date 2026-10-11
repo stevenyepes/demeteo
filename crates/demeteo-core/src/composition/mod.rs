@@ -281,6 +281,18 @@ pub fn build_core_context(
     // `MrPublisher::fetch_mr_state` every 2 minutes, persists a
     // `Notification` row on transition to `merged`, and emits
     // `DomainEvent::MrMerged` for the bell + toast.
+    let feature_cache: Arc<dyn ports::worktree_ops::FeatureCachePort> = Arc::new(
+        crate::application::lifecycle::RoutedFeatureCacheRelease::new(
+            crate::application::lifecycle::FeatureCacheRelease {
+                projects: projects_repo.clone(),
+                exec: exec_inner.clone(),
+                workspace_dir: workspace_dir.clone(),
+                worktree_ops: worktree_ops.clone(),
+            },
+            remote_run_mirror_repo.clone(),
+            app_settings_repo.clone(),
+        ),
+    );
     adapters::mr_monitor::start_mr_monitor(
         adapters::mr_monitor::MrMonitorPorts {
             features: features_repo.clone(),
@@ -289,18 +301,7 @@ pub fn build_core_context(
             notif: notif.clone(),
             tickets: tickets_repo.clone(),
             discoveries: discoveries_repo.clone(),
-            cache: Arc::new(
-                crate::application::lifecycle::RoutedFeatureCacheRelease::new(
-                    crate::application::lifecycle::FeatureCacheRelease {
-                        projects: projects_repo.clone(),
-                        exec: exec_inner.clone(),
-                        workspace_dir: workspace_dir.clone(),
-                        worktree_ops: worktree_ops.clone(),
-                    },
-                    remote_run_mirror_repo.clone(),
-                    app_settings_repo.clone(),
-                ),
-            ),
+            cache: feature_cache.clone(),
         },
         &runtime,
     );
@@ -346,6 +347,7 @@ pub fn build_core_context(
         presenter: step_executor_adapter,
         pricing,
         mr_publisher,
+        feature_cache,
         worktree_ops,
         provider_http,
         memory_llm,

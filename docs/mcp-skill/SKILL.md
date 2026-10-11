@@ -5,7 +5,7 @@ description: Query and drive a running Demeteo workspace over its MCP tool surfa
 
 # Demeteo MCP
 
-Demeteo exposes a fixed, twelve-tool MCP surface over its workspace state:
+Demeteo exposes a fixed, fifteen-tool MCP surface over its workspace state:
 projects, Features, Steps, Gates, Discovery boards, and run events. This skill
 is the judgement a tool's own JSON schema can't carry — which tool answers
 which question, which two cost money, and which operations this surface
@@ -26,7 +26,7 @@ call is checked against.
 
 ## Tool routing table
 
-Twelve tools, each answering one kind of question:
+Fifteen tools, each answering one kind of question:
 
 | Tool | Answers |
 |---|---|
@@ -36,12 +36,15 @@ Twelve tools, each answering one kind of question:
 | `list_step_attempts` | "What's the per-attempt history of this Step?" |
 | `get_failure_verdict` | "Why did this Step fail?" — see Failure triage below |
 | `list_pending_gates` | "What's waiting for a human decision?" — omit `project_id` for a workspace-wide answer |
-| `get_discovery_board` | "What's the state of this Discovery's tickets?" |
+| `list_discoveries` | "What Discoveries exist, and what's this one's id?" — omit `project_id` for a workspace-wide answer |
+| `get_discovery_board` | "What's the state of this Discovery's tickets?" — also names the base branch they integrate against and each started ticket's own branch |
+| `refresh_discovery_prs` | "I just merged or closed a pull request — what does the board say now?" — asks the forge instead of waiting for the two-minute poll; see Spend vs. read |
+| `list_machines` | "Which machines can a run be sent to, and what id names each?" |
 | `run_events_since` | "What's happened on this Feature's run since I last checked?" |
 | `create_workspace_project` | "Register a new project (and its repos) in this workspace." — rows only: nothing is cloned or bootstrapped, so `apply_run_shape_patch` refuses the project until the app bootstraps it |
 | `apply_run_shape_patch` | "Change a project's default agent/model/effort/workflow/artifact settings." |
 | `start_feature` | "Kick off a new Feature run." — spends money, see below; `machine_id` sends it detached to that registered machine, omit it to run on the project's own compute |
-| `start_ticket` | "Kick off a Ticket's current attempt." — spends money, see below; runs where the Ticket is placed unless `machine_id` overrides it for this launch only |
+| `start_ticket` | "Kick off a Ticket's current attempt." — spends money, see below; runs where the Ticket is placed unless `machine_id` overrides it for this launch only; see Driving a Discovery's tickets for its bounds |
 
 A cross-project question — "which projects have running pipelines", "is
 anything waiting for approval" — is a **single** `list_features` or
@@ -53,8 +56,16 @@ already answers.
 ## Spend vs. read
 
 `list_projects`, `list_features`, `get_feature`, `list_step_attempts`,
-`get_failure_verdict`, `list_pending_gates`, `get_discovery_board`, and
-`run_events_since` are free reads: each inspects state and changes nothing.
+`get_failure_verdict`, `list_pending_gates`, `list_discoveries`,
+`get_discovery_board`, `list_machines`, and `run_events_since` are free reads:
+each inspects state and changes nothing.
+
+`refresh_discovery_prs` is free too, and needs only `read`, but it is not
+inert: it calls the forge and records what it says, so a pull request it finds
+merged completes its Feature, notifies the human, and releases the tickets
+waiting on it — exactly what the app's own poll would have done within two
+minutes. Call it when you have a reason to think a pull request settled, not
+in a tight loop: each call is one forge request per unsettled pull request.
 
 `create_workspace_project` and `apply_run_shape_patch` are free of charge —
 neither spends money — but each is a real, persisted write: the first inserts
@@ -73,6 +84,32 @@ approach Y", "could this design work" — must never end in a call to
 tools and from reasoning; only call one of those four when performing the
 write, the config change, or starting a run is the thing actually being asked
 for.
+
+## Driving a Discovery's tickets
+
+Find the Discovery with `list_discoveries` and the machine with
+`list_machines`; never ask the human to paste either id. Read the board, and
+start only tickets whose `standing.startable` is true — a blocked ticket is
+refused, and force-starting it is not offered here.
+
+Bound every `start_ticket` you send on someone's behalf:
+
+- `max_in_flight` when the human asked for a limit ("two at a time"). The
+  server counts and refuses; do not count the board yourself and then start,
+  which races any other client. A ticket is **in flight from its start until
+  its pull request is merged or closed** — a finished run with an open pull
+  request still holds its slot, because its dependents are still blocked.
+- `max_cost_usd` and `max_wall_clock_secs` on a detached start. A ticket has
+  no caps of its own, so a detached ticket sent without them runs unattended
+  and uncapped. They are refused on a ticket that resolves to the project's
+  own compute.
+
+A refused start launched nothing and may be sent again once the reason is
+gone. Merging pull requests is not on this surface (below); after the human
+merges one, or you are told to merge it through the forge's own tooling, call
+`refresh_discovery_prs` and read the returned board for what became startable.
+Tickets listed under its `unrefreshed` could not be read from the forge, so
+their lanes are stale — say so rather than acting on them.
 
 ## Attaching files to a Feature
 

@@ -149,19 +149,38 @@ pub async fn start_feature(
     launch_run(ctx, request).await.map_err(|e| e.to_string())
 }
 
-/// Start a Ticket's current attempt.
+/// What an external caller chooses when starting a Ticket. The run shape is
+/// the ticket's own; the caller picks where this one launch goes and what
+/// bounds it ([`tickets::launch::StartBounds`]).
 ///
-/// `machine_id` places this one launch and is never stored on the ticket
-/// ([`tickets::launch::start`]). An absent or blank one is no override — the
-/// ticket's own placement applies — whereas `"local"` overrides to local.
+/// `machine_id` places this one launch and is never stored on the ticket. An
+/// absent or blank one is no override — the ticket's own placement applies —
+/// whereas `"local"` overrides to local.
+pub struct AgentTicketLaunch {
+    pub ticket_id: String,
+    pub machine_id: Option<String>,
+    pub max_cost_usd: Option<f64>,
+    pub max_wall_clock_secs: Option<u64>,
+    pub max_in_flight: Option<usize>,
+}
+
+/// Start a Ticket's current attempt.
 pub async fn start_ticket(
     ctx: &AppContext,
-    ticket_id: &TicketId,
-    machine_id: Option<String>,
+    launch: AgentTicketLaunch,
 ) -> Result<LaunchedRun, String> {
-    tickets::launch::start(ctx, ticket_id, placement_override(machine_id.as_deref()))
-        .await
-        .map_err(|e| e.to_string())
+    tickets::launch::start_bounded(
+        ctx,
+        &TicketId::from(launch.ticket_id),
+        placement_override(launch.machine_id.as_deref()),
+        tickets::launch::StartBounds {
+            max_cost_usd: launch.max_cost_usd,
+            max_wall_clock_secs: launch.max_wall_clock_secs,
+            max_in_flight: launch.max_in_flight,
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Apply a [`RunShapePatch`] to a project's settings, persist the result, and

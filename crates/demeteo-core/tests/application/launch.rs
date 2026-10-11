@@ -201,6 +201,8 @@ pub(crate) struct RunnerAt {
     /// Answers `retry_step`, recorded with the run and step it named.
     pub(crate) accepts_retry: bool,
     pub(crate) calls: Mutex<Vec<String>>,
+    /// The `spec` of every `submit_run` it was sent, accepted or not.
+    pub(crate) submitted: Mutex<Vec<Value>>,
 }
 
 impl RunnerAt {
@@ -213,6 +215,7 @@ impl RunnerAt {
             accepts_credentials: false,
             accepts_retry: false,
             calls: Mutex::new(Vec::new()),
+            submitted: Mutex::new(Vec::new()),
         }
     }
 
@@ -238,6 +241,10 @@ impl RunnerAt {
 
     pub(crate) fn calls(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
+    }
+
+    pub(crate) fn submitted(&self) -> Vec<Value> {
+        self.submitted.lock().unwrap().clone()
     }
 
     fn unscripted<T>(&self, call: &str) -> Result<T, String> {
@@ -323,6 +330,9 @@ impl ExecutionPort for RunnerAt {
             return Ok(serde_json::json!({ "status": "running" }));
         }
         self.record(format!("rpc {method}"));
+        if method == "submit_run" {
+            self.submitted.lock().unwrap().push(params["spec"].clone());
+        }
         match (method, self.build_version) {
             ("health", Some(version)) => Ok(serde_json::json!({ "build_version": version })),
             ("submit_run", _) if self.accepts_submit => {

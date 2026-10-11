@@ -6,8 +6,11 @@ use serde::Serialize;
 
 use crate::application::run_view::FailureExplanation;
 use crate::application::tickets;
-use crate::domain::ids::{DiscoveryId, FeatureId, ProjectId, StepExecutionId};
-use crate::domain::models::{Feature, GateDecision, Project, StepAttempt, StepExecution};
+use crate::domain::ids::{DiscoveryId, FeatureId, MachineId, ProjectId, StepExecutionId};
+use crate::domain::models::{
+    Discovery, DiscoveryStatus, Feature, GateDecision, Machine, Project, StepAttempt, StepExecution,
+};
+use crate::domain::run_placement::{placement_for, RunPlacement};
 use crate::ports::run_events::RunEvent;
 use crate::state::AppContext;
 
@@ -28,6 +31,64 @@ pub struct PendingGate {
     pub feature_id: FeatureId,
     pub feature_title: String,
     pub decision: GateDecision,
+}
+
+/// A Discovery as a caller choosing one reads it. Narrower than the row on
+/// purpose: the interview's session id, worktree path, attachments and spend
+/// are the app's own bookkeeping, and nothing here needs them to name a
+/// Discovery and say where its tickets integrate.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoverySummary {
+    pub id: DiscoveryId,
+    pub project_id: ProjectId,
+    pub title: String,
+    pub status: DiscoveryStatus,
+    /// `None` is the project's default branch, as on the row.
+    pub base_branch: Option<String>,
+    pub updated_at: i64,
+}
+
+impl From<Discovery> for DiscoverySummary {
+    fn from(d: Discovery) -> Self {
+        Self {
+            id: d.id,
+            project_id: d.project_id,
+            title: d.title,
+            status: d.status,
+            base_branch: d.base_branch,
+            updated_at: d.updated_at,
+        }
+    }
+}
+
+/// A registered machine as a caller placing a run reads it: the id a
+/// `machine_id` argument takes, and whether naming it detaches the run.
+///
+/// The row's host, user, key path and webhook URL are deliberately absent. A
+/// `read` grant spans every project, and none of them helps choose a
+/// placement — a webhook URL is, besides, a credential in all but name.
+#[derive(Debug, Clone, Serialize)]
+pub struct MachineSummary {
+    pub id: MachineId,
+    pub name: String,
+    /// What a launch naming this id resolves to. `local` is this desktop,
+    /// which a detached launch refuses.
+    pub placement: RunPlacement,
+}
+
+impl From<Machine> for MachineSummary {
+    fn from(m: Machine) -> Self {
+        let placement = if m.auth_type == "local" {
+            RunPlacement::Local
+        } else {
+            placement_for(&m.id)
+        };
+        Self {
+            id: m.id,
+            name: m.name,
+            placement,
+        }
+    }
 }
 
 /// Every workspace project.
@@ -106,12 +167,64 @@ pub fn list_pending_gates(
     Ok(pending)
 }
 
+/// Discoveries, most recently touched first within each project — for one
+/// project, or across all of them on [`list_features`]'s terms. Closed ones
+/// are included, as the port includes them.
+pub fn list_discoveries(
+    ctx: &AppContext,
+    project_id: Option<&ProjectId>,
+) -> Result<Vec<DiscoverySummary>, String> {
+    let project_ids = match project_id {
+        Some(id) => vec![id.clone()],
+        None => ctx
+            .projects
+            .get_projects()?
+            .into_iter()
+            .map(|p| p.id)
+            .collect(),
+    };
+    let mut discoveries = Vec::new();
+    for id in &project_ids {
+        discoveries.extend(
+            ctx.discoveries
+                .list_for_project(id)?
+                .into_iter()
+                .map(|row| DiscoverySummary::from(row.discovery)),
+        );
+    }
+    Ok(discoveries)
+}
+
 /// A Discovery's tickets and derived board.
 pub fn get_discovery_board(
     ctx: &AppContext,
     discovery_id: &DiscoveryId,
 ) -> Result<tickets::DiscoveryBoard, String> {
     tickets::board(ctx, discovery_id)
+}
+
+/// [`get_discovery_board`] after reading each unsettled pull request from the
+/// forge ([`tickets::refresh`]).
+pub async fn refresh_discovery_prs(
+    ctx: &AppContext,
+    discovery_id: &DiscoveryId,
+) -> Result<tickets::refresh::RefreshedBoard, String> {
+    tickets::refresh::refresh_pr_states(ctx, discovery_id).await
+}
+
+/// Every registered machine.
+///
+/// Rows only: whether a machine's runner is installed, reachable and this
+/// build's version takes an SSH round trip per machine, which a launch makes
+/// for the one machine it names and refuses on. A list that probed them all
+/// would be a `read` that opens connections.
+pub fn list_machines(ctx: &AppContext) -> Result<Vec<MachineSummary>, String> {
+    Ok(ctx
+        .machines
+        .get_machines()?
+        .into_iter()
+        .map(MachineSummary::from)
+        .collect())
 }
 
 /// Durable events for a feature whose offsets are greater than

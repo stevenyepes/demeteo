@@ -1010,3 +1010,75 @@ async fn a_start_releases_its_claim_whether_it_launches_or_is_refused() {
         "a launched start released its claim"
     );
 }
+
+#[test]
+fn a_bounded_start_goes_ahead_only_below_the_bound() {
+    let at = |recorded, starting| InFlight { recorded, starting };
+
+    assert_eq!(in_flight_refusal(3, at(1, 0), 2), None);
+    assert_eq!(in_flight_refusal(3, at(0, 1), 2), None);
+
+    let full = in_flight_refusal(3, at(2, 0), 2).expect("two in flight fills a bound of two");
+    assert!(full.contains("#3"), "{full}");
+    assert!(full.contains("2 in flight"), "{full}");
+    assert!(full.contains("max_in_flight = 2"), "{full}");
+    assert!(!full.contains("being started"), "{full}");
+
+    let racing = in_flight_refusal(3, at(1, 1), 2).expect("a start under way takes a slot");
+    assert!(racing.contains("1 in flight"), "{racing}");
+    assert!(racing.contains("1 more being started"), "{racing}");
+}
+
+#[test]
+fn a_bound_of_zero_is_refused_as_a_bound_not_as_a_full_board() {
+    let refusal = in_flight_refusal(
+        1,
+        InFlight {
+            recorded: 0,
+            starting: 0,
+        },
+        0,
+    )
+    .expect("zero admits nothing");
+
+    assert!(refusal.contains("above zero"), "{refusal}");
+}
+
+/// The board cannot show a start that has claimed its ticket and not yet
+/// recorded a run, so a bounded start has to count it from the claims.
+#[tokio::test]
+async fn a_start_under_way_in_the_same_discovery_takes_a_slot() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h, Some("runner-1"));
+    let mut other = t.clone();
+    other.id = TicketId::from("t-2".to_string());
+    other.seq = 2;
+    h.ctx
+        .tickets
+        .upsert_batch(std::slice::from_ref(&other))
+        .expect("the second ticket is stored");
+    let under_way = h
+        .ctx
+        .ticket_starts
+        .try_claim(&other.id)
+        .expect("nothing holds the second ticket");
+    under_way.join(&other.discovery_id);
+
+    let bounds = StartBounds {
+        max_in_flight: Some(1),
+        ..StartBounds::default()
+    };
+    let error = start_bounded(&h.ctx, &t.id, None, bounds.clone())
+        .await
+        .expect_err("the start under way fills the bound");
+    assert_eq!(error.code(), "validation", "{error}");
+    assert!(error.to_string().contains("being started"), "{error}");
+    assert_untouched(&h, &t);
+
+    drop(under_way);
+    let feature = start_bounded(&h.ctx, &t.id, None, bounds)
+        .await
+        .expect("the slot is free again")
+        .feature;
+    assert_started_detached(&h, &t, &feature);
+}

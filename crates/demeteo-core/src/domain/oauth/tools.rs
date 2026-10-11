@@ -8,7 +8,12 @@
 
 use super::Scope;
 
-/// The literal 12-row table from `docs/MCP_INTEGRATION.md` §7.
+/// The literal table from `docs/MCP_INTEGRATION.md` §7.
+///
+/// `refresh_discovery_prs` is `read` although it writes: what it writes is
+/// the forge's own answer for a pull request, the write the MR monitor makes
+/// unasked, and §6 of that document prices a scope by what a call costs the
+/// user rather than by whether a row changes.
 pub fn required_scope(tool_name: &str) -> Option<Scope> {
     match tool_name {
         "list_projects"
@@ -17,7 +22,10 @@ pub fn required_scope(tool_name: &str) -> Option<Scope> {
         | "list_step_attempts"
         | "get_failure_verdict"
         | "list_pending_gates"
+        | "list_discoveries"
         | "get_discovery_board"
+        | "refresh_discovery_prs"
+        | "list_machines"
         | "run_events_since" => Some(Scope::Read),
         "create_workspace_project" | "apply_run_shape_patch" => Some(Scope::Configure),
         "start_feature" | "start_ticket" => Some(Scope::Spend),

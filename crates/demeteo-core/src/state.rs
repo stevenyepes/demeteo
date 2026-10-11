@@ -39,7 +39,7 @@ use crate::ports::run_events::RunEventsPort;
 use crate::ports::runner_run::RunnerRunPort;
 use crate::ports::step_executor::{GatePresenter, StepExecutor};
 use crate::ports::sync_session::SyncSessionPort;
-use crate::ports::worktree_ops::WorktreeOpsPort;
+use crate::ports::worktree_ops::{FeatureCachePort, WorktreeOpsPort};
 use serde::Serialize;
 use std::sync::{Arc, OnceLock};
 
@@ -138,6 +138,12 @@ pub struct AppContext {
     /// so the orchestrator can publish from any code path without
     /// threading the port through every layer.
     pub mr_publisher: Arc<dyn MrPublisher>,
+
+    /// Releases a Feature's dependency cache once its pull request settles.
+    /// The same instance the MR monitor holds, so a settle a refresh finds
+    /// first ([`crate::application::tickets::refresh`]) is cleaned up exactly
+    /// as one the poll found.
+    pub feature_cache: Arc<dyn FeatureCachePort>,
 
     /// Worktree operations (cloning, provisioning, status, branch delete, etc.).
     pub worktree_ops: Arc<dyn WorktreeOpsPort>,
