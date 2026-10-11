@@ -111,12 +111,12 @@ fn start_ticket_schema_lists_its_bounds_as_optional() {
 }
 
 #[test]
-fn start_tools_keep_spend_scope_and_the_catalog_keeps_fifteen_tools() {
+fn start_tools_keep_spend_scope_and_the_catalog_keeps_eighteen_tools() {
     assert_eq!(required_scope("start_feature"), Some(Scope::Spend));
     assert_eq!(required_scope("start_ticket"), Some(Scope::Spend));
     assert_eq!(
         super::tool_catalog().as_array().map(Vec::len),
-        Some(15),
+        Some(18),
         "a placement or a bound is an argument, not a new tool"
     );
 }

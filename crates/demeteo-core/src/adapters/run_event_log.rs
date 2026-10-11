@@ -35,6 +35,11 @@
 //! runner (`submitted`, `bootstrapped`, `pushed`, `pr_opened`, …), which
 //! have no local equivalent.
 //!
+//! One kind is appended by hand on the desktop, for local and detached runs
+//! alike: `critic_rework_requested` (`step_execution_id`, `verdict`), written
+//! by [`rework_from_critic`](crate::application::agent_surface::rework_from_critic)
+//! and counted by it to bound how often one run is sent back.
+//!
 //! Deliberately **not** recorded: `AgentStream` (see `step_output`
 //! above), `PermissionRequested`/`CommandExecuted` (high volume, not
 //! run-progress), `MrMerged`/`ConflictDetected` (post-run concerns),

@@ -28,7 +28,11 @@ pub fn required_scope(tool_name: &str) -> Option<Scope> {
         | "list_machines"
         | "run_events_since" => Some(Scope::Read),
         "create_workspace_project" | "apply_run_shape_patch" => Some(Scope::Configure),
-        "start_feature" | "start_ticket" => Some(Scope::Spend),
+        "start_feature"
+        | "start_ticket"
+        | "retry_step"
+        | "set_step_assignment"
+        | "rework_from_critic" => Some(Scope::Spend),
         _ => None,
     }
 }

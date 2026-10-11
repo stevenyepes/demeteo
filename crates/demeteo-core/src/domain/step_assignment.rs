@@ -144,6 +144,27 @@ pub fn harness_refusal(agent_kind: &str, registered: &[&str]) -> Option<String> 
     ))
 }
 
+/// Whether an assignment from outside the app carries only identifiers that
+/// are safe to store. `Some` is the refusal.
+///
+/// The app's own control offers harnesses from the registry and models from a
+/// live probe, so it never needed this; a caller that types both does. Neither
+/// reaches a shell, but a model is pushed as the argv value after `--model`,
+/// where a leading `-` reads as another flag.
+pub fn identifier_refusal(assignment: &StepAssignment) -> Option<String> {
+    [
+        ("agent_kind", assignment.agent_kind.as_deref()),
+        ("model", assignment.model.as_deref()),
+    ]
+    .into_iter()
+    .find(|(_, value)| {
+        value.is_some_and(|v| !crate::domain::models::project::is_plain_identifier(v))
+    })
+    .map(|(field, _)| {
+        format!("{field} must not start with `-` or contain whitespace or control characters")
+    })
+}
+
 #[cfg(test)]
 #[path = "../../tests/domain/step_assignment.rs"]
 mod tests;

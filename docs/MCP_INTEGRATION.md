@@ -3,7 +3,7 @@
 > **Scope:** how an external MCP client reaches Demeteo — the transport, the
 > protocol revision, who may call what, which operations exist, and which are
 > deliberately absent. **Built:** the listener, the OAuth 2.1 authorization
-> server, the consent screen, and the fifteen-tool surface. What is *not* built
+> server, the consent screen, and the eighteen-tool surface. What is *not* built
 > is marked where it appears (§9). [`ARCHITECTURE.md`](ARCHITECTURE.md) owns the
 > hexagon this sits on, [`DDD_MODEL.md`](DDD_MODEL.md) owns the entities the
 > tools return, [decision 35](DECISIONS.md#1-the-locked-decisions) and
@@ -34,6 +34,7 @@ alternative in full.
 | 49 | The external settings write is a typed `RunShapePatch` | whole-`ProjectSettings` writes | `configure` would transitively grant unbounded `spend` and could disable review |
 | 50 | Gate approval and worktree merges are excluded; ticket creation stays with decomposition; discovery interviews are out of scope this phase | exposing them | see §8 — the first two are *permanent*, the last is *this phase* |
 | 51 | `ticket_force_start` is excluded | exposing it | its `reason` is fed to the agent as prerequisite context |
+| 59 | A `spend` client can retry a step, pin a step's assignment, and send the Standard pipeline's final gate back on its critic's review | client-authored redirect feedback; replay; a caller-set rework limit | the feedback would be an outside party's text read by the agent as fact; see §7.3 |
 | 52 | The listener is off until enabled in Settings | always listening | discovery documents are unauthenticated by necessity |
 | 53 | `initialize` and `tools/list` need a grant; only `server/discover` is open on `/mcp` | an open handshake | clients that sign in only when connecting is refused never got a token — see §5 |
 
@@ -176,7 +177,7 @@ stateless, and HTTP requests here aren't guaranteed to share a connection),
 is what a real client accepts: this is the standard MCP negotiation
 contract, where the server states a version and the client's own logic
 decides whether to proceed and disconnects if it can't. Demeteo's
-fifteen-tool surface doesn't vary across recent revisions, so there is
+tool surface doesn't vary across recent revisions, so there is
 nothing to gate on server-side in the first place. Full reproduction and
 decision history: [decision 46](DECISIONS.md#46--mcp-protocol-revision).
 
@@ -294,7 +295,7 @@ Three scopes, split by **consequence**, not by resource.
 | Scope | What it lets a client do | What it costs |
 |---|---|---|
 | `read` | Observe projects, features, steps, failure verdicts, pending gates, discoveries and their boards, registered machines, run events | nothing — no spend, and no state change but one: `refresh_discovery_prs` records what the forge says about a pull request (§7) |
-| `spend` | Start a Feature or a Ticket's attempt, here or on any registered machine | **money and agent time** — a run consumes provider budget until it finishes or is stopped |
+| `spend` | Start a Feature or a Ticket's attempt, here or on any registered machine; retry a step, choose a step's agent and model, and send a Standard-pipeline run back from its final gate (§7.3) | **money and agent time** — a run consumes provider budget until it finishes or is stopped |
 | `configure` | Create a Project; change a Project's run shape | **future behaviour** — how later runs are shaped, never their ceiling (§7.1) |
 
 Scopes are a **flat set**. `spend` does not imply `read`; a grant holds exactly
@@ -317,7 +318,7 @@ three consequence classes answer what a user is asking before ticking a box:
 
 ## 7. The operation surface
 
-Fifteen tools. The table is `required_scope` in `domain/oauth/tools.rs`; the two
+Eighteen tools. The table is `required_scope` in `domain/oauth/tools.rs`; the two
 must not drift.
 
 | Tool | Scope | What it does |
@@ -337,6 +338,9 @@ must not drift.
 | `apply_run_shape_patch` | `configure` | Write the run-shape subset of a Project's settings (§7.1) |
 | `start_feature` | `spend` | Start a Feature run, optionally with attachments (§7.2), on the project's own compute or detached on a named machine; returns a handle as soon as the run is accepted |
 | `start_ticket` | `spend` | Start a Ticket's current attempt where the Ticket is placed, or on a machine named for this launch only, optionally capped and bounded by how many Tickets are in flight |
+| `retry_step` | `spend` | Re-run one step that failed, was interrupted, or never started (§7.3) |
+| `set_step_assignment` | `spend` | Pin which agent, model and effort one step of a started run uses (§7.3) |
+| `rework_from_critic` | `spend` | Send the Standard pipeline's final gate back to fix what its critic review found (§7.3) |
 
 **Reads span every project.** `list_features` and `list_pending_gates` with no
 `project_id` fan out across all of them.
@@ -428,6 +432,8 @@ as one from the app.
 Agent, model, effort, step overrides, origin and budget stay absent on purpose:
 they are the project's run shape (§7.1), not a caller's to set per launch.
 Attachments are the one input that is the caller's own, so they are the exception.
+After launch, `set_step_assignment` can pin one step (§7.3); the launch itself
+still takes none of them.
 
 **Detached-only options are a contract, not a hint.** Caps and `unattended` are
 accepted because they can only *bound* a run, never widen it:
@@ -625,6 +631,89 @@ covered only through the existing UI-attachment path.
 `path` is a host-file-read reachable from a `spend` grant; §9 states how far
 the guard goes.
 
+### 7.3 Acting on a started run
+
+Three `spend` tools act on a run that already exists. Each takes a
+`step_execution_id` and reaches the step wherever its run lives: a run the
+desktop drives through the executor, a detached run through the runner that
+owns it. `application/step_control.rs` makes that choice; the adapter and the
+caller never do.
+
+**`retry_step`** re-runs one step whose status is `failed`, `interrupted` or
+`pending`, on the agent and model it already resolves to. It is refused for a
+completed step and while an earlier step of the run is still active. It
+returns the step once the retry is accepted, not a finished attempt.
+
+**Replay is not exposed.** The app's replay takes a step of any status and has
+no predecessor check, and on a live run it cancels the run before rewinding.
+A client that can kill a running, paid-for run by naming one of its steps is
+a different consequence from the one `spend` prices.
+
+**`set_step_assignment`** writes the per-step pin of decision 54: `agent_kind`,
+`model` and `effort`. It replaces the pin as a whole — a dimension the caller
+omits is un-pinned, and omitting all three removes the pin — and it re-runs
+nothing; the pin applies the next time that step is dispatched. It is refused
+while the step is `running` or `verifying`, for a step kind that spawns no
+agent, for a harness this build has not registered, and for an `agent_kind`
+or `model` that starts with `-` or carries whitespace or a control character.
+That last check is the one `RunShapePatch::validate` makes (§7.1), for the
+same reason: a model is the argv value after a harness's `--model`.
+
+It is `spend`, not `configure`. §6 prices a scope by consequence: the pin
+changes what one step of one run costs and writes nothing a later run reads.
+`configure` names the opposite — how later runs are shaped.
+
+A model is not checked against a list, here or in the app: models are whatever
+the harness answers on the run's machine, so an unknown one fails that step
+when it is dispatched.
+
+**`rework_from_critic`** sends the Standard Feature Pipeline's final gate back
+to fix what the critic found. The caller names the gate and supplies **no
+text**. Demeteo reads the stored critic review by step from its artifact
+store — never from a path a caller chose — and redirects the gate with a fixed
+preamble followed by that review. The preamble says the run was sent back by
+an MCP client and that no person has reviewed the work, because the redirect
+is recorded through the path a person's is.
+
+It is refused, with `isError: true` and nothing decided, when:
+
+- the run's workflow is not `wf-starter-standard`;
+- the pinned workflow version no longer has the shape this relies on — a
+  starter can be edited in place and keep its id, so the shape is read off the
+  version's steps: the gate is marked `dangerous`, only `finalize` follows it,
+  the step before it declares the `critic-review` artifact, and a redirect
+  from it lands on a step with a rework prompt;
+- the step is not a `gate` step awaiting a decision. A pending row from
+  `list_pending_gates` is not always one: a verifier park on an agent step
+  holds a decision row too;
+- the review has no `## Verdict`, or its verdict is `PASS`. `PASS_WITH_NOTES`
+  and `FAIL` proceed;
+- the run has already been sent back **twice** this way.
+
+The limit of two is fixed here and not an argument. A gate redirect has no
+loop budget — `default_loop_iterations` bounds `on_failure` redirects only —
+so without it a client could send a run round critic, fix, critic for as long
+as its grant lasts, and a limit the caller supplied is one the caller would
+raise. Each accepted rework appends a `critic_rework_requested` run event on
+the desktop, and those are what is counted: the redirect deletes its own
+decision row, and a detached run's `gate_decided` event is written on the
+runner.
+
+What follows the redirect is the pipeline's own rework cycle (decision 43):
+the task-list step writes one ticket per defect, and implementation,
+validation and the critic run again before the gate is reached again. On a run
+whose project is `attended`, that cycle stops at the ticket-review gate for a
+person; this tool cannot move that gate.
+
+The result is `feature_id`, the `verdict` acted on, `reworks_used` and
+`reworks_remaining`.
+
+**Not verified end to end for a detached run.** The routing to the runner is
+covered by a test for `retry_step`. For `rework_from_critic`, whether a
+detached run's parked final gate reaches the desktop as a step awaiting a
+decision with its critic review cached has not been exercised against a real
+runner; where it does not, the tool refuses rather than acting.
+
 ## 8. What is excluded, and whether permanently
 
 | Operation | Status | Why |
@@ -642,6 +731,13 @@ real-time human-in-the-loop surface (decision 35) and an approval the gated part
 can grant is not one. Only the discovery-interview row is a statement about
 *now*. The design conversation recorded the ticket-creation and interview
 boundaries without a longer rationale than the one in the table.
+
+**A redirect is not an approval.** `rework_from_critic` (§7.3) sends one gate
+back; it lets nothing through, so it is not the operation the first row
+excludes. What would be the same kind of problem as `ticket_force_start`,
+below, is a redirect whose feedback the client wrote: that text is rendered
+into every step of the rework cycle under "Previous Attempt Feedback" and kept
+as a memory signal. That form is refused — the tool has no feedback argument.
 
 ### `ticket_force_start`
 

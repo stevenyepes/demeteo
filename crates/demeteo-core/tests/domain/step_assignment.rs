@@ -191,3 +191,31 @@ fn only_a_registered_harness_can_be_pinned() {
     assert!(refusal.contains("claude_code"), "{refusal}");
     assert!(refusal.contains("opencode, claude-code"), "{refusal}");
 }
+
+#[test]
+fn an_identifier_that_reads_as_a_flag_or_carries_whitespace_is_refused() {
+    for (agent, model, field) in [
+        (Some("--dangerously-skip"), None, "agent_kind"),
+        (None, Some("-m"), "model"),
+        (None, Some("opus --yolo"), "model"),
+        (None, Some("opus\n"), "model"),
+        (Some("claude\u{7}code"), None, "agent_kind"),
+    ] {
+        let refusal = identifier_refusal(&change(agent, model, None))
+            .unwrap_or_else(|| panic!("{agent:?} / {model:?} should be refused"));
+        assert!(refusal.starts_with(field), "{refusal}");
+    }
+}
+
+#[test]
+fn ordinary_identifiers_and_an_inherit_change_pass_the_identifier_check() {
+    assert_eq!(
+        identifier_refusal(&change(
+            Some("claude-code"),
+            Some("anthropic/claude-opus-5-5[1m]"),
+            Some(EffortLevel::High)
+        )),
+        None
+    );
+    assert_eq!(identifier_refusal(&change(None, None, None)), None);
+}
