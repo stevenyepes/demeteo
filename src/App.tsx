@@ -37,6 +37,7 @@ import { useFollowFeatureProject } from "./hooks/useFollowFeatureProject";
 import { useLaunchRun } from "./hooks/useLaunchRun";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { MouseNavigationBridge } from "./hooks/useMouseNavigation";
+import { UiZoomIndicator } from "./components/UiZoomIndicator";
 import {
   NavigationProvider, useNavigation,
   ProjectProvider, useProject,
@@ -589,6 +590,7 @@ function App() {
               <AppInner />
             </TerminalPanelProvider>
             <ErrorToast />
+            <UiZoomIndicator />
           </UIStateProvider>
         </ProjectProvider>
       </NavigationProvider>
