@@ -2,9 +2,9 @@
 
 > **Scope:** how a browser control plane reaches many Demeteo instances — who
 > trusts whom, how an instance pairs, what crosses the wire, what the Hub may ask
-> an instance to do, and what never leaves an instance. **Built:** nothing. The
-> design is decided (2026-10-02) and no part of it is implemented; §2 says so per
-> part. [`hub-design/README.md`](hub-design/README.md) owns the mockup,
+> an instance to do, and what never leaves an instance. **Built:** in part. The
+> design is decided (2026-10-02); §2 says per part what is implemented.
+> [`hub-design/README.md`](hub-design/README.md) owns the mockup,
 > [`ARCHITECTURE.md`](ARCHITECTURE.md) owns the hexagon the desktop-side client
 > will sit in, [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) owns the other
 > external surface into a desktop — a different surface, with a different trust
@@ -12,9 +12,9 @@
 > document must not weaken.
 >
 > The wire field names in §5 and §6 are **illustrative** unless a section says a
-> name is fixed by decision. The decisions fix the behaviour; the
-> `demeteo-hub-protocol` crate will fix the spelling, and until it exists a name
-> here is a proposal, not a contract.
+> name is fixed by decision. The decisions fix the behaviour;
+> `crates/demeteo-hub-protocol` fixes the spelling, and where a name here differs
+> from the crate's, the crate is the contract.
 
 ---
 
@@ -41,9 +41,9 @@ full.
 
 | Part | State |
 |---|---|
-| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, and static serving of the browser bundle. Pairing, auth, request handling and the WebSocket are **not built** |
-| `crates/demeteo-hub-protocol` (wire types) | **not built** — the crate does not exist |
-| `hub-web/` (second Vite entry) | **app shell only** — placeholder routes (Fleet, Instance, Runs, Run, Dispatch, AddInstance) with no data wiring yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` will serve the directory its configuration names |
+| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8). It depends on `crates/demeteo-hub-protocol`. Pairing, request handling and the WebSocket are **not built** |
+| `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots, and the canonical encoder of §6.1 and §8. The Hub compiles against it; the desktop does not yet |
+| `hub-web/` (second Vite entry) | **sign-in and passkey management built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, and every other route is behind the session. Fleet, Instance, Runs, Run, Dispatch and AddInstance are placeholders with no data wiring yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
 | Desktop side: device key, pairing, Settings › Hub tab, socket client | **not built** |
 | Desktop side: passkey pin set, request verification, local ceilings | **not built** |
@@ -538,6 +538,19 @@ Both assertions bind `instance_id`, `request_id` and `expires_at` the way a gate
 does; the exact field lists are those of `endorsement_challenge` and
 `revocation_challenge` in `canonical.rs`, and remain defaults (§11).
 
+**The Hub keeps the same chain for itself.** After a tenant's first passkey, which
+passkeys may sign in to the Hub changes only by these two assertions, and the Hub
+stores each one as a record; the module rustdoc of
+[`auth/mod.rs`](../crates/demeteo-hub/src/auth/mod.rs) says what that proves and
+why a session alone moves nothing. Such an assertion is made at the Hub and
+addressed to no instance, so its challenge binds `instance_id = "*"`, a fresh
+`request_id` and an `expires_at` 300 seconds after it was minted, and all three
+are stored with the record. That keeps a record re-verifiable as a signature. It
+is a **carried default, not a decision**: an instance recomputes a challenge from
+the envelope it received, with its own id, so nothing above has it accept a
+`"*"`-bound assertion, and how it comes to trust what such a record says is open
+(§11 item 9).
+
 **Rejected: accepting each new passkey manually on every desktop.** It would hold
 the property and make adding a phone a trip to every machine, which in practice is
 a reason never to add one. The chain extends trust from a key the desktop already
@@ -592,10 +605,10 @@ material for attachments (§6.3).
 
 | Path | What it is |
 |---|---|
-| `crates/demeteo-hub` | the axum server — storage, `KeyService` and `/healthz` plus static serving **built**; auth and the socket **not built** |
+| `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, and passkey auth (registration, sign-in, sessions, endorsement and revocation) **built**; pairing, request handling and the socket **not built**. It depends on `crates/demeteo-hub-protocol` |
 | `deploy/hub` | the Compose bundle, Dockerfile and operator README — **built** |
-| `crates/demeteo-hub-protocol` | **serde-only** wire types shared by the desktop client and the Hub — **not built** |
-| `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **app shell only**: placeholder routes (Fleet, Instance, Runs, Run, Dispatch, AddInstance), no data wiring yet, and no view renders the canvas yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`, and `demeteo-hub` will serve the directory its configuration names |
+| `crates/demeteo-hub-protocol` | **serde-only** wire types shared by the desktop client and the Hub — **built**; the Hub is its only dependant so far |
+| `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **sign-in and passkey management built** (SignUp, SignIn, Passkeys, and a session gate in front of every other route); Fleet, Instance, Runs, Run, Dispatch and AddInstance are placeholder routes with no data wiring yet, and no view renders the canvas yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`, and `demeteo-hub` serves the directory its configuration names |
 
 **Rejected: the Hub linking `demeteo-core` in v1.** `demeteo-core` brings `libssh2`,
 git plumbing and `rusqlite`. A hosted container would ship all three for code that
@@ -672,7 +685,12 @@ should raise it, not pick.
    is the runner's answer and is not assumed to carry over.
 9. **Defaults carried, not measured:** ES256 for the device key, EdDSA for the
    envelope, 128 bits for a request id, the field lists of the two passkey
-   challenges, and an upper bound on `expires_at` an instance will accept.
+   challenges, and an upper bound on `expires_at` an instance will accept. One
+   more is already in stored data: the Hub's own endorsement and revocation
+   assertions bind `instance_id = "*"`, a fresh `request_id` and a 300-second
+   `expires_at`, all stored with the record (§8). How an instance accepts such
+   a record — relayed as it stands, or replaced by a fresh assertion bound to
+   that instance — is not decided.
 10. **Where the desktop-side client sits in the hexagon.** It must obey
     [AGENTS.md §3](../AGENTS.md) — no business logic in `commands/` — and which
     port it hangs from is a build ticket's call.

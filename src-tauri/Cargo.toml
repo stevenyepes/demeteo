@@ -60,3 +60,9 @@ demeteo-core = { path = "../crates/demeteo-core", features = ["test-support"] }
 # (`run_in_background_enabled`, `cleanup_terminal_sessions`) can be exercised
 # against a real `AppHandle` without a display server.
 tauri = { version = "2", features = ["test"] }
+
+# `cargo test` here is the one Rust gate a Demeteo run executes, so Hub
+# behaviour has to be reachable from `tests/`. Linux only: that is where runs
+# happen, and a macOS or Windows desktop test build has no use for the Hub.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+demeteo-hub = { path = "../crates/demeteo-hub", features = ["test-support"] }

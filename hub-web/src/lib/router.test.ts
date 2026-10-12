@@ -4,17 +4,20 @@ import { parseRoute, routeHref, type Route } from './router';
 
 type Linkable = Exclude<Route, { name: 'not-found' }>;
 
-const SIX_ROUTES: Array<[hash: string, route: Linkable]> = [
+const LINKABLE_ROUTES: Array<[hash: string, route: Linkable]> = [
   ['#/fleet', { name: 'fleet' }],
   ['#/instances/i-1', { name: 'instance', instanceId: 'i-1' }],
   ['#/runs', { name: 'runs' }],
   ['#/instances/i-1/runs/f-9', { name: 'run', instanceId: 'i-1', featureId: 'f-9' }],
   ['#/dispatch', { name: 'dispatch' }],
   ['#/add-instance', { name: 'add-instance' }],
+  ['#/sign-up', { name: 'sign-up' }],
+  ['#/sign-in', { name: 'sign-in' }],
+  ['#/passkeys', { name: 'passkeys' }],
 ];
 
 describe('routeHref', () => {
-  it.each(SIX_ROUTES)('spells %s', (hash, route) => {
+  it.each(LINKABLE_ROUTES)('spells %s', (hash, route) => {
     expect(routeHref(route)).toBe(hash);
   });
 
@@ -26,12 +29,16 @@ describe('routeHref', () => {
 });
 
 describe('parseRoute', () => {
-  it.each(SIX_ROUTES)('round-trips %s', (_hash, route) => {
+  it.each(LINKABLE_ROUTES)('round-trips %s', (_hash, route) => {
     expect(parseRoute(routeHref(route))).toEqual(route);
   });
 
   it.each(['', '#', '#/'])('reads the empty hash %j as fleet', (hash) => {
     expect(parseRoute(hash)).toEqual({ name: 'fleet' });
+  });
+
+  it.each(LINKABLE_ROUTES)('reads the literal hash %s', (hash, route) => {
+    expect(parseRoute(hash)).toEqual(route);
   });
 
   it('reports an unknown path as not-found, carrying the path', () => {
@@ -68,6 +75,13 @@ describe('parseRoute', () => {
     expect(parseRoute('#/instances//runs/f-9').name).toBe('not-found');
     expect(parseRoute('#/instances/i-1/runs/').name).toBe('not-found');
   });
+
+  it.each(['#/sign-up/x', '#/sign-in/x', '#/passkeys/cred-1', '#/signin', '#/Sign-In'])(
+    'reports %s as not-found rather than as an auth route',
+    (hash) => {
+      expect(parseRoute(hash).name).toBe('not-found');
+    },
+  );
 
   it('does not let an id shadow the add-instance route', () => {
     expect(parseRoute('#/instances/add')).toEqual({ name: 'instance', instanceId: 'add' });

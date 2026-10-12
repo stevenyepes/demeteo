@@ -5,10 +5,19 @@ description = "Hosted Hub: tenant-scoped Postgres storage, Transit key service a
 license = "MIT"
 edition = "2021"
 
+[features]
+# Test-only API for test builds outside this crate's unit tests: its own
+# `tests/` and `src-tauri/tests`. Never enabled by a production build.
+test-support = []
+
 [dependencies]
 async-trait = "0.1"
+# Already built for rustls (via reqwest) with exactly this feature set. The
+# default features add `untrusted 0.7`, which is not in Cargo.lock.
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys"] }
 axum = "0.8"
 base64 = "0.22"
+demeteo-hub-protocol = { path = "../demeteo-hub-protocol" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -28,6 +37,17 @@ tower-http = { version = "0.6", features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
+# `conditional-ui` is the only gate on the discoverable (usernameless) sign-in
+# calls; the default `attestation` feature adds an API this crate does not use.
+# Never `danger-allow-state-serialisation`: ceremony state stays in process
+# memory. Its core links the system OpenSSL through openssl-sys, which is why
+# deploy/hub/Dockerfile installs libssl3 and the Windows leg of `cross-os`
+# (.github/workflows/pr-checks.yml) leaves this crate out.
+webauthn-rs = { version = "0.5", default-features = false, features = ["conditional-ui"] }
+
+[dev-dependencies]
+# Turns `test-support` on for this crate's integration tests without a flag.
+demeteo-hub = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

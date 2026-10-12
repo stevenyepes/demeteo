@@ -152,7 +152,8 @@ registrable domain the browser sees. Changing the domain, or the RP ID, invalida
 enrolled passkey; there is no migration. Choose it once.
 
 `localhost` is the only development exception, because browsers treat it as a secure context.
-For anything else, plain HTTP will not work.
+For anything else, plain HTTP will not work. [A local passkey sign-in](#a-local-passkey-sign-in)
+is the procedure that uses it.
 
 Caddy obtains and renews the certificate through ACME, which needs:
 
@@ -161,15 +162,87 @@ Caddy obtains and renews the certificate through ACME, which needs:
 
 `DEMETEO_HUB_DOMAIN`, `DEMETEO_HUB_PUBLIC_URL` and `DEMETEO_HUB_RP_ID` must agree.
 
+## A local passkey sign-in
+
+No automated test drives a real browser or a real authenticator: the browser tests double
+`navigator.credentials`, and the server tests sign with a software authenticator. Registering a
+passkey, signing out and signing back in with a real one is a manual check, made against the
+Hub itself on `http://localhost`.
+
+Sign-in needs Postgres and nothing from OpenBao. Start Postgres through the test override, which
+publishes it on `127.0.0.1:5432`:
+
+```bash
+docker compose -f compose.yaml -f compose.test.yaml up -d --wait postgres
+```
+
+Then, from the repository root and not from `deploy/hub/`, build the browser bundle and run the
+Hub on the host:
+
+```bash
+npm run build:hub-web
+DATABASE_URL=postgres://<user>:<password>@127.0.0.1:5432/<db> \
+DEMETEO_HUB_BIND=127.0.0.1:8080 \
+DEMETEO_HUB_PUBLIC_URL=http://localhost:8080 \
+DEMETEO_HUB_RP_ID=localhost \
+DEMETEO_HUB_WEB_DIR=hub-web/dist \
+OPENBAO_ADDR=http://127.0.0.1:8200 \
+OPENBAO_TOKEN=unused \
+RUST_LOG=info \
+cargo run -p demeteo-hub
+```
+
+| Value | Why it is this |
+|---|---|
+| `DEMETEO_HUB_WEB_DIR` | `hub-web/dist` is where `npm run build:hub-web` writes the bundle; the Hub serves it and the `/v1` routes from one origin |
+| `DEMETEO_HUB_PUBLIC_URL` | `http://localhost:` followed by the port in `DEMETEO_HUB_BIND`. The Hub compares the origin a browser reports with this one byte for byte, so a different port, or `127.0.0.1` in place of `localhost`, is refused |
+| `DEMETEO_HUB_RP_ID` | `localhost`, the only RP ID a browser accepts over plain HTTP |
+| `OPENBAO_ADDR`, `OPENBAO_TOKEN` | the Hub refuses to start without them, but no sign-in route calls the key service. Any non-empty values do: it logs `key service is not usable yet; serving anyway` and serves |
+| `RUST_LOG` | the Hub logs errors only by default, so without it a healthy start prints nothing |
+
+`cargo run` builds the Hub on the host, where it links the system OpenSSL (the note on
+`webauthn-rs` in `crates/demeteo-hub/Cargo.toml`), so the OpenSSL development package has to be
+installed.
+
+Open `http://localhost:8080/` — `localhost`, not `127.0.0.1` — and:
+
+1. follow **Sign up**, name the passkey and create it. The navigation appears only once a
+   session exists;
+2. **Sign out**, then **Sign in with a passkey**. No name is asked for: the authenticator offers
+   the passkey it holds for `localhost`;
+3. optionally, under **Passkeys**, add a second passkey from a second authenticator. It is listed
+   as pending and cannot sign in until **Endorse** on its row is answered with the first one.
+   **Revoke** asks a different trusted passkey, and the last trusted one cannot be revoked.
+
+### Why not the Vite dev server
+
+`npm run dev:hub-web` serves the page from an origin of its own, and the Hub accepts exactly one.
+A state-changing request whose `Origin` is not the origin of `DEMETEO_HUB_PUBLIC_URL` is answered
+`403 origin_mismatch`, and a registration or an assertion whose `clientDataJSON` names another
+origin fails the WebAuthn origin check. `vite.hub-web.config.ts` configures no proxy either, so a
+`/v1` request from that page reaches Vite and never the Hub. The session cookie is a third fence:
+it is `SameSite=Strict`, so a page on another site never has it sent.
+
+None of these is relaxed for development, and neither is `Secure`: the cookie carries it on
+`http://localhost` exactly as it does behind Caddy, for the reason on `set_cookie` in
+`crates/demeteo-hub/src/auth/session.rs`. A browser that treats `http://localhost` as a secure
+context stores it anyway; Chromium and Firefox are expected to, and Safari is not verified. In
+one that does not, the passkey is created and the session does not stick. The answer there is
+HTTPS, never a weaker cookie.
+
+Stop the Hub with Ctrl-C and the database with `docker compose stop postgres`. The account stays
+in the `postgres-data` volume, and the passkey stays on the authenticator under the RP ID
+`localhost` until it is deleted there.
+
 ## Environment
 
 | Variable | Read by | Meaning |
 |---|---|---|
 | `DATABASE_URL` | hub | Postgres connection URL. Compose builds it from the `POSTGRES_*` values |
 | `DEMETEO_HUB_BIND` | hub | listen address inside the container |
-| `DEMETEO_HUB_PUBLIC_URL` | hub | the externally visible `https://` URL |
+| `DEMETEO_HUB_PUBLIC_URL` | hub | the externally visible `https://` URL. Its origin is the one every passkey ceremony and every state-changing request is checked against |
 | `DEMETEO_HUB_RP_ID` | hub | WebAuthn RP ID; see above |
-| `DEMETEO_HUB_WEB_DIR` | hub | directory of static files to serve, default `/srv/hub-web`. Neither the image nor compose ships a bundle there yet, so every static request is 404 until `hub-web/` exists |
+| `DEMETEO_HUB_WEB_DIR` | hub | directory of static files to serve, default `/srv/hub-web`. Neither the image nor compose ships a bundle there, so in this deployment every static request is 404 and the sign-in page is not served; [A local passkey sign-in](#a-local-passkey-sign-in) points it at a built `hub-web/dist` |
 | `OPENBAO_ADDR` | hub | OpenBao address (compose network only) |
 | `OPENBAO_TOKEN` | hub | the least-privilege Transit token |
 | `OPENBAO_TOKEN_FILE` | hub | path to a file holding that token, as an alternative to `OPENBAO_TOKEN` |
@@ -182,9 +255,9 @@ Caddy obtains and renews the certificate through ACME, which needs:
 
 ## Running the ignored tests
 
-The tenancy and OpenBao round-trip tests need live services, so they are `#[ignore]`d and a
-plain `cargo test` skips them. `compose.yaml` publishes neither Postgres nor OpenBao, so start
-the two through the test override, which publishes both on `127.0.0.1` only:
+The tenancy, passkey-store and OpenBao round-trip tests need live services, so they are
+`#[ignore]`d and a plain `cargo test` skips them. `compose.yaml` publishes neither Postgres nor
+OpenBao, so start the two through the test override, which publishes both on `127.0.0.1` only:
 
 ```bash
 docker compose -f compose.yaml -f compose.test.yaml up -d --wait postgres openbao
@@ -202,7 +275,7 @@ export DEMETEO_HUB_TRANSIT_KEY=demeteo-hub
 cargo test -p demeteo-hub -- --ignored
 ```
 
-`--ignored` runs only the seven live tests; CI passes `--include-ignored` to run them with the
+`--ignored` runs only the live tests; CI passes `--include-ignored` to run them with the
 rest. Run a later `docker compose up` from a different shell, or `unset OPENBAO_ADDR` first: an
 exported value outranks `.env`, and the Hub container would be told to find OpenBao on its own
 loopback.
@@ -220,12 +293,64 @@ init, unseal, Transit, policy and token steps of this guide in order, then
 finally builds the image from `deploy/hub/Dockerfile` and discards it — nothing is pushed.
 
 It is deliberately not part of `scripts/checks.sh`: `npm run checks` has to run on a machine
-without Docker, so a green local run says nothing about these seven tests.
+without Docker, so a green local run says nothing about these live tests.
 
 The job reads the unseal keys and the root token out of `bao operator init` in a script. That
 is acceptable only because its OpenBao exists for one job and wraps nothing worth keeping.
 Never do the same for a deployment; [First run](#first-run-initialise-openbao) is the rule
 there.
+
+## No per-client limit, one replica
+
+Nothing in this stack limits how many requests one client may make. The `caddy` service is the
+stock image, which carries no rate-limit module, and its `Caddyfile` is a bare `reverse_proxy`.
+The Hub does not count requests per address either. This is a known gap in the Hub, not a
+setting you got wrong, and no value in `.env` closes it.
+
+What the Hub does bound is how many passkey ceremonies it holds between a `…/start` request and
+its `…/finish`. The constants are in `crates/demeteo-hub/src/auth/ceremonies.rs` and
+`crates/demeteo-hub/src/auth/challenge.rs`:
+
+| Constant | Value | What it bounds |
+|---|---|---|
+| `CHALLENGE_TTL_SECS` | 300 | seconds a started ceremony is held before it expires |
+| `MAX_LIVE_CEREMONIES` | 4096 | registrations and sign-ins in flight, counted together over every caller |
+| `MAX_LIVE_PER_HOLDER` | 8 | ceremonies in flight started by the sessions of one signed-in passkey |
+| `MAX_LIVE_SESSION_BOUND` | 16,384 | ceremonies in flight started by any session, over every passkey |
+
+Each of those budgets is shared, so without a per-client rate limit one client can use up what
+was meant for everyone:
+
+- **Signed out.** A registration and a sign-in need no account to start, and both count toward
+  `MAX_LIVE_CEREMONIES` for `CHALLENGE_TTL_SECS`. A script that sustains roughly 14 starts a
+  second keeps that budget full, and `POST /v1/session/start` and `POST /v1/register/start` then
+  answer `503 too_many_ceremonies` to everyone. For as long as it lasts, a user who is not
+  already signed in cannot sign in — including to revoke a compromised passkey.
+- **Signed in.** Adding, endorsing and revoking a passkey are started by a session and held
+  under the passkey that signed it in, `MAX_LIVE_PER_HOLDER` each, so a flood of sign-in starts
+  does not refuse them. All of them together stop at `MAX_LIVE_SESSION_BOUND`, though, and
+  registration is open: someone who first registers about two thousand passkeys of their own
+  can fill that bound from their sessions. Every tenant's endorsement and revocation starts are
+  then answered `503 too_many_ceremonies` as well.
+
+**Do not expose the Hub to the public internet without a per-client request limit in front of
+it** — a Caddy build that includes a rate-limit module, or another proxy or a firewall that has
+one. Until then, keep the Hub on a private network or a VPN. The certificate procedure under
+[HTTPS, the RP ID and a stable domain](#https-the-rp-id-and-a-stable-domain) assumes ports 80
+and 443 are reachable from the public internet, so it does not fit a private Hub as written;
+this guide does not yet describe another way to obtain the certificate.
+
+### Run exactly one `hub`
+
+Ceremonies in flight are held in the `hub` process's memory and nowhere else. A finish that
+reaches a different replica than the one that served its start finds nothing there, so do not
+scale `hub` beyond one, and do not put a second stack behind the same domain.
+
+### What a restart of `hub` loses
+
+A restart of `hub` — the `docker compose up -d hub` that follows a change to `.env` included —
+drops every ceremony in flight. A user who was part-way through one is answered
+`ceremony_expired` and starts it again. Sessions and passkeys are in Postgres and survive.
 
 ## What this deployment does not protect
 

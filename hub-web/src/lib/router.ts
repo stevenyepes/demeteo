@@ -1,9 +1,9 @@
 /**
- * The route lives in the URL fragment, not the path. `crates/demeteo-hub` is
- * not built, so nothing promises an `index.html` fallback for a deep link; a
- * fragment never reaches the server, which keeps "serve this directory" the
- * whole server contract. History routing becomes an option only once the Hub
- * commits to that fallback.
+ * The route lives in the URL fragment, not the path. `crates/demeteo-hub`
+ * serves this bundle as plain files and promises no `index.html` fallback for
+ * a deep link; a fragment never reaches the server, which keeps "serve this
+ * directory" the whole of what routing asks of it. History routing becomes an
+ * option only once the Hub commits to that fallback.
  */
 
 export type Route =
@@ -13,6 +13,9 @@ export type Route =
   | { name: 'run'; instanceId: string; featureId: string }
   | { name: 'dispatch' }
   | { name: 'add-instance' }
+  | { name: 'sign-up' }
+  | { name: 'sign-in' }
+  | { name: 'passkeys' }
   | { name: 'not-found'; path: string };
 
 export function parseRoute(hash: string): Route {
@@ -30,6 +33,9 @@ function segmentsOf(route: Exclude<Route, { name: 'not-found' }>): string[] {
     case 'runs':
     case 'dispatch':
     case 'add-instance':
+    case 'sign-up':
+    case 'sign-in':
+    case 'passkeys':
       return [route.name];
     case 'instance':
       return ['instances', route.instanceId];
@@ -54,10 +60,18 @@ function matchSegments(segments: string[] | null): Route | null {
   const [head, instanceId, tail, featureId] = segments;
   if (segments.length === 0) return { name: 'fleet' };
   if (segments.length === 1) {
-    if (head === 'fleet' || head === 'runs' || head === 'dispatch' || head === 'add-instance') {
-      return { name: head };
+    switch (head) {
+      case 'fleet':
+      case 'runs':
+      case 'dispatch':
+      case 'add-instance':
+      case 'sign-up':
+      case 'sign-in':
+      case 'passkeys':
+        return { name: head };
+      default:
+        return null;
     }
-    return null;
   }
   if (head !== 'instances') return null;
   if (segments.length === 2) return { name: 'instance', instanceId };

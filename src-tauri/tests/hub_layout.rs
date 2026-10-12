@@ -1,9 +1,10 @@
 //! Guard over the shape of `crates/demeteo-hub`.
 //!
 //! The harness runs `cd src-tauri && cargo test`, which scopes cargo to the
-//! `demeteo` package and compiles nothing from the Hub crate. A test inside
-//! the Hub crate therefore can never be seen passing; this one lives here so
-//! that the structural contract is checked by something the harness runs.
+//! `demeteo` package: the Hub crate is built only as a Linux dev-dependency
+//! of this one, and none of its own tests run. A test inside the Hub crate
+//! therefore can never be seen passing; this one lives here so that the
+//! structural contract is checked by something the harness runs.
 //! It proves file shape, not behaviour.
 //!
 //! Each detector is a pure function over `cargo metadata` JSON or file text,
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const HUB: &str = "demeteo-hub";
-const FORBIDDEN_DEPS: [&str; 2] = ["demeteo-core", "demeteo-hub-protocol"];
+const FORBIDDEN_DEPS: [&str; 1] = ["demeteo-core"];
 const FORBIDDEN_SQLX_FEATURES: [&str; 3] = ["sqlite", "mysql", "any"];
 
 fn repo_root() -> PathBuf {
@@ -165,7 +166,7 @@ fn hub_is_a_workspace_member() {
 }
 
 #[test]
-fn hub_does_not_depend_on_core_or_protocol() {
+fn hub_does_not_depend_on_core() {
     let metadata = workspace_metadata();
     let pkg = hub_package(&metadata).unwrap_or_else(|| panic!("`{HUB}` package not found"));
     let violations = forbidden_dependency_violations(pkg);
@@ -370,7 +371,7 @@ fn sqlite_lockstep_detector_fires_on_violations() {
     assert_eq!(sqlite_lockstep_violations("").len(), 3);
 }
 
-const EXPECTED_TABLES: [&str; 9] = [
+const EXPECTED_TABLES: [&str; 12] = [
     "users",
     "passkeys",
     "instances",
@@ -380,9 +381,47 @@ const EXPECTED_TABLES: [&str; 9] = [
     "run_mirror",
     "snapshots",
     "attachments",
+    "sessions",
+    "passkey_endorsements",
+    "passkey_revocations",
 ];
 const FORBIDDEN_TOKEN_COLUMNS: [&str; 4] = ["token", "secret", "plaintext", "private_key"];
 const FORBIDDEN_ATTACHMENT_COLUMNS: [&str; 3] = ["data_key", "plaintext", "key"];
+/// The CSRF token is derived from the session secret and never stored, so a
+/// column for it means that derivation was replaced by a second stored secret.
+const FORBIDDEN_SESSION_COLUMNS: [&str; 6] = [
+    "token",
+    "secret",
+    "plaintext",
+    "cookie",
+    "csrf",
+    "csrf_token",
+];
+/// `(column, type)` for every challenge input and assertion field an instance
+/// re-verifies. `expires_at` is the integer that was hashed into the challenge,
+/// which a timestamp type would not hand back unchanged; the assertion columns
+/// are the base64url text as it arrived, for the same reason.
+const ENDORSEMENT_RECORD_COLUMNS: [(&str, &str); 9] = [
+    ("instance_id", "TEXT"),
+    ("request_id", "TEXT"),
+    ("expires_at", "BIGINT"),
+    ("new_credential_id", "TEXT"),
+    ("new_public_key", "TEXT"),
+    ("assertion_credential_id", "TEXT"),
+    ("authenticator_data", "TEXT"),
+    ("client_data_json", "TEXT"),
+    ("signature", "TEXT"),
+];
+const REVOCATION_RECORD_COLUMNS: [(&str, &str); 8] = [
+    ("instance_id", "TEXT"),
+    ("request_id", "TEXT"),
+    ("expires_at", "BIGINT"),
+    ("credential_id", "TEXT"),
+    ("assertion_credential_id", "TEXT"),
+    ("authenticator_data", "TEXT"),
+    ("client_data_json", "TEXT"),
+    ("signature", "TEXT"),
+];
 const INSTANCE_CHILDREN: [&str; 5] = [
     "device_keys",
     "instance_requests",
@@ -481,7 +520,7 @@ fn table_set_violations(tables: &[Table]) -> Vec<String> {
         .filter(|n| !expected.contains(n))
         .collect();
     vec![format!(
-        "table set differs from the expected nine: missing {missing:?}, unexpected {extra:?}"
+        "table set differs from the expected one: missing {missing:?}, unexpected {extra:?}"
     )]
 }
 
@@ -508,6 +547,7 @@ fn secret_column_violations(tables: &[Table]) -> Vec<String> {
             "wrapped_key",
             &FORBIDDEN_ATTACHMENT_COLUMNS[..],
         ),
+        ("sessions", "token_hash", &FORBIDDEN_SESSION_COLUMNS[..]),
     ] {
         let Some(t) = tables.iter().find(|t| t.name == table) else {
             out.push(format!("{table} is missing"));
@@ -520,6 +560,46 @@ fn secret_column_violations(tables: &[Table]) -> Vec<String> {
             if t.column(name).is_some() {
                 out.push(format!("{table} has forbidden column `{name}`"));
             }
+        }
+    }
+    out
+}
+
+/// A record names passkeys by credential id value, never by a foreign key to
+/// `passkeys`: it must be verifiable from its own row alone, and a cascade
+/// from that table must not be able to delete it.
+fn chain_record_violations(tables: &[Table]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (name, required) in [
+        ("passkey_endorsements", &ENDORSEMENT_RECORD_COLUMNS[..]),
+        ("passkey_revocations", &REVOCATION_RECORD_COLUMNS[..]),
+    ] {
+        let Some(t) = tables.iter().find(|t| t.name == name) else {
+            out.push(format!("{name} is missing"));
+            continue;
+        };
+        for (column, ty) in required {
+            match t.column(column) {
+                None => out.push(format!("{name} has no {column} column")),
+                Some(def) if def.split_whitespace().next() != Some(*ty) => {
+                    out.push(format!("{name}.{column} is not {ty}"));
+                }
+                Some(_) => {}
+            }
+        }
+        for (column, def) in &t.columns {
+            if !def.contains("NOT NULL") && !def.contains("PRIMARY KEY") {
+                out.push(format!("{name}.{column} is nullable"));
+            }
+        }
+        let references_passkeys = t
+            .columns
+            .iter()
+            .map(|(_, def)| def)
+            .chain(&t.constraints)
+            .any(|text| text.contains("REFERENCES passkeys"));
+        if references_passkeys {
+            out.push(format!("{name} has a foreign key to passkeys"));
         }
     }
     out
@@ -580,7 +660,7 @@ fn is_migration_filename(name: &str) -> bool {
 }
 
 #[test]
-fn migrations_create_exactly_the_nine_tables() {
+fn migrations_create_exactly_the_expected_tables() {
     let violations = table_set_violations(&all_tables());
     assert!(violations.is_empty(), "{}", violations.join("\n"));
 }
@@ -601,6 +681,16 @@ fn secret_bearing_columns_are_hashed_or_wrapped() {
     assert!(
         violations.is_empty(),
         "plaintext secret columns:\n  - {}",
+        violations.join("\n  - ")
+    );
+}
+
+#[test]
+fn chain_records_keep_every_field_an_instance_reverifies() {
+    let violations = chain_record_violations(&all_tables());
+    assert!(
+        violations.is_empty(),
+        "endorsement and revocation record violations:\n  - {}",
         violations.join("\n  - ")
     );
 }
@@ -663,33 +753,112 @@ fn schema_detectors_fire_on_violations() {
     let absent = parse_tables("CREATE TABLE tokens (\n  id UUID\n);\n");
     assert_eq!(tenancy_violations(&absent).len(), 1);
 
-    let mut ten = EXPECTED_TABLES
+    let mut exact = EXPECTED_TABLES
         .map(|n| format!("CREATE TABLE {n} (\n  id UUID\n);\n"))
         .join("");
-    assert!(table_set_violations(&parse_tables(&ten)).is_empty());
-    ten.push_str("CREATE TABLE extra (\n  id UUID\n);\n");
-    assert_eq!(table_set_violations(&parse_tables(&ten)).len(), 1);
+    assert!(table_set_violations(&parse_tables(&exact)).is_empty());
+    let one_short = exact.replace("CREATE TABLE sessions (\n  id UUID\n);\n", "");
+    assert_eq!(table_set_violations(&parse_tables(&one_short)).len(), 1);
+    exact.push_str("CREATE TABLE extra (\n  id UUID\n);\n");
+    assert_eq!(table_set_violations(&parse_tables(&exact)).len(), 1);
 
-    for bad in FORBIDDEN_TOKEN_COLUMNS {
-        let sql = format!(
-            "CREATE TABLE tokens (\n  token_hash BYTEA,\n  {bad} TEXT\n);\n\
-             CREATE TABLE attachments (\n  wrapped_key TEXT\n);\n"
-        );
+    let secrets = "CREATE TABLE tokens (\n  token_hash BYTEA\n);\n\
+                   CREATE TABLE attachments (\n  wrapped_key TEXT\n);\n\
+                   CREATE TABLE sessions (\n  token_hash BYTEA\n);\n";
+    assert!(secret_column_violations(&parse_tables(secrets)).is_empty());
+    for (table, required, forbidden) in [
+        ("tokens", "token_hash BYTEA", &FORBIDDEN_TOKEN_COLUMNS[..]),
+        (
+            "attachments",
+            "wrapped_key TEXT",
+            &FORBIDDEN_ATTACHMENT_COLUMNS[..],
+        ),
+        (
+            "sessions",
+            "token_hash BYTEA",
+            &FORBIDDEN_SESSION_COLUMNS[..],
+        ),
+    ] {
+        let good = format!("CREATE TABLE {table} (\n  {required}\n);\n");
+        for bad in forbidden {
+            let plaintext = format!("CREATE TABLE {table} (\n  {required},\n  {bad} TEXT\n);\n");
+            let sql = secrets.replace(&good, &plaintext);
+            assert_eq!(
+                secret_column_violations(&parse_tables(&sql)).len(),
+                1,
+                "{table}.{bad}"
+            );
+        }
+        let unhashed = secrets.replace(&good, &format!("CREATE TABLE {table} (\n  id UUID\n);\n"));
         assert_eq!(
-            secret_column_violations(&parse_tables(&sql)).len(),
+            secret_column_violations(&parse_tables(&unhashed)).len(),
             1,
-            "{bad}"
+            "{table} without {required}"
+        );
+        let absent = secrets.replace(&good, "");
+        assert_eq!(
+            secret_column_violations(&parse_tables(&absent)).len(),
+            1,
+            "no {table}"
         );
     }
-    for bad in FORBIDDEN_ATTACHMENT_COLUMNS {
-        let sql = format!(
-            "CREATE TABLE tokens (\n  token_hash BYTEA\n);\n\
-             CREATE TABLE attachments (\n  wrapped_key TEXT,\n  {bad} BYTEA\n);\n"
+
+    let record = |name: &str, columns: &[(&str, &str)]| {
+        let body: String = columns
+            .iter()
+            .map(|(column, ty)| format!("  {column} {ty} NOT NULL,\n"))
+            .collect();
+        format!(
+            "CREATE TABLE {name} (\n  id UUID PRIMARY KEY,\n  user_id UUID NOT NULL REFERENCES users (id),\n{body}  UNIQUE (user_id, request_id)\n);\n"
+        )
+    };
+    let records = format!(
+        "{}{}",
+        record("passkey_endorsements", &ENDORSEMENT_RECORD_COLUMNS),
+        record("passkey_revocations", &REVOCATION_RECORD_COLUMNS)
+    );
+    assert!(chain_record_violations(&parse_tables(&records)).is_empty());
+    for (name, columns) in [
+        ("passkey_endorsements", &ENDORSEMENT_RECORD_COLUMNS[..]),
+        ("passkey_revocations", &REVOCATION_RECORD_COLUMNS[..]),
+    ] {
+        let good = record(name, columns);
+        for (column, ty) in columns {
+            let line = format!("  {column} {ty} NOT NULL,\n");
+            for (what, replacement) in [
+                ("missing", String::new()),
+                ("nullable", format!("  {column} {ty},\n")),
+                ("retyped", format!("  {column} JSONB NOT NULL,\n")),
+            ] {
+                let sql = records.replace(&good, &good.replace(&line, &replacement));
+                assert_eq!(
+                    chain_record_violations(&parse_tables(&sql)).len(),
+                    1,
+                    "{name}.{column} {what}"
+                );
+            }
+        }
+        let column_fk = good.replace(
+            "signature TEXT NOT NULL",
+            "signature TEXT NOT NULL REFERENCES passkeys (credential_id)",
         );
+        let table_fk = good.replace(
+            "  UNIQUE (user_id, request_id)\n",
+            "  UNIQUE (user_id, request_id),\n  FOREIGN KEY (request_id) REFERENCES passkeys (id)\n",
+        );
+        for (what, bad) in [("column", column_fk), ("table", table_fk)] {
+            let sql = records.replace(&good, &bad);
+            assert_eq!(
+                chain_record_violations(&parse_tables(&sql)).len(),
+                1,
+                "{name} {what}-level foreign key to passkeys"
+            );
+        }
+        let absent = records.replace(&good, "");
         assert_eq!(
-            secret_column_violations(&parse_tables(&sql)).len(),
+            chain_record_violations(&parse_tables(&absent)).len(),
             1,
-            "{bad}"
+            "no {name}"
         );
     }
 
@@ -740,6 +909,25 @@ const README_OPERATOR_DUTIES: [&str; 3] = ["bao token renew", "bao token lookup"
 /// once the token is in `.env`, and recreate `hub` after any later `.env` change.
 const README_FULL_STACK_UP: &str = "docker compose up -d";
 const README_RECREATE_HUB: &str = "docker compose up -d hub";
+/// Nothing in the stack bounds a client, the Hub is one replica and a restart
+/// drops its ceremonies. The rustdoc on `Ceremonies` says so to whoever reads
+/// the code, and an operator does not: the README is where they are told.
+const README_CEREMONY_LIMITS: [&str; 4] = [
+    "too_many_ceremonies",
+    "rate limit",
+    "replica",
+    "ceremony_expired",
+];
+/// Each has a row in the README's table, whose value cell is compared with the
+/// declaration: a budget raised in the Hub and not in the README is a number
+/// an operator sizes a limiter from and gets wrong.
+const CEREMONY_BUDGETS: [&str; 4] = [
+    "CHALLENGE_TTL_SECS",
+    "MAX_LIVE_CEREMONIES",
+    "MAX_LIVE_PER_HOLDER",
+    "MAX_LIVE_SESSION_BOUND",
+];
+const CEREMONY_BUDGET_SOURCES: [&str; 2] = ["challenge.rs", "ceremonies.rs"];
 
 fn deploy_dir() -> PathBuf {
     repo_root().join("deploy").join("hub")
@@ -947,6 +1135,18 @@ fn cache_mount_targets(line: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Whether an `apt-get install` of the last stage names `libssl3`. Why it has
+/// to is on that `RUN` in `deploy/hub/Dockerfile`.
+fn runtime_installs_libssl(lines: &[&str]) -> bool {
+    let runtime = lines
+        .iter()
+        .rposition(|l| l.starts_with("FROM "))
+        .unwrap_or(0);
+    lines[runtime..]
+        .iter()
+        .any(|l| l.contains("apt-get install") && l.split_whitespace().any(|t| t == "libssl3"))
+}
+
 fn dockerfile_violations(dockerfile: &str, channel: &str) -> Vec<String> {
     let logical = logical_lines(dockerfile);
     let lines: Vec<&str> = logical.iter().map(String::as_str).collect();
@@ -1004,6 +1204,9 @@ fn dockerfile_violations(dockerfile: &str, channel: &str) -> Vec<String> {
     }
     if !lines.iter().any(|l| l.starts_with("ENTRYPOINT")) {
         out.push("runtime stage sets no `ENTRYPOINT`".to_string());
+    }
+    if !runtime_installs_libssl(&lines) {
+        out.push("runtime stage does not `apt-get install` `libssl3`".to_string());
     }
     out
 }
@@ -1183,6 +1386,7 @@ fn readme_violations(readme: &str) -> Vec<String> {
     let mut out: Vec<String> = README_KEYWORDS
         .iter()
         .chain(README_OPERATOR_DUTIES.iter())
+        .chain(README_CEREMONY_LIMITS.iter())
         .filter(|k| !readme.contains(*k))
         .map(|k| format!("deploy/hub/README.md never mentions `{k}`"))
         .collect();
@@ -1209,6 +1413,67 @@ fn readme_violations(readme: &str) -> Vec<String> {
         ));
     }
     out
+}
+
+fn declared_const(source: &str, name: &str) -> Option<u64> {
+    let declaration = format!("pub const {name}:");
+    source.lines().find_map(|l| {
+        let (_, value) = l.trim().strip_prefix(&declaration)?.split_once('=')?;
+        value
+            .trim()
+            .trim_end_matches(';')
+            .replace('_', "")
+            .parse()
+            .ok()
+    })
+}
+
+/// The second cell of the table row whose first cell is `` `name` ``. A
+/// mention in a sentence is not read: the number beside it there is as often
+/// a rate or a count derived from the constant as the constant itself.
+fn documented_const(readme: &str, name: &str) -> Option<u64> {
+    let first_cell = format!("`{name}`");
+    readme.lines().find_map(|l| {
+        let mut cells = l.trim().strip_prefix('|')?.split('|').map(str::trim);
+        if cells.next()? != first_cell {
+            return None;
+        }
+        cells.next()?.replace(',', "").parse().ok()
+    })
+}
+
+fn ceremony_budget_violations(readme: &str, source: &str) -> Vec<String> {
+    CEREMONY_BUDGETS
+        .iter()
+        .filter_map(|name| {
+            let Some(declared) = declared_const(source, name) else {
+                return Some(format!(
+                    "the Hub declares no `pub const {name}` with an integer literal"
+                ));
+            };
+            match documented_const(readme, name) {
+                None => Some(format!(
+                    "deploy/hub/README.md has no table row giving `{name}` a value"
+                )),
+                Some(documented) if documented != declared => Some(format!(
+                    "deploy/hub/README.md gives `{name}` as {documented}; the Hub declares {declared}"
+                )),
+                Some(_) => None,
+            }
+        })
+        .collect()
+}
+
+fn ceremony_budget_sources() -> String {
+    let auth = hub_dir().join("src").join("auth");
+    CEREMONY_BUDGET_SOURCES
+        .iter()
+        .map(|file| {
+            let path = auth.join(file);
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+        })
+        .collect()
 }
 
 #[test]
@@ -1266,7 +1531,12 @@ fn openbao_file_storage_is_the_mounted_image_volume() {
 
 #[test]
 fn readme_documents_the_operator_steps() {
-    let violations = readme_violations(&read_deploy("README.md"));
+    let readme = read_deploy("README.md");
+    let mut violations = readme_violations(&readme);
+    violations.extend(ceremony_budget_violations(
+        &readme,
+        &ceremony_budget_sources(),
+    ));
     assert!(violations.is_empty(), "{}", violations.join("\n"));
 }
 
@@ -1287,12 +1557,17 @@ fn env_example_says_the_postgres_password_must_be_url_safe() {
 #[test]
 fn readme_detector_fires_on_violations() {
     let good = format!(
-        "# Hub\n\n## Unseal after every restart\n\n{}\n{}\n{README_FULL_STACK_UP}\n{README_RECREATE_HUB}\n",
+        "# Hub\n\n## Unseal after every restart\n\n{}\n{}\n{}\n{README_FULL_STACK_UP}\n{README_RECREATE_HUB}\n",
         README_KEYWORDS.join("\n"),
-        README_OPERATOR_DUTIES.join("\n")
+        README_OPERATOR_DUTIES.join("\n"),
+        README_CEREMONY_LIMITS.join("\n")
     );
     assert!(readme_violations(&good).is_empty());
-    for keyword in README_KEYWORDS.iter().chain(README_OPERATOR_DUTIES.iter()) {
+    for keyword in README_KEYWORDS
+        .iter()
+        .chain(README_OPERATOR_DUTIES.iter())
+        .chain(README_CEREMONY_LIMITS.iter())
+    {
         let missing = good.replace(keyword, "");
         assert_eq!(readme_violations(&missing).len(), 1, "{keyword}");
     }
@@ -1307,6 +1582,30 @@ fn readme_detector_fires_on_violations() {
     assert_eq!(readme_violations(&one_service_only).len(), 1);
     let no_recreate = good.replace(README_RECREATE_HUB, "docker compose restart hub");
     assert_eq!(readme_violations(&no_recreate).len(), 1);
+}
+
+#[test]
+fn ceremony_budget_detector_fires_on_violations() {
+    let source = "pub const CHALLENGE_TTL_SECS: u64 = 300;\npub const MAX_LIVE_CEREMONIES: usize = 4096;\npub const MAX_LIVE_PER_HOLDER: usize = 8;\npub const MAX_LIVE_SESSION_BOUND: usize = 16_384;\n";
+    let readme = "| Constant | Value | Bounds |\n|---|---|---|\n| `CHALLENGE_TTL_SECS` | 300 | a |\n| `MAX_LIVE_CEREMONIES` | 4096 | b |\n| `MAX_LIVE_PER_HOLDER` | 8 | c |\n| `MAX_LIVE_SESSION_BOUND` | 16,384 | d |\n";
+    assert!(ceremony_budget_violations(readme, source).is_empty());
+
+    let raised = source.replace("= 4096;", "= 8192;");
+    assert_eq!(ceremony_budget_violations(readme, &raised).len(), 1);
+    let stale = readme.replace("16,384", "16,385");
+    assert_eq!(ceremony_budget_violations(&stale, source).len(), 1);
+    let no_row = readme.replace("| `MAX_LIVE_PER_HOLDER` | 8 | c |\n", "");
+    assert_eq!(ceremony_budget_violations(&no_row, source).len(), 1);
+    let prose_only = readme.replace(
+        "| `MAX_LIVE_PER_HOLDER` | 8 | c |",
+        "`MAX_LIVE_PER_HOLDER` is 8",
+    );
+    assert_eq!(ceremony_budget_violations(&prose_only, source).len(), 1);
+    let undeclared = source.replace("pub const CHALLENGE_TTL_SECS: u64 = 300;\n", "");
+    assert_eq!(ceremony_budget_violations(readme, &undeclared).len(), 1);
+    let computed = source.replace("= 300;", "= 5 * 60;");
+    assert_eq!(ceremony_budget_violations(readme, &computed).len(), 1);
+    assert_eq!(ceremony_budget_violations("", source).len(), 4);
 }
 
 #[test]
@@ -1361,7 +1660,7 @@ fn deploy_detectors_fire_on_violations() {
 
 #[test]
 fn dockerfile_detector_fires_on_violations() {
-    let good = "FROM rust:1.97.0-bookworm AS builder\nENV CARGO_TARGET_DIR=/build/target\nCOPY Cargo.toml Cargo.lock ./\nCOPY crates ./crates\nRUN --mount=type=cache,target=/usr/local/cargo/registry \\\n    --mount=type=cache,target=/build/target \\\n    cargo build --locked --release -p demeteo-hub \\\n    && cp /build/target/release/demeteo-hub /usr/local/bin/demeteo-hub\nFROM debian:bookworm-slim\nCOPY --from=builder /usr/local/bin/demeteo-hub /usr/local/bin/demeteo-hub\nUSER hub\nENTRYPOINT [\"/usr/local/bin/demeteo-hub\"]\n";
+    let good = "FROM rust:1.97.0-bookworm AS builder\nENV CARGO_TARGET_DIR=/build/target\nCOPY Cargo.toml Cargo.lock ./\nCOPY crates ./crates\nRUN --mount=type=cache,target=/usr/local/cargo/registry \\\n    --mount=type=cache,target=/build/target \\\n    cargo build --locked --release -p demeteo-hub \\\n    && cp /build/target/release/demeteo-hub /usr/local/bin/demeteo-hub\nFROM debian:bookworm-slim\nRUN apt-get update \\\n    && apt-get install -y --no-install-recommends ca-certificates libssl3\nCOPY --from=builder /usr/local/bin/demeteo-hub /usr/local/bin/demeteo-hub\nUSER hub\nENTRYPOINT [\"/usr/local/bin/demeteo-hub\"]\n";
     assert!(dockerfile_violations(good, "1.97.0").is_empty());
     assert_eq!(dockerfile_violations(good, "1.98.0").len(), 1);
     assert_eq!(
@@ -1420,6 +1719,15 @@ fn dockerfile_detector_fires_on_violations() {
         "COPY --from=builder /build/target/release/demeteo-hub",
     );
     assert_eq!(dockerfile_violations(&from_mount, "1.97.0").len(), 1);
+    assert_eq!(
+        dockerfile_violations(&good.replace(" libssl3", ""), "1.97.0").len(),
+        1
+    );
+    let builder_only = good.replace(" libssl3", "").replace(
+        "COPY crates ./crates\n",
+        "COPY crates ./crates\nRUN apt-get install -y libssl3\n",
+    );
+    assert_eq!(dockerfile_violations(&builder_only, "1.97.0").len(), 1);
 }
 
 #[test]

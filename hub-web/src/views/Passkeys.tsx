@@ -1,0 +1,195 @@
+import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from 'react';
+
+import { CeremonyError } from '../components/CeremonyError';
+import { PasskeyRow } from '../components/PasskeyRow';
+import { PlaceholderCard } from '../components/PlaceholderCard';
+import { HubApiError } from '../lib/api';
+import { isUsablePasskeyLabel } from '../lib/passkeyLabel';
+import {
+  addPasskey,
+  endorsePasskey,
+  listPasskeys,
+  type Passkey,
+  revokePasskey,
+} from '../lib/passkeys';
+
+/**
+ * `changed` is the passkey as the Hub answered it, and it is the only way a
+ * row's status moves here. The view never writes the status it asked for: a
+ * row reading `Trusted` is the page's whole statement that an assertion was
+ * verified, and only the Hub can make it.
+ */
+function withPasskey(held: Passkey[], changed: Passkey): Passkey[] {
+  return held.some((passkey) => passkey.credentialId === changed.credentialId)
+    ? held.map((passkey) => (passkey.credentialId === changed.credentialId ? changed : passkey))
+    : [...held, changed];
+}
+
+/**
+ * The Hub holds a bounded number of ceremonies per signed-in passkey and evicts
+ * that passkey's own oldest to make room (`MAX_LIVE_PER_HOLDER` in
+ * `crates/demeteo-hub/src/auth/ceremonies.rs`). So a second sign-in with the
+ * same passkey can displace a request in flight here, which no sign-in with a
+ * different passkey can do. The bare code tells the user none of that.
+ */
+function isExpiredCeremony(error: unknown): boolean {
+  return error instanceof HubApiError && error.code === 'ceremony_expired';
+}
+
+function showNothing(): void {}
+
+export function Passkeys() {
+  const labelId = useId();
+  const [passkeys, setPasskeys] = useState<Passkey[] | null>(null);
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<{ error: unknown } | null>(null);
+
+  /**
+   * Numbers the reads of the list so that only the latest one is applied. One
+   * that settles after a newer one started carries the older answer, and one
+   * that settles after the view unmounted has no page to put it on.
+   */
+  const latestRead = useRef(0);
+
+  const readList = useCallback((onRefused: (error: unknown) => void) => {
+    latestRead.current += 1;
+    const read = latestRead.current;
+    listPasskeys().then(
+      (listed) => {
+        if (latestRead.current === read) setPasskeys(listed);
+      },
+      (error: unknown) => {
+        if (latestRead.current === read) onRefused(error);
+      },
+    );
+  }, []);
+
+  const load = useCallback(() => readList((error) => setFailure({ error })), [readList]);
+
+  useEffect(() => {
+    load();
+    return () => {
+      latestRead.current += 1;
+    };
+  }, [load]);
+
+  function retryLoad() {
+    setFailure(null);
+    load();
+  }
+
+  const label = typed.trim();
+  const canAdd = !busy && isUsablePasskeyLabel(label);
+
+  /**
+   * One at a time: a browser shows a single WebAuthn prompt, so two ceremonies cannot both be answered.
+   *
+   * However the attempt settles, the list is read again. The answered passkey
+   * is one row; the others move without this page too, and a finish whose
+   * answer was lost may have committed. That read says nothing of its own: the
+   * attempt's outcome is the only thing shown about the attempt, and a read
+   * answered `401` has already taken the shell to the sign-in view in
+   * `lib/api.ts`.
+   */
+  async function run(ceremony: () => Promise<Passkey>): Promise<boolean> {
+    setFailure(null);
+    setBusy(true);
+    try {
+      const changed = await ceremony();
+      setPasskeys((held) => held && withPasskey(held, changed));
+      return true;
+    } catch (error) {
+      setFailure({ error });
+      return false;
+    } finally {
+      setBusy(false);
+      readList(showNothing);
+    }
+  }
+
+  async function add(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canAdd) return;
+    if (await run(() => addPasskey(label))) setTyped('');
+  }
+
+  const trusted = passkeys?.filter((passkey) => passkey.status === 'trusted').length ?? 0;
+
+  return (
+    <PlaceholderCard title="Passkeys">
+      <p>Each trusted passkey signs you in to this Hub. Revoking one signs it out everywhere.</p>
+      {passkeys === null && failure === null && <p className="mt-6">Loading your passkeys…</p>}
+      {passkeys !== null && (
+        <>
+          <ul className="mt-6 flex flex-col gap-2">
+            {passkeys.map((passkey) => (
+              <PasskeyRow
+                key={passkey.credentialId}
+                passkey={passkey}
+                lastTrusted={passkey.status === 'trusted' && trusted === 1}
+                disabled={busy}
+                onEndorse={(credentialId) => run(() => endorsePasskey(credentialId))}
+                onRevoke={(credentialId) => run(() => revokePasskey(credentialId))}
+              />
+            ))}
+          </ul>
+          {passkeys.some((passkey) => passkey.status === 'pending') && (
+            <p className="mt-3 text-xs text-cyan-300">
+              A pending passkey cannot sign in yet. A passkey that is already trusted must approve
+              it: choose Endorse on its row and answer the prompt with a trusted passkey.
+            </p>
+          )}
+          <form onSubmit={add} className="mt-6 flex max-w-sm flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={labelId} className="text-xs font-medium text-slate-300">
+                Passkey name
+              </label>
+              <input
+                id={labelId}
+                type="text"
+                value={typed}
+                onChange={(event) => setTyped(event.target.value)}
+                autoComplete="off"
+                className="input-field focus:border-cyan-400! focus:shadow-none!"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={!canAdd}
+              className="btn-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Add passkey
+            </button>
+          </form>
+        </>
+      )}
+      {busy && (
+        <p role="status" className="mt-4 text-cyan-300">
+          Waiting for your passkey…
+        </p>
+      )}
+      {failure && (
+        <div className="mt-4 max-w-sm">
+          <CeremonyError error={failure.error} />
+          {isExpiredCeremony(failure.error) && (
+            <p className="mt-3 text-xs text-cyan-300">
+              The Hub was no longer holding this request. Try again. If it keeps happening, another
+              sign-in with this same passkey may be starting requests of its own: sign in with a
+              different trusted passkey and revoke this one.
+            </p>
+          )}
+          {passkeys === null && (
+            <button
+              type="button"
+              onClick={retryLoad}
+              className="btn-primary mt-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+            >
+              Try again
+            </button>
+          )}
+        </div>
+      )}
+    </PlaceholderCard>
+  );
+}

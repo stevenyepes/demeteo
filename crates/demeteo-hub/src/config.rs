@@ -40,6 +40,9 @@ pub struct Config {
     /// The single authority for URLs and WebAuthn origins; never derived from
     /// a request's `Host` header.
     pub public_url: String,
+    /// `public_url`'s origin as a browser serialises it: it is compared
+    /// byte-for-byte with `clientDataJSON.origin` and the `Origin` header.
+    pub origin: String,
     pub rp_id: String,
     pub database_url: String,
     pub openbao_addr: String,
@@ -93,9 +96,15 @@ impl Config {
             });
         }
 
+        let origin = public_origin(&public_url).ok_or_else(|| ConfigError::Invalid {
+            var: PUBLIC_URL,
+            reason: format!("`{public_url}` has a port that is not a number up to 65535"),
+        })?;
+
         Ok(Self {
             bind,
             public_url,
+            origin,
             rp_id,
             database_url: required(DATABASE_URL)?,
             openbao_addr: required(OPENBAO_ADDR)?,
@@ -127,16 +136,52 @@ fn openbao_token(lookup: &impl Fn(&str) -> Option<String>) -> Result<String, Con
         .ok_or(ConfigError::Missing(OPENBAO_TOKEN))
 }
 
-fn url_host(url: &str) -> &str {
+fn url_host_port(url: &str) -> &str {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    authority.rsplit_once('@').map_or(authority, |(_, h)| h)
+}
+
+fn url_host(url: &str) -> &str {
+    let host_port = url_host_port(url);
     if host_port.starts_with('[') {
         return host_port
             .find(']')
             .map_or(host_port, |end| &host_port[..=end]);
     }
     host_port.split(':').next().unwrap_or(host_port)
+}
+
+/// `scheme://host[:port]` the way a browser writes it: scheme and host
+/// lowercased, the scheme's default port and an empty port omitted. `None`
+/// when the port is not one a browser would parse, since no origin it sends
+/// could then match.
+///
+/// Only ASCII case is folded. An IDN host a browser would punycode, or an IP
+/// literal it would re-spell, yields an origin no request carries.
+fn public_origin(public_url: &str) -> Option<String> {
+    let scheme = public_url.split_once("://")?.0.to_ascii_lowercase();
+    let host = url_host(public_url);
+    let port = match url_host_port(public_url).strip_prefix(host)? {
+        "" | ":" => None,
+        text => {
+            let digits = text.strip_prefix(':')?;
+            if !digits.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            Some(digits.parse::<u16>().ok()?)
+        }
+    };
+    let default_port = match scheme.as_str() {
+        "https" => Some(443),
+        "http" => Some(80),
+        _ => None,
+    };
+    let host = host.to_ascii_lowercase();
+    Some(match port.filter(|port| Some(*port) != default_port) {
+        Some(port) => format!("{scheme}://{host}:{port}"),
+        None => format!("{scheme}://{host}"),
+    })
 }
 
 /// WebAuthn refuses a non-secure origin at enrolment, and browsers treat
@@ -238,6 +283,7 @@ impl fmt::Debug for Config {
         f.debug_struct("Config")
             .field("bind", &self.bind)
             .field("public_url", &self.public_url)
+            .field("origin", &self.origin)
             .field("rp_id", &self.rp_id)
             .field("database_url", &redact_database_url(&self.database_url))
             .field("openbao_addr", &self.openbao_addr)
@@ -377,6 +423,93 @@ mod tests {
         assert_eq!(url_host("http://[::1]:8080"), "[::1]");
         assert_eq!(url_host("https://user@[2001:db8::1]/x"), "[2001:db8::1]");
         assert!(!rp_id_covers("localhost", "http://[::1]:8080"));
+    }
+
+    fn origin_of(public_url: &str) -> String {
+        let mut env = full();
+        env.insert(PUBLIC_URL, public_url.to_owned());
+        env.insert(RP_ID, url_host(public_url).to_owned());
+        load(&env).unwrap().origin
+    }
+
+    #[test]
+    fn origin_drops_everything_after_the_authority() {
+        for url in [
+            "https://hub.example.com",
+            "https://hub.example.com/",
+            "https://hub.example.com/app/",
+            "https://hub.example.com?next=1",
+            "https://hub.example.com/app?next=1#top",
+            "https://user:pw@hub.example.com/app",
+        ] {
+            assert_eq!(origin_of(url), "https://hub.example.com", "{url}");
+        }
+    }
+
+    #[test]
+    fn origin_keeps_an_explicit_non_default_port() {
+        assert_eq!(
+            origin_of("https://hub.example.com:8443/x"),
+            "https://hub.example.com:8443"
+        );
+        assert_eq!(origin_of("http://localhost:8080"), "http://localhost:8080");
+        assert_eq!(
+            origin_of("https://hub.example.com:80"),
+            "https://hub.example.com:80"
+        );
+        assert_eq!(
+            public_origin("https://[2001:DB8::1]:8443/x").as_deref(),
+            Some("https://[2001:db8::1]:8443")
+        );
+    }
+
+    #[test]
+    fn origin_drops_the_default_port_of_its_scheme() {
+        for (url, origin) in [
+            ("https://hub.example.com:443", "https://hub.example.com"),
+            (
+                "https://hub.example.com:0443/app",
+                "https://hub.example.com",
+            ),
+            ("https://hub.example.com:/app", "https://hub.example.com"),
+            ("http://localhost:80/", "http://localhost"),
+        ] {
+            assert_eq!(origin_of(url), origin, "{url}");
+        }
+    }
+
+    #[test]
+    fn origin_lowercases_the_scheme_and_the_host() {
+        assert_eq!(
+            origin_of("HTTPS://Hub.Example.COM:8443/App"),
+            "https://hub.example.com:8443"
+        );
+    }
+
+    #[test]
+    fn a_public_url_whose_port_is_not_a_port_is_rejected() {
+        for url in [
+            "https://hub.example.com:port",
+            "https://hub.example.com:99999",
+            "https://hub.example.com:+443",
+        ] {
+            assert_eq!(public_origin(url), None, "{url}");
+            let mut env = full();
+            env.insert(PUBLIC_URL, url.to_owned());
+            let err = load(&env).unwrap_err().to_string();
+            assert!(err.contains(PUBLIC_URL) && err.contains("port"), "{err}");
+        }
+    }
+
+    #[test]
+    fn debug_shows_the_origin() {
+        let mut env = full();
+        env.insert(PUBLIC_URL, "https://Hub.Example.com/app".to_owned());
+        let shown = format!("{:?}", load(&env).unwrap());
+        assert!(
+            shown.contains(r#"origin: "https://hub.example.com""#),
+            "{shown}"
+        );
     }
 
     fn assert_token_file_rejected(content: &str, tag: &str) {
