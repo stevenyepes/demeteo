@@ -110,6 +110,44 @@ describe('GateStrip', () => {
     expect(animated[0]).toBeEmptyDOMElement();
   });
 
+  it('says why the next gate was not auto-approved when the engine recorded a reason', () => {
+    render(
+      <GateStrip
+        steps={[step('a', 'awaiting_gate', 0), step('b', 'awaiting_gate', 1)]}
+        events={[
+          {
+            kind: 'gate_held_by_review',
+            payload_json: JSON.stringify({ step_execution_id: 'a', reason: 'the review lists critical or major issues' }),
+          },
+        ]}
+        onDecideGate={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('gate-strip-held-reason')).toHaveTextContent(
+      'Not auto-approved: the review lists critical or major issues',
+    );
+  });
+
+  // The strip acts on the earliest gate, so a later gate's reason would be
+  // read as a statement about the one the CTA opens.
+  it('gives no reason when only a later gate was held', () => {
+    render(
+      <GateStrip
+        steps={[step('a', 'awaiting_gate', 0), step('b', 'awaiting_gate', 1)]}
+        events={[
+          {
+            kind: 'gate_held_by_review',
+            payload_json: JSON.stringify({ step_execution_id: 'b', reason: 'no counts' }),
+          },
+        ]}
+        onDecideGate={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTestId('gate-strip-held-reason')).not.toBeInTheDocument();
+  });
+
   it('merges a caller-supplied className', () => {
     render(
       <GateStrip steps={[step('a', 'awaiting_gate', 0)]} onDecideGate={() => {}} className="mb-4" />,

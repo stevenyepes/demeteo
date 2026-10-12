@@ -185,6 +185,25 @@ describe('ActivityPanel — the sync affordance', () => {
     expect(screen.getByTestId('activity-sync')).toHaveTextContent('paused');
   });
 
+  it('fetches once more, still closed, when the run stops at a gate', async () => {
+    vi.useFakeTimers();
+    streamRemoteEvents.mockResolvedValue([event({ offset: 3 })]);
+    const closed = { events: [], terminal: false, open: false, onOpenChange: () => {} };
+    const remote = { run: RUN, machineName: 'gpu-box', onEvents: vi.fn() };
+
+    const { rerender } = render(<ActivityPanel {...closed} remote={remote} awaitingGateId={null} />);
+    await act(async () => {});
+    expect(streamRemoteEvents).toHaveBeenCalledTimes(1);
+
+    rerender(<ActivityPanel {...closed} remote={remote} awaitingGateId="se-ship" />);
+    await act(async () => {});
+    expect(streamRemoteEvents).toHaveBeenCalledTimes(2);
+    expect(streamRemoteEvents).toHaveBeenLastCalledWith('m-1', 'r-1', 3);
+
+    await act(async () => { vi.advanceTimersByTime(REMOTE_TAIL_POLL_MS * 4); });
+    expect(streamRemoteEvents).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps a failed closed fetch quiet and resumes the tail on reopen', async () => {
     vi.useFakeTimers();
     streamRemoteEvents.mockRejectedValue(new Error('tunnel down'));

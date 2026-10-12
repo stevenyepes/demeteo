@@ -71,6 +71,15 @@ pub(super) static AGENT_CONFIG_SCHEMA: std::sync::LazyLock<serde_json::Value> =
                         configured: terminal by default, or a pass for a step \
                         that judges nothing the project must configure."
                 },
+                "review_artifact": {
+                    "type": ["string", "null"],
+                    "description": "Marks this step as a review: the name of \
+                        the declared artifact its review is written to. The \
+                        engine appends the review format to the prompt, and a \
+                        project whose gate approvals are set to ship on a \
+                        clean review reads it at the ship gate that follows. \
+                        The artifact must be captured by path."
+                },
                 "capability": {
                     "type": ["string", "null"],
                     "enum": ["read_only", "artifacts", "verify", "implement", null],

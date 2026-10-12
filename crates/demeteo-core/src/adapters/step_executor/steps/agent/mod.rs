@@ -252,10 +252,12 @@ impl ExecutionDriver {
             wt.path,
         )
         .await;
+        let review_before = self.review_body_before_turn(step_conf, wt).await;
         let baseline = TurnBaseline {
             snapshot: &worktree_snapshot,
             base_ref: worktree_base_ref.as_deref(),
             head: &pre_turn_head,
+            review_before: review_before.as_deref(),
         };
 
         let prompt = self

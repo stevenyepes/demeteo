@@ -27,6 +27,7 @@ import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { AttachmentsPanel } from './AttachmentsPanel';
 import { FeatureHeader } from './FeatureHeader';
 import { FeatureStatusBanners } from './FeatureStatusBanners';
+import { awaitingGates } from '../../lib/gateStrip';
 import { GateStrip } from './GateStrip';
 import { InitialPromptPanel } from './InitialPromptPanel';
 import { InspectorColumn, type InspectorPane } from './InspectorColumn';
@@ -559,6 +560,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       runEvents={panelRunEvents}
       activityOpen={activityOpen}
       onActivityOpenChange={onActivityOpenChange}
+      awaitingGateId={awaitingGates(run.steps)[0]?.id ?? null}
       onRunEvents={remote.handleRunEvents}
       onRemoteResolved={remote.refreshRemoteRun}
       runStatus={run.status}
@@ -626,7 +628,12 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       {/* Above the run rather than inside it: a gate is the run asking a
           question, and it was previously findable only by scrolling to the card
           holding it (UI_REDESIGN_PLAN §3.2). */}
-      <GateStrip steps={run.steps} onDecideGate={decideGate} className="mx-6 mt-4" />
+      <GateStrip
+        steps={run.steps}
+        events={panelRunEvents}
+        onDecideGate={decideGate}
+        className="mx-6 mt-4"
+      />
 
       {/* Renders itself away unless this run wrote a review report *and* the
           pull request it reviewed is still open — see the component. That can

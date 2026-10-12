@@ -21,6 +21,17 @@ const evt = (over: Partial<RunEvent>): RunEvent => ({
 afterEach(cleanup);
 
 describe('describeEvent', () => {
+  it('renders a gate held by its review with the reason the engine gave', () => {
+    const d = describeEvent(
+      'gate_held_by_review',
+      JSON.stringify({ step_execution_id: 'se-ship', reason: 'the review carries no issue counts' }),
+    );
+
+    expect(d.label).toBe('Gate held for you');
+    expect(d.detail).toBe('the review carries no issue counts');
+    expect(d.tone).toBe('warn');
+  });
+
   it('renders an agent spawn with the canonical effective-effort label', () => {
     const d = describeEvent(
       'agent_spawned',

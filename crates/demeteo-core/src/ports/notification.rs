@@ -87,6 +87,15 @@ pub enum DomainEvent {
         step_execution_id: StepExecutionId,
     },
 
+    /// Emitted ahead of [`GateRequired`](DomainEvent::GateRequired) when the
+    /// project's autonomy would have approved the gate on a clean review and
+    /// the review did not allow it. `reason` is shown to the person deciding.
+    GateHeldByReview {
+        feature_id: FeatureId,
+        step_execution_id: StepExecutionId,
+        reason: String,
+    },
+
     /// Emitted when the merge executor detects a conflict between two
     /// subtask branches on the same feature.
     ConflictDetected {

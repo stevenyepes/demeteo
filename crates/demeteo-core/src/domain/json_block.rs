@@ -93,6 +93,40 @@ where
     found
 }
 
+/// The **last** object in `text`, by position, that deserializes into `T`.
+///
+/// [`find_json_block`] ranks by shape before position: a fenced candidate
+/// anywhere outranks a bare one below it. That suits a turn whose declaration
+/// is the fenced thing, and is wrong for a file told to *end* on its object —
+/// a fenced quote of the shape higher up would answer for the bare object the
+/// file actually ends on. Here only where a candidate sits ranks it.
+///
+/// Fence bodies are still offered as candidates of their own, beside the
+/// balanced-brace scan that would find most of them anyway: that scan runs
+/// over the whole text, so one unbalanced `{` or `"` in the prose above loses
+/// every object after it, and a fence is the one boundary that survives that.
+pub(crate) fn last_json_object<T: DeserializeOwned>(text: &str) -> Option<T> {
+    let bare = top_level_objects(text).map(|(start, end)| (start, &text[start..end]));
+    fenced_bodies(text)
+        .chain(bare)
+        .filter_map(|(start, body)| Some((start, serde_json::from_str::<T>(body).ok()?)))
+        .max_by_key(|(start, _)| *start)
+        .map(|(_, value)| value)
+}
+
+/// The trimmed body of every closed fence in `text`, with where it starts.
+fn fenced_bodies(text: &str) -> impl Iterator<Item = (usize, &str)> + '_ {
+    const FENCE: &str = "```";
+    let mut from = 0;
+    std::iter::from_fn(move || {
+        let open = from + text[from..].find(FENCE)? + FENCE.len();
+        let body_start = open + text[open..].find('\n')? + 1;
+        let close = body_start + text[body_start..].find(FENCE)?;
+        from = close + FENCE.len();
+        Some((body_start, text[body_start..close].trim()))
+    })
+}
+
 /// The object a turn *ends* on, parsed or not — the span from the last
 /// top-level `{` that reaches the end of the text.
 ///
