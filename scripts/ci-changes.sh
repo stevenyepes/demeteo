@@ -72,7 +72,7 @@ classify() {
     crates/demeteo-core/tests/domain/*|crates/demeteo-core/tests/application/*) KIND=rust-pure ;;
     src-tauri/Cargo.toml|crates/*/Cargo.toml) KIND=rust ;;
     src-tauri/*|crates/demeteo-runner/*) KIND=rust-portable ;;
-    crates/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|.cargo/*) KIND=rust ;;
+    crates/*|Cargo.toml|Cargo.lock|rust-toolchain.toml|.cargo/*|.config/nextest.toml) KIND=rust ;;
     scripts/check-doc-refs.sh|scripts/check-test-temp-dirs.sh) KIND=rust-portable ;;
 
     src/*|public/*|index.html|vite.config.ts|vitest.config.ts) KIND=frontend ;;
@@ -158,6 +158,7 @@ self_test() {
     "false true true|modified,crates/demeteo-core/src/ports/notification.rs"
     "false true true|modified,crates/demeteo-core/tests/fixtures/x.jsonl"
     "false true true|modified,Cargo.lock"
+    "false true true|modified,.config/nextest.toml"
     "false true true|modified,src-tauri/Cargo.toml"
     "false true true|renamed,crates/demeteo-core/src/domain/pure.rs,crates/demeteo-core/src/shared/pure.rs"
     "true true true|modified,package.json"

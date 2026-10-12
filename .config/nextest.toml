@@ -1,0 +1,17 @@
+# Only the Windows legs of `cross-os-test` (pr-checks.yml) run under nextest;
+# everything else, scripts/checks.sh included, uses `cargo test` and never
+# reads this file.
+
+# This test has to get two cold `pwsh` processes started — a child, then the
+# grandchild it launches — inside a 5-second ceiling, and then proves the
+# grandchild died with the tree. With the other test slots busy it missed that
+# window in two of the first three sharded runs ("the grandchild never
+# started") and passed every time it ran alone or beside only its own module.
+# So it takes every slot: nextest waits for the others to drain and runs it by
+# itself.
+#
+# Not `retries`: a retry would also turn a real failure of the reaping it
+# covers into a pass on the second attempt.
+[[profile.default.overrides]]
+filter = 'test(=adapters::local::execution::tests::a_grandchild_is_reaped_when_the_deadline_takes_the_tree)'
+threads-required = "num-test-threads"
