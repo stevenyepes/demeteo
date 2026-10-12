@@ -364,6 +364,7 @@ impl ExecutionDriver {
             &prompt,
             step_conf.artifacts.as_deref(),
         );
+        let prompt = crate::domain::gate::review_contract::append_contract(prompt, step_conf);
 
         // Prepend the capability's prohibitive Operating Boundary block —
         // the prompt-level mirror of the OS fence and tool policy. Keeps a

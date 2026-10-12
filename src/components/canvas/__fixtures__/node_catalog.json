@@ -85,6 +85,13 @@
             "null"
           ]
         },
+        "review_artifact": {
+          "description": "Marks this step as a review: the name of the declared artifact its review is written to. The engine appends the review format to the prompt, and a project whose gate approvals are set to ship on a clean review reads it at the ship gate that follows. The artifact must be captured by path.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "rework_prompt_template": {
           "description": "Prompt rendered instead of `prompt_template` when a verdict from behind this step's task-list consumer sends the run back here — the previous cycle's code is already on the branch, so the step emits a delta rather than a whole decomposition. Unset falls back to `prompt_template`.",
           "type": [

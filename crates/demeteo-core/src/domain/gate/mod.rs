@@ -16,3 +16,4 @@
 pub(crate) mod critic_rework;
 pub(crate) mod decision;
 pub(crate) mod redirect;
+pub(crate) mod review_contract;

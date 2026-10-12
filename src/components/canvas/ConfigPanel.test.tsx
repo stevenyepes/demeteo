@@ -387,6 +387,10 @@ describe('round-trip', () => {
         fireEvent.change(screen.getByLabelText('Agent kind'), { target: { value: 'codex' } }),
       allow_network: () => fireEvent.click(screen.getByLabelText('Allow network')),
       allow_shell: () => fireEvent.click(screen.getByLabelText('Allow shell')),
+      review_artifact: () =>
+        fireEvent.change(screen.getByLabelText('Review artifact'), {
+          target: { value: 'critic-review' },
+        }),
       max_iterations: () =>
         fireEvent.change(screen.getByLabelText('Max iterations'), { target: { value: '4' } }),
       artifacts: () =>
@@ -428,6 +432,7 @@ describe('round-trip', () => {
       capability: 'implement',
       agent_kind: 'codex',
       max_iterations: 4,
+      review_artifact: 'critic-review',
       artifacts: [{ name: 'report' }],
       prompt_template: 'Do the thing.',
       rework_prompt_template: 'Fix only what the verdict named.',

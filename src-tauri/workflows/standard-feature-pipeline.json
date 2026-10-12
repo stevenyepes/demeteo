@@ -132,7 +132,7 @@
       "kind": "agent",
       "title": "Critic Review",
       "agent_kind": null,
-      "prompt_template": "You are a senior code reviewer looking for problems in a change you did not write.\n\nFeature goal: {{feature_description}}\nSpec artifact: [attached — s-spec]\nValidation report (build and tests already passed): [attached — s-validate]\n\n{{review_base_section}}## What to cover\nCorrectness against each acceptance criterion; deviations from the spec's constraints; security (hardcoded secrets, injection, path traversal, TOCTOU); performance (N+1 queries, unbounded loops, allocations on hot paths); test coverage of edge cases and error paths; code quality (naming, duplication, dead code, needless complexity).\n\nRead the code before you judge it. Each of those is a claim about what the implementation does, and the range above is the only place that answer lives; a report from an earlier step describes intent, not what landed. Where your harness supports sub-agents, delegate one dimension to each and keep the verdict yourself.\n\n## Deliverable\nWrite `artifacts/critic-review.md`; the orchestrator reads the file, not your reply.\n- `## Critical Issues` — blocking; fixed before ship\n- `## Major Issues` — should be fixed, not blocking\n- `## Minor Issues` — nice to fix\n- `## Verdict` — one of `PASS`, `PASS_WITH_NOTES`, `FAIL`\n\nYou are done when the file exists with every dimension assessed and a Verdict written.",
+      "prompt_template": "You are a senior code reviewer looking for problems in a change you did not write.\n\nFeature goal: {{feature_description}}\nSpec artifact: [attached — s-spec]\nValidation report (build and tests already passed): [attached — s-validate]\n\n{{review_base_section}}## What to cover\nCorrectness against each acceptance criterion; deviations from the spec's constraints; security (hardcoded secrets, injection, path traversal, TOCTOU); performance (N+1 queries, unbounded loops, allocations on hot paths); test coverage of edge cases and error paths; code quality (naming, duplication, dead code, needless complexity).\n\nRead the code before you judge it. Each of those is a claim about what the implementation does, and the range above is the only place that answer lives; a report from an earlier step describes intent, not what landed. Where your harness supports sub-agents, delegate one dimension to each and keep the verdict yourself.\n\n## Deliverable\nWrite `artifacts/critic-review.md`; the orchestrator reads the file, not your reply. Its sections and how to end it are set out under Review Format below.\n\nYou are done when the file exists with every dimension assessed and a Verdict written.",
       "capability": "artifacts",
       "allow_shell": true,
       "artifacts": [
@@ -145,6 +145,7 @@
           "mode": "full"
         }
       ],
+      "review_artifact": "critic-review",
       "on_failure": null,
       "max_iterations": 1
     },

@@ -464,6 +464,12 @@ export type StepConfig = {
    * unattended remote run instead of auto-approving; anything else is the `safe` default.
    */
   gate_class?: 'safe' | 'dangerous' | null;
+  /**
+   * Marks the step as a review by naming the declared artifact its review is
+   * written to; `clean` gate autonomy reads it at the ship gate that follows.
+   * See `domain::gate::review_contract`.
+   */
+  review_artifact?: string | null;
 };
 
 export interface WorkflowWithSteps extends Workflow {
@@ -1220,7 +1226,7 @@ export interface WorktreeStrategy {
 /** `attended`: every gate waits for a person. `review`: review gates approve
  *  themselves and the ship gate (which publishes the PR) waits. `full`: every
  *  gate approves itself. A detached run never runs below `review`. */
-export type GateAutonomy = 'attended' | 'review' | 'full';
+export type GateAutonomy = 'attended' | 'review' | 'clean' | 'full';
 
 export interface ProjectSettingsData {
   project_id: string;

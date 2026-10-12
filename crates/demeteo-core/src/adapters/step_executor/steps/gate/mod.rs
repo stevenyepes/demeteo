@@ -13,9 +13,11 @@ use crate::ports::db::StepExecutionPatch;
 use crate::ports::notification::DomainEvent;
 
 mod redirect_reset;
+mod review_read;
 mod without_waiting;
 
 use redirect_reset::{reset_gate_target, GateWriters, RedirectReset};
+use review_read::review_standing;
 use without_waiting::{decided_without_waiting, Unasked};
 
 use crate::adapters::step_executor::gate_park::GATE_POLL_INTERVAL;
@@ -114,6 +116,15 @@ impl ExecutionDriver {
             &step_exec.id,
             self.gate_autonomy(),
             _step_conf.is_dangerous_gate(),
+            || {
+                review_standing(
+                    &*self.artifacts,
+                    self.f_id.as_ref(),
+                    &self.steps,
+                    step_execs,
+                    &step_exec.step_id,
+                )
+            },
             paths::now_ms(),
         ) {
             if let Unasked::ApprovedByPolicy(_) = &unasked {

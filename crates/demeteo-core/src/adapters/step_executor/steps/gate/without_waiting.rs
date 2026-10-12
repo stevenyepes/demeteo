@@ -1,6 +1,7 @@
 //! The answer a gate can have before anyone is asked.
 
-use crate::domain::gate_autonomy::{auto_approves, GateAutonomy};
+use crate::domain::gate::review_contract::ReviewStanding;
+use crate::domain::gate_autonomy::{policy_answer, GateAutonomy, PolicyAnswer};
 use crate::domain::ids::StepExecutionId;
 use crate::domain::models::GateDecision;
 use crate::ports::db::GateRepository;
@@ -34,11 +35,15 @@ impl Unasked {
 /// from an approval it could not re-read would find no answer after a restart
 /// — `None` sends the caller to its waiter, whose poll picks the row up if the
 /// write did land.
+///
+/// `review` is called only when the policy's answer turns on it, so a gate
+/// that needs no review reads no artifact.
 pub(crate) fn decided_without_waiting(
     gates: &dyn GateRepository,
     step_execution_id: &StepExecutionId,
     autonomy: GateAutonomy,
     dangerous: bool,
+    review: impl FnOnce() -> ReviewStanding,
     now_ms: i64,
 ) -> Option<Unasked> {
     if let Some(recorded) = gates.latest_for_step(step_execution_id).ok().flatten() {
@@ -46,7 +51,12 @@ pub(crate) fn decided_without_waiting(
             return Some(Unasked::Recorded(recorded));
         }
     }
-    if !auto_approves(autonomy, dangerous) {
+    let approved = match policy_answer(autonomy, dangerous) {
+        PolicyAnswer::Ask => false,
+        PolicyAnswer::Approve => true,
+        PolicyAnswer::ApproveIfReviewClean => review() == ReviewStanding::Clean,
+    };
+    if !approved {
         return None;
     }
     gates.approve_by_policy(step_execution_id, now_ms).ok()?;

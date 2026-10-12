@@ -181,6 +181,17 @@ pub struct StepConfig {
     /// auto-approves. Ignored on non-gate steps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_class: Option<String>,
+    /// Marks this step as a review, by naming the declared artifact its
+    /// review is written to. The engine then appends the format a gate can
+    /// read back — see [`review_contract`](crate::domain::gate::review_contract)
+    /// — and [`GateAutonomy::Clean`](crate::domain::gate_autonomy::GateAutonomy::Clean)
+    /// consults it at the ship gate that follows.
+    ///
+    /// A name rather than a flag because a step may declare several
+    /// artifacts and only one of them is the review. Stored inside
+    /// `steps_json`, so no DB migration is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_artifact: Option<String>,
     /// For a `sequence` step: the earlier step whose `task-list` artifact
     /// holds the ordered task list to execute. Putting the decomposition in
     /// an upstream artifact means a human gate can review it *before* any
