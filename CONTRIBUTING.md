@@ -153,7 +153,8 @@ runs as separate jobs, useful while iterating; the no-argument form is the gate.
 Two things `npm run checks` cannot see, both covered in [§7 of AGENTS.md](AGENTS.md): the
 Docker-based `ExecutionPort` conformance suites (run them when you touch an execution
 transport or the step executor), and `#[cfg(windows)]` code (`scripts/check-windows.sh`).
-CI's `cross-os` job type-checks and runs the core tests on macOS and Windows.
+CI's `cross-os` job type-checks on macOS and Windows, and `cross-os-test` runs the core
+tests there when the change touches code that talks to the OS (`scripts/ci-changes.sh`).
 
 If your change has UI or runtime surface, also confirm the app boots clean:
 
@@ -169,7 +170,7 @@ npm run dev:tauri   # no console errors
   limit, so keep it under about 64 characters and use the description for context
 - Reference any related issue with `Closes #N`
 - If your change touches a Gate-policy area (migrations, Tauri capabilities, agent spawn logic, worktree merge), say so explicitly in the PR description
-- Every PR runs the [`PR Checks` workflow](.github/workflows/pr-checks.yml) — the same `scripts/checks.sh` as `npm run checks` above (as `frontend` and `rust` jobs), plus the `cross-os` and `conformance` jobs, so a `frontend` or `rust` failure you see inline on the PR reproduces locally. It runs on `master` too, after every merge, and that run is what warms the Rust caches every PR reads.
+- Every PR runs the [`PR Checks` workflow](.github/workflows/pr-checks.yml) — the same `scripts/checks.sh` as `npm run checks` above (as `frontend` and `rust` jobs), plus the `cross-os`, `cross-os-test` and `conformance` jobs, so a `frontend` or `rust` failure you see inline on the PR reproduces locally. A PR runs only the jobs its changed files can affect (`scripts/ci-changes.sh`). It runs in full on `master`, after every merge, and that run is what warms the Rust caches every PR reads.
 - Commit subjects and the PR title are linted by [`Lint Commits`](.github/workflows/lint-commits.yml); the title is what a squash merge becomes, so keep it under 72 characters and conventional.
 
 ## What we won't merge
