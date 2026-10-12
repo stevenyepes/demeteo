@@ -1,24 +1,163 @@
-use axum::extract::Request;
-use axum::http::StatusCode;
+use crate::auth::ceremonies::Ceremonies;
+use crate::auth::handlers::{self, cookie_text, header_text, ApiError};
+use crate::auth::session::{self, Rejection};
+use crate::auth::webauthn::{RelyingPartyError, Verifier};
+use crate::auth::RelyingParty;
+use crate::store::Db;
+use axum::extract::{Request, State};
+use axum::http::header::ORIGIN;
+use axum::http::{Method, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Response;
-use axum::routing::get;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
 use axum::Router;
 use std::path::Path;
+use std::sync::Arc;
 use tower_http::services::ServeDir;
+
+struct AuthState {
+    rp: RelyingParty,
+    verifier: Verifier,
+    ceremonies: Ceremonies,
+}
+
+/// axum clones the state into every request, so the auth half is shared, not
+/// copied: a [`Ceremonies`] per clone would hold a ceremony's start where its
+/// finish never looks.
+#[derive(Clone)]
+pub struct AppState {
+    db: Db,
+    auth: Arc<AuthState>,
+}
+
+impl AppState {
+    pub fn new(db: Db, rp: RelyingParty) -> Result<Self, RelyingPartyError> {
+        let verifier = Verifier::new(&rp)?;
+        Ok(Self {
+            db,
+            auth: Arc::new(AuthState {
+                rp,
+                verifier,
+                ceremonies: Ceremonies::default(),
+            }),
+        })
+    }
+
+    pub fn db(&self) -> &Db {
+        &self.db
+    }
+
+    pub fn rp(&self) -> &RelyingParty {
+        &self.auth.rp
+    }
+
+    pub fn verifier(&self) -> &Verifier {
+        &self.auth.verifier
+    }
+
+    pub fn ceremonies(&self) -> &Ceremonies {
+        &self.auth.ceremonies
+    }
+}
 
 /// `/healthz` is liveness only: it must stay green while OpenBao is sealed or
 /// Postgres is away, or the orchestrator restarts a Hub that is merely waiting
-/// for a manual unseal.
+/// for a manual unseal. It therefore takes no part of `state`, which only the
+/// `/v1` routes hold, and building the router dials nothing.
 ///
 /// A missing `web_dir` degrades to 404s at request time, never a startup failure.
-pub fn router(web_dir: &Path) -> Router {
-    router_with(Router::new().route("/healthz", get(healthz)), web_dir)
+pub fn router(state: AppState, web_dir: &Path) -> Router {
+    let routes = Router::new()
+        .route("/healthz", get(healthz))
+        .merge(v1(state));
+    router_with(routes, web_dir)
 }
 
-/// The dotfile guard wraps the static fallback only. Applied to the whole
-/// router it would also 404 every `/.well-known/*` route (WebAuthn related
-/// origins, passkey endpoints): those are served by routes, never by files.
+/// The guard is a `route_layer`, so it runs for a path only once a route
+/// matched it. As a `layer` it would also answer `403` for a `/v1` path that
+/// nothing serves, and a `403` would stop being evidence that a route exists
+/// and is guarded.
+fn v1(state: AppState) -> Router {
+    Router::new()
+        .route("/v1/register/start", post(handlers::start_registration))
+        .route("/v1/register/finish", post(handlers::finish_registration))
+        .route("/v1/session/start", post(handlers::start_sign_in))
+        .route("/v1/session/finish", post(handlers::finish_sign_in))
+        .route("/v1/session", get(handlers::read_session))
+        .route("/v1/session/end", post(handlers::end_session))
+        .route("/v1/passkeys", get(handlers::list_passkeys))
+        .route("/v1/passkeys/add/start", post(handlers::start_addition))
+        .route("/v1/passkeys/add/finish", post(handlers::finish_addition))
+        .route(
+            "/v1/passkeys/endorse/start",
+            post(handlers::start_endorsement),
+        )
+        .route(
+            "/v1/passkeys/endorse/finish",
+            post(handlers::finish_endorsement),
+        )
+        .route(
+            "/v1/passkeys/revoke/start",
+            post(handlers::start_revocation),
+        )
+        .route(
+            "/v1/passkeys/revoke/finish",
+            post(handlers::finish_revocation),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            guard_mutations,
+        ))
+        .with_state(state)
+}
+
+/// The `/v1` routes that change state before there is a session, whose only
+/// CSRF defence is therefore the `Origin` check. A route is named here or it
+/// needs the token: one added to `v1` and forgotten here is refused, not
+/// left open.
+///
+/// Public for `src-tauri/tests/hub_auth.rs` alone, which holds this list to
+/// one written out by hand there: an exemption added here fails that test
+/// until someone edits the other list on purpose.
+pub const PRE_SESSION_ROUTES: &[&str] = &[
+    "/v1/register/start",
+    "/v1/register/finish",
+    "/v1/session/start",
+    "/v1/session/finish",
+];
+
+fn needs_session(path: &str) -> bool {
+    !PRE_SESSION_ROUTES.contains(&path)
+}
+
+/// `expected_origin` is the one in [`AppState`]. Nothing here reads `Host`,
+/// which the client chooses.
+fn mutation_verdict(expected_origin: &str, request: &Request) -> Result<(), Rejection> {
+    if request.method() == Method::GET {
+        return Ok(());
+    }
+    let headers = request.headers();
+    let cookie = cookie_text(headers);
+    session::guard_mutation(
+        expected_origin,
+        header_text(headers, ORIGIN),
+        cookie.as_deref(),
+        header_text(headers, session::CSRF_HEADER),
+        needs_session(request.uri().path()),
+    )
+}
+
+async fn guard_mutations(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    match mutation_verdict(&state.rp().origin, &request) {
+        Ok(()) => next.run(request).await,
+        Err(rejection) => ApiError::from(rejection).into_response(),
+    }
+}
+
+/// Takes routes whose state is already applied. The dotfile guard wraps the
+/// static fallback only: applied to the whole router it would also 404 every
+/// `/.well-known/*` route (WebAuthn related origins, passkey endpoints), and
+/// those are served by routes, never by files.
 fn router_with(routes: Router, web_dir: &Path) -> Router {
     routes.fallback_service(static_files(web_dir))
 }
@@ -53,6 +192,9 @@ fn is_hidden(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::testing::{lazy_state, serve};
+    use axum::http::header::COOKIE;
+    use axum::http::HeaderValue;
     use std::net::Ipv4Addr;
     use std::path::PathBuf;
 
@@ -63,8 +205,16 @@ mod tests {
             .join("web")
     }
 
-    async fn serve(web_dir: &Path) -> String {
-        serve_app(router(web_dir)).await
+    fn state() -> AppState {
+        let rp = RelyingParty {
+            rp_id: "hub.example".to_owned(),
+            origin: "https://hub.example".to_owned(),
+        };
+        lazy_state("postgres://hub@db.invalid/hub", rp).unwrap()
+    }
+
+    async fn serve_router(web_dir: &Path) -> String {
+        serve_app(router(state(), web_dir)).await
     }
 
     async fn serve_app(app: Router) -> String {
@@ -72,7 +222,7 @@ mod tests {
             .await
             .unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await });
+        serve(listener, app);
         format!("http://{addr}")
     }
 
@@ -86,13 +236,13 @@ mod tests {
 
     #[tokio::test]
     async fn healthz_is_200_with_no_backing_service() {
-        let base = serve(&fixture_dir()).await;
+        let base = serve_router(&fixture_dir()).await;
         assert_eq!(status(&base, "/healthz").await, 200);
     }
 
     #[tokio::test]
     async fn root_serves_the_fixture_index() {
-        let base = serve(&fixture_dir()).await;
+        let base = serve_router(&fixture_dir()).await;
         let body = reqwest::get(format!("{base}/"))
             .await
             .unwrap()
@@ -104,7 +254,7 @@ mod tests {
 
     #[tokio::test]
     async fn dotfiles_and_traversal_are_not_served() {
-        let base = serve(&fixture_dir()).await;
+        let base = serve_router(&fixture_dir()).await;
         for path in [
             "/.env",
             "/.git/config",
@@ -130,6 +280,114 @@ mod tests {
         }
     }
 
+    const ORIGIN_OF_STATE: &str = "https://hub.example";
+
+    fn mutation(method: Method, headers: &[(&str, &str)]) -> Request {
+        let mut request = Request::builder().method(method).uri("/v1/session/end");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.body(axum::body::Body::empty()).unwrap()
+    }
+
+    #[test]
+    fn a_route_needs_the_csrf_token_unless_it_is_listed_as_pre_session() {
+        assert!(needs_session("/v1/session/end"));
+        assert!(needs_session("/v1/a-route-nobody-listed"));
+        for path in PRE_SESSION_ROUTES {
+            assert!(!needs_session(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_get_is_not_a_mutation_and_every_other_method_is() {
+        assert_eq!(
+            mutation_verdict(ORIGIN_OF_STATE, &mutation(Method::GET, &[])),
+            Ok(())
+        );
+        for method in [
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::HEAD,
+            Method::OPTIONS,
+        ] {
+            assert_eq!(
+                mutation_verdict(ORIGIN_OF_STATE, &mutation(method.clone(), &[])),
+                Err(Rejection::OriginMismatch),
+                "{method}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_guard_reads_the_three_headers_and_never_the_host() {
+        let secret = session::SessionSecret::generate().unwrap();
+        let cookie = format!("{}={}", session::COOKIE_NAME, secret.cookie_value());
+        let token = secret.csrf_token();
+        let verdict = |headers: &[(&str, &str)]| {
+            mutation_verdict(ORIGIN_OF_STATE, &mutation(Method::POST, headers))
+        };
+
+        assert_eq!(
+            verdict(&[
+                ("host", "evil.example"),
+                ("origin", ORIGIN_OF_STATE),
+                ("cookie", &cookie),
+                ("x-csrf-token", &token),
+            ]),
+            Ok(())
+        );
+        assert_eq!(
+            verdict(&[
+                ("host", "evil.example"),
+                ("origin", "https://evil.example"),
+                ("cookie", &cookie),
+                ("x-csrf-token", &token),
+            ]),
+            Err(Rejection::OriginMismatch)
+        );
+        assert_eq!(
+            verdict(&[("origin", ORIGIN_OF_STATE), ("cookie", &cookie)]),
+            Err(Rejection::CsrfMissing)
+        );
+        assert_eq!(
+            verdict(&[
+                ("origin", ORIGIN_OF_STATE),
+                ("cookie", &cookie),
+                ("x-csrf-token", &secret.cookie_value()),
+            ]),
+            Err(Rejection::CsrfMismatch)
+        );
+    }
+
+    #[test]
+    fn the_guard_finds_the_session_beside_a_cookie_that_is_not_ascii() {
+        let secret = session::SessionSecret::generate().unwrap();
+        let another = session::SessionSecret::generate().unwrap();
+        let cookie = format!(
+            "theme=café; {}={}",
+            session::COOKIE_NAME,
+            secret.cookie_value()
+        );
+        let cookie = HeaderValue::from_bytes(cookie.as_bytes()).unwrap();
+        let verdict = |token: String| {
+            let request = Request::builder()
+                .method(Method::POST)
+                .uri("/v1/session/end")
+                .header(ORIGIN, ORIGIN_OF_STATE)
+                .header(COOKIE, &cookie)
+                .header(session::CSRF_HEADER, token)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            mutation_verdict(ORIGIN_OF_STATE, &request)
+        };
+
+        assert_eq!(verdict(secret.csrf_token()), Ok(()));
+        assert_eq!(verdict(another.csrf_token()), Err(Rejection::CsrfMismatch));
+    }
+
     #[test]
     fn the_static_guard_treats_well_known_as_hidden() {
         assert!(is_hidden("/.well-known/webauthn"));
@@ -138,7 +396,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_web_dir_is_404_not_a_panic() {
-        let base = serve(&fixture_dir().join("absent")).await;
+        let base = serve_router(&fixture_dir().join("absent")).await;
         assert_eq!(status(&base, "/").await, 404);
         assert_eq!(status(&base, "/healthz").await, 200);
     }

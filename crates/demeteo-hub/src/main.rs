@@ -1,4 +1,5 @@
 use demeteo_hub::adapters::openbao::{http_client, OpenBaoKeys};
+use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::config::Config;
 use demeteo_hub::ports::KeyService;
 use demeteo_hub::startup::{classify_key_probe, KeyStatus};
@@ -49,7 +50,12 @@ async fn run() -> Result<(), String> {
     // Spawned after bind, never awaited: a black-holed OpenBao would otherwise
     // hold /healthz back for up to OPENBAO_TOTAL_TIMEOUT.
     tokio::spawn(probe_key_service(keys, config.transit_key.clone()));
-    axum::serve(listener, routes::router(&config.web_dir))
+    let rp = RelyingParty {
+        rp_id: config.rp_id,
+        origin: config.origin,
+    };
+    let state = routes::AppState::new(db, rp).map_err(|e| e.to_string())?;
+    axum::serve(listener, routes::router(state, &config.web_dir))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|e| e.to_string())

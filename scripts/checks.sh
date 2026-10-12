@@ -160,7 +160,8 @@ fi
 step "Rust format check (cargo fmt --all -- --check)"
 ( cd src-tauri && cargo fmt --all -- --check )
 
-# `--workspace` is load-bearing, and matches the `cross-os` job verbatim. Run
+# `--workspace` is load-bearing, and matches the `cross-os` job (whose Windows
+# leg alone also leaves out demeteo-hub). Run
 # from src-tauri without it and cargo selects only the `demeteo` package, so
 # demeteo-core's own test targets are linted as a dependency's lib and never as
 # tests -- a lint in crates/demeteo-core/tests/ was green here and failed the

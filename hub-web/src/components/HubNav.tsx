@@ -1,18 +1,21 @@
 import { type Route, routeHref } from '../lib/router';
 
-type Section = 'fleet' | 'runs' | 'dispatch' | 'add-instance';
+type Section = 'fleet' | 'runs' | 'dispatch' | 'add-instance' | 'passkeys';
 
 const SECTIONS: readonly { name: Section; label: string }[] = [
   { name: 'fleet', label: 'Fleet' },
   { name: 'runs', label: 'Runs' },
   { name: 'dispatch', label: 'Dispatch' },
   { name: 'add-instance', label: 'Add instance' },
+  { name: 'passkeys', label: 'Passkeys' },
 ];
 
 /**
  * A detail view lights the list it is reached from: an instance is opened from
- * the fleet, a run from the runs list. No `default` arm, so a route added to
- * `Route` fails to compile here until it is given a section.
+ * the fleet, a run from the runs list. The two auth routes light nothing and
+ * are not expected here: the nav exists only signed in, where `App` shows
+ * Fleet for them and passes that route instead. No `default` arm, so a route
+ * added to `Route` fails to compile here until it is given a section.
  */
 function sectionOf(route: Route): Section | null {
   switch (route.name) {
@@ -26,6 +29,10 @@ function sectionOf(route: Route): Section | null {
       return 'dispatch';
     case 'add-instance':
       return 'add-instance';
+    case 'passkeys':
+      return 'passkeys';
+    case 'sign-up':
+    case 'sign-in':
     case 'not-found':
       return null;
   }
@@ -33,12 +40,14 @@ function sectionOf(route: Route): Section | null {
 
 interface HubNavProps {
   route: Route;
+  signingOut: boolean;
+  onSignOut: () => void;
 }
 
-export function HubNav({ route }: HubNavProps) {
+export function HubNav({ route, signingOut, onSignOut }: HubNavProps) {
   const active = sectionOf(route);
   return (
-    <nav aria-label="Primary" className="flex flex-wrap items-center gap-1">
+    <nav aria-label="Primary" className="flex flex-1 flex-wrap items-center gap-1">
       {SECTIONS.map(({ name, label }) => (
         <a
           key={name}
@@ -53,6 +62,14 @@ export function HubNav({ route }: HubNavProps) {
           {label}
         </a>
       ))}
+      <button
+        type="button"
+        onClick={onSignOut}
+        disabled={signingOut}
+        className="ml-auto rounded-lg border border-transparent px-3 py-1.5 text-sm font-medium text-slate-400 transition-colors hover:bg-white/5 hover:text-cyan-300 focus-visible:text-cyan-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Sign out
+      </button>
     </nav>
   );
 }

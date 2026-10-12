@@ -12,8 +12,8 @@
 # the second fence.
 #
 # The builder tag tracks `rust-toolchain.toml`; bump them together. The suffix
-# pins the Debian release so the binary links against the glibc of the runtime
-# stage below — change both or neither.
+# pins the Debian release so the binary links against the glibc and the libssl
+# of the runtime stage below — change both or neither.
 FROM rust:1.97.0-bookworm AS builder
 
 # aws-lc-sys (rustls' crypto provider) compiles C and wants cmake.
@@ -41,8 +41,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:bookworm-slim AS runtime
 
+# libssl3: webauthn-rs links the system OpenSSL dynamically through openssl-sys
+# (nothing in this build turns on its `vendored` feature), against the
+# libssl-dev the builder's base image carries. The `hub` CI job builds this
+# image and never starts it, so leaving the library out passes CI and yields a
+# container that exits at launch.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --no-create-home --uid 10001 hub
 

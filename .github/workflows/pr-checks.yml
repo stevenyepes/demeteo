@@ -160,8 +160,15 @@ jobs:
       # remote is always Linux, and selecting it would unify its
       # `vendored-openssl` feature into demeteo-core, building OpenSSL from
       # source on both runners for a binary neither one ever produces.
+      #
+      # demeteo-hub is excluded on Windows only: webauthn-rs links the system
+      # OpenSSL through openssl-sys, which nothing else builds there
+      # (libssh2-sys takes it on unix alone), so this job has never had to
+      # supply one. The Hub ships as a Linux container, and the `rust` and
+      # `hub` jobs lint and test it there; macOS already links OpenSSL for
+      # libssh2.
       - name: Rust clippy (--all-targets -D warnings)
-        run: cargo clippy --workspace --exclude demeteo-runner --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude demeteo-runner ${{ runner.os == 'Windows' && '--exclude demeteo-hub' || '' }} --all-targets -- -D warnings
 
       - name: Core + hub-protocol tests
         run: cargo test -p demeteo-core -p demeteo-hub-protocol

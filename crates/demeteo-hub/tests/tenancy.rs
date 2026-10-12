@@ -1,80 +1,43 @@
 //! Tenant isolation against a real Postgres. Needs the `postgres` service from
 //! `deploy/hub/compose.yaml` as `deploy/hub/README.md` describes, and
 //! `DEMETEO_HUB_TEST_DATABASE_URL` pointing at it.
-//!
-//! Each test migrates a schema of its own and drops it at the end, so tests
-//! run in parallel and leave the database as they found it.
 
+mod support;
+
+use demeteo_hub::auth::policy::Status;
 use demeteo_hub::store::attachments::{
     get_attachment, insert_attachment, NewAttachment, WrappedKey,
 };
 use demeteo_hub::store::instances::{insert_instance, list_instances, NewInstance};
+use demeteo_hub::store::passkeys::{insert_passkey, list_passkeys, NewPasskey};
 use demeteo_hub::store::pool::create_user;
+use demeteo_hub::store::sessions::{
+    delete_session, delete_sessions_of_credential, find_session, insert_session, NewSession,
+    Session, SessionHash,
+};
 use demeteo_hub::store::tokens::{find_token, insert_token, retire_token, NewToken, TokenHash};
-use demeteo_hub::store::{self, Db, InstanceId, UserId};
+use demeteo_hub::store::{Db, InstanceId, UserId};
 use sha2::{Digest, Sha256};
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::collections::BTreeSet;
-use std::future::Future;
-use std::str::FromStr;
+use support::in_fresh_schema;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-const URL_ENV: &str = "DEMETEO_HUB_TEST_DATABASE_URL";
 const FOREIGN_KEY_VIOLATION: &str = "23503";
-const EXPECTED_TABLES: [&str; 9] = [
+const EXPECTED_TABLES: [&str; 12] = [
     "attachments",
     "device_keys",
     "instance_requests",
     "instances",
+    "passkey_endorsements",
+    "passkey_revocations",
     "passkeys",
     "run_mirror",
+    "sessions",
     "snapshots",
     "tokens",
     "users",
 ];
-
-async fn in_fresh_schema<F, Fut>(body: F)
-where
-    F: FnOnce(Db) -> Fut + Send + 'static,
-    Fut: Future<Output = ()> + Send + 'static,
-{
-    let url = std::env::var(URL_ENV)
-        .unwrap_or_else(|_| panic!("{URL_ENV} must be set (see deploy/hub/README.md)"));
-    let schema = format!("hub_tenancy_{}", Uuid::new_v4().simple());
-
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&url)
-        .await
-        .unwrap();
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
-        .execute(&admin)
-        .await
-        .unwrap();
-
-    // Everything after CREATE SCHEMA runs in the task, so a panic in connect
-    // or migrate is caught here too and the DROP below still runs.
-    let task_schema = schema.clone();
-    let outcome = tokio::spawn(async move {
-        let options = PgConnectOptions::from_str(&url)
-            .unwrap()
-            .options([("search_path", task_schema.as_str())]);
-        let db = PgPoolOptions::new().connect_with(options).await.unwrap();
-        store::migrate(&db).await.unwrap();
-        body(db.clone()).await;
-        db.close().await;
-    })
-    .await;
-
-    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    if let Err(failure) = outcome {
-        std::panic::resume_unwind(failure.into_panic());
-    }
-}
 
 fn new_instance(name: &str) -> NewInstance {
     NewInstance {
@@ -92,6 +55,30 @@ async fn user_with_instance(db: &Db, name: &str) -> (UserId, InstanceId) {
     let new = new_instance(name);
     insert_instance(user, db, &new).await.unwrap();
     (user, new.id)
+}
+
+fn new_session(secret: &[u8], credential_id: &[u8], lifetime: Duration) -> NewSession {
+    NewSession {
+        hash: SessionHash::digest(secret),
+        credential_id: credential_id.to_vec(),
+        expires_at: OffsetDateTime::now_utc() + lifetime,
+    }
+}
+
+fn new_passkey(credential_id: &[u8]) -> NewPasskey {
+    NewPasskey {
+        credential_id: credential_id.to_vec(),
+        public_key: vec![0xa5; 77],
+        label: "laptop".to_owned(),
+        sign_count: 0,
+        credential: "{}".to_owned(),
+    }
+}
+
+async fn enrol_trusted(db: &Db, user: UserId, credential_id: &[u8]) {
+    insert_passkey(user, db, &new_passkey(credential_id), Status::Trusted)
+        .await
+        .unwrap();
 }
 
 fn violation_code(err: &sqlx::Error) -> Option<String> {
@@ -254,6 +241,152 @@ async fn tokens_and_attachments_are_invisible_to_other_users() {
         assert_eq!(stored.size_bytes, 3);
         assert!(get_attachment(a, &db, stored.id).await.unwrap().is_some());
         assert!(get_attachment(b, &db, stored.id).await.unwrap().is_none());
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_session_names_its_owner_and_no_other_user_can_end_it() {
+    in_fresh_schema(|db| async move {
+        let a = create_user(&db).await.unwrap();
+        let b = create_user(&db).await.unwrap();
+
+        let credential_id = b"a-passkey".as_slice();
+        enrol_trusted(&db, a, credential_id).await;
+        let new = new_session(b"a-session-secret", credential_id, Duration::hours(1));
+        insert_session(a, &db, &new).await.unwrap();
+        let owned_by_a = Some(Session {
+            user_id: a,
+            credential_id: credential_id.to_vec(),
+        });
+        assert_eq!(find_session(&db, &new.hash).await.unwrap(), owned_by_a);
+
+        assert!(!delete_session(b, &db, &new.hash).await.unwrap());
+        assert_eq!(
+            delete_sessions_of_credential(b, &db, credential_id)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(find_session(&db, &new.hash).await.unwrap(), owned_by_a);
+
+        assert!(delete_session(a, &db, &new.hash).await.unwrap());
+        assert_eq!(find_session(&db, &new.hash).await.unwrap(), None);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn an_expired_session_is_not_found_and_the_next_sign_in_collects_it() {
+    in_fresh_schema(|db| async move {
+        let a = create_user(&db).await.unwrap();
+        let b = create_user(&db).await.unwrap();
+        let count = |user: UserId| {
+            let db = db.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sessions WHERE user_id = $1")
+                    .bind(user)
+                    .fetch_one(&db)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        enrol_trusted(&db, a, b"a-passkey").await;
+        enrol_trusted(&db, a, b"a-second-passkey").await;
+        let expired_a = new_session(b"a-old-secret", b"a-passkey", Duration::hours(-1));
+        let expired_b = new_session(b"b-old-secret", b"b-passkey", Duration::hours(-1));
+        insert_session(a, &db, &expired_a).await.unwrap();
+        insert_session(b, &db, &expired_b).await.unwrap();
+        assert_eq!(find_session(&db, &expired_a.hash).await.unwrap(), None);
+        assert_eq!((count(a).await, count(b).await), (1, 1));
+
+        let live = new_session(b"a-new-secret", b"a-passkey", Duration::hours(1));
+        let other = new_session(b"a-other-secret", b"a-second-passkey", Duration::hours(1));
+        let mut tx = db.begin().await.unwrap();
+        insert_session(a, &mut *tx, &live).await.unwrap();
+        insert_session(a, &mut *tx, &other).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!((count(a).await, count(b).await), (2, 1));
+        assert!(find_session(&db, &live.hash).await.unwrap().is_some());
+
+        let mut tx = db.begin().await.unwrap();
+        assert_eq!(
+            delete_sessions_of_credential(a, &mut *tx, b"a-passkey")
+                .await
+                .unwrap(),
+            1
+        );
+        tx.commit().await.unwrap();
+        assert!(find_session(&db, &live.hash).await.unwrap().is_none());
+        assert!(find_session(&db, &other.hash).await.unwrap().is_some());
+    })
+    .await;
+}
+
+/// The passkey is one that authenticates its own tenant, so what keeps the
+/// crossed row from being found is whose passkey it is and nothing else.
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_session_naming_another_users_passkey_is_not_found() {
+    in_fresh_schema(|db| async move {
+        let a = create_user(&db).await.unwrap();
+        let b = create_user(&db).await.unwrap();
+        let passkey_of_b = b"b-passkey".as_slice();
+        enrol_trusted(&db, b, passkey_of_b).await;
+
+        let crossed = new_session(b"a-crossed-secret", passkey_of_b, Duration::hours(1));
+        let own = new_session(b"b-session-secret", passkey_of_b, Duration::hours(1));
+        insert_session(a, &db, &crossed).await.unwrap();
+        insert_session(b, &db, &own).await.unwrap();
+
+        assert_eq!(find_session(&db, &crossed.hash).await.unwrap(), None);
+        let owned_by_b = Some(Session {
+            user_id: b,
+            credential_id: passkey_of_b.to_vec(),
+        });
+        assert_eq!(find_session(&db, &own.hash).await.unwrap(), owned_by_b);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn list_passkeys_never_returns_another_users_passkey() {
+    in_fresh_schema(|db| async move {
+        let a = create_user(&db).await.unwrap();
+        let b = create_user(&db).await.unwrap();
+        let nobody = create_user(&db).await.unwrap();
+
+        for (owner, credential_id, status) in [
+            (a, b"a-first".as_slice(), Status::Trusted),
+            (a, b"a-second".as_slice(), Status::Pending),
+            (b, b"b-first".as_slice(), Status::Trusted),
+        ] {
+            insert_passkey(owner, &db, &new_passkey(credential_id), status)
+                .await
+                .unwrap();
+        }
+
+        let ids_seen_by = |user: UserId| {
+            let db = db.clone();
+            async move {
+                let listed = list_passkeys(user, &db).await.unwrap();
+                assert!(listed.iter().all(|p| p.user_id == user));
+                listed
+                    .into_iter()
+                    .map(|p| p.credential_id)
+                    .collect::<BTreeSet<_>>()
+            }
+        };
+        assert_eq!(
+            ids_seen_by(a).await,
+            BTreeSet::from([b"a-first".to_vec(), b"a-second".to_vec()])
+        );
+        assert_eq!(ids_seen_by(b).await, BTreeSet::from([b"b-first".to_vec()]));
+        assert!(ids_seen_by(nobody).await.is_empty());
     })
     .await;
 }
