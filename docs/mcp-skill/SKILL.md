@@ -5,10 +5,10 @@ description: Query and drive a running Demeteo workspace over its MCP tool surfa
 
 # Demeteo MCP
 
-Demeteo exposes a fixed, twelve-tool MCP surface over its workspace state:
+Demeteo exposes a fixed, eighteen-tool MCP surface over its workspace state:
 projects, Features, Steps, Gates, Discovery boards, and run events. This skill
 is the judgement a tool's own JSON schema can't carry — which tool answers
-which question, which two cost money, and which operations this surface
+which question, which five cost money, and which operations this surface
 deliberately does not expose. It does not restate any tool's arguments or
 return shape; read those from the tool's own descriptor.
 
@@ -26,7 +26,7 @@ call is checked against.
 
 ## Tool routing table
 
-Twelve tools, each answering one kind of question:
+Fifteen tools, each answering one kind of question:
 
 | Tool | Answers |
 |---|---|
@@ -36,12 +36,18 @@ Twelve tools, each answering one kind of question:
 | `list_step_attempts` | "What's the per-attempt history of this Step?" |
 | `get_failure_verdict` | "Why did this Step fail?" — see Failure triage below |
 | `list_pending_gates` | "What's waiting for a human decision?" — omit `project_id` for a workspace-wide answer |
-| `get_discovery_board` | "What's the state of this Discovery's tickets?" |
+| `list_discoveries` | "What Discoveries exist, and what's this one's id?" — omit `project_id` for a workspace-wide answer |
+| `get_discovery_board` | "What's the state of this Discovery's tickets?" — also names the base branch they integrate against and each started ticket's own branch |
+| `refresh_discovery_prs` | "I just merged or closed a pull request — what does the board say now?" — asks the forge instead of waiting for the two-minute poll; see Spend vs. read |
+| `list_machines` | "Which machines can a run be sent to, and what id names each?" |
 | `run_events_since` | "What's happened on this Feature's run since I last checked?" |
 | `create_workspace_project` | "Register a new project (and its repos) in this workspace." — rows only: nothing is cloned or bootstrapped, so `apply_run_shape_patch` refuses the project until the app bootstraps it |
 | `apply_run_shape_patch` | "Change a project's default agent/model/effort/workflow/artifact settings." |
 | `start_feature` | "Kick off a new Feature run." — spends money, see below; `machine_id` sends it detached to that registered machine, omit it to run on the project's own compute |
-| `start_ticket` | "Kick off a Ticket's current attempt." — spends money, see below; runs where the Ticket is placed unless `machine_id` overrides it for this launch only |
+| `start_ticket` | "Kick off a Ticket's current attempt." — spends money, see below; runs where the Ticket is placed unless `machine_id` overrides it for this launch only; see Driving a Discovery's tickets for its bounds |
+| `retry_step` | "Run that failed step again." — spends money, see below; only a step that failed, was interrupted, or never started |
+| `set_step_assignment` | "Use a different agent, model or effort for this step." — re-runs nothing by itself; see Acting on a run already started |
+| `rework_from_critic` | "The run is waiting at its final gate and the critic found problems — send it back to fix them." — spends money, see below; Standard Feature Pipeline only |
 
 A cross-project question — "which projects have running pipelines", "is
 anything waiting for approval" — is a **single** `list_features` or
@@ -53,8 +59,16 @@ already answers.
 ## Spend vs. read
 
 `list_projects`, `list_features`, `get_feature`, `list_step_attempts`,
-`get_failure_verdict`, `list_pending_gates`, `get_discovery_board`, and
-`run_events_since` are free reads: each inspects state and changes nothing.
+`get_failure_verdict`, `list_pending_gates`, `list_discoveries`,
+`get_discovery_board`, `list_machines`, and `run_events_since` are free reads:
+each inspects state and changes nothing.
+
+`refresh_discovery_prs` is free too, and needs only `read`, but it is not
+inert: it calls the forge and records what it says, so a pull request it finds
+merged completes its Feature, notifies the human, and releases the tickets
+waiting on it — exactly what the app's own poll would have done within two
+minutes. Call it when you have a reason to think a pull request settled, not
+in a tight loop: each call is one forge request per unsettled pull request.
 
 `create_workspace_project` and `apply_run_shape_patch` are free of charge —
 neither spends money — but each is a real, persisted write: the first inserts
@@ -66,13 +80,71 @@ actual task being asked for.
 `start_feature` and `start_ticket` are different again — each launches a real
 pipeline run, which costs real money the instant it's accepted.
 
+`retry_step` and `rework_from_critic` spend the same way on a run that already
+exists: the first re-runs one step, the second re-runs ticketing,
+implementation, validation and the critic. `set_step_assignment` spends
+nothing when called, but it decides what the step's next attempt costs, which
+is why it needs `spend` too.
+
 An exploratory question — "what would it take to add X", "how would you
 approach Y", "could this design work" — must never end in a call to
-`create_workspace_project`, `apply_run_shape_patch`, `start_feature`, or
-`start_ticket`, no matter how confident the answer is. Answer from the read
-tools and from reasoning; only call one of those four when performing the
-write, the config change, or starting a run is the thing actually being asked
-for.
+`create_workspace_project`, `apply_run_shape_patch`, `start_feature`,
+`start_ticket`, `retry_step`, `set_step_assignment`, or `rework_from_critic`,
+no matter how confident the answer is. Answer from the read tools and from
+reasoning; only call one of those seven when performing the write, the config
+change, or starting or re-running work is the thing actually being asked for.
+
+## Driving a Discovery's tickets
+
+Find the Discovery with `list_discoveries` and the machine with
+`list_machines`; never ask the human to paste either id. Read the board, and
+start only tickets whose `standing.startable` is true — a blocked ticket is
+refused, and force-starting it is not offered here.
+
+Bound every `start_ticket` you send on someone's behalf:
+
+- `max_in_flight` when the human asked for a limit ("two at a time"). The
+  server counts and refuses; do not count the board yourself and then start,
+  which races any other client. A ticket is **in flight from its start until
+  its pull request is merged or closed** — a finished run with an open pull
+  request still holds its slot, because its dependents are still blocked.
+- `max_cost_usd` and `max_wall_clock_secs` on a detached start. A ticket has
+  no caps of its own, so a detached ticket sent without them runs unattended
+  and uncapped. They are refused on a ticket that resolves to the project's
+  own compute.
+
+A refused start launched nothing and may be sent again once the reason is
+gone. Merging pull requests is not on this surface (below); after the human
+merges one, or you are told to merge it through the forge's own tooling, call
+`refresh_discovery_prs` and read the returned board for what became startable.
+Tickets listed under its `unrefreshed` could not be read from the forge, so
+their lanes are stale — say so rather than acting on them.
+
+## Acting on a run already started
+
+**A failed step.** Read `get_failure_verdict` before `retry_step`. A repeating
+fingerprint means the same attempt will fail the same way; retry it only after
+something changed — a different assignment, or the human's fix. `retry_step`
+returns once the retry is accepted, so poll `get_feature` for the outcome.
+
+**A different model for one step.** `set_step_assignment` replaces the step's
+pin as a whole: send every dimension you want pinned, because one you omit is
+un-pinned, and omitting all three removes the pin. It re-runs nothing. To
+re-run a failed step on a different model, set the assignment and then call
+`retry_step`. Pin only when the human asked for a model, or agreed to one you
+proposed — the project's defaults are otherwise theirs.
+
+**The final gate of a Standard Feature Pipeline run.** When
+`list_pending_gates` shows a run parked and the human asked you to see it
+through, call `rework_from_critic` with that gate's `step_execution_id`. You
+send no feedback: Demeteo reads the critic's review itself and sends the run
+back to fix what it found. It refuses when the workflow is not the Standard
+pipeline, when the pending decision is not that pipeline's final gate, when
+the critic's verdict is `PASS`, and once a run has been sent back twice. Every
+refusal means the same thing — a person decides this gate in the app — so
+report it and stop; do not look for another way to move the gate. On a run
+started from the app, the rework stops again at the ticket-review gate, which
+also waits for a person.
 
 ## Attaching files to a Feature
 
@@ -144,7 +216,13 @@ This surface does not expose:
 
 - **Gate approval** — a human decides in the app; the alternative is to report
   what's pending (via `list_pending_gates`) back to the human, not to search
-  for a way to approve it programmatically.
+  for a way to approve it programmatically. `rework_from_critic` sends one
+  specific gate *back*; it never approves one, and no tool does.
+- **Redirecting a gate with your own feedback** — the rework tool carries the
+  critic's review and nothing you wrote. If the human wants different
+  instructions given, they give them in the app.
+- **Replaying a completed step** — `retry_step` is for a step that did not
+  finish.
 - **Merging a worktree back to a feature branch** — report merge-readiness or
   conflicts back to the human rather than attempting the merge.
 - **Force-starting a ticket whose dependency is blocking it** — report the

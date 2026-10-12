@@ -576,3 +576,71 @@ async fn an_unparseable_cursor_is_invalid_params_not_a_silent_reset() {
     );
     assert_eq!(body["error"]["code"], json!(-32602));
 }
+
+#[tokio::test]
+async fn list_discoveries_and_list_machines_page_at_the_top_level() {
+    let (addr, resource, ctx) = spawn_mcp_router("pagination-new-lists").await;
+    let token = "token-new-lists";
+    seed_read_grant(&ctx, token, &resource);
+    let project_id = ProjectId::from("p-1".to_string());
+    ctx.projects.add(project(project_id.as_str())).unwrap();
+    let discovery =
+        open_discovery(&ctx, opening(&project_id, "listed plan")).expect("the discovery opens");
+
+    let body = call_tool(addr, token, "list_discoveries", json!({})).await;
+    let content = &body["result"]["structuredContent"];
+    assert_eq!(content["items"].as_array().map(Vec::len), Some(1), "{body}");
+    assert_eq!(content["items"][0]["id"], json!(discovery.id.as_str()));
+    assert_eq!(content["items"][0]["title"], json!("listed plan"));
+    assert_eq!(content["truncated"], json!(false));
+
+    let expected = ctx.machines.get_machines().unwrap().len();
+    let body = call_tool(addr, token, "list_machines", json!({})).await;
+    let content = &body["result"]["structuredContent"];
+    assert_eq!(
+        content["items"].as_array().map(Vec::len),
+        Some(expected),
+        "{body}"
+    );
+    assert_eq!(content["truncated"], json!(false));
+}
+
+/// Both board tools return one shape, so a client that reads one reads the
+/// other: tickets under `tickets`, and the branch facts beside them.
+#[tokio::test]
+async fn both_board_tools_carry_the_base_branch_and_refresh_adds_unrefreshed() {
+    let (addr, resource, ctx) = spawn_mcp_router("board-shape").await;
+    let token = "token-board-shape";
+    seed_read_grant(&ctx, token, &resource);
+    let project_id = ProjectId::from("p-1".to_string());
+    ctx.projects.add(project(project_id.as_str())).unwrap();
+    let discovery =
+        open_discovery(&ctx, opening(&project_id, "shaped plan")).expect("the discovery opens");
+    ctx.discoveries
+        .update(
+            &discovery.id,
+            &crate::ports::discovery::DiscoveryPatch {
+                base_branch: Some(Some("feat/integration".to_string())),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+    ctx.tickets
+        .upsert_batch(&[ticket("t-001", &discovery.id, 1)])
+        .unwrap();
+    let arguments = json!({ "discovery_id": discovery.id.as_str() });
+
+    let read = call_tool(addr, token, "get_discovery_board", arguments.clone()).await;
+    let read = &read["result"]["structuredContent"];
+    assert_eq!(read["base_branch"], json!("feat/integration"), "{read}");
+    assert!(read.get("unrefreshed").is_none(), "{read}");
+
+    let refreshed = call_tool(addr, token, "refresh_discovery_prs", arguments).await;
+    assert_eq!(refreshed["result"]["isError"], json!(false), "{refreshed}");
+    let refreshed = &refreshed["result"]["structuredContent"];
+    assert_eq!(refreshed["base_branch"], read["base_branch"], "{refreshed}");
+    assert_eq!(refreshed["tickets"], read["tickets"], "{refreshed}");
+    assert_eq!(refreshed["progress"], read["progress"], "{refreshed}");
+    assert_eq!(refreshed["unrefreshed"], json!([]), "{refreshed}");
+}

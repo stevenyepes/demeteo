@@ -1603,6 +1603,10 @@ export interface TicketFeatureView {
   status: string;
   mr_state: string | null;
   mr_url: string | null;
+  /** The branch the attempt works on; `null` until the run has cut one. Sent
+   *  on every board and read by no component — it is there for the MCP
+   *  surface — so it is optional here rather than a field every fixture owes. */
+  branch?: string | null;
   /** Where this attempt was placed, as its start recorded it; `null` when
    *  nothing did. Never inferred from `remote` being absent. */
   placement: RunPlacement | null;
@@ -1623,6 +1627,10 @@ export interface TicketView {
 export interface DiscoveryBoard {
   tickets: TicketView[];
   progress: TicketProgress;
+  /** The branch every ticket is cut from and reviewed against; `null` is the
+   *  project's default branch. Optional for `TicketFeatureView.branch`'s
+   *  reason: the header reads the base from the `Discovery` row itself. */
+  base_branch?: string | null;
   /** What a ticket left on Default runs on — resolved by the server, since no
    *  ticket holding a stored choice can say it. */
   discovery_default: RunPlacement;

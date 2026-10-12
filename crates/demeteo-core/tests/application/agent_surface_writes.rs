@@ -15,7 +15,7 @@ use crate::application::projects::RepositoryConfig;
 use crate::composition::{build_core_context, CoreConfig, ExecutionMode};
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::WorkflowId;
-use crate::domain::models::{EffortLevel, Feature, Project, ProviderInstance, Ticket, TicketState};
+use crate::domain::models::{Project, ProviderInstance, Ticket, TicketState};
 use crate::ports::step_executor::StepExecutor;
 
 /// A fully wired `AppContext` over a fresh temp-dir SQLite database — same
@@ -197,6 +197,8 @@ async fn a_hostile_artifact_subdir_is_refused_and_nothing_is_saved() {
 struct SpyExecutor {
     captured: Mutex<Option<FeatureLaunch>>,
     calls: AtomicUsize,
+    /// Every `step_retry` and `step_set_assignment`, with all its arguments.
+    step_calls: Mutex<Vec<String>>,
 }
 
 impl SpyExecutor {
@@ -204,7 +206,15 @@ impl SpyExecutor {
         Arc::new(Self {
             captured: Mutex::new(None),
             calls: AtomicUsize::new(0),
+            step_calls: Mutex::new(Vec::new()),
         })
+    }
+
+    fn step_calls(&self) -> Vec<String> {
+        self.step_calls
+            .lock()
+            .expect("lock is not poisoned")
+            .clone()
     }
 
     fn calls(&self) -> usize {
@@ -271,19 +281,30 @@ impl StepExecutor for SpyExecutor {
     }
     async fn step_retry(
         &self,
-        _: &str,
-        _: Option<&str>,
-        _: Option<&str>,
-        _: Option<EffortLevel>,
+        id: &str,
+        model: Option<&str>,
+        agent: Option<&str>,
+        effort: Option<EffortLevel>,
     ) -> Result<(), crate::error::AppError> {
-        panic!("unexpected StepExecutor call")
+        self.step_calls
+            .lock()
+            .expect("lock is not poisoned")
+            .push(format!("retry {id} {model:?} {agent:?} {effort:?}"));
+        Ok(())
     }
     async fn step_set_assignment(
         &self,
-        _: &str,
-        _: crate::domain::step_assignment::StepAssignment,
+        id: &str,
+        assignment: crate::domain::step_assignment::StepAssignment,
     ) -> Result<(), crate::error::AppError> {
-        panic!("unexpected StepExecutor call")
+        self.step_calls
+            .lock()
+            .expect("lock is not poisoned")
+            .push(format!(
+                "assign {id} {:?} {:?} {:?}",
+                assignment.agent_kind, assignment.model, assignment.effort
+            ));
+        Ok(())
     }
     async fn replay_from_step(
         &self,
@@ -720,6 +741,16 @@ fn stored_ticket(ctx: &AppContext, stored: &str) -> Ticket {
     t
 }
 
+fn ticket_launch(t: &Ticket, machine_id: Option<&str>) -> AgentTicketLaunch {
+    AgentTicketLaunch {
+        ticket_id: t.id.0.clone(),
+        machine_id: machine_id.map(str::to_string),
+        max_cost_usd: None,
+        max_wall_clock_secs: None,
+        max_in_flight: None,
+    }
+}
+
 fn stored_machine(ctx: &AppContext, t: &Ticket) -> Option<MachineId> {
     ctx.tickets
         .get(&t.id)
@@ -733,7 +764,7 @@ async fn a_machine_override_starts_one_ticket_launch_detached_and_is_not_saved()
     let h = harness(RunnerAt::accepting());
     let t = stored_ticket(&h.ctx, "local");
 
-    let feature = start_ticket(&h.ctx, &t.id, Some("runner-1".to_string()))
+    let feature = start_ticket(&h.ctx, ticket_launch(&t, Some("runner-1")))
         .await
         .expect("the ticket starts on the runner")
         .feature;
@@ -750,7 +781,7 @@ async fn a_blank_machine_override_keeps_the_tickets_own_placement() {
         let h = harness(RunnerAt::accepting());
         let t = stored_ticket(&h.ctx, "runner-1");
 
-        start_ticket(&h.ctx, &t.id, Some(blank.to_string()))
+        start_ticket(&h.ctx, ticket_launch(&t, Some(blank)))
             .await
             .unwrap_or_else(|e| panic!("{blank:?} is no override, got: {e}"));
 
@@ -760,4 +791,478 @@ async fn a_blank_machine_override_keeps_the_tickets_own_placement() {
             "{blank:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_tickets_caps_reach_the_runner_as_the_runs_budget() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h.ctx, "runner-1");
+
+    start_ticket(
+        &h.ctx,
+        AgentTicketLaunch {
+            max_cost_usd: Some(7.5),
+            max_wall_clock_secs: Some(900),
+            ..ticket_launch(&t, None)
+        },
+    )
+    .await
+    .expect("the capped ticket starts");
+
+    let submitted = h.exec.submitted();
+    assert_eq!(submitted.len(), 1, "{submitted:?}");
+    assert_eq!(submitted[0]["budget"]["max_cost_usd"], 7.5, "{submitted:?}");
+    assert_eq!(
+        submitted[0]["budget"]["max_wall_clock_secs"], 900,
+        "{submitted:?}"
+    );
+}
+
+/// A cap on a run that would not honour it is refused, not dropped: the
+/// caller that sent it believes the run is capped.
+#[tokio::test]
+async fn a_cap_on_a_ticket_that_resolves_local_is_refused_and_starts_nothing() {
+    for (cost, secs, named) in [
+        (Some(5.0), None, "max_cost_usd"),
+        (None, Some(60), "max_wall_clock_secs"),
+    ] {
+        let h = harness(RunnerAt::accepting());
+        let t = stored_ticket(&h.ctx, "local");
+
+        let err = start_ticket(
+            &h.ctx,
+            AgentTicketLaunch {
+                max_cost_usd: cost,
+                max_wall_clock_secs: secs,
+                ..ticket_launch(&t, None)
+            },
+        )
+        .await
+        .expect_err("a cap on a local run is refused");
+
+        assert!(err.contains(named), "got: {err}");
+        assert!(h.spy.launched().is_none(), "{named}: the executor ran");
+        assert_eq!(h.exec.calls(), Vec::<String>::new(), "{named}");
+        assert_eq!(feature_ids(&h.ctx), Vec::<String>::new(), "{named}");
+        let after = h.ctx.tickets.get(&t.id).unwrap().unwrap();
+        assert_eq!(after.state, TicketState::Unstarted, "{named}");
+    }
+}
+
+/// A second ticket in `t`'s Discovery that is already in flight: started,
+/// with no settled pull request.
+fn in_flight_sibling(ctx: &AppContext, t: &Ticket) -> Ticket {
+    let sibling = Ticket {
+        id: TicketId::from("t-2".to_string()),
+        seq: 2,
+        state: TicketState::Started,
+        ..t.clone()
+    };
+    ctx.tickets
+        .upsert_batch(std::slice::from_ref(&sibling))
+        .expect("the sibling is stored");
+    sibling
+}
+
+#[tokio::test]
+async fn a_start_bounded_at_the_in_flight_count_is_refused_and_starts_nothing() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h.ctx, "runner-1");
+    in_flight_sibling(&h.ctx, &t);
+
+    let err = start_ticket(
+        &h.ctx,
+        AgentTicketLaunch {
+            max_in_flight: Some(1),
+            ..ticket_launch(&t, None)
+        },
+    )
+    .await
+    .expect_err("one is in flight and the bound is one");
+
+    assert!(err.contains("max_in_flight = 1"), "got: {err}");
+    assert!(err.contains("#1"), "got: {err}");
+    assert_eq!(h.exec.calls(), Vec::<String>::new(), "no RPC");
+    assert_eq!(feature_ids(&h.ctx), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_start_bounded_above_the_in_flight_count_goes_ahead() {
+    let h = harness(RunnerAt::accepting());
+    let t = stored_ticket(&h.ctx, "runner-1");
+    in_flight_sibling(&h.ctx, &t);
+
+    start_ticket(
+        &h.ctx,
+        AgentTicketLaunch {
+            max_in_flight: Some(2),
+            ..ticket_launch(&t, None)
+        },
+    )
+    .await
+    .expect("one is in flight and the bound is two");
+
+    assert!(h.exec.calls().contains(&"rpc submit_run".to_string()));
+}
+
+/// Records every gate decision it is handed. Answers nothing else.
+struct GateSpy {
+    decided: Mutex<Vec<(String, String, Option<String>)>>,
+}
+
+impl GateSpy {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            decided: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn decided(&self) -> Vec<(String, String, Option<String>)> {
+        self.decided.lock().expect("lock is not poisoned").clone()
+    }
+}
+
+#[async_trait]
+impl crate::ports::step_executor::GatePresenter for GateSpy {
+    async fn gate_pending_for_run(
+        &self,
+        _: &str,
+    ) -> Result<Option<crate::domain::models::GateDecision>, String> {
+        panic!("unexpected GatePresenter call")
+    }
+    async fn gate_decide(
+        &self,
+        step_execution_id: &str,
+        decision: &str,
+        feedback: Option<&str>,
+    ) -> Result<(), crate::error::AppError> {
+        self.decided.lock().expect("lock is not poisoned").push((
+            step_execution_id.to_string(),
+            decision.to_string(),
+            feedback.map(str::to_string),
+        ));
+        Ok(())
+    }
+}
+
+fn step_row(id: &str, feature_id: &str, step_id: &str, kind: &str, status: &str) -> StepExecution {
+    StepExecution {
+        id: StepExecutionId::from(id.to_string()),
+        feature_id: FeatureId::from(feature_id.to_string()),
+        step_id: StepId::from(step_id.to_string()),
+        step_index: 0,
+        step_kind: kind.to_string(),
+        status: status.to_string(),
+        cost_usd: None,
+        tokens: None,
+        wall_clock_secs: None,
+        artifact_path: None,
+        artifact_paths: Vec::new(),
+        error_message: None,
+        iteration_count: 0,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+        last_failure_fingerprint: None,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+fn feature_row(id: &str, workflow: Option<(&str, &str)>) -> Feature {
+    Feature {
+        id: FeatureId::from(id.to_string()),
+        project_id: ProjectId::from("p-1".to_string()),
+        workflow_id: workflow.map(|(id, _)| WorkflowId::from(id.to_string())),
+        workflow_version_id: workflow
+            .map(|(_, version)| crate::domain::ids::WorkflowVersionId::from(version)),
+        title: format!("feature {id}"),
+        description: String::new(),
+        status: "running".to_string(),
+        total_cost: 0.0,
+        duration: String::new(),
+        tokens: 0,
+        created_at: 0,
+        agent_kind: None,
+        model: None,
+        effort: None,
+        mr_url: None,
+        mr_state: Some("none".to_string()),
+        pr_title: None,
+        pr_body: None,
+        commit_artifacts: None,
+        loop_iterations: None,
+        max_budget_usd: None,
+        step_overrides: Vec::new(),
+        attachments: Vec::new(),
+        harness_baseline: None,
+        origin: FeatureOrigin::DefaultBranch,
+        diff_base_branch: None,
+        resolved_branch: None,
+    }
+}
+
+#[tokio::test]
+async fn retry_step_on_a_desktop_run_retries_without_repinning_the_feature() {
+    let mut ctx = fixture("retry-local");
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+    seed_project(&ctx);
+    ctx.features.add(feature_row("f-1", None)).unwrap();
+    ctx.features
+        .step_create(step_row("se-1", "f-1", "s-implement", "agent", "failed"))
+        .unwrap();
+
+    let step = retry_step(&ctx, &StepExecutionId::from("se-1".to_string()))
+        .await
+        .expect("the retry is accepted");
+
+    assert_eq!(step.id.as_ref(), "se-1");
+    assert_eq!(spy.step_calls(), ["retry se-1 None None None"]);
+}
+
+#[tokio::test]
+async fn retry_step_on_an_unknown_step_reaches_no_executor() {
+    let mut ctx = fixture("retry-unknown");
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+
+    let refused = retry_step(&ctx, &StepExecutionId::from("se-missing".to_string())).await;
+
+    assert!(refused.is_err());
+    assert!(spy.step_calls().is_empty());
+}
+
+/// The desktop executor refuses a runner-owned feature, so a step of a
+/// detached run has to reach the runner that owns it.
+#[tokio::test]
+async fn retry_step_on_a_detached_run_goes_to_its_runner_and_not_the_executor() {
+    let h = harness(RunnerAt {
+        accepts_retry: true,
+        ..RunnerAt::accepting()
+    });
+    let feature = start_feature(&h.ctx, agent_launch(Some("runner-1")))
+        .await
+        .expect("a detached start is submitted")
+        .feature;
+    let run_id = h.ctx.remote_run_mirror.list().unwrap().remove(0).run_id;
+    h.ctx
+        .features
+        .step_create(step_row(
+            "se-1",
+            feature.id.as_ref(),
+            "s-implement",
+            "agent",
+            "failed",
+        ))
+        .unwrap();
+
+    retry_step(&h.ctx, &StepExecutionId::from("se-1".to_string()))
+        .await
+        .expect("the retry reaches the runner");
+
+    assert!(
+        h.exec
+            .calls()
+            .contains(&format!("rpc retry_step {run_id} se-1 retry")),
+        "{:?}",
+        h.exec.calls()
+    );
+}
+
+fn assignment(
+    agent: Option<&str>,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> AgentStepAssignment {
+    AgentStepAssignment {
+        step_execution_id: "se-1".to_string(),
+        agent_kind: agent.map(str::to_string),
+        model: model.map(str::to_string),
+        effort: effort.map(str::to_string),
+    }
+}
+
+fn ctx_with_one_step(tag: &str) -> (AppContext, Arc<SpyExecutor>) {
+    let mut ctx = fixture(tag);
+    let spy = SpyExecutor::new();
+    ctx.executor = spy.clone();
+    seed_project(&ctx);
+    ctx.features.add(feature_row("f-1", None)).unwrap();
+    ctx.features
+        .step_create(step_row("se-1", "f-1", "s-implement", "agent", "failed"))
+        .unwrap();
+    (ctx, spy)
+}
+
+#[tokio::test]
+async fn set_step_assignment_hands_the_executor_all_three_dimensions() {
+    let (ctx, spy) = ctx_with_one_step("assign-local");
+
+    let outcome = set_step_assignment(
+        &ctx,
+        assignment(Some("claude-code"), Some("claude-opus-5-5"), Some("xhigh")),
+    )
+    .await
+    .expect("the pin is accepted");
+
+    assert_eq!(outcome.step_id.as_ref(), "s-implement");
+    assert_eq!(
+        spy.step_calls(),
+        [r#"assign se-1 Some("claude-code") Some("claude-opus-5-5") Some(XHigh)"#]
+    );
+}
+
+#[tokio::test]
+async fn an_assignment_the_harness_could_read_as_a_flag_reaches_no_executor() {
+    let (ctx, spy) = ctx_with_one_step("assign-hostile");
+
+    for hostile in [
+        assignment(None, Some("--dangerously-skip-permissions"), None),
+        assignment(Some("claude code"), None, None),
+        assignment(None, None, Some("ludicrous")),
+    ] {
+        assert!(set_step_assignment(&ctx, hostile).await.is_err());
+    }
+    assert!(spy.step_calls().is_empty());
+}
+
+const STANDARD: &str = "wf-starter-standard";
+
+/// A Standard-pipeline run parked at its ship gate with `review` stored as
+/// the critic's artifact, and a [`GateSpy`] in place of the presenter.
+fn parked_at_ship_gate(tag: &str, workflow_id: &str, review: &str) -> (AppContext, Arc<GateSpy>) {
+    let mut ctx = fixture(tag);
+    let gates = GateSpy::new();
+    ctx.presenter = gates.clone();
+    seed_project(&ctx);
+    let bundled = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src-tauri/workflows/standard-feature-pipeline.json"),
+    )
+    .expect("the bundled Standard pipeline is readable");
+    let starter = crate::domain::workflow_starters::StarterDefinition::parse(&bundled)
+        .expect("the bundled Standard pipeline is JSON");
+    ctx.workflows
+        .create(crate::domain::models::Workflow {
+            id: WorkflowId::from(workflow_id.to_string()),
+            name: "Standard Feature Pipeline".to_string(),
+            description: String::new(),
+            is_starter: true,
+            created_at: 0,
+            updated_at: 0,
+            schedule: None,
+        })
+        .unwrap();
+    ctx.workflows
+        .save_version(crate::domain::models::WorkflowVersion {
+            id: crate::domain::ids::WorkflowVersionId::from("wv-std"),
+            workflow_id: WorkflowId::from(workflow_id.to_string()),
+            version: 1,
+            steps_json: starter.steps_json().unwrap(),
+            definition_json: None,
+            note: None,
+            created_at: 0,
+        })
+        .unwrap();
+    ctx.features
+        .add(feature_row("f-1", Some((workflow_id, "wv-std"))))
+        .unwrap();
+    ctx.features
+        .step_create(step_row(
+            "se-critic",
+            "f-1",
+            "s-critic",
+            "agent",
+            "completed",
+        ))
+        .unwrap();
+    ctx.features
+        .step_create(step_row(
+            "se-gate",
+            "f-1",
+            "s-gate-ship",
+            "gate",
+            "awaiting_gate",
+        ))
+        .unwrap();
+    ctx.artifact_store
+        .put(
+            "f-1",
+            "s-critic",
+            &crate::domain::artifact::Artifact::agent_text("critic-review", review),
+        )
+        .unwrap();
+    (ctx, gates)
+}
+
+const FAILING: &str = "## Critical Issues\n- delete skips the audit log\n\n## Verdict\nFAIL\n";
+
+fn gate_id() -> StepExecutionId {
+    StepExecutionId::from("se-gate".to_string())
+}
+
+#[tokio::test]
+async fn rework_from_critic_redirects_the_gate_with_the_stored_review() {
+    let (ctx, gates) = parked_at_ship_gate("rework", STANDARD, FAILING);
+
+    let outcome = rework_from_critic(&ctx, &gate_id())
+        .await
+        .expect("a failing review is sent back");
+
+    assert_eq!(outcome.verdict, "FAIL");
+    assert_eq!((outcome.reworks_used, outcome.reworks_remaining), (1, 1));
+    let decided = gates.decided();
+    assert_eq!(decided.len(), 1, "{decided:?}");
+    let (step, decision, feedback) = &decided[0];
+    assert_eq!((step.as_str(), decision.as_str()), ("se-gate", "redirect"));
+    assert!(feedback
+        .as_deref()
+        .is_some_and(|f| f.contains("delete skips the audit log")));
+}
+
+/// The gate spy never moves the gate, so each call here finds it parked
+/// again — which is what a run that came back round to its ship gate looks
+/// like to this function.
+#[tokio::test]
+async fn the_third_rework_of_one_run_is_refused_and_decides_nothing() {
+    let (ctx, gates) = parked_at_ship_gate("rework-cap", STANDARD, FAILING);
+
+    rework_from_critic(&ctx, &gate_id()).await.expect("first");
+    let second = rework_from_critic(&ctx, &gate_id()).await.expect("second");
+    let third = rework_from_critic(&ctx, &gate_id()).await;
+
+    assert_eq!(second.reworks_remaining, 0);
+    assert!(third.is_err_and(|e| e.contains("a person has to decide")));
+    assert_eq!(gates.decided().len(), 2);
+}
+
+#[tokio::test]
+async fn a_refused_rework_decides_nothing_and_does_not_count_against_the_cap() {
+    let (ctx, gates) = parked_at_ship_gate("rework-pass", STANDARD, "## Verdict\nPASS\n");
+
+    assert!(rework_from_critic(&ctx, &gate_id()).await.is_err());
+
+    assert!(gates.decided().is_empty());
+    let recorded = ctx.run_events.list_since("f-1", 0).unwrap();
+    assert!(recorded.iter().all(|e| e.kind != CRITIC_REWORK_EVENT));
+}
+
+#[tokio::test]
+async fn a_run_on_another_workflow_is_refused_before_its_review_is_read() {
+    let (ctx, gates) = parked_at_ship_gate("rework-custom", "wf-custom", FAILING);
+
+    let refused = rework_from_critic(&ctx, &gate_id()).await;
+
+    assert!(refused.is_err_and(|e| e.contains("Standard Feature Pipeline")));
+    assert!(gates.decided().is_empty());
+}
+
+#[tokio::test]
+async fn a_step_that_is_not_the_ship_gate_is_refused() {
+    let (ctx, gates) = parked_at_ship_gate("rework-not-gate", STANDARD, FAILING);
+
+    let refused = rework_from_critic(&ctx, &StepExecutionId::from("se-critic".to_string())).await;
+
+    assert!(refused.is_err());
+    assert!(gates.decided().is_empty());
 }

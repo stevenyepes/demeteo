@@ -136,6 +136,7 @@ describe("McpConsentView", () => {
     await waitFor(() => expect(screen.getByText("Claude Desktop")).toBeInTheDocument());
 
     expect(screen.getByText(/costs money and agent time/i)).toBeInTheDocument();
+    expect(screen.getByText(/send a run back for rework/i)).toBeInTheDocument();
     expect(screen.getByText(/change how later runs are set up/i)).toBeInTheDocument();
     expect(screen.getByText(/unverified/i)).toBeInTheDocument();
     expect(screen.getByText(/every project in this workspace/i)).toBeInTheDocument();

@@ -10,7 +10,7 @@ use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{MachineId, TicketId};
 use crate::domain::models::{Ticket, TicketState};
 use crate::domain::run_placement::DetachedOptions;
-use crate::domain::ticket_graph::{derive_board, BlockerReason, TicketStanding};
+use crate::domain::ticket_graph::{derive_board, BlockerReason, TicketLane, TicketStanding};
 use crate::error::AppError;
 use crate::paths::now_ms;
 use crate::ports::discovery::TicketPatch;
@@ -19,7 +19,23 @@ use crate::state::AppContext;
 
 use super::{attachments, briefing, load, nodes_for, resolve_ticket_placement};
 
-/// Start a Ticket's current attempt.
+/// What a caller may bound one start by. Each field can only refuse the start
+/// or cap the run it produces, never widen either, which is what lets a
+/// surface that does not own the ticket's run shape still set them.
+///
+/// The caps are a detached run's ([`DetachedOptions`]), so they are refused
+/// when the ticket resolves to a local placement rather than dropped: a caller
+/// that sent a cap believes the run is capped.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StartBounds {
+    pub max_cost_usd: Option<f64>,
+    pub max_wall_clock_secs: Option<u64>,
+    /// Refuse the start when the Discovery already has this many tickets in
+    /// flight, counting starts under way ([`in_flight_refusal`]).
+    pub max_in_flight: Option<usize>,
+}
+
+/// Start a Ticket's current attempt, bounded by nothing.
 ///
 /// The Feature takes the **Ticket's** workflow, agent, model and effort, never
 /// the project's defaults: §5.4 lets a plan route a docs ticket and a UI
@@ -30,8 +46,7 @@ use super::{attachments, briefing, load, nodes_for, resolve_ticket_placement};
 ///
 /// `placement_override` applies to this launch only and is never written to
 /// the ticket: a one-off "run this one on the runner" must not silently
-/// become the ticket's choice for its next attempt. A detached run carries no
-/// per-ticket caps — a ticket has no cap fields to read them from.
+/// become the ticket's choice for its next attempt.
 ///
 /// Nothing is recorded until the launch succeeds, so a refused one leaves the
 /// ticket exactly as startable as it was. A detached run whose PAT was parked,
@@ -41,16 +56,27 @@ use super::{attachments, briefing, load, nodes_for, resolve_ticket_placement};
 /// once one exists, an `Err` here would read as "nothing started" and invite
 /// a second, so the failure becomes
 /// [`ticket_unrecorded`](LaunchedRun::ticket_unrecorded) instead.
-///
-/// The whole body runs under the ticket's [`starting`](super::starting) claim,
-/// taken before the ticket is even read: a second start that loaded the row
-/// first would judge it on a state the first start is about to overwrite.
 pub async fn start(
     ctx: &AppContext,
     ticket_id: &TicketId,
     placement_override: Option<MachineId>,
 ) -> Result<LaunchedRun, AppError> {
-    let Some(_claim) = ctx.ticket_starts.try_claim(ticket_id) else {
+    start_bounded(ctx, ticket_id, placement_override, StartBounds::default()).await
+}
+
+/// [`start`], held to `bounds`. A ticket has no cap fields of its own, so a
+/// detached run is capped only by what the caller of this one launch sends.
+///
+/// The whole body runs under the ticket's [`starting`](super::starting) claim,
+/// taken before the ticket is even read: a second start that loaded the row
+/// first would judge it on a state the first start is about to overwrite.
+pub async fn start_bounded(
+    ctx: &AppContext,
+    ticket_id: &TicketId,
+    placement_override: Option<MachineId>,
+    bounds: StartBounds,
+) -> Result<LaunchedRun, AppError> {
+    let Some(claim) = ctx.ticket_starts.try_claim(ticket_id) else {
         let named = load(ctx, ticket_id)
             .map(|t| format!("#{}", t.seq))
             .unwrap_or_else(|_| ticket_id.0.clone());
@@ -60,6 +86,7 @@ pub async fn start(
         )));
     };
     let ticket = load(ctx, ticket_id)?;
+    let also_starting = claim.join(&ticket.discovery_id);
     let siblings = ctx.tickets.list_for_discovery(&ticket.discovery_id)?;
     let (nodes, _) = nodes_for(&siblings, &*ctx.features)?;
     let derived = derive_board(&nodes);
@@ -72,6 +99,27 @@ pub async fn start(
         })?;
     if let Some(refusal) = start_refusal(&ticket, standing, &siblings) {
         return Err(AppError::validation(refusal));
+    }
+    if let Some(max) = bounds.max_in_flight {
+        let unrecorded = also_starting
+            .iter()
+            .filter(|id| {
+                !derived
+                    .standings
+                    .iter()
+                    .any(|s| s.id == **id && s.lane == TicketLane::InFlight)
+            })
+            .count();
+        if let Some(refusal) = in_flight_refusal(
+            ticket.seq,
+            InFlight {
+                recorded: derived.progress.in_flight,
+                starting: unrecorded,
+            },
+            max,
+        ) {
+            return Err(AppError::validation(refusal));
+        }
     }
 
     let discovery = ctx.discoveries.get(&ticket.discovery_id)?.ok_or_else(|| {
@@ -111,7 +159,11 @@ pub async fn start(
         LaunchRequest {
             launch,
             placement: resolved.placement.clone(),
-            detached: DetachedOptions::default(),
+            detached: DetachedOptions {
+                max_cost_usd: bounds.max_cost_usd,
+                max_wall_clock_secs: bounds.max_wall_clock_secs,
+                ..DetachedOptions::default()
+            },
         },
     )
     .await?;
@@ -255,6 +307,42 @@ pub fn start_refusal(
             ))
         }
     }
+}
+
+/// How many of a Discovery's tickets occupy a slot a bounded start counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InFlight {
+    /// The board's own [`TicketLane::InFlight`] count: started, with a pull
+    /// request neither merged nor closed.
+    pub recorded: usize,
+    /// Starts under way that the board does not show yet.
+    pub starting: usize,
+}
+
+/// Why a start bounded by `max` in-flight tickets is refused, or `None` when
+/// it may go ahead.
+///
+/// The count is the board's lane and not "runs still executing": a finished
+/// run whose pull request is open has not landed, a dependent of it is still
+/// blocked, and the lane is the one number every surface already agrees on. A
+/// caller that wants a slot back merges or closes the pull request.
+pub fn in_flight_refusal(seq: i64, in_flight: InFlight, max: usize) -> Option<String> {
+    if max == 0 {
+        return Some("max_in_flight must be above zero".to_string());
+    }
+    let InFlight { recorded, starting } = in_flight;
+    if recorded + starting < max {
+        return None;
+    }
+    let under_way = match starting {
+        0 => String::new(),
+        n => format!(", and {n} more being started"),
+    };
+    Some(format!(
+        "ticket #{seq} was not started: this discovery already has {recorded} in flight\
+         {under_way}, and this start was bounded at max_in_flight = {max}. A ticket stays in \
+         flight until its pull request is merged or closed."
+    ))
 }
 
 /// The prompt body the run is launched with.
