@@ -79,7 +79,8 @@ A Gate shows every artifact the pipeline produced so far — here the ship gate,
 critic's review open beside the diff, validation report and task list. Approve, redirect
 it back into a loop with feedback, or abort. Per project, **gate autonomy** sets how much
 of this is yours: `attended` (every gate waits — the default), `review` (only the ship
-gate waits), or `full`.
+gate waits), `clean` (the ship gate waits unless the critic's review found nothing
+critical or major), or `full`.
 
 ![Manual Approval Gate on the ship step: prior steps' artifacts, the critic review open, and Abort / Redirect / Approve](docs-site/assets/screenshots/gate-critic-review.png)
 

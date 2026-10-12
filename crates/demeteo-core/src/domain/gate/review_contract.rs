@@ -26,9 +26,11 @@
 use serde::Deserialize;
 
 use super::critic_rework::{parse_verdict, CriticVerdict};
-use crate::domain::artifact::ArtifactCapture;
-use crate::domain::json_block::find_json_block;
+use crate::domain::artifact::{ArtifactCapture, ArtifactDecl};
+use crate::domain::ids::StepId;
+use crate::domain::json_block::last_json_object;
 use crate::domain::models::StepConfig;
+use crate::domain::workflow_graph::WorkflowGraph;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -106,13 +108,23 @@ pub(crate) fn append_contract(prompt: String, step: &StepConfig) -> String {
 }
 
 /// Where `step` writes the artifact its `review_artifact` names. `None` when
-/// it names none, names one the step does not declare, or names one captured
-/// some other way than by path — the contract has to tell the agent a file.
+/// it names none, or one [`declared_review_path`] cannot place.
 pub(crate) fn review_path(step: &StepConfig) -> Option<&str> {
-    let name = step.review_artifact.as_deref()?;
-    step.artifacts
+    declared_review_path(
+        step.review_artifact.as_deref()?,
+        step.artifacts.as_deref().unwrap_or(&[]),
+    )
+}
+
+/// Where the artifact called `name` is written, among `artifacts`. `None`
+/// when no declaration has that name, or the one that does is captured some
+/// other way than by path — the contract has to tell the agent a file.
+pub(crate) fn declared_review_path<'a>(
+    name: &str,
+    artifacts: &'a [ArtifactDecl],
+) -> Option<&'a str> {
+    artifacts
         .iter()
-        .flatten()
         .find(|decl| decl.name == name)
         .and_then(|decl| match &decl.capture {
             ArtifactCapture::LastWriteTo { path } => Some(path.as_str()),
@@ -120,26 +132,75 @@ pub(crate) fn review_path(step: &StepConfig) -> Option<&str> {
         })
 }
 
-/// The review step whose review covers the gate at `gate_idx`.
+/// A review step, and where it writes the review a gate may be approved on.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct GateReview<'a> {
+    pub step: &'a StepConfig,
+    pub path: &'a str,
+}
+
+/// The review step whose review covers `gate`.
 ///
-/// Only other gates may stand between the two. Anything else that ran after
-/// the review could have changed what it reviewed, and a review of code that
-/// has since moved is not a review of what ships.
-pub(crate) fn review_step_for_gate(steps: &[StepConfig], gate_idx: usize) -> Option<&StepConfig> {
-    steps
-        .get(..gate_idx)?
+/// A review of code that has since moved is not a review of what ships, so
+/// the review has to be the last thing that could have run before the gate:
+/// it is upstream of the gate, and every other step that is not itself a gate
+/// and not downstream of `gate` is upstream of the review. That is asked of the
+/// graph, never of a step's position in `steps` — the list is one valid
+/// topological order and the scheduler runs another, so for anything but a
+/// chain "the step before the gate" names a step the run may not have run
+/// last.
+///
+/// The same rule is why a rewind cannot leave a stale review behind: a
+/// redirect resets its target and the target's descendants, and here every
+/// step a redirect could re-run has the review among its descendants.
+pub(crate) fn review_for_gate<'a>(
+    steps: &'a [StepConfig],
+    graph: &WorkflowGraph,
+    gate: &StepId,
+) -> Option<GateReview<'a>> {
+    let upstream = graph.ancestors(gate)?;
+    let downstream = graph.descendants(gate)?;
+    let may_run_first: Vec<&StepConfig> = steps
         .iter()
-        .rev()
-        .find(|step| step.kind != "gate")
-        .filter(|step| review_path(step).is_some())
+        .filter(|step| step.kind != "gate" && step.id != *gate && !downstream.contains(&step.id))
+        .collect();
+    let step = may_run_first.iter().copied().find(|candidate| {
+        upstream.contains(&candidate.id)
+            && graph.ancestors(&candidate.id).is_some_and(|before| {
+                may_run_first
+                    .iter()
+                    .all(|other| other.id == candidate.id || before.contains(&other.id))
+            })
+    })?;
+    Some(GateReview {
+        step,
+        path: review_path(step)?,
+    })
+}
+
+/// Whether the body found at a review step's review path after its turn is
+/// one the turn did not write.
+///
+/// A declared path is read back whether or not the turn touched it, because a
+/// harness that reports no write still leaves its file on disk. For most
+/// deliverables a body that was already there is the previous step's work
+/// being refined. For a review it is someone else's verdict: a project that
+/// commits its step reports carries the last feature's review at this exact
+/// path on every later branch, and a turn that answered only in its reply
+/// would otherwise have that review stored as its own.
+///
+/// `before` is the body at the path when the turn started, `None` when there
+/// was none.
+pub(crate) fn carried_over(before: Option<&str>, after: &str) -> bool {
+    before == Some(after)
 }
 
 pub(crate) fn standing(review: &str) -> ReviewStanding {
-    let Some((_, block)) = find_json_block::<CountsBlock, _>(review, |_| true) else {
+    let Some(block) = last_json_object::<CountsBlock>(review) else {
         return ReviewStanding::Unreadable("the review carries no issue counts");
     };
     let Some(written) = parse_verdict(review) else {
-        return ReviewStanding::Unreadable("the review has no `## Verdict`");
+        return ReviewStanding::Unreadable("the review has no Verdict section");
     };
     let blocks = block.review.blocks();
     if blocks != (written == CriticVerdict::Fail) {

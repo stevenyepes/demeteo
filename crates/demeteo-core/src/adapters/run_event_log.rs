@@ -27,7 +27,9 @@
 //! | `env_not_ready`      | `step_id`, `reason` | harness triage verdict: the machine, not the code, is broken (C6) |
 //! | `agent_commits_folded` | `step_id`, `task_id`, `commits` (`sha`, `author`, `subject`), `note` | the agent committed itself; Demeteo folded it into its own commit |
 //! | `gate_required`      | `step_execution_id` | a gate is waiting on a human |
+//! | `gate_held_by_review` | `step_execution_id`, `reason` | written just before `gate_required` when `clean` gate autonomy would have approved the gate and its review did not allow it; `reason` is shown to the person deciding |
 //! | `gate_decided`       | `step_execution_id`, `decision`, `feedback` | the human's answer (`approve`/`reject`/`redirect`) |
+//! | `gate_auto_approved` | `step_execution_id`, `decision`, `feedback` | the project's gate autonomy approved the gate; nobody was asked |
 //! | `bootstrap_progress` | `phase`, `label`, `status`, `detail` | feature-start sub-steps |
 //! | `step_output`        | `step_execution_id`, `text` | coalesced agent output — **remote only** (the runner bridge buffers `AgentStream` deltas; locally the durable transcript already lives in the `messages` table, so the recorder skips it) |
 //!

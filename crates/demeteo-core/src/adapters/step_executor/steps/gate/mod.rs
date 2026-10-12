@@ -111,45 +111,46 @@ impl ExecutionDriver {
         // would raise a "needs you" nobody can act on and kill the
         // feature's sessions for an idle gap that never happens. This is
         // what makes the system self-healing across app restarts and races.
-        let review_read = std::cell::Cell::new(None);
-        if let Some(unasked) = decided_without_waiting(
+        let held_by_review = match decided_without_waiting(
             &*self.gates,
             &step_exec.id,
             self.gate_autonomy(),
             _step_conf.is_dangerous_gate(),
             || {
-                let standing = review_standing(
+                review_standing(
                     &*self.artifacts,
                     self.f_id.as_ref(),
                     &self.steps,
+                    &self.graph,
                     step_execs,
                     &step_exec.step_id,
-                );
-                review_read.set(Some(standing));
-                standing
+                )
             },
             paths::now_ms(),
         ) {
-            if let Unasked::ApprovedByPolicy(_) = &unasked {
-                let _ = self.notif.emit(&DomainEvent::GateDecided {
-                    feature_id: self.f_id.clone(),
-                    step_execution_id: step_exec.id.clone(),
-                    decision: "approve".to_string(),
-                    feedback: None,
-                    auto_approved: true,
-                });
+            Ok(unasked) => {
+                if let Unasked::ApprovedByPolicy(_) = &unasked {
+                    let _ = self.notif.emit(&DomainEvent::GateDecided {
+                        feature_id: self.f_id.clone(),
+                        step_execution_id: step_exec.id.clone(),
+                        decision: "approve".to_string(),
+                        feedback: None,
+                        auto_approved: true,
+                    });
+                }
+                let mut ctx = GateDecisionContext {
+                    step_exec,
+                    step_conf: _step_conf,
+                    step_execs,
+                    prev_artifact_path: &prev_artifact_path,
+                    prev_artifact_paths: &prev_artifact_paths,
+                    accumulated_cost,
+                    step_start,
+                };
+                return self.apply_gate_decision(unasked.decision(), &mut ctx);
             }
-            let mut ctx = GateDecisionContext {
-                step_exec,
-                step_conf: _step_conf,
-                step_execs,
-                prev_artifact_path: &prev_artifact_path,
-                prev_artifact_paths: &prev_artifact_paths,
-                accumulated_cost,
-                step_start,
-            };
-            return self.apply_gate_decision(unasked.decision(), &mut ctx);
-        }
+            Err(must_ask) => must_ask.held_by_review,
+        };
 
         // Only now insert the undecided row. Inserted earlier, a gate the
         // policy approves would sit pending for a moment, and the detached
@@ -172,10 +173,7 @@ impl ExecutionDriver {
 
         self.park_feature();
 
-        if let Some(reason) = review_read
-            .take()
-            .and_then(|standing| standing.held_reason())
-        {
+        if let Some(reason) = held_by_review {
             let _ = self.notif.emit(&DomainEvent::GateHeldByReview {
                 feature_id: self.f_id.clone(),
                 step_execution_id: step_exec.id.clone(),

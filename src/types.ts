@@ -1224,8 +1224,10 @@ export interface WorktreeStrategy {
 }
 
 /** `attended`: every gate waits for a person. `review`: review gates approve
- *  themselves and the ship gate (which publishes the PR) waits. `full`: every
- *  gate approves itself. A detached run never runs below `review`. */
+ *  themselves and the ship gate (which publishes the PR) waits. `clean`: as
+ *  `review`, and the ship gate approves itself too when the review step it
+ *  follows reports no critical and no major issue. `full`: every gate approves
+ *  itself. A detached run never runs below `review`. */
 export type GateAutonomy = 'attended' | 'review' | 'clean' | 'full';
 
 export interface ProjectSettingsData {

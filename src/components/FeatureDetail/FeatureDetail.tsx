@@ -27,6 +27,7 @@ import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { AttachmentsPanel } from './AttachmentsPanel';
 import { FeatureHeader } from './FeatureHeader';
 import { FeatureStatusBanners } from './FeatureStatusBanners';
+import { awaitingGates } from '../../lib/gateStrip';
 import { GateStrip } from './GateStrip';
 import { InitialPromptPanel } from './InitialPromptPanel';
 import { InspectorColumn, type InspectorPane } from './InspectorColumn';
@@ -559,6 +560,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       runEvents={panelRunEvents}
       activityOpen={activityOpen}
       onActivityOpenChange={onActivityOpenChange}
+      awaitingGateId={awaitingGates(run.steps)[0]?.id ?? null}
       onRunEvents={remote.handleRunEvents}
       onRemoteResolved={remote.refreshRemoteRun}
       runStatus={run.status}

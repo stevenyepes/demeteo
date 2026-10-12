@@ -191,7 +191,9 @@ merge-to-default and over-budget.
 **Where the policy lives now (decision 57).** The classification above is the
 project's `gate_autonomy` setting, applied by the engine's gate step on every
 transport. A detached run raises it to `review` at least; a project set to
-`full` auto-approves the dangerous class too. The runner's poll loop no longer
+`full` auto-approves the dangerous class too, and one set to `clean` does so
+when the review step before the gate reports no critical and no major issue
+(decision 60). The runner's poll loop no longer
 approves anything — it only announces a gate still pending, which by then is
 always one held for a person.
 

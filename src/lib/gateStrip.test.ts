@@ -96,6 +96,22 @@ describe('gateHeldReason', () => {
     expect(gateHeldReason(events, 'se-ship')).toBe('now blocking');
   });
 
+  it.each(['gate_decided', 'gate_auto_approved'])(
+    'drops a reason the gate has since been answered past (%s)',
+    (kind) => {
+      const answered = { kind, payload_json: JSON.stringify({ step_execution_id: 'se-ship', decision: 'redirect' }) };
+
+      expect(gateHeldReason([held('se-ship', 'now blocking'), answered], 'se-ship')).toBeNull();
+      expect(gateHeldReason([answered, held('se-ship', 'now blocking')], 'se-ship')).toBe('now blocking');
+    },
+  );
+
+  it('keeps a reason past an answer given to some other gate', () => {
+    const other = { kind: 'gate_decided', payload_json: JSON.stringify({ step_execution_id: 'se-spec' }) };
+
+    expect(gateHeldReason([held('se-ship', 'now blocking'), other], 'se-ship')).toBe('now blocking');
+  });
+
   it('skips an event whose payload it cannot read rather than failing the strip', () => {
     const events: GateHeldEvent[] = [
       held('se-ship', 'readable'),

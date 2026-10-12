@@ -1,8 +1,11 @@
 //! Reading the review a ship gate may be approved on.
 
-use crate::domain::gate::review_contract::{review_step_for_gate, standing, ReviewStanding};
+use std::path::Path;
+
+use crate::domain::gate::review_contract::{review_for_gate, standing, ReviewStanding};
 use crate::domain::ids::StepId;
 use crate::domain::models::{StepConfig, StepExecution};
+use crate::domain::workflow_graph::WorkflowGraph;
 use crate::ports::artifact_store::ArtifactStore;
 
 /// The standing of the review covering the gate `gate_step_id`, read from the
@@ -16,40 +19,35 @@ pub(crate) fn review_standing(
     artifacts: &dyn ArtifactStore,
     feature_id: &str,
     steps: &[StepConfig],
+    graph: &WorkflowGraph,
     step_execs: &[StepExecution],
     gate_step_id: &StepId,
 ) -> ReviewStanding {
-    let Some(review_step) = steps
-        .iter()
-        .position(|step| &step.id == gate_step_id)
-        .and_then(|gate_idx| review_step_for_gate(steps, gate_idx))
-    else {
+    let Some(review) = review_for_gate(steps, graph, gate_step_id) else {
         return ReviewStanding::Unreadable("no review step covers this gate");
     };
     let completed = step_execs
         .iter()
-        .any(|exec| exec.step_id == review_step.id && exec.status == "completed");
+        .any(|exec| exec.step_id == review.step.id && exec.status == "completed");
     if !completed {
         return ReviewStanding::Unreadable("the review step has not completed");
     }
-    let Some(name) = review_step.review_artifact.as_deref() else {
-        return ReviewStanding::Unreadable("no review step covers this gate");
-    };
-    // The last reference, not the first: a rework cycle re-runs the review,
-    // and the store lists a step's references in insertion order.
-    let review = artifacts
-        .list_for_step(feature_id, review_step.id.as_ref())
+    // By the declared path's file name, never by the declaration's name: a
+    // body captured from the worktree is stored under the name of the file it
+    // was read from, and most workflows give the two different names
+    // (`critic` written to `artifacts/s-critic.md`).
+    let stored_as = Path::new(review.path).file_name();
+    let body = artifacts
+        .list_for_step(feature_id, review.step.id.as_ref())
         .ok()
         .and_then(|references| {
-            references.into_iter().rev().find(|reference| {
-                std::path::Path::new(reference)
-                    .file_stem()
-                    .is_some_and(|stem| stem == name)
+            references.into_iter().find(|reference| {
+                stored_as.is_some() && Path::new(reference).file_name() == stored_as
             })
         })
         .and_then(|reference| artifacts.get(&reference).ok());
-    match review {
-        Some(review) => standing(&review),
+    match body {
+        Some(body) => standing(&body),
         None => ReviewStanding::Unreadable("the review artifact is not in the store"),
     }
 }

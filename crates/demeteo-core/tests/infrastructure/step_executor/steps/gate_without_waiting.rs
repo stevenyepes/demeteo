@@ -85,7 +85,7 @@ fn se() -> StepExecutionId {
 
 /// For every gate whose answer does not turn on a review: reading one is a
 /// change in what the function touches, and fails loudly.
-fn ask(gates: &OneGate, autonomy: GateAutonomy, dangerous: bool) -> Option<Unasked> {
+fn ask(gates: &OneGate, autonomy: GateAutonomy, dangerous: bool) -> Result<Unasked, MustAsk> {
     decided_without_waiting(
         gates,
         &se(),
@@ -96,21 +96,24 @@ fn ask(gates: &OneGate, autonomy: GateAutonomy, dangerous: bool) -> Option<Unask
     )
 }
 
-fn ask_ship_gate_with(gates: &OneGate, review: ReviewStanding) -> Option<Unasked> {
+fn ask_ship_gate_with(gates: &OneGate, review: ReviewStanding) -> Result<Unasked, MustAsk> {
     decided_without_waiting(gates, &se(), GateAutonomy::Clean, true, || review, 7)
 }
 
 #[test]
 fn an_attended_project_asks_and_writes_nothing() {
     let gates = OneGate::default();
-    assert!(ask(&gates, GateAutonomy::Attended, false).is_none());
+    assert_eq!(
+        ask(&gates, GateAutonomy::Attended, false).unwrap_err(),
+        MustAsk::default()
+    );
     assert!(gates.stored().is_none());
 }
 
 #[test]
 fn a_review_gate_approves_itself_and_says_whose_approval_it_was() {
     let gates = OneGate::default();
-    let Some(Unasked::ApprovedByPolicy(row)) = ask(&gates, GateAutonomy::Review, false) else {
+    let Ok(Unasked::ApprovedByPolicy(row)) = ask(&gates, GateAutonomy::Review, false) else {
         panic!("a review gate under `review` autonomy should approve itself");
     };
     assert_eq!(row.decision.as_deref(), Some("approve"));
@@ -120,7 +123,10 @@ fn a_review_gate_approves_itself_and_says_whose_approval_it_was() {
 #[test]
 fn the_ship_gate_still_asks_under_review_autonomy() {
     let gates = OneGate::default();
-    assert!(ask(&gates, GateAutonomy::Review, true).is_none());
+    assert_eq!(
+        ask(&gates, GateAutonomy::Review, true).unwrap_err(),
+        MustAsk::default()
+    );
     assert!(gates.stored().is_none());
 }
 
@@ -129,7 +135,7 @@ fn the_ship_gate_approves_itself_under_full_autonomy() {
     let gates = OneGate::default();
     assert!(matches!(
         ask(&gates, GateAutonomy::Full, true),
-        Some(Unasked::ApprovedByPolicy(_))
+        Ok(Unasked::ApprovedByPolicy(_))
     ));
 }
 
@@ -138,7 +144,7 @@ fn the_ship_gate_approves_itself_under_full_autonomy() {
 #[test]
 fn a_recorded_human_answer_wins_over_the_policy() {
     let gates = OneGate::holding(Some("cancel"));
-    let Some(Unasked::Recorded(row)) = ask(&gates, GateAutonomy::Full, true) else {
+    let Ok(Unasked::Recorded(row)) = ask(&gates, GateAutonomy::Full, true) else {
         panic!("a recorded answer should be returned as recorded");
     };
     assert_eq!(row.decision.as_deref(), Some("cancel"));
@@ -152,7 +158,7 @@ fn an_undecided_row_is_still_approved_by_the_policy() {
     let gates = OneGate::holding(None);
     assert!(matches!(
         ask(&gates, GateAutonomy::Review, false),
-        Some(Unasked::ApprovedByPolicy(_))
+        Ok(Unasked::ApprovedByPolicy(_))
     ));
 }
 
@@ -162,27 +168,37 @@ fn an_approval_that_was_not_recorded_is_not_given() {
         refuse_writes: true,
         ..OneGate::default()
     };
-    assert!(ask(&gates, GateAutonomy::Full, false).is_none());
+    assert_eq!(
+        ask(&gates, GateAutonomy::Full, false).unwrap_err(),
+        MustAsk::default()
+    );
 }
 
 #[test]
 fn clean_autonomy_ships_on_a_clean_review_and_says_whose_approval_it_was() {
     let gates = OneGate::default();
-    let Some(Unasked::ApprovedByPolicy(row)) = ask_ship_gate_with(&gates, ReviewStanding::Clean)
+    let Ok(Unasked::ApprovedByPolicy(row)) = ask_ship_gate_with(&gates, ReviewStanding::Clean)
     else {
         panic!("a clean review should approve the ship gate under `clean` autonomy");
     };
     assert!(row.auto_approved);
 }
 
+/// The reason travels out with the refusal: it is what the person asked to
+/// decide is shown.
 #[test]
-fn clean_autonomy_asks_on_a_review_that_blocks_or_cannot_be_read() {
+fn clean_autonomy_asks_on_a_review_that_blocks_or_cannot_be_read_and_says_why() {
     for review in [
         ReviewStanding::Blocking,
         ReviewStanding::Unreadable("no counts"),
     ] {
         let gates = OneGate::default();
-        assert!(ask_ship_gate_with(&gates, review).is_none());
+        assert_eq!(
+            ask_ship_gate_with(&gates, review).unwrap_err(),
+            MustAsk {
+                held_by_review: review.held_reason(),
+            }
+        );
         assert!(gates.stored().is_none());
     }
 }
@@ -194,6 +210,6 @@ fn clean_autonomy_approves_a_review_gate_without_reading_any_review() {
     let gates = OneGate::default();
     assert!(matches!(
         ask(&gates, GateAutonomy::Clean, false),
-        Some(Unasked::ApprovedByPolicy(_))
+        Ok(Unasked::ApprovedByPolicy(_))
     ));
 }

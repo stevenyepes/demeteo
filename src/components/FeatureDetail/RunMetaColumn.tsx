@@ -22,6 +22,8 @@ interface RunMetaColumnProps {
   runEvents: RunEvent[];
   activityOpen: boolean;
   onActivityOpenChange: (open: boolean) => void;
+  /** The gate the run is waiting at — see `ActivityPanel`'s prop of the same name. */
+  awaitingGateId: string | null;
   onRunEvents: (events: RunEvent[]) => void;
   onRemoteResolved: () => void;
   /** Display status of the local run — decides whether its feed can still grow. */
@@ -56,6 +58,7 @@ export function RunMetaColumn({
   runEvents,
   activityOpen,
   onActivityOpenChange,
+  awaitingGateId,
   onRunEvents,
   onRemoteResolved,
   runStatus,
@@ -110,6 +113,7 @@ export function RunMetaColumn({
             }
             terminal={remoteRun ? remoteTerminal : TERMINAL_STATUSES.includes(runStatus)}
             open={activityOpen}
+            awaitingGateId={awaitingGateId}
             onOpenChange={onActivityOpenChange}
           />
         )}
@@ -163,6 +167,7 @@ export function RunMetaColumn({
             }
             terminal={remoteRun ? remoteTerminal : TERMINAL_STATUSES.includes(runStatus)}
             open={activityOpen}
+            awaitingGateId={awaitingGateId}
             onOpenChange={onActivityOpenChange}
           />
           {remoteRun && (

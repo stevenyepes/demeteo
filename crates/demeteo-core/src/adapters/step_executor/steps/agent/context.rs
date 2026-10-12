@@ -129,4 +129,9 @@ pub(crate) struct TurnBaseline<'a> {
     /// The worktree's own HEAD and branch just before the turn, which any
     /// commit the agent makes itself is folded back onto.
     pub head: &'a HeadState,
+    /// What was already at a review step's review path, for
+    /// [`carried_over`](crate::domain::gate::review_contract::carried_over)
+    /// to tell the turn's review from one it found there. `None` both for a
+    /// step that is not a review and for a path with nothing at it.
+    pub review_before: Option<&'a str>,
 }

@@ -88,6 +88,9 @@ Per-project settings, in four tabs.
 |--------|-------|
 | *Ask at every gate* (default) | `attended` |
 | *Auto-approve review gates, ask before shipping* | `review` — only a gate the workflow marks *dangerous* (the ship gate, which publishes the PR) waits. |
+| *Auto-approve review gates, ship when the review is clean* | `clean` — as `review`, and the ship gate approves itself too when the review step it follows reports no critical and no major issue. |
 | *Auto-approve every gate, including publishing the PR* | `full` |
 
 An automatic approval never redirects or rejects, so the run's own validation and critic steps are the only check left. A run on a remote runner always approves review gates on its own, since nobody is attached to answer them.
+
+Under `clean`, a review that lists a critical or major issue, cannot be read, or was not written by this run leaves the ship gate waiting for you, and the gate says which. The Standard Feature Pipeline has the review step this needs; [a custom workflow gets one](workflows.md#gate-actions) by naming a review artifact on a step.

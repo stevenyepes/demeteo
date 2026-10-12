@@ -62,9 +62,12 @@ Whether a gate waits for you at all is a per-project setting, **gate autonomy**:
 |-------|-----------|
 | `attended` *(default)* | Every gate waits for a person. |
 | `review` | Review gates approve themselves; a gate the workflow marks *dangerous* still waits. Among the starters, that is the ship gate of the Standard, Bugfix and CI Fix pipelines. |
+| `clean` | As `review`, and a *dangerous* gate approves itself too when the review step it follows reports no critical and no major issue. |
 | `full` | Every gate approves itself, the ship gate included. |
 
 An automatic approval never redirects or rejects. A run detached to a remote runner always runs with at least `review`, because nobody is attached to answer a review gate.
+
+`clean` reads a **review step**: an agent step whose `review_artifact` names one of its declared artifacts, written to a path. Among the starters, that is the Standard pipeline's critic. The review must be the last thing that could have run before the gate — other gates may sit between them, but any other step that is not upstream of the review leaves the gate waiting, because the review did not see its work. So does a review that lists a critical or major issue, one whose issue counts are missing or disagree with its verdict, and one the step did not write on this run; the gate says which.
 
 ## What every agent prompt carries
 
@@ -73,6 +76,7 @@ The template is only the middle of what an agent reads. The orchestrator wraps i
 - An **Operating Boundary** naming what the step's capability may not do (write outside `artifacts/`, run a shell, reach the network), mirrored by a real filesystem fence.
 - A **conduct block**: the turn is unattended, so a reply that ends on a plan or a question has done nothing; claims in the report are audited against tool results from the session; an implement turn holds the task's scope and reports anything else as a follow-up.
 - The **artifact contract** — the files the step is expected to produce and where.
+- For a review step, the **review format**: four sections (critical, major and minor issues, then a verdict) and a closing JSON object counting the issues in each, which is what a `clean` ship gate reads. A template does not need to describe the format itself.
 - For a verifying step, the **Harness Results** the orchestrator already captured and the **verdict** menu (`pass`, `fail`, `environment`, `evidence`). A verifier's `when_nothing_ran` field says whether an absent harness is terminal (the default) or a pass for a step that judges nothing the project must configure.
 
 Prompts state goals, contracts and the reasons for constraints rather than step-by-step methods: current models plan better than a hand-written script, and read pressure language literally.

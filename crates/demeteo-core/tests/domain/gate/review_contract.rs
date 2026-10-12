@@ -2,6 +2,9 @@
 //! bundled critic step that stops declaring its review fails here.
 
 use super::*;
+use crate::domain::ids::WorkflowId;
+use crate::domain::models::workflow_migrate::migrate_v1_to_v2;
+use crate::domain::models::workflow_v2::EdgeConfig;
 use crate::domain::workflow_starters::StarterDefinition;
 
 fn standard_steps() -> Vec<StepConfig> {
@@ -18,6 +21,52 @@ fn index_of(steps: &[StepConfig], id: &str) -> usize {
         .iter()
         .position(|s| s.id.as_ref() == id)
         .expect("the step is in the workflow")
+}
+
+fn step_id(id: &str) -> StepId {
+    StepId::from(id.to_string())
+}
+
+/// A Standard-pipeline step under another id, with nothing that ties it to
+/// its old neighbours.
+fn pick(source: &str, id: &str) -> StepConfig {
+    let steps = standard_steps();
+    let mut step = steps[index_of(&steps, source)].clone();
+    step.id = step_id(id);
+    step.task_list_from = None;
+    step.on_failure = None;
+    step
+}
+
+/// `steps` as the chain a list-shaped workflow is, or wired by `edges`.
+fn graph_of(steps: &[StepConfig], edges: Option<&[(&str, &str)]>) -> WorkflowGraph {
+    let mut def = migrate_v1_to_v2(WorkflowId::from("wf".to_string()), "wf", steps);
+    if let Some(edges) = edges {
+        def.edges = edges
+            .iter()
+            .map(|(from, to)| EdgeConfig {
+                from: step_id(from),
+                to: step_id(to),
+                when: None,
+            })
+            .collect();
+    }
+    WorkflowGraph::build(&def).expect("the fixture is an acyclic graph")
+}
+
+fn covering<'a>(steps: &'a [StepConfig], graph: &WorkflowGraph, gate: &str) -> Option<&'a str> {
+    review_for_gate(steps, graph, &step_id(gate)).map(|review| review.step.id.as_ref())
+}
+
+/// `i`, `j` and `b` do work, `r` reviews, `g` is the ship gate.
+fn canvas_steps() -> Vec<StepConfig> {
+    vec![
+        pick("s-research", "i"),
+        pick("s-research", "j"),
+        pick("s-validate", "b"),
+        pick("s-critic", "r"),
+        pick("s-gate-ship", "g"),
+    ]
 }
 
 fn review(critical: &str, major: &str, minor: &str, verdict: &str, block: &str) -> String {
@@ -135,6 +184,40 @@ fn the_last_counts_block_is_the_one_read() {
     assert_eq!(standing(&text), ReviewStanding::Blocking);
 }
 
+/// The file ends on its counts; a fenced quote of the shape above them is an
+/// illustration, however it is dressed.
+#[test]
+fn a_fenced_quote_of_the_example_does_not_outrank_the_counts_the_file_ends_on() {
+    let ending = review(
+        "None.",
+        "- no test for the error path",
+        "None.",
+        "PASS_WITH_NOTES",
+        &counts(0, 1, 0),
+    );
+    let quoting = format!(
+        "The format asked for:\n```json\n{}\n```\n\n{ending}",
+        counts(0, 0, 0)
+    );
+    assert_eq!(standing(&quoting), standing(&ending));
+    assert!(matches!(standing(&quoting), ReviewStanding::Unreadable(_)));
+}
+
+/// One unbalanced brace in a quoted snippet hides every bare object after it
+/// from a brace scan; the fence around the counts is what still finds them.
+#[test]
+fn fenced_counts_are_read_past_an_unbalanced_brace_in_the_prose() {
+    let block = format!("```json\n{}\n```", counts(0, 0, 1));
+    let text = review(
+        "None.",
+        "None.",
+        "- `if ready {` reads better as a guard",
+        "PASS_WITH_NOTES",
+        &block,
+    );
+    assert_eq!(standing(&text), ReviewStanding::Clean);
+}
+
 #[test]
 fn a_fenced_counts_block_is_read() {
     let block = format!("```json\n{}\n```", counts(0, 0, 2));
@@ -196,24 +279,25 @@ fn a_review_naming_an_artifact_the_step_does_not_declare_is_no_review() {
 #[test]
 fn the_shipped_ship_gate_is_covered_by_the_critic() {
     let steps = standard_steps();
-    let covering = review_step_for_gate(&steps, index_of(&steps, "s-gate-ship"))
+    let graph = graph_of(&steps, None);
+    let review = review_for_gate(&steps, &graph, &step_id("s-gate-ship"))
         .expect("the ship gate has a review step before it");
-    assert_eq!(covering.id.as_ref(), "s-critic");
+    assert_eq!(review.step.id.as_ref(), "s-critic");
+    assert_eq!(review.path, "artifacts/critic-review.md");
 }
 
 /// The Standard pipeline's earlier gates follow steps that review nothing.
 #[test]
 fn a_gate_that_does_not_follow_a_review_step_is_not_covered() {
     let steps = standard_steps();
+    let graph = graph_of(&steps, None);
     let uncovered = steps
         .iter()
-        .enumerate()
-        .filter(|(_, s)| s.kind == "gate" && s.id.as_ref() != "s-gate-ship")
-        .map(|(i, _)| i)
+        .filter(|s| s.kind == "gate" && s.id.as_ref() != "s-gate-ship")
         .collect::<Vec<_>>();
     assert!(!uncovered.is_empty());
-    for idx in uncovered {
-        assert!(review_step_for_gate(&steps, idx).is_none());
+    for gate in uncovered {
+        assert_eq!(covering(&steps, &graph, gate.id.as_ref()), None);
     }
 }
 
@@ -222,20 +306,62 @@ fn a_gate_that_does_not_follow_a_review_step_is_not_covered() {
 fn a_step_between_the_review_and_the_gate_uncovers_it() {
     let mut steps = standard_steps();
     let gate = index_of(&steps, "s-gate-ship");
-    let intruder = steps[index_of(&steps, "s-validate")].clone();
-    steps.insert(gate, intruder);
-    assert!(review_step_for_gate(&steps, gate + 1).is_none());
+    steps.insert(gate, pick("s-validate", "s-intruder"));
+    let graph = graph_of(&steps, None);
+    assert_eq!(covering(&steps, &graph, "s-gate-ship"), None);
 }
 
 #[test]
 fn another_gate_between_the_review_and_the_gate_does_not_uncover_it() {
     let mut steps = standard_steps();
     let gate = index_of(&steps, "s-gate-ship");
-    let mut extra = steps[gate].clone();
+    let mut extra = pick("s-gate-ship", "s-gate-extra");
     extra.gate_class = None;
     steps.insert(gate, extra);
-    let covering = review_step_for_gate(&steps, gate + 1).expect("still covered");
-    assert_eq!(covering.id.as_ref(), "s-critic");
+    let graph = graph_of(&steps, None);
+    assert_eq!(covering(&steps, &graph, "s-gate-ship"), Some("s-critic"));
+}
+
+/// `b` feeds the gate beside the review, so it is free to run after it —
+/// and does, in the order the scheduler picks, while sitting before the
+/// review in the list the canvas saves. A redirect to `b` would also re-run
+/// it without re-running the review.
+#[test]
+fn a_branch_that_joins_the_gate_beside_the_review_uncovers_it() {
+    let steps = canvas_steps();
+    let graph = graph_of(
+        &steps,
+        Some(&[("i", "r"), ("j", "b"), ("r", "g"), ("b", "g")]),
+    );
+    assert_eq!(covering(&steps, &graph, "g"), None);
+}
+
+#[test]
+fn branches_that_join_before_the_review_leave_the_gate_covered() {
+    let steps = canvas_steps();
+    let graph = graph_of(
+        &steps,
+        Some(&[("i", "r"), ("j", "b"), ("b", "r"), ("r", "g")]),
+    );
+    assert_eq!(covering(&steps, &graph, "g"), Some("r"));
+}
+
+/// Not upstream of the gate at all, and still able to run before it.
+#[test]
+fn a_branch_that_never_reaches_the_gate_uncovers_it_too() {
+    let steps = canvas_steps();
+    let graph = graph_of(
+        &steps,
+        Some(&[("i", "r"), ("j", "r"), ("r", "g"), ("r", "b")]),
+    );
+    assert_eq!(covering(&steps, &graph, "g"), None);
+}
+
+#[test]
+fn a_body_the_turn_found_at_the_review_path_is_not_its_review() {
+    assert!(carried_over(Some("PASS"), "PASS"));
+    assert!(!carried_over(Some("PASS"), "FAIL"));
+    assert!(!carried_over(None, "PASS"));
 }
 
 #[test]
@@ -246,7 +372,7 @@ fn a_clean_review_holds_nothing_and_every_other_standing_says_why() {
         Some("the review lists critical or major issues")
     );
     assert_eq!(
-        ReviewStanding::Unreadable("the review has no `## Verdict`").held_reason(),
-        Some("the review has no `## Verdict`")
+        ReviewStanding::Unreadable("the review has no Verdict section").held_reason(),
+        Some("the review has no Verdict section")
     );
 }
