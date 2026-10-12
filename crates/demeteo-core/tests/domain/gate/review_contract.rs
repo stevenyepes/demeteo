@@ -237,3 +237,16 @@ fn another_gate_between_the_review_and_the_gate_does_not_uncover_it() {
     let covering = review_step_for_gate(&steps, gate + 1).expect("still covered");
     assert_eq!(covering.id.as_ref(), "s-critic");
 }
+
+#[test]
+fn a_clean_review_holds_nothing_and_every_other_standing_says_why() {
+    assert_eq!(ReviewStanding::Clean.held_reason(), None);
+    assert_eq!(
+        ReviewStanding::Blocking.held_reason(),
+        Some("the review lists critical or major issues")
+    );
+    assert_eq!(
+        ReviewStanding::Unreadable("the review has no `## Verdict`").held_reason(),
+        Some("the review has no `## Verdict`")
+    );
+}

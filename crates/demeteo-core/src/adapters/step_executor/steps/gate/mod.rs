@@ -111,19 +111,22 @@ impl ExecutionDriver {
         // would raise a "needs you" nobody can act on and kill the
         // feature's sessions for an idle gap that never happens. This is
         // what makes the system self-healing across app restarts and races.
+        let review_read = std::cell::Cell::new(None);
         if let Some(unasked) = decided_without_waiting(
             &*self.gates,
             &step_exec.id,
             self.gate_autonomy(),
             _step_conf.is_dangerous_gate(),
             || {
-                review_standing(
+                let standing = review_standing(
                     &*self.artifacts,
                     self.f_id.as_ref(),
                     &self.steps,
                     step_execs,
                     &step_exec.step_id,
-                )
+                );
+                review_read.set(Some(standing));
+                standing
             },
             paths::now_ms(),
         ) {
@@ -168,6 +171,17 @@ impl ExecutionDriver {
         let _ = self.gates.create(gate_dec);
 
         self.park_feature();
+
+        if let Some(reason) = review_read
+            .take()
+            .and_then(|standing| standing.held_reason())
+        {
+            let _ = self.notif.emit(&DomainEvent::GateHeldByReview {
+                feature_id: self.f_id.clone(),
+                step_execution_id: step_exec.id.clone(),
+                reason: reason.to_string(),
+            });
+        }
 
         let _ = self.notif.emit(&DomainEvent::GateRequired {
             feature_id: self.f_id.clone(),

@@ -626,7 +626,12 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       {/* Above the run rather than inside it: a gate is the run asking a
           question, and it was previously findable only by scrolling to the card
           holding it (UI_REDESIGN_PLAN §3.2). */}
-      <GateStrip steps={run.steps} onDecideGate={decideGate} className="mx-6 mt-4" />
+      <GateStrip
+        steps={run.steps}
+        events={panelRunEvents}
+        onDecideGate={decideGate}
+        className="mx-6 mt-4"
+      />
 
       {/* Renders itself away unless this run wrote a review report *and* the
           pull request it reviewed is still open — see the component. That can

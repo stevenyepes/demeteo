@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { awaitingGates, type GateStripRow } from './gateStrip';
+import {
+  awaitingGates,
+  gateHeldReason,
+  type GateHeldEvent,
+  type GateStripRow,
+} from './gateStrip';
 
 function step(id: string, status: string, step_index: number): GateStripRow {
   return { id, step_id: `s-${id}`, step_index, status };
@@ -60,4 +65,47 @@ describe('awaitingGates', () => {
       expect(awaitingGates([step('a', status, 0)])).toEqual([]);
     },
   );
+});
+
+function held(step_execution_id: string, reason: unknown): GateHeldEvent {
+  return { kind: 'gate_held_by_review', payload_json: JSON.stringify({ step_execution_id, reason }) };
+}
+
+describe('gateHeldReason', () => {
+  it('gives the reason the engine recorded for that gate', () => {
+    expect(gateHeldReason([held('se-ship', 'the review lists critical or major issues')], 'se-ship')).toBe(
+      'the review lists critical or major issues',
+    );
+  });
+
+  it('gives nothing for a gate no policy would have approved', () => {
+    const events = [{ kind: 'gate_required', payload_json: JSON.stringify({ step_execution_id: 'se-ship' }) }];
+
+    expect(gateHeldReason(events, 'se-ship')).toBeNull();
+    expect(gateHeldReason([], 'se-ship')).toBeNull();
+  });
+
+  it('does not borrow the reason another gate was held for', () => {
+    expect(gateHeldReason([held('se-other', 'no counts')], 'se-ship')).toBeNull();
+  });
+
+  // A rework cycle reaches the same gate again, with a new review.
+  it('gives the latest reason when the gate was held more than once', () => {
+    const events = [held('se-ship', 'the review carries no issue counts'), held('se-ship', 'now blocking')];
+
+    expect(gateHeldReason(events, 'se-ship')).toBe('now blocking');
+  });
+
+  it('skips an event whose payload it cannot read rather than failing the strip', () => {
+    const events: GateHeldEvent[] = [
+      held('se-ship', 'readable'),
+      { kind: 'gate_held_by_review', payload_json: '{not json' },
+      { kind: 'gate_held_by_review', payload_json: null },
+      { kind: 'gate_held_by_review', payload_json: '"a string"' },
+      held('se-ship', 42),
+      held('se-ship', ''),
+    ];
+
+    expect(gateHeldReason(events, 'se-ship')).toBe('readable');
+  });
 });

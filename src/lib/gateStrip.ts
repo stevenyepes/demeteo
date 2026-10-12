@@ -36,3 +36,40 @@ export function awaitingGates<T extends GateStripRow>(steps: readonly T[]): T[] 
     .sort((a, b) => a.step.step_index - b.step.step_index || a.index - b.index)
     .map((entry) => entry.step);
 }
+
+/** The fields this module reads off a run event. */
+export interface GateHeldEvent {
+  kind: string;
+  payload_json: string | null;
+}
+
+/**
+ * Why the project's own gate autonomy did not approve this gate, when that is
+ * why it is waiting — the engine's `gate_held_by_review` run event.
+ *
+ * The latest one for the execution, because a rework cycle reaches the same
+ * gate again with a new review and the earlier reason no longer describes it.
+ * `null` for a gate nothing would have approved: most gates wait because the
+ * project asks at every gate, and there is no reason to give for that.
+ */
+export function gateHeldReason(
+  events: readonly GateHeldEvent[],
+  stepExecutionId: string,
+): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.kind !== 'gate_held_by_review' || !event.payload_json) continue;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(event.payload_json);
+    } catch {
+      continue;
+    }
+    if (typeof payload !== 'object' || payload === null) continue;
+    const { step_execution_id, reason } = payload as Record<string, unknown>;
+    if (step_execution_id === stepExecutionId && typeof reason === 'string' && reason) {
+      return reason;
+    }
+  }
+  return null;
+}

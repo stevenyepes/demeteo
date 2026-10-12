@@ -205,6 +205,18 @@ pub fn run_event_record(event: &DomainEvent) -> Option<RunEventRecord> {
             kind: "gate_required",
             payload: serde_json::json!({ "step_execution_id": step_execution_id.as_str() }),
         },
+        DomainEvent::GateHeldByReview {
+            feature_id,
+            step_execution_id,
+            reason,
+        } => RunEventRecord {
+            feature_id: feature_id.0.clone(),
+            kind: "gate_held_by_review",
+            payload: serde_json::json!({
+                "step_execution_id": step_execution_id.as_str(),
+                "reason": reason,
+            }),
+        },
         DomainEvent::GateDecided {
             feature_id,
             step_execution_id,

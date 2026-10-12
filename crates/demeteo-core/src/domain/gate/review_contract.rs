@@ -58,6 +58,18 @@ pub(crate) enum ReviewStanding {
     Unreadable(&'static str),
 }
 
+impl ReviewStanding {
+    /// Why a gate that turned on this review is being held for a person, in
+    /// words shown to that person. `None` for a review that holds nothing.
+    pub(crate) fn held_reason(self) -> Option<&'static str> {
+        match self {
+            Self::Clean => None,
+            Self::Blocking => Some("the review lists critical or major issues"),
+            Self::Unreadable(why) => Some(why),
+        }
+    }
+}
+
 /// The section appended to a review step's prompt. `path` is where the step's
 /// declared review artifact is written.
 pub(crate) fn contract_section(path: &str) -> String {
