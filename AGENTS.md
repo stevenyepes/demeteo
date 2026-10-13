@@ -129,7 +129,8 @@ The desktop app ships on **Linux x86_64, macOS aarch64, and Windows x86_64**
 must work on all three; only remote-side code may assume Linux and systemd.
 
 The full gate (`scripts/checks.sh`) runs on `ubuntu-22.04` only; the `cross-os`
-job in `pr-checks.yml` type-checks and runs the core tests on macOS and Windows,
+job in `pr-checks.yml` type-checks on macOS and Windows and `cross-os-test` runs
+the core tests there,
 which is where three of the last six real PR failures were caught — an import
 only used behind a `cfg`, dead on Linux, fatal under `-D warnings` elsewhere.
 **Green locally does not prove macOS or Windows even compiles.** When you touch
@@ -275,8 +276,13 @@ catches it. §4 has the mechanism that makes it silent.
 ### The parity gates are not in `npm run checks`
 
 `pr-checks.yml` runs `scripts/checks.sh` as two jobs (`frontend`, `rust`), the
-`cross-os` compile-and-core-test job, and a `conformance` job holding two suites
-that `checks.sh` does not invoke. Both suites need Docker, and both are the only
+`cross-os` compile job and its `cross-os-test` counterpart, and a `conformance`
+job holding two suites that `checks.sh` does not invoke. Which of those a PR
+gets is decided from its changed files by `scripts/ci-changes.sh` — a skipped
+job is not a passed one, and only the master run is unconditional. A path the
+rule gets wrong is fixed there, with a case in its `--self-test`.
+
+Both suites need Docker, and both are the only
 thing standing between you and a local/remote divergence:
 
 ```bash

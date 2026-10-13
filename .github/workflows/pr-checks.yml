@@ -26,6 +26,48 @@ permissions:
   contents: read
 
 jobs:
+  # Which of the jobs below this change can affect. The rule, its exceptions
+  # and the evidence for them are in scripts/ci-changes.sh; this job only feeds
+  # it the file list. A push to master skips the question and runs everything:
+  # that run is what tests the squash commit and saves the caches every PR
+  # starts from, and it is the backstop for anything the rule skipped on the PR.
+  #
+  # The list comes from the API rather than `git diff` so the checkout can stay
+  # shallow. The endpoint stops at 3000 files, so a PR that large runs
+  # everything instead of being judged on a truncated list.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      frontend: ${{ steps.decide.outputs.frontend }}
+      rust: ${{ steps.decide.outputs.rust }}
+      os_tests: ${{ steps.decide.outputs.os_tests }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Self-test the rule
+        run: scripts/ci-changes.sh --self-test
+
+      - name: Decide which jobs run
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ] || [ "$PR_CHANGED_FILES" -ge 3000 ]; then
+            scripts/ci-changes.sh --all | tee -a "$GITHUB_OUTPUT"
+          else
+            gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
+              --jq '.[] | [.status, .filename, (.previous_filename // "")] | @tsv' \
+              > "$RUNNER_TEMP/changed.tsv"
+            scripts/ci-changes.sh < "$RUNNER_TEMP/changed.tsv" | tee -a "$GITHUB_OUTPUT"
+          fi
+
   # The build/test gate is a single shared script (scripts/checks.sh) that
   # developers and agents run locally before pushing, so "green locally" means
   # "green in CI" — no drift between an ad-hoc local run and these jobs. It is
@@ -35,6 +77,8 @@ jobs:
   # pinned toolchain, rust-toolchain.toml), cargo doc, doc-refs and the demeteo
   # + core + runner tests. Commitlint lives in lint-commits.yml.
   frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
@@ -54,6 +98,8 @@ jobs:
         run: ./scripts/checks.sh frontend
 
   rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     steps:
@@ -110,7 +156,12 @@ jobs:
   #
   # macos-14 is pinned to the image build.yml releases from, so a PR compiles
   # on the same SDK the shipped .app is built with.
+  #
+  # The tests are `cross-os-test` below, a separate job so that this one — the
+  # half that runs on every Rust change — answers in a few minutes.
   cross-os:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -163,8 +214,78 @@ jobs:
       - name: Rust clippy (--all-targets -D warnings)
         run: cargo clippy --workspace --exclude demeteo-runner --all-targets -- -D warnings
 
+  # The core tests on the other two targets — only when the change can behave
+  # differently there (`os_tests`, scripts/ci-changes.sh), and always on master.
+  #
+  # Windows is sharded because the same suite that takes ~2 minutes on Linux
+  # and macOS takes 12–17 there, which made this one leg the wall-clock of the
+  # whole workflow. libtest cannot partition a test binary, so the Windows legs
+  # run under cargo-nextest; `hash:` assigns each test to a shard by name, so a
+  # new module lands in one without this file knowing it exists. macOS stays on
+  # plain `cargo test`, the invocation scripts/checks.sh uses, so one leg here
+  # still runs the suite the way a developer does.
+  #
+  # nextest does not run doctests; shard 1 runs them with cargo.
+  #
+  # Only shard 1 saves the Rust cache: the shards build the same artifacts
+  # under the same key, and three concurrent saves of one key is two failures.
+  cross-os-test:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && needs.changes.outputs.os_tests == 'true'
+    name: cross-os-test (${{ matrix.platform }}, ${{ matrix.shard }}/${{ matrix.shards }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: macos-14, shard: 1, shards: 1 }
+          - { platform: windows-latest, shard: 1, shards: 3 }
+          - { platform: windows-latest, shard: 2, shards: 3 }
+          - { platform: windows-latest, shard: 3, shards: 3 }
+
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Resolve pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> src-tauri/target"
+          save-if: ${{ github.ref == 'refs/heads/master' && matrix.shard == 1 }}
+          cache-on-failure: true
+
       - name: Core tests
+        if: matrix.shards == 1
         run: cargo test -p demeteo-core
+
+      - name: Install cargo-nextest
+        if: matrix.shards > 1
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Core tests (shard ${{ matrix.shard }} of ${{ matrix.shards }})
+        if: matrix.shards > 1
+        run: cargo nextest run -p demeteo-core --no-fail-fast --partition hash:${{ matrix.shard }}/${{ matrix.shards }}
+
+      - name: Core doctests
+        if: matrix.shards > 1 && matrix.shard == 1
+        run: cargo test -p demeteo-core --doc
 
   # The two parity gates, in one job because they share everything expensive:
   # the same loopback sshd image (each script builds it; the second build is a
@@ -181,6 +302,8 @@ jobs:
   # in-container git host). Uses the deterministic `stub` agent so a run reaches
   # a terminal state with no real LLM CLI. (docs/EXECUTION_PARITY.md)
   conformance:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     steps:
