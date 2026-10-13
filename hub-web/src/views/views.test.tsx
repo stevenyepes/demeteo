@@ -7,6 +7,7 @@ import { HubApiError } from '../lib/api';
 import type { Session } from '../lib/auth';
 import { WebAuthnCancelledError, WebAuthnUnavailableError } from '../lib/webauthn';
 import { AddInstance } from './AddInstance';
+import { ApprovePairing } from './ApprovePairing';
 import { Dispatch } from './Dispatch';
 import { Fleet } from './Fleet';
 import { Instance } from './Instance';
@@ -30,6 +31,9 @@ vi.mock('../lib/auth', () => auth);
  */
 vi.mock('../lib/passkeys', () => ({ listPasskeys: () => new Promise<never>(() => {}) }));
 
+/** Held in flight for the same reason; `ApprovePairing.test.tsx` is where it meets the prompt. */
+vi.mock('../lib/pairing', () => ({ startPairing: () => new Promise<never>(() => {}) }));
+
 const SESSION: Session = { csrfToken: 'csrf-1', credentialId: 'cred-1' };
 
 const VIEWS: { heading: string; element: ReactElement }[] = [
@@ -43,6 +47,7 @@ const VIEWS: { heading: string; element: ReactElement }[] = [
   { heading: 'Sign up', element: <SignUp onSession={() => {}} /> },
   { heading: 'Sign in', element: <SignIn onSession={() => {}} /> },
   { heading: 'Passkeys', element: <Passkeys /> },
+  { heading: 'Pair instance', element: <ApprovePairing request="eyJyZXF1ZXN0IjoiMSJ9" /> },
 ];
 
 function monoTexts(container: HTMLElement): (string | null)[] {

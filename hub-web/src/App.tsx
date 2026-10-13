@@ -7,6 +7,7 @@ import { fetchSession, signOut } from './lib/auth';
 import { parseRoute, type Route, routeHref } from './lib/router';
 import { useRoute } from './lib/useRoute';
 import { AddInstance } from './views/AddInstance';
+import { ApprovePairing } from './views/ApprovePairing';
 import { Dispatch } from './views/Dispatch';
 import { Fleet } from './views/Fleet';
 import { Instance } from './views/Instance';
@@ -61,6 +62,8 @@ function viewFor(route: Route, onSession: () => void): ReactElement {
       return <Dispatch />;
     case 'add-instance':
       return <AddInstance />;
+    case 'pair':
+      return <ApprovePairing request={route.request} />;
     case 'sign-up':
       return <SignUp onSession={onSession} />;
     case 'sign-in':

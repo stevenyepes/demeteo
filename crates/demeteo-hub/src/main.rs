@@ -5,6 +5,7 @@ use demeteo_hub::ports::KeyService;
 use demeteo_hub::startup::{classify_key_probe, KeyStatus};
 use demeteo_hub::{routes, store};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 const OPENBAO_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -35,13 +36,15 @@ async fn run() -> Result<(), String> {
 
     let http =
         http_client(OPENBAO_CONNECT_TIMEOUT, OPENBAO_TOTAL_TIMEOUT).map_err(|e| e.to_string())?;
-    let keys = OpenBaoKeys::new(
-        http,
-        &config.openbao_addr,
-        &config.transit_mount,
-        &config.openbao_token,
-    )
-    .map_err(|e| e.to_string())?;
+    let keys: Arc<dyn KeyService> = Arc::new(
+        OpenBaoKeys::new(
+            http,
+            &config.openbao_addr,
+            &config.transit_mount,
+            &config.openbao_token,
+        )
+        .map_err(|e| e.to_string())?,
+    );
 
     let listener = tokio::net::TcpListener::bind(config.bind)
         .await
@@ -49,19 +52,23 @@ async fn run() -> Result<(), String> {
     tracing::info!(addr = %config.bind, "listening");
     // Spawned after bind, never awaited: a black-holed OpenBao would otherwise
     // hold /healthz back for up to OPENBAO_TOTAL_TIMEOUT.
-    tokio::spawn(probe_key_service(keys, config.transit_key.clone()));
+    tokio::spawn(probe_key_service(
+        Arc::clone(&keys),
+        config.transit_key.clone(),
+    ));
     let rp = RelyingParty {
         rp_id: config.rp_id,
         origin: config.origin,
     };
-    let state = routes::AppState::new(db, rp).map_err(|e| e.to_string())?;
+    let state =
+        routes::AppState::new(db, rp, keys, config.signing_key).map_err(|e| e.to_string())?;
     axum::serve(listener, routes::router(state, &config.web_dir))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|e| e.to_string())
 }
 
-async fn probe_key_service(keys: OpenBaoKeys, transit_key: String) {
+async fn probe_key_service(keys: Arc<dyn KeyService>, transit_key: String) {
     let probe = keys.encrypt(&transit_key, b"startup-probe").await;
     match classify_key_probe(&probe) {
         KeyStatus::Ready => tracing::info!("key service is ready"),

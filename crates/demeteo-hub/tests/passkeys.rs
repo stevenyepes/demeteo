@@ -4,6 +4,7 @@
 
 mod support;
 
+use demeteo_hub::adapters::memory_keys::MemoryKeys;
 use demeteo_hub::auth::ceremonies::{Ceremony, MAX_LIVE_CEREMONIES};
 use demeteo_hub::auth::chain::{self, ChainError, EndorsementRecord, RevocationRecord, StoredKey};
 use demeteo_hub::auth::challenge::{
@@ -30,8 +31,10 @@ use demeteo_hub::store::sessions::{
 use demeteo_hub::store::{Db, StoreError, UserId};
 use demeteo_hub_protocol::{PasskeyEndorsement, PasskeyRevocation, WebAuthnAssertion};
 use serde_json::{json, Value};
+use std::iter;
 use std::net::Ipv4Addr;
 use std::path::Path;
+use std::sync::Arc;
 use support::in_fresh_schema;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -92,10 +95,17 @@ async fn enrol_as(db: &Db, user: UserId, key: &SoftAuthenticator, label: &str, s
     insert_passkey(user, db, &new, status).await.unwrap();
 }
 
+/// No passkey route asks the key service for anything, so it holds no key and
+/// one that started to would be answered an error.
+fn state_over(db: Db) -> AppState {
+    let no_keys = MemoryKeys::with_keys(iter::empty::<String>());
+    AppState::new(db, rp(), Arc::new(no_keys), String::new()).unwrap()
+}
+
 /// The Hub's real router over `db` on a loopback port, and the base URL it
 /// answers at. The web directory does not exist: no `/v1` route reads it.
 async fn serve_hub(db: Db) -> String {
-    serve_state(AppState::new(db, rp()).unwrap()).await
+    serve_state(state_over(db)).await
 }
 
 /// [`serve_hub`] over a state the test holds a clone of, and so can reach
@@ -1435,7 +1445,7 @@ async fn a_flood_of_sign_in_starts_refuses_sign_ins_and_no_signed_in_tenants_cer
         enrol_as(&db, user, &other, "phone", Status::Trusted).await;
         enrol(&db, user, &pending, Status::Pending).await;
         let session = open_session(&db, user, &trusted).await;
-        let state = AppState::new(db.clone(), rp()).unwrap();
+        let state = state_over(db.clone());
         let base = serve_state(state.clone()).await;
         for _ in 0..MAX_LIVE_CEREMONIES {
             let (_, sign_in) = state.verifier().start_sign_in().unwrap();

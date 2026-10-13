@@ -326,11 +326,14 @@ jobs:
           export BAO_TOKEN
           bao secrets enable transit
           bao write -f transit/keys/demeteo-hub
+          bao write -f transit/keys/demeteo-hub-signing type=ed25519
 
           bao policy write demeteo-hub - <<'EOF'
           path "transit/encrypt/demeteo-hub"          { capabilities = ["update"] }
           path "transit/decrypt/demeteo-hub"          { capabilities = ["update"] }
           path "transit/datakey/plaintext/demeteo-hub" { capabilities = ["update"] }
+          path "transit/keys/demeteo-hub-signing"      { capabilities = ["read"] }
+          path "transit/sign/demeteo-hub-signing"      { capabilities = ["update"] }
           EOF
 
           hub_token=$(bao token create -policy=demeteo-hub -period=720h -format=json | jq -er '.auth.client_token')
@@ -342,12 +345,13 @@ jobs:
 
       # OPENBAO_TOKEN arrives through GITHUB_ENV from the step above, and is
       # the least-privilege token rather than root on purpose: the run then
-      # proves the README's three-path policy is all the adapter needs.
+      # proves the README's policy, over both keys, is all the adapter needs.
       - name: Hub tests, including the Postgres- and OpenBao-backed ones
         env:
           DEMETEO_HUB_TEST_DATABASE_URL: postgres://demeteo:${{ env.POSTGRES_PASSWORD }}@127.0.0.1:5432/demeteo_hub
           OPENBAO_ADDR: http://127.0.0.1:8200
           DEMETEO_HUB_TRANSIT_KEY: demeteo-hub
+          DEMETEO_HUB_SIGNING_KEY: demeteo-hub-signing
         run: cargo test -p demeteo-hub -- --include-ignored
 
       - name: Build the Hub image (not pushed)

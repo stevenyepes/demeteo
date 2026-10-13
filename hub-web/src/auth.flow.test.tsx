@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -78,6 +78,19 @@ const REVOKING_ASSERTION = {
   authenticator_data: 'YXV0aA',
   client_data_json: 'Y2xpZW50',
   signature: 'c2ln',
+};
+
+const PAIRING_REQUEST = 'eyJyZXF1ZXN0IjoiMSJ9';
+const PAIRING_LINK = `#/pair/${PAIRING_REQUEST}`;
+const PAIRING_PROMPT = {
+  pairing_id: 'pairing-1',
+  fingerprint: 'SHA256:0ZcO CORZ NYy- DWpq',
+  instance_name: 'workstation',
+  os: 'linux',
+  arch: 'x86_64',
+  app_version: '1.4.2',
+  scopes: ['read', 'gates'],
+  expires_at: 1_700_000_300,
 };
 
 function wirePasskey(credential_id: string, label: string, status: string, current: boolean) {
@@ -160,6 +173,51 @@ describe('hub-web, from no account to signed back in', () => {
     ]);
     expect(webauthn.getCredential.mock.calls).toEqual([[REQUEST_OPTIONS]]);
     expect(webauthn.getAssertion).not.toHaveBeenCalled();
+    expect(pending).toEqual([]);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('hub-web, opened signed out on a pairing link', () => {
+  it('shows the sign-in view, and signing in lands on the approval page of that link', async () => {
+    const { sent, pending } = stubFetch([
+      answer('GET /v1/session', { error: 'unauthenticated' }, 401),
+      answer('POST /v1/session/start', { ceremony_id: 'cer-sign-in', options: REQUEST_OPTIONS }),
+      answer('POST /v1/session/finish', { csrf_token: 'csrf-from-sign-in', credential_id: 'cred-1' }),
+      answer('POST /v1/pairing/start', PAIRING_PROMPT),
+    ]);
+    webauthn.getCredential.mockResolvedValueOnce(SIGN_IN_ASSERTION);
+    window.location.hash = PAIRING_LINK;
+    render(<App />);
+
+    const signInControl = await screen.findByRole('button', { name: 'Sign in with a passkey' });
+    expect(shownView()).toBe('Sign in');
+    expect(screen.queryByRole('navigation')).toBeNull();
+    expect(window.location.hash).toBe(PAIRING_LINK);
+    // Signed out, the Hub is not asked about the request the link carries.
+    expect(sent).toEqual([{ request: 'GET /v1/session', csrf: null, body: undefined }]);
+
+    await userEvent.click(signInControl);
+
+    await screen.findByRole('button', { name: 'Approve' });
+    expect(shownView()).toBe('Pair instance');
+    expect(window.location.hash).toBe(PAIRING_LINK);
+    const key = screen.getByRole('region', { name: 'Device key fingerprint' });
+    expect(within(key).getByText(PAIRING_PROMPT.fingerprint)).toBeInTheDocument();
+    expect(screen.getByText(PAIRING_PROMPT.instance_name)).toBeInTheDocument();
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2);
+    expect(screen.getByRole('checkbox', { name: 'read' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'gates' })).toBeChecked();
+    expect(sent.slice(1)).toEqual([
+      { request: 'POST /v1/session/start', csrf: null, body: {} },
+      {
+        request: 'POST /v1/session/finish',
+        csrf: null,
+        body: { ceremony_id: 'cer-sign-in', credential: SIGN_IN_ASSERTION },
+      },
+      { request: 'POST /v1/pairing/start', csrf: 'csrf-from-sign-in', body: { request: PAIRING_REQUEST } },
+    ]);
+    expect(webauthn.getCredential.mock.calls).toEqual([[REQUEST_OPTIONS]]);
     expect(pending).toEqual([]);
     expect(screen.queryByRole('alert')).toBeNull();
   });

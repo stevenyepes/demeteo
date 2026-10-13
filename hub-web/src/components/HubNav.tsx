@@ -12,10 +12,12 @@ const SECTIONS: readonly { name: Section; label: string }[] = [
 
 /**
  * A detail view lights the list it is reached from: an instance is opened from
- * the fleet, a run from the runs list. The two auth routes light nothing and
- * are not expected here: the nav exists only signed in, where `App` shows
- * Fleet for them and passes that route instead. No `default` arm, so a route
- * added to `Route` fails to compile here until it is given a section.
+ * the fleet, a run from the runs list. Approving a pairing is how an instance
+ * gets added, though the page is reached from the desktop and never from a
+ * link here. The two auth routes light nothing and are not expected here: the
+ * nav exists only signed in, where `App` shows Fleet for them and passes that
+ * route instead. No `default` arm, so a route added to `Route` fails to
+ * compile here until it is given a section.
  */
 function sectionOf(route: Route): Section | null {
   switch (route.name) {
@@ -28,6 +30,7 @@ function sectionOf(route: Route): Section | null {
     case 'dispatch':
       return 'dispatch';
     case 'add-instance':
+    case 'pair':
       return 'add-instance';
     case 'passkeys':
       return 'passkeys';

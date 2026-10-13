@@ -413,16 +413,17 @@ src/                              # React frontend
 The tree above is `src-tauri/` only. The shared core and the remote runner live
 in `crates/demeteo-core` and `crates/demeteo-runner`. The Demeteo Hub — a hosted
 browser control plane over many instances — adds three more. All three exist, and the
-Hub is built only in part: storage, the `KeyService` port, `/healthz`, static serving and
-passkey auth, plus the Compose bundle in `deploy/hub`. Pairing, request handling and the
-WebSocket are not built, and nothing on the desktop talks to the Hub yet
+Hub is built only in part: storage, the `KeyService` port, `/healthz`, static serving,
+passkey auth and the Hub's half of pairing, plus the Compose bundle in `deploy/hub`.
+Request handling and the WebSocket are not built, and nothing on the desktop talks to the
+Hub yet — the desktop's half of pairing included
 ([HUB.md §2](HUB.md#2-status-of-the-parts) has the state per part):
 
 | Path | What it is |
 |---|---|
-| `crates/demeteo-hub` | the axum server — partly built: passkey registration, sign-in, sessions, endorsement and revocation under `/v1`; no pairing, request handling or socket. It depends on `crates/demeteo-hub-protocol` |
+| `crates/demeteo-hub` | the axum server — partly built: passkey registration, sign-in, sessions, endorsement and revocation under `/v1`, and pairing in `crates/demeteo-hub/src/pairing/` (`GET /authorize`, the consent routes under `/v1/pairing`, `POST /token`); no request handling or socket. It depends on `crates/demeteo-hub-protocol` |
 | `crates/demeteo-hub-protocol` | serde-only wire types shared by the desktop client and the Hub; it does not depend on `demeteo-core` — built, and the Hub is its only dependant so far |
-| `hub-web/` | a second Vite entry in this repo, reusing `src/components/canvas` and the `src/App.css` tokens — sign-up, sign-in and passkey management built; the fleet views are placeholders |
+| `hub-web/` | a second Vite entry in this repo, reusing `src/components/canvas` and the `src/App.css` tokens — sign-up, sign-in, passkey management and the pairing approval page built; the fleet views are placeholders |
 
 The Hub does not link `demeteo-core` in v1. Where the desktop's client for it sits in the
 hexagon above is open ([HUB.md §11](HUB.md#11-what-is-not-decided)); the Hub never

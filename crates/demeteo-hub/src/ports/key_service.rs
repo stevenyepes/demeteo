@@ -42,9 +42,11 @@ pub enum KeyServiceError {
     Malformed(String),
 }
 
-/// Envelope encryption as the Hub needs it. Deliberately has no persistence:
-/// callers store what comes back, and `docs/HUB.md` §9 keeps plaintext out of
-/// Postgres.
+/// Key custody as the Hub needs it: envelope encryption, and a signing key
+/// whose private half stays in the service — the Hub is handed its public half
+/// and signatures made under it, never the key. Deliberately has no
+/// persistence: callers store what comes back, and `docs/HUB.md` §9 keeps
+/// plaintext out of Postgres.
 #[async_trait]
 pub trait KeyService: Send + Sync {
     /// Returns the ciphertext in the service's own text form (`vault:v1:…`).
@@ -53,4 +55,11 @@ pub trait KeyService: Send + Sync {
     async fn decrypt(&self, key: &str, ciphertext: &str) -> Result<Vec<u8>, KeyServiceError>;
 
     async fn data_key(&self, key: &str) -> Result<DataKey, KeyServiceError>;
+
+    /// The raw 32-byte public half of an Ed25519 signing key.
+    async fn verifying_key(&self, key: &str) -> Result<[u8; 32], KeyServiceError>;
+
+    /// The 64-byte Ed25519 signature over `message`, which verifies under what
+    /// [`verifying_key`](Self::verifying_key) answers for the same name.
+    async fn sign(&self, key: &str, message: &[u8]) -> Result<[u8; 64], KeyServiceError>;
 }

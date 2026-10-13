@@ -3,6 +3,7 @@
 //! This is the only file allowed to spell a host, port or filesystem root
 //! (`tests/no_literals.rs`), so an image never bakes one in.
 
+use crate::adapters::openbao::{is_key_name, KEY_NAME_ALPHABET};
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -11,6 +12,7 @@ const DEFAULT_BIND: &str = "0.0.0.0:8080";
 const DEFAULT_WEB_DIR: &str = "/srv/hub-web";
 const DEFAULT_TRANSIT_MOUNT: &str = "transit";
 const DEFAULT_TRANSIT_KEY: &str = "demeteo-hub";
+const DEFAULT_SIGNING_KEY: &str = "demeteo-hub-signing";
 
 const DATABASE_URL: &str = "DATABASE_URL";
 const BIND: &str = "DEMETEO_HUB_BIND";
@@ -22,6 +24,7 @@ const OPENBAO_TOKEN: &str = "OPENBAO_TOKEN";
 const OPENBAO_TOKEN_FILE: &str = "OPENBAO_TOKEN_FILE";
 const TRANSIT_MOUNT: &str = "DEMETEO_HUB_TRANSIT_MOUNT";
 const TRANSIT_KEY: &str = "DEMETEO_HUB_TRANSIT_KEY";
+const SIGNING_KEY: &str = "DEMETEO_HUB_SIGNING_KEY";
 
 const REDACTED: &str = "<redacted>";
 
@@ -49,6 +52,9 @@ pub struct Config {
     pub openbao_token: String,
     pub transit_mount: String,
     pub transit_key: String,
+    /// The Transit name of the Ed25519 request-signing key. The key itself
+    /// never leaves OpenBao, so there is no material here to redact.
+    pub signing_key: String,
     pub web_dir: PathBuf,
 }
 
@@ -101,6 +107,17 @@ impl Config {
             reason: format!("`{public_url}` has a port that is not a number up to 65535"),
         })?;
 
+        let signing_key = or_default(SIGNING_KEY, DEFAULT_SIGNING_KEY);
+        if !is_key_name(&signing_key) {
+            return Err(ConfigError::Invalid {
+                var: SIGNING_KEY,
+                reason: format!(
+                    "`{signing_key}` is not a Transit key name the Hub can address: only \
+                     {KEY_NAME_ALPHABET} are allowed"
+                ),
+            });
+        }
+
         Ok(Self {
             bind,
             public_url,
@@ -111,6 +128,7 @@ impl Config {
             openbao_token: openbao_token(&lookup)?,
             transit_mount: or_default(TRANSIT_MOUNT, DEFAULT_TRANSIT_MOUNT),
             transit_key: or_default(TRANSIT_KEY, DEFAULT_TRANSIT_KEY),
+            signing_key,
             web_dir: PathBuf::from(or_default(WEB_DIR, DEFAULT_WEB_DIR)),
         })
     }
@@ -290,6 +308,7 @@ impl fmt::Debug for Config {
             .field("openbao_token", &REDACTED)
             .field("transit_mount", &self.transit_mount)
             .field("transit_key", &self.transit_key)
+            .field("signing_key", &self.signing_key)
             .field("web_dir", &self.web_dir)
             .finish()
     }
@@ -323,6 +342,43 @@ mod tests {
         assert_eq!(config.bind.to_string(), DEFAULT_BIND);
         assert_eq!(config.transit_mount, DEFAULT_TRANSIT_MOUNT);
         assert_eq!(config.transit_key, DEFAULT_TRANSIT_KEY);
+        assert_eq!(config.signing_key, "demeteo-hub-signing");
+    }
+
+    #[test]
+    fn the_signing_key_name_is_read_from_its_own_variable() {
+        let mut env = full();
+        env.insert(SIGNING_KEY, "hub-requests".to_owned());
+        let config = load(&env).unwrap();
+        assert_eq!(config.signing_key, "hub-requests");
+        assert_eq!(config.transit_key, DEFAULT_TRANSIT_KEY);
+    }
+
+    #[test]
+    fn a_signing_key_name_openbao_cannot_address_is_refused() {
+        for name in ["a/b", "hub requests", "hub.signing", "..", "clé"] {
+            let mut env = full();
+            env.insert(SIGNING_KEY, name.to_owned());
+            match load(&env) {
+                Err(ConfigError::Invalid { var, reason }) => {
+                    assert_eq!(var, SIGNING_KEY, "{name:?}");
+                    assert!(reason.contains(KEY_NAME_ALPHABET), "{name:?}: {reason}");
+                }
+                other => panic!("{name:?} was not refused: {:?}", other.map(|_| ())),
+            }
+        }
+    }
+
+    #[test]
+    fn a_signing_key_name_inside_the_transit_alphabet_is_accepted() {
+        for name in [DEFAULT_SIGNING_KEY, "hub-requests", "Tenant_42"] {
+            let mut env = full();
+            env.insert(SIGNING_KEY, name.to_owned());
+            assert_eq!(load(&env).unwrap().signing_key, name);
+        }
+        let mut env = full();
+        env.insert(SIGNING_KEY, String::new());
+        assert_eq!(load(&env).unwrap().signing_key, DEFAULT_SIGNING_KEY);
     }
 
     #[test]
@@ -510,6 +566,14 @@ mod tests {
             shown.contains(r#"origin: "https://hub.example.com""#),
             "{shown}"
         );
+    }
+
+    #[test]
+    fn debug_shows_the_signing_key_name() {
+        let mut env = full();
+        env.insert(SIGNING_KEY, "hub-requests".to_owned());
+        let shown = format!("{:?}", load(&env).unwrap());
+        assert!(shown.contains(r#"signing_key: "hub-requests""#), "{shown}");
     }
 
     fn assert_token_file_rejected(content: &str, tag: &str) {

@@ -14,6 +14,7 @@ const LINKABLE_ROUTES: Array<[hash: string, route: Linkable]> = [
   ['#/sign-up', { name: 'sign-up' }],
   ['#/sign-in', { name: 'sign-in' }],
   ['#/passkeys', { name: 'passkeys' }],
+  ['#/pair/eyJyZXF1ZXN0IjoiMSJ9', { name: 'pair', request: 'eyJyZXF1ZXN0IjoiMSJ9' }],
 ];
 
 describe('routeHref', () => {
@@ -75,6 +76,13 @@ describe('parseRoute', () => {
     expect(parseRoute('#/instances//runs/f-9').name).toBe('not-found');
     expect(parseRoute('#/instances/i-1/runs/').name).toBe('not-found');
   });
+
+  it.each(['#/pair', '#/pair/', '#/pair//', '#/pair/a/b'])(
+    'reports %s as not-found: a pairing is one request segment, and never none',
+    (hash) => {
+      expect(parseRoute(hash).name).toBe('not-found');
+    },
+  );
 
   it.each(['#/sign-up/x', '#/sign-in/x', '#/passkeys/cred-1', '#/signin', '#/Sign-In'])(
     'reports %s as not-found rather than as an auth route',

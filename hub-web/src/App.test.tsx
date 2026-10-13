@@ -43,6 +43,17 @@ function json(body: unknown, status = 200): Response {
 const SIGNED_IN: Answers = {
   'GET /v1/session': () => json({ csrf_token: 'csrf-1', credential_id: 'cred-1' }),
   'GET /v1/passkeys': () => json({ passkeys: [] }),
+  'POST /v1/pairing/start': () =>
+    json({
+      pairing_id: 'pairing-1',
+      fingerprint: 'SHA256:0ZcO CORZ NYy- DWpq',
+      instance_name: 'workstation',
+      os: 'linux',
+      arch: 'x86_64',
+      app_version: '1.4.2',
+      scopes: ['read'],
+      expires_at: 1_700_000_300,
+    }),
 };
 
 const SIGNED_OUT: Answers = {
@@ -59,6 +70,7 @@ const ROUTES: { hash: string; heading: string; activeHref: string }[] = [
   { hash: '#/dispatch', heading: 'Dispatch', activeHref: '#/dispatch' },
   { hash: '#/add-instance', heading: 'Add instance', activeHref: '#/add-instance' },
   { hash: '#/passkeys', heading: 'Passkeys', activeHref: '#/passkeys' },
+  { hash: '#/pair/eyJyZXF1ZXN0IjoiMSJ9', heading: 'Pair instance', activeHref: '#/add-instance' },
   { hash: '#/sign-in', heading: 'Fleet', activeHref: '#/fleet' },
   { hash: '#/sign-up', heading: 'Fleet', activeHref: '#/fleet' },
 ];

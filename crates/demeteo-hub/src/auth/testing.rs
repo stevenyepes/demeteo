@@ -19,6 +19,8 @@ use axum::Router;
 use demeteo_hub_protocol::WebAuthnAssertion;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::iter;
+use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -31,6 +33,8 @@ use super::handlers::ApiError;
 use super::policy::Status;
 use super::webauthn::RelyingPartyError;
 use super::RelyingParty;
+use crate::adapters::memory_keys::MemoryKeys;
+use crate::ports::KeyService;
 use crate::routes::AppState;
 use crate::store::passkeys::Passkey;
 use crate::store::{pool, StoreError, UserId};
@@ -292,9 +296,27 @@ impl Default for SoftAuthenticator {
 /// refused or answered before any query runs. `database_url` is parsed and
 /// never dialled; a query against this state fails instead of returning rows.
 ///
+/// Its key service holds no key, so a route that reaches for one is answered
+/// an error under whatever name it asks; [`lazy_state_with_keys`] is for the
+/// routes that need an answer.
+///
 /// Call it inside a Tokio runtime, as [`pool::connect_lazy`] requires.
 pub fn lazy_state(database_url: &str, rp: RelyingParty) -> Result<AppState, LazyStateError> {
-    Ok(AppState::new(pool::connect_lazy(database_url)?, rp)?)
+    let no_keys = MemoryKeys::with_keys(iter::empty::<String>());
+    lazy_state_with_keys(database_url, rp, Arc::new(no_keys), "")
+}
+
+/// [`lazy_state`] over a key service of the caller's, which is asked for the
+/// request-signing key by the name `signing_key`. Keep a clone of `keys` to
+/// sign with the key the routes advertise.
+pub fn lazy_state_with_keys(
+    database_url: &str,
+    rp: RelyingParty,
+    keys: Arc<dyn KeyService>,
+    signing_key: &str,
+) -> Result<AppState, LazyStateError> {
+    let db = pool::connect_lazy(database_url)?;
+    Ok(AppState::new(db, rp, keys, signing_key.to_owned())?)
 }
 
 #[derive(Debug, thiserror::Error)]
