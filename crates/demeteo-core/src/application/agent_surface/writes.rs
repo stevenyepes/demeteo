@@ -334,7 +334,12 @@ pub async fn rework_from_critic(
     let workflow_id = feature.workflow_id.as_ref().map(|id| id.as_ref());
     let critic =
         critic_rework::critic_step(workflow_id, &steps, &gate).map_err(|e| e.to_string())?;
-    let review = critic_review(ctx, &feature.id, &critic.id)?;
+    let executions = ctx.features.steps_for_feature(&feature.id)?;
+    let review = critic_review(
+        ctx,
+        &feature.id,
+        &critic_rework::review_store_keys(&executions, critic),
+    )?;
     let prior_reworks = ctx
         .run_events
         .list_since(feature.id.as_ref(), 0)?
@@ -396,19 +401,23 @@ fn pinned_steps(ctx: &AppContext, feature: &Feature) -> Result<Vec<StepConfig>, 
 fn critic_review(
     ctx: &AppContext,
     feature_id: &FeatureId,
-    critic_step_id: &StepId,
+    keys: &[String],
 ) -> Result<String, String> {
-    let reference = ctx
-        .artifact_store
-        .list_for_step(feature_id.as_ref(), critic_step_id.as_ref())?
-        .into_iter()
-        .find(|reference| {
-            std::path::Path::new(reference)
-                .file_stem()
-                .is_some_and(|stem| stem == CRITIC_ARTIFACT)
-        })
-        .ok_or_else(|| "the critic review for this run is not available".to_string())?;
-    ctx.artifact_store.get(&reference)
+    for key in keys {
+        let found = ctx
+            .artifact_store
+            .list_for_step(feature_id.as_ref(), key)?
+            .into_iter()
+            .find(|reference| {
+                std::path::Path::new(reference)
+                    .file_stem()
+                    .is_some_and(|stem| stem == CRITIC_ARTIFACT)
+            });
+        if let Some(reference) = found {
+            return ctx.artifact_store.get(&reference);
+        }
+    }
+    Err("the critic review for this run is not available".to_string())
 }
 
 #[cfg(test)]
