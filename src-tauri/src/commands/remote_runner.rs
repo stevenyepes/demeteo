@@ -1,24 +1,26 @@
 #![allow(clippy::useless_conversion)]
 
+use crate::application::launch::{launch_run as launch, LaunchRequest, LaunchedRun};
+use crate::domain::run_placement::{placement_from_raw, DetachedOptions};
 use crate::error::AppError;
 use crate::ports::remote_run_mirror::RemoteRunMirror;
+use crate::ports::step_executor::FeatureLaunch;
 use crate::state::AppContext;
-pub use demeteo_core::application::remote_runs::RemoteRunHandle;
 use demeteo_core::application::remote_runs::*;
 use tauri::{AppHandle, State};
 use tauri_plugin_notification::NotificationExt;
 
-/// The frontend's `submitRemoteRun` input, everything [`SubmitInput`] needs
-/// except `app_version`, which only the running bundle can state.
-///
-/// `remote_submit_run` takes this as one camelCase `args` object
-/// (`{ args: { machineId, … } }`), not as flat top-level keys. The only caller
-/// is `submitRemoteRun` in `src/lib/remoteRuns.ts`, and `useLaunchRun.test.tsx`
-/// pins that shape — change all three together.
+/// The frontend's `launchRun` input (`src/lib/launch.ts`), taken as one
+/// camelCase `args` object (`{ args: { machineId, … } }`) that
+/// `useLaunchRun.test.tsx` pins — change all three together. An absent,
+/// blank or `"local"` `machine_id` launches on the project's own compute; any
+/// other id is a detached run on that machine — see
+/// [`crate::domain::run_placement`]. The app version a detached run is checked
+/// against is not part of it: core reads it from [`AppContext::app_version`].
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RemoteSubmitRunArgs {
-    pub machine_id: String,
+pub struct LaunchRunArgs {
+    pub machine_id: Option<String>,
     pub project_id: String,
     pub workflow_id: String,
     pub title: String,
@@ -32,53 +34,50 @@ pub struct RemoteSubmitRunArgs {
     pub step_overrides: Option<Vec<crate::domain::models::StepOverride>>,
     pub staged_attachments: Option<Vec<crate::commands::attachments::StagedAttachmentInput>>,
     pub target_repo_id: Option<String>,
-    pub unattended: bool,
+    pub unattended: Option<bool>,
     pub max_cost_usd: Option<f64>,
     pub max_wall_clock_secs: Option<u64>,
-    // Omitted (a frontend older than the origin picker) = `None`, which
-    // `SubmitInput::origin` and `SubmitInput::diff_base_branch` define.
     pub origin: Option<crate::domain::feature_origin::FeatureOrigin>,
     pub diff_base_branch: Option<String>,
 }
 
-impl RemoteSubmitRunArgs {
-    fn into_submit_input(self, app_version: String) -> SubmitInput {
-        SubmitInput {
-            machine_id: self.machine_id,
-            project_id: self.project_id,
-            workflow_id: self.workflow_id,
-            title: self.title,
-            description: self.description,
-            agent_kind: self.agent_kind,
-            model: self.model,
-            effort: self.effort,
-            commit_artifacts: self.commit_artifacts,
-            loop_iterations: self.loop_iterations,
-            max_budget_usd: self.max_budget_usd,
-            step_overrides: self.step_overrides,
-            staged_attachments: self.staged_attachments,
-            target_repo_id: self.target_repo_id,
-            unattended: self.unattended,
-            max_cost_usd: self.max_cost_usd,
-            max_wall_clock_secs: self.max_wall_clock_secs,
-            origin: self.origin,
-            diff_base_branch: self.diff_base_branch,
-            app_version,
+impl LaunchRunArgs {
+    fn into_launch_request(self) -> LaunchRequest {
+        LaunchRequest {
+            placement: placement_from_raw(self.machine_id.as_deref()),
+            launch: FeatureLaunch {
+                project_id: self.project_id,
+                workflow_id: self.workflow_id,
+                title: self.title,
+                description: self.description,
+                agent_kind: self.agent_kind,
+                model: self.model,
+                effort: self.effort,
+                commit_artifacts: self.commit_artifacts,
+                loop_iterations: self.loop_iterations,
+                max_budget_usd: self.max_budget_usd,
+                step_overrides: self.step_overrides.unwrap_or_default(),
+                staged_attachments: self.staged_attachments.unwrap_or_default(),
+                origin: self.origin.unwrap_or_default(),
+                diff_base_branch: self.diff_base_branch,
+                ..FeatureLaunch::default()
+            },
+            detached: DetachedOptions {
+                target_repo_id: self.target_repo_id,
+                unattended: self.unattended,
+                max_cost_usd: self.max_cost_usd,
+                max_wall_clock_secs: self.max_wall_clock_secs,
+            },
         }
     }
 }
 
 #[tauri::command]
-pub async fn remote_submit_run(
-    app: AppHandle,
+pub async fn launch_run(
     ctx: State<'_, AppContext>,
-    args: RemoteSubmitRunArgs,
-) -> Result<RemoteRunHandle, AppError> {
-    let input = args.into_submit_input(app.package_info().version.to_string());
-    submit_remote_run(&ctx, input)
-        .await
-        .map(RemoteRunHandle::from)
-        .map_err(AppError::from)
+    args: LaunchRunArgs,
+) -> Result<LaunchedRun, AppError> {
+    launch(&ctx, args.into_launch_request()).await
 }
 
 #[tauri::command]

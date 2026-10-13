@@ -153,6 +153,12 @@ exactly as `ThreadSession` already carries them. Interviewing and implementing
 want different things from a model, and inheriting the project default gives no
 way to say so without changing it for every run.
 
+The machine is the one choice that outlives the interview. Agent kind, model
+and effort stop at the interviewer — each Ticket carries its own (§8.1) — but
+the Discovery's machine is also where its tickets run unless a ticket says
+otherwise (§7.4). A user who opened a Discovery on a build box meant the work
+to happen there, not only the conversation about it.
+
 ### 4.6 What the interview can see and do
 
 A Discovery gets its **own worktree**, created lazily on the first turn that
@@ -302,6 +308,10 @@ the plan moved on. §7.2 is what stops that becoming a lie told to the next agen
 
 Two properties come with reading `mr_state`: roughly **two minutes of latency**
 between a merge and the unblock, and a hard dependence on `mr_url` existing.
+The latency is the poll's, not the rule's: `application/tickets/refresh.rs`
+reads one Discovery's unsettled pull requests on demand and settles them through
+the same path, which is what the MCP `refresh_discovery_prs` tool calls
+([`MCP_INTEGRATION.md` §7](MCP_INTEGRATION.md)).
 
 ### 6.5 No PR means blocked
 
@@ -401,6 +411,39 @@ Two alternatives were rejected:
   would throw away exactly the interview this PRD's own discovery-session
   design exists to accumulate.
 
+### 7.4 Placement
+
+Each Ticket has a **placement**: whether its Feature runs on the project's own
+compute, attached as any started run is, or is submitted *detached* to a
+machine's `demeteo-runner`. `Ticket.machine_id` (V60) stores the choice, and
+unlike the base branch (§7.3) it is per Ticket — placement says where one run
+happens, not what the Discovery integrates against, so two tickets on two
+machines leave sync, squash and PR target with one subject still.
+
+`NULL` means *not chosen*, and the Ticket inherits a default from its
+Discovery's machine (§4.5):
+
+- the Discovery ran **locally** → local;
+- the Discovery ran on the **project's own compute host** → local. On a remote
+  project that is where tickets have always run, attached over SSH; quietly
+  turning every one of them detached would refuse them all on a host with no
+  runner installed;
+- otherwise → **detached on the Discovery's machine**.
+
+A stored `"local"` is an explicit opt-out of a detached default, not the same
+thing as `NULL`. One launch can override both, and the override is never
+written back to the ticket: precedence is the launch override (`machine_id` on
+MCP `start_ticket` or the ticket start commands) over the stored choice over
+the default. The rule and its precedence live in `domain/run_placement.rs`, which
+is the only statement of them; the board shows the resolved placement and
+whether it was inherited, rather than recomputing it.
+
+A detached ticket is always unattended, and a machine with no compatible
+runner refuses the start before anything is created — the ticket stays
+`Unstarted` and startable. A detached start that succeeds records its attempt
+exactly as a local one does: the Feature `feature_id` names is the run's shadow
+row, so §6.4's dependency check reads `mr_state` from it unchanged.
+
 ---
 
 ## 8. Persistence and lifecycle
@@ -412,7 +455,7 @@ Two alternatives were rejected:
   fast path (§4.4).
 - **Ticket** — owned by a Discovery; the planned fields (title, description,
   acceptance, files, test command); the execution choices (workflow, agent,
-  model, effort); `blocked_by` edges within the Discovery; staged attachments,
+  model, effort) and placement (§7.4); `blocked_by` edges within the Discovery; staged attachments,
   committed to the Feature on start (§9.3); drop state and reason; force-start
   reason; `feature_id` for the current attempt.
 
@@ -545,7 +588,7 @@ Migrations that only add tables and columns are not Gate items.
 | Deferred | Why it was parked |
 |----------|-------------------|
 | Cross-Discovery and Ticket→Feature edges | §6.2 — deletion, provenance and readiness would all span aggregates |
-| Auto-starting ready tickets; a concurrency ceiling | No ceiling exists for *any* run today; it is a pre-existing gap, not this feature's |
+| Auto-starting ready tickets; a concurrency ceiling | No ceiling exists for *any* run today; it is a pre-existing gap, not this feature's. A caller may bound **one start** by the Discovery's in-flight count (`StartBounds::max_in_flight`, `application/tickets/launch.rs`); that refuses a start somebody asked for, and is neither a stored ceiling nor a scheduler |
 | Per-Discovery budget cap | §8.5 |
 | Switching agent or model mid-Discovery | §4.4 makes it free later; not exposed in the first cut |
 | Committing the spec to a branch, and a PR for it | §4.7 — revisit once it is known whether ticket agents miss it |
@@ -601,3 +644,4 @@ recorded because they are what the implementation will not preserve.
 | 36 | Progress counted as landed over live tickets | Counting started runs; counting dropped tickets as outstanding |
 | 37 | Ticket attachments staged in `launch` mode, committed on start | Interview attachments only; attaching to a Feature that does not exist yet |
 | 38 | Base branch editable while every ticket is `Unstarted` | Fixed at creation like `agent_kind`; a per-ticket base |
+| 39 | Per-ticket placement, defaulting to the Discovery's machine unless that is the project's own compute | Always local; the Discovery's machine read literally, which turns every remote-project ticket detached |

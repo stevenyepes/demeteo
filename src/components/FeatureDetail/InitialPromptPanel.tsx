@@ -23,13 +23,20 @@ function promptSummary(description: string): string {
  * would re-expand for a returning user the block the paragraph above collapses
  * for them.
  */
-export function InitialPromptPanel({ featureDescription }: { featureDescription: string }) {
+export function InitialPromptPanel({
+  featureDescription,
+  variant = 'card',
+}: {
+  featureDescription: string;
+  variant?: 'card' | 'chip';
+}) {
   const [open, setOpen] = useState(false);
+  const chip = variant === 'chip';
 
-  return (
-    <div className="px-6 py-4 bg-[var(--bg-app)] border-b border-white/5">
+  const disclosure = (
       <Disclosure
-        title="Initial Prompt"
+        title={chip ? 'Prompt' : 'Initial Prompt'}
+        variant={variant}
         open={open}
         onOpenChange={setOpen}
         icon={<MessageSquareText className={`w-4 h-4 ${TONE_TEXT.violet}`} />}
@@ -37,7 +44,7 @@ export function InitialPromptPanel({ featureDescription }: { featureDescription:
           open ? undefined : (
             <span
               data-testid="initial-prompt-summary"
-              className="text-xs font-mono text-slate-500 truncate max-w-[48ch]"
+              className={`text-xs font-mono text-slate-500 truncate ${chip ? 'max-w-[32ch]' : 'max-w-[48ch]'}`}
               title={featureDescription || undefined}
             >
               {promptSummary(featureDescription)}
@@ -61,6 +68,8 @@ export function InitialPromptPanel({ featureDescription }: { featureDescription:
             : <span className="text-slate-500 italic">No initial prompt was recorded for this run.</span>}
         </div>
       </Disclosure>
-    </div>
   );
+
+  if (chip) return disclosure;
+  return <div className="px-6 py-4 bg-[var(--bg-app)] border-b border-white/5">{disclosure}</div>;
 }

@@ -24,6 +24,9 @@ pub(crate) struct CompletedTask {
     pub(crate) id: String,
     pub(crate) title: String,
     pub(crate) files: Vec<String>,
+    /// The note its agent left for whoever runs next
+    /// ([`crate::domain::sequence::handoff`]).
+    pub(crate) handoff: Option<String>,
 }
 
 impl ExecutionDriver {
@@ -171,6 +174,9 @@ impl ExecutionDriver {
         } else {
             append_retry_feedback_section(prompt, effective_retry_ctx.as_ref())
         };
+        // A task turn gets no Operating Boundary (it implements, and the fence
+        // is everything), so the conduct block is its only engine preamble.
+        let prompt = crate::domain::step_conduct::inject_turn_conduct(&prompt, capability);
         let prompt = format!(
             "{}{}{}",
             platform_placement.prefix, review_placement.prefix, prompt
@@ -239,7 +245,7 @@ pub(crate) fn format_completed_tasks(
         let mut lines: Vec<String> = completed
             .iter()
             .map(|c| {
-                if c.files.is_empty() {
+                let mut line = if c.files.is_empty() {
                     format!("- [{}] {} (already committed)", c.id, c.title)
                 } else {
                     format!(
@@ -248,7 +254,12 @@ pub(crate) fn format_completed_tasks(
                         c.title,
                         c.files.join(", ")
                     )
+                };
+                if let Some(note) = &c.handoff {
+                    line.push_str("\n  Handoff from this ticket: ");
+                    line.push_str(&note.replace('\n', "\n  "));
                 }
+                line
             })
             .collect();
         if is_rework {

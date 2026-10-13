@@ -30,6 +30,7 @@ function ticket(id: string, seq: number, blockedBy: string[]): TicketView {
       agent_kind: null,
       model: null,
       effort: null,
+      machine_id: null,
       attachments: [],
       state: 'unstarted',
       drop_reason: null,
@@ -45,6 +46,7 @@ function ticket(id: string, seq: number, blockedBy: string[]): TicketView {
       startable: false,
       blockers: blockedBy.map((blocker) => ({ id: blocker, reason: 'outstanding' })),
     },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 }

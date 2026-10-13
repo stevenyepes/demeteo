@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useLayoutEffect, useState } from 'react';
+
+import { interviewWidthPref } from '../../lib/uiPrefs';
 
 import type { TranscriptBlock } from '../../lib/discoveryInterview';
 import type { TicketIndex } from '../../lib/ticketPresentation';
@@ -6,6 +8,8 @@ import type {
   Discovery,
   DiscoveryBoard,
   DiscoveryMessageView,
+  Machine,
+  RunPlacement,
   TicketProgress,
   TicketView,
   WorkflowWithSteps,
@@ -13,8 +17,10 @@ import type {
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { InterviewCollapsedRail } from './InterviewCollapsedRail';
 import { InterviewColumn } from './InterviewColumn';
+import { INTERVIEW_WIDTH_VAR, InterviewResizeHandle } from './InterviewResizeHandle';
+import { DEFAULT_INTERVIEW_WIDTH, resolveInterviewWidth } from './discoveryLayout';
 import { TicketColumn } from './TicketColumn';
-import { TicketEditorDrawer } from './TicketEditorDrawer';
+import { TicketEditorModal } from './TicketEditorModal';
 import { TicketInspector } from './TicketInspector';
 import { TicketOverlayPanel } from './TicketOverlayPanel';
 import { useDiscoveryColumnLayout } from './useDiscoveryColumnLayout';
@@ -46,7 +52,12 @@ interface DiscoveryWorkspaceRowProps {
   workflows: WorkflowWithSteps[];
   workflowName: string | null;
   busy: boolean;
-  machineId: string;
+  machines: readonly Machine[];
+  /** `null` until the board has answered, which is also when nothing can be
+   *  open in the editor. */
+  discoveryDefault: RunPlacement | null;
+  /** `DiscoveryBoard.local_host`, `null` alongside `discoveryDefault`. */
+  localHost: string | null;
   onEditorClose: () => void;
   onInspectorClose: () => void;
   onEditorSaved: (board: DiscoveryBoard) => void;
@@ -62,6 +73,8 @@ interface DiscoveryWorkspaceRowProps {
 /**
  * The workspace's three panes (`DISCOVERY_UI_SPEC.md` §3), laid out for the
  * width the row actually measures (`implementation-spec.md` §1 AC2–AC4, AC7).
+ * The ticket editor is not one of them: it opens as a modal over the window,
+ * so the row only ever seats the inspector.
  *
  * `'stacked'`'s pane toggle hides with a class rather than unmounting, so an
  * in-progress interview draft and the graph's zoom state survive a toggle —
@@ -94,7 +107,9 @@ export function DiscoveryWorkspaceRow({
   workflows,
   workflowName,
   busy,
-  machineId,
+  machines,
+  discoveryDefault,
+  localHost,
   onEditorClose,
   onInspectorClose,
   onEditorSaved,
@@ -107,21 +122,48 @@ export function DiscoveryWorkspaceRow({
   onInspectorOpenFeature,
 }: DiscoveryWorkspaceRowProps): React.ReactElement {
   const [interviewHidden, setInterviewHidden] = useState(false);
-  const { setRowEl, layoutMode } = useDiscoveryColumnLayout(interviewHidden);
+  const [interviewWidth, setInterviewWidth] = useState(DEFAULT_INTERVIEW_WIDTH);
+  const { rowEl, setRowEl, rowSize, layoutMode } = useDiscoveryColumnLayout(
+    interviewHidden,
+    interviewWidth,
+  );
   const [stackedPane, setStackedPane] = useState<'interview' | 'tickets'>('interview');
+
+  useEffect(() => {
+    let cancelled = false;
+    void interviewWidthPref.read().then((width) => {
+      if (!cancelled) setInterviewWidth(width);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const renderedInterviewWidth = resolveInterviewWidth(interviewWidth, rowSize?.width ?? 0);
+
+  useLayoutEffect(() => {
+    rowEl?.style.setProperty(INTERVIEW_WIDTH_VAR, `${renderedInterviewWidth}px`);
+  }, [rowEl, renderedInterviewWidth]);
+
+  const commitInterviewWidth = (width: number) => {
+    setInterviewWidth(width);
+    interviewWidthPref.write(width);
+  };
 
   const overlaid = layoutMode !== 'three-up';
   const stacked = layoutMode === 'stacked';
   const interviewCollapsed = interviewHidden && !stacked;
 
-  const pane = editing ? (
-    <TicketEditorDrawer
+  const editor = editing && discoveryDefault && localHost !== null && (
+    <TicketEditorModal
       key={editing.ticket.id}
       view={editing}
       index={index}
       siblings={tickets}
       workflows={workflows}
-      machineId={machineId}
+      machines={machines}
+      discoveryDefault={discoveryDefault}
+      localHost={localHost}
       busy={busy}
       onClose={onEditorClose}
       onSaved={onEditorSaved}
@@ -130,21 +172,22 @@ export function DiscoveryWorkspaceRow({
       onForceStart={onEditorForceStart}
       onDrop={onEditorDrop}
     />
-  ) : (
-    selected && (
-      <TicketInspector
-        key={selected.ticket.id}
-        view={selected}
-        index={index}
-        workflowName={workflowName}
-        busy={busy}
-        onStart={onInspectorStart}
-        onForceStart={onInspectorForceStart}
-        onEdit={onInspectorEdit}
-        onOpenFeature={onInspectorOpenFeature}
-        onClose={onInspectorClose}
-      />
-    )
+  );
+
+  const inspector = selected && (
+    <TicketInspector
+      key={selected.ticket.id}
+      view={selected}
+      index={index}
+      workflowName={workflowName}
+      machines={machines}
+      busy={busy}
+      onStart={onInspectorStart}
+      onForceStart={onInspectorForceStart}
+      onEdit={onInspectorEdit}
+      onOpenFeature={onInspectorOpenFeature}
+      onClose={onInspectorClose}
+    />
   );
 
   return (
@@ -161,7 +204,11 @@ export function DiscoveryWorkspaceRow({
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1" ref={setRowEl} data-testid="discovery-workspace-row">
+      <div
+        className="relative flex min-h-0 flex-1"
+        ref={setRowEl}
+        data-testid="discovery-workspace-row"
+      >
         <InterviewColumn
           discovery={discovery}
           messages={messages}
@@ -176,6 +223,14 @@ export function DiscoveryWorkspaceRow({
           onHide={stacked ? undefined : () => setInterviewHidden(true)}
         />
 
+        {!stacked && !interviewCollapsed && (
+          <InterviewResizeHandle
+            rowEl={rowEl}
+            width={renderedInterviewWidth}
+            onCommit={commitInterviewWidth}
+          />
+        )}
+
         {interviewCollapsed && (
           <InterviewCollapsedRail onShow={() => setInterviewHidden(false)} pending={pending} />
         )}
@@ -189,18 +244,16 @@ export function DiscoveryWorkspaceRow({
           hidden={stacked && stackedPane !== 'tickets'}
         />
 
-        {!overlaid && pane}
+        {!overlaid && inspector}
+
+        {overlaid && inspector && (
+          <TicketOverlayPanel onClose={onInspectorClose} label="Ticket inspector">
+            {inspector}
+          </TicketOverlayPanel>
+        )}
       </div>
 
-      {overlaid && pane && (
-        <TicketOverlayPanel
-          widthPx={editing ? 760 : 360}
-          onClose={editing ? onEditorClose : onInspectorClose}
-          label={editing ? 'Ticket editor' : 'Ticket inspector'}
-        >
-          {pane}
-        </TicketOverlayPanel>
-      )}
+      {editor}
     </div>
   );
 }

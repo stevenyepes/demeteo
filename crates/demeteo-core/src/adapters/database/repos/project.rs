@@ -1,5 +1,6 @@
 use rusqlite::params;
 
+use crate::domain::gate_autonomy::GateAutonomy;
 use crate::domain::ids::{ProjectId, WorkflowId};
 use crate::domain::models::{
     EffortLevel, FeatureStatusCount, Project, ProjectSettings, ProjectWorkflowOverride, Repository,
@@ -269,7 +270,7 @@ impl ProjectRepository for SqliteAdapter {
         let mut stmt = conn
             .prepare(
                 "SELECT project_id, default_branch, branch_prefix, test_command, pr_template,
-                        conflict_policy, feature_lifecycle, build_command, coverage_command,
+                        gate_autonomy, feature_lifecycle, build_command, coverage_command,
                         conventions_file, default_agent_kind, default_model, harnesses,
                         artifact_subdir, commit_artifacts, default_loop_iterations,
                         extra_writable_paths, prepare_command, default_effort,
@@ -303,7 +304,9 @@ impl ProjectRepository for SqliteAdapter {
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or_default(),
                     },
-                    conflict_policy: row.get(5)?,
+                    gate_autonomy: GateAutonomy::from_column(
+                        row.get::<_, Option<String>>(5)?.as_deref(),
+                    ),
                     feature_lifecycle: row.get(6)?,
                     default_agent_kind: row.get(10)?,
                     default_model: row.get(11)?,
@@ -345,7 +348,7 @@ impl ProjectRepository for SqliteAdapter {
         conn.execute(
             "INSERT OR REPLACE INTO project_settings
              (project_id, default_branch, branch_prefix, test_command, build_command,
-              coverage_command, conventions_file, pr_template, conflict_policy, feature_lifecycle,
+              coverage_command, conventions_file, pr_template, gate_autonomy, feature_lifecycle,
               default_agent_kind, default_model, harnesses, artifact_subdir, commit_artifacts,
               default_loop_iterations, extra_writable_paths, prepare_command, default_effort,
               default_max_budget_usd, default_workflow_id, review_entrypoint,
@@ -361,7 +364,7 @@ impl ProjectRepository for SqliteAdapter {
                 s.worktree_strategy.coverage_command,
                 s.worktree_strategy.conventions_file,
                 s.worktree_strategy.pr_template,
-                s.conflict_policy,
+                s.gate_autonomy.as_str(),
                 s.feature_lifecycle,
                 s.default_agent_kind,
                 s.default_model,

@@ -97,7 +97,6 @@ function scriptIpc(scenario: Scenario) {
         harnesses: scenario.harnesses ?? HARNESSES,
         validation_gates: scenario.validationGates ?? null,
       },
-      conflict_policy: 'always_gate',
       feature_lifecycle: 'archive',
     }),
     get_repositories_for_project: () => [],

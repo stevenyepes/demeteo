@@ -33,9 +33,11 @@ import CommandPalette from "./components/CommandPalette";
 import DocsPanel from "./components/DocsPanel";
 import type { Feature, Project, Provider } from "./types";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useFollowFeatureProject } from "./hooks/useFollowFeatureProject";
 import { useLaunchRun } from "./hooks/useLaunchRun";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { MouseNavigationBridge } from "./hooks/useMouseNavigation";
+import { UiZoomIndicator } from "./components/UiZoomIndicator";
 import {
   NavigationProvider, useNavigation,
   ProjectProvider, useProject,
@@ -113,6 +115,8 @@ function AppInner() {
   // cycling list with the new feature so the user can immediately step
   // through it with Cmd+G; the `feature_status_changed` listener is
   // idempotent so the entry is patched in place, not duplicated.
+  useFollowFeatureProject();
+
   const launchRun = useLaunchRun({
     projectId: currentProjectId,
     onLaunched: (feature) =>
@@ -453,6 +457,7 @@ function AppInner() {
               baseRef={view.editorContext.baseRef}
               headRef={view.editorContext.headRef}
               initialTab={view.editorContext.initialTab}
+              changesOnly={view.editorContext.changesOnly}
             />
           )}
 
@@ -585,6 +590,7 @@ function App() {
               <AppInner />
             </TerminalPanelProvider>
             <ErrorToast />
+            <UiZoomIndicator />
           </UIStateProvider>
         </ProjectProvider>
       </NavigationProvider>

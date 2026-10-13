@@ -1,6 +1,5 @@
 import { useCallback } from 'react';
-import { startFeature } from '../lib/createProjectWizard';
-import { submitRemoteRun } from '../lib/remoteRuns';
+import { launchRun, reportDegradedLaunch } from '../lib/launch';
 import { useNavigation, useProject, useUIState } from '../context';
 import { useErrorBus } from '../lib/errorBus';
 import { stagedAttachmentInputs } from '../lib/attachments';
@@ -19,6 +18,9 @@ export interface LaunchRunParams {
   /** Feature-wide reasoning effort. Unset = inherit the project default,
    *  which bottoms out at the engine default (`high`). */
   effort?: EffortLevel;
+  /** Detached-only, like `unattended` and the two caps: `launch_run` refuses
+   *  any of them on a local launch, so a composer sets them only alongside a
+   *  `machineId`. */
   targetRepos?: string[];
   commitArtifacts?: boolean;
   loopIterations?: number;
@@ -27,10 +29,11 @@ export interface LaunchRunParams {
   maxBudgetUsd?: number;
   stepOverrides?: StepOverride[];
   attachments?: LaunchStageEntry[];
-  /** Run detached on this machine via `remote_submit_run`; unset/empty
-   * means the local `start_feature` path (which is also the
-   * attached-remote path — that routing is a project-level setting). */
+  /** Run detached on this machine; unset/empty runs on the project's own
+   * compute (which is also the attached-remote path — that routing is a
+   * project-level setting). */
   machineId?: string;
+  /** Unset = a detached run's default, which is unattended. */
   unattended?: boolean;
   maxCostUsd?: number;
   maxWallClockMins?: number;
@@ -50,14 +53,17 @@ export interface LaunchRunOptions {
 
 /**
  * The one launch code path (ux-audit F28): every composer routes through
- * this hook, and every branch ends the same way — `navigate` to
- * `FeatureDetail` with a real feature id. The detached branch can do
- * that because `remote_submit_run` inserts an eager shadow Feature and
- * returns its id in the handle; there is no separate "remote landing".
+ * this hook, and every launch ends the same way — `navigate` to
+ * `FeatureDetail` with a real feature id. `launch_run` decides where the run
+ * goes and returns its Feature either way (for a detached run, the eager
+ * shadow row), so there is no separate "remote landing" and no placement test
+ * here.
  *
  * Returns the launched `Feature` (shadow or local) or `null` on failure
  * (already reported to the error bus) so callers can decide whether to
- * close their composer / clear staged state.
+ * close their composer / clear staged state. A run the runner accepted but
+ * left degraded is a launch, not a failure: it is reported as a notice and
+ * still lands.
  */
 export function useLaunchRun(options: {
   projectId: string | null;
@@ -81,62 +87,15 @@ export function useLaunchRun(options: {
 
         // Both transports honour the batch before the agent runs: locally
         // `StepExecutor::feature_start` persists it before the driver is
-        // spawned, and `remote_submit_run` spools the bytes onto the runner
+        // spawned, and a detached submit spools the bytes onto the runner
         // host over SFTP before submitting. Post-launch
         // `feature_add_attachment` calls would race the first turn instead,
         // and the user sees "no image attached" for a screenshot they watched
         // themselves attach.
         const stagedAttachments = await stagedAttachmentInputs(params.attachments ?? []);
 
-        if (params.machineId) {
-          // Detached run (docs/REMOTE_EXECUTION.md M6.1): the
-          // runner drives it; the laptop keeps an eager shadow Feature
-          // (inserted by `remote_submit_run` before the RPC) that the
-          // reconcile loop hydrates as the runner reports progress.
-          const handle = await submitRemoteRun({
-            machineId: params.machineId,
-            projectId,
-            workflowId: params.workflowId,
-            title: params.title,
-            description: params.description,
-            agentKind: params.agentKind ?? null,
-            model: params.model ?? null,
-            effort: params.effort ?? null,
-            commitArtifacts: params.commitArtifacts ?? null,
-            loopIterations: params.loopIterations ?? null,
-            maxBudgetUsd: params.maxBudgetUsd ?? null,
-            stepOverrides: params.stepOverrides ?? null,
-            stagedAttachments,
-            // A detached run clones exactly one repository — the first
-            // selected repo wins; `null` keeps the project's first.
-            targetRepoId: params.targetRepos?.[0] ?? null,
-            unattended: params.unattended ?? false,
-            maxCostUsd: params.maxCostUsd ?? null,
-            maxWallClockSecs:
-              params.maxWallClockMins != null ? params.maxWallClockMins * 60 : null,
-            origin: params.origin,
-            diffBaseBranch: params.diffBaseBranch,
-          });
-          const feature: Feature = {
-            id: handle.feature_id,
-            project_id: projectId,
-            workflow_id: params.workflowId,
-            title: params.title,
-            status: handle.status || 'pending',
-            total_cost: 0,
-            tokens: 0,
-            duration: '0s',
-            created_at: Date.now(),
-            agent_kind: params.agentKind,
-            model: params.model,
-          };
-          onLaunched?.(feature);
-          refreshProjectActivity();
-          navigate({ kind: 'detail', featureId: feature.id, featureTitle: feature.title });
-          return feature;
-        }
-
-        const res = await startFeature({
+        const feature = await launchRun({
+          machineId: params.machineId ?? null,
           projectId,
           workflowId: params.workflowId,
           title: params.title,
@@ -149,27 +108,21 @@ export function useLaunchRun(options: {
           maxBudgetUsd: params.maxBudgetUsd ?? null,
           stepOverrides: params.stepOverrides ?? null,
           stagedAttachments,
+          // A detached run clones exactly one repository — the first
+          // selected repo wins; `null` keeps the project's first.
+          targetRepoId: params.targetRepos?.[0] ?? null,
+          unattended: params.unattended,
+          maxCostUsd: params.maxCostUsd ?? null,
+          maxWallClockSecs: params.maxWallClockMins != null ? params.maxWallClockMins * 60 : null,
           origin: params.origin,
           diffBaseBranch: params.diffBaseBranch,
         });
-        const feature: Feature = {
-          id: res.id,
-          project_id: projectId,
-          workflow_id: res.workflow_id ?? undefined,
-          title: res.title,
-          status: res.status,
-          total_cost: res.total_cost ?? 0,
-          tokens: res.tokens || 0,
-          duration: res.duration ?? '0s',
-          created_at: res.created_at ?? Date.now(),
-          agent_kind: res.agent_kind,
-          model: res.model,
-        };
         // Inserted at `bootstrapping` with no event; the first one comes after
         // worktree, branch and preflight.
         onLaunched?.(feature);
         refreshProjectActivity();
         navigate({ kind: 'detail', featureId: feature.id, featureTitle: feature.title });
+        reportDegradedLaunch(feature, reportError, () => navigate({ kind: 'remote-inbox' }));
         return feature;
       } catch (err) {
         if (params.machineId && isRunnerIncompatibleError(err)) {

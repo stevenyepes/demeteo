@@ -41,8 +41,9 @@ pub(super) fn shell_invocation(
 fn shell_args(cmd: &str, opts: &ShellOptions) -> Vec<String> {
     let exports = shell::export_prefix(&opts.env);
     let body = format!(
-        "{}{}",
+        "{}{}{}",
         shell::job_control_prefix(opts.interactive),
+        shell::body_marker_prefix(opts.login_shell),
         shell::command_body(None, &exports, cmd)
     );
 

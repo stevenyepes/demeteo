@@ -29,6 +29,7 @@ fn decision(step_execution_id: &str) -> GateDecision {
         decision: Some("approve".to_string()),
         feedback: None,
         created_at: paths::now_ms(),
+        auto_approved: false,
     }
 }
 

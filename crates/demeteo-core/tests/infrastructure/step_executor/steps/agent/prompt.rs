@@ -245,6 +245,7 @@ fn verifier(key: &str) -> VerifierConfig {
         instructions: "Judge the acceptance criteria.".into(),
         harness_names: Vec::new(),
         verdict_key: key.into(),
+        when_nothing_ran: Default::default(),
     }
 }
 
@@ -318,21 +319,13 @@ fn all_three_verdicts_are_offered_s13() {
     }
 }
 
-/// The review starter's gate step judges nothing a project must configure: it
-/// reports what the gates said. With no gate configured, the verdict that
-/// completes it is `pass`, and `environment` ends the review `failed` with its
-/// report discarded. Yet two engine blocks bracket the starter's instructions
-/// and advise `environment` for exactly that case — `NotConfigured`'s section
-/// above them, the verdict contract below. The starter can only win that by
-/// naming the block and overriding it after it, so this renders the prompt the
-/// turn really receives rather than reading the starter's JSON alone, where
-/// the conflict is invisible.
-///
-/// Prose is the only lever while the engine offers `environment` under
-/// `NotConfigured` to every step; the `domain/` fix is the follow-up recorded
-/// under `docs/OPEN_QUESTIONS.md` §21a.
+/// With no gate configured the review starter's gate step still receives the
+/// engine's `NotConfigured` block and the verdict contract, both advising
+/// `environment`. Neither text is special-cased for it: the step's
+/// `when_nothing_ran` field is what reads that answer as a pass, so the
+/// rendered prompt carries the engine texts unchanged and no override.
 #[test]
-fn the_review_gate_step_overrides_the_engines_environment_advice_when_nothing_ran() {
+fn the_review_gate_step_gets_the_engines_nothing_ran_texts_unchanged() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../src-tauri/workflows/code-review.json");
     let raw = std::fs::read_to_string(path).expect("the code-review starter ships in-tree");
@@ -352,38 +345,14 @@ fn the_review_gate_step_overrides_the_engines_environment_advice_when_nothing_ra
         Some(&HarnessOutcome::NotConfigured),
     );
 
-    let block = out
-        .find("## Harness Results — NOTHING RAN")
-        .expect("the engine's NotConfigured section must render");
-    let contract = out
-        .find("Use `environment`")
-        .expect("the verdict contract's environment advice must render");
-    let (at, sentence) = out
-        .match_indices(". ")
-        .map(|(i, _)| i + 2)
-        .chain(out.match_indices('\n').map(|(i, _)| i + 1))
-        .chain(std::iter::once(0))
-        .map(|start| {
-            let rest = &out[start..];
-            let end = [rest.find(". "), rest.find('\n')]
-                .into_iter()
-                .flatten()
-                .min()
-                .unwrap_or(rest.len());
-            (start, &rest[..end])
-        })
-        .filter(|(_, s)| s.contains("\"pass\"") && s.contains("NOTHING RAN"))
-        .min_by_key(|&(start, _)| start)
-        .expect("no sentence asks for \"pass\" and names the NOTHING RAN block it overrides");
-
+    assert!(out.contains("## Harness Results — NOTHING RAN"));
+    assert!(out.contains("Use `environment`"));
     assert!(
-        block < at && at < contract,
-        "the override must sit after the block it overrides and before the \
-         contract's `environment` advice, or the turn meets it out of order"
+        !out.contains("does not apply"),
+        "no prose override remains; the field is the policy"
     );
-    assert!(
-        sentence.contains("does not apply"),
-        "the override names the block but never says its `environment` advice \
-         does not apply to this step: {sentence}"
+    assert_eq!(
+        cfg.when_nothing_ran,
+        crate::domain::verifier::NothingRanPolicy::Pass
     );
 }

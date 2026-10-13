@@ -227,14 +227,15 @@ pub(crate) fn credential_env(
 
 /// The push invocation, assembled where a test can read it.
 ///
-/// `force` is the merge-request publisher's alone, and is spelled at the call
+/// `lease` is the merge-request publisher's alone, and is spelled at the call
 /// site rather than defaulted here: it re-points a branch that was squashed
 /// under an open MR, which is what that path means to do and what every other
-/// push must never do to a branch a person may have committed to since.
+/// push must never do to a branch a person may have committed to since. It is
+/// a lease and never a bare `-f` — see [`crate::domain::push_lease`].
 pub(crate) fn push_request(
     repo_dir: &str,
     branch: &str,
-    force: bool,
+    lease: Option<&crate::domain::push_lease::PushLease>,
     credential: Option<&GitCredential>,
 ) -> ProgramRequest {
     let mut args = vec!["-C".to_string(), repo_dir.to_string()];
@@ -242,8 +243,8 @@ pub(crate) fn push_request(
         args.extend(credential_args());
     }
     args.push("push".to_string());
-    if force {
-        args.push("-f".to_string());
+    if let Some(lease) = lease {
+        args.push(lease.flag());
     }
     args.extend(["origin".to_string(), branch.to_string()]);
 
@@ -335,22 +336,99 @@ pub(crate) fn redacted(message: &str, pat: &str) -> String {
 /// A failed push, said in the words of whichever half of it went wrong, with
 /// any token the message carried removed.
 ///
-/// The two readings are not interchangeable advice: a remote that refused a
+/// The three readings are not interchangeable advice: a remote that refused a
 /// push heard it, and fetching usually fixes what it objected to; a push that
 /// never got past the credential exchange will fail again identically after any
-/// number of fetches. Telling the user the second was the first is what sent
-/// them round that loop.
+/// number of fetches; and one a local `pre-push` hook stopped never left the
+/// machine, so only the hook's own output says what to fix. Telling the user
+/// the second was the first is what sent them round that loop.
+///
+/// The hook's output is the repository's own and unbounded, so it is cut down
+/// by [`hook_tail`](crate::domain::git_push::hook_tail) — after redaction, so a
+/// token the cut would have split cannot survive it.
 pub(crate) fn push_failure(error: &str, credential: Option<&GitCredential>) -> String {
+    use crate::domain::git_push::{classify_push_failure, hook_tail, PushFailure};
+
     let clean = redacted(error, credential.map(|c| c.pat.as_str()).unwrap_or(""));
-    if crate::domain::git_push::is_credential_failure(&clean) {
-        return format!(
+    match classify_push_failure(&clean) {
+        PushFailure::Credential => format!(
             "Git could not authenticate to origin, so nothing was pushed. \
              Connect the provider or refresh its token in Preferences → Providers, \
              then try again.\n\n{}",
             clean
-        );
+        ),
+        PushFailure::HookFailed => format!(
+            "The repository's pre-push hook failed, so nothing reached origin.\n\n{}",
+            hook_tail(&clean)
+        ),
+        PushFailure::Rejected | PushFailure::Other => clean,
     }
-    clean
+}
+
+/// Run the project's `prepare_command` in `repo_dir` when that tree has a
+/// `pre-push` hook, so the hook judges the branch with its dependencies
+/// installed.
+///
+/// The terminal push and the MR publisher push from the project's clone, and
+/// nothing else ever prepares the clone: every step runs `prepare_command` in
+/// its own worktree, and dependency caches are seeded *from* the clone, never
+/// into it. A hook that runs the repo's gate (`scripts/checks.sh`) then fails
+/// its own toolchain preflight on a missing `node_modules` and refuses a
+/// branch whose gates passed — a detached run ended with every step green and
+/// no PR. Skipping the hook instead is ruled out (docs/EXECUTION_PARITY.md).
+///
+/// No hook, no prepare: installing into the clone on every push would cost a
+/// push that nothing checks. A failed prepare is returned rather than pushed
+/// through, because the hook would only fail again with a less useful message.
+pub async fn prepare_push_tree(
+    exec: &dyn ExecutionPort,
+    app_settings: &dyn AppSettingsRepository,
+    machine_str: &str,
+    repo_dir: &str,
+    prepare_command: Option<&str>,
+) -> Result<(), String> {
+    let Some(cmd) = prepare_command.map(str::trim).filter(|c| !c.is_empty()) else {
+        return Ok(());
+    };
+    let Ok(reported) = exec
+        .run_program(
+            machine_str,
+            git_request(repo_dir, ["rev-parse", "--git-path", "hooks/pre-push"]),
+        )
+        .await
+    else {
+        return Ok(());
+    };
+    let Some(hook) = crate::adapters::worktree::git_ops::squash::hook_path_on(
+        repo_dir,
+        &reported,
+        crate::paths::targets_windows_host(machine_str),
+    ) else {
+        return Ok(());
+    };
+    if !exec
+        .is_executable(machine_str, &hook)
+        .await
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    exec.run_command_with(
+        machine_str,
+        &crate::domain::harness_outcome::merge_stderr_into_stdout(cmd),
+        crate::adapters::step_executor::harness_shell::harness_shell_options(
+            app_settings,
+            repo_dir,
+        ),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| {
+        format!(
+            "The repository has a pre-push hook, and `{cmd}` (the project's prepare command) \
+             failed in {repo_dir}, so the branch was not pushed.\n\n{e}"
+        )
+    })
 }
 
 fn git_request<const N: usize>(repo_dir: &str, args: [&str; N]) -> ProgramRequest {

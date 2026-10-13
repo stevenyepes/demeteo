@@ -241,7 +241,7 @@ const EnvModal: React.FC<EnvModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 select-none">
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 select-none">
       {/* Bounded to the viewport (the backdrop's p-4 is the 2rem) and laid out
           as a column so the field list — which outgrew the container once the
           shell-environment and webhook sections landed — scrolls on its own

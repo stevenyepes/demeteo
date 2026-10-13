@@ -85,6 +85,13 @@
             "null"
           ]
         },
+        "review_artifact": {
+          "description": "Marks this step as a review: the name of the declared artifact its review is written to. The engine appends the review format to the prompt, and a project whose gate approvals are set to ship on a clean review reads it at the ship gate that follows. The artifact must be captured by path.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "rework_prompt_template": {
           "description": "Prompt rendered instead of `prompt_template` when a verdict from behind this step's task-list consumer sends the run back here — the previous cycle's code is already on the branch, so the step emits a delta rather than a whole decomposition. Unset falls back to `prompt_template`.",
           "type": [
@@ -93,7 +100,7 @@
           ]
         },
         "verifier": {
-          "description": "Optional harness/verifier turn run after the agent turn; a FAIL verdict feeds the retry policy.",
+          "description": "Optional harness/verifier turn run after the agent turn; a FAIL verdict feeds the retry policy. `when_nothing_ran` (`environment` | `pass`) says what an ENVIRONMENT verdict means when no harness is configured: terminal by default, or a pass for a step that judges nothing the project must configure.",
           "type": [
             "object",
             "null"
@@ -231,7 +238,7 @@
           ]
         },
         "verifier": {
-          "description": "Optional harness/verifier turn run after the list lands; a FAIL verdict feeds the retry policy targeted at the tasks owning the implicated files.",
+          "description": "Optional harness/verifier turn run after the list lands; a FAIL verdict feeds the retry policy targeted at the tasks owning the implicated files. `when_nothing_ran` (`environment` | `pass`) says what an ENVIRONMENT verdict means when no harness is configured.",
           "type": [
             "object",
             "null"

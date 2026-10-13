@@ -272,6 +272,7 @@ impl ExecutionDriver {
             ),
         );
         Ok(TaskContribution {
+            handoff: crate::domain::sequence::handoff::extract_handoff(&agent_text),
             artifact_refs: refs,
             satisfied_decls: decls
                 .iter()

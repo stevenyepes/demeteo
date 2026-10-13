@@ -12,13 +12,13 @@ Scripts are in `package.json`; run `npm run` to list them.
 ## 1. Project Identity
 
 **Demeteo** lets a developer describe a feature in plain language; the app decomposes
-it into a Workflow, delegates Steps to coding agents (opencode, claude-code, hermes),
+it into a Workflow, delegates Steps to coding agents (opencode, claude-code, hermes, codex, pi),
 manages a Git worktree per Step, and presents human-approval Gates before merging.
 **Current phase: V1** — core orchestrator, fully implemented.
 
 Use these exact names in code and comments: **Project** (a Git repo Demeteo tracks) ·
 **Feature** (user-described work, decomposed by a Workflow) · **Workflow** (reusable,
-versioned DAG of Steps) · **Step** (one DAG node: `agent`, `parallel`, or `gate`) ·
+versioned DAG of Steps) · **Step** (one DAG node: `agent`, `sequence`, `gate`, `sync`, `finalize`, or `command`) ·
 **Subtask** (work for one agent in one worktree) · **Gate** (human-approval checkpoint) ·
 **ProviderInstance** (a configured AI provider: model + key + endpoint).
 
@@ -54,8 +54,8 @@ of one file would *not* infer:
 - No `any` — use `unknown` + a type guard when the shape is uncertain
 - One component per file; extract when a file passes ~400 LOC
 - `#[tauri::command]` returns `Result<T, String>` — map with `.map_err(|e| e.to_string())`
-- `thiserror` for domain error enums in `src-tauri/src/domain/`
-- All DB access through `src-tauri/src/db.rs` — no raw `rusqlite` in commands
+- `thiserror` for domain error enums in `crates/demeteo-core/src/domain/`
+- All DB access through the repositories in `crates/demeteo-core/src/adapters/database/` — no raw `rusqlite` in commands
 - Never `.unwrap()` / `.expect()` in production paths — use `?` or match
 - Never hard-code `localhost`, port numbers, or paths — read them from config/state
 
@@ -71,8 +71,9 @@ reflex. Line count was the symptom; this is the cause:
   test without a single port double. `domain/` has no `async fn` anywhere in
   it; keep it that way and the boundary enforces itself.
 - **Never construct an `ExecutionDriver` in a test.** It carries twenty-odd
-  ports that the code under test does not read (`driver_watchdog.rs` has two
-  `#[ignore]`d tests conceding exactly this). When adapter code is unreachable
+  ports that the code under test does not read (`driver_watchdog.rs` had two
+  `#[ignore]`d tests conceding exactly this, until the arithmetic moved to
+  `domain/agent_session/`). When adapter code is unreachable
   from a test, the fix is to make it a free function over the *one* port it
   needs — not to stub the other nineteen.
 - Extract a stage when an adapter module passes ~400 LOC **of code**. Doc
@@ -129,7 +130,8 @@ The desktop app ships on **Linux x86_64, macOS aarch64, and Windows x86_64**
 must work on all three; only remote-side code may assume Linux and systemd.
 
 The full gate (`scripts/checks.sh`) runs on `ubuntu-22.04` only; the `cross-os`
-job in `pr-checks.yml` type-checks and runs the core tests on macOS and Windows,
+job in `pr-checks.yml` type-checks on macOS and Windows and `cross-os-test` runs
+the core tests there,
 which is where three of the last six real PR failures were caught — an import
 only used behind a `cfg`, dead on Linux, fatal under `-D warnings` elsewhere.
 **Green locally does not prove macOS or Windows even compiles.** When you touch
@@ -211,7 +213,7 @@ Covers tsc, `biome check .` (the §3 TypeScript rules, mechanically — see `bio
 `cargo fmt --check`, clippy `--all-targets -D warnings` on the toolchain
 pinned in `rust-toolchain.toml` (so local clippy == CI clippy), `cargo doc` for
 intra-doc links, `scripts/check-doc-refs.sh`, the demeteo + core + runner test suites,
-the gate-feedback repro, and commitlint on `origin/master..HEAD`.
+the Vitest frontend suite, and commitlint on `origin/master..HEAD`.
 Fails fast. "`cargo test` passed" is **not** "CI is green" — run the whole script, not
 a subset. Nothing runs it for you: the `pre-push` hook is deliberately inert
 (`.githooks/pre-push`), so run it yourself before pushing. `scripts/checks.sh frontend`
@@ -246,7 +248,7 @@ without commitlint. Commitlint judges `origin/master..HEAD`, and inside a run th
 holds only orchestrator plumbing (one commit per ticket, plus subtask merges) that the
 finalize step squashes away, having validated the surviving message against the real
 `commit-msg` hook. A ticket agent cannot fix a message it never wrote, so the verdict
-feeds a rework cycle that closes nothing. That is what `ProjectSettings.default_test_command`
+feeds a rework cycle that closes nothing. That is what `ProjectSettings.worktree_strategy.test_command`
 should point at; CI keeps running every gate, with commitlint in its own
 `Lint Commits` job so a bad subject is reported in seconds, not after the Rust build.
 
@@ -276,8 +278,13 @@ catches it. §4 has the mechanism that makes it silent.
 ### The parity gates are not in `npm run checks`
 
 `pr-checks.yml` runs `scripts/checks.sh` as two jobs (`frontend`, `rust`), the
-`cross-os` compile-and-core-test job, and a `conformance` job holding two suites
-that `checks.sh` does not invoke. Both suites need Docker, and both are the only
+`cross-os` compile job and its `cross-os-test` counterpart, and a `conformance`
+job holding two suites that `checks.sh` does not invoke. Which of those a PR
+gets is decided from its changed files by `scripts/ci-changes.sh` — a skipped
+job is not a passed one, and only the master run is unconditional. A path the
+rule gets wrong is fixed there, with a case in its `--self-test`.
+
+Both suites need Docker, and both are the only
 thing standing between you and a local/remote divergence:
 
 ```bash

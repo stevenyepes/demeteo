@@ -239,7 +239,6 @@ pub(crate) fn start_ssh_session(
     if let Some(dir) = work_dir {
         let cd_cmd = format!("cd {} && clear\n", crate::paths::shell_escape_posix(dir));
         let _ = ssh_chan.write_all(cd_cmd.as_bytes());
-        let _ = ssh_chan.flush();
     }
     // The remote is ALWAYS a POSIX shell, so the bootstrap must use POSIX
     // syntax regardless of the client OS. Calling `branch_bootstrap_line` here
@@ -249,7 +248,6 @@ pub(crate) fn start_ssh_session(
     // compile-time-independent of the client OS and keeps the SSH path correct.
     if let Some(bootstrap) = branch_bootstrap_line_posix(work_branch) {
         let _ = ssh_chan.write_all(bootstrap.as_bytes());
-        let _ = ssh_chan.flush();
     }
 
     sess.set_blocking(false);

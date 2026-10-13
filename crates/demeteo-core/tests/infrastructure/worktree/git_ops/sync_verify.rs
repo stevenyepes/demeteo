@@ -19,13 +19,23 @@ fn opts() -> ShellOptions {
     }
 }
 
+/// The strict double, keyed on the command a test *authored* rather than the
+/// `( … ) 2>&1` shape the gate hands the adapter.
+fn scripted(answers: &[(&str, Result<&str, &str>)]) -> ScriptedExec {
+    ScriptedExec::new(answers).map_keys(merged)
+}
+
+fn merged(cmd: &str) -> String {
+    crate::domain::harness_outcome::merge_stderr_into_stdout(cmd)
+}
+
 fn gate<'a>(prepare: Option<&'a str>, harness: Option<&'a str>) -> MergeGate<'a> {
     MergeGate { prepare, harness }
 }
 
 #[tokio::test]
 async fn a_red_harness_withholds_the_push_and_says_which_command_went_red() {
-    let exec = ScriptedExec::new(&[(
+    let exec = scripted(&[(
         "npm run checks:code",
         Err("Command failed (exit code: Some(101)): error[E0063]: missing fields"),
     )]);
@@ -53,7 +63,7 @@ async fn a_red_harness_withholds_the_push_and_says_which_command_went_red() {
 async fn a_project_that_names_no_harness_runs_nothing_and_withholds_nothing() {
     // Scripted with *no* answers: anything this double is asked answers `Err`,
     // so "it ran a command anyway" fails here rather than passing quietly.
-    let exec = ScriptedExec::new(&[]);
+    let exec = scripted(&[]);
 
     assert!(
         merge_gate_refusal(&exec, "local", gate(Some("npm ci"), None), opts())
@@ -76,7 +86,7 @@ async fn a_harness_nobody_could_run_does_not_withhold_a_committed_merge() {
         format!("{TRANSPORT_ERROR_PREFIX} ssh channel closed"),
         format!("{TIMEOUT_ERROR_PREFIX} exceeded 1800s"),
     ] {
-        let exec = ScriptedExec::new(&[("npm run checks:code", Err(err.as_str()))]);
+        let exec = scripted(&[("npm run checks:code", Err(err.as_str()))]);
 
         assert_eq!(
             merge_gate_refusal(
@@ -109,7 +119,7 @@ async fn a_failed_prepare_is_unprepared_not_a_pass() {
             Err("Cannot find module 'react' — this must not be reached"),
         ),
     ];
-    let exec = ScriptedExec::new(&script);
+    let exec = scripted(&script);
 
     assert_eq!(
         run_merge_gate(
@@ -126,12 +136,12 @@ async fn a_failed_prepare_is_unprepared_not_a_pass() {
     );
     assert_eq!(
         exec.commands(),
-        vec!["npm ci".to_string()],
+        vec![merged("npm ci")],
         "the harness must not run after a failed prepare: its verdict would be \
          about the missing install"
     );
 
-    let exec = ScriptedExec::new(&script);
+    let exec = scripted(&script);
     assert_eq!(
         merge_gate_refusal(
             &exec,
@@ -175,14 +185,14 @@ async fn the_three_ways_nothing_withholds_a_push_are_three_verdicts() {
     ];
 
     for (what, g, script, expected) in cases {
-        let exec = ScriptedExec::new(script);
+        let exec = scripted(script);
         assert_eq!(
             run_merge_gate(&exec, "local", g, opts(), None).await,
             expected,
             "{what}"
         );
 
-        let exec = ScriptedExec::new(script);
+        let exec = scripted(script);
         assert_eq!(
             merge_gate_refusal(&exec, "local", g, opts()).await,
             None,
@@ -193,7 +203,7 @@ async fn the_three_ways_nothing_withholds_a_push_are_three_verdicts() {
 
 #[tokio::test]
 async fn a_green_harness_runs_after_its_prepare_and_lets_the_push_through() {
-    let exec = ScriptedExec::new(&[
+    let exec = scripted(&[
         ("npm ci", Ok("added 900 packages")),
         ("npm run checks:code", Ok("all checks passed")),
     ]);
@@ -210,7 +220,7 @@ async fn a_green_harness_runs_after_its_prepare_and_lets_the_push_through() {
     );
     assert_eq!(
         exec.commands(),
-        vec!["npm ci".to_string(), "npm run checks:code".to_string()],
+        vec![merged("npm ci"), merged("npm run checks:code")],
         "prepare first, and both of them in the merge worktree"
     );
 }
@@ -221,7 +231,7 @@ async fn a_green_harness_runs_after_its_prepare_and_lets_the_push_through() {
 /// found" for every `mise`/`nvm`-shimmed toolchain.
 #[tokio::test]
 async fn the_gate_runs_in_the_merge_worktree_under_the_harness_shell() {
-    let exec = ScriptedExec::new(&[("cargo test", Ok(""))]);
+    let exec = scripted(&[("cargo test", Ok(""))]);
 
     merge_gate_refusal(&exec, "local", gate(None, Some("cargo test")), opts()).await;
 
@@ -241,7 +251,7 @@ async fn the_gate_runs_in_the_merge_worktree_under_the_harness_shell() {
 /// comes back `Failed` with "unscripted command" rather than reading as a pass.
 #[tokio::test]
 async fn a_stop_mid_gate_is_not_a_red_build() {
-    let exec = ScriptedExec::new(&[]);
+    let exec = scripted(&[]);
     let (_tx, rx) = tokio::sync::watch::channel(true);
 
     assert_eq!(
@@ -280,7 +290,7 @@ async fn a_stop_mid_gate_is_not_a_red_build() {
 /// rewrite can drop silently: nothing downstream of it reports that it ran.
 #[tokio::test]
 async fn the_prepare_command_still_runs_under_the_cancel_race() {
-    let exec = ScriptedExec::new(&[
+    let exec = scripted(&[
         ("npm ci", Ok("added 900 packages")),
         ("npm run checks:code", Ok("all checks passed")),
     ]);
@@ -298,6 +308,6 @@ async fn the_prepare_command_still_runs_under_the_cancel_race() {
     );
     assert_eq!(
         exec.commands(),
-        vec!["npm ci".to_string(), "npm run checks:code".to_string()],
+        vec![merged("npm ci"), merged("npm run checks:code")],
     );
 }

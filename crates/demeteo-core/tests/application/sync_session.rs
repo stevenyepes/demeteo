@@ -289,12 +289,15 @@ async fn aborting_against_an_unreachable_host_leaves_the_session_open() {
     );
 }
 
-/// The push, as `run_program` renders it. The string is the one it always was
-/// — only the port changed, because a credential helper needs argv and env and
+/// The push, as `run_program` renders it: from the sync worktree, which is
+/// where a pre-push hook has to run. A credential helper needs argv and env, and
 /// a shell command string has nowhere to put either.
-const PUSH: &str = "git -C /repos/demeteo push origin feature/f-1";
+const PUSH: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 push origin feature/f-1";
 /// Read before every push, to see whether the remote needs a credential.
-const REMOTE_URL: &str = "git -C /repos/demeteo remote get-url origin";
+const REMOTE_URL: &str = "git -C /repos/demeteo_wt_sync_feature-f-1 remote get-url origin";
+/// The same two when the session has no worktree of its own to push from.
+const CLONE_PUSH: &str = "git -C /repos/demeteo push origin feature/f-1";
+const CLONE_REMOTE_URL: &str = "git -C /repos/demeteo remote get-url origin";
 /// An ssh remote authenticates itself, so these publish uncredentialed —
 /// the shape every assertion here was written against.
 const SSH_REMOTE: &str = "git@github.com:acme/widgets.git\n";
@@ -346,6 +349,193 @@ fn script_with_push(
     script(extra).with_programs(&[(REMOTE_URL, Ok(SSH_REMOTE)), (PUSH, push)])
 }
 
+fn discards(calls: &[String]) -> bool {
+    calls
+        .iter()
+        .any(|c| c.contains("worktree remove") || c.contains("worktree prune"))
+}
+
+fn position(calls: &[String], call: &str) -> usize {
+    calls
+        .iter()
+        .position(|c| c == call)
+        .unwrap_or_else(|| panic!("`{call}` was never issued: {calls:?}"))
+}
+
+/// The probe of a tree at `dir` holding a committed resolution, for a session
+/// whose worktree is somewhere other than [`WT`].
+fn resolved_probe_at(dir: &str) -> Vec<(String, Result<&'static str, &'static str>)> {
+    vec![
+        (format!("git -C {dir} rev-parse --git-dir"), Ok(".git\n")),
+        (
+            format!("git -C {dir} rev-parse --verify --quiet MERGE_HEAD"),
+            Ok(""),
+        ),
+        (format!("git -C {dir} status --porcelain"), Ok("")),
+        (format!("git -C {dir} rev-parse HEAD"), Ok("c0ffeec\n")),
+    ]
+}
+
+/// A script whose reconcile probe reads `dir` and whose push goes from the
+/// clone, for the sessions that have no separate worktree to push from.
+fn clone_push_script(
+    dir: &str,
+    extra: &[(&'static str, Result<&'static str, &'static str>)],
+) -> ScriptedExec {
+    let probe = resolved_probe_at(dir);
+    let mut all: Vec<(&str, Result<&str, &str>)> =
+        probe.iter().map(|(c, r)| (c.as_str(), *r)).collect();
+    all.extend_from_slice(extra);
+    ScriptedExec::new(&all)
+        .with_programs(&[(CLONE_REMOTE_URL, Ok(SSH_REMOTE)), (CLONE_PUSH, Ok(""))])
+}
+
+/// The worktree is where the hook that governs the resolution lives, so the
+/// push — and the credential lookup that precedes it — are made from there; the
+/// landed check reads the shared refs from the clone; and only then does the
+/// worktree go.
+#[tokio::test]
+async fn publishing_pushes_from_the_sync_worktree_and_discards_it_last() {
+    let fx = ports(
+        script_with_push(
+            &[(CONTAINS, Ok("")), (DISCARD_WT, Ok("")), (PRUNE, Ok(""))],
+            Ok(""),
+        )
+        .with_queue(GIT_DIR, &[Ok(".git\n"), Err("fatal: not a git repository")]),
+    );
+    fx.sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    let published = publish(fx.ports(), &fid()).await.unwrap().unwrap();
+    assert!(published.session.pushed_at.is_some());
+
+    let programs = fx.git.programs();
+    assert_eq!(programs, vec![REMOTE_URL.to_string(), PUSH.to_string()]);
+    let calls = fx.git.calls();
+    let push = position(&calls, PUSH);
+    let landed = position(&calls, CONTAINS);
+    let discard = position(&calls, DISCARD_WT);
+    assert!(push < landed && landed < discard, "{calls:?}");
+    assert!(landed < position(&calls, PRUNE), "{calls:?}");
+    assert_eq!(published.session.worktree_path, None);
+}
+
+#[tokio::test]
+async fn a_failed_push_leaves_the_worktree_in_place() {
+    let fx = ports(script_with_push(
+        &[],
+        Err("! [rejected] feature/f-1 -> feature/f-1 (non-fast-forward)"),
+    ));
+    fx.sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    publish(fx.ports(), &fid())
+        .await
+        .expect_err("origin said no");
+
+    assert!(!discards(&fx.git.calls()), "{:?}", fx.git.calls());
+    let read = fx.sessions.get(&fid()).unwrap().unwrap();
+    assert_eq!(read.pushed_at, None);
+    assert_eq!(read.worktree_path.as_deref(), Some(WT));
+}
+
+#[tokio::test]
+async fn a_landed_check_origin_refuses_leaves_the_worktree_in_place() {
+    let fx = ports(script_with_push(
+        &[(CONTAINS, Err("exit status 1"))],
+        Ok(""),
+    ));
+    fx.sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    publish(fx.ports(), &fid())
+        .await
+        .expect_err("origin does not have the commit");
+
+    assert!(!discards(&fx.git.calls()), "{:?}", fx.git.calls());
+    let read = fx.sessions.get(&fid()).unwrap().unwrap();
+    assert_eq!(read.pushed_at, None);
+    assert_eq!(read.worktree_path.as_deref(), Some(WT));
+}
+
+#[tokio::test]
+async fn a_landed_check_nobody_answered_leaves_the_worktree_in_place() {
+    let fx = ports(script_with_push(
+        &[(CONTAINS, Err("transport: Connection appears dead"))],
+        Ok(""),
+    ));
+    fx.sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    publish(fx.ports(), &fid()).await.expect_err("unconfirmed");
+
+    assert!(!discards(&fx.git.calls()), "{:?}", fx.git.calls());
+    let read = fx.sessions.get(&fid()).unwrap().unwrap();
+    assert_eq!(read.pushed_at, None);
+    assert_eq!(read.worktree_path.as_deref(), Some(WT));
+}
+
+/// The aborted-in-place shape: the feature branch is checked out in the clone
+/// itself, so there is no other tree to push from, and none to discard.
+#[tokio::test]
+async fn a_session_whose_worktree_is_the_clone_pushes_from_the_clone() {
+    let fx = ports(clone_push_script(REPO, &[(CONTAINS, Ok(""))]));
+    fx.sessions
+        .open(&SyncSession {
+            worktree_path: Some(REPO.to_string()),
+            ..resolved(Some("aaaaaaa"))
+        })
+        .unwrap();
+
+    let published = publish(fx.ports(), &fid()).await.unwrap().unwrap();
+    assert!(published.session.pushed_at.is_some());
+    assert_eq!(
+        fx.git.programs(),
+        vec![CLONE_REMOTE_URL.to_string(), CLONE_PUSH.to_string()]
+    );
+    assert!(!discards(&fx.git.calls()), "{:?}", fx.git.calls());
+}
+
+#[tokio::test]
+async fn a_session_with_no_worktree_pushes_from_the_clone() {
+    let fx = ports(
+        ScriptedExec::new(&[(CONTAINS, Ok(""))])
+            .with_programs(&[(CLONE_REMOTE_URL, Ok(SSH_REMOTE)), (CLONE_PUSH, Ok(""))]),
+    );
+    fx.sessions
+        .open(&SyncSession {
+            worktree_path: None,
+            ..resolved(Some("aaaaaaa"))
+        })
+        .unwrap();
+
+    let published = publish(fx.ports(), &fid()).await.unwrap().unwrap();
+    assert!(published.session.pushed_at.is_some());
+    assert_eq!(
+        fx.git.programs(),
+        vec![CLONE_REMOTE_URL.to_string(), CLONE_PUSH.to_string()]
+    );
+}
+
+/// A worktree the probe finds gone has no hook to run and nowhere to push from,
+/// so the clone stands in; the teardown still runs, to prune what git remembers.
+#[tokio::test]
+async fn a_worktree_that_has_vanished_pushes_from_the_clone() {
+    let fx = ports(
+        ScriptedExec::new(&[
+            (GIT_DIR, Err("fatal: not a git repository")),
+            (CONTAINS, Ok("")),
+            (DISCARD_WT, Ok("")),
+            (PRUNE, Ok("")),
+        ])
+        .with_programs(&[(CLONE_REMOTE_URL, Ok(SSH_REMOTE)), (CLONE_PUSH, Ok(""))]),
+    );
+    fx.sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    let published = publish(fx.ports(), &fid()).await.unwrap().unwrap();
+    assert!(published.session.pushed_at.is_some());
+    assert_eq!(
+        fx.git.programs(),
+        vec![CLONE_REMOTE_URL.to_string(), CLONE_PUSH.to_string()]
+    );
+}
+
 /// Publishing twice must not push twice, and must not be an error either.
 ///
 /// The button sits beside a diff the user is reading, so the honest reading of
@@ -392,7 +582,85 @@ async fn a_rejected_push_is_not_recorded_as_published() {
         .await
         .expect_err("origin said no");
     assert!(err.contains("non-fast-forward"), "{err}");
+    assert!(err.contains("origin refused the push"), "{err}");
+    assert!(err.contains("fetch and sync again"), "{err}");
     assert_eq!(fx.sessions.get(&fid()).unwrap().unwrap().pushed_at, None);
+}
+
+const HOOK_FAILURE: &str = "running the gate\nclippy: 3 errors\n\
+     error: failed to push some refs to 'git@example.com:acme/app.git'";
+
+/// Publishes against a push that answers `push` and returns the message, after
+/// checking the failure left no trace: nothing recorded, nothing discarded.
+async fn publish_failure(push: Result<&'static str, &'static str>) -> String {
+    let fx = ports(script_with_push(&[], push));
+    fx.sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    let err = publish(fx.ports(), &fid())
+        .await
+        .expect_err("the push failed");
+
+    assert!(!discards(&fx.git.calls()), "{:?}", fx.git.calls());
+    let read = fx.sessions.get(&fid()).unwrap().unwrap();
+    assert_eq!(read.pushed_at, None);
+    assert_eq!(read.worktree_path.as_deref(), Some(WT));
+    err
+}
+
+#[tokio::test]
+async fn a_pre_push_hook_failure_is_reported_as_the_hook_and_not_as_a_rejection() {
+    let err = publish_failure(Err(HOOK_FAILURE)).await;
+    assert!(err.contains("pre-push hook failed"), "{err}");
+    assert!(err.contains("clippy: 3 errors"), "{err}");
+    assert!(err.contains("nothing reached origin"), "{err}");
+    assert!(!err.contains("fetch and sync again"), "{err}");
+    assert!(!err.contains("origin refused"), "{err}");
+}
+
+#[tokio::test]
+async fn a_fetch_first_rejection_keeps_the_resync_advice() {
+    let err = publish_failure(Err(
+        "! [rejected] feature/f-1 -> feature/f-1 (fetch first)\n\
+         error: failed to push some refs to 'git@example.com:acme/app.git'",
+    ))
+    .await;
+    assert!(err.contains("origin refused the push"), "{err}");
+    assert!(err.contains("fetch and sync again"), "{err}");
+    assert!(!err.contains("pre-push hook failed"), "{err}");
+}
+
+#[tokio::test]
+async fn a_credential_failure_keeps_its_own_message() {
+    let err = publish_failure(Err(
+        "fatal: Authentication failed for 'https://example.com/acme/app.git/'",
+    ))
+    .await;
+    assert!(err.contains("could not authenticate"), "{err}");
+    assert!(err.contains("Preferences"), "{err}");
+    assert!(!err.contains("fetch and sync again"), "{err}");
+    assert!(!err.contains("pre-push hook failed"), "{err}");
+}
+
+#[tokio::test]
+async fn an_unrecognised_push_failure_is_neutral() {
+    let err = publish_failure(Err("fatal: something git has never said before")).await;
+    assert!(err.contains("something git has never said before"), "{err}");
+    assert!(err.contains("still unpublished"), "{err}");
+    assert!(!err.contains("fetch and sync again"), "{err}");
+    assert!(!err.contains("origin refused"), "{err}");
+    assert!(!err.contains("pre-push hook failed"), "{err}");
+}
+
+#[tokio::test]
+async fn a_push_that_never_reached_a_verdict_says_so() {
+    for failure in [
+        "transport: Connection appears dead",
+        "timeout: gave up after 120s",
+    ] {
+        let err = publish_failure(Err(failure)).await;
+        assert!(err.contains("never reached a verdict"), "{failure}: {err}");
+        assert!(!err.contains("fetch and sync again"), "{err}");
+    }
 }
 
 /// `git push` exiting zero is a verdict about the command, not about origin.

@@ -1,4 +1,5 @@
 use super::rpc::{json_str, remote_rpc};
+use super::sequence_mirror::read_sequence_state_mirror;
 use crate::adapters::artifact_store::fs::FsArtifactStore;
 use crate::domain::artifact::{Artifact, ArtifactSource};
 use crate::domain::ids::{FeatureId, ProjectId};
@@ -34,7 +35,10 @@ pub(super) const NOTIFY_ON: &[&str] = &[
 /// and mirroring them back would let the runner's copy overwrite the local
 /// pin. `resolved_branch` is not one of them — the runner cuts the branch, so
 /// its name is an answer only the runner has.
-fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
+///
+/// `local_mr_state` is the shadow row's current value, for
+/// [`shadow_mr_state`].
+fn shadow_feature_patch(feature: &Feature, local_mr_state: Option<&str>) -> FeaturePatch {
     FeaturePatch {
         effort: None,
         status: Some(feature.status.clone()),
@@ -44,7 +48,7 @@ fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
         agent_kind: Some(feature.agent_kind.clone()),
         model: Some(feature.model.clone()),
         mr_url: Some(feature.mr_url.clone()),
-        mr_state: Some(feature.mr_state.clone()),
+        mr_state: Some(shadow_mr_state(local_mr_state, feature.mr_state.as_deref())),
         pr_title: Some(feature.pr_title.clone()),
         pr_body: Some(feature.pr_body.clone()),
         // The runner measured the baseline and the runner's own validate read
@@ -61,6 +65,24 @@ fn shadow_feature_patch(feature: &Feature) -> FeaturePatch {
         diff_base_branch: None,
         resolved_branch: Some(feature.resolved_branch.clone()),
     }
+}
+
+/// The `mr_state` a detached run's shadow row keeps, given its current value
+/// and the runner's.
+///
+/// The runner is not the only writer: the desktop `MrMonitor` polls the forge
+/// and writes `merged` onto the shadow itself, and the runner's copy can lag
+/// it by a poll or more. A landed ticket's lane, and every dependant it
+/// released, derive from this column, so a lagging copy must never move it
+/// back in flight. A merge is irreversible on every forge, so a local
+/// `merged` is never overwritten. `closed` gets no such guard: a closed PR can be
+/// reopened, and the runner seeing `open` again is the truth.
+pub(super) fn shadow_mr_state(local: Option<&str>, runner: Option<&str>) -> Option<String> {
+    match local {
+        Some("merged") => local,
+        _ => runner,
+    }
+    .map(str::to_string)
 }
 
 /// The status a detached run's shadow row shows, given the runner's own
@@ -141,11 +163,12 @@ pub(super) async fn hydrate_shadow_feature(
     let steps: Vec<StepExecution> = serde_json::from_value(steps_value)
         .map_err(|error| format!("shadow steps decode: {error}"))?;
     let feature_id = feature.id.clone();
-    if ctx.features.get(&feature_id)?.is_none() {
-        ctx.features.add(feature.clone())?;
-    } else {
-        ctx.features
-            .update(&feature_id, &shadow_feature_patch(&feature))?;
+    match ctx.features.get(&feature_id)? {
+        None => ctx.features.add(feature.clone())?,
+        Some(local) => ctx.features.update(
+            &feature_id,
+            &shadow_feature_patch(&feature, local.mr_state.as_deref()),
+        )?,
     }
 
     let store = FsArtifactStore::new(ctx.app_data_dir.clone());
@@ -208,9 +231,10 @@ pub(super) async fn hydrate_shadow_feature(
 /// plan cache, the landed-task checkpoint, and the per-task run rows — onto
 /// the laptop, so `RunView::sequence_state` finds real rows locally instead
 /// of reading `unplanned` forever (the bug this closes: nothing ever wrote
-/// these three tables for a runner-owned feature). Guarded by
-/// `plan_missing || force_refresh` rather than every poll, mirroring
-/// `shadow_step_artifacts_stale`'s own staleness gate just above.
+/// these three tables for a runner-owned feature). When to ask is
+/// [`sequence_state_needs_fetch`]; what crosses the wire is kept small by
+/// sending the local copy's revision, so an unchanged node costs one tiny
+/// round trip rather than the whole plan.
 ///
 /// Never fails the caller: an older runner without `get_sequence_state`
 /// (or any other RPC/decode failure) leaves the local tables untouched and
@@ -225,12 +249,10 @@ async fn hydrate_sequence_state(
     force_refresh: bool,
 ) {
     let node_id = step.step_id.as_str();
-    let plan_missing = ctx
-        .sequence_resume
-        .plan_cache_get(feature_id, node_id)
-        .unwrap_or(None)
-        .is_none();
-    if !plan_missing && !force_refresh {
+    let local =
+        read_sequence_state_mirror(&*ctx.features, &*ctx.sequence_resume, feature_id, node_id).ok();
+    let plan_missing = local.as_ref().is_none_or(|l| l.plan_json.is_none());
+    if !sequence_state_needs_fetch(plan_missing, force_refresh, &step.status) {
         return;
     }
 
@@ -238,10 +260,15 @@ async fn hydrate_sequence_state(
         ctx,
         machine_id,
         "get_sequence_state",
-        serde_json::json!({ "run_id": run_id, "node_id": node_id }),
+        serde_json::json!({
+            "run_id": run_id,
+            "node_id": node_id,
+            "if_revision": local.as_ref().map(SequenceStateMirror::revision),
+        }),
     )
     .await
     {
+        Ok(value) if value.get("unchanged").and_then(|v| v.as_bool()) == Some(true) => return,
         Ok(value) => value,
         Err(error) => {
             if !error.starts_with("unknown method") {
@@ -290,6 +317,20 @@ async fn hydrate_sequence_state(
     {
         eprintln!("shadow subtask runs write failed for run {run_id} node {node_id}: {error}");
     }
+}
+
+/// Whether a poll asks the runner for a `sequence` node's task list.
+///
+/// A `running` step is asked every time because its own counters cannot
+/// say when to: the runner rolls cost, tokens and wall-clock into the step
+/// row only when an attempt ends, so a sequence working through its tickets
+/// looks identical to [`shadow_step_artifacts_stale`] for the whole attempt.
+/// Gating on that alone froze the laptop's list at whatever the attempt
+/// started with — an interrupted ticket 1 shown for an hour while the
+/// runner landed tickets 1–4. Any other status changes only through a
+/// status transition, which `force_refresh` already carries.
+fn sequence_state_needs_fetch(plan_missing: bool, force_refresh: bool, step_status: &str) -> bool {
+    plan_missing || force_refresh || step_status == "running"
 }
 
 fn shadow_step_artifacts_stale(existing: Option<&StepExecution>, fresh: &StepExecution) -> bool {

@@ -34,6 +34,7 @@ fn with_verifier(mut s: StepConfig) -> StepConfig {
         instructions: "check it".into(),
         harness_names: Vec::new(),
         verdict_key: "verdict".into(),
+        when_nothing_ran: Default::default(),
     });
     // A properly-authored looping judge attaches the artifact it grades
     // against; give it one by default so invariant #4 (judge must not
@@ -404,6 +405,7 @@ fn verify_step_running(cmd_token: &str) -> Vec<StepConfig> {
         instructions: "Return pass or fail.".into(),
         harness_names: Vec::new(),
         verdict_key: "verdict".into(),
+        when_nothing_ran: Default::default(),
     });
     vec![step("s-impl", StepCapability::Implement, None), s]
 }
@@ -465,6 +467,7 @@ fn a_verify_step_reading_the_harness_output_is_clean() {
         instructions: "Return pass, fail, or environment.".into(),
         harness_names: Vec::new(),
         verdict_key: "verdict".into(),
+        when_nothing_ran: Default::default(),
     });
     let steps = vec![step("s-impl", StepCapability::Implement, None), s];
     assert!(

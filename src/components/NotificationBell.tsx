@@ -13,6 +13,7 @@ import type {
   RetryBudgetExhaustedEvent,
   EnvironmentNotReadyEvent,
   CachesReclaimedEvent,
+  RunnerBranchStaleEvent,
 } from "../types";
 
 /**
@@ -57,6 +58,14 @@ export function NotificationBell() {
   // interruption — the row is there when the user opens the bell.
   useTauriEvent<CachesReclaimedEvent>("caches_reclaimed", () => {
     refresh();
+  });
+
+  // Toasted: the sync the user just pressed did reach origin, but a later
+  // push of the detached run may be refused until the runner catches up.
+  useTauriEvent<RunnerBranchStaleEvent>("runner_branch_stale", ({ message }) => {
+    setToast({ message, accent: "amber" });
+    refresh();
+    setTimeout(() => setToast(null), 8000);
   });
 
   useTauriEvent<MrMergedEvent>("mr_merged", ({ feature_title }) => {
@@ -272,6 +281,8 @@ function kindLabel(kind: string): string {
       return "Environment not ready";
     case "caches_reclaimed":
       return "Disk reclaimed";
+    case "runner_branch_stale":
+      return "Runner branch stale";
     default:
       return kind;
   }
@@ -290,6 +301,7 @@ function kindAccent(kind: string): { dot: string } {
       return { dot: "bg-ruby-400 text-ruby-400" };
     case "retry_budget_exhausted":
     case "environment_not_ready":
+    case "runner_branch_stale":
       return { dot: "bg-amber-400 text-amber-400" };
     default:
       return { dot: "bg-slate-400 text-slate-400" };

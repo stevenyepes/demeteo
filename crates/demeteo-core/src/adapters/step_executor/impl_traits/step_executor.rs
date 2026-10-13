@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+use crate::domain::feature_launch::refuse_blank_launch_text;
 use crate::domain::ids::{FeatureId, ProjectId, StepExecutionId, WorkflowId};
 use crate::domain::models::{Feature, StepExecution};
 use crate::domain::run_control::{retry_refusal, shadow_refusal, RunAction};
@@ -34,12 +35,7 @@ impl StepExecutor for DagStepExecutor {
             origin,
             diff_base_branch,
         } = launch;
-        if title.trim().is_empty() {
-            return Err("Feature title cannot be empty.".to_string());
-        }
-        if description.trim().is_empty() {
-            return Err("Feature description cannot be empty.".to_string());
-        }
+        refuse_blank_launch_text(&title, &description)?;
 
         let now = paths::now_ms();
         // A caller-supplied id (the runner reusing `RunSpec::feature_id`)

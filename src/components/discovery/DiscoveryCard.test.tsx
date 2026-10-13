@@ -79,6 +79,7 @@ function ticket(seq: number, lane: TicketLane): TicketView {
       agent_kind: null,
       model: null,
       effort: null,
+      machine_id: null,
       attachments: [],
       state: lane === 'dropped' ? 'dropped' : 'unstarted',
       drop_reason: null,
@@ -89,6 +90,7 @@ function ticket(seq: number, lane: TicketLane): TicketView {
       updated_at: 0,
     },
     standing: { id: `t${seq}`, lane, startable: false, blockers: [] },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 }
@@ -104,6 +106,8 @@ const SEVEN_ONE_DROPPED: DiscoveryBoard = {
     ticket(7, 'blocked'),
   ],
   progress: { blocked: 3, ready: 1, in_flight: 1, landed: 1, dropped: 1, live: 6 },
+  discovery_default: { kind: 'local' },
+  local_host: 'local',
 };
 
 describe('DiscoveryCard', () => {
@@ -173,7 +177,7 @@ describe('DiscoveryCard', () => {
     renderWithNav(
       <DiscoveryCard
         discovery={discovery()}
-        board={{ tickets: [], progress: NOTHING_PROPOSED }}
+        board={{ tickets: [], progress: NOTHING_PROPOSED, discovery_default: { kind: 'local' }, local_host: 'local' }}
         turnRunning={false}
         now={0}
         onOpen={() => {}}

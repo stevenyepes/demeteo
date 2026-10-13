@@ -8,15 +8,17 @@ use serde::Serialize;
 
 use crate::domain::ids::{DiscoveryId, FeatureId, TicketId};
 use crate::domain::models::{EffortLevel, Ticket, TicketFeatureAttempt, TicketState};
+use crate::domain::run_placement::RunPlacement;
 use crate::ports::discovery::{TicketPatch, TicketPort};
 
 use super::super::SqliteAdapter;
 
 const COLUMNS: &str = "id, discovery_id, seq, title, description, acceptance_json, files_json,
-     blocked_by_json, test_command, workflow_id, agent_kind, model, effort, attachments_json,
-     state, drop_reason, force_start_reason, force_started_at, feature_id, created_at, updated_at";
+     blocked_by_json, test_command, workflow_id, agent_kind, model, effort, machine_id,
+     attachments_json, state, drop_reason, force_start_reason, force_started_at, feature_id,
+     created_at, updated_at";
 
-const ATTEMPT_COLUMNS: &str = "ticket_id, feature_id, started_at, superseded_at";
+const ATTEMPT_COLUMNS: &str = "ticket_id, feature_id, started_at, superseded_at, machine_id";
 
 fn encode<T: Serialize>(value: &T) -> Result<String, String> {
     serde_json::to_string(value).map_err(|e| e.to_string())
@@ -30,7 +32,7 @@ fn decode<T: Default + DeserializeOwned>(raw: Option<String>) -> T {
 
 fn row_to_ticket(row: &rusqlite::Row) -> rusqlite::Result<Ticket> {
     let effort: Option<String> = row.get(12)?;
-    let state: String = row.get(14)?;
+    let state: String = row.get(15)?;
     Ok(Ticket {
         id: row.get(0)?,
         discovery_id: row.get(1)?,
@@ -45,18 +47,19 @@ fn row_to_ticket(row: &rusqlite::Row) -> rusqlite::Result<Ticket> {
         agent_kind: row.get(10)?,
         model: row.get(11)?,
         effort: effort.as_deref().and_then(EffortLevel::parse),
-        attachments: decode(row.get(13)?),
+        machine_id: row.get(13)?,
+        attachments: decode(row.get(14)?),
         // A state this build cannot name reads as started, which is the only
         // one of the three that is safe to be wrong about: it holds the row
         // immutable against a re-decomposition (§5.3) and satisfies no
         // dependent, where `dropped` would release the whole graph below it.
         state: TicketState::parse(&state).unwrap_or(TicketState::Started),
-        drop_reason: row.get(15)?,
-        force_start_reason: row.get(16)?,
-        force_started_at: row.get(17)?,
-        feature_id: row.get(18)?,
-        created_at: row.get(19)?,
-        updated_at: row.get(20)?,
+        drop_reason: row.get(16)?,
+        force_start_reason: row.get(17)?,
+        force_started_at: row.get(18)?,
+        feature_id: row.get(19)?,
+        created_at: row.get(20)?,
+        updated_at: row.get(21)?,
     })
 }
 
@@ -66,6 +69,7 @@ fn row_to_attempt(row: &rusqlite::Row) -> rusqlite::Result<TicketFeatureAttempt>
         feature_id: row.get(1)?,
         started_at: row.get(2)?,
         superseded_at: row.get(3)?,
+        machine_id: row.get(4)?,
     })
 }
 
@@ -74,7 +78,7 @@ fn insert_ticket(conn: &rusqlite::Connection, ticket: &Ticket) -> Result<(), Str
         &format!(
             "INSERT OR REPLACE INTO tickets ({COLUMNS})
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                     ?17, ?18, ?19, ?20, ?21)"
+                     ?17, ?18, ?19, ?20, ?21, ?22)"
         ),
         params![
             ticket.id,
@@ -90,6 +94,7 @@ fn insert_ticket(conn: &rusqlite::Connection, ticket: &Ticket) -> Result<(), Str
             ticket.agent_kind,
             ticket.model,
             ticket.effort.map(EffortLevel::as_str),
+            ticket.machine_id,
             encode(&ticket.attachments)?,
             ticket.state.as_str(),
             ticket.drop_reason,
@@ -160,13 +165,14 @@ impl TicketPort for SqliteAdapter {
                     agent_kind         = CASE WHEN ?11 THEN ?12 ELSE agent_kind END,
                     model              = CASE WHEN ?13 THEN ?14 ELSE model END,
                     effort             = CASE WHEN ?15 THEN ?16 ELSE effort END,
-                    attachments_json   = COALESCE(?17, attachments_json),
-                    state              = COALESCE(?18, state),
-                    drop_reason        = CASE WHEN ?19 THEN ?20 ELSE drop_reason END,
-                    force_start_reason = CASE WHEN ?21 THEN ?22 ELSE force_start_reason END,
-                    force_started_at   = CASE WHEN ?23 THEN ?24 ELSE force_started_at END,
-                    feature_id         = CASE WHEN ?25 THEN ?26 ELSE feature_id END,
-                    updated_at         = ?27
+                    machine_id         = CASE WHEN ?17 THEN ?18 ELSE machine_id END,
+                    attachments_json   = COALESCE(?19, attachments_json),
+                    state              = COALESCE(?20, state),
+                    drop_reason        = CASE WHEN ?21 THEN ?22 ELSE drop_reason END,
+                    force_start_reason = CASE WHEN ?23 THEN ?24 ELSE force_start_reason END,
+                    force_started_at   = CASE WHEN ?25 THEN ?26 ELSE force_started_at END,
+                    feature_id         = CASE WHEN ?27 THEN ?28 ELSE feature_id END,
+                    updated_at         = ?29
               WHERE id = ?1",
             params![
                 id.0,
@@ -185,6 +191,8 @@ impl TicketPort for SqliteAdapter {
                 patch.model.clone().flatten(),
                 patch.effort.is_some(),
                 patch.effort.flatten().map(EffortLevel::as_str),
+                patch.machine_id.is_some(),
+                patch.machine_id.clone().flatten(),
                 attachments,
                 patch.state.map(TicketState::as_str),
                 patch.drop_reason.is_some(),
@@ -234,38 +242,45 @@ impl TicketPort for SqliteAdapter {
             .map_err(|e| e.to_string())
     }
 
-    fn record_attempt(
+    fn record_start(
         &self,
         ticket_id: &TicketId,
         feature_id: &FeatureId,
+        placement: &RunPlacement,
         now: i64,
     ) -> Result<(), String> {
-        let conn = self.conn.lock()?;
-        // `DO NOTHING` rather than a replace: re-recording the attempt a ticket
-        // is already on must not move its `started_at` forward, and must not
-        // resurrect one that `supersede_attempts` has closed.
-        conn.execute(
-            &format!(
-                "INSERT INTO ticket_feature_attempts ({ATTEMPT_COLUMNS})
-                 VALUES (?1, ?2, ?3, NULL)
-                 ON CONFLICT(ticket_id, feature_id) DO NOTHING"
-            ),
+        let mut conn = self.conn.lock()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE ticket_feature_attempts
+                SET superseded_at = ?3
+              WHERE ticket_id = ?1 AND feature_id <> ?2 AND superseded_at IS NULL",
             params![ticket_id.0, feature_id.0, now],
         )
         .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    fn supersede_attempts(&self, ticket_id: &TicketId, now: i64) -> Result<(), String> {
-        let conn = self.conn.lock()?;
-        conn.execute(
-            "UPDATE ticket_feature_attempts
-                SET superseded_at = ?2
-              WHERE ticket_id = ?1 AND superseded_at IS NULL",
-            params![ticket_id.0, now],
+        // `DO NOTHING` rather than a replace: re-recording the attempt a ticket
+        // is already on must not move its `started_at` forward, and must not
+        // resurrect one an earlier start has closed.
+        tx.execute(
+            &format!(
+                "INSERT INTO ticket_feature_attempts ({ATTEMPT_COLUMNS})
+                 VALUES (?1, ?2, ?3, NULL, ?4)
+                 ON CONFLICT(ticket_id, feature_id) DO NOTHING"
+            ),
+            params![ticket_id.0, feature_id.0, now, placement.machine_id().0],
         )
         .map_err(|e| e.to_string())?;
-        Ok(())
+        tx.execute(
+            "UPDATE tickets SET state = ?2, feature_id = ?3, updated_at = ?4 WHERE id = ?1",
+            params![
+                ticket_id.0,
+                TicketState::Started.as_str(),
+                feature_id.0,
+                now
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
     }
 
     fn list_attempts(&self, ticket_id: &TicketId) -> Result<Vec<TicketFeatureAttempt>, String> {

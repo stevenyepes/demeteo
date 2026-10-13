@@ -35,7 +35,6 @@ export function useCreateZeroWizardActions(form: WizardFormApi) {
         branch_prefix: form.branchPrefix,
         test_command: form.testCommand.trim() || null,
         pr_template: form.prTemplate || null,
-        conflict_policy: form.conflictPolicy,
         feature_lifecycle: form.featureLifecycle,
       });
     } catch (err) { reportError(err, { kind: 'internal' }); }

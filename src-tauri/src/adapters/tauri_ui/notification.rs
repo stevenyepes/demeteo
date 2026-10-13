@@ -166,6 +166,10 @@ impl NotificationPort for TauriNotificationAdapter {
                 "gate_required",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
+            DomainEvent::GateHeldByReview { .. } => (
+                "gate_held_by_review",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
             DomainEvent::ConflictDetected { .. } => (
                 "conflict_detected",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
@@ -220,6 +224,10 @@ impl NotificationPort for TauriNotificationAdapter {
             ),
             DomainEvent::CachesReclaimed { .. } => (
                 "caches_reclaimed",
+                serde_json::to_value(event).map_err(|e| e.to_string())?,
+            ),
+            DomainEvent::RunnerBranchStale { .. } => (
+                "runner_branch_stale",
                 serde_json::to_value(event).map_err(|e| e.to_string())?,
             ),
             DomainEvent::CacheSweepProgress { .. } => (

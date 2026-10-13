@@ -100,3 +100,64 @@ fn the_adapter_opens_against_a_divergent_history() {
     // app actually does on launch.
     SqliteAdapter::new(conn).expect("adapter must open a database migrated by an older refinery");
 }
+
+/// V61 runs over tickets V60 left NULL. Each one ran on the project's own
+/// compute before the upgrade, so it must still resolve there afterwards —
+/// not inherit a detached default from a Discovery opened on another machine
+/// — and each recorded attempt must say where it went.
+#[test]
+fn v61_keeps_existing_tickets_local_and_places_their_attempts() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migration::migrations::runner()
+        .set_target(refinery::Target::Version(60))
+        .run(&mut conn)
+        .unwrap();
+    conn.execute_batch(
+        "INSERT INTO projects (id, name, created_at) VALUES ('p-1', 'demeteo', 0);
+         INSERT INTO discoveries
+             (id, project_id, title, status, machine_id, agent_kind, created_at, updated_at)
+         VALUES ('d-1', 'p-1', 'plan', 'open', 'm-1', 'claude-code', 0, 0);
+         INSERT INTO tickets (id, discovery_id, seq, title, state, created_at, updated_at)
+         VALUES ('t-1', 'd-1', 1, 'unstarted', 'unstarted', 0, 0),
+                ('t-2', 'd-1', 2, 'started local', 'started', 0, 0),
+                ('t-3', 'd-1', 3, 'started detached', 'started', 0, 0);
+         INSERT INTO tickets (id, discovery_id, seq, title, state, machine_id, created_at, updated_at)
+         VALUES ('t-4', 'd-1', 4, 'chosen', 'unstarted', 'm-9', 0, 0);
+         INSERT INTO ticket_feature_attempts (ticket_id, feature_id, started_at)
+         VALUES ('t-2', 'f-2', 0), ('t-3', 'f-3', 0);
+         INSERT INTO remote_run_mirror
+             (machine_id, run_id, title, feature_id, created_at, updated_at)
+         VALUES ('m-3', 'r-old', 'x', 'f-3', 1, 1), ('m-4', 'r-new', 'x', 'f-3', 2, 2);",
+    )
+    .unwrap();
+
+    migration::run(&mut conn).unwrap();
+
+    let column = |sql: &str| -> Vec<(String, Option<String>)> {
+        conn.prepare(sql)
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    let some = |s: &str| Some(s.to_string());
+    assert_eq!(
+        column("SELECT id, machine_id FROM tickets ORDER BY seq"),
+        vec![
+            ("t-1".to_string(), some("local")),
+            ("t-2".to_string(), some("local")),
+            ("t-3".to_string(), some("local")),
+            ("t-4".to_string(), some("m-9")),
+        ],
+        "a NULL placement is backfilled local; a stored choice is kept"
+    );
+    assert_eq!(
+        column("SELECT feature_id, machine_id FROM ticket_feature_attempts ORDER BY feature_id"),
+        vec![
+            ("f-2".to_string(), some("local")),
+            ("f-3".to_string(), some("m-4")),
+        ],
+        "an attempt is placed by its latest-submitted mirror row, else local"
+    );
+}

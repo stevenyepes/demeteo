@@ -156,6 +156,7 @@ interface Props {
   evidence: HarnessEvidence | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  variant?: 'card' | 'chip';
 }
 
 /**
@@ -169,7 +170,7 @@ interface Props {
  * to the same invariant: it never reads green. The baseline chip stays in both
  * states, because what the verdict was judged against is part of the verdict.
  */
-export function HarnessGateTable({ baseline, evidence, open, onOpenChange }: Props) {
+export function HarnessGateTable({ baseline, evidence, open, onOpenChange, variant = 'card' }: Props) {
   const rows = buildGateRows(baseline, evidence);
   if (rows.length === 0) return null;
 
@@ -209,9 +210,10 @@ export function HarnessGateTable({ baseline, evidence, open, onOpenChange }: Pro
   );
 
   return (
-    <div data-testid="harness-gate-table" className="mb-6 w-full shrink-0">
+    <div data-testid="harness-gate-table" className={variant === 'chip' ? 'contents' : 'mb-6 w-full shrink-0'}>
       <Disclosure
         title="Harness gates"
+        variant={variant}
         open={open}
         onOpenChange={onOpenChange}
         icon={<ListChecks className={`h-4 w-4 ${tone}`} />}

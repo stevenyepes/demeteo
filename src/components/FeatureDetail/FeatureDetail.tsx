@@ -3,7 +3,8 @@ import { RefreshCw, ShieldAlert } from 'lucide-react';
 import type { AppView } from '../../types';
 import type { NavigationMode } from '../../context/NavigationContext';
 import { DEFAULT_DENSITY } from '../../lib/density';
-import { TERMINAL_STATUSES } from '../../lib/runStatus';
+import { featureRunStatus, runStatusMeta, TERMINAL_STATUSES } from '../../lib/runStatus';
+import { settledRequest } from '../../lib/staleness';
 import { isOutOfBandStep } from '../../lib/featureSync';
 import { describeSyncPanel, syncIntentMovesBranch } from '../../lib/syncPanel';
 import { densityPref, inspectorWidthPref } from '../../lib/uiPrefs';
@@ -26,6 +27,7 @@ import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { AttachmentsPanel } from './AttachmentsPanel';
 import { FeatureHeader } from './FeatureHeader';
 import { FeatureStatusBanners } from './FeatureStatusBanners';
+import { awaitingGates } from '../../lib/gateStrip';
 import { GateStrip } from './GateStrip';
 import { InitialPromptPanel } from './InitialPromptPanel';
 import { InspectorColumn, type InspectorPane } from './InspectorColumn';
@@ -176,7 +178,11 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   const mr = useFeatureMr({
     featureId,
     projectId,
-    status: run.status,
+    // The row's status, not the step-derived one: publishing moves the row
+    // from `awaiting_mr` to `completed` while every step was already
+    // completed, so the derived status never changes and the MR is never
+    // re-read.
+    status: run.featureStatus,
     reload: run.reload,
     navigate,
   });
@@ -187,10 +193,24 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
   // side. `syncIntentMovesBranch` is what keeps the pane's own Refresh out of
   // that gate — suspending the read on *any* pending intent superseded the very
   // fetch that press had just paid for.
+  //
+  // Nor once the pull request is merged or closed, which is also why it waits
+  // for the row: `mrState` is `null` until it has been read, and a fetch
+  // started before then would count a branch nobody can sync.
+  const settled = settledRequest(mr.mrState);
   const { drift, refresh: refreshDrift, refreshing: refreshingDrift } = useFeatureDrift({
     featureId,
-    enabled: TERMINAL_STATUSES.includes(run.status) && !syncIntentMovesBranch(sync.pending),
+    enabled:
+      TERMINAL_STATUSES.includes(run.status) &&
+      !syncIntentMovesBranch(sync.pending) &&
+      mr.mrState !== null &&
+      settled === null,
   });
+  // The PR's state, folded in the way the project list folds it, so a run
+  // reads the same on both. Only a promotion replaces the step-derived meta,
+  // which also carries `Review ready`.
+  const shownStatus = featureRunStatus({ status: run.status, mr_url: mr.mrUrl, mr_state: mr.mrState });
+  const headerStatusMeta = shownStatus === run.status ? run.statusMeta : runStatusMeta(shownStatus);
   const syncModel = useMemo(
     () =>
       describeSyncPanel({
@@ -199,8 +219,9 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         divergence: sync.divergence,
         canSync: TERMINAL_STATUSES.includes(run.status),
         pending: sync.pending,
+        settled,
       }),
-    [sync.session, sync.divergence, drift, run.status, sync.pending],
+    [sync.session, sync.divergence, drift, run.status, sync.pending, settled],
   );
   const syncResolver = useSyncResolverOverrides({
     featureId,
@@ -505,6 +526,30 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
    *  row's the moment it was also deciding the inspector's. */
   const surfaceHeightPx = inspectorLayout === 'side' || !graph.graphMode ? null : graphBoxPx;
 
+  /** The run's own controls. Stacked, they end the meta column's chip row, so
+   *  they cost no row of their own; split, the meta column is a side track and
+   *  they sit in `chromeRow` above the panes, which `useRunColumnLayout`
+   *  measures as the chrome above the graph. The gap below is `pb-6` rather
+   *  than a margin so it lands inside `offsetHeight`; as a margin it is space
+   *  the hook cannot see and hands to the graph twice. The density control
+   *  belongs to the timeline's rows, so it appears only where there are rows to
+   *  compact, and the row disappears entirely rather than reserving height for
+   *  nothing. */
+  const hasViewControls = graph.canShowGraph || !graph.graphMode;
+  const viewControls = hasViewControls && (
+    <>
+      {graph.canShowGraph && <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} />}
+      {!graph.graphMode && (
+        <DensityToggle value={density} onChange={setDensity} ariaLabel="Timeline density" />
+      )}
+    </>
+  );
+  const chromeRow = hasViewControls && (
+    <div ref={setToggleChromeEl} className="flex flex-wrap items-center justify-between gap-3 pb-6">
+      {viewControls}
+    </div>
+  );
+
   const metaColumn = (
     <RunMetaColumn
       runLayout={runLayout}
@@ -515,6 +560,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       runEvents={panelRunEvents}
       activityOpen={activityOpen}
       onActivityOpenChange={onActivityOpenChange}
+      awaitingGateId={awaitingGates(run.steps)[0]?.id ?? null}
       onRunEvents={remote.handleRunEvents}
       onRemoteResolved={remote.refreshRemoteRun}
       runStatus={run.status}
@@ -524,22 +570,9 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
       harnessEvidence={run.harnessEvidence}
       harnessOpen={harnessOpen}
       onHarnessOpenChange={onHarnessOpenChange}
+      featureDescription={run.featureDescription}
+      trailing={viewControls || undefined}
     />
-  );
-
-  /** The run's own controls, and the element `useRunColumnLayout` measures as
-   *  the chrome above the graph. The gap below is `pb-6` rather than a margin so
-   *  it lands inside `offsetHeight`; as a margin it is space the hook cannot see
-   *  and hands to the graph twice. The density control belongs to the timeline's
-   *  rows, so it appears only where there are rows to compact, and the row
-   *  disappears entirely rather than reserving height for nothing. */
-  const chromeRow = (graph.canShowGraph || !graph.graphMode) && (
-    <div ref={setToggleChromeEl} className="flex flex-wrap items-center justify-between gap-3 pb-6">
-      {graph.canShowGraph && <RunViewToggle mode={graph.viewMode} onSelect={graph.setViewMode} />}
-      {!graph.graphMode && (
-        <DensityToggle value={density} onChange={setDensity} ariaLabel="Timeline density" />
-      )}
-    </div>
   );
 
   const panes = (
@@ -560,7 +593,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         featureId={featureId}
         featureTitle={run.featureTitle}
         status={run.status}
-        statusMeta={run.statusMeta}
+        statusMeta={headerStatusMeta}
         currentProject={currentProject}
         remoteRun={remote.remoteRun}
         remoteMachineName={remote.remoteMachineName}
@@ -576,25 +609,31 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         driftRefreshing={refreshingDrift}
         onRefreshDrift={refreshDrift}
         mrUrl={mr.mrUrl}
+        mrState={mr.mrState}
+        onRefreshMrState={mr.refreshMrState}
         onOpenTerminalTab={routing.handleOpenTerminalTab}
         onBrowseCode={routing.openEditor}
         onCancelFeature={rerun.handleCancelFeature}
         onOpenSync={openSync}
+        syncOffered={settled === null || syncModel.badge > 0}
         onPublish={mr.handlePublishClick}
         onCleanup={() => mr.handleCleanup()}
       />
 
       <FeatureStatusBanners
         status={run.status}
-        mrUrl={mr.mrUrl}
-        mrState={mr.mrState}
-        onRefreshMrState={mr.refreshMrState}
+        publishError={remote.remoteRun?.status === 'failed' ? remote.remoteRun.error : null}
       />
 
       {/* Above the run rather than inside it: a gate is the run asking a
           question, and it was previously findable only by scrolling to the card
           holding it (UI_REDESIGN_PLAN §3.2). */}
-      <GateStrip steps={run.steps} onDecideGate={decideGate} className="mx-6 mt-4" />
+      <GateStrip
+        steps={run.steps}
+        events={panelRunEvents}
+        onDecideGate={decideGate}
+        className="mx-6 mt-4"
+      />
 
       {/* Renders itself away unless this run wrote a review report *and* the
           pull request it reviewed is still open — see the component. That can
@@ -610,7 +649,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
         onLaunch={launchFixRun}
       />
 
-      <InitialPromptPanel featureDescription={run.featureDescription} />
+      {runLayout === 'split' && <InitialPromptPanel featureDescription={run.featureDescription} />}
 
       <AttachmentsPanel
         attachments={attachments.attachments}
@@ -673,11 +712,10 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
               </>
             ) : (
               <>
-                {/* Stacked, the meta panels *are* the graph's chrome and read
-                    above it, so the toggle stays next to the surface it switches
-                    rather than being hoisted away from it. */}
+                {/* Stacked, the meta panels *are* the graph's chrome: one chip
+                    row that also carries the view toggle, directly above the
+                    surface it switches. */}
                 {metaColumn}
-                {chromeRow}
                 {panes}
               </>
             )}

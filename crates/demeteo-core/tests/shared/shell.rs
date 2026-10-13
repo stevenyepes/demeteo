@@ -84,3 +84,44 @@ fn an_unset_or_blank_shell_is_no_answer() {
     assert_eq!(posix_login_shell(Some("")), None);
     assert_eq!(posix_login_shell(Some("   ")), None);
 }
+
+/// A login shell's stdout is the profile's bytes, the marker, then the command.
+#[test]
+fn a_login_shells_stdout_starts_after_the_marker() {
+    let stdout = format!("\u{1b}]1337;RemoteHost=me@box\u{7}{BODY_MARKER}hello\n");
+
+    assert_eq!(command_stdout(true, stdout.as_bytes()), b"hello\n");
+}
+
+/// Only the first marker is Demeteo's. A command that prints the same bytes —
+/// a nested Demeteo command is one — is answering, not starting.
+#[test]
+fn a_marker_the_command_printed_itself_is_its_own_output() {
+    let stdout = format!("banner{BODY_MARKER}one{BODY_MARKER}two");
+
+    assert_eq!(
+        command_stdout(true, stdout.as_bytes()),
+        format!("one{BODY_MARKER}two").as_bytes()
+    );
+}
+
+/// No marker means the body never ran, and what the shell printed instead is
+/// the only account of why. Dropping it would turn that into an empty answer.
+#[test]
+fn stdout_with_no_marker_in_it_is_returned_whole() {
+    assert_eq!(
+        command_stdout(true, b"profile: exec failed"),
+        b"profile: exec failed"
+    );
+    assert_eq!(command_stdout(true, b""), b"");
+}
+
+/// `sh -c` sources nothing and its body carries no marker, so there is no
+/// first marker that is Demeteo's to cut at.
+#[test]
+fn a_non_login_shells_stdout_is_never_cut() {
+    let stdout = format!("noise{BODY_MARKER}hello");
+
+    assert_eq!(body_marker_prefix(false), "");
+    assert_eq!(command_stdout(false, stdout.as_bytes()), stdout.as_bytes());
+}

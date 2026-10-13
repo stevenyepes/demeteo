@@ -917,6 +917,49 @@ fn a_long_gate_output_is_cut_head_and_tail() {
     }
 }
 
+/// The other shape a gate answers in: stages that pass, then one that does
+/// not. The cause is in the last screens, and an excerpt that spent itself on
+/// the head handed a resolver `error: test failed` with no test named.
+///
+/// Thirty failures, because one fits in any tail: the claim is that the first
+/// panic — what actually went wrong — survives ahead of the list of names.
+#[test]
+fn a_gate_that_fails_in_its_last_stage_keeps_what_failed_and_why() {
+    let mut output = String::from("==> TypeScript type-check\n==> Frontend tests\n");
+    for n in 0..4_000 {
+        output.push_str(&format!("test domain::case_{n} ... ok\n"));
+    }
+    output.push_str(
+        "\nfailures:\n\n---- adapters::local::execution::tests::case_0 stdout ----\n\
+         assertion `left == right` failed\n  left: \"noise hello\"\n right: \"hello\"\n\n\
+         failures:\n",
+    );
+    for n in 0..30 {
+        output.push_str(&format!(
+            "    adapters::local::execution::tests::a_command_returns_its_stdout_case_{n}\n"
+        ));
+    }
+    output.push_str(
+        "\ntest result: FAILED. 4000 passed; 30 failed; 0 ignored\n\n\
+         error: test failed, to rerun pass `-p demeteo-core --lib`\n",
+    );
+
+    let excerpt = gate_output_excerpt(&output);
+
+    assert!(excerpt.contains("bytes elided"), "it was cut");
+    assert!(
+        excerpt.contains("assertion `left == right` failed")
+            && excerpt.contains("stdout_case_0\n")
+            && excerpt.contains("30 failed"),
+        "which tests failed, and the first reason, are what the reader acts on: {}",
+        &excerpt[excerpt.len().saturating_sub(600)..]
+    );
+    assert!(
+        excerpt.starts_with("==> TypeScript type-check"),
+        "and the head still says what ran"
+    );
+}
+
 /// Short output passes through byte-identical: nothing is cut that fits.
 #[test]
 fn output_that_fits_is_not_touched() {

@@ -103,8 +103,9 @@ rail's "nodes" metric is a hardcoded 4-or-8 written on settings save, not a meas
 3. Customize: default agent/model (free text), remote machine picker + readiness probe +
    unattended toggle + budget caps, per-step agent/model overrides, loop iterations,
    commit-artifacts policy.
-4. Launch → local: `start_feature` → navigate to Feature Detail; remote:
-   `remote_submit_run` → confirmation dialog pointing at the Return Inbox.
+4. Launch → both placements go through the single `launch_run` command
+   (`useLaunchRun`); local → navigate to Feature Detail; remote → confirmation
+   dialog pointing at the Return Inbox.
 
 **Friction:** conflict badges fire for *all* repos whenever *any* feature is active (F3).
 `targetRepos` is computed and dropped (F2), and the promised "edit in Customize" repo

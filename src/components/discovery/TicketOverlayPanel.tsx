@@ -1,23 +1,22 @@
 import React, { useEffect } from 'react';
 import { useOverlay } from '../../hooks/useOverlay';
-import { OverlayPortal } from '../ui/OverlayPortal';
 
 interface TicketOverlayPanelProps {
-  widthPx: number;
   onClose: () => void;
   label: string;
   children: React.ReactNode;
 }
 
-// Docked variant of `Modal.tsx`'s portal + Escape idiom, but not its backdrop:
-// `DISCOVERY_UI_SPEC.md` §3.2.1 describes this panel as floating over the
-// ticket pane rather than displacing it, so — unlike `Modal.tsx` — the wrapper
-// stays `pointer-events-none` and carries no dimming/blur. `InterviewColumn`
-// and `TicketColumn` remain mounted underneath at `fixed inset-y-0 right-0`'s
-// left edge, in normal flow, and must stay clickable; only the docked panel
-// itself re-enables pointer events. With no exposed backdrop region left to
-// click, there is no click-to-dismiss — Escape is the only dismiss gesture.
-export function TicketOverlayPanel({ widthPx, onClose, label, children }: TicketOverlayPanelProps) {
+// Floats over the ticket pane rather than displacing it (`DISCOVERY_UI_SPEC.md`
+// §3.2.1), and is anchored to the workspace row, not the window. We tried a
+// portal pinned to the window's full height: the inspector then covered the app
+// header in this mode but sat beneath it in three-up, so one click produced two
+// layouts depending on whether the interview was showing. Anchored here, the
+// two modes differ only in whether the panel pushes the graph or floats over
+// it. The caller must render this inside a `relative` box. No backdrop and no
+// click-to-dismiss — the interview and graph stay live beside it — so Escape
+// is the only dismiss gesture.
+export function TicketOverlayPanel({ onClose, label, children }: TicketOverlayPanelProps) {
   // This component exists only in the overlaid layouts — three-up renders the
   // same pane inline, where it is a column and not an overlay — so registering
   // here says "an overlay is open" exactly when one is.
@@ -30,15 +29,11 @@ export function TicketOverlayPanel({ widthPx, onClose, label, children }: Ticket
   }, [onClose]);
 
   return (
-    <OverlayPortal>
-      <div className="pointer-events-none fixed inset-0 z-50" aria-label={label}>
-        <div
-          className="pointer-events-auto fixed inset-y-0 right-0 shadow-[0_0_32px_rgba(0,0,0,0.5)]"
-          style={{ width: `min(92vw, ${widthPx}px)` }}
-        >
-          {children}
-        </div>
-      </div>
-    </OverlayPortal>
+    <aside
+      aria-label={label}
+      className="absolute inset-y-0 right-0 z-30 flex max-w-full shadow-[-24px_0_48px_rgba(0,0,0,0.55)]"
+    >
+      {children}
+    </aside>
   );
 }

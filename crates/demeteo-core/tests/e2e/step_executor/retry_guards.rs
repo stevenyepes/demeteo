@@ -218,6 +218,7 @@ async fn test_gate_decide_blocked_by_active_predecessor() {
             decision: None,
             feedback: None,
             created_at: now,
+            auto_approved: false,
         })
         .unwrap();
 

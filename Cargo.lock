@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "demeteo"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "async-trait",
  "demeteo-core",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "demeteo-core"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1050,7 +1050,7 @@ dependencies = [
 
 [[package]]
 name = "demeteo-hub"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "demeteo-hub-protocol"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "demeteo-runner"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "async-trait",
  "demeteo-core",

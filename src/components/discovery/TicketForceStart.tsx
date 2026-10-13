@@ -12,9 +12,18 @@ interface TicketForceStartProps {
   view: TicketView;
   index: TicketIndex;
   busy: boolean;
+  /** The editor's draft differs from the stored row. `ticket_start` launches
+   *  the stored row, so a launch from here would run on choices no longer on
+   *  screen — the placement among them. Passing the draft as a one-launch
+   *  override instead would run on a placement that is never saved, which a
+   *  reload would then contradict. Drop launches nothing and stays open. */
+  needsSave: boolean;
   onStart: () => void;
   onForceStart: (reason: string) => void;
   onDrop: (reason: string) => void;
+  /** The editor's Discard/Save, seated in the same action row so the footer
+   *  reads as one bar. `null` on a locked ticket, which has nothing to save. */
+  saveControls?: React.ReactNode;
 }
 
 /**
@@ -28,7 +37,7 @@ interface TicketForceStartProps {
  * says which of the two states it is in.
  *
  * Dropping is a different act from force-starting and is pushed to the far
- * right for that reason: one starts the work anyway, the other decides against
+ * left, away from Start, for that reason: one starts the work anyway, the other decides against
  * it — and a dropped ticket keeps its reason and releases what waited on it
  * (§6.6), which a *removal* does not do (§4.7).
  */
@@ -36,9 +45,11 @@ export function TicketForceStart({
   view,
   index,
   busy,
+  needsSave,
   onStart,
   onForceStart,
   onDrop,
+  saveControls = null,
 }: TicketForceStartProps): React.ReactElement | null {
   const [phase, setPhase] = useState<Phase>('idle');
   const [reason, setReason] = useState('');
@@ -50,8 +61,15 @@ export function TicketForceStart({
     return prerequisite ? ticketLabel(prerequisite.ticket.seq) : 'an unknown ticket';
   });
   const short = reason.trim().length < MIN_REASON;
+  const saveHint = needsSave && (
+    <span className="text-[11px] text-slate-500">
+      Save before starting.
+    </span>
+  );
 
-  if (view.ticket.state === 'dropped') return null;
+  if (view.ticket.state === 'dropped') {
+    return saveControls ? <div className="flex justify-end gap-2.5">{saveControls}</div> : null;
+  }
 
   if (forced) {
     return (
@@ -81,7 +99,7 @@ export function TicketForceStart({
   const dropping = phase === 'dropping';
 
   return (
-    <div className="border-t border-white/5 pt-4">
+    <div>
       {showsForceStart(view) && (
         <>
           <FieldLabel className="text-amber-400!">Start it anyway</FieldLabel>
@@ -122,7 +140,7 @@ export function TicketForceStart({
             <button
               type="button"
               data-testid={dropping ? 'ticket-drop-confirm' : 'ticket-force-confirm'}
-              disabled={short || busy}
+              disabled={short || busy || (needsSave && !dropping)}
               onClick={() => (dropping ? onDrop(reason.trim()) : onForceStart(reason.trim()))}
               className={
                 dropping
@@ -148,23 +166,27 @@ export function TicketForceStart({
               {short ? 'A reason is required.' : 'Recorded on the ticket.'}
             </span>
           </div>
+          {!dropping && saveHint && <div className="mt-2">{saveHint}</div>}
         </div>
       ) : (
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           <button
             type="button"
-            data-testid="ticket-primary-action"
-            disabled={action.kind !== 'start' || busy}
-            onClick={onStart}
-            className="btn-primary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
+            data-testid="ticket-drop"
+            disabled={busy}
+            onClick={() => setPhase('dropping')}
+            className="btn-secondary text-[13px] text-ruby-200 disabled:cursor-not-allowed disabled:opacity-35"
           >
-            {action.label}
+            Drop ticket&hellip;
           </button>
+          <span className="flex-1" />
+          {saveHint}
+          {saveControls}
           {showsForceStart(view) && (
             <button
               type="button"
               data-testid="ticket-force-start"
-              disabled={busy}
+              disabled={busy || needsSave}
               onClick={() => setPhase('forcing')}
               className="rounded-md border border-amber-500/25 bg-amber-500/[0.08] px-[18px] py-2.5 text-[13px] font-medium text-amber-400 transition hover:bg-amber-500/[0.14] disabled:cursor-not-allowed disabled:opacity-35"
             >
@@ -173,12 +195,12 @@ export function TicketForceStart({
           )}
           <button
             type="button"
-            data-testid="ticket-drop"
-            disabled={busy}
-            onClick={() => setPhase('dropping')}
-            className="btn-secondary ml-auto text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
+            data-testid="ticket-primary-action"
+            disabled={action.kind !== 'start' || busy || needsSave}
+            onClick={onStart}
+            className="btn-primary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
           >
-            Drop ticket&hellip;
+            {action.label}
           </button>
         </div>
       )}

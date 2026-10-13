@@ -56,7 +56,7 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
 
     return (
       <OverlayPortal>
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#08090c]/80 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#08090c]/85 p-4">
             <div className="absolute w-[600px] h-[600px] bg-cyan-600/10 rounded-full blur-[120px] pointer-events-none"></div>
             
             <div className="glass-panel w-full max-w-xl p-8 relative z-10 flex flex-col shadow-2xl animate-fade-in border border-white/10">

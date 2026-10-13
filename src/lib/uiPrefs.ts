@@ -38,6 +38,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
+import { DEFAULT_INTERVIEW_WIDTH } from '../components/discovery/discoveryLayout';
 import type { RunViewMode } from '../components/RunViewToggle';
 import { DEFAULT_DENSITY, isDensity, type Density } from './density';
 import {
@@ -45,6 +46,7 @@ import {
   type PipelineSegment,
   type PipelineSort,
 } from './pipelineFilter';
+import { DEFAULT_UI_ZOOM, decodeUiZoom } from './uiZoom';
 
 export const UI_PREF_WRITE_DEBOUNCE_MS = 400;
 
@@ -77,7 +79,7 @@ export interface UiPrefSpec<T> {
 }
 
 /**
- * Build one preference. The five below are its call sites; it is exported so the
+ * Build one preference. The definitions below are its call sites; it is exported so the
  * arming and debounce rules can be exercised on an instance no earlier test has
  * read, which is the only place either is observable.
  */
@@ -195,6 +197,19 @@ export const inspectorWidthPref: UiPref<number | null> = definePref({
   encode: (value) => (value === null ? '' : String(value)),
 });
 
+/** The discovery interview's dragged width. Stored as asked, not as rendered:
+ *  `resolveInterviewWidth` re-clamps it against whatever row reads it, so a
+ *  width chosen on a wide monitor survives a session on a laptop. */
+export const interviewWidthPref: UiPref<number> = definePref({
+  key: 'ui.discovery_interview_width',
+  fallback: DEFAULT_INTERVIEW_WIDTH,
+  decode: (raw) => {
+    const width = Number(raw);
+    return Number.isFinite(width) && width > 0 ? width : undefined;
+  },
+  encode: (value) => String(value),
+});
+
 /** Graph, per UI_REDESIGN_PLAN §7 and `useRunGraph`'s initialiser — a stored
  *  timeline is a choice, and the absence of one is not a vote for it. */
 export const runViewModePref: UiPref<RunViewMode> = definePref({
@@ -218,6 +233,13 @@ export const pipelineSortPref: UiPref<PipelineSort> = definePref({
   encode: (value) => value,
 });
 
+export const uiZoomPref: UiPref<number> = definePref({
+  key: 'ui.zoom',
+  fallback: DEFAULT_UI_ZOOM,
+  decode: decodeUiZoom,
+  encode: (value) => String(value),
+});
+
 /**
  * Every preference this module defines, so a caller that has to reach all of
  * them does not maintain its own list — `src/test/setup.ts` drains their
@@ -227,8 +249,10 @@ export const pipelineSortPref: UiPref<PipelineSort> = definePref({
 export const UI_PREFS: readonly UiPref<unknown>[] = [
   densityPref,
   inspectorWidthPref,
+  interviewWidthPref,
   runViewModePref,
   pipelineSegmentPref,
   pipelineSortPref,
+  uiZoomPref,
 ] as UiPref<unknown>[];
 

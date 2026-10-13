@@ -232,4 +232,8 @@ pub struct GateDecision {
     /// Feedback / redirect instructions provided by the user.
     pub feedback: Option<String>,
     pub created_at: i64,
+    /// The project's [`GateAutonomy`](crate::domain::gate_autonomy::GateAutonomy)
+    /// approved this, not a person.
+    #[serde(default)]
+    pub auto_approved: bool,
 }

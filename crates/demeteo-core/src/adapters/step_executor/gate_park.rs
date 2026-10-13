@@ -74,6 +74,7 @@ fn undecided_row(id: GateDecisionId, step_exec_id: &StepExecutionId) -> GateDeci
         decision: None,
         feedback: None,
         created_at: paths::now_ms(),
+        auto_approved: false,
     }
 }
 

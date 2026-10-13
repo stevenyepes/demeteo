@@ -19,6 +19,8 @@ let columnWidth = 1600;
 let runLayoutMode: 'stacked' | 'split' = 'stacked';
 /** The element the view offers the hook as "the chrome above the surface". */
 let toggleChromeEl: HTMLElement | null = null;
+/** The meta chrome the view offers the hook — stacked, the chip row. */
+let metaChromeEl: HTMLElement | null = null;
 /** The `app_session` rows this mount finds already written. */
 let stored: Record<string, string> = {};
 
@@ -26,7 +28,9 @@ vi.mock('../useRunColumnLayout', () => ({
   useRunColumnLayout: () => ({
     setRunColumnEl: () => {},
     runColumnEl: null,
-    setMetaChromeEl: () => {},
+    setMetaChromeEl: (el: HTMLElement | null) => {
+      metaChromeEl = el;
+    },
     setToggleChromeEl: (el: HTMLElement | null) => {
       toggleChromeEl = el;
     },
@@ -125,6 +129,7 @@ beforeEach(() => {
   columnWidth = 1600;
   runLayoutMode = 'stacked';
   toggleChromeEl = null;
+  metaChromeEl = null;
   stored = {};
   mockBackend();
 });
@@ -141,18 +146,32 @@ afterEach(() => {
  * height the graph box claims twice.
  */
 describe('the chrome the graph box is measured against', () => {
-  it('offers the hook the whole row, spacing included', async () => {
+  /** Stacked, the view controls end the chip row rather than spending a row of
+   *  their own — so the chip row is the one element the hook has to see. */
+  it('offers the hook the chip row, controls and spacing included', async () => {
     mount();
 
     // This feature has no graph definition, so the view toggle is absent and the
     // density control is the only occupant — the case that previously had no
     // chrome row at all and so had nothing to measure.
     const density = await screen.findByRole('radiogroup', { name: 'Timeline density' });
-    await waitFor(() => expect(toggleChromeEl).not.toBeNull());
-    expect(toggleChromeEl).toContainElement(density);
+    await waitFor(() => expect(metaChromeEl).not.toBeNull());
+    expect(metaChromeEl).toContainElement(density);
+    expect(toggleChromeEl).toBeNull();
 
     // `offsetHeight` excludes margin. The gap under this row must therefore be
     // padding, or the hook reports a row shorter than the space it occupies.
+    expect(metaChromeEl?.className).toMatch(/\bpb-\d/);
+    expect(metaChromeEl?.className).not.toMatch(/\bmb-\d/);
+  });
+
+  it('offers the hook a row of its own when split, spacing included', async () => {
+    runLayoutMode = 'split';
+    mount();
+
+    const density = await screen.findByRole('radiogroup', { name: 'Timeline density' });
+    await waitFor(() => expect(toggleChromeEl).not.toBeNull());
+    expect(toggleChromeEl).toContainElement(density);
     expect(toggleChromeEl?.className).toMatch(/\bpb-\d/);
     expect(toggleChromeEl?.className).not.toMatch(/\bmb-\d/);
   });

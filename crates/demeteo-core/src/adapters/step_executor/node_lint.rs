@@ -300,6 +300,42 @@ mod tests {
         assert!(!has_errors(&findings));
     }
 
+    fn review_node_findings(review_artifact: &str, capture: serde_json::Value) -> Vec<LintFinding> {
+        lint_definition(&def(serde_json::json!({
+            "schema_version": 2,
+            "id": "wf-review",
+            "name": "review",
+            "nodes": [
+                { "id": "critic", "type": "agent", "title": "Critic",
+                  "config": {
+                      "prompt_template": "p",
+                      "review_artifact": review_artifact,
+                      "artifacts": [{ "name": "critic", "capture": capture, "mode": "full" }]
+                  } },
+                { "id": "done", "type": "finalize", "title": "Done", "config": {} }
+            ],
+            "edges": [{ "from": "critic", "to": "done" }]
+        })))
+    }
+
+    #[test]
+    fn a_review_artifact_that_marks_no_review_is_flagged_at_save_time() {
+        let by_path =
+            serde_json::json!({ "kind": "last_write_to", "path": "artifacts/s-critic.md" });
+        let by_name = serde_json::json!({ "kind": "by_name", "name": "critic" });
+
+        assert!(!codes(&review_node_findings("critic", by_path.clone()))
+            .contains(&"review-artifact-unreadable"));
+        for (review_artifact, capture) in [("critic-review", by_path), ("critic", by_name)] {
+            let findings = review_node_findings(review_artifact, capture);
+            assert!(
+                codes(&findings).contains(&"review-artifact-unreadable"),
+                "{review_artifact}: {findings:?}"
+            );
+            assert!(!has_errors(&findings));
+        }
+    }
+
     #[test]
     fn type_default_ports_are_enforced_so_the_editor_is_not_stricter_than_the_engine() {
         // `connectRules.ts` reads the registry's type-level ports and refuses a

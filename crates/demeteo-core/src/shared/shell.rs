@@ -71,6 +71,58 @@ pub fn job_control_prefix(interactive: bool) -> &'static str {
     }
 }
 
+/// What a login shell's body prints before anything else, so the bytes ahead
+/// of it can be told apart from the command's own.
+///
+/// A login shell sources the account's profile before it reads the body, and
+/// whatever that profile writes to stdout arrives on the same pipe as the
+/// command's answer with nothing between them. iTerm2's shell integration does
+/// it on every start (three OSC 1337 sequences), and so does any rc that
+/// prints a banner, a `fortune`, or a version manager's notice — on a remote
+/// box as readily as on the desktop. A caller comparing or parsing stdout then
+/// reads the account's dotfiles as the command's output: `echo hello` answered
+/// `\e]1337;…\ahello`, and a project's own suite went red inside a sync gate
+/// on a tree with nothing wrong in it.
+///
+/// Record separators rather than printable text, so the marker cannot be
+/// produced by an rc that merely echoes a line.
+pub const BODY_MARKER: &str = "\u{1e}demeteo:body\u{1e}";
+
+/// The statement that emits [`BODY_MARKER`], for a body a login shell runs.
+///
+/// Empty for a non-login shell: `sh -c` sources nothing, so there is nothing
+/// ahead of the body to separate it from — and its body stays the bare command
+/// every existing caller of the default options was written against.
+///
+/// Applied by both adapters, like [`job_control_prefix`], and read back by
+/// [`command_stdout`]. Spelled in octal because `printf`'s `\036` is POSIX and
+/// `\x1e` is not.
+pub fn body_marker_prefix(login_shell: bool) -> &'static str {
+    if login_shell {
+        "printf '\\036demeteo:body\\036'; "
+    } else {
+        ""
+    }
+}
+
+/// A command's own stdout: everything after the first [`BODY_MARKER`].
+///
+/// The first, because the marker is the first thing the body does — anything
+/// the command prints afterwards, an identical byte sequence included, is its
+/// own output. A login shell's stdout with no marker in it is returned whole:
+/// the body never started (the profile exited, the shell could not be
+/// executed), and what was printed is the only account of why.
+pub fn command_stdout(login_shell: bool, stdout: &[u8]) -> &[u8] {
+    if !login_shell {
+        return stdout;
+    }
+    let marker = BODY_MARKER.as_bytes();
+    stdout
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .map_or(stdout, |at| &stdout[at + marker.len()..])
+}
+
 /// The account's own login shell, when it is one that reads the bodies built
 /// above; `None` for anything else, which means "use `bash`".
 ///

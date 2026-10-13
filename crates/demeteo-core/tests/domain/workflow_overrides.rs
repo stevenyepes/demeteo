@@ -23,7 +23,7 @@ fn settings() -> ProjectSettings {
             prepare_command: None,
             extra_writable_paths: Vec::new(),
         },
-        conflict_policy: "manual".to_string(),
+        gate_autonomy: Default::default(),
         feature_lifecycle: "keep".to_string(),
         default_agent_kind: Some("opencode".to_string()),
         default_model: Some("project-model".to_string()),

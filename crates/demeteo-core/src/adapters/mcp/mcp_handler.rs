@@ -33,10 +33,13 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::application::agent_surface::{self, AgentFeatureLaunch};
+use crate::application::agent_surface::{
+    self, AgentAttachment, AgentFeatureLaunch, AgentStepAssignment, AgentTicketLaunch,
+};
 use crate::application::projects::{ProjectConfig, RepositoryConfig};
-use crate::application::tickets::TicketView;
-use crate::domain::ids::{DiscoveryId, FeatureId, ProjectId, StepExecutionId, TicketId};
+use crate::application::tickets::refresh::UnrefreshedPr;
+use crate::application::tickets::{DiscoveryBoard, TicketView};
+use crate::domain::ids::{DiscoveryId, FeatureId, ProjectId, StepExecutionId};
 use crate::domain::models::project::RunShapePatch;
 use crate::domain::models::step_attempt::{tail_log, LOG_TAIL_BUDGET_BYTES};
 use crate::domain::oauth::tools::{method_auth, required_scope, MethodAuth};
@@ -206,12 +209,16 @@ async fn handle_tools_call(
 /// is the one point where that text leaves for a party the user has not seen.
 /// Bounded too, since the column has no length limit and a list of rows would
 /// otherwise carry it once per row.
+///
+/// A launch's notes ([`crate::application::launch::LaunchedRun`]) are the same
+/// kind of text — a runner's or SQLite's own error, from a call that carried
+/// the PAT — so they get the same treatment.
 fn bound_error_messages(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, inner) in map.iter_mut() {
                 match inner {
-                    Value::String(message) if key == "error_message" => {
+                    Value::String(message) if ERROR_TEXT_KEYS.contains(&key.as_str()) => {
                         let scrubbed = scrub_secrets(message);
                         *message = tail_log(&scrubbed, ERROR_MESSAGE_BUDGET_BYTES).text;
                     }
@@ -225,6 +232,13 @@ fn bound_error_messages(value: &mut Value) {
 }
 
 const ERROR_MESSAGE_BUDGET_BYTES: usize = 2 * LOG_TAIL_BUDGET_BYTES;
+
+const ERROR_TEXT_KEYS: [&str; 4] = [
+    "error_message",
+    "credentials_parked",
+    "mirror_unrecorded",
+    "ticket_unrecorded",
+];
 
 fn parse<T: DeserializeOwned>(value: Value) -> Result<T, DispatchError> {
     serde_json::from_value(value).map_err(|e| DispatchError::InvalidParams(e.to_string()))
@@ -333,16 +347,34 @@ async fn dispatch(ctx: &AppContext, name: &str, arguments: Value) -> Result<Valu
                 &args.page,
             )
         }
+        "list_discoveries" => {
+            let args: OptionalProjectArgs = parse(arguments)?;
+            to_paged_json(
+                agent_surface::list_discoveries(ctx, args.project_id.map(ProjectId::from).as_ref()),
+                &args.page,
+            )
+        }
         "get_discovery_board" => {
             let args: DiscoveryArgs = parse(arguments)?;
             let board =
                 agent_surface::get_discovery_board(ctx, &DiscoveryId::from(args.discovery_id))
                     .map_err(DispatchError::Failed)?;
-            let tickets = paginate(board.tickets, &args.page)?;
-            to_json(Ok::<_, String>(DiscoveryBoardPage {
-                tickets,
-                progress: board.progress,
+            to_json(Ok::<_, String>(board_page(board, &args.page)?))
+        }
+        "refresh_discovery_prs" => {
+            let args: DiscoveryArgs = parse(arguments)?;
+            let refreshed =
+                agent_surface::refresh_discovery_prs(ctx, &DiscoveryId::from(args.discovery_id))
+                    .await
+                    .map_err(DispatchError::Failed)?;
+            to_json(Ok::<_, String>(RefreshedBoardPage {
+                board: board_page(refreshed.board, &args.page)?,
+                unrefreshed: refreshed.unrefreshed,
             }))
+        }
+        "list_machines" => {
+            let args: NoArgs = parse(arguments)?;
+            to_paged_json(agent_surface::list_machines(ctx), &args.page)
         }
         "run_events_since" => {
             let args: RunEventsSinceArgs = parse(arguments)?;
@@ -392,14 +424,73 @@ async fn dispatch(ctx: &AppContext, name: &str, arguments: Value) -> Result<Valu
                         workflow_id: args.workflow_id,
                         title: args.title,
                         description: args.description,
+                        attachments: args
+                            .attachments
+                            .into_iter()
+                            .map(|a| AgentAttachment {
+                                path: a.path,
+                                content_base64: a.content_base64,
+                                mime: a.mime,
+                                filename: a.filename,
+                            })
+                            .collect(),
+                        machine_id: args.machine_id,
+                        target_repo_id: args.target_repo_id,
+                        unattended: args.unattended,
+                        max_cost_usd: args.max_cost_usd,
+                        max_wall_clock_secs: args.max_wall_clock_secs,
                     },
                 )
                 .await,
             )
         }
         "start_ticket" => {
-            let args: TicketArgs = parse(arguments)?;
-            to_json(agent_surface::start_ticket(ctx, &TicketId::from(args.ticket_id)).await)
+            let args: StartTicketArgs = parse(arguments)?;
+            to_json(
+                agent_surface::start_ticket(
+                    ctx,
+                    AgentTicketLaunch {
+                        ticket_id: args.ticket_id,
+                        machine_id: args.machine_id,
+                        max_cost_usd: args.max_cost_usd,
+                        max_wall_clock_secs: args.max_wall_clock_secs,
+                        max_in_flight: args.max_in_flight,
+                    },
+                )
+                .await,
+            )
+        }
+        "retry_step" => {
+            let args: StepExecutionArgs = parse(arguments)?;
+            to_json(
+                agent_surface::retry_step(ctx, &StepExecutionId::from(args.step_execution_id))
+                    .await,
+            )
+        }
+        "set_step_assignment" => {
+            let args: SetStepAssignmentArgs = parse(arguments)?;
+            to_json(
+                agent_surface::set_step_assignment(
+                    ctx,
+                    AgentStepAssignment {
+                        step_execution_id: args.step_execution_id,
+                        agent_kind: args.agent_kind,
+                        model: args.model,
+                        effort: args.effort,
+                    },
+                )
+                .await,
+            )
+        }
+        "rework_from_critic" => {
+            let args: StepExecutionArgs = parse(arguments)?;
+            to_json(
+                agent_surface::rework_from_critic(
+                    ctx,
+                    &StepExecutionId::from(args.step_execution_id),
+                )
+                .await,
+            )
         }
         other => Err(DispatchError::Failed(format!(
             "tool {other:?} has a required scope but no dispatch arm"
@@ -434,6 +525,24 @@ struct Page<T: Serialize> {
 struct DiscoveryBoardPage {
     tickets: Page<TicketView>,
     progress: TicketProgress,
+    base_branch: Option<String>,
+}
+
+fn board_page(board: DiscoveryBoard, page: &PageArgs) -> Result<DiscoveryBoardPage, DispatchError> {
+    Ok(DiscoveryBoardPage {
+        tickets: paginate(board.tickets, page)?,
+        progress: board.progress,
+        base_branch: board.base_branch,
+    })
+}
+
+/// `refresh_discovery_prs`'s result: the board as `get_discovery_board`
+/// returns it, plus the pull requests the forge read could not answer for.
+#[derive(Serialize)]
+struct RefreshedBoardPage {
+    #[serde(flatten)]
+    board: DiscoveryBoardPage,
+    unrefreshed: Vec<UnrefreshedPr>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -455,11 +564,29 @@ struct GetFeatureArgs {
     feature_id: String,
 }
 
-/// `get_failure_verdict`'s args — unpaginated, since its result is already
-/// bounded by `LogTail`'s own budget.
+/// Args naming one step execution and nothing else — unpaginated, which for
+/// `get_failure_verdict` is because its result is already bounded by
+/// `LogTail`'s own budget.
 #[derive(Debug, Deserialize, JsonSchema)]
 struct StepExecutionArgs {
     step_execution_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SetStepAssignmentArgs {
+    step_execution_id: String,
+    /// The harness this step runs as: opencode, claude-code, hermes, codex or
+    /// pi. Omit to inherit.
+    #[serde(default)]
+    agent_kind: Option<String>,
+    /// The model this step runs on, as that harness names it. Not checked
+    /// against a list: an unknown model fails the step when it is dispatched.
+    /// Omit to inherit.
+    #[serde(default)]
+    model: Option<String>,
+    /// One of low, medium, high, xhigh, max. Omit to inherit.
+    #[serde(default)]
+    effort: Option<String>,
 }
 
 /// `list_step_attempts`'s args. Kept distinct from [`StepExecutionArgs`]
@@ -523,11 +650,67 @@ struct StartFeatureArgs {
     workflow_id: String,
     title: String,
     description: String,
+    #[serde(default)]
+    attachments: Vec<AttachmentArg>,
+    /// Where to run: a remote machine's id submits the run detached to that
+    /// machine's demeteo-runner. Omit it, or pass "" or "local", to run on the
+    /// project's own compute as before.
+    #[serde(default)]
+    machine_id: Option<String>,
+    /// Detached runs only: the repository to run in. Defaults to the
+    /// project's first repository.
+    #[serde(default)]
+    target_repo_id: Option<String>,
+    /// Detached runs only. A detached run is always unattended, so `false`
+    /// is refused.
+    #[serde(default)]
+    unattended: Option<bool>,
+    /// Detached runs only: a spend cap in US dollars, above zero.
+    #[serde(default)]
+    max_cost_usd: Option<f64>,
+    /// Detached runs only: a wall-clock cap in seconds, above zero.
+    #[serde(default)]
+    max_wall_clock_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct TicketArgs {
+struct AttachmentArg {
+    /// Absolute path of a file on the machine running Demeteo (not the client's machine).
+    #[serde(default)]
+    path: Option<String>,
+    /// File bytes, standard base64. Counts against the 2 MiB request limit.
+    #[serde(default)]
+    content_base64: Option<String>,
+    /// One of the accepted types. Optional; derived from `filename`/`path` when absent.
+    #[serde(default)]
+    mime: Option<String>,
+    /// Required with `content_base64`. Optional with `path` (defaults to its basename).
+    #[serde(default)]
+    filename: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct StartTicketArgs {
     ticket_id: String,
+    /// Where to run this one launch: a remote machine's id submits it
+    /// detached to that machine's demeteo-runner, and "local" runs it on the
+    /// project's own compute. Never saved on the ticket. Omit it, or pass "",
+    /// to use the ticket's own placement.
+    #[serde(default)]
+    machine_id: Option<String>,
+    /// Detached runs only: a spend cap in US dollars, above zero. Refused,
+    /// not dropped, when the ticket resolves to the project's own compute.
+    #[serde(default)]
+    max_cost_usd: Option<f64>,
+    /// Detached runs only: a wall-clock cap in seconds, above zero. Refused
+    /// when the ticket resolves to the project's own compute.
+    #[serde(default)]
+    max_wall_clock_secs: Option<u64>,
+    /// Refuse this start when the ticket's Discovery already has this many
+    /// tickets in flight — started, with a pull request neither merged nor
+    /// closed — counting starts still under way. Above zero.
+    #[serde(default)]
+    max_in_flight: Option<usize>,
 }
 
 fn tool_descriptor(name: &str, description: &str, schema: schemars::Schema) -> Value {
@@ -538,7 +721,7 @@ fn tool_descriptor(name: &str, description: &str, schema: schemars::Schema) -> V
     })
 }
 
-/// The literal 12-row catalog from `docs/MCP_INTEGRATION.md` §7, in the same
+/// The literal catalog from `docs/MCP_INTEGRATION.md` §7, in the same
 /// order as [`crate::domain::oauth::tools::required_scope`]'s table.
 fn tool_catalog() -> Value {
     json!([
@@ -573,9 +756,24 @@ fn tool_catalog() -> Value {
             schemars::schema_for!(OptionalProjectArgs),
         ),
         tool_descriptor(
+            "list_discoveries",
+            "List Discoveries, optionally scoped to one project. Closed ones are included.",
+            schemars::schema_for!(OptionalProjectArgs),
+        ),
+        tool_descriptor(
             "get_discovery_board",
-            "Get a Discovery's tickets and its derived board.",
+            "Get a Discovery's tickets and its derived board, with the base branch its tickets are cut from and reviewed against (null is the project's default branch).",
             schemars::schema_for!(DiscoveryArgs),
+        ),
+        tool_descriptor(
+            "refresh_discovery_prs",
+            "Read each unsettled pull request of a Discovery's tickets from the forge now, record what it says, and return the board. Use it after merging or closing a pull request instead of waiting for the two-minute poll. A pull request that could not be read is listed in unrefreshed and its ticket is shown as of the last successful read.",
+            schemars::schema_for!(DiscoveryArgs),
+        ),
+        tool_descriptor(
+            "list_machines",
+            "List registered machines: the ids a machine_id argument takes, and whether naming one detaches the run. Does not probe a machine's runner; a launch does, for the machine it names.",
+            schemars::schema_for!(NoArgs),
         ),
         tool_descriptor(
             "run_events_since",
@@ -594,13 +792,46 @@ fn tool_catalog() -> Value {
         ),
         tool_descriptor(
             "start_feature",
-            "Start a Feature run.",
+            concat!(
+                "Start a Feature run. Runs on the project's own compute unless machine_id names a remote machine, which submits it detached to that machine's runner; the detached-only options are refused without one. ",
+                "Returns the Feature; a detached run the runner accepted but that is degraded also carries credentials_parked (its git credentials were not delivered) or mirror_unrecorded (Demeteo could not record it). ",
+                "Optional `attachments` (files the agent should see) ",
+                "accept png, jpg/jpeg, gif, webp, tiff, pdf, txt, md and json. ",
+                "The type is the `mime` when one is given, otherwise the filename extension; ",
+                "for `path` it comes from the real file name and a `mime` must agree with it. ",
+                "Each item takes exactly one of `path` or `content_base64`, and inline ",
+                "`content_base64` needs a `filename`. ",
+                "A call carries at most 20 items, and a feature takes at most 10 files after sha256 dedup. ",
+                "A file given by `path` may be up to 100 MiB; `path` must be absolute and is ",
+                "resolved on the Demeteo host, not on the client's machine, and a path inside ",
+                "Demeteo's own data directory is refused. ",
+                "Inline `content_base64` must fit the whole request under 2 MiB, ",
+                "about 1.5 MiB of file bytes. ",
+                "An invalid attachment refuses the whole call and starts nothing. ",
+                "The returned handle shows attachments empty until the run bootstraps; ",
+                "read get_feature to see them.",
+            ),
             schemars::schema_for!(StartFeatureArgs),
         ),
         tool_descriptor(
             "start_ticket",
-            "Start a Ticket's current attempt.",
-            schemars::schema_for!(TicketArgs),
+            "Start a Ticket's current attempt, where the ticket is placed. machine_id overrides that placement for this launch only and is never saved on the ticket. max_cost_usd and max_wall_clock_secs cap a detached run and are refused for a local one; max_in_flight refuses the start when the Discovery already has that many tickets in flight. A refused start launches nothing. Returns the Feature, with the same optional credentials_parked and mirror_unrecorded notes as start_feature, and ticket_unrecorded when the run started but the ticket could not record it — do not start that ticket again.",
+            schemars::schema_for!(StartTicketArgs),
+        ),
+        tool_descriptor(
+            "retry_step",
+            "Re-run one step that failed, was interrupted, or never started, on the agent and model it already resolves to. Refused for a completed step, and while an earlier step of the run is still active. Spends as a fresh attempt does. Returns the step as it stands once the retry is accepted, not a finished attempt; poll get_feature for the outcome.",
+            schemars::schema_for!(StepExecutionArgs),
+        ),
+        tool_descriptor(
+            "set_step_assignment",
+            "Pin which agent, model and effort one step of a started run uses. The three fields replace the step's pin as a whole: one you omit is un-pinned, and omitting all three removes the pin. Re-runs nothing; the pin applies the next time that step is dispatched, so follow it with retry_step to re-run a failed step on the new assignment. Refused while the step is running, and for a gate or command step. Returns the Feature's step_overrides.",
+            schemars::schema_for!(SetStepAssignmentArgs),
+        ),
+        tool_descriptor(
+            "rework_from_critic",
+            "Send the Standard Feature Pipeline's final gate back to fix what its critic review found. Takes the gate's step_execution_id from list_pending_gates and no feedback text: Demeteo reads the critic review itself and composes the instruction. Refused for any other workflow or gate, when the critic's verdict is PASS, and once a run has been sent back twice this way; a refusal means a person decides the gate in the app. Re-runs ticketing, implementation, validation and the critic, and spends accordingly. This never approves a gate.",
+            schemars::schema_for!(StepExecutionArgs),
         ),
     ])
 }
@@ -626,9 +857,21 @@ mod revocation_tests;
 mod pagination_tests;
 
 #[cfg(test)]
+#[path = "../../../tests/adapters/mcp/start_placement.rs"]
+mod start_placement_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/adapters/mcp/step_control.rs"]
+mod step_control_tests;
+
+#[cfg(test)]
 #[path = "../../../tests/adapters/mcp/read_redaction.rs"]
 mod read_redaction_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/adapters/mcp/skill_catalog_parity.rs"]
 mod skill_catalog_parity_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/adapters/mcp/start_attachments.rs"]
+mod start_attachments_tests;

@@ -14,7 +14,8 @@ import {
   verdict,
   type TicketIndex,
 } from '../../lib/ticketPresentation';
-import type { TicketView } from '../../types';
+import { placementLabel } from '../../lib/ticketPlacement';
+import type { Machine, RunPlacement, TicketView } from '../../types';
 import { Chip } from '../ui/Chip';
 import { FieldLabel } from '../ui/FieldLabel';
 import { AgentMarkdown } from './AgentMarkdown';
@@ -55,6 +56,10 @@ interface TicketInspectorProps {
   index: TicketIndex;
   /** Resolved from `workflow_list`; the ticket stores only an id. */
   workflowName: string | null;
+  /** Names a detached placement's machine; the placement itself is the
+   *  server's (`TicketView.placement`, or the started Feature's `remote`),
+   *  never re-derived here. */
+  machines: readonly Machine[];
   onStart: () => void;
   onForceStart: (reason: string) => void;
   /** Open the full editor (§3.6.8). Offered on every ticket: a locked one is
@@ -79,6 +84,7 @@ export function TicketInspector({
   view,
   index,
   workflowName,
+  machines,
   onStart,
   onForceStart,
   onEdit,
@@ -120,6 +126,14 @@ export function TicketInspector({
     return prerequisite ? ticketLabel(prerequisite.ticket.seq) : 'an unknown ticket';
   });
   const forced = view.ticket.force_started_at !== null;
+  const remote = view.feature?.remote ?? null;
+  // A started ticket may have run on a one-launch override, so its stored
+  // placement is not where the attempt went — the attempt's own record is.
+  const attempted = view.ticket.state !== 'unstarted' && view.feature !== null;
+  const placement: RunPlacement | null = attempted
+    ? (view.feature?.placement ?? null)
+    : view.placement.placement;
+  const inherited = !attempted && view.placement.inherited;
 
   return (
     <div className="flex w-[360px] min-h-0 shrink-0 flex-col overflow-y-auto border-l border-white/5 bg-[#0d0f14]">
@@ -192,6 +206,16 @@ export function TicketInspector({
         <div>
           <FieldLabel>Execution</FieldLabel>
           <div className="flex flex-wrap items-center gap-1.5">
+            <Chip size="sm" tone={placement?.kind === 'detached' ? 'violet' : 'slate'} maxWidth="14rem">
+              {placement
+                ? `${placementLabel(placement, machines)}${inherited ? ' · default' : ''}`
+                : 'Placement unknown'}
+            </Chip>
+            {remote && (
+              <span data-testid="ticket-run-mirror" className="contents">
+                <Chip size="sm" status={remote.status} title="Detached run, as last mirrored" />
+              </span>
+            )}
             {workflowName && (
               <Chip size="sm" tone="violet" maxWidth="12rem">
                 {workflowName}

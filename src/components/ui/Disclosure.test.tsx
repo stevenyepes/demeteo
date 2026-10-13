@@ -196,4 +196,40 @@ describe('Disclosure', () => {
     expect(body).toHaveClass('overflow-y-auto');
     expect(body).toHaveClass('animate-fade-in');
   });
+
+  /** The chip variant exists to sit in a wrapping row of peers, so its body
+   *  must break out under the whole row and still unmount when closed. */
+  describe('chip variant', () => {
+    it('unmounts its body when closed and drops it below the row when open', () => {
+      const { rerender } = render(
+        <Disclosure variant="chip" title="Activity" open={false} onOpenChange={() => {}}>
+          body
+        </Disclosure>,
+      );
+      expect(screen.queryByTestId('disclosure-body')).toBeNull();
+
+      rerender(
+        <Disclosure variant="chip" title="Activity" open onOpenChange={() => {}}>
+          body
+        </Disclosure>,
+      );
+      expect(screen.getByTestId('disclosure')).toHaveClass('contents');
+      expect(screen.getByTestId('disclosure-body')).toHaveClass('order-last', 'basis-full');
+    });
+
+    it('keeps the meta slot outside the trigger button', () => {
+      render(
+        <Disclosure
+          variant="chip"
+          title="Activity"
+          open={false}
+          onOpenChange={() => {}}
+          meta={<span data-testid="meta">live</span>}
+        >
+          body
+        </Disclosure>,
+      );
+      expect(screen.getByTestId('disclosure-trigger')).not.toContainElement(screen.getByTestId('meta'));
+    });
+  });
 });

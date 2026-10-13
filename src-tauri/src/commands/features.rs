@@ -1,8 +1,11 @@
+use crate::application::launch::{launch_run, LaunchRequest};
+use crate::application::remote_runs::with_runner_branch_refresh;
 use crate::domain::ids::{FeatureId, StepExecutionId};
 use crate::domain::models::{
     EffortLevel, Feature, FeatureDivergence, FeatureDrift, GateDecision, SequenceState,
     StepAttempt, StepExecution,
 };
+use crate::domain::run_placement::{DetachedOptions, RunPlacement};
 use crate::domain::step_assignment::StepAssignment;
 use crate::domain::sync_resolver::SyncResolverChoice;
 use crate::domain::upstream_feature::DivergenceReconcile;
@@ -68,26 +71,33 @@ pub async fn start_feature(
     origin: Option<crate::domain::feature_origin::FeatureOrigin>,
     diff_base_branch: Option<String>,
 ) -> Result<Feature, AppError> {
-    ctx.executor
-        .feature_start(FeatureLaunch {
-            project_id,
-            workflow_id,
-            title,
-            description,
-            agent_kind,
-            model,
-            effort,
-            commit_artifacts,
-            loop_iterations,
-            max_budget_usd,
-            step_overrides: step_overrides.unwrap_or_default(),
-            staged_attachments: staged_attachments.unwrap_or_default(),
-            origin: origin.unwrap_or_default(),
-            diff_base_branch,
-            ..FeatureLaunch::default()
-        })
-        .await
-        .map_err(AppError::from)
+    let launch = FeatureLaunch {
+        project_id,
+        workflow_id,
+        title,
+        description,
+        agent_kind,
+        model,
+        effort,
+        commit_artifacts,
+        loop_iterations,
+        max_budget_usd,
+        step_overrides: step_overrides.unwrap_or_default(),
+        staged_attachments: staged_attachments.unwrap_or_default(),
+        origin: origin.unwrap_or_default(),
+        diff_base_branch,
+        ..FeatureLaunch::default()
+    };
+    launch_run(
+        &ctx,
+        LaunchRequest {
+            launch,
+            placement: RunPlacement::Local,
+            detached: DetachedOptions::default(),
+        },
+    )
+    .await
+    .map(|launched| launched.feature)
 }
 
 #[tauri::command]
@@ -329,8 +339,8 @@ pub async fn feature_sync(
     ctx: State<'_, AppContext>,
     feature_id: String,
 ) -> Result<SyncOutcomeView, AppError> {
-    ctx.executor
-        .feature_sync(&feature_id)
+    let fid = FeatureId::from(feature_id.clone());
+    with_runner_branch_refresh(&ctx, &fid, ctx.executor.feature_sync(&feature_id))
         .await
         .map_err(AppError::from)
 }
@@ -411,9 +421,14 @@ pub async fn sync_publish(
     ctx: State<'_, AppContext>,
     feature_id: String,
 ) -> Result<Option<SyncSessionView>, AppError> {
-    crate::application::sync_session::publish(sync_ports(&ctx), &FeatureId::from(feature_id))
-        .await
-        .map_err(AppError::from)
+    let fid = FeatureId::from(feature_id);
+    with_runner_branch_refresh(
+        &ctx,
+        &fid,
+        crate::application::sync_session::publish(sync_ports(&ctx), &fid),
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 /// Throw a resolution away: move the feature branch back to where the merge
@@ -451,10 +466,14 @@ pub async fn sync_reconcile(
     feature_id: String,
     reconcile: DivergenceReconcile,
 ) -> Result<Option<SyncSessionView>, AppError> {
-    ctx.executor
-        .feature_reconcile(&feature_id, reconcile)
-        .await
-        .map_err(AppError::from)
+    let fid = FeatureId::from(feature_id.clone());
+    with_runner_branch_refresh(
+        &ctx,
+        &fid,
+        ctx.executor.feature_reconcile(&feature_id, reconcile),
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 /// What the feature branch and `origin/<feature>` each hold that the other does
@@ -519,10 +538,15 @@ pub async fn feature_resolve_sync_conflicts(
             kind
         )));
     }
-    ctx.executor
-        .feature_resolve_sync_conflicts(&feature_id, &asked)
-        .await
-        .map_err(AppError::from)
+    let fid = FeatureId::from(feature_id.clone());
+    with_runner_branch_refresh(
+        &ctx,
+        &fid,
+        ctx.executor
+            .feature_resolve_sync_conflicts(&feature_id, &asked),
+    )
+    .await
+    .map_err(AppError::from)
 }
 
 /// Finish a conflict the user resolved in the sync worktree by hand.
@@ -537,8 +561,8 @@ pub async fn feature_continue_sync(
     ctx: State<'_, AppContext>,
     feature_id: String,
 ) -> Result<SyncOutcomeView, AppError> {
-    ctx.executor
-        .feature_continue_sync(&feature_id)
+    let fid = FeatureId::from(feature_id.clone());
+    with_runner_branch_refresh(&ctx, &fid, ctx.executor.feature_continue_sync(&feature_id))
         .await
         .map_err(AppError::from)
 }

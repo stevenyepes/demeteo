@@ -10,6 +10,72 @@ pub mod verdict;
 #[path = "../../../tests/domain/verifier/harness_resolution_tests.rs"]
 mod harness_resolution_tests;
 
+#[cfg(test)]
+#[path = "../../../tests/domain/verifier/nothing_ran.rs"]
+mod nothing_ran_tests;
+
+/// What an `environment` verdict means on a step whose harness ran nothing.
+///
+/// `environment` exists for a criterion the *project* cannot evidence: the
+/// code may be right, no agent can add the missing command, so the run ends
+/// once with remediation instead of spending the rework budget (decision 43,
+/// S13). Three engine texts advise it for exactly the nothing-ran case — the
+/// `NotConfigured` harness block, the verdict contract and the correction
+/// re-ask — and for a validate step that is the right advice.
+///
+/// A step that judges nothing the project must configure reads the same
+/// advice wrongly. The review starter's gate step reports what the gates
+/// said; with no gate configured its honest answer is "nothing ran", which
+/// is a `pass`, and `environment` there ends the review `failed` with its
+/// report discarded. Until this field existed the starter could only argue
+/// with all three texts in prose, and the re-ask arrived a turn after that
+/// prose. This is the engine-side answer `docs/OPEN_QUESTIONS.md` §21a asked
+/// for: the policy is read where the verdict is read, so it covers the
+/// re-ask by construction.
+///
+/// It applies **only** when the harness outcome is
+/// [`HarnessOutcome::NotConfigured`](crate::domain::harness_outcome::HarnessOutcome::NotConfigured).
+/// An `environment` after gates ran names a command the criteria demand and
+/// the project lacks, and that is still terminal whatever this says.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NothingRanPolicy {
+    /// The step cannot be judged without a harness. Terminal with remediation.
+    #[default]
+    Environment,
+    /// The step has nothing to configure; an absent harness is a `pass`.
+    Pass,
+}
+
+impl NothingRanPolicy {
+    fn is_default(&self) -> bool {
+        *self == Self::Environment
+    }
+
+    /// How an `environment` verdict is read on a turn whose harness outcome
+    /// was `harness`. `None` is a turn that ran no harness primitive at all
+    /// (no verifier config), which no policy can turn into a pass.
+    pub fn environment_reading(
+        self,
+        harness: Option<&crate::domain::harness_outcome::HarnessOutcome>,
+    ) -> EnvironmentReading {
+        use crate::domain::harness_outcome::HarnessOutcome;
+        match (self, harness) {
+            (Self::Pass, Some(HarnessOutcome::NotConfigured)) => EnvironmentReading::Pass,
+            _ => EnvironmentReading::Unjudgeable,
+        }
+    }
+}
+
+/// The reading [`NothingRanPolicy::environment_reading`] resolved for one turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvironmentReading {
+    /// Terminal: the project is not configured to evidence the criteria.
+    Unjudgeable,
+    /// Accepted: this step declares nothing to configure.
+    Pass,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VerifierConfig {
     /// Agent kind for the verifier. `None` = same as the step's agent_kind.
@@ -48,6 +114,12 @@ pub struct VerifierConfig {
     /// JSON key whose value must be `"pass"` or `"fail"`. Default: `"verdict"`.
     #[serde(default = "default_verdict_key")]
     pub verdict_key: String,
+    /// What an `environment` verdict means when the harness ran nothing —
+    /// see [`NothingRanPolicy`]. Absent in every workflow authored before the
+    /// field existed, which reads as the terminal default those workflows
+    /// already had.
+    #[serde(default, skip_serializing_if = "NothingRanPolicy::is_default")]
+    pub when_nothing_ran: NothingRanPolicy,
 }
 
 impl VerifierConfig {

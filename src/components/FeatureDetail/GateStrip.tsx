@@ -1,12 +1,19 @@
 import { useMemo } from 'react';
 import { ArrowRight, ShieldAlert } from 'lucide-react';
 
-import { awaitingGates, type GateStripRow } from '../../lib/gateStrip';
+import {
+  awaitingGates,
+  gateHeldReason,
+  type GateHeldEvent,
+  type GateStripRow,
+} from '../../lib/gateStrip';
 import { TONE_CHIP } from '../../lib/runStatus';
 import { humanizeStepId } from './stepIdentity';
 
 export interface GateStripProps {
   steps: readonly GateStripRow[];
+  /** The run's event feed, read for why the next gate was not auto-approved. */
+  events?: readonly GateHeldEvent[];
   onDecideGate: (stepExecutionId: string) => void;
   className?: string;
 }
@@ -30,6 +37,7 @@ export interface GateStripProps {
  */
 export function GateStrip({
   steps,
+  events = [],
   onDecideGate,
   className = '',
 }: GateStripProps): React.ReactElement | null {
@@ -39,6 +47,7 @@ export function GateStrip({
   if (!next) return null;
 
   const stepName = humanizeStepId(next.step_id);
+  const heldReason = gateHeldReason(events, next.id);
 
   return (
     <div
@@ -63,6 +72,11 @@ export function GateStrip({
         <span className="truncate font-mono text-xs opacity-80" title={stepName}>
           {stepName}
         </span>
+        {heldReason && (
+          <span data-testid="gate-strip-held-reason" className="text-xs opacity-80">
+            Not auto-approved: {heldReason}
+          </span>
+        )}
       </div>
 
       <button

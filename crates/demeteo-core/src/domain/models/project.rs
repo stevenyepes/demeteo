@@ -1,3 +1,4 @@
+use crate::domain::gate_autonomy::GateAutonomy;
 use crate::domain::ids::{MachineId, ProjectId, ProviderId, RepositoryId, WorkflowId};
 use crate::domain::models::EffortLevel;
 use serde::{Deserialize, Serialize};
@@ -87,7 +88,11 @@ pub struct WorktreeStrategy {
 pub struct ProjectSettings {
     pub project_id: ProjectId,
     pub worktree_strategy: WorktreeStrategy,
-    pub conflict_policy: String,
+    /// Which gates approve themselves. Read live at each gate rather than
+    /// snapshotted at launch, like every other project default a run reads
+    /// mid-flight. See [`GateAutonomy`] and migration V62.
+    #[serde(default)]
+    pub gate_autonomy: GateAutonomy,
     pub feature_lifecycle: String,
     #[serde(default)]
     pub default_agent_kind: Option<String>,
@@ -301,13 +306,21 @@ impl RunShapePatch {
         ];
         for (field, value) in identifiers {
             if let Some(v) = value {
-                if v.starts_with('-') || v.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                if !is_plain_identifier(v) {
                     return Err(RunShapePatchError::Identifier(field));
                 }
             }
         }
         Ok(())
     }
+}
+
+/// Whether an agent, model or workflow identifier from an external caller is
+/// safe to store. One that starts with `-` reads as a flag where a harness
+/// takes it as an argv value, and none of the three legitimately carries
+/// whitespace or a control character.
+pub fn is_plain_identifier(value: &str) -> bool {
+    !value.starts_with('-') && !value.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// Copies `patch`'s nine fields onto `settings`, returning every other

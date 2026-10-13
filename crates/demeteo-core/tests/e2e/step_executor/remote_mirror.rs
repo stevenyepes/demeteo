@@ -104,6 +104,13 @@ impl crate::ports::remote_run_mirror::RemoteRunMirrorPort for ListPauseMirror {
         }
         Ok(rows)
     }
+
+    fn list_for_features(
+        &self,
+        feature_ids: &[&str],
+    ) -> Result<Vec<crate::ports::remote_run_mirror::RemoteRunMirror>, String> {
+        self.inner.list_for_features(feature_ids)
+    }
 }
 
 impl RecordingRunnerRpc {

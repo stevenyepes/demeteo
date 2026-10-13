@@ -8,11 +8,12 @@
  *
  * Tone semantics (docs/UX_JOURNEYS.md §2, as settled by F27):
  *   cyan    = in motion (running)
- *   violet  = in motion, agent-judged (verifying)
+ *   violet  = in motion, agent-judged (verifying), or out with a reviewer
+ *             (published PR) — work that is moving without this app doing it
  *   amber   = needs a human (gates, credentials, interruptions)
  *   emerald = done well (completed / PR ready)
  *   ruby    = done badly (failed / over budget)
- *   slate   = inert (queued, cancelled, unreachable, skipped)
+ *   slate   = inert (queued, cancelled, unreachable, skipped, PR closed)
  */
 
 export type RunStatusTone = 'emerald' | 'cyan' | 'violet' | 'amber' | 'ruby' | 'slate';
@@ -37,7 +38,9 @@ const META: Record<string, RunStatusMeta> = {
   'over-budget':        { label: 'Over budget',       tone: 'ruby',    active: false },
   awaiting_mr:          { label: 'PR ready',          tone: 'emerald', active: false },
   pr_ready:             { label: 'PR ready',          tone: 'emerald', active: false },
-  published:            { label: 'Published',         tone: 'emerald', active: false },
+  published:            { label: 'Published',         tone: 'violet',  active: false },
+  merged:               { label: 'Merged',            tone: 'emerald', active: false },
+  pr_closed:            { label: 'PR closed',         tone: 'slate',   active: false },
   completed:            { label: 'Completed',         tone: 'emerald', active: false },
   failed:               { label: 'Failed',            tone: 'ruby',    active: false },
   error:                { label: 'Failed',            tone: 'ruby',    active: false },
@@ -81,8 +84,8 @@ export interface FeatureRunStatusFields {
   mr_state?: string | null;
 }
 
-/** MR states that mean the run's work actually reached a provider. */
-const PUBLISHED_MR_STATES = ['draft', 'open', 'merged'];
+/** MR states that mean the run's work reached a provider and is still in review. */
+const PUBLISHED_MR_STATES = ['draft', 'open'];
 
 /**
  * Display status for a feature, which is not always `Feature.status`.
@@ -91,10 +94,16 @@ const PUBLISHED_MR_STATES = ['draft', 'open', 'merged'];
  * records the PR on `mr_url`/`mr_state` in the same write, so `status`
  * alone cannot tell "finished, nothing shipped" from "finished, PR is
  * up". Fold that back into one status string here so every surface
- * applies the published-beats-completed rule the same way.
+ * applies the published-beats-completed rule the same way. A merged PR is
+ * its own status rather than a published one: the project view is where
+ * people look for what is left to merge, and "Published" on a PR the forge
+ * has already merged sent them into each run to find out. Published and
+ * merged take different tones for the same reason: the label alone made the
+ * one question that list is scanned for a matter of reading every chip.
  *
- * `mr_state = 'closed'` (PR closed without merge) deliberately falls
- * through to the feature's own status — nothing was published.
+ * `mr_state = 'closed'` (PR closed without merge) is `pr_closed`, not the
+ * feature's own `completed`: "completed" there read as work still waiting to
+ * ship, when the forge has already said it will not.
  *
  * Only a run that finished well is promoted. Nothing ever clears the MR
  * columns, so a replayed published feature keeps its PR while it runs,
@@ -106,14 +115,11 @@ const PUBLISHED_MR_STATES = ['draft', 'open', 'merged'];
  */
 export function featureRunStatus(feature: FeatureRunStatusFields): string {
   const own = runStatusMeta(feature.status);
-  if (
-    own.tone === 'emerald' &&
-    !own.active &&
-    feature.mr_url &&
-    PUBLISHED_MR_STATES.includes((feature.mr_state ?? '').toLowerCase())
-  ) {
-    return 'published';
-  }
+  if (own.tone !== 'emerald' || own.active || !feature.mr_url) return feature.status;
+  const mrState = (feature.mr_state ?? '').toLowerCase();
+  if (mrState === 'merged') return 'merged';
+  if (mrState === 'closed') return 'pr_closed';
+  if (PUBLISHED_MR_STATES.includes(mrState)) return 'published';
   return feature.status;
 }
 

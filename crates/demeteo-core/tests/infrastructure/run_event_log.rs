@@ -121,13 +121,32 @@ fn translation_maps_narrative_events() {
             "gate_required",
         ),
         (
+            DomainEvent::GateHeldByReview {
+                feature_id: feature(),
+                step_execution_id: StepExecutionId::new("se-2"),
+                reason: "the review carries no issue counts".into(),
+            },
+            "gate_held_by_review",
+        ),
+        (
             DomainEvent::GateDecided {
                 feature_id: feature(),
                 step_execution_id: StepExecutionId::new("se-2"),
                 decision: "approve".into(),
                 feedback: None,
+                auto_approved: false,
             },
             "gate_decided",
+        ),
+        (
+            DomainEvent::GateDecided {
+                feature_id: feature(),
+                step_execution_id: StepExecutionId::new("se-2"),
+                decision: "approve".into(),
+                feedback: None,
+                auto_approved: true,
+            },
+            "gate_auto_approved",
         ),
         (
             DomainEvent::BootstrapProgress {
@@ -290,4 +309,22 @@ fn unwired_recorder_forwards_without_recording() {
     let events = inner.events.lock().unwrap();
     assert_eq!(events.len(), 1);
     assert!(matches!(events[0], DomainEvent::StepProgress { .. }));
+}
+
+/// The reason is the whole point of the event: the gate strip shows it.
+#[test]
+fn a_held_gate_carries_which_gate_and_why() {
+    let rec = run_event_record(&DomainEvent::GateHeldByReview {
+        feature_id: feature(),
+        step_execution_id: StepExecutionId::new("se-2"),
+        reason: "the review carries no issue counts".into(),
+    })
+    .expect("a held gate is narrative");
+    assert_eq!(
+        rec.payload,
+        serde_json::json!({
+            "step_execution_id": "se-2",
+            "reason": "the review carries no issue counts",
+        })
+    );
 }

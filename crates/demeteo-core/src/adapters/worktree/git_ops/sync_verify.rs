@@ -101,13 +101,22 @@ pub(crate) async fn run_gate_prepare(
     cancel: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> GatePrepare {
     use crate::adapters::step_executor::harness_shell::run_harness_command;
+    use crate::domain::harness_outcome::merge_stderr_into_stdout;
 
     let (Some(_), Some(prepare)) = (gate.harness, gate.prepare) else {
         return GatePrepare::NotNeeded;
     };
     let cancel = cancel.unwrap_or_else(|| tokio::sync::watch::channel(false).1);
 
-    match run_harness_command(exec, cancel, machine, prepare, opts.clone()).await {
+    match run_harness_command(
+        exec,
+        cancel,
+        machine,
+        &merge_stderr_into_stdout(prepare),
+        opts.clone(),
+    )
+    .await
+    {
         None => GatePrepare::Stopped,
         Some(Ok(_)) => GatePrepare::Ready,
         Some(Err(err)) => {
@@ -128,6 +137,15 @@ pub(crate) async fn run_gate_prepare(
 ///
 /// Takes the command rather than the gate, so there is no `prepare` field
 /// within reach to run a second time.
+///
+/// The streams are merged, as every other harness caller merges them
+/// ([`merge_stderr_into_stdout`]). Left apart, a failure arrives as all of
+/// stdout followed by all of stderr, and a `cargo test` puts the failing
+/// tests' names on the first and `error: test failed` on the second — so the
+/// end of the output, which is the part
+/// [`gate_output_excerpt`](crate::domain::sync_session::gate_output_excerpt)
+/// keeps, named a crate and no test. A resolver was handed exactly that and
+/// asked to fix it.
 pub(crate) async fn run_gate_harness(
     exec: &dyn ExecutionPort,
     machine: &str,
@@ -136,13 +154,22 @@ pub(crate) async fn run_gate_harness(
     cancel: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> GateVerdict {
     use crate::adapters::step_executor::harness_shell::run_harness_command;
+    use crate::domain::harness_outcome::merge_stderr_into_stdout;
 
     let Some(harness) = harness else {
         return GateVerdict::NotGated;
     };
     let cancel = cancel.unwrap_or_else(|| tokio::sync::watch::channel(false).1);
 
-    match run_harness_command(exec, cancel, machine, harness, opts).await {
+    match run_harness_command(
+        exec,
+        cancel,
+        machine,
+        &merge_stderr_into_stdout(harness),
+        opts,
+    )
+    .await
+    {
         None => GateVerdict::Stopped,
         Some(Ok(_)) => GateVerdict::Passed,
         Some(Err(error)) => GateVerdict::Failed { error },

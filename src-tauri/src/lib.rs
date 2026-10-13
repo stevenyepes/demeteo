@@ -139,12 +139,26 @@ fn configure_linux_gpu_env() {
             ("GBM_BACKEND", "nvidia-drm"),
             ("__GLX_VENDOR_LIBRARY_NAME", "nvidia"),
             ("__NV_DISABLE_EXPLICIT_SYNC", "1"),
+            // WebKitGTK 2.54's GPU path spins the web process at 100% CPU on
+            // NVIDIA and grows it by ~400 MB/s until the host swaps; the
+            // window never finishes its first render. Disabling the DMA-BUF
+            // renderer is the only env switch that avoids it, and it costs
+            // GPU rendering: the web process rasterizes on the CPU into
+            // shared memory. `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` keeps the
+            // GPU and still runs away. `=0` opts back in — WebKit reads "0"
+            // as enabled. See docs/KNOWN_ISSUES.md.
+            ("WEBKIT_DISABLE_DMABUF_RENDERER", "1"),
         ] {
             if std::env::var(k).is_err() {
                 std::env::set_var(k, v);
             }
         }
-        eprintln!("[demeteo] NVIDIA detected: GPU rendering enabled (explicit sync off)");
+        let render = if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").as_deref() == Ok("0") {
+            "GPU rendering via DMA-BUF"
+        } else {
+            "DMA-BUF renderer off, CPU rasterization"
+        };
+        eprintln!("[demeteo] NVIDIA detected: explicit sync off, {render}");
     }
 }
 
@@ -299,6 +313,7 @@ pub fn run() {
             run_event_recorder.wire(ctx.run_events.clone());
 
             commands::workflows::seed_starter_workflows(&ctx.workflows);
+            ctx.app_version.set(app.package_info().version.to_string());
 
             app.manage(ctx);
             app.manage(SessionState::default());
@@ -456,7 +471,7 @@ pub fn run() {
             commands::project::set_workflow_override,
             commands::features::fetch_active_features,
             commands::features::start_feature,
-            commands::remote_runner::remote_submit_run,
+            commands::remote_runner::launch_run,
             commands::remote_runner::remote_list_mirrored_runs,
             commands::remote_runner::remote_reconcile_runs,
             commands::remote_runner::remote_refresh_run,

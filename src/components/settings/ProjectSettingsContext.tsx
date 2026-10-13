@@ -1,5 +1,5 @@
 import { createContext, useContext, useRef, useState, useEffect } from 'react';
-import type { ConfigOptionValue, EffortLevel, ProjectMemoryEntry, StepConfig, Machine, Project } from '../../types';
+import type { ConfigOptionValue, EffortLevel, GateAutonomy, ProjectMemoryEntry, StepConfig, Machine, Project } from '../../types';
 import { getAgentModels } from '../../lib/agentModels';
 import { effortLevelsFor, useAgentCatalog } from '../../lib/agentCatalog';
 import { reconcileDefaultWorkflow } from '../../lib/workflowDefault';
@@ -119,7 +119,7 @@ interface SettingsCtx {
   refreshCommandProbe: () => void;
   prepareCommand: string; setPrepareCommand: (v: string) => void;
   prTemplate: string; setPrTemplate: (v: string) => void;
-  conflictPolicy: string; setConflictPolicy: (v: string) => void;
+  gateAutonomy: GateAutonomy; setGateAutonomy: (v: GateAutonomy) => void;
   featureLifecycle: string; setFeatureLifecycle: (v: string) => void;
   /** The field's raw text: `''` persists as `null` (the engine default),
    *  `'0'` as `0` (never release on idleness). */
@@ -305,7 +305,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [probeNonce, setProbeNonce] = useState(0);
   const [prepareCommand, setPrepareCommand] = useState('');
   const [prTemplate, setPrTemplate] = useState('');
-  const [conflictPolicy, setConflictPolicy] = useState('always_gate');
+  const [gateAutonomy, setGateAutonomy] = useState<GateAutonomy>('attended');
   const [featureLifecycle, setFeatureLifecycle] = useState('archive');
   const [cacheIdleTtlDays, setCacheIdleTtlDays] = useState('');
 
@@ -314,7 +314,13 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const [agentConfigs, setAgentConfigs] = useState<AgentConfigView[]>([]);
+  const [agentConfigsDirty, setAgentConfigsDirty] = useState(false);
   const [isRefreshingAgents, setIsRefreshingAgents] = useState(false);
+
+  const setAgentConfigsDraft = (configs: AgentConfigView[]) => {
+    setAgentConfigs(configs);
+    setAgentConfigsDirty(true);
+  };
 
   const [defaultAgentKind, setDefaultAgentKind] = useState('');
   const [defaultModel, setDefaultModel] = useState('');
@@ -569,9 +575,11 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
     try {
       const configs = await getAgentConfigs(machineId, refresh);
       setAgentConfigs(configs);
+      setAgentConfigsDirty(false);
     } catch (err) {
       console.warn('No agent configs for machine:', machineId, formatError(err));
       setAgentConfigs([]);
+      setAgentConfigsDirty(false);
     } finally { if (refresh) setIsRefreshingAgents(false); }
   };
 
@@ -636,7 +644,7 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
           setValidationGates(res.worktree_strategy.validation_gates || []);
           setPrepareCommand(res.worktree_strategy.prepare_command || '');
           setPrTemplate(res.worktree_strategy.pr_template || '');
-          setConflictPolicy(res.conflict_policy);
+          setGateAutonomy(res.gate_autonomy ?? 'attended');
           setFeatureLifecycle(res.feature_lifecycle);
           setCacheIdleTtlDays(res.cache_idle_ttl_days != null ? String(res.cache_idle_ttl_days) : '');
           setDefaultAgentKind(res.default_agent_kind || '');
@@ -755,14 +763,19 @@ export function ProjectSettingsProvider({ children }: { children: React.ReactNod
    *  every project that goes through the site that omitted it. Spelled twice,
    *  that omission is invisible to the compiler and to any test that exercises
    *  only the other site. */
-  const settingsToPersist = (): ProjectSettingsInput => ({ default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, conflict_policy: conflictPolicy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts, review_entrypoint: reviewEntrypoint.trim() || null, sync_resolver_agent_kind: syncResolverAgentKind || null, sync_resolver_model: syncResolverModel || null, sync_resolver_effort: syncResolverEffort || null, sync_review_before_push: syncReviewBeforePush === 'push' ? false : null, cache_idle_ttl_days: parsedCacheIdleTtlDays() });
+  const settingsToPersist = (): ProjectSettingsInput => ({ default_branch: defaultBranch, branch_prefix: branchPrefix, test_command: testCommand || null, build_command: buildCommand || null, coverage_command: coverageCommand || null, conventions_file: conventionsFile || null, pr_template: prTemplate || null, harnesses: Object.keys(harnesses).length > 0 ? harnesses : null, validation_gates: gatesToPersist(), prepare_command: prepareCommand || null, extra_writable_paths: extraWritablePaths.length > 0 ? extraWritablePaths : null, gate_autonomy: gateAutonomy, feature_lifecycle: featureLifecycle, default_agent_kind: defaultAgentKind || null, default_model: defaultModel || null, default_effort: defaultEffort || null, default_workflow_id: defaultWorkflowId || null, default_loop_iterations: defaultLoopIterations.trim() ? parseInt(defaultLoopIterations, 10) : null, default_max_budget_usd: defaultMaxBudgetUsd.trim() ? parseFloat(defaultMaxBudgetUsd) : null, artifact_subdir: artifactSubdir || 'artifacts/', commit_artifacts: commitArtifacts, review_entrypoint: reviewEntrypoint.trim() || null, sync_resolver_agent_kind: syncResolverAgentKind || null, sync_resolver_model: syncResolverModel || null, sync_resolver_effort: syncResolverEffort || null, sync_review_before_push: syncReviewBeforePush === 'push' ? false : null, cache_idle_ttl_days: parsedCacheIdleTtlDays() });
 
-  const saveAllSettings = async () => {
+  const saveAgentConfigsIfChanged = async () => {
+    if (!agentConfigsDirty) return;
     const machineId = computeType === 'remote' ? remoteHost : 'local';
     if (machineId) {
-      try { await writeAgentConfigs(machineId, agentConfigs.map(a => ({ kind: a.kind, enabled: a.enabled }))); }
+      try { await writeAgentConfigs(machineId, agentConfigs.map(a => ({ kind: a.kind, enabled: a.enabled }))); setAgentConfigsDirty(false); }
       catch (err) { reportError(err, { kind: 'validation' }); }
     }
+  };
+
+  const saveAllSettings = async () => {
+    await saveAgentConfigsIfChanged();
     await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
 await saveProjectSettings(activeProject.id, settingsToPersist());
   };
@@ -772,13 +785,10 @@ await saveProjectSettings(activeProject.id, settingsToPersist());
     if (!ttl.ok) { setStatus('error'); setErrorMsg(ttl.message); return; }
     setStatus('saving'); setErrorMsg('');
     const reposChanged = selectedRepos.length !== originalRepos.length || selectedRepos.some(r => !originalRepos.some(o => o.path === r.path));
-    const computeChanged = computeType !== activeProject.compute_type || remoteHost !== activeProject.remote_host;
+    const computeChanged = computeType !== activeProject.compute_type ||
+      (computeType === 'remote' && remoteHost !== (activeProject.remote_host ?? ''));
     const isCurrentlyFailedOrBootstrapping = activeProject.status === 'error' || activeProject.status === 'bootstrapping';
-    const machineId = computeType === 'remote' ? remoteHost : 'local';
-    if (machineId) {
-      try { await writeAgentConfigs(machineId, agentConfigs.map(a => ({ kind: a.kind, enabled: a.enabled }))); }
-      catch (err) { reportError(err, { kind: 'validation' }); }
-    }
+    await saveAgentConfigsIfChanged();
     if (reposChanged || computeChanged || isCurrentlyFailedOrBootstrapping) {
       const removedRepos = originalRepos.filter(o => !selectedRepos.some(s => s.path === o.path));
       if (removedRepos.length > 0) {
@@ -788,12 +798,10 @@ await saveProjectSettings(activeProject.id, settingsToPersist());
       await proceedWithReBootstrap();
     } else {
       try {
-        await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
+        if (projectName !== activeProject.name) {
+          await updateProject(activeProject.id, { name: projectName, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null, repos: selectedRepos.map(r => ({ repo_path: r.path, provider_id: r.providerId })) });
+        }
         await saveProjectSettings(activeProject.id, settingsToPersist());
-        // Keep `compute_type` / `remote_host` in sync with the DB so the
-        // Settings tab doesn't fall back to "Local Compute" the next
-        // time the user reopens it. Mirrors the re-bootstrap save path
-        // below (line ~531).
         setProjects(prev => prev.map(p => p.id === activeProject.id ? { ...p, name: projectName, repos: selectedRepos.length, compute_type: computeType, remote_host: computeType === 'remote' ? remoteHost : null } : p));
         setStatus('success'); setOriginalRepos(selectedRepos);
         fadeLater(() => setStatus('idle'), 1500);
@@ -860,13 +868,13 @@ await saveProjectSettings(activeProject.id, settingsToPersist());
     buildCommand, setBuildCommand, coverageCommand, setCoverageCommand, conventionsFile, setConventionsFile,
     harnesses, setHarnesses, validationGates, setValidationGates,
     commandProbe, isProbingCommands, probeError, refreshCommandProbe,
-    prepareCommand, setPrepareCommand, prTemplate, setPrTemplate, conflictPolicy, setConflictPolicy,
+    prepareCommand, setPrepareCommand, prTemplate, setPrTemplate, gateAutonomy, setGateAutonomy,
     featureLifecycle, setFeatureLifecycle, cacheIdleTtlDays, setCacheIdleTtlDays, defaultAgentKind, setDefaultAgentKind, defaultModel, setDefaultModel,
     defaultEffort, setDefaultEffort,
     defaultWorkflowId, setDefaultWorkflowId: chooseDefaultWorkflow, missingDefaultWorkflowId,
     defaultLoopIterations, setDefaultLoopIterations, availableModelsForDefault, isLoadingModelsForDefault,
     defaultMaxBudgetUsd, setDefaultMaxBudgetUsd,
-    agentConfigs, setAgentConfigs, isRefreshingAgents, artifactSubdir, setArtifactSubdir, commitArtifacts, setCommitArtifacts,
+    agentConfigs, setAgentConfigs: setAgentConfigsDraft, isRefreshingAgents, artifactSubdir, setArtifactSubdir, commitArtifacts, setCommitArtifacts,
     reviewEntrypoint, setReviewEntrypoint,
     syncResolverAgentKind, setSyncResolverAgentKind: onSyncResolverAgentChange,
     syncResolverModel, setSyncResolverModel,

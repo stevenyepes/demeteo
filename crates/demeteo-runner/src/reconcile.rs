@@ -106,31 +106,12 @@ pub async fn reconcile_on_startup(svc: Arc<RunnerServices>) {
             // `feature_start` has nothing to resume and runs from scratch.
             let result =
                 crate::run::resume_or_run(&svc_bg, &run_id_bg, &spec, project_id, feature_id).await;
-            let now = paths::now_ms();
-            match result {
-                Ok(outcome) => {
-                    let _ = svc_bg.ctx.runner_runs.update_status(
-                        &run_id_bg,
-                        &outcome.status,
-                        outcome.project_id.as_deref(),
-                        outcome.feature_id.as_deref(),
-                        None,
-                        outcome.pushed_branch.as_deref(),
-                        now,
-                    );
-                }
-                Err(e) => {
-                    let _ = svc_bg.ctx.runner_runs.update_status(
-                        &run_id_bg,
-                        "failed",
-                        None,
-                        None,
-                        Some(&e),
-                        None,
-                        now,
-                    );
-                }
-            }
+            crate::run::settle_run(
+                svc_bg.ctx.run_events.as_ref(),
+                svc_bg.ctx.runner_runs.as_ref(),
+                &run_id_bg,
+                result,
+            );
         });
     }
 }

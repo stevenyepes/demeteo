@@ -17,6 +17,13 @@ import type { PullRequestSummary } from '../../lib/pullRequests';
 import { GATE_FENCE_CLOSE, GATE_FENCE_OPEN, GATE_HEADING } from '../../lib/reviewEvidence';
 import type { StepConfig, StepExecution, WorkflowWithSteps } from '../../types';
 
+/** The `args` object `launch_run` is invoked with. */
+function launchArgs(payload: unknown): Record<string, unknown> {
+  if (typeof payload !== 'object' || payload === null || !('args' in payload)) return {};
+  const { args } = payload;
+  return typeof args === 'object' && args !== null ? { ...args } : {};
+}
+
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
 const getAgentModels = vi.hoisted(() => vi.fn());
@@ -190,8 +197,8 @@ function backend(input: {
       }
       return Promise.reject(new Error(`unread artifact: ${path}`));
     }
-    if (cmd === 'start_feature') {
-      launches.push(typeof args === 'object' && args !== null ? { ...args } : {});
+    if (cmd === 'launch_run') {
+      launches.push(launchArgs(args));
       return Promise.resolve({ id: 'feat-2', title: 'fix', status: 'running' });
     }
     return Promise.reject(new Error(`unexpected command: ${cmd}`));

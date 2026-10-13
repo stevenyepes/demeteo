@@ -15,8 +15,22 @@ fn credential() -> GitCredential {
     }
 }
 
+const LEASED: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+fn lease(branch: &str) -> crate::domain::push_lease::PushLease {
+    crate::domain::push_lease::PushLease {
+        branch: branch.to_string(),
+        expected: Some(LEASED.to_string()),
+    }
+}
+
 fn request() -> ProgramRequest {
-    push_request("/w/repo", "demeteo/f-1", true, Some(&credential()))
+    push_request(
+        "/w/repo",
+        "demeteo/f-1",
+        Some(&lease("demeteo/f-1")),
+        Some(&credential()),
+    )
 }
 
 /// The whole reason the token moved out of the URL and off the disk: nothing
@@ -153,7 +167,7 @@ fn redaction_of_an_empty_secret_is_the_identity() {
 /// Demeteo had a token for it.
 #[test]
 fn an_uncredentialed_push_installs_no_helper_but_still_cannot_be_asked() {
-    let req = push_request("/w/repo", "demeteo/f-1", false, None);
+    let req = push_request("/w/repo", "demeteo/f-1", None, None);
 
     assert!(
         !req.args.iter().any(|a| a.starts_with("credential.helper")),
@@ -170,21 +184,26 @@ fn an_uncredentialed_push_installs_no_helper_but_still_cannot_be_asked() {
     );
 }
 
-/// Force is the merge-request publisher's alone.
+/// Force is the merge-request publisher's alone, and even there it is leased.
 ///
 /// Every other push in the app aims at a branch a person may have committed to
-/// since — a resolution, a clean sync merge, the Publish button — and `-f`
+/// since — a resolution, a clean sync merge, the Publish button — and forcing
 /// there would overwrite their work with Demeteo's idea of the branch.
 #[test]
-fn only_the_caller_that_asks_for_it_force_pushes() {
-    assert!(push_request("/w/repo", "b", true, None)
-        .args
+fn only_the_caller_that_asks_for_it_force_pushes_and_never_blindly() {
+    let forced = push_request("/w/repo", "b", Some(&lease("b")), None).args;
+    let plain = push_request("/w/repo", "b", None, None).args;
+
+    assert!(forced
         .iter()
-        .any(|a| a == "-f"));
-    assert!(!push_request("/w/repo", "b", false, None)
-        .args
-        .iter()
-        .any(|a| a == "-f"));
+        .any(|a| a == &format!("--force-with-lease=refs/heads/b:{LEASED}")));
+    assert!(!plain.iter().any(|a| a.starts_with("--force")));
+    for args in [&forced, &plain] {
+        assert!(
+            !args.iter().any(|a| a == "-f" || a == "--force"),
+            "{args:?}"
+        );
+    }
 }
 
 /// A push git could not authenticate is diagnosed as one, and says what to do.
@@ -235,6 +254,98 @@ fn a_failed_push_carries_no_token_into_its_diagnosis() {
     assert!(!said.contains(PAT), "token survived: {said}");
 }
 
+/// What git prints when a local `pre-push` hook exits non-zero: the hook's own
+/// output, then the closing pair — and no `! [rejected]`, because nothing was
+/// sent.
+fn hook_failure(hook_output: &str) -> String {
+    format!(
+        "Command failed (exit code: Some(1)): {hook_output}\n\
+         error: failed to push some refs to 'https://gitlab.example.com/acme/widgets.git'"
+    )
+}
+
+/// The user is told which half failed, and that origin never heard the push —
+/// the hook's words follow because they are the only thing that says what to fix.
+#[test]
+fn a_push_a_hook_stopped_says_so_and_shows_the_hooks_output() {
+    let said = push_failure(
+        &hook_failure("running checks\nTS2322: Type 'string' is not assignable"),
+        None,
+    );
+
+    assert!(said.contains("pre-push hook failed"), "{said}");
+    assert!(said.contains("nothing reached origin"), "{said}");
+    assert!(said.contains("TS2322: Type 'string'"), "{said}");
+    assert!(
+        !said.contains("failed to push some refs"),
+        "git's closing line is not the hook's output: {said}"
+    );
+}
+
+/// The hook runs arbitrary repository code and may print the token it was
+/// handed through the environment.
+#[test]
+fn a_token_the_hook_printed_is_redacted_from_its_tail() {
+    let cred = credential();
+    let said = push_failure(
+        &hook_failure(&format!("deploy-check: using token {PAT}\ncheck failed")),
+        Some(&cred),
+    );
+
+    assert!(said.contains("pre-push hook failed"), "{said}");
+    assert!(said.contains("check failed"), "{said}");
+    assert!(!said.contains(PAT), "token survived: {said}");
+}
+
+/// A recognisable token that is not the configured one is still masked by the
+/// shared scrubber.
+#[test]
+fn a_recognisable_foreign_token_in_the_hook_output_is_scrubbed() {
+    let foreign = format!("ghp_{}", "a1B2c3D4e5F6g7H8i9J0".repeat(2));
+    let said = push_failure(&hook_failure(&format!("token={foreign}")), None);
+
+    assert!(said.contains("pre-push hook failed"), "{said}");
+    assert!(!said.contains(&foreign), "token survived: {said}");
+}
+
+/// A gate that runs a whole test suite can print megabytes, and the end of it
+/// is where it says why it failed.
+#[test]
+fn a_hooks_output_is_bounded_to_its_tail() {
+    let noisy: String = (0..5000).map(|n| format!("line {n}\n")).collect();
+    let said = push_failure(&hook_failure(&format!("{noisy}the real reason")), None);
+
+    assert!(said.contains("the real reason"), "{said}");
+    assert!(!said.contains("line 0\n"), "the head was not cut: {said}");
+    assert!(said.len() < 8192, "{} bytes", said.len());
+}
+
+/// A remote's own `pre-receive` hook ends in the same closing line a local
+/// hook does; it heard the push, so it is not relabelled.
+#[test]
+fn a_remote_hook_rejection_is_not_attributed_to_the_local_hook() {
+    let raw = "Command failed (exit code: Some(1)): remote: pre-receive hook declined\n\
+               ! [remote rejected] main -> main (pre-receive hook declined)\n\
+               error: failed to push some refs to 'https://h/r.git'";
+    assert_eq!(push_failure(raw, None), raw);
+}
+
+/// The credential rendering is the one callers already match on; the hook
+/// branch must not have moved a byte of it.
+#[test]
+fn the_credential_message_is_exactly_this_text() {
+    let raw = "Command failed (exit code: Some(128)): fatal: could not read Password for \
+               'https://x-access-token@github.com': No such device or address";
+    assert_eq!(
+        push_failure(raw, None),
+        format!(
+            "Git could not authenticate to origin, so nothing was pushed. \
+             Connect the provider or refresh its token in Preferences → Providers, \
+             then try again.\n\n{raw}"
+        )
+    );
+}
+
 /// `push_request` is what every push site hands the transport; factoring its
 /// credential half out must not move a byte of it.
 #[test]
@@ -252,7 +363,7 @@ fn a_credentialed_force_push_is_exactly_this_argv_and_env() {
             "-c".to_string(),
             format!("credential.helper={}", credential_helper()),
             "push".to_string(),
-            "-f".to_string(),
+            format!("--force-with-lease=refs/heads/demeteo/f-1:{LEASED}"),
             "origin".to_string(),
             "demeteo/f-1".to_string(),
         ]
@@ -267,7 +378,7 @@ fn a_credentialed_force_push_is_exactly_this_argv_and_env() {
 
 #[test]
 fn an_uncredentialed_push_is_exactly_this_argv_and_env() {
-    let req = push_request("/w/repo", "b", false, None);
+    let req = push_request("/w/repo", "b", None, None);
 
     assert_eq!(
         req.args,

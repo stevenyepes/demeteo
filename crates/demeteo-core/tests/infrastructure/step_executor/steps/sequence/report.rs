@@ -103,3 +103,48 @@ fn rendering_twice_is_stable() {
     assert_eq!(first, second);
     assert_eq!(body1, store.get(&second).unwrap());
 }
+
+/// The note a ticket left survives only in its fragment; a resumed list reads
+/// it back from there, keyed by ticket id, and a fragment without one is
+/// simply absent from the map.
+#[test]
+fn landed_tickets_handoffs_are_read_back_from_their_fragments() {
+    let store = temp_store();
+    record_ticket_report(
+        &store,
+        "f",
+        "s-implement",
+        &TicketReport::new(
+            "a",
+            "Ticket a",
+            "AC1: MET\n\n## Handoff\nthe port is a stub",
+            vec![],
+            1,
+        ),
+    );
+    record_ticket_report(&store, "f", "s-implement", &fragment("b", 2, "npm test"));
+    record_ticket_report(
+        &store,
+        "f",
+        "s-other",
+        &TicketReport::new("c", "Ticket c", "## Handoff\nother step", vec![], 3),
+    );
+
+    let notes = ticket_handoffs(&store, "f", "s-implement");
+    assert_eq!(
+        notes.get("a").map(String::as_str),
+        Some("the port is a stub")
+    );
+    assert!(
+        !notes.contains_key("b"),
+        "a fragment without a handoff: {notes:?}"
+    );
+    assert!(
+        !notes.contains_key("c"),
+        "another step's fragment leaked in: {notes:?}"
+    );
+    assert!(
+        ticket_handoffs(&store, "f", "s-nothing").is_empty(),
+        "no fragments, no notes"
+    );
+}

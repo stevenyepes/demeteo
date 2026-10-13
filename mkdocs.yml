@@ -1,5 +1,5 @@
 site_name: Demeteo
-site_description: Fleet-style multi-agent orchestrator for software features
+site_description: A desktop control plane for coding agents
 site_url: https://stevenyepes.github.io/demeteo
 repo_url: https://github.com/stevenyepes/demeteo
 repo_name: stevenyepes/demeteo
@@ -46,8 +46,9 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - User journeys:
+    - Creating a project: journeys/create-a-workspace.md
     - Starting a feature: journeys/start-a-feature.md
-    - Creating a workspace: journeys/create-a-workspace.md
+    - Running a Discovery: journeys/run-a-discovery.md
   - Concepts:
     - Workflows: workflows.md
     - Settings: settings.md

@@ -5,12 +5,10 @@ export interface CreateZeroStrategyStepProps {
   branchPrefix: string;
   testCommand: string;
   prTemplate: string;
-  conflictPolicy: string;
   featureLifecycle: string;
   onDefaultBranchChange: (v: string) => void;
   onBranchPrefixChange: (v: string) => void;
   onTestCommandChange: (v: string) => void;
-  onConflictPolicyChange: (v: string) => void;
   onFeatureLifecycleChange: (v: string) => void;
 }
 
@@ -43,9 +41,9 @@ const FieldInput: React.FC<{
  */
 export function CreateZeroStrategyStep(props: CreateZeroStrategyStepProps) {
   const {
-    defaultBranch, branchPrefix, testCommand, prTemplate, conflictPolicy, featureLifecycle,
+    defaultBranch, branchPrefix, testCommand, prTemplate, featureLifecycle,
     onDefaultBranchChange, onBranchPrefixChange, onTestCommandChange,
-    onConflictPolicyChange, onFeatureLifecycleChange,
+    onFeatureLifecycleChange,
   } = props;
   return (
     <div className="space-y-4">
@@ -61,16 +59,6 @@ export function CreateZeroStrategyStep(props: CreateZeroStrategyStepProps) {
         <FieldInput label="Default branch" value={defaultBranch} onChange={onDefaultBranchChange} />
         <FieldInput label="Branch prefix" value={branchPrefix} onChange={onBranchPrefixChange} />
         <FieldInput label="Test command (optional)" value={testCommand} onChange={onTestCommandChange} placeholder="npm test" />
-        <div>
-          <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-widest mb-1.5">
-            Conflict policy
-          </label>
-          <select value={conflictPolicy} onChange={(e) => onConflictPolicyChange(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50">
-            <option value="always_gate">Always Gate</option>
-            <option value="auto_agent">Auto Agent First</option>
-            <option value="auto_human">Immediate Manual Merge</option>
-          </select>
-        </div>
         <div>
           <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-widest mb-1.5">
             Feature lifecycle

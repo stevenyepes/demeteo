@@ -18,6 +18,7 @@ function ticket(seq: number, state: TicketState): Ticket {
     agent_kind: null,
     model: null,
     effort: null,
+    machine_id: null,
     attachments: [],
     state,
     drop_reason: null,

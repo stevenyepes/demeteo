@@ -224,6 +224,9 @@ impl RemoteRunMirrorPort for RecordingMirrors {
             Vec::new()
         })
     }
+    fn list_for_features(&self, _: &[&str]) -> Result<Vec<RemoteRunMirror>, String> {
+        panic!("unexpected RemoteRunMirrorPort call")
+    }
 }
 
 #[test]

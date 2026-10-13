@@ -247,6 +247,7 @@ fn reset_clears_gate_decision_row() {
             decision: Some("redirect".to_string()),
             feedback: Some("revise the spec to use cargo before mise".to_string()),
             created_at: crate::paths::now_ms(),
+            auto_approved: false,
         })
         .unwrap();
 
@@ -401,6 +402,7 @@ fn reset_is_noop_when_target_index_out_of_bounds() {
             decision: Some("redirect".to_string()),
             feedback: None,
             created_at: crate::paths::now_ms(),
+            auto_approved: false,
         })
         .unwrap();
 

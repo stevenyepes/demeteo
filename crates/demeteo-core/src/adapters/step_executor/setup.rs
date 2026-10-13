@@ -227,7 +227,7 @@ pub fn fetch_default_settings() -> ProjectSettings {
             prepare_command: None,
             extra_writable_paths: Vec::new(),
         },
-        conflict_policy: "always_gate".to_string(),
+        gate_autonomy: Default::default(),
         feature_lifecycle: "archive".to_string(),
         default_agent_kind: None,
         default_model: None,

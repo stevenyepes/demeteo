@@ -31,6 +31,8 @@ export interface TicketDraft {
   /** `''` is *unset*, which is a real choice: the run falls back to the
    *  project's default rather than to a level nobody picked. */
   effort: EffortLevel | '';
+  /** `''` inherits the Discovery's placement; `'local'` overrides it. */
+  machineId: string;
 }
 
 /** The row, as a form holds it. */
@@ -46,6 +48,7 @@ export function draftOf(ticket: Ticket): TicketDraft {
     agentKind: ticket.agent_kind ?? '',
     model: ticket.model ?? '',
     effort: ticket.effort ?? '',
+    machineId: ticket.machine_id ?? '',
   };
 }
 
@@ -69,6 +72,7 @@ export function editOf(draft: TicketDraft): TicketEdit {
     agent_kind: chosen(draft.agentKind),
     model: chosen(draft.model),
     effort: draft.effort === '' ? null : draft.effort,
+    machine_id: chosen(draft.machineId),
   };
 }
 

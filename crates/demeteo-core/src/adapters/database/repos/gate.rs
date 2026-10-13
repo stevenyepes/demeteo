@@ -10,14 +10,15 @@ impl GateRepository for SqliteAdapter {
     fn create(&self, g: GateDecision) -> Result<(), String> {
         let conn = self.conn.lock()?;
         conn.execute(
-            "INSERT INTO gate_decisions (id,step_execution_id,decision,feedback,created_at)
-             VALUES (?1,?2,?3,?4,?5)",
+            "INSERT INTO gate_decisions (id,step_execution_id,decision,feedback,created_at,auto_approved)
+             VALUES (?1,?2,?3,?4,?5,?6)",
             params![
                 g.id,
                 g.step_execution_id,
                 g.decision,
                 g.feedback,
-                g.created_at
+                g.created_at,
+                g.auto_approved
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -27,19 +28,21 @@ impl GateRepository for SqliteAdapter {
     fn reopen(&self, g: GateDecision) -> Result<(), String> {
         let conn = self.conn.lock()?;
         conn.execute(
-            "INSERT INTO gate_decisions (id,step_execution_id,decision,feedback,created_at)
-             VALUES (?1,?2,?3,?4,?5)
+            "INSERT INTO gate_decisions (id,step_execution_id,decision,feedback,created_at,auto_approved)
+             VALUES (?1,?2,?3,?4,?5,?6)
              ON CONFLICT(step_execution_id) DO UPDATE SET
                  id = excluded.id,
                  decision = excluded.decision,
                  feedback = excluded.feedback,
-                 created_at = excluded.created_at",
+                 created_at = excluded.created_at,
+                 auto_approved = excluded.auto_approved",
             params![
                 g.id,
                 g.step_execution_id,
                 g.decision,
                 g.feedback,
-                g.created_at
+                g.created_at,
+                g.auto_approved
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -54,7 +57,8 @@ impl GateRepository for SqliteAdapter {
     ) -> Result<(), String> {
         let conn = self.conn.lock()?;
         conn.execute(
-            "UPDATE gate_decisions SET decision=?2, feedback=?3 WHERE step_execution_id=?1",
+            "UPDATE gate_decisions SET decision=?2, feedback=?3, auto_approved=0
+             WHERE step_execution_id=?1",
             params![step_execution_id.0, decision, feedback],
         )
         .map_err(|e| e.to_string())?;
@@ -80,8 +84,30 @@ impl GateRepository for SqliteAdapter {
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(step_execution_id) DO UPDATE SET
                  decision = excluded.decision,
-                 feedback = excluded.feedback",
+                 feedback = excluded.feedback,
+                 auto_approved = 0",
             params![id, step_execution_id.0, decision, feedback, created_at],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn approve_by_policy(
+        &self,
+        step_execution_id: &StepExecutionId,
+        created_at: i64,
+    ) -> Result<(), String> {
+        let id = format!("gd-{}", step_execution_id.0);
+        let conn = self.conn.lock()?;
+        conn.execute(
+            "INSERT INTO gate_decisions
+                 (id, step_execution_id, decision, feedback, created_at, auto_approved)
+             VALUES (?1, ?2, 'approve', NULL, ?3, 1)
+             ON CONFLICT(step_execution_id) DO UPDATE SET
+                 decision = 'approve',
+                 feedback = NULL,
+                 auto_approved = 1",
+            params![id, step_execution_id.0, created_at],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -94,7 +120,7 @@ impl GateRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, step_execution_id, decision, feedback, created_at
+                "SELECT id, step_execution_id, decision, feedback, created_at, auto_approved
                  FROM gate_decisions
                  WHERE step_execution_id = ?1
                  ORDER BY created_at DESC LIMIT 1",
@@ -108,6 +134,7 @@ impl GateRepository for SqliteAdapter {
                     decision: row.get(2)?,
                     feedback: row.get(3)?,
                     created_at: row.get(4)?,
+                    auto_approved: row.get::<_, i64>(5)? != 0,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -122,7 +149,7 @@ impl GateRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT gd.id,gd.step_execution_id,gd.decision,gd.feedback,gd.created_at
+                "SELECT gd.id,gd.step_execution_id,gd.decision,gd.feedback,gd.created_at,gd.auto_approved
                  FROM gate_decisions gd
                  JOIN step_executions se ON se.id = gd.step_execution_id
                  WHERE se.feature_id=?1 AND gd.decision IS NULL
@@ -137,6 +164,7 @@ impl GateRepository for SqliteAdapter {
                     decision: row.get(2)?,
                     feedback: row.get(3)?,
                     created_at: row.get(4)?,
+                    auto_approved: row.get::<_, i64>(5)? != 0,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -164,7 +192,7 @@ impl GateRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT gd.id,gd.step_execution_id,gd.decision,gd.feedback,gd.created_at
+                "SELECT gd.id,gd.step_execution_id,gd.decision,gd.feedback,gd.created_at,gd.auto_approved
                  FROM gate_decisions gd
                  JOIN step_executions se ON se.id = gd.step_execution_id
                  WHERE se.feature_id=?1 AND gd.decision IS NOT NULL
@@ -179,6 +207,7 @@ impl GateRepository for SqliteAdapter {
                     decision: row.get(2)?,
                     feedback: row.get(3)?,
                     created_at: row.get(4)?,
+                    auto_approved: row.get::<_, i64>(5)? != 0,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -193,7 +222,7 @@ impl GateRepository for SqliteAdapter {
         let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
-                "SELECT gd.id,gd.step_execution_id,gd.decision,gd.feedback,gd.created_at
+                "SELECT gd.id,gd.step_execution_id,gd.decision,gd.feedback,gd.created_at,gd.auto_approved
                  FROM gate_decisions gd
                  JOIN step_executions se ON se.id = gd.step_execution_id
                  WHERE se.feature_id=?1 AND gd.decision IS NOT NULL
@@ -208,6 +237,7 @@ impl GateRepository for SqliteAdapter {
                     decision: row.get(2)?,
                     feedback: row.get(3)?,
                     created_at: row.get(4)?,
+                    auto_approved: row.get::<_, i64>(5)? != 0,
                 })
             })
             .map_err(|e| e.to_string())?;

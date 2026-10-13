@@ -11,12 +11,18 @@ fn every_declared_tool_maps_to_its_exact_tier() {
         ("list_step_attempts", Scope::Read),
         ("get_failure_verdict", Scope::Read),
         ("list_pending_gates", Scope::Read),
+        ("list_discoveries", Scope::Read),
         ("get_discovery_board", Scope::Read),
+        ("refresh_discovery_prs", Scope::Read),
+        ("list_machines", Scope::Read),
         ("run_events_since", Scope::Read),
         ("create_workspace_project", Scope::Configure),
         ("apply_run_shape_patch", Scope::Configure),
         ("start_feature", Scope::Spend),
         ("start_ticket", Scope::Spend),
+        ("retry_step", Scope::Spend),
+        ("set_step_assignment", Scope::Spend),
+        ("rework_from_critic", Scope::Spend),
     ];
 
     for (name, expected) in cases {

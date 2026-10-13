@@ -252,10 +252,12 @@ impl ExecutionDriver {
             wt.path,
         )
         .await;
+        let review_before = self.review_body_before_turn(step_conf, wt).await;
         let baseline = TurnBaseline {
             snapshot: &worktree_snapshot,
             base_ref: worktree_base_ref.as_deref(),
             head: &pre_turn_head,
+            review_before: review_before.as_deref(),
         };
 
         let prompt = self
@@ -413,7 +415,10 @@ impl ExecutionDriver {
                 .read_step_verdict(&text_buffer, &session, verifier_cfg, target, wt, &mut spend)
                 .await;
 
-            match verdict::verdict_disposition(verdict, &missing_artifacts) {
+            let environment = verifier_cfg
+                .when_nothing_ran
+                .environment_reading(harness_section.as_ref());
+            match verdict::verdict_disposition(verdict, &missing_artifacts, environment) {
                 verdict::VerdictDisposition::Pass => {
                     tracing::info!(
                         feature_id = %self.f_id,

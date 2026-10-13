@@ -319,7 +319,7 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
       aria-labelledby="shortcut-help-title"
     >
       <div
-        className="absolute inset-0 bg-[#08090c]/80 backdrop-blur-md"
+        className="absolute inset-0 bg-[#08090c]/85"
         onClick={close}
         data-testid="shortcut-help-backdrop"
       />

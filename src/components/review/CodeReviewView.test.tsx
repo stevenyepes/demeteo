@@ -15,6 +15,13 @@ import { REVIEW_STARTER_WORKFLOW_ID } from '../../lib/reviewLaunch';
 import type { Project, WorkflowWithSteps } from '../../types';
 import { CodeReviewView } from './CodeReviewView';
 
+/** The `args` object `launch_run` is invoked with. */
+function launchArgs(payload: unknown): Record<string, unknown> {
+  if (typeof payload !== 'object' || payload === null || !('args' in payload)) return {};
+  const { args } = payload;
+  return typeof args === 'object' && args !== null ? { ...args } : {};
+}
+
 const PROJECT: Project = {
   id: 'proj-1',
   name: 'Demo Project',
@@ -98,8 +105,8 @@ function queueBackend(input: { workflows: 'ok' | 'rejected' }) {
       return Promise.resolve({ default_agent_kind: 'claude-code' });
     }
     if (cmd === 'list_agents') return Promise.resolve([]);
-    if (cmd === 'start_feature') {
-      launches.push(typeof args === 'object' && args !== null ? { ...args } : {});
+    if (cmd === 'launch_run') {
+      launches.push(launchArgs(args));
       return Promise.resolve({ id: 'feat-1', title: 'Review', status: 'running' });
     }
     return Promise.reject(new Error(`unexpected command: ${cmd}`));
@@ -261,8 +268,8 @@ describe('CodeReviewView', () => {
     const launches: Record<string, unknown>[] = [];
     vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === 'list_open_pull_requests') return Promise.resolve([PULL_REQUEST]);
-      if (cmd === 'start_feature') {
-        launches.push(typeof args === 'object' && args !== null ? { ...args } : {});
+      if (cmd === 'launch_run') {
+        launches.push(launchArgs(args));
         return Promise.resolve({ id: 'feat-1', title: 'Review PR #412', status: 'running' });
       }
       return Promise.reject(new Error(`unexpected command: ${cmd}`));
@@ -297,8 +304,8 @@ describe('CodeReviewView', () => {
     vi.mocked(invoke).mockImplementation((cmd: string, args?: unknown) => {
       if (cmd === 'list_open_pull_requests')
         return Promise.resolve([{ ...PULL_REQUEST, from_fork: false }]);
-      if (cmd === 'start_feature') {
-        launches.push(typeof args === 'object' && args !== null ? { ...args } : {});
+      if (cmd === 'launch_run') {
+        launches.push(launchArgs(args));
         return Promise.resolve({ id: 'feat-1', title: 'Review PR #412', status: 'running' });
       }
       return Promise.reject(new Error(`unexpected command: ${cmd}`));
@@ -374,7 +381,7 @@ describe('CodeReviewView', () => {
     expect(screen.getByTestId('review-this-pr')).toBeDisabled();
 
     await userEvent.click(screen.getByTestId('review-this-pr'));
-    expect(launched).not.toContain('start_feature');
+    expect(launched).not.toContain('launch_run');
   });
 
   it('shows flat skeleton rows while the list is in flight', async () => {

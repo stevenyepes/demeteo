@@ -50,6 +50,8 @@ const detail: DiscoveryDetail = {
 const board: DiscoveryBoard = {
   tickets: [],
   progress: { blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 0, live: 0 },
+  discovery_default: { kind: 'local' },
+  local_host: 'local',
 };
 
 const stored: DiscoveryMessage = {
@@ -227,6 +229,7 @@ describe('the inspector overlay', () => {
       agent_kind: null,
       model: null,
       effort: null,
+      machine_id: null,
       attachments: [],
       state: 'unstarted',
       drop_reason: null,
@@ -237,12 +240,15 @@ describe('the inspector overlay', () => {
       updated_at: 0,
     },
     standing: { id: 't-1', lane: 'ready', startable: true, blockers: [] },
+    placement: { placement: { kind: 'local' }, inherited: true },
     feature: null,
   };
 
   const boardWithTicket: DiscoveryBoard = {
     tickets: [ticketOne],
     progress: { blocked: 0, ready: 1, in_flight: 0, landed: 0, dropped: 0, live: 1 },
+    discovery_default: { kind: 'local' },
+    local_host: 'local',
   };
 
   function mockBoard(withTicket: boolean) {
@@ -261,16 +267,19 @@ describe('the inspector overlay', () => {
     });
   }
 
-  it('auto-selects the first ticket once the board loads, opening the inspector', async () => {
+  it('opens with no ticket selected, so no inspector covers the graph', async () => {
     mockBoard(true);
     const view = await openWorkspace();
 
-    await waitFor(() => expect(view.getByTestId('ticket-verdict')).toBeInTheDocument());
+    await view.findAllByTestId('ticket-node');
+    await act(async () => {});
+    expect(view.queryByTestId('ticket-verdict')).not.toBeInTheDocument();
   });
 
-  it('Escape closes the inspector, and the auto-select effect does not reopen it', async () => {
+  it('opens the inspector on a picked ticket, and Escape closes it for good', async () => {
     mockBoard(true);
     const view = await openWorkspace();
+    fireEvent.click((await view.findAllByTestId('ticket-node'))[0]);
     await waitFor(() => expect(view.getByTestId('ticket-verdict')).toBeInTheDocument());
 
     await act(async () => {
@@ -278,7 +287,6 @@ describe('the inspector overlay', () => {
     });
     expect(view.queryByTestId('ticket-verdict')).not.toBeInTheDocument();
 
-    // Give the auto-select effect another render to try to fight the close.
     await act(async () => {});
     expect(view.queryByTestId('ticket-verdict')).not.toBeInTheDocument();
   });

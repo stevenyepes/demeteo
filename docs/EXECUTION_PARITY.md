@@ -26,8 +26,13 @@ that, and they are the reason the code looks the way it does:
   data in `ShellOptions` and every adapter honours every field identically. This
   is why `run_command_with` exists and why raw `run_command` should only appear
   where the documented default is genuinely intended.
+- **A command's stdout is the command's.** A login shell sources the account's
+  profile before it runs anything, and whatever that prints (iTerm2's shell
+  integration, a banner, a version manager's notice) lands on the same pipe.
+  Every login body therefore starts by printing `shared::shell::BODY_MARKER`,
+  and both adapters return only what follows it.
 - **Failures are loud and uniform.** A command that cannot run, or runs
-  non-zero, is always `Err` carrying stderr — never `Ok("")`, never swallowed by
+  non-zero, is always `Err` carrying its stdout and stderr — never `Ok("")`, never swallowed by
   `.ok()?` or `unwrap_or_default()`. Transport failures are distinguishable by
   message prefix (`TRANSPORT_ERROR_PREFIX`) so the verifier can treat them as
   non-retryable infrastructure rather than as a code regression.
@@ -71,6 +76,16 @@ worked example:
   from "the runner had never heard of it" except by that message, so it is
   propagated verbatim. A control silently succeeding against a runner that
   ignored it is the exact divergence this document exists to forbid.
+
+Starting a run holds to the same rule from the other end. The UI, Discovery
+tickets and MCP all launch through `application::launch::launch_run`, which
+holds the only `match` on `RunPlacement`; no caller branches on transport, or
+even on placement. A placement is a destination, not a transport —
+`RunPlacement::Local` is the project's own compute through the step executor,
+whether that is a subprocess or SSH, and `Detached` hands the run to that
+machine's runner — so the match chooses *who drives* the run, never *how a
+command reaches the machine*. Two launch surfaces given the same placement
+therefore produce the same run, and a refusal reads the same on each.
 
 ## Platform is not transport
 
@@ -218,6 +233,20 @@ directions.** Both need guarding, and one of them is invisible:
 
 Normalize conservatively: mask only known-volatile spans (absolute worktree
 path, ISO/epoch timestamps, feature/step run-id) and nothing else.
+
+## A `pre-push` hook runs in the tree you push from
+
+Git runs the hook in the working tree the push was issued from, so *where* a
+push runs decides which checkout the hook sees. A sync publish pushes from the
+sync worktree, where the feature's files are, and reports a hook that stopped
+it as a hook failure rather than a rejection. The MR publisher deliberately
+pushes from the clone instead. Neither is to be "fixed" to match the other, and
+neither may bypass the hook with `--no-verify`. Nothing else ever prepares the
+clone, so a push from it first runs the project's `prepare_command` there when a
+hook will judge it (`prepare_push_tree` in `crates/demeteo-core/src/adapters/git_push.rs`);
+without that, a hook that runs the repo's gate refuses a branch whose gates passed. The failure classifier is in
+`crates/demeteo-core/src/domain/git_push.rs`; the reason for the MR publisher's
+choice is recorded in `crates/demeteo-core/src/adapters/mr_publisher/push.rs`.
 
 ## Related
 

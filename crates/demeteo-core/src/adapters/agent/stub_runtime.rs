@@ -45,6 +45,12 @@
 //! [`stub_body`]), so a `sequence` step consuming the artifact via
 //! `task_list_from` resolves a real, deterministic plan.
 //!
+//! A `@stub-review <path> <critical> <major> <minor>` directive is a write
+//! whose body is a review in the shape
+//! [`review_contract`](crate::domain::gate::review_contract) asks a review
+//! step for, carrying those counts and the verdict they imply — the only way
+//! a stub-driven run reaches a ship gate with a review the gate can read.
+//!
 //! A trailing `@stub-verdict <key>` directive makes the stub end its reply
 //! with `{"<key>":"pass"}` so single-turn validate steps (which parse a
 //! verdict object out of the agent text) pass deterministically.
@@ -185,6 +191,47 @@ struct WriteDirective {
     /// Worktree-relative path — matched verbatim against a declared
     /// `LastWriteTo { path }` and used as the `ToolWrite` source path.
     path: String,
+    /// The counts of a `@stub-review` write; `None` for a `@stub-write`.
+    review: Option<[u32; 3]>,
+}
+
+impl WriteDirective {
+    fn body(&self) -> String {
+        match self.review {
+            Some(counts) => stub_review(counts),
+            None => stub_body(&self.path),
+        }
+    }
+}
+
+/// `<path> <critical> <major> <minor>`, or `None` when it is not all four.
+fn parse_review_directive(rest: &str) -> Option<WriteDirective> {
+    let mut words = rest.split_whitespace();
+    let path = words.next()?.to_string();
+    let mut count = || words.next()?.parse::<u32>().ok();
+    let review = Some([count()?, count()?, count()?]);
+    Some(WriteDirective { path, review })
+}
+
+/// A review a gate reads as its counts say: every section present, one bullet
+/// per counted issue, and the verdict the contract assigns those counts.
+fn stub_review([critical, major, minor]: [u32; 3]) -> String {
+    let section = |count: u32| match count {
+        0 => "None.\n".to_string(),
+        n => (1..=n).map(|i| format!("- stub issue {i}\n")).collect(),
+    };
+    let verdict = match (critical + major, minor) {
+        (0, 0) => "PASS",
+        (0, _) => "PASS_WITH_NOTES",
+        _ => "FAIL",
+    };
+    format!(
+        "## Critical Issues\n{}\n## Major Issues\n{}\n## Minor Issues\n{}\n## Verdict\n{verdict}\n\n\
+         {{\"review\": {{\"critical\": {critical}, \"major\": {major}, \"minor\": {minor}}}}}\n",
+        section(critical),
+        section(major),
+        section(minor),
+    )
 }
 
 struct StubDirectives {
@@ -197,8 +244,8 @@ struct StubDirectives {
     failing_tests: Option<Vec<String>>,
 }
 
-/// Extract `@stub-write` / `@stub-verdict` / `@stub-triage` / `@stub-tests`
-/// directives from a
+/// Extract `@stub-write` / `@stub-review` / `@stub-verdict` / `@stub-triage` /
+/// `@stub-tests` directives from a
 /// rendered prompt. Whitespace-tolerant; a directive must be the first token
 /// on its (trimmed) line, so a prompt merely *mentioning* one in prose — e.g.
 /// the failing-command echo embedded mid-line in a triage prompt — does not
@@ -215,8 +262,11 @@ fn parse_directives(text: &str) -> StubDirectives {
             if !path.is_empty() {
                 writes.push(WriteDirective {
                     path: path.to_string(),
+                    review: None,
                 });
             }
+        } else if let Some(rest) = line.strip_prefix("@stub-review") {
+            writes.extend(parse_review_directive(rest));
         } else if let Some(rest) = line.strip_prefix("@stub-verdict") {
             let key = rest.trim();
             if !key.is_empty() {
@@ -355,7 +405,7 @@ impl AgentSession for StubSession {
         tokio::spawn(async move {
             for d in &directives.writes {
                 let abs = resolve_abs(&cwd, &d.path);
-                let body = stub_body(&d.path);
+                let body = d.body();
                 // Land the file on the target worktree so git snapshot /
                 // AllWrites captures also see it. A write failure is
                 // surfaced as an Error event (not a silent skip) so the

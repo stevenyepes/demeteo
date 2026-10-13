@@ -5,12 +5,26 @@ use crate::adapters::step_executor::artifacts::{
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::artifact::Artifact;
 use crate::domain::artifact_capture::captures_file_bodies;
+use crate::domain::gate::review_contract::{carried_over, review_path};
 use crate::domain::models::{StepConfig, StepExecution};
 use crate::domain::staged_deliverable::{is_under_prefix, normalize_artifact_subdir};
 
 use super::context::{AgentWorktree, TurnBaseline};
 
 impl ExecutionDriver {
+    /// The body at `step_conf`'s review path before its turn runs. Nothing
+    /// being there is the ordinary case, so unlike [`read_worktree_file`] a
+    /// read that fails is an answer and not a warning.
+    pub(crate) async fn review_body_before_turn(
+        &self,
+        step_conf: &StepConfig,
+        wt: AgentWorktree<'_>,
+    ) -> Option<String> {
+        let path = review_path(step_conf)?;
+        let abs = format!("{}/{}", wt.path.trim_end_matches('/'), path);
+        self.exec.read_file(wt.machine, &abs).await.ok()
+    }
+
     pub(crate) async fn process_agent_artifacts(
         &self,
         step_exec: &StepExecution,
@@ -62,6 +76,7 @@ impl ExecutionDriver {
         // On a step that scaffolds a project that is the entire tree held in
         // memory to be thrown away. `captures_file_bodies` names the four
         // captures that can actually consume one.
+        let review = review_path(step_conf);
         if captures_file_bodies(decls) {
             for rel_path in changed {
                 let name = std::path::Path::new(&rel_path)
@@ -72,6 +87,11 @@ impl ExecutionDriver {
                 if let Some(content) =
                     read_worktree_file(&*self.exec, machine_str, wt_path, &rel_path).await
                 {
+                    if review == Some(rel_path.as_str())
+                        && carried_over(baseline.review_before, &content)
+                    {
+                        continue;
+                    }
                     produced_artifacts.push(Artifact::tool_write(name, rel_path, content));
                 }
             }

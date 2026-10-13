@@ -524,11 +524,26 @@ describe('WorkflowCanvas zoom bounds', () => {
  * the plan carries no fit scale and the predicate falls back to node count —
  * which is the branch these two starters straddle. The scale branch is covered
  * where it is decidable, in `layoutDirection.test.ts`.
+ *
+ * Design mode only: a run graph stops at a readable scale and pans on scroll,
+ * and there the map covered the run's last steps.
  */
 describe('WorkflowCanvas minimap', () => {
   afterEach(cleanup);
 
-  it('shows the minimap for a graph at the node-count threshold', () => {
+  it('shows the minimap for a design graph at the node-count threshold', () => {
+    const def = standard as unknown as WorkflowDefinitionV2;
+    expect(def.nodes.length).toBeGreaterThanOrEqual(MINIMAP_NODE_THRESHOLD);
+
+    const { container } = render(
+      <div style={{ width: 800, height: 600 }}>
+        <WorkflowCanvas definition={def} mode="design" />
+      </div>,
+    );
+    expect(container.querySelector('.react-flow__minimap')).not.toBeNull();
+  });
+
+  it('never shows it over a run graph, however many nodes it has', () => {
     const def = standard as unknown as WorkflowDefinitionV2;
     expect(def.nodes.length).toBeGreaterThanOrEqual(MINIMAP_NODE_THRESHOLD);
 
@@ -537,7 +552,7 @@ describe('WorkflowCanvas minimap', () => {
         <WorkflowCanvas definition={def} />
       </div>,
     );
-    expect(container.querySelector('.react-flow__minimap')).not.toBeNull();
+    expect(container.querySelector('.react-flow__minimap')).toBeNull();
   });
 
   it('hides it for a graph below the threshold that fits legibly', () => {

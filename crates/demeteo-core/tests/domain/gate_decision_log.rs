@@ -8,6 +8,7 @@ fn approved<'a>(step_id: &'a str, feedback: Option<&'a str>) -> DecidedGate<'a> 
         step_id,
         decision: "approve",
         feedback,
+        auto_approved: false,
     }
 }
 
@@ -86,7 +87,41 @@ fn a_cancel_renders_as_a_cancel() {
         step_id: "s-gate-ship",
         decision: "cancel",
         feedback: Some("wrong branch"),
+        auto_approved: false,
     }]);
     assert!(out.contains("cancel"), "{out}");
     assert!(out.contains("wrong branch"), "{out}");
+}
+
+fn auto<'a>(step_id: &'a str) -> DecidedGate<'a> {
+    DecidedGate {
+        step_id,
+        decision: "approve",
+        feedback: None,
+        auto_approved: true,
+    }
+}
+
+/// A policy approval under the human heading is a sign-off nobody gave, and
+/// the block tells validators to spend exactly that.
+#[test]
+fn a_policy_approval_is_never_listed_as_a_human_decision() {
+    let out = render_gate_decision_log(&[auto("s-gate-review")]);
+    assert!(!out.contains("Human decisions"), "{out}");
+    assert!(out.contains("s-gate-review"), "{out}");
+    assert!(out.contains("**not** evidence"), "{out}");
+}
+
+#[test]
+fn human_and_policy_decisions_render_under_their_own_headings() {
+    let out = render_gate_decision_log(&[
+        auto("s-gate-review"),
+        approved("s-gate-ship", Some("ship it")),
+    ]);
+    let human = out.find("Human decisions").expect("human heading");
+    let automatic = out.find("approved automatically").expect("policy heading");
+    let ship = out.find("s-gate-ship").expect("ship present");
+    let review = out.find("s-gate-review").expect("review present");
+    assert!(human < ship && ship < automatic, "{out}");
+    assert!(automatic < review, "{out}");
 }

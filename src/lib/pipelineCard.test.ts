@@ -59,7 +59,7 @@ describe('scan tier', () => {
     });
 
     expect(card.scan.status.label).toBe('Published');
-    expect(card.scan.status.tone).toBe('emerald');
+    expect(card.scan.status.tone).toBe('violet');
   });
 
   it('flags amber statuses as needing a human', () => {

@@ -62,6 +62,7 @@ fn ticket(id: &str, seq: i64, title: &str) -> Ticket {
         agent_kind: None,
         model: None,
         effort: None,
+        machine_id: None,
         attachments: Vec::new(),
         state: TicketState::Unstarted,
         drop_reason: None,

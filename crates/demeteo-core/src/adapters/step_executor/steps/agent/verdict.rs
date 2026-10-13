@@ -9,7 +9,7 @@ use crate::adapters::step_executor::artifacts::{note_undelivered_artifacts, Miss
 use crate::adapters::step_executor::driver::ExecutionDriver;
 use crate::domain::models::StepExecution;
 use crate::domain::verifier::verdict::{EvidenceGap, ParsedVerdict};
-use crate::domain::verifier::{VerdictFailure, VerifierConfig};
+use crate::domain::verifier::{EnvironmentReading, VerdictFailure, VerifierConfig};
 use crate::ports::db::{FeatureRepository, StepExecutionPatch};
 use crate::ports::execution::ExecutionPort;
 
@@ -42,13 +42,18 @@ pub(crate) enum VerdictDisposition {
 }
 
 /// Read one parsed verdict, in the light of what the step actually
-/// delivered.
+/// delivered and what its harness ran.
 ///
 /// `missing` is only consulted on the `Fail` arm. That asymmetry is S14 and
-/// is deliberate — see the arm.
+/// is deliberate — see the arm. `environment` is only consulted on the
+/// `Environment` arm: it is the step's
+/// [`NothingRanPolicy`](crate::domain::verifier::NothingRanPolicy) already
+/// resolved against this turn's harness outcome, so a step that declares
+/// nothing to configure is not failed for having nothing configured.
 pub(crate) fn verdict_disposition(
     verdict: ParsedVerdict,
     missing: &[MissingArtifact],
+    environment: EnvironmentReading,
 ) -> VerdictDisposition {
     match verdict {
         ParsedVerdict::Pass => VerdictDisposition::Pass,
@@ -83,6 +88,9 @@ pub(crate) fn verdict_disposition(
         // policy from the other input — a *harness* failure triaged as an
         // unprovisioned box. Two different observations, one answer; the
         // duplication is the point, not an oversight.
+        ParsedVerdict::Environment(_) if environment == EnvironmentReading::Pass => {
+            VerdictDisposition::Pass
+        }
         ParsedVerdict::Environment(reason) => VerdictDisposition::Unjudgeable {
             message: format!(
                 "[project configuration — retrying cannot fix this] {}",

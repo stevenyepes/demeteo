@@ -21,6 +21,9 @@ import "@fontsource/fira-code/600.css";
 import "./monaco-setup";
 
 import App from "./App";
+import { installMotionPause } from "./lib/motionPause";
+
+installMotionPause();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

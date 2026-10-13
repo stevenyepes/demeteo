@@ -10,6 +10,7 @@ use std::process::{Command, Stdio};
 
 use crate::ports::execution::{ProgramRequest, ShellOptions};
 use crate::shared::proc::{harden_child_spawn, sanitize_child_env};
+use crate::shared::shell;
 
 use super::invocation::{program_path, shell_invocation, unspawnable_arguments};
 use super::process_guard::{KillGroupOnDrop, ProcessGuard};
@@ -178,7 +179,12 @@ pub(super) async fn local_run_command_async(
     guard.disarm();
     job.disarm();
     let status = status.map_err(|e| format!("Failed to await command: {}", e))?;
-    command_result(status.code(), status.success(), &stdout, &stderr)
+    command_result(
+        status.code(),
+        status.success(),
+        shell::command_stdout(opts.login_shell, &stdout),
+        &stderr,
+    )
 }
 
 /// Blocking structured-program helper for a few short adapter-owned setup

@@ -441,7 +441,7 @@ export async function stageBrowserFilesForLaunch(
 
 /**
  * One file collected before the aggregate that will own it exists — the wire
- * shape `start_feature`, `remote_submit_run` and `discovery_create` all take.
+ * shape `start_feature`, `launch_run` and `discovery_create` all take.
  */
 export interface StagedAttachmentInput {
   source_path: string;

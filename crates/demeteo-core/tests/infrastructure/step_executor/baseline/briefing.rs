@@ -27,7 +27,7 @@ impl SettingsDouble {
             settings: Some(ProjectSettings {
                 project_id: ProjectId::from(P_ID.to_string()),
                 worktree_strategy: strategy,
-                conflict_policy: "manual".to_string(),
+                gate_autonomy: Default::default(),
                 feature_lifecycle: "keep".to_string(),
                 default_agent_kind: None,
                 default_model: None,
@@ -154,6 +154,7 @@ fn verifying_step(id: &str, names: &[&str]) -> StepConfig {
             instructions: String::new(),
             harness_names: names.iter().map(|n| n.to_string()).collect(),
             verdict_key: "verdict".to_string(),
+            when_nothing_ran: Default::default(),
         }),
         ..StepConfig::default()
     }

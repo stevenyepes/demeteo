@@ -427,7 +427,7 @@ WebSocket are not built, and nothing on the desktop talks to the Hub yet
 The Hub does not link `demeteo-core` in v1. Where the desktop's client for it sits in the
 hexagon above is open ([HUB.md §11](HUB.md#11-what-is-not-decided)); the Hub never
 dials a desktop. Spec:
-[HUB.md](HUB.md); decisions 56–63 in [DECISIONS.md](DECISIONS.md#1-the-locked-decisions).
+[HUB.md](HUB.md); decisions 61–68 in [DECISIONS.md](DECISIONS.md#1-the-locked-decisions).
 
 ## 4. Tauri Command Surface
 

@@ -28,7 +28,7 @@ import type {
   SyncSessionView,
 } from '../types';
 import type { RunStatusTone } from './runStatus';
-import { describeStaleness } from './staleness';
+import { describeStaleness, type SettledRequestState } from './staleness';
 
 export type SyncPanelState =
   | 'run_active'
@@ -41,7 +41,8 @@ export type SyncPanelState =
   | 'resolving'
   | 'awaiting_review'
   | 'published'
-  | 'resolution_failed';
+  | 'resolution_failed'
+  | 'request_settled';
 
 /**
  * The two reconciles are two intents and not one carrying a move, because the
@@ -131,6 +132,12 @@ export interface SyncPanelInput {
    * started saying "Nothing has been read yet".
    */
   pending: SyncIntent | null;
+  /**
+   * The pull request's finished state, or `null` while it is still open or was
+   * never published. A settled request takes the pane only where no sync is
+   * live: a conflicted merge on disk still needs its own way out.
+   */
+  settled?: SettledRequestState | null;
 }
 
 /**
@@ -264,6 +271,7 @@ export function describeSyncPanel({
   divergence,
   canSync,
   pending,
+  settled = null,
 }: SyncPanelInput): SyncPanelModel {
   const base: PanelBase = {
     live: false,
@@ -286,6 +294,9 @@ export function describeSyncPanel({
     return resolvingArm(base, session);
   }
 
+  if (settled !== null && (session === null || syncIsOver(session))) {
+    return { ...base, ...settledArm(settled) };
+  }
   if (session === null || session.status === 'up_to_date' || session.status === 'merged' || session.status === 'aborted') {
     return { ...base, ...quiet(drift, canSync) };
   }
@@ -362,6 +373,39 @@ export function describeSyncPanel({
           }
         : publishedArm(base, session, drift, canSync);
   }
+}
+
+/** No merge is open on disk: the quiet statuses, and a resolution origin
+ *  already has — the finished sync whose row never says so (`publishedArm`). */
+function syncIsOver(session: SyncSessionView): boolean {
+  return (
+    session.status === 'up_to_date' ||
+    session.status === 'merged' ||
+    session.status === 'aborted' ||
+    (session.status === 'resolved' && session.pushed_at !== null)
+  );
+}
+
+function settledArm(settled: SettledRequestState): Quiet {
+  return settled === 'merged'
+    ? {
+        state: 'request_settled',
+        tone: 'emerald',
+        chipLabel: 'PR merged',
+        headline: 'The pull request is merged',
+        body: 'This branch has already landed. Nothing merged into it now would reach the base branch, so there is nothing to sync.',
+        actions: [],
+        badge: 0,
+      }
+    : {
+        state: 'request_settled',
+        tone: 'slate',
+        chipLabel: 'PR closed',
+        headline: 'The pull request was closed',
+        body: 'It was closed without merging, so no pull request is waiting on this branch and there is nothing to sync.',
+        actions: [],
+        badge: 0,
+      };
 }
 
 /**
@@ -684,6 +728,47 @@ function resolvingArm(base: PanelBase, session: SyncSessionView): SyncPanelModel
   };
 }
 
+/** A ref pair and the checkout that holds both. */
+export interface DiffTarget {
+  machineId: string;
+  worktreePath: string;
+  branch: string;
+  defaultBranch: string;
+  baseRef: string;
+  headRef: string;
+  /** The checkout does not have `headRef` checked out. */
+  changesOnly: boolean;
+}
+
+/**
+ * Where a resolution is reviewed: the clone the sync ran in, never the
+ * feature's own worktree.
+ *
+ * The two differ for a detached run. Its sync runs in the laptop's shadow
+ * clone while its code lives on the runner, and an unpublished merge commit
+ * exists only in the first — routed through the run's worktree, the diff ran
+ * on the runner and git refused a range naming a commit it never had. So the
+ * refs and the repository come from one row, in one value. The sync worktree
+ * while it exists, because it has the merge checked out; `repo_dir` after,
+ * which shares its object store and so still resolves both refs — but has
+ * some other branch checked out, so only the Changes tab, which reads refs
+ * rather than the disk, is true there.
+ *
+ * `null` without a recorded pre-merge tip — see `reviewActions`.
+ */
+export function reviewTarget(session: SyncSessionView): DiffTarget | null {
+  if (session.head_before === null || session.merge_commit_sha === null) return null;
+  return {
+    machineId: session.machine_id,
+    worktreePath: session.worktree_path ?? session.repo_dir,
+    branch: session.feature_branch,
+    defaultBranch: session.base_branch,
+    baseRef: session.head_before,
+    headRef: session.merge_commit_sha,
+    changesOnly: session.worktree_path === null,
+  };
+}
+
 /**
  * The diff a resolution is reviewed as is `head_before..merge_commit_sha`, and
  * nothing else. `merge_commit_sha^` names the pre-merge tip only while the
@@ -695,7 +780,7 @@ function resolvingArm(base: PanelBase, session: SyncSessionView): SyncPanelModel
  * one against a guess.
  */
 function reviewActions(session: SyncSessionView): SyncAction[] {
-  const reviewable = session.head_before !== null && session.merge_commit_sha !== null;
+  const reviewable = reviewTarget(session) !== null;
   const actions: SyncAction[] = [];
   if (reviewable) {
     actions.push({

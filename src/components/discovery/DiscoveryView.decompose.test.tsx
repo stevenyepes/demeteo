@@ -37,6 +37,8 @@ const discovery: Discovery = {
 const board: DiscoveryBoard = {
   tickets: [],
   progress: { blocked: 0, ready: 0, in_flight: 0, landed: 0, dropped: 0, live: 0 },
+  discovery_default: { kind: 'local' },
+  local_host: 'local',
 };
 
 const STOP = 'Agent blocked: no output for 600s';

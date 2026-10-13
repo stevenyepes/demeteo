@@ -87,6 +87,15 @@ pub enum DomainEvent {
         step_execution_id: StepExecutionId,
     },
 
+    /// Emitted ahead of [`GateRequired`](DomainEvent::GateRequired) when the
+    /// project's autonomy would have approved the gate on a clean review and
+    /// the review did not allow it. `reason` is shown to the person deciding.
+    GateHeldByReview {
+        feature_id: FeatureId,
+        step_execution_id: StepExecutionId,
+        reason: String,
+    },
+
     /// Emitted when the merge executor detects a conflict between two
     /// subtask branches on the same feature.
     ConflictDetected {
@@ -258,6 +267,9 @@ pub enum DomainEvent {
         step_execution_id: StepExecutionId,
         decision: String,
         feedback: Option<String>,
+        /// The project's gate autonomy gave this approval, not a person.
+        #[serde(default)]
+        auto_approved: bool,
     },
 
     /// A pull request reached a terminal state and, with it, one or more
@@ -283,6 +295,16 @@ pub enum DomainEvent {
     ///
     /// [`NotificationKind::CachesReclaimed`]: crate::domain::models::NotificationKind::CachesReclaimed
     CachesReclaimed { project_id: String, message: String },
+
+    /// The live half of a [`NotificationKind::RunnerBranchStale`] row, so the
+    /// bell refreshes without waiting for its next read.
+    ///
+    /// [`NotificationKind::RunnerBranchStale`]: crate::domain::models::NotificationKind::RunnerBranchStale
+    RunnerBranchStale {
+        project_id: String,
+        feature_id: String,
+        message: String,
+    },
 
     /// Where a cache sweep has got to — the background one and one asked for
     /// from Storage alike, since an on-demand sweep queues behind a running

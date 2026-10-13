@@ -31,7 +31,7 @@ export interface AgentAvailability {
   path_containment?: PathContainment;
 }
 
-/** Mirrors the Rust `MrInfo` returned by `publish_mr`. */
+/** Mirrors the Rust `MrInfo`. */
 export interface MrInfo {
   url: string;
   state: string;
@@ -39,6 +39,15 @@ export interface MrInfo {
   provider_kind: string;
   provider_host: string;
 }
+
+/**
+ * Mirrors the Rust `PublishOutcome` returned by `publish_mr`. `on_runner` is a
+ * detached run: its branch exists only on the runner, which pushes and opens
+ * the PR itself and reports the result in the run's activity feed.
+ */
+export type PublishOutcome =
+  | { kind: 'opened'; mr: MrInfo }
+  | { kind: 'on_runner'; machine_id: string; run_id: string };
 
 /** Mirrors the Rust `CleanupResult` returned by `feature_cleanup`. */
 export interface CleanupResult {
@@ -167,8 +176,8 @@ export async function publishMr(input: {
   projectId: string;
   featureId: string;
   draft: boolean;
-}): Promise<MrInfo> {
-  return invoke<MrInfo>("publish_mr", {
+}): Promise<PublishOutcome> {
+  return invoke<PublishOutcome>("publish_mr", {
     projectId: input.projectId,
     featureId: input.featureId,
     draft: input.draft,

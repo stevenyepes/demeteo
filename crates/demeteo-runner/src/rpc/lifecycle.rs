@@ -157,37 +157,12 @@ pub(super) async fn submit_run(
     let run_id_bg = params.run_id.clone();
     tokio::spawn(async move {
         let result = crate::run::execute_run(&svc_bg, &run_id_bg, &params.spec).await;
-        let now = paths::now_ms();
-        match result {
-            Ok(outcome) => {
-                let _ = svc_bg.ctx.runner_runs.update_status(
-                    &run_id_bg,
-                    &outcome.status,
-                    outcome.project_id.as_deref(),
-                    outcome.feature_id.as_deref(),
-                    None,
-                    outcome.pushed_branch.as_deref(),
-                    now,
-                );
-            }
-            Err(e) => {
-                let _ = svc_bg.ctx.run_events.append(
-                    &run_id_bg,
-                    "failed",
-                    serde_json::to_string(&e).ok().as_deref(),
-                    now,
-                );
-                let _ = svc_bg.ctx.runner_runs.update_status(
-                    &run_id_bg,
-                    "failed",
-                    None,
-                    None,
-                    Some(&e),
-                    None,
-                    now,
-                );
-            }
-        }
+        crate::run::settle_run(
+            svc_bg.ctx.run_events.as_ref(),
+            svc_bg.ctx.runner_runs.as_ref(),
+            &run_id_bg,
+            result,
+        );
     });
 
     svc.ctx
@@ -288,37 +263,12 @@ pub(super) async fn retry_step(
             &spec,
         )
         .await;
-        let now = paths::now_ms();
-        match result {
-            Ok(outcome) => {
-                let _ = svc_bg.ctx.runner_runs.update_status(
-                    &run_id_bg,
-                    &outcome.status,
-                    outcome.project_id.as_deref(),
-                    outcome.feature_id.as_deref(),
-                    None,
-                    outcome.pushed_branch.as_deref(),
-                    now,
-                );
-            }
-            Err(e) => {
-                let _ = svc_bg.ctx.run_events.append(
-                    &run_id_bg,
-                    "failed",
-                    serde_json::to_string(&e).ok().as_deref(),
-                    now,
-                );
-                let _ = svc_bg.ctx.runner_runs.update_status(
-                    &run_id_bg,
-                    "failed",
-                    None,
-                    None,
-                    Some(&e),
-                    None,
-                    now,
-                );
-            }
-        }
+        crate::run::settle_run(
+            svc_bg.ctx.run_events.as_ref(),
+            svc_bg.ctx.runner_runs.as_ref(),
+            &run_id_bg,
+            result,
+        );
     });
 
     svc.ctx

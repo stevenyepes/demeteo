@@ -626,6 +626,21 @@ impl ExecutionDriver {
                 );
                 Err(crate::domain::verifier::VerifierError::Verdict(failure))
             }
+            ParsedVerdict::Environment(reason)
+                if verifier_cfg
+                    .when_nothing_ran
+                    .environment_reading(Some(&harness_outcome))
+                    == crate::domain::verifier::EnvironmentReading::Pass =>
+            {
+                tracing::info!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    reason = %reason,
+                    "verifier verdict: environment on a step that declares nothing to \
+                     configure — read as pass"
+                );
+                Ok(())
+            }
             ParsedVerdict::Environment(reason) => {
                 tracing::warn!(
                     feature_id = %self.f_id,

@@ -26,7 +26,8 @@ interface McpConsentRequestedPayload {
  *  tag beside it stays the literal scope name. */
 const SCOPE_COST: Record<string, string> = {
   read: "Can see every project, feature, run and failure. Changes nothing, costs nothing.",
-  spend: "Can start runs. Costs money and agent time until each run finishes or is stopped.",
+  spend:
+    "Can start runs, retry steps, choose a step's model, and send a run back for rework. Costs money and agent time until each run finishes or is stopped.",
   configure: "Can register projects and change how later runs are set up.",
 };
 
@@ -70,7 +71,7 @@ export function McpConsentView() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div className="w-full max-w-md bg-[#0d0f14] border border-violet-500/30 rounded-2xl shadow-[0_0_50px_rgba(139,92,246,0.15)] overflow-hidden flex flex-col font-sans">
         <div className="p-6 border-b border-white/5 bg-white/[0.01] flex items-center gap-3">
           <span className="p-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.1)]">

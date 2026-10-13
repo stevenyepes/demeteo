@@ -353,6 +353,7 @@ impl HttpMrPublisher {
 
         push::push_feature_branch(
             &self.exec,
+            self.app_settings.as_ref(),
             &push::BranchPush {
                 compute_type: &project.compute_type,
                 remote_host: project.remote_host.as_ref().map(|m| m.as_str()),
@@ -363,6 +364,7 @@ impl HttpMrPublisher {
                 provider_host: &provider.host,
                 pat: &pat,
                 source_branch: &source_branch,
+                prepare_command: settings.worktree_strategy.prepare_command.as_deref(),
             },
         )
         .await?;

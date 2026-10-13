@@ -28,7 +28,6 @@ export interface WizardFormState {
   branchPrefix: string;
   testCommand: string;
   prTemplate: string;
-  conflictPolicy: string;
   featureLifecycle: string;
   description: string;
   workflowId: string;
@@ -57,7 +56,6 @@ export interface WizardFormSetters {
   setBranchPrefix: (v: string) => void;
   setTestCommand: (v: string) => void;
   setPrTemplate: (v: string) => void;
-  setConflictPolicy: (v: string) => void;
   setFeatureLifecycle: (v: string) => void;
   setDescription: (v: string) => void;
   setWorkflowId: (v: string) => void;
@@ -133,7 +131,6 @@ export function useCreateZeroWizardForm(): WizardFormApi {
   const [branchPrefix, setBranchPrefix] = useState('demeteo/features/');
   const [testCommand, setTestCommand] = useState('');
   const [prTemplate, setPrTemplate] = useState('');
-  const [conflictPolicy, setConflictPolicy] = useState('always_gate');
   const [featureLifecycle, setFeatureLifecycle] = useState('archive');
   const [description, setDescription] = useState('');
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
@@ -291,7 +288,7 @@ export function useCreateZeroWizardForm(): WizardFormApi {
     projectName, providerId, namespaceId, repoSlug, repoPrivate,
     machineKind, machineId, keyPassphrase, agentKind, model, effort,
     defaultBranch, branchPrefix, testCommand, prTemplate,
-    conflictPolicy, featureLifecycle, description, workflowId,
+    featureLifecycle, description, workflowId,
     providers, providerHost, namespaces, namespacesLoading,
     machines, workflows, models, modelsLoading,
     machineProbeStatus, machineProbeError, retestMachineConnection,
@@ -299,13 +296,13 @@ export function useCreateZeroWizardForm(): WizardFormApi {
     setProjectName, setProviderId, setNamespaceId, setRepoSlug, setRepoPrivate,
     setMachineKind, setMachineId, setKeyPassphrase, setAgentKind, setModel, setEffort,
     setDefaultBranch, setBranchPrefix, setTestCommand, setPrTemplate,
-    setConflictPolicy, setFeatureLifecycle, setDescription, setWorkflowId,
+    setFeatureLifecycle, setDescription, setWorkflowId,
     setProjectId, applyStrategyToForm,
   }), [
     projectName, providerId, namespaceId, repoSlug, repoPrivate,
     machineKind, machineId, keyPassphrase, agentKind, model, effort,
     defaultBranch, branchPrefix, testCommand, prTemplate,
-    conflictPolicy, featureLifecycle, description, workflowId,
+    featureLifecycle, description, workflowId,
     providers, providerHost, namespaces, namespacesLoading,
     machines, workflows, models, modelsLoading,
     machineProbeStatus, machineProbeError, retestMachineConnection,

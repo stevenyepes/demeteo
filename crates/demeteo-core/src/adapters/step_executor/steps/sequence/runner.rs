@@ -58,6 +58,14 @@ impl ExecutionDriver {
         // previous attempt. Seed the completed record with the tasks this
         // attempt is skipping so the first running task's prompt describes
         // the tree it actually gets, rather than claiming an empty branch.
+        // The notes those tasks left are not on the plan; they survive only in
+        // each task's report fragment, so one read of the step's fragments
+        // puts them back beside the ids.
+        let mut handoffs = if plan.already_landed.is_empty() {
+            Default::default()
+        } else {
+            super::report::ticket_handoffs(&*self.artifacts, &self.f_id_str, &step_exec.step_id.0)
+        };
         let mut completed: Vec<CompletedTask> = plan
             .already_landed
             .iter()
@@ -65,6 +73,7 @@ impl ExecutionDriver {
                 id: t.id.clone(),
                 title: t.title.clone(),
                 files: t.files.clone(),
+                handoff: handoffs.remove(&t.id),
             })
             .collect();
 
@@ -159,6 +168,7 @@ impl ExecutionDriver {
                 );
             }
             let contribution = task_res?;
+            let handoff = contribution.handoff.clone();
 
             // The task committed (run_one_task fails otherwise), so the
             // worktree HEAD is that commit — the checkpoint anchor a later
@@ -198,6 +208,7 @@ impl ExecutionDriver {
                 id: task.id.clone(),
                 title: task.title.clone(),
                 files,
+                handoff,
             });
 
             let cost_ceiling = self.base_max_budget_usd() * SEQUENCE_STEP_COST_CEILING_MULTIPLIER;

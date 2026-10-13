@@ -43,6 +43,8 @@ const EVENT_KIND_LABEL: Record<string, string> = {
   pushed: 'Branch pushed',
   pr_opened: 'PR opened',
   pr_open_failed: 'PR failed to open',
+  failed: 'Run failed',
+  publish_requested: 'Publish requested',
   cancelled: 'Cancelled',
   // Per-step telemetry from the engine's DomainEvent stream (P1.13 locally,
   // the runner's RunEventBridge for remote). Structured JSON payloads.
@@ -53,6 +55,7 @@ const EVENT_KIND_LABEL: Record<string, string> = {
   env_not_ready: 'Environment not ready',
   agent_commits_folded: 'Agent commits folded',
   gate_required: 'Gate reached',
+  gate_held_by_review: 'Gate held for you',
   gate_decided: 'Gate decided',
   step_output: 'Output',
   agent_spawned: 'Agent spawned',
@@ -193,6 +196,10 @@ export function describeEvent(
       return { label: fallbackLabel, detail: String(p?.decision ?? ''), tone: 'default' };
     case 'gate_required':
       return { label: fallbackLabel, detail: '', tone: 'warn' };
+    case 'gate_held_by_review':
+      return { label: fallbackLabel, detail: String(p?.reason ?? ''), tone: 'warn' };
+    case 'gate_auto_approved':
+      return { label: fallbackLabel, detail: 'by project policy', tone: 'default' };
     case 'parked':
     case 'over_budget':
     case 'needs_credentials':

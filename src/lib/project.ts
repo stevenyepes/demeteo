@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   EffortLevel,
   FeatureStatusCount,
+  GateAutonomy,
   Project,
   ProjectMemoryEntry,
   ProjectSettingsData,
@@ -275,7 +276,7 @@ export interface ProjectSettingsInput {
   validation_gates?: string[] | null;
   prepare_command?: string | null;
   extra_writable_paths?: string[] | null;
-  conflict_policy?: string;
+  gate_autonomy?: GateAutonomy;
   feature_lifecycle?: string;
   default_agent_kind?: string | null;
   default_model?: string | null;
@@ -359,8 +360,8 @@ export async function saveProjectSettings(
               : [])
           : (baseWs?.extra_writable_paths ?? []),
     },
-    conflict_policy:
-      input.conflict_policy ?? existing?.conflict_policy ?? "always_gate",
+    gate_autonomy:
+      input.gate_autonomy ?? existing?.gate_autonomy ?? "attended",
     feature_lifecycle:
       input.feature_lifecycle ?? existing?.feature_lifecycle ?? "archive",
     default_agent_kind:

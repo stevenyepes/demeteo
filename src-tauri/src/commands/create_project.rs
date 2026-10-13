@@ -415,7 +415,7 @@ pub async fn submit_create_project_step(
                     prepare_command: None,
                     extra_writable_paths: Vec::new(),
                 },
-                conflict_policy: "always_gate".to_string(),
+                gate_autonomy: Default::default(),
                 feature_lifecycle: "archive".to_string(),
                 default_agent_kind: Some(agent_kind.to_string()),
                 default_model: Some(model.to_string()),

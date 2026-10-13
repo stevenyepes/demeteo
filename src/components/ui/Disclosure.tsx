@@ -18,6 +18,14 @@ export interface DisclosureProps {
    *  utility appended here cannot reliably override one baked into the
    *  primitive. */
   bodyClassName?: string;
+  /** `card` is a full-width bar of its own. `chip` is a pill that sits in a
+   *  row of siblings inside a `flex-wrap` parent: the wrapper is
+   *  `display: contents`, so the pill and its body are *children of that row*,
+   *  and the body's `order-last basis-full` drops it below every pill instead
+   *  of splitting the row at the pill that opened it. That is the reason the
+   *  variant lives here rather than in a caller — the body still unmounts when
+   *  closed, which is the whole point of this primitive. */
+  variant?: 'card' | 'chip';
 }
 
 /**
@@ -44,10 +52,48 @@ export function Disclosure({
   children,
   className = '',
   bodyClassName = '',
+  variant = 'card',
 }: DisclosureProps): React.ReactElement {
   const baseId = useId();
   const triggerId = `${baseId}-trigger`;
   const bodyId = `${baseId}-body`;
+
+  if (variant === 'chip') {
+    return (
+      <div data-testid="disclosure" data-open={open ? 'true' : 'false'} className={`contents ${className}`}>
+        <div
+          className={`flex h-8 max-w-full min-w-0 items-center gap-2 rounded-full border pr-3 text-xs transition-colors ${
+            open ? 'border-violet-500/40 bg-violet-500/10' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'
+          }`}
+        >
+          <button
+            type="button"
+            id={triggerId}
+            data-testid="disclosure-trigger"
+            aria-expanded={open}
+            aria-controls={open ? bodyId : undefined}
+            onClick={() => onOpenChange(!open)}
+            className="flex h-full shrink-0 items-center gap-2 rounded-full pl-3 text-left"
+          >
+            {icon && <span className="shrink-0 flex items-center">{icon}</span>}
+            <span className={`font-medium ${open ? 'text-violet-200' : 'text-slate-200'}`}>{title}</span>
+          </button>
+          {meta && <div className="flex min-w-0 items-center gap-2 overflow-hidden">{meta}</div>}
+        </div>
+        {open && (
+          <div
+            id={bodyId}
+            data-testid="disclosure-body"
+            role="region"
+            aria-labelledby={triggerId}
+            className={`glass-panel animate-fade-in order-last basis-full overflow-hidden ${bodyClassName}`}
+          >
+            {children}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div

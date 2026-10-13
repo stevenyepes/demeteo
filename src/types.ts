@@ -80,6 +80,9 @@ export interface EditorContext {
   headRef?: string;
   /** Which sidebar tab opens. Omitted = 'files'. */
   initialTab?: 'files' | 'changes';
+  /** The checkout on disk is not `headRef`, so the Files tab — which reads
+   *  the disk — would show some other branch under this one's name. */
+  changesOnly?: boolean;
 }
 
 export interface WorkflowSummary {
@@ -168,11 +171,9 @@ export type AppView =
    *  it before `discovery_get` answers, exactly as `detail` carries
    *  `featureTitle`.
    *
-   *  `selectedTicketId` is which ticket the inspector is showing, and carries
-   *  the same absent-vs-`null` contract `selectedStepId` documents above:
-   *  absent means "nothing has chosen yet, seed one", `null` means "the user
-   *  closed it". `DiscoveryView`'s auto-select effect reads that difference, so
-   *  normalising one to the other here collapses it silently. */
+   *  `selectedTicketId` is which ticket the inspector is showing; absent and
+   *  `null` both mean none. Nothing seeds it — the inspector opens only on a
+   *  ticket the user picked. */
   | {
       kind: 'discovery';
       discoveryId: string;
@@ -463,6 +464,12 @@ export type StepConfig = {
    * unattended remote run instead of auto-approving; anything else is the `safe` default.
    */
   gate_class?: 'safe' | 'dangerous' | null;
+  /**
+   * Marks the step as a review by naming the declared artifact its review is
+   * written to; `clean` gate autonomy reads it at the ship gate that follows.
+   * See `domain::gate::review_contract`.
+   */
+  review_artifact?: string | null;
 };
 
 export interface WorkflowWithSteps extends Workflow {
@@ -625,6 +632,8 @@ export interface GateDecision {
   decision?: 'approve' | 'redirect' | 'cancel' | string | null;
   feedback?: string | null;
   created_at: number;
+  /** The project's gate autonomy approved it; nobody looked. */
+  auto_approved?: boolean;
 }
 
 export interface Feature {
@@ -685,6 +694,24 @@ export interface Feature {
    *  mid-flight don't reach it. Seeded at launch and re-pointable while the
    *  run is alive. See {@link StepOverride}. */
   step_overrides?: StepOverride[];
+}
+
+/** Mirrors the Rust `LaunchedRun`: what `launch_run`, `ticket_start` and
+ *  `ticket_force_start` resolve with. The Feature's own fields, plus a note
+ *  for each way a run that *did* launch is still degraded — each absent
+ *  unless set. None is a failure, so none rejects: `reportDegradedLaunch`
+ *  (`src/lib/launch.ts`) turns them into what the user is told. */
+export interface LaunchedRun extends Feature {
+  /** The run's git credentials were not delivered; it waits at
+   *  `needs-credentials` until they are re-injected. Detached runs only. */
+  credentials_parked?: string;
+  /** Demeteo could not record the run, so reconcile will never report on it.
+   *  Detached runs only. */
+  mirror_unrecorded?: string;
+  /** A ticket's run launched, local or detached, but the ticket could not
+   *  record it: the board still shows it startable, and starting it again
+   *  would launch a second run. Ticket starts only. */
+  ticket_unrecorded?: string;
 }
 
 /** Mirrors the Rust `StepOverride` (`domain/models/feature.rs`): the run's
@@ -777,7 +804,8 @@ export type NotificationKind =
   | 'merge_conflict'
   | 'retry_budget_exhausted'
   | 'environment_not_ready'
-  | 'caches_reclaimed';
+  | 'caches_reclaimed'
+  | 'runner_branch_stale';
 
 /** Mirrors the Rust `Notification` struct on the `notifications`
  *  table. `feature_url` is a relative deep link; the bell decides
@@ -796,6 +824,14 @@ export interface Notification {
 /** A background sweep deleted leaked caches or worktrees of a project. */
 export interface CachesReclaimedEvent {
   project_id: string;
+  message: string;
+}
+
+/** A desktop sync reached origin, but the runner holding the detached run
+ *  could not bring its own copy of the branch up to date. */
+export interface RunnerBranchStaleEvent {
+  project_id: string;
+  feature_id: string;
   message: string;
 }
 
@@ -1187,10 +1223,19 @@ export interface WorktreeStrategy {
   extra_writable_paths?: string[] | null;
 }
 
+/** `attended`: every gate waits for a person. `review`: review gates approve
+ *  themselves and the ship gate (which publishes the PR) waits. `clean`: as
+ *  `review`, and the ship gate approves itself too when the review step it
+ *  follows reports no critical and no major issue. `full`: every gate approves
+ *  itself. A detached run never runs below `review`. */
+export type GateAutonomy = 'attended' | 'review' | 'clean' | 'full';
+
 export interface ProjectSettingsData {
   project_id: string;
   worktree_strategy: WorktreeStrategy;
-  conflict_policy: string;
+  /** Which gates approve themselves. Absent reads as `attended`. See
+   *  `domain::gate_autonomy` and migration V62. */
+  gate_autonomy?: GateAutonomy;
   feature_lifecycle: string;
   default_agent_kind?: string | null;
   default_model?: string | null;
@@ -1491,6 +1536,9 @@ export interface Ticket {
   agent_kind: string | null;
   model: string | null;
   effort: EffortLevel | null;
+  /** `null` inherits the Discovery's default placement; `'local'` is an
+   *  explicit local choice, not the same thing. */
+  machine_id: string | null;
   attachments: AttachedFile[];
   state: TicketState;
   drop_reason: string | null;
@@ -1537,6 +1585,25 @@ export interface TicketProgress {
   live: number;
 }
 
+/** Mirrors `RunPlacement` (`domain/run_placement.rs`): a destination, not a
+ *  transport. */
+export type RunPlacement = { kind: 'local' } | { kind: 'detached'; machine_id: string };
+
+/** Mirrors `ResolvedPlacement`. `inherited` is true only when the placement
+ *  came from the Discovery default rather than a stored or override choice. */
+export interface ResolvedPlacement {
+  placement: RunPlacement;
+  inherited: boolean;
+}
+
+/** Mirrors `TicketRemoteRun` — the mirror row of a detached attempt, for
+ *  display only; the lane still derives from the Feature. */
+export interface TicketRemoteRun {
+  machine_id: string;
+  run_id: string;
+  status: string;
+}
+
 /** Mirrors `TicketFeatureView` — what a started ticket's current attempt
  *  contributes to a card. */
 export interface TicketFeatureView {
@@ -1544,6 +1611,14 @@ export interface TicketFeatureView {
   status: string;
   mr_state: string | null;
   mr_url: string | null;
+  /** The branch the attempt works on; `null` until the run has cut one. Sent
+   *  on every board and read by no component — it is there for the MCP
+   *  surface — so it is optional here rather than a field every fixture owes. */
+  branch?: string | null;
+  /** Where this attempt was placed, as its start recorded it; `null` when
+   *  nothing did. Never inferred from `remote` being absent. */
+  placement: RunPlacement | null;
+  remote: TicketRemoteRun | null;
 }
 
 /** Mirrors `TicketView`: the row, its derived position, and the forge state
@@ -1553,12 +1628,22 @@ export interface TicketView {
   ticket: Ticket;
   standing: TicketStanding;
   feature: TicketFeatureView | null;
+  placement: ResolvedPlacement;
 }
 
 /** Mirrors `DiscoveryBoard`. `tickets` arrive in `Ticket.seq` order. */
 export interface DiscoveryBoard {
   tickets: TicketView[];
   progress: TicketProgress;
+  /** The branch every ticket is cut from and reviewed against; `null` is the
+   *  project's default branch. Optional for `TicketFeatureView.branch`'s
+   *  reason: the header reads the base from the `Discovery` row itself. */
+  base_branch?: string | null;
+  /** What a ticket left on Default runs on — resolved by the server, since no
+   *  ticket holding a stored choice can say it. */
+  discovery_default: RunPlacement;
+  /** The machine a Local run executes on (`'local'` for the desktop). */
+  local_host: string;
 }
 
 // ── Decomposition (docs/PRD_DISCOVERY.md §5) ──────────────────────────────
@@ -1691,6 +1776,7 @@ export interface TicketEdit {
   agent_kind: string | null;
   model: string | null;
   effort: EffortLevel | null;
+  machine_id: string | null;
 }
 
 /** Mirrors `AskStatus`. Ask never surfaces `closed` yet — no close/reopen

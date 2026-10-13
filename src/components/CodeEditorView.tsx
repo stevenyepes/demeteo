@@ -36,6 +36,8 @@ interface CodeEditorViewProps {
   baseRef?: string;
   headRef?: string;
   initialTab?: 'files' | 'changes';
+  /** Hide the Files tab: see `EditorContext.changesOnly`. */
+  changesOnly?: boolean;
 }
 
 type SidebarTab = 'files' | 'changes';
@@ -100,10 +102,11 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
   baseRef,
   headRef,
   initialTab,
+  changesOnly = false,
 }) => {
   const diffBase = baseRef ?? defaultBranch;
   const diffHead = headRef ?? branch;
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>(initialTab ?? 'files');
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>(changesOnly ? 'changes' : (initialTab ?? 'files'));
 
   // ── File tree state ───────────────────────────────────────────────
   const [nodes, setNodes] = useState<FileNode[]>([]);
@@ -127,6 +130,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
   const [diffOriginal, setDiffOriginal] = useState<string>('');
   const [diffModified, setDiffModified] = useState<string>('');
   const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
 
   const [refreshing, setRefreshing] = useState(false);
   const nodesRef = useRef<FileNode[]>([]);
@@ -143,6 +147,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
   }, [machineId]);
 
   const loadRoot = useCallback(async () => {
+    if (changesOnly) return;
     setTreeLoading(true);
     setTreeError(null);
     try {
@@ -152,7 +157,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     } finally {
       setTreeLoading(false);
     }
-  }, [loadDir, worktreePath]);
+  }, [loadDir, worktreePath, changesOnly]);
 
   useEffect(() => { loadRoot(); }, [loadRoot]);
 
@@ -219,6 +224,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     setDiffPath(file.path);
     setDiffStatus(file.status);
     setDiffLoading(true);
+    setDiffError(null);
     try {
       const [original, modified] = await Promise.all([
         file.status === 'A'
@@ -241,8 +247,11 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
       setDiffOriginal(original);
       setDiffModified(modified);
     } catch (err) {
+      // Never as the modified side's content: that renders as a file the range
+      // added, whose body happens to be an error message.
       setDiffOriginal('');
-      setDiffModified(formatError(err));
+      setDiffModified('');
+      setDiffError(formatError(err));
     } finally {
       setDiffLoading(false);
     }
@@ -325,6 +334,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
         <div className="w-56 shrink-0 border-r border-white/5 bg-[#0d0f14]/50 flex flex-col overflow-hidden">
           {/* Tab switcher */}
           <div className="flex border-b border-white/5 shrink-0">
+            {!changesOnly && (
             <button
               onClick={() => setSidebarTab('files')}
               className={`flex-1 py-2 text-[10px] uppercase font-bold tracking-widest transition-colors ${
@@ -335,6 +345,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
             >
               Files
             </button>
+            )}
             <button
               onClick={() => setSidebarTab('changes')}
               className={`flex-1 py-2 text-[10px] uppercase font-bold tracking-widest transition-colors flex items-center justify-center gap-1 ${
@@ -371,7 +382,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
                   <Loader2 className="w-4 h-4 text-violet-400 animate-spin" />
                 </div>
               ) : changesError ? (
-                <div className="p-3 text-xs text-rose-400 font-mono">{changesError}</div>
+                <div className="p-3 text-xs text-rose-400 font-mono whitespace-pre-wrap break-all select-text" title={changesError}>{changesError}</div>
               ) : changedFiles.length === 0 ? (
                 <div className="py-8 px-3 text-[10px] text-slate-600 uppercase tracking-widest text-center">
                   No changes vs {refLabel(diffBase)}
@@ -475,8 +486,12 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
               </div>
             )}
 
+            {diffPath && !diffLoading && diffError && (
+              <div className="p-6 text-xs text-rose-400 font-mono whitespace-pre-wrap break-all select-text">{diffError}</div>
+            )}
+
             {/* Side-by-side diff editor */}
-            {diffPath && !diffLoading && (
+            {diffPath && !diffLoading && !diffError && (
               <DiffEditor
                 height="100%"
                 language={activeLang}

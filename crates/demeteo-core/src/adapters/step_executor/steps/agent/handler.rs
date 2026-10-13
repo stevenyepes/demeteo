@@ -46,6 +46,45 @@ impl crate::adapters::step_executor::registry::NodeHandler for AgentNodeHandler 
         }
     }
 
+    /// A `review_artifact` that marks no review says so at save time.
+    ///
+    /// Nothing else does: the step runs as an ordinary agent step, without the
+    /// review format, and the only symptom is a ship gate that reports no
+    /// review step covers it — on a run, at the far end of the workflow from
+    /// the field that is wrong.
+    fn lint(
+        &self,
+        node: &crate::domain::models::workflow_v2::NodeConfig,
+        _graph: &crate::domain::workflow_graph::WorkflowGraph,
+    ) -> Vec<crate::domain::workflow_graph::LintFinding> {
+        use crate::domain::artifact::ArtifactDecl;
+        use crate::domain::gate::review_contract::declared_review_path;
+        use crate::domain::workflow_graph::LintFinding;
+
+        let Some(name) = node.config.get("review_artifact").and_then(|v| v.as_str()) else {
+            return Vec::new();
+        };
+        let artifacts: Vec<ArtifactDecl> = node
+            .config
+            .get("artifacts")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        if declared_review_path(name, &artifacts).is_some() {
+            return Vec::new();
+        }
+        vec![LintFinding::node_warning(
+            "review-artifact-unreadable",
+            &node.id,
+            format!(
+                "agent node '{}' names '{name}' as its review artifact, but declares no \
+                 artifact of that name written to a path. It will run as an ordinary step: \
+                 no review format is added to its prompt, and a ship gate after it is \
+                 never approved on its review.",
+                node.id
+            ),
+        )]
+    }
+
     async fn execute(
         &self,
         ctx: crate::adapters::step_executor::registry::NodeCtx<'_>,

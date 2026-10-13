@@ -149,8 +149,12 @@ panel to find their data will look in a directory that doesn't exist.
 actions — no button anywhere invokes them. Likewise `workflow_import` is registered and
 `workflow_export` has a UI button, but there is no Import affordance in `WorkflowList`.
 
-### F13. Remote launches silently drop attachments, per-step overrides, and commit-artifacts
-`App.tsx:527-555` — the `remote_submit_run` path forwards only workflow/title/description
+### F13. Remote launches silently drop attachments, per-step overrides, and commit-artifacts — **RESOLVED (2026-10-06)**
+**Resolved:** both placements now launch through the one `launch_run` command, whose
+detached arm (`application/remote_runs/submit.rs`) forwards staged attachments, per-step
+overrides and the commit-artifacts choice to the runner. As first found:
+
+`App.tsx:527-555` — the remote submit path forwards only workflow/title/description
 /agent/model/loop/unattended/caps. Staged attachments (admitted in a comment), per-step
 overrides, and the commit-artifacts choice are dropped with **no warning in the modal**.
 A user who staged screenshots and picked a remote machine gets an agent that never saw

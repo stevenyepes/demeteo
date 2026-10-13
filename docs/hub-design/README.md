@@ -27,7 +27,7 @@ the board layout.
 The design reverses `docs/OPEN_QUESTIONS.md` §17 (web companion out of
 scope) and lets a human decide gates outside the desktop, which the MCP surface
 excludes. Both are decided
-([decisions 56 and 60](../DECISIONS.md#1-the-locked-decisions)); neither is built.
+([decisions 61 and 65](../DECISIONS.md#1-the-locked-decisions)); neither is built.
 The gate decision is a separate surface from MCP's and does not reopen
 [decision 50](../MCP_INTEGRATION.md#8-what-is-excluded-and-whether-permanently).
 
@@ -37,10 +37,10 @@ The artboards are not edited. Where they disagree with a decision, the decision 
 
 | Artboard says | Superseded by |
 | --- | --- |
-| A `logs` scope that sends transcripts and diffs to the Hub (`DesktopConnect`, `Instance`, `Run`, `Runs`) | [Decision 61](../DECISIONS.md#61--hub-scopes-and-ceilings-detail): scopes are `read`, `spend` and `gates`; transcripts and diffs never leave an instance |
-| A runner pairing with a printed code, `demeteo-runner hub pair <url>`, and a refresh token in the runner's credential store (`AddInstance`) | [Decision 58](../DECISIONS.md#58--hub-instances-detail): runners are not paired; a later, separate discovery covers runners over SSH |
-| A runner as a paired instance (`Architecture`, `Pairing`) | Decisions 58 and 59 |
-| A passkey required only for merge-to-default and over-budget gates (`DesktopConnect`, `Instance`) | [Decision 60](../DECISIONS.md#60--hub-gate-decisions-detail): every Hub gate decision carries an assertion |
+| A `logs` scope that sends transcripts and diffs to the Hub (`DesktopConnect`, `Instance`, `Run`, `Runs`) | [Decision 66](../DECISIONS.md#66--hub-scopes-and-ceilings-detail): scopes are `read`, `spend` and `gates`; transcripts and diffs never leave an instance |
+| A runner pairing with a printed code, `demeteo-runner hub pair <url>`, and a refresh token in the runner's credential store (`AddInstance`) | [Decision 63](../DECISIONS.md#63--hub-instances-detail): runners are not paired; a later, separate discovery covers runners over SSH |
+| A runner as a paired instance (`Architecture`, `Pairing`) | Decisions 63 and 64 |
+| A passkey required only for merge-to-default and over-budget gates (`DesktopConnect`, `Instance`) | [Decision 65](../DECISIONS.md#65--hub-gate-decisions-detail): every Hub gate decision carries an assertion |
 
 The mockup has no place to set the per-run and rolling 24-hour ceilings, and none
 for endorsing or revoking a passkey. [`HUB.md`](../HUB.md) §7 and §8 specify both.

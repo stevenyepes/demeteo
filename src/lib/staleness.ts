@@ -103,3 +103,20 @@ export function holdsOpenRequest(feature: {
     OPEN_REQUEST_STATES.includes((feature.mr_state ?? '').toLowerCase())
   );
 }
+
+/** `mr_state` values that describe a request the forge has finished with. */
+const SETTLED_REQUEST_STATES = ['merged', 'closed'] as const;
+export type SettledRequestState = (typeof SETTLED_REQUEST_STATES)[number];
+
+/**
+ * The finished state of this feature's request, or `null` while it is open,
+ * draft, or was never published.
+ *
+ * A settled request is the other half of `holdsOpenRequest`: a merge into
+ * that branch can no longer reach a pull request, so neither surface counts
+ * its drift or offers a sync.
+ */
+export function settledRequest(mrState: string | null | undefined): SettledRequestState | null {
+  const state = (mrState ?? '').toLowerCase();
+  return SETTLED_REQUEST_STATES.find((s) => s === state) ?? null;
+}

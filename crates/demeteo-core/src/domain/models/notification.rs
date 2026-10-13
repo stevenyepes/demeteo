@@ -42,6 +42,10 @@ pub enum NotificationKind {
     /// or worktrees. One row per project per sweep that deleted anything, so
     /// an automatic deletion is never a silent one; `feature_id` is empty.
     CachesReclaimed,
+    /// A sync of a detached run reached origin, but the runner's own clone of
+    /// the branch could not be brought up to date with it
+    /// ([`crate::domain::runner_branch_refresh`]).
+    RunnerBranchStale,
 }
 
 impl NotificationKind {
@@ -58,6 +62,7 @@ impl NotificationKind {
             NotificationKind::EnvironmentNotReady => "environment_not_ready",
             NotificationKind::TicketsStartable => "tickets_startable",
             NotificationKind::CachesReclaimed => "caches_reclaimed",
+            NotificationKind::RunnerBranchStale => "runner_branch_stale",
         }
     }
 }
@@ -76,6 +81,7 @@ impl FromStr for NotificationKind {
             "environment_not_ready" => Ok(NotificationKind::EnvironmentNotReady),
             "tickets_startable" => Ok(NotificationKind::TicketsStartable),
             "caches_reclaimed" => Ok(NotificationKind::CachesReclaimed),
+            "runner_branch_stale" => Ok(NotificationKind::RunnerBranchStale),
             _ => Err(()),
         }
     }

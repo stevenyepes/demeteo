@@ -121,6 +121,8 @@ Control RPC methods (over the SSH-tunneled unix socket, R4):
 | `decide_gate(run_id, gate_id, decision)` | Clear a **parked** gate remotely from the laptop. |
 | `cancel_run(run_id)` | The only way to stop a run (R8). |
 | `release_feature_cache(run_id, reason)` | The laptop saw the run's PR `merged`/`closed`, or the user `dismissed` the feature — the runner can't see either once its PAT is wiped (§6.2). Records it on the runner's own feature row, then frees the dependency cache if `domain::cache_release` agrees. Refused while the run is `pending`/`running`; idempotent. |
+| `refresh_feature_branch(run_id, git_pat?)` | A desktop sync of the run reached origin. Fast-forwards the runner's clone of the run's branch — and its `origin/<branch>`, which the terminal push's `--force-with-lease` reads — to origin's tip. Refused while the run row is unsettled (`pending`/`running`/`needs-credentials`), and for runner commits origin lacks or a dirty checkout; never resets. `git_pat` serves the one fetch and is not stored. Decision in `domain::runner_branch_refresh`. |
+| `publish_run(run_id, git_pat)` | The desktop's Publish MR on a detached run. Repeats the run's terminal tail — push, then open the PR — from the runner's clone, the only place the branch exists; answers once started, and the outcome arrives through the event log like any run ending. Refused while the run row is `pending`/`running`, for a feature that did not finish, and for one that already has a PR. `git_pat` is stored for the run and wiped at its end, as `inject_credentials`'s is. Decision in `domain::runner_publish`. |
 | `health()` | Heartbeat + version + capacity. |
 
 **Lifecycle:** laptop composes the spec (description, workflow, agent/model,
@@ -129,6 +131,16 @@ runner persists the spec to its own DB → spawns the driver → returns the han
 **The user may close the app immediately.** The remote DB is now source of truth
 (R9); the laptop mirrors by `(machine_id, run_id)` and reconciles by event
 offset.
+
+**There is one way in.** The Start Feature modal, a Discovery ticket's start
+(PRD_DISCOVERY §7.4) and MCP's `start_feature`/`start_ticket` all reach this
+lifecycle only through `application::launch::launch_run`, naming a
+`RunPlacement` and nothing more. `submit_remote_run` is `pub(crate)` and
+`launch_run` is its only caller, so its refusal gate — unknown or
+local machine, then the runner-version check — runs before anything is
+written, whichever surface asked. No caller inspects how a placement will be
+carried; a new launch surface that called the submit directly would be the
+second route this exists to prevent.
 
 ---
 
@@ -175,6 +187,15 @@ promise ("close the laptop, come back to results"). It extends the existing
 `auto_approved_rules` model from commands to gate classes. **Default policy:**
 auto-approve review gates + auto-merge to the feature branch; park
 merge-to-default and over-budget.
+
+**Where the policy lives now (decision 57).** The classification above is the
+project's `gate_autonomy` setting, applied by the engine's gate step on every
+transport. A detached run raises it to `review` at least; a project set to
+`full` auto-approves the dangerous class too, and one set to `clean` does so
+when the review step before the gate reports no critical and no major issue
+(decision 60). The runner's poll loop no longer
+approves anything — it only announces a gate still pending, which by then is
+always one held for a person.
 
 **Budget ceilings.** Hard per-run and per-machine caps on token cost and
 wall-clock. Exceeding → park or stop; **never** auto-approve more spend. The

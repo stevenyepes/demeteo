@@ -33,6 +33,7 @@ fn redirect(feedback: Option<&str>) -> GateDecision {
         decision: Some("redirect".into()),
         feedback: feedback.map(str::to_string),
         created_at: 1,
+        auto_approved: false,
     }
 }
 

@@ -21,6 +21,7 @@ fn ticket(seq: i64, state: TicketState) -> Ticket {
         agent_kind: None,
         model: None,
         effort: None,
+        machine_id: None,
         attachments: Vec::new(),
         state,
         drop_reason: None,

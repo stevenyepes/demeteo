@@ -44,6 +44,7 @@ impl GateRepository for GateDouble {
         latest_decided_for_feature(&FeatureId) -> Result<Option<GateDecision>, String>;
         latest_for_step(&StepExecutionId) -> Result<Option<GateDecision>, String>;
         reset_for_step_execution(&StepExecutionId) -> Result<(), String>;
+        approve_by_policy(&StepExecutionId, i64) -> Result<(), String>;
     }
 
     fn upsert_decision(
@@ -68,6 +69,7 @@ fn decision(step_exec_id: &str, decision: &str, feedback: Option<&str>) -> GateD
         decision: Some(decision.to_string()),
         feedback: feedback.map(str::to_string),
         created_at: 1,
+        auto_approved: false,
     }
 }
 

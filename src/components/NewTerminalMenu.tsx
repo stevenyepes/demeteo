@@ -665,7 +665,7 @@ export function NewTerminalMenu({
           if (compact) return panel;
           return (
             <div
-              className="fixed inset-0 z-40 flex items-start justify-center pt-[14vh] bg-black/50 backdrop-blur-sm"
+              className="fixed inset-0 z-40 flex items-start justify-center pt-[14vh] bg-black/60"
               onMouseDown={(e) => {
                 if (e.target === e.currentTarget) setOpenMenu(false);
               }}

@@ -100,14 +100,6 @@ function Shell() {
               </div>
             ))}
             <div>
-              <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Conflict Resolution Policy</label>
-              <select value={s.conflictPolicy} onChange={e => s.setConflictPolicy(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50">
-                <option value="always_gate">Always Gate (Requires approval)</option>
-                <option value="auto_agent">Auto Agent First (Cascade to manual)</option>
-                <option value="auto_human">Immediate Manual Merge</option>
-              </select>
-            </div>
-            <div>
               <label className="block text-[11px] font-mono text-slate-400 mb-1.5 uppercase tracking-wider">Completed Feature Lifecycle</label>
               <select value={s.featureLifecycle} onChange={e => s.setFeatureLifecycle(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50">
                 <option value="archive">Archive by default</option>

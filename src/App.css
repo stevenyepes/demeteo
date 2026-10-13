@@ -689,13 +689,21 @@ body {
   animation: spin 1s linear infinite;
 }
 
-/* Compositor-cheap pulse: animate ONLY opacity (GPU-composited, no per-frame
-   repaint/raster). The glow is a STATIC box-shadow on the element, faded in and
-   out by the opacity keyframe — so we get the same visual pulse without
+/* Animate ONLY opacity. The glow is a STATIC box-shadow on the element, faded
+   in and out by the opacity keyframe — so we get the same visual pulse without
    re-rasterizing box-shadow/scale every frame. Animating box-shadow or scale
    here previously pinned the WKWebView GPU process at idle.
 
-   That is the cheap half of the motion budget (UI_REDESIGN_PLAN §6, Phase 5).
+   Opacity-only is cheap per frame on macOS, and that is all it buys. On
+   WebKitGTK *any* running animation makes the webview produce a frame per
+   display refresh, which the GTK3 UI thread pays for whatever the frame
+   contains: one opacity-only badge held demeteo at ~35-90% of a core.
+   `will-change` and dropping the shadow were both measured and changed
+   nothing — only an animation that is stopped or paused costs nothing. Hence
+   the `data-motion` rule below, and a finite pulse on anything that is not a
+   liveness signal.
+
+   That is the cost half of the motion budget (UI_REDESIGN_PLAN §6, Phase 5).
    The other half is not about cost: an animation that never stops is a claim
    that something is still happening, so an infinite one belongs on a small
    liveness dot or an in-flight spinner and nowhere else. Put on a container
@@ -711,9 +719,19 @@ body {
   animation: pulse-glow 1.2s ease-in-out infinite;
 }
 
+/* "Needs you" is a call for attention, not a liveness signal: nothing is in
+   motion while a gate waits, and a gate can wait for hours — exactly the
+   stretch an infinite pulse costs the most. Three beats catch the eye, then it
+   rests fully lit, which is why this keyframe starts and ends at 1 rather than
+   reusing `pulse-glow`, whose ends would snap from 0.4. */
+@keyframes pulse-attention {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+
 .animate-pulse-glow-amber {
   box-shadow: 0 0 10px 1px rgba(245, 158, 11, 0.5);
-  animation: pulse-glow 1.2s ease-in-out infinite;
+  animation: pulse-attention 1.2s ease-in-out 3;
 }
 
 .animate-pulse-glow-delay-1 { animation-delay: 0.15s; }
@@ -791,6 +809,19 @@ body {
 .animate-skeleton-pulse {
   background-color: rgba(255, 255, 255, 0.07);
   animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+/* ----------------------------------------------------
+   PAUSED MOTION
+   ----------------------------------------------------
+   `src/lib/motionPause.ts` sets `data-motion="paused"` while the window is
+   unfocused or hidden — see `pulse-glow` above for what a running animation
+   costs on WebKitGTK. Paused, not removed: an animation resumes where it
+   stopped, so a one-shot fade cut short by a blur still finishes. */
+:root[data-motion='paused'] *,
+:root[data-motion='paused'] *::before,
+:root[data-motion='paused'] *::after {
+  animation-play-state: paused !important;
 }
 
 /* ----------------------------------------------------

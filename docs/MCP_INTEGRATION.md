@@ -3,7 +3,7 @@
 > **Scope:** how an external MCP client reaches Demeteo — the transport, the
 > protocol revision, who may call what, which operations exist, and which are
 > deliberately absent. **Built:** the listener, the OAuth 2.1 authorization
-> server, the consent screen, and the twelve-tool surface. What is *not* built
+> server, the consent screen, and the eighteen-tool surface. What is *not* built
 > is marked where it appears (§9). [`ARCHITECTURE.md`](ARCHITECTURE.md) owns the
 > hexagon this sits on, [`DDD_MODEL.md`](DDD_MODEL.md) owns the entities the
 > tools return, [decision 35](DECISIONS.md#1-the-locked-decisions) and
@@ -34,6 +34,7 @@ alternative in full.
 | 49 | The external settings write is a typed `RunShapePatch` | whole-`ProjectSettings` writes | `configure` would transitively grant unbounded `spend` and could disable review |
 | 50 | Gate approval and worktree merges are excluded; ticket creation stays with decomposition; discovery interviews are out of scope this phase | exposing them | see §8 — the first two are *permanent*, the last is *this phase* |
 | 51 | `ticket_force_start` is excluded | exposing it | its `reason` is fed to the agent as prerequisite context |
+| 59 | A `spend` client can retry a step, pin a step's assignment, and send the Standard pipeline's final gate back on its critic's review | client-authored redirect feedback; replay; a caller-set rework limit | the feedback would be an outside party's text read by the agent as fact; see §7.3 |
 | 52 | The listener is off until enabled in Settings | always listening | discovery documents are unauthenticated by necessity |
 | 53 | `initialize` and `tools/list` need a grant; only `server/discover` is open on `/mcp` | an open handshake | clients that sign in only when connecting is refused never got a token — see §5 |
 
@@ -48,6 +49,7 @@ alternative in full.
 | Human consent screen (`McpConsentView.tsx`) and grant list with revocation (`McpGrantsTab.tsx`) | built |
 | Settings toggle and port (`mcp_server_enabled`, `mcp_server_port`) | built; the toggle sits in the MCP grants tab |
 | Per-grant **project list** | **not built** — see §9 |
+| Per-grant **machine list** | **not built** — a `spend` grant can launch on any registered machine; see §9 |
 | Refresh tokens | none by design; the 30-day lifetime is a default, open — see §5 and §9 |
 | The CLI (`docs/roadmap/stories/D1-cli-read-trigger.md`) | not built; the seam it would use is |
 
@@ -175,7 +177,7 @@ stateless, and HTTP requests here aren't guaranteed to share a connection),
 is what a real client accepts: this is the standard MCP negotiation
 contract, where the server states a version and the client's own logic
 decides whether to proceed and disconnects if it can't. Demeteo's
-twelve-tool surface doesn't vary across recent revisions, so there is
+tool surface doesn't vary across recent revisions, so there is
 nothing to gate on server-side in the first place. Full reproduction and
 decision history: [decision 46](DECISIONS.md#46--mcp-protocol-revision).
 
@@ -292,8 +294,8 @@ Three scopes, split by **consequence**, not by resource.
 
 | Scope | What it lets a client do | What it costs |
 |---|---|---|
-| `read` | Observe projects, features, steps, failure verdicts, pending gates, discovery boards, run events | nothing — no state changes, no spend |
-| `spend` | Start a Feature or a Ticket's attempt | **money and agent time** — a run consumes provider budget until it finishes or is stopped |
+| `read` | Observe projects, features, steps, failure verdicts, pending gates, discoveries and their boards, registered machines, run events | nothing — no spend, and no state change but one: `refresh_discovery_prs` records what the forge says about a pull request (§7) |
+| `spend` | Start a Feature or a Ticket's attempt, here or on any registered machine; retry a step, choose a step's agent and model, and send a Standard-pipeline run back from its final gate (§7.3) | **money and agent time** — a run consumes provider budget until it finishes or is stopped |
 | `configure` | Create a Project; change a Project's run shape | **future behaviour** — how later runs are shaped, never their ceiling (§7.1) |
 
 Scopes are a **flat set**. `spend` does not imply `read`; a grant holds exactly
@@ -316,7 +318,7 @@ three consequence classes answer what a user is asking before ticking a box:
 
 ## 7. The operation surface
 
-Twelve tools. The table is `required_scope` in `domain/oauth/tools.rs`; the two
+Eighteen tools. The table is `required_scope` in `domain/oauth/tools.rs`; the two
 must not drift.
 
 | Tool | Scope | What it does |
@@ -327,12 +329,18 @@ must not drift.
 | `list_step_attempts` | `read` | A step's attempts, ordered by attempt number |
 | `get_failure_verdict` | `read` | Why a step failed, for an agent asking about its own failed run |
 | `list_pending_gates` | `read` | Every Gate awaiting a decision, named by Project and Feature |
-| `get_discovery_board` | `read` | A Discovery's tickets and derived board |
+| `list_discoveries` | `read` | Discoveries — for one Project, or across all of them — as id, title, status and base branch |
+| `get_discovery_board` | `read` | A Discovery's tickets and derived board, with the base branch they integrate against and each started Ticket's own branch |
+| `refresh_discovery_prs` | `read` | Read each unsettled pull request of a Discovery's Tickets from the forge now, record the answer, and return the board |
+| `list_machines` | `read` | Registered machines: the ids `machine_id` takes, and whether naming one detaches the run |
 | `run_events_since` | `read` | Durable run events after an offset, ascending |
 | `create_workspace_project` | `configure` | Register a Project and its repositories — **rows only**: no clone, no bootstrap, no settings row, so the Project stays `bootstrapping` and `apply_run_shape_patch` refuses it until it is bootstrapped |
 | `apply_run_shape_patch` | `configure` | Write the run-shape subset of a Project's settings (§7.1) |
-| `start_feature` | `spend` | Start a Feature run; returns a handle as soon as the executor accepts it |
-| `start_ticket` | `spend` | Start a Ticket's current attempt |
+| `start_feature` | `spend` | Start a Feature run, optionally with attachments (§7.2), on the project's own compute or detached on a named machine; returns a handle as soon as the run is accepted |
+| `start_ticket` | `spend` | Start a Ticket's current attempt where the Ticket is placed, or on a machine named for this launch only, optionally capped and bounded by how many Tickets are in flight |
+| `retry_step` | `spend` | Re-run one step that failed, was interrupted, or never started (§7.3) |
+| `set_step_assignment` | `spend` | Pin which agent, model and effort one step of a started run uses (§7.3) |
+| `rework_from_critic` | `spend` | Send the Standard pipeline's final gate back to fix what its critic review found (§7.3) |
 
 **Reads span every project.** `list_features` and `list_pending_gates` with no
 `project_id` fan out across all of them.
@@ -340,10 +348,155 @@ must not drift.
 `list_pending_gates` is a **read**. It lets a client *see* that a Gate is waiting;
 it does not conflict with the permanent exclusion of Gate approval (§8).
 
-`start_feature` takes only `project_id`, `workflow_id`, `title` and
-`description` (`AgentFeatureLaunch`). Agent, model, effort, step overrides, origin and
-budget are absent on purpose: they are the run's own business, not a caller's to
-set from outside.
+`list_discoveries` and `list_machines` return **summaries, not rows**. A
+Discovery's interview session id, worktree path, attachments and spend stay in
+the app. A machine's host, user, key path and notification webhook URL stay in
+the app too: a `read` grant spans every Project, none of them helps a client
+choose a placement, and a webhook URL is a credential in all but name.
+`list_machines` does not probe a runner — whether one is installed, reachable
+and this build's version takes an SSH round trip per machine, which a launch
+makes for the one machine it names and refuses on (below).
+
+**`refresh_discovery_prs` is `read`, and it writes.** The MR monitor polls every
+Feature whose pull request is `open` every two minutes
+([`PRD_DISCOVERY.md` §6.4](PRD_DISCOVERY.md)) and never one whose pull request
+is `draft`. A client that has just merged a pull request would otherwise wait
+out that interval before `get_discovery_board` shows the dependents released,
+and for a draft would wait indefinitely. This tool asks the forge now, for the
+unsettled pull requests of one Discovery's Tickets, and applies each answer
+through the monitor's own settle path — the same row write, notification,
+cache release and dependents' notice.
+
+It is scoped `read` because §6 prices a scope by what a call **costs the
+user**: this spends nothing, changes no setting, and writes only what the app
+would have written unasked. The alternatives were `configure`, which names a
+change to how later runs are shaped and this is not one, and a fourth scope,
+which would put a consent-screen question in front of a user for a write they
+cannot meaningfully refuse. What a `read` grant gains is the ability to make
+Demeteo call the forge with the user's token, bounded by one request per
+unsettled pull request of the Discovery named.
+
+A pull request that could not be read is listed under `unrefreshed`
+(`ticket_id`, `feature_id`, `error_message`) and the rest are still applied; a
+Ticket named there is on the board as of its last successful read. An answer
+of `open` is never written, by this tool or by the monitor: `fetch_mr_state`
+also answers `open` when it has no provider or no access to ask with.
+
+`start_feature` takes `project_id`, `workflow_id`, `title` and `description`
+(`AgentFeatureLaunch`), an optional `attachments` array (§7.2), plus five optional
+placement arguments:
+
+| Argument | Meaning |
+|---|---|
+| `machine_id` | A registered remote machine's id submits the run detached to that machine's `demeteo-runner`. Omitted, `""` or `"local"` runs it on the project's own compute, exactly as before the argument existed |
+| `target_repo_id` | Detached only: the repository to run in; defaults to the project's first |
+| `unattended` | Detached only; `false` is refused (below) |
+| `max_cost_usd` | Detached only: a spend cap in US dollars, finite and above zero |
+| `max_wall_clock_secs` | Detached only: a wall-clock cap in seconds, above zero |
+
+`start_ticket` takes `ticket_id` and an optional `machine_id` that overrides the
+Ticket's placement **for that one launch** and is never saved on the Ticket.
+`"local"` forces the project's own compute; omitted or `""` uses the Ticket's own
+placement, whose default and precedence are `domain/run_placement.rs`. A detached
+Ticket always runs in the first repository, unattended.
+
+It also takes three optional **bounds**, none saved on the Ticket:
+
+| Argument | Meaning |
+|---|---|
+| `max_cost_usd` | Detached only: a spend cap in US dollars, finite and above zero |
+| `max_wall_clock_secs` | Detached only: a wall-clock cap in seconds, above zero |
+| `max_in_flight` | Refuse the start when the Ticket's Discovery already has this many Tickets in flight; above zero |
+
+The two caps are `start_feature`'s, under the contract below. A Ticket has no cap
+fields of its own, so one launched without them is uncapped. Because a Ticket's
+placement can come from the Ticket rather than from `machine_id`, "without a
+machine" means *resolves to the project's own compute*: a cap on such a start is
+refused.
+
+`max_in_flight` is the one bound that is not a detached-only option. **In flight**
+is the board's lane — started, with a pull request neither merged nor closed — and
+not "runs still executing": a finished run whose pull request is open has not
+landed and still blocks its dependents, and the lane is the number every surface
+already agrees on (`progress.in_flight`). A start under way that has not recorded
+its run yet counts too, so two clients racing for one free slot can both be
+refused and are never both admitted. It is a bound a caller supplies for one
+launch, not a stored ceiling and not a scheduler:
+[`PRD_DISCOVERY.md` §11](PRD_DISCOVERY.md) still defers both, and nothing here
+starts a Ticket nobody asked for.
+
+Both tools reach the run through `application::launch::launch_run`, the same
+function the UI uses, so a launch from MCP is placed, refused and recorded exactly
+as one from the app.
+
+Agent, model, effort, step overrides, origin and budget stay absent on purpose:
+they are the project's run shape (§7.1), not a caller's to set per launch.
+Attachments are the one input that is the caller's own, so they are the exception.
+After launch, `set_step_assignment` can pin one step (§7.3); the launch itself
+still takes none of them.
+
+**Detached-only options are a contract, not a hint.** Caps and `unattended` are
+accepted because they can only *bound* a run, never widen it:
+
+- **Caps only bound spend.** A cap is a ceiling the detached run stops at. It
+  cannot raise what the grant already allows — starting the run is the spend, and
+  `spend` authorises it — and `default_max_budget_usd` stays out of reach (§7.1).
+- **Detached is always unattended.** Nobody is attached to a runner session to
+  answer a Gate, so `unattended` omitted or `true` sends `true`, and
+  **`unattended: false` with a machine is refused** rather than launched into a
+  run that would wait forever.
+- **Detached-only options without a machine are refused**, not silently dropped:
+  a caller that sends a cap believes the run is capped.
+
+**A remote launch needs scope `spend`, and nothing more.** That is a decision, not
+an omission:
+
+- **Same consequence class.** A detached run spends money and agent time, which is
+  exactly what `spend` prices on the consent screen (§6); where the compute sits
+  does not change what the user is agreeing to pay for.
+- **Scope is keyed by tool name.** `required_scope` maps a tool to one scope; it
+  never reads arguments, and the guard checks the grant before the arguments are
+  parsed.
+- **An argument-aware scope would change existing grants.** A `spend` grant a
+  user already approved would silently stop covering `start_feature` with a
+  `machine_id`, or a new scope would need a consent-screen change and new
+  `oauth_grants` values. What a `spend` grant can reach as built is open (§9).
+
+**A refused launch creates nothing.** Each of these returns `isError: true` with
+the reason in the text, before a Feature row, a run, a spooled attachment or a
+recorded Ticket attempt exists, and before any credential leaves the app:
+
+- an unknown `machine_id` — the text names the id;
+- a `machine_id` registered as this desktop rather than a remote machine;
+- a machine whose `demeteo-runner` is missing, or reports a version other than
+  this app's build;
+- a machine that cannot be reached to read that version;
+- any detached-only option refused above;
+- a `start_ticket` whose Discovery is at its `max_in_flight`, or whose
+  `max_in_flight` is zero.
+
+A failure *after* the runner accepted the probe — the submit call itself erroring
+— is also `isError: true`, but the placeholder Feature it had written is left
+marked failed rather than deleted, so the attempt stays visible.
+
+**A run the runner accepted is never an error**, even when what follows the
+acceptance goes wrong: an `isError` would invite a retry, and a retry submits the
+same paid run twice. Both tools return the Feature's fields at the top level of
+`structuredContent`, unchanged, and add a key for each way an accepted run is
+degraded. Each key is a string giving the cause, and is absent unless that state
+holds — so a client that reads only the Feature reads every result as before:
+
+| Key | Present when | What it means for the run |
+|---|---|---|
+| `credentials_parked` | The runner accepted the run but its git credentials could not be delivered | The run waits as `needs-credentials` until they are re-sent from the app; it does not proceed on its own |
+| `mirror_unrecorded` | The runner accepted the run but the app could not record it locally | The run proceeds on the runner, but reconcile cannot follow a run the app never recorded, so the app will not report on it |
+| `ticket_unrecorded` | `start_ticket` launched the run, local or detached, but the ticket could not record it | The run proceeds and the text names its Feature id, but the board still shows the ticket unstarted. Do not start it again: that launches a second run |
+
+`credentials_parked` and `mirror_unrecorded` are set only for a detached run; a
+local launch never carries either. `ticket_unrecorded` is set only by
+`start_ticket`, whatever the placement. Their text is scrubbed of
+credential-shaped content and bounded, as `error_message` is. Report any of them
+to the human: none is something a client can repair through this surface.
 
 A tool result carries `structuredContent` and an `isError` flag. An operation
 that fails returns `isError: true` on HTTP `200`; a missing or insufficient
@@ -399,6 +552,168 @@ to the patch has to be traced to its sinks, not only judged by its name.
 
 ---
 
+### 7.2 Attachments on `start_feature`
+
+Each `attachments` item names its bytes one of two ways, never both and never
+neither:
+
+- **`path`** — an absolute path **on the Demeteo host**, not on the caller's
+  machine. The file is read by Demeteo; a relative path is refused.
+- **`content_base64`** — the bytes inline, standard padded base64, with a required
+  `filename`. `mime` is optional on both forms.
+
+Accepted types are the nine the UI accepts, decided once by
+`resolve_attachment_type` in `crates/demeteo-core/src/application/attachments.rs`.
+This surface is stricter than the UI: there is no extension fallback for an
+unrecognised mime, and the content must match the signature of the type it was
+accepted as.
+
+**Where the type comes from differs by form.** Inline, the supplied `mime` wins
+and the `filename` extension is the fallback. By `path`, the type is derived from
+the file's own name **and** the name of the file a symlink resolves to; a `mime`
+may only confirm it, so a `filename` or `mime` cannot turn a `credentials` file
+into text. A symlink whose target has a different type than its own name is
+refused with the generic unreadable-path message, so `notes.txt` linked to an
+extensionless file is not text. A path inside Demeteo's own data directory is
+refused, the path is canonicalised first so a symlink does not walk around that
+either, and the file is read through a bounded reader rather than trusting its
+reported length. The batch byte cap is charged for the bytes actually read, never
+for the length the file system reports, so a file that reports `0` still counts.
+`agent_attachment_forbidden_roots` in that same file says which entries are
+forbidden and what that leaves open.
+
+A TIFF by `path` is stored under the file's own extension whatever `filename`
+says; `image/tiff` has no `ext_for_mime` entry on purpose (§24 item 4 in
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md#24-what-is-left-open-by-attachments-on-the-mcp-start_feature)).
+
+The limits are `MAX_ATTACHMENT_BYTES` (per file), `MAX_ATTACHMENTS_PER_FEATURE`
+(after dedup by content hash), `MAX_AGENT_ATTACHMENT_BATCH_BYTES` (distinct
+bytes per call) and `MAX_AGENT_ATTACHMENT_ITEMS` (raw items per call, duplicates
+included, checked before any file is read), all in that same file.
+
+Inline content is also bounded by the transport: a request body over
+`MAX_BODY_BYTES` in `crates/demeteo-core/src/adapters/mcp/protocol.rs` (2 MiB)
+is refused with `413` before any of this runs. Base64 inflates by a third, so
+about 1.5 MiB of raw bytes fits inline; anything larger should go by `path`.
+
+**All or nothing.** The whole batch is validated and decoded before the Feature
+is started. If an attachment is invalid the call returns `isError: true` on HTTP
+`200`, the message begins `attachments[i]:` with the item's index, and no
+Feature row exists. Count and batch-size refusals name no index. A wrongly
+typed `attachments` value is a malformed argument and stays `InvalidParams`.
+
+**The returned handle's `attachments` is empty.** The Feature row is inserted
+`bootstrapping` first; the bootstrap tail commits the attachments afterwards.
+Read `get_feature` for the committed list. All-or-nothing covers an *invalid
+attachment*, not a store fault: a write that fails after validation (disk full)
+can still leave a `bootstrapping` Feature row, as it does on the UI path.
+
+**`source_filename` is the caller's raw string.** The manifest records it as given;
+it is sanitised only for the stored name, and is never used as a path. Over MCP it
+is caller-controlled rather than a browser's file name, so any renderer must
+escape it.
+
+**Detached runs have a tighter cap.** An MCP launch placed on a machine (`machine_id`,
+§7; [OPEN_QUESTIONS §24](OPEN_QUESTIONS.md#24-what-is-left-open-by-attachments-on-the-mcp-start_feature)
+item 6) goes through
+`spool_attachments` (`crates/demeteo-core/src/application/remote_runs/attachments.rs`),
+which refuses a file over `MAX_DETACHED_ATTACHMENT_BYTES` (25 MiB) there, not
+`MAX_ATTACHMENT_BYTES`. This surface does not pre-check it. The shape this surface
+stages (empty `source_path`, bytes in memory, the caller's `filename`) is driven
+through `spool_attachments` by
+`an_mcp_inline_attachment_reaches_the_runner_as_it_was_sent` and the over-cap
+refusal by `an_inline_attachment_over_the_detached_cap_is_refused_before_anything_is_written`,
+both in `crates/demeteo-core/tests/application/remote_runs/attachments.rs`, so
+delivery of the spooled bytes to a remote machine is covered by a test. The
+runner-side materialise step is **not** exercised with an MCP-shaped item; it is
+covered only through the existing UI-attachment path.
+
+`path` is a host-file-read reachable from a `spend` grant; §9 states how far
+the guard goes.
+
+### 7.3 Acting on a started run
+
+Three `spend` tools act on a run that already exists. Each takes a
+`step_execution_id` and reaches the step wherever its run lives: a run the
+desktop drives through the executor, a detached run through the runner that
+owns it. `application/step_control.rs` makes that choice; the adapter and the
+caller never do.
+
+**`retry_step`** re-runs one step whose status is `failed`, `interrupted` or
+`pending`, on the agent and model it already resolves to. It is refused for a
+completed step and while an earlier step of the run is still active. It
+returns the step once the retry is accepted, not a finished attempt.
+
+**Replay is not exposed.** The app's replay takes a step of any status and has
+no predecessor check, and on a live run it cancels the run before rewinding.
+A client that can kill a running, paid-for run by naming one of its steps is
+a different consequence from the one `spend` prices.
+
+**`set_step_assignment`** writes the per-step pin of decision 54: `agent_kind`,
+`model` and `effort`. It replaces the pin as a whole — a dimension the caller
+omits is un-pinned, and omitting all three removes the pin — and it re-runs
+nothing; the pin applies the next time that step is dispatched. It is refused
+while the step is `running` or `verifying`, for a step kind that spawns no
+agent, for a harness this build has not registered, and for an `agent_kind`
+or `model` that starts with `-` or carries whitespace or a control character.
+That last check is the one `RunShapePatch::validate` makes (§7.1), for the
+same reason: a model is the argv value after a harness's `--model`.
+
+It is `spend`, not `configure`. §6 prices a scope by consequence: the pin
+changes what one step of one run costs and writes nothing a later run reads.
+`configure` names the opposite — how later runs are shaped.
+
+A model is not checked against a list, here or in the app: models are whatever
+the harness answers on the run's machine, so an unknown one fails that step
+when it is dispatched.
+
+**`rework_from_critic`** sends the Standard Feature Pipeline's final gate back
+to fix what the critic found. The caller names the gate and supplies **no
+text**. Demeteo reads the stored critic review by step from its artifact
+store — never from a path a caller chose — and redirects the gate with a fixed
+preamble followed by that review. The preamble says the run was sent back by
+an MCP client and that no person has reviewed the work, because the redirect
+is recorded through the path a person's is.
+
+It is refused, with `isError: true` and nothing decided, when:
+
+- the run's workflow is not `wf-starter-standard`;
+- the pinned workflow version no longer has the shape this relies on — a
+  starter can be edited in place and keep its id, so the shape is read off the
+  version's steps: the gate is marked `dangerous`, only `finalize` follows it,
+  the step before it declares the `critic-review` artifact, and a redirect
+  from it lands on a step with a rework prompt;
+- the step is not a `gate` step awaiting a decision. A pending row from
+  `list_pending_gates` is not always one: a verifier park on an agent step
+  holds a decision row too;
+- the review has no `## Verdict`, or its verdict is `PASS`. `PASS_WITH_NOTES`
+  and `FAIL` proceed;
+- the run has already been sent back **twice** this way.
+
+The limit of two is fixed here and not an argument. A gate redirect has no
+loop budget — `default_loop_iterations` bounds `on_failure` redirects only —
+so without it a client could send a run round critic, fix, critic for as long
+as its grant lasts, and a limit the caller supplied is one the caller would
+raise. Each accepted rework appends a `critic_rework_requested` run event on
+the desktop, and those are what is counted: the redirect deletes its own
+decision row, and a detached run's `gate_decided` event is written on the
+runner.
+
+What follows the redirect is the pipeline's own rework cycle (decision 43):
+the task-list step writes one ticket per defect, and implementation,
+validation and the critic run again before the gate is reached again. On a run
+whose project is `attended`, that cycle stops at the ticket-review gate for a
+person; this tool cannot move that gate.
+
+The result is `feature_id`, the `verdict` acted on, `reworks_used` and
+`reworks_remaining`.
+
+**Not verified end to end for a detached run.** The routing to the runner is
+covered by a test for `retry_step`. For `rework_from_critic`, whether a
+detached run's parked final gate reaches the desktop as a step awaiting a
+decision with its critic review cached has not been exercised against a real
+runner; where it does not, the tool refuses rather than acting.
+
 ## 8. What is excluded, and whether permanently
 
 | Operation | Status | Why |
@@ -432,7 +747,14 @@ public keys it pinned. The Hub only relays it and cannot produce one, so **no to
 can approve**. If a future change would let a token do what the assertion does, it
 reopens this section; one that leaves the assertion in place does not. Mechanism:
 [`HUB.md` §8](HUB.md#8-gate-decisions); decision:
-[decision 60](DECISIONS.md#60--hub-gate-decisions-detail).
+[decision 65](DECISIONS.md#65--hub-gate-decisions-detail).
+
+**A redirect is not an approval.** `rework_from_critic` (§7.3) sends one gate
+back; it lets nothing through, so it is not the operation the first row
+excludes. What would be the same kind of problem as `ticket_force_start`,
+below, is a redirect whose feedback the client wrote: that text is rendered
+into every step of the rework cycle under "Previous Attempt Feedback" and kept
+as a memory signal. That form is refused — the tool has no feedback argument.
 
 ### `ticket_force_start`
 
@@ -481,13 +803,29 @@ Open means unresolved. Nothing below is decided.
    `project_id` to anything on the grant, and the consent screen does not ask. As
    built, a `configure` or `spend` grant can write to any Project. Tracked in
    [`OPEN_QUESTIONS.md` §19](OPEN_QUESTIONS.md#19-must-an-mcp-write-name-a-project-listed-on-the-grant).
-2. **The CLI's relationship to the running app** — an app-attached command, or a
+2. **Must a remote launch name a machine listed on the grant?** The same gap, one
+   axis over. `start_feature` and `start_ticket` take a `machine_id` (§7), and a
+   `spend` grant can send a run to **any registered machine** — `GrantRecord` has
+   no machine list either, and the consent screen does not name machines. Keeping
+   `spend` as the scope for remote launches was decided (§7); whether a grant
+   should also be narrowed to particular machines was not.
+3. **The CLI's relationship to the running app** — an app-attached command, or a
    short-lived single-writer process? See §3.
-3. **`server/discover`'s shape** is unverified (§4).
-4. **The 30-day lifetime** and the absence of refresh tokens are defaults, not
+4. **`server/discover`'s shape** is unverified (§4).
+5. **The 30-day lifetime** and the absence of refresh tokens are defaults, not
    measured choices (§5).
-5. **Unauthenticated registration** relies on the consent screen alone (§5); a
+6. **Unauthenticated registration** relies on the consent screen alone (§5); a
    client's `client_name` is self-asserted and unchecked.
+6. **`path` turns a `spend` grant into a host-file-read.** A caller can name any
+   absolute path the Demeteo process can read. The guard narrows what that
+   yields — a regular file only, a strictly allowed type whose content must match
+   its signature, the size caps in §7.2, and error text that echoes only the
+   caller's own string. The data-directory refusal, the type derived from the real
+   file name and the bounded read are specified in §7.2. It does not close the
+   hole: a readable accepted-type file outside the data directory is still
+   attached and then visible to the run's agent. There is no path allow-list. Same family as question 1: a write's reach is
+   wider than its grant says. See
+   [`OPEN_QUESTIONS.md` §19](OPEN_QUESTIONS.md#19-must-an-mcp-write-name-a-project-listed-on-the-grant).
 
 ---
 

@@ -13,12 +13,14 @@ use demeteo_core::application::attachments::StagedAttachmentInput;
 use demeteo_core::application::{bootstrap, projects, workflows};
 use demeteo_core::domain::ids::{FeatureId, ProjectId, ProviderId};
 use demeteo_core::domain::models::{
-    Feature, GateDecision, MrInfo, ProjectSettings, ProviderInstance, PublishOptions, StepConfig,
-    WorktreeStrategy,
+    Feature, MrInfo, ProjectSettings, ProviderInstance, PublishOptions, WorktreeStrategy,
 };
+use demeteo_core::domain::push_lease;
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
 use demeteo_core::ports::db::FeatureRepository;
+use demeteo_core::ports::run_events::RunEventsPort;
+use demeteo_core::ports::runner_run::RunnerRunPort;
 use demeteo_core::state::AppContext;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -83,6 +85,49 @@ pub(crate) fn emit(ctx: &AppContext, run_id: &str, kind: &str, payload: impl Ser
             "[demeteo-runner] warning: failed to append '{}' event for run {}: {}",
             kind, run_id, e
         );
+    }
+}
+
+/// Record where a background run ended: its `runner_runs` status and, when
+/// it ended in an `Err`, a `failed` event carrying the error.
+///
+/// Every task that drives a run — submit, retry, the credential resume, the
+/// restart reconciliation — ends here. The event is not optional: the laptop
+/// mirrors a detached run through its event log, and a failure that only
+/// reaches the status row shows there as a run that stopped at its last
+/// event. The credential resume used to be one of those, so a terminal push
+/// refused by the target repo's pre-push hook read as a finished run.
+pub(crate) fn settle_run(
+    run_events: &dyn RunEventsPort,
+    runner_runs: &dyn RunnerRunPort,
+    run_id: &str,
+    result: Result<RunOutcome, String>,
+) {
+    let now = paths::now_ms();
+    let written = match result {
+        Ok(outcome) => runner_runs.update_status(
+            run_id,
+            &outcome.status,
+            outcome.project_id.as_deref(),
+            outcome.feature_id.as_deref(),
+            None,
+            outcome.pushed_branch.as_deref(),
+            now,
+        ),
+        Err(e) => {
+            if let Err(log) = run_events.append(
+                run_id,
+                "failed",
+                serde_json::to_string(&e).ok().as_deref(),
+                now,
+            ) {
+                eprintln!("[demeteo-runner] warning: failed to append 'failed' event for run {run_id}: {log}");
+            }
+            runner_runs.update_status(run_id, "failed", None, None, Some(&e), None, now)
+        }
+    };
+    if let Err(e) = written {
+        eprintln!("[demeteo-runner] warning: failed to record the outcome of run {run_id}: {e}");
     }
 }
 
@@ -267,12 +312,15 @@ pub async fn execute_run(
     // `fetch_default_settings` would supply `default_branch = "main"`, so
     // `create_feature_branch` would run `git branch -f <feature> main` and
     // fail on a `master`-default repo.
-    let settings = merge_project_settings(
+    let mut settings = merge_project_settings(
         strategy,
         spec.project_settings.clone(),
         project.id.clone(),
         origin.base_branch(spec.diff_base_branch.as_deref()),
     );
+    // The engine applies the gate autonomy itself, identically on every
+    // transport; the runner's only part is the floor an unattended run needs.
+    settings.gate_autonomy = settings.gate_autonomy.for_run(spec.unattended);
     svc.ctx
         .projects
         .save_settings(settings)
@@ -360,7 +408,7 @@ pub async fn execute_run(
 /// launching client's settings win on **every tunable** (`branch_prefix`,
 /// `test_command`, `build_command`, `coverage_command`, `conventions_file`,
 /// `pr_template`, `harnesses`, `prepare_command`, `extra_writable_paths`,
-/// `conflict_policy`, `feature_lifecycle`, `default_*`, `artifact_subdir`,
+/// `gate_autonomy`, `feature_lifecycle`, `default_*`, `artifact_subdir`,
 /// `commit_artifacts`). `project_id` is always the run's own project (the
 /// client's is meaningless on the runner). `None` client settings reproduce
 /// the pre-multi-client behavior exactly: detected strategy + engine
@@ -447,44 +495,16 @@ pub async fn resume_or_run(
     }
 }
 
-/// Resolve whether the currently-pending gate for `feature` is classified
-/// `dangerous` (M5.1). Best-effort: any lookup failure (feature has no
-/// workflow, version vanished, steps_json unparseable) is treated as
-/// `false` — the conservative choice would be to always park on lookup
-/// failure, but a workflow authored before `gate_class` existed has no
-/// way to express "dangerous" at all, and defaulting those to a permanent
-/// park would silently wedge every unattended run on a pre-M5 workflow.
-pub(crate) fn gate_is_dangerous(
-    ctx: &AppContext,
-    feature: &Feature,
-    gate_dec: &GateDecision,
-) -> bool {
-    let Ok(Some(step_exec)) = ctx.features.step_get(&gate_dec.step_execution_id) else {
-        return false;
-    };
-    let Some(workflow_id) = feature.workflow_id.as_ref() else {
-        return false;
-    };
-    let Ok(Some(version)) = ctx.workflows.latest_version(workflow_id) else {
-        return false;
-    };
-    let Ok(steps) = serde_json::from_str::<Vec<StepConfig>>(&version.steps_json) else {
-        return false;
-    };
-    steps
-        .iter()
-        .find(|s| s.id == step_exec.step_id)
-        .map(|s| s.is_dangerous_gate())
-        .unwrap_or(false)
-}
-
-/// M5.1: apply the unattended gate policy to the feature's currently
-/// pending gate (if any) — auto-approve `safe`, leave `dangerous` parked
-/// for a human (cleared later via the `decide_gate` RPC). `parked_seen`
-/// dedupes the `parked` event and the approve attempt across poll ticks
-/// so a long-parked dangerous gate doesn't spam the event log every
+/// Tell the away notifier about the feature's pending gate, once per gate.
+///
+/// The engine already approved every gate the run's
+/// [`GateAutonomy`](demeteo_core::domain::gate_autonomy::GateAutonomy) lets
+/// it (see `steps/gate/`), and it inserts the pending row only after that
+/// check — so a gate still pending here is one held for a person, cleared
+/// later via the `decide_gate` RPC. `parked_seen` dedupes
+/// across poll ticks so a long-parked gate doesn't spam the event log every
 /// `POLL_INTERVAL`.
-async fn apply_gate_policy(
+async fn announce_parked_gate(
     svc: &RunnerServices,
     run_id: &str,
     feature: &Feature,
@@ -499,38 +519,17 @@ async fn apply_gate_policy(
         return;
     };
     let step_exec_id = gate_dec.step_execution_id.as_str().to_string();
-    if parked_seen.contains(&step_exec_id) {
+    if !parked_seen.insert(step_exec_id.clone()) {
         return;
     }
-
-    if gate_is_dangerous(&svc.ctx, feature, &gate_dec) {
-        parked_seen.insert(step_exec_id.clone());
-        let msg = format!(
-            "dangerous gate {} awaiting a human decision (unattended run) — clear it via decide_gate",
-            step_exec_id
-        );
-        emit(&svc.ctx, run_id, "parked", &msg);
-        svc.away_notifier
-            .notify("Run needs you", &format!("{}: {}", run_id, msg))
-            .await;
-        return;
-    }
-
-    match svc
-        .ctx
-        .presenter
-        .gate_decide(&step_exec_id, "approve", None)
-        .await
-    {
-        Ok(()) => {
-            parked_seen.insert(step_exec_id.clone());
-            emit(&svc.ctx, run_id, "gate_auto_approved", &step_exec_id);
-        }
-        Err(e) => eprintln!(
-            "[demeteo-runner] failed to auto-approve gate {}: {}",
-            step_exec_id, e
-        ),
-    }
+    let msg = format!(
+        "gate {} awaiting a human decision (unattended run) — clear it via decide_gate",
+        step_exec_id
+    );
+    emit(&svc.ctx, run_id, "parked", &msg);
+    svc.away_notifier
+        .notify("Run needs you", &format!("{}: {}", run_id, msg))
+        .await;
 }
 
 /// Resume path (M2.3/M4.3): the feature already exists (created by a
@@ -669,20 +668,10 @@ async fn await_terminal_and_push_inner(
             }
         }
 
-        // M5.1: unattended relaxes gates only — the per-command
-        // permission/intercept layer and worktree fence are untouched.
-        //
-        // Keyed off the *pending gate row*, not the feature status: an
-        // open gate only flips the gate step to `awaiting_gate` (see
-        // `steps/gate/`), while the feature it belongs to stays
-        // `running`. The one writer of `awaiting_gate` onto a feature is
-        // the startup watchdog's restart reconciliation — so gating this
-        // call on the feature status meant a live unattended run never
-        // auto-approved anything and parked on every gate.
-        // `apply_gate_policy` no-ops when there is no pending gate.
-        if spec.unattended {
-            apply_gate_policy(svc, run_id, &feature, &mut parked_gates).await;
-        }
+        // Keyed off the *pending gate row*, not the feature status, which
+        // the startup watchdog's restart reconciliation is not the only
+        // writer of. `announce_parked_gate` no-ops when nothing is pending.
+        announce_parked_gate(svc, run_id, &feature, &mut parked_gates).await;
 
         if started.elapsed() > MAX_WAIT {
             // The poll window elapsed while the run is still in flight —
@@ -839,7 +828,7 @@ async fn await_terminal_and_push_inner(
 /// is the branch nobody cut for any origin whose name does not come from the
 /// feature id at all. Pushing a branch that does not exist fails loudly; the
 /// worse shape is pushing one that does and belongs to a different run.
-fn branch_to_push(
+pub(crate) fn branch_to_push(
     features: &dyn FeatureRepository,
     feature_id: &FeatureId,
     branch_prefix: &str,
@@ -898,26 +887,60 @@ async fn push_feature_branch(
     .await
     .map_err(|e| format!("failed to update remote origin URL: {}", e))?;
 
-    git_askpass::run_git(
-        &svc.askpass_path,
-        &[
-            "-C".to_string(),
-            target_dir_str,
-            "push".to_string(),
-            "-f".to_string(),
-            "origin".to_string(),
-            branch.clone(),
-        ],
-        Some(pat),
+    demeteo_core::adapters::git_push::prepare_push_tree(
+        svc.ctx.exec.as_ref(),
+        svc.ctx.app_settings.as_ref(),
+        demeteo_core::domain::ids::LOCAL_MACHINE,
+        &target_dir_str,
+        settings.worktree_strategy.prepare_command.as_deref(),
     )
-    .await
-    .map_err(|e| format!("failed to push feature branch to origin: {}", e))?;
+    .await?;
+    push_leased(&svc.askpass_path, &target_dir_str, &branch, pat).await?;
 
     eprintln!(
         "[demeteo-runner] pushed feature branch {} to origin",
         branch
     );
     Ok(branch)
+}
+
+/// Force-push `branch` from `repo_dir`, leased against the clone's own
+/// remote-tracking ref ([`demeteo_core::domain::push_lease`]). Forced because a
+/// retried or replayed run re-points a branch it pushed before, and leased
+/// because a sync published from the desktop since must not be overwritten.
+pub(crate) async fn push_leased(
+    askpass_path: &std::path::Path,
+    repo_dir: &str,
+    branch: &str,
+    pat: &str,
+) -> Result<(), String> {
+    let mut query = vec!["-C".to_string(), repo_dir.to_string()];
+    query.extend(push_lease::tracking_query(branch));
+    let tracking = git_askpass::run_git(askpass_path, &query, None)
+        .await
+        .map_err(|e| format!("failed to read origin/{branch} before the push: {e}"))?;
+    let lease = push_lease::lease_from_tracking(branch, &tracking);
+    git_askpass::run_git(
+        askpass_path,
+        &[
+            "-C".to_string(),
+            repo_dir.to_string(),
+            "push".to_string(),
+            lease.flag(),
+            "origin".to_string(),
+            branch.to_string(),
+        ],
+        Some(pat),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| {
+        if push_lease::is_stale_lease(&e) {
+            lease.refusal()
+        } else {
+            format!("failed to push feature branch to origin: {}", e)
+        }
+    })
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ fn strs(items: &[&str]) -> Vec<String> {
 
 fn contribution(refs: &[&str], decls: &[&str]) -> TaskContribution {
     TaskContribution {
+        handoff: None,
         artifact_refs: strs(refs),
         satisfied_decls: strs(decls),
     }
