@@ -211,6 +211,14 @@ export interface RemoteRunMirror {
   last_notified_status: string | null;
 }
 
+/** A mirror row as the feature view reads it — mirrors
+ *  `demeteo_core::application::remote_runs::MirroredRunView`. */
+export interface MirroredRunView extends RemoteRunMirror {
+  /** The runner can no longer change this run's shadow. Decided in core from
+   *  the row *and* the shadow feature; `status` alone does not say it. */
+  shadow_settled: boolean;
+}
+
 /** One entry in a remote run's append-only event log (M3.3/M6.4) —
  *  mirrors `demeteo_core::ports::run_events::RunEvent`. */
 export interface RunEvent {

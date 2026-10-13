@@ -127,18 +127,20 @@ pub async fn remote_refresh_run(
     ctx: State<'_, AppContext>,
     machine_id: String,
     run_id: String,
-) -> Result<Option<RemoteRunMirror>, AppError> {
-    refresh_remote_run(&ctx, machine_id, run_id)
+) -> Result<Option<MirroredRunView>, AppError> {
+    let run = refresh_remote_run(&ctx, machine_id, run_id)
         .await
-        .map_err(AppError::from)
+        .map_err(AppError::from)?;
+    Ok(run.map(|run| mirrored_run_view(ctx.features.as_ref(), run)))
 }
 
 #[tauri::command]
 pub fn remote_run_for_feature(
     ctx: State<'_, AppContext>,
     feature_id: String,
-) -> Result<Option<RemoteRunMirror>, AppError> {
-    find_mirror_for_feature(&ctx, feature_id).map_err(AppError::from)
+) -> Result<Option<MirroredRunView>, AppError> {
+    let run = find_mirror_for_feature(&ctx, feature_id).map_err(AppError::from)?;
+    Ok(run.map(|run| mirrored_run_view(ctx.features.as_ref(), run)))
 }
 
 #[tauri::command]

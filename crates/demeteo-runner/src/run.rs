@@ -13,10 +13,11 @@ use demeteo_core::application::attachments::StagedAttachmentInput;
 use demeteo_core::application::{bootstrap, projects, workflows};
 use demeteo_core::domain::ids::{FeatureId, ProjectId, ProviderId};
 use demeteo_core::domain::models::{
-    Feature, MrInfo, ProjectSettings, ProviderInstance, PublishOptions, WorktreeStrategy,
+    GateDecision, MrInfo, ProjectSettings, ProviderInstance, PublishOptions, WorktreeStrategy,
 };
 use demeteo_core::domain::push_lease;
 use demeteo_core::domain::run_spec::RunSpec;
+use demeteo_core::domain::wait_backstop::WaitBackstop;
 use demeteo_core::paths;
 use demeteo_core::ports::db::FeatureRepository;
 use demeteo_core::ports::run_events::RunEventsPort;
@@ -507,17 +508,9 @@ pub async fn resume_or_run(
 async fn announce_parked_gate(
     svc: &RunnerServices,
     run_id: &str,
-    feature: &Feature,
+    gate_dec: &GateDecision,
     parked_seen: &mut HashSet<String>,
 ) {
-    let Ok(Some(gate_dec)) = svc
-        .ctx
-        .presenter
-        .gate_pending_for_run(feature.id.as_str())
-        .await
-    else {
-        return;
-    };
     let step_exec_id = gate_dec.step_execution_id.as_str().to_string();
     if !parked_seen.insert(step_exec_id.clone()) {
         return;
@@ -593,14 +586,12 @@ async fn await_terminal_and_push_inner(
     spec: &RunSpec,
 ) -> Result<RunOutcome, String> {
     const POLL_INTERVAL: Duration = Duration::from_secs(2);
-    // Backstop only — a detached run is "fire and forget" and may legitimately
-    // run for hours, so this must not guillotine a healthy long run before it
-    // reaches a terminal state (the terminal push/PR-open lives *after* this
-    // loop). Callers that want a real bound set a `budget.max_wall_clock_secs`
-    // cap (M5.2), which cancels cleanly above; this only catches a feature
-    // wedged forever with no cap at all.
-    const MAX_WAIT: Duration = Duration::from_secs(24 * 60 * 60);
+    // The wall-clock budget cap (M5.2) is the bound a caller sets; the
+    // backstop only catches a feature wedged forever with no cap at all. When
+    // it fires is `WaitBackstop`'s to decide.
     let started = Instant::now();
+    let mut backstop = WaitBackstop::default();
+    let mut observed_at = started;
     let mut parked_gates: HashSet<String> = HashSet::new();
 
     let final_status = loop {
@@ -670,10 +661,22 @@ async fn await_terminal_and_push_inner(
 
         // Keyed off the *pending gate row*, not the feature status, which
         // the startup watchdog's restart reconciliation is not the only
-        // writer of. `announce_parked_gate` no-ops when nothing is pending.
-        announce_parked_gate(svc, run_id, &feature, &mut parked_gates).await;
+        // writer of.
+        let pending_gate = svc
+            .ctx
+            .presenter
+            .gate_pending_for_run(feature.id.as_str())
+            .await
+            .ok()
+            .flatten();
+        if let Some(gate) = pending_gate.as_ref() {
+            announce_parked_gate(svc, run_id, gate, &mut parked_gates).await;
+        }
 
-        if started.elapsed() > MAX_WAIT {
+        let now = Instant::now();
+        let gave_up = backstop.observe(now - observed_at, pending_gate.is_some());
+        observed_at = now;
+        if gave_up {
             // The poll window elapsed while the run is still in flight —
             // this is NOT a terminal state. Return the live (non-terminal)
             // status directly, mirroring the budget-cap early return above,
@@ -820,7 +823,7 @@ async fn await_terminal_and_push_inner(
 }
 
 /// The branch the terminal push sends to `origin`: the one the run's own row
-/// records ([`Feature::run_branch`]), not one rebuilt here from
+/// records ([`Feature::run_branch`](demeteo_core::domain::models::Feature::run_branch)), not one rebuilt here from
 /// `branch_prefix` and the feature id.
 ///
 /// The rebuild is only ever right by coincidence — it reproduces what the

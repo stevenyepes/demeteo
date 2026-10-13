@@ -200,6 +200,10 @@ async fn serve(runtime: tokio::runtime::Handle) -> i32 {
         return 1;
     }
 
+    // Read before the context is built: `reconcile_on_startup` separates gate
+    // rows the engine's reconciliation poses in there from ones that predate
+    // this process.
+    let process_started_at = paths::now_ms();
     // `build_core_context` already runs the engine's own restart
     // reconciliation for individual features/steps (`startup_watchdog` +
     // `resume_interrupted_features`) before returning. `reconcile_on_startup`
@@ -233,7 +237,7 @@ async fn serve(runtime: tokio::runtime::Handle) -> i32 {
         askpass_path,
         away_notifier,
     });
-    reconcile::reconcile_on_startup(svc.clone()).await;
+    reconcile::reconcile_on_startup(svc.clone(), process_started_at).await;
 
     let socket_path = rpc::socket_path(&app_data_dir);
     let rpc_svc = svc.clone();

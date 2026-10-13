@@ -11,11 +11,11 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Machine, RemoteRunMirror, RunEvent } from '../../types';
+import type { Machine, MirroredRunView, RunEvent } from '../../types';
 
-const remoteRunForFeature = vi.fn<(featureId: string) => Promise<RemoteRunMirror | null>>();
+const remoteRunForFeature = vi.fn<(featureId: string) => Promise<MirroredRunView | null>>();
 const remoteRefreshRun =
-  vi.fn<(input: { machineId: string; runId: string }) => Promise<RemoteRunMirror | null>>();
+  vi.fn<(input: { machineId: string; runId: string }) => Promise<MirroredRunView | null>>();
 const listMachines = vi.fn<() => Promise<Machine[]>>();
 
 vi.mock('../../lib/featureDetail', () => ({
@@ -31,7 +31,7 @@ import { useRemoteRun } from './useRemoteRun';
 let hidden = false;
 Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
 
-const mirror = (over: Partial<RemoteRunMirror> = {}): RemoteRunMirror => ({
+const mirror = (over: Partial<MirroredRunView> = {}): MirroredRunView => ({
   machine_id: 'm1',
   run_id: 'r1',
   project_id: 'p1',
@@ -45,6 +45,7 @@ const mirror = (over: Partial<RemoteRunMirror> = {}): RemoteRunMirror => ({
   created_at: 0,
   updated_at: 1,
   last_notified_status: null,
+  shadow_settled: false,
   ...over,
 });
 
@@ -73,7 +74,7 @@ const spawnedEvent = (
     }),
   });
 
-async function mount(run: RemoteRunMirror | null) {
+async function mount(run: MirroredRunView | null) {
   remoteRunForFeature.mockResolvedValue(run);
   const reload = vi.fn();
   const onShadowSynced = vi.fn();
@@ -202,8 +203,8 @@ describe('useRemoteRun poll scheduling', () => {
     expect(remoteRefreshRun).toHaveBeenCalledTimes(3);
   });
 
-  it('pulls a terminal run exactly once and then holds no timer', async () => {
-    const { reload } = await mount(mirror({ status: 'completed' }));
+  it('pulls a settled run exactly once and then holds no timer', async () => {
+    const { reload } = await mount(mirror({ status: 'completed', shadow_settled: true }));
 
     expect(reload).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
@@ -211,6 +212,30 @@ describe('useRemoteRun poll scheduling', () => {
     await advance(60_000);
     expect(remoteRefreshRun).not.toHaveBeenCalled();
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  // The runner parked the run row `failed` while its engine went on to finish
+  // the feature; the shadow still read `running`, and nothing asked again.
+  it('keeps polling a terminal run whose shadow has not settled', async () => {
+    remoteRefreshRun.mockResolvedValue(mirror({ status: 'failed' }));
+    await mount(mirror({ status: 'failed' }));
+
+    await advance(3_000);
+    await advance(3_000);
+
+    expect(remoteRefreshRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops polling once the shadow of a terminal run settles', async () => {
+    remoteRefreshRun.mockResolvedValue(mirror({ status: 'failed', shadow_settled: true }));
+    await mount(mirror({ status: 'failed' }));
+
+    await advance(3_000);
+    expect(remoteRefreshRun).toHaveBeenCalledTimes(1);
+
+    await advance(60_000);
+    expect(remoteRefreshRun).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('re-reads the rail rollup after a hydration lands, not after a failed one', async () => {

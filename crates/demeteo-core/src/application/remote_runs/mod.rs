@@ -24,9 +24,9 @@ pub use compatibility::{
     runner_compatibility_with, BinaryFallback,
 };
 pub use control::{
-    cancel_remote_run, find_mirror_for_feature, list_mirrored_runs, reconcile_all_runs,
-    refresh_remote_run, reinject_credentials, retry_remote_step, set_remote_step_assignment,
-    RemoteRewind, RewindOverrides,
+    cancel_remote_run, find_mirror_for_feature, list_mirrored_runs, mirrored_run_view,
+    reconcile_all_runs, refresh_remote_run, reinject_credentials, retry_remote_step,
+    set_remote_step_assignment, MirroredRunView, RemoteRewind, RewindOverrides,
 };
 pub use diff_url::resolve_run_diff_url;
 pub use publish::{publish_feature, PublishOutcome};
