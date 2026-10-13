@@ -353,6 +353,77 @@ async fn one_feature_with_a_pending_gate_is_named_and_the_other_active_feature_i
     assert_eq!(pending[0].decision.step_execution_id, step_execution_id);
 }
 
+/// A run on a remote machine writes its gate decisions on the runner, so the
+/// desktop holds only the mirrored step row: no `gate_decisions` row exists.
+async fn feature_with_mirrored_gate(tag: &str, status: &str) -> (AppContext, ProjectId) {
+    let ctx = fixture(tag);
+    let project_id = ProjectId::from("p-1".to_string());
+    ctx.projects.add(project(project_id.as_str())).unwrap();
+    let feature_id = FeatureId::from("f-detached".to_string());
+    ctx.features
+        .add(feature("f-detached", &project_id))
+        .unwrap();
+    let mut gate = step("se-gate", &feature_id, 1);
+    gate.step_kind = "gate".to_string();
+    gate.status = status.to_string();
+    ctx.features.step_create(gate).unwrap();
+    (ctx, project_id)
+}
+
+#[tokio::test]
+async fn a_gate_mirrored_from_a_runner_is_listed_without_a_local_decision_row() {
+    let (ctx, project_id) = feature_with_mirrored_gate("gates-mirrored", "awaiting_gate").await;
+
+    let pending = list_pending_gates(&ctx, Some(&project_id)).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].feature_id.as_str(), "f-detached");
+    assert_eq!(pending[0].decision.step_execution_id.as_str(), "se-gate");
+    assert_eq!(pending[0].decision.decision, None);
+}
+
+#[tokio::test]
+async fn a_mirrored_gate_that_has_been_decided_is_not_listed() {
+    let (ctx, _) = feature_with_mirrored_gate("gates-mirrored-done", "completed").await;
+
+    assert!(list_pending_gates(&ctx, None).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_local_gate_with_a_pending_row_is_listed_once_under_its_own_decision_id() {
+    let (ctx, _) = feature_with_mirrored_gate("gates-local-once", "awaiting_gate").await;
+    ctx.gates
+        .create(GateDecision {
+            id: GateDecisionId::from("gd-1".to_string()),
+            step_execution_id: StepExecutionId::from("se-gate".to_string()),
+            decision: None,
+            feedback: None,
+            created_at: 0,
+            auto_approved: false,
+        })
+        .unwrap();
+
+    let pending = list_pending_gates(&ctx, None).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].decision.id.as_str(), "gd-1");
+}
+
+#[tokio::test]
+async fn a_gate_decided_locally_before_its_step_row_settles_is_not_listed() {
+    let (ctx, _) = feature_with_mirrored_gate("gates-decided-race", "awaiting_gate").await;
+    ctx.gates
+        .create(GateDecision {
+            id: GateDecisionId::from("gd-1".to_string()),
+            step_execution_id: StepExecutionId::from("se-gate".to_string()),
+            decision: Some("approve".to_string()),
+            feedback: None,
+            created_at: 0,
+            auto_approved: false,
+        })
+        .unwrap();
+
+    assert!(list_pending_gates(&ctx, None).unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn a_discovery_boards_ticket_count_matches_its_mixed_state_fixture() {
     let (ctx, project_id) = ctx_with_project("board");
