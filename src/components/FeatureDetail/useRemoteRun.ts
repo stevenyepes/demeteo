@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { RemoteRunMirror, RunEvent } from '../../types';
-import { TERMINAL_STATUSES } from '../../lib/runStatus';
+import type { MirroredRunView, RunEvent } from '../../types';
 import { listMachines, remoteRefreshRun, remoteRunForFeature } from '../../lib/featureDetail';
 import type { RunEventAssignments } from '../../lib/runEventAssignments';
 import {
@@ -48,7 +47,7 @@ function pollDelayMs(consecutiveFailures: number): number {
  * that ran on a remote machine receives none of the local `step_progress` /
  * `feature_status_changed` Tauri events — those fire on the runner, not this
  * laptop — so without this its timeline would freeze at whatever the last
- * reconcile captured. While such a run is non-terminal we poll its runner
+ * reconcile captured. Until its shadow is settled we poll its runner
  * (`remote_refresh_run`, which re-hydrates the shadow) and re-read the
  * mirrored steps, driving the exact same timeline UI a local run gets from
  * its events. `remoteRun` is `null` for a locally-run feature (not in the
@@ -74,7 +73,7 @@ export function useRemoteRun(input: {
   upsertBootstrapPhase: (p: BootstrapPhasePayload) => void;
 }) {
   const { featureId, reload, onShadowSynced, upsertBootstrapPhase } = input;
-  const [remoteRun, setRemoteRun] = useState<RemoteRunMirror | null>(null);
+  const [remoteRun, setRemoteRun] = useState<MirroredRunView | null>(null);
   // Display name for `remoteRun.machine_id` — resolved lazily (only
   // when the feature turns out to be a remote run) from the same
   // machines list every other view uses.
@@ -138,9 +137,10 @@ export function useRemoteRun(input: {
   useEffect(() => {
     if (!remoteRun) return;
     const { machine_id: machineId, run_id: runId } = remoteRun;
-    // A finished run's shadow can't change further — pull once so the
-    // terminal state's steps/artifacts are current, then stop polling.
-    if (TERMINAL_STATUSES.includes(remoteRun.status)) {
+    // Not `TERMINAL_STATUSES.includes(remoteRun.status)`: the runner can park
+    // the run row terminal while its engine is still driving the feature, and
+    // stopping there froze the shadow on `running` for a run that had finished.
+    if (remoteRun.shadow_settled) {
       reload();
       return;
     }
@@ -196,7 +196,7 @@ export function useRemoteRun(input: {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remoteRun?.machine_id, remoteRun?.run_id, remoteRun?.status]);
+  }, [remoteRun?.machine_id, remoteRun?.run_id, remoteRun?.status, remoteRun?.shadow_settled]);
 
   // Remote (detached) path: bootstrap sub-steps live in the run-event log.
   // `ActivityPanel` polls it; we tap the same batch via `onEvents` (no second

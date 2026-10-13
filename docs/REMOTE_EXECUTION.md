@@ -300,7 +300,9 @@ This is the load-bearing reliability case, and the reason R2 pins **systemd
   reset the worktree to the step's base and re-run that step — the same
   machinery the retry loop already uses. A **bounded reboot-retry budget**
   prevents a crash-looping machine from re-running a run forever; exhausting it
-  parks the run as `failed (unstable host)`.
+  parks the run as `failed (unstable host)`. Only a restart that interrupted
+  work is counted: a run waiting on a person at a gate is re-attached for free,
+  however many times the host restarts under it.
 - **The git PAT is gone after reboot** (memory-only, §6.2). Agent work that
   needs no git access resumes immediately; a step that needs fetch/push parks in
   `needs-credentials` until the laptop reconnects and re-injects. Since push is a
@@ -456,9 +458,9 @@ deliberately deferred and under what condition it should be revisited.
    permanent-machine-death data loss actually happens to a user.
 7. **Reboot-retry budget — a global default of 5, not yet per-run
    configurable.** Implemented as `REBOOT_RETRY_BUDGET` in
-   `crates/demeteo-runner/src/reconcile.rs`: a run that has been
-   auto-resumed 5 times parks as `failed (unstable host)` rather than
-   retrying a sixth time. Per-run overrides are straightforward to add
+   `crates/demeteo-core/src/domain/reboot_budget.rs`: a run whose work has
+   been interrupted by 5 restarts parks as `failed (unstable host)` rather
+   than retrying a sixth time. Per-run overrides are straightforward to add
    to `RunSpec` later if a workload needs a different tolerance, but
    nothing has needed it yet.
 8. **Linger without privilege — (a), install anyway and warn.**

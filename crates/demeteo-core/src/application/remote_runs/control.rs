@@ -2,9 +2,12 @@ use super::cache_release::{retry_pending_runner_releases, RunnerCacheRpc};
 use super::credentials::inject_pat_for_run;
 use super::reconcile::{reconcile_one_run, NOTIFY_ON};
 use super::rpc::{json_str, remote_rpc};
+use crate::domain::ids::FeatureId;
 use crate::domain::models::EffortLevel;
+use crate::domain::shadow_settled::shadow_settled;
 use crate::domain::step_assignment::StepAssignment;
 use crate::error::AppError;
+use crate::ports::db::FeatureRepository;
 use crate::ports::remote_run_mirror::RemoteRunMirror;
 use crate::state::AppContext;
 
@@ -216,6 +219,34 @@ pub async fn refresh_remote_run(
 
 pub fn list_mirrored_runs(ctx: &AppContext) -> Result<Vec<RemoteRunMirror>, AppError> {
     ctx.remote_run_mirror.list().map_err(AppError::from)
+}
+
+/// A mirror row as the feature view reads it: the row, plus whether its
+/// shadow still has anything to learn from the runner.
+///
+/// The second is not derivable from the row — it needs the shadow feature —
+/// and the view must not guess it from `status`, which is how a terminal row
+/// over a feature still in flight stopped being polled.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MirroredRunView {
+    #[serde(flatten)]
+    pub run: RemoteRunMirror,
+    pub shadow_settled: bool,
+}
+
+pub fn mirrored_run_view(
+    features: &dyn FeatureRepository,
+    run: RemoteRunMirror,
+) -> MirroredRunView {
+    let shadow_status = run
+        .feature_id
+        .as_ref()
+        .and_then(|id| features.get(&FeatureId::from(id.clone())).ok().flatten())
+        .map(|feature| feature.status);
+    MirroredRunView {
+        shadow_settled: shadow_settled(&run.status, shadow_status.as_deref()),
+        run,
+    }
 }
 
 pub fn find_mirror_for_feature(
