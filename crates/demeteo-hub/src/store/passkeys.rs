@@ -117,7 +117,13 @@ pub async fn insert_passkey(
 
 /// Every passkey the tenant has ever had, revoked ones included: rows are
 /// never deleted, and the trust decisions need the whole set.
-pub async fn list_passkeys(user: UserId, db: &Db) -> Result<Vec<Passkey>, StoreError> {
+///
+/// Takes an executor rather than the pool so a pairing can read them inside
+/// the transaction that writes its instance.
+pub async fn list_passkeys(
+    user: UserId,
+    db: impl PgExecutor<'_>,
+) -> Result<Vec<Passkey>, StoreError> {
     sqlx::query_as::<_, PasskeyRow>(
         "SELECT user_id, credential_id, public_key, label, sign_count, status, \
            credential::text AS credential, created_at \

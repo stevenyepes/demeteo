@@ -15,7 +15,10 @@
 //! alone and returns the owning [`UserId`] for every later call to take.
 //! [`sessions::find_session`] goes on to read the status of the passkey its
 //! row names, joined on that row's own `user_id`: a second table, and still
-//! the one tenant the first established. Nothing else is exempt: once the
+//! the one tenant the first established. [`tokens::rotate_family`] finds its
+//! row the same way and then writes, in the transaction the lookup opened:
+//! every statement after the lookup carries the `user_id` it returned, so the
+//! writes are that one tenant's too. Nothing else is exempt: once the
 //! tenant is known, or for any column that is not one of those three, the
 //! [`UserId`]-first rule holds.
 //!
@@ -29,6 +32,7 @@
 //! secret or key (`docs/HUB.md` §9).
 
 pub mod attachments;
+pub mod device_keys;
 pub mod instances;
 pub mod passkey_records;
 pub mod passkeys;
@@ -84,6 +88,8 @@ pub enum StoreError {
     CredentialExists,
     #[error("unknown passkey status {0:?}")]
     UnknownStatus(String),
+    #[error("unknown token kind {0:?}")]
+    UnknownTokenKind(String),
     #[error("stored sign count {0} is not a 32-bit counter")]
     SignCountOutOfRange(i64),
     #[error("expiry {0} exceeds the BIGINT column")]
@@ -94,4 +100,8 @@ pub enum StoreError {
     RecordNamesNoPasskey(Status),
     #[error("the record's assertion gives no signature counter of a passkey of this tenant")]
     AssertionGivesNoCounter,
+    #[error("the change retires a token row, or adds one to a family, that was not locked for it")]
+    ChangeOutsideFamily,
+    #[error("the device key, family and token rows handed over do not describe one pairing")]
+    PairingDisagrees,
 }

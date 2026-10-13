@@ -1,19 +1,28 @@
 use crate::ports::{DataKey, KeyService, KeyServiceError};
 use async_trait::async_trait;
+use aws_lc_rs::error::Unspecified;
+use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const PREFIX: &str = "memory";
 const DATA_KEY_LEN: usize = 32;
 
-/// Test double: reversible and not cryptographic. Errors on every key name it
-/// was not constructed with, on all three methods, so a test that reaches for
-/// the wrong key fails instead of passing against a default answer. Never
+/// Test double. Its encryption is reversible and not cryptographic; its
+/// signing is real, one Ed25519 key pair per name, so a test can verify a
+/// signature under the public key a response carried. Errors on every key
+/// name it was not constructed with, on every method, so a test that reaches
+/// for the wrong key fails instead of passing against a default answer. Never
 /// wired from `Config` or `main.rs`.
+///
+/// Compiled outside `#[cfg(test)]` under the `test-support` feature, and
+/// panics where [`auth::testing`](crate::auth::testing) does, for the reason
+/// given there.
 pub struct MemoryKeys {
-    keys: BTreeSet<String>,
+    keys: BTreeMap<String, Ed25519KeyPair>,
+    sealed: bool,
     counter: AtomicU64,
 }
 
@@ -24,17 +33,32 @@ impl MemoryKeys {
         S: Into<String>,
     {
         Self {
-            keys: keys.into_iter().map(Into::into).collect(),
+            keys: keys
+                .into_iter()
+                .map(|name| (name.into(), generated_key_pair()))
+                .collect(),
+            sealed: false,
             counter: AtomicU64::new(0),
         }
     }
 
-    fn require(&self, key: &str) -> Result<(), KeyServiceError> {
-        if self.keys.contains(key) {
-            Ok(())
-        } else {
-            Err(KeyServiceError::UnknownKey(key.to_owned()))
+    /// A key service nobody has unsealed: every call answers `Sealed`, whatever
+    /// name it carries, because a sealed service cannot say which keys exist.
+    pub fn sealed() -> Self {
+        Self {
+            keys: BTreeMap::new(),
+            sealed: true,
+            counter: AtomicU64::new(0),
         }
+    }
+
+    fn require(&self, key: &str) -> Result<&Ed25519KeyPair, KeyServiceError> {
+        if self.sealed {
+            return Err(KeyServiceError::Sealed);
+        }
+        self.keys
+            .get(key)
+            .ok_or_else(|| KeyServiceError::UnknownKey(key.to_owned()))
     }
 
     fn seal(key: &str, plaintext: &[u8]) -> String {
@@ -75,11 +99,33 @@ impl KeyService for MemoryKeys {
         let wrapped = Self::seal(key, &plaintext);
         Ok(DataKey { plaintext, wrapped })
     }
+
+    async fn verifying_key(&self, key: &str) -> Result<[u8; 32], KeyServiceError> {
+        fixed(self.require(key)?.public_key().as_ref())
+    }
+
+    async fn sign(&self, key: &str, message: &[u8]) -> Result<[u8; 64], KeyServiceError> {
+        fixed(self.require(key)?.sign(message).as_ref())
+    }
+}
+
+fn generated_key_pair() -> Ed25519KeyPair {
+    match Ed25519KeyPair::generate() {
+        Ok(key_pair) => key_pair,
+        Err(Unspecified) => panic!("memory keys: could not generate an Ed25519 key pair"),
+    }
+}
+
+fn fixed<const N: usize>(bytes: &[u8]) -> Result<[u8; N], KeyServiceError> {
+    bytes.try_into().map_err(|_| {
+        KeyServiceError::Malformed(format!("{} bytes where {N} were due", bytes.len()))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_lc_rs::signature::{UnparsedPublicKey, ED25519};
 
     const KNOWN: &str = "known";
     const OTHER: &str = "other";
@@ -92,14 +138,60 @@ mod tests {
         matches!(r, Err(KeyServiceError::UnknownKey(name)) if name == OTHER)
     }
 
+    fn is_sealed<T>(r: Result<T, KeyServiceError>) -> bool {
+        matches!(r, Err(KeyServiceError::Sealed))
+    }
+
+    fn verifies(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
+        UnparsedPublicKey::new(&ED25519, public_key)
+            .verify(message, signature)
+            .is_ok()
+    }
+
     #[tokio::test]
-    async fn unknown_key_errors_on_all_three_methods() {
+    async fn unknown_key_errors_on_every_method() {
         let keys = double();
         let wrapped = keys.encrypt(KNOWN, b"x").await.unwrap();
 
         assert!(is_unknown(keys.encrypt(OTHER, b"x").await));
         assert!(is_unknown(keys.decrypt(OTHER, &wrapped).await));
         assert!(is_unknown(keys.data_key(OTHER).await));
+        assert!(is_unknown(keys.verifying_key(OTHER).await));
+        assert!(is_unknown(keys.sign(OTHER, b"x").await));
+    }
+
+    #[tokio::test]
+    async fn a_signature_verifies_under_the_verifying_key_of_the_same_name_only() {
+        let keys = MemoryKeys::with_keys([KNOWN, OTHER]);
+        let message = b"POST /v1/requests";
+        let signature = keys.sign(KNOWN, message).await.unwrap();
+        let own = keys.verifying_key(KNOWN).await.unwrap();
+        let other = keys.verifying_key(OTHER).await.unwrap();
+
+        assert!(verifies(&own, message, &signature));
+        assert!(!verifies(&other, message, &signature));
+        assert!(!verifies(&own, b"POST /v1/other", &signature));
+        assert_eq!(own, keys.verifying_key(KNOWN).await.unwrap());
+        assert_ne!(own, other);
+    }
+
+    #[tokio::test]
+    async fn two_doubles_do_not_share_a_signing_key() {
+        assert_ne!(
+            double().verifying_key(KNOWN).await.unwrap(),
+            double().verifying_key(KNOWN).await.unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_sealed_double_answers_sealed_on_every_method() {
+        let keys = MemoryKeys::sealed();
+
+        assert!(is_sealed(keys.encrypt(KNOWN, b"x").await));
+        assert!(is_sealed(keys.decrypt(KNOWN, "memory:known:eA==").await));
+        assert!(is_sealed(keys.data_key(KNOWN).await));
+        assert!(is_sealed(keys.verifying_key(KNOWN).await));
+        assert!(is_sealed(keys.sign(KNOWN, b"x").await));
     }
 
     #[tokio::test]

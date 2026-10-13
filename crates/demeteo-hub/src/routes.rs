@@ -3,6 +3,10 @@ use crate::auth::handlers::{self, cookie_text, header_text, ApiError};
 use crate::auth::session::{self, Rejection};
 use crate::auth::webauthn::{RelyingPartyError, Verifier};
 use crate::auth::RelyingParty;
+use crate::pairing;
+use crate::pairing::pending::Pairings;
+use crate::pairing::signing_key::SigningKey;
+use crate::ports::KeyService;
 use crate::store::Db;
 use axum::extract::{Request, State};
 use axum::http::header::ORIGIN;
@@ -15,30 +19,45 @@ use std::path::Path;
 use std::sync::Arc;
 use tower_http::services::ServeDir;
 
-struct AuthState {
+struct Shared {
     rp: RelyingParty,
     verifier: Verifier,
     ceremonies: Ceremonies,
+    pairings: Pairings,
+    keys: Arc<dyn KeyService>,
+    signing_key: SigningKey,
 }
 
-/// axum clones the state into every request, so the auth half is shared, not
-/// copied: a [`Ceremonies`] per clone would hold a ceremony's start where its
-/// finish never looks.
+/// axum clones the state into every request, so everything but the pool is
+/// shared, not copied: a [`Ceremonies`] per clone would hold a ceremony's
+/// start where its finish never looks, a [`Pairings`] per clone a consent
+/// where its approval never looks, and a [`SigningKey`] per clone a key that
+/// is asked for again by every request.
 #[derive(Clone)]
 pub struct AppState {
     db: Db,
-    auth: Arc<AuthState>,
+    shared: Arc<Shared>,
 }
 
 impl AppState {
-    pub fn new(db: Db, rp: RelyingParty) -> Result<Self, RelyingPartyError> {
+    /// `signing_key` is the name `keys` knows the request-signing key by.
+    /// Nothing here asks `keys` for it, or for anything else.
+    pub fn new(
+        db: Db,
+        rp: RelyingParty,
+        keys: Arc<dyn KeyService>,
+        signing_key: String,
+    ) -> Result<Self, RelyingPartyError> {
         let verifier = Verifier::new(&rp)?;
         Ok(Self {
             db,
-            auth: Arc::new(AuthState {
+            shared: Arc::new(Shared {
                 rp,
                 verifier,
                 ceremonies: Ceremonies::default(),
+                pairings: Pairings::default(),
+                keys,
+                signing_key: SigningKey::new(signing_key),
             }),
         })
     }
@@ -48,27 +67,50 @@ impl AppState {
     }
 
     pub fn rp(&self) -> &RelyingParty {
-        &self.auth.rp
+        &self.shared.rp
     }
 
     pub fn verifier(&self) -> &Verifier {
-        &self.auth.verifier
+        &self.shared.verifier
     }
 
     pub fn ceremonies(&self) -> &Ceremonies {
-        &self.auth.ceremonies
+        &self.shared.ceremonies
+    }
+
+    pub fn pairings(&self) -> &Pairings {
+        &self.shared.pairings
+    }
+
+    pub fn keys(&self) -> &dyn KeyService {
+        self.shared.keys.as_ref()
+    }
+
+    pub fn signing_key(&self) -> &SigningKey {
+        &self.shared.signing_key
     }
 }
 
 /// `/healthz` is liveness only: it must stay green while OpenBao is sealed or
 /// Postgres is away, or the orchestrator restarts a Hub that is merely waiting
-/// for a manual unseal. It therefore takes no part of `state`, which only the
-/// `/v1` routes hold, and building the router dials nothing.
+/// for a manual unseal. Its handler therefore extracts no part of `state`,
+/// though `/token` beside it and the `/v1` routes both hold it, and building
+/// the router dials nothing.
 ///
 /// A missing `web_dir` degrades to 404s at request time, never a startup failure.
 pub fn router(state: AppState, web_dir: &Path) -> Router {
     let routes = Router::new()
         .route("/healthz", get(healthz))
+        .route("/authorize", get(pairing::handlers::authorize))
+        // Outside `v1`, and so outside `guard_mutations`: a desktop is not a
+        // browser and sends no `Origin`, so in there every token request
+        // would be answered `403 origin_mismatch`. A request is held to the
+        // DPoP proof it carries instead.
+        .route(
+            pairing::handlers::TOKEN_PATH,
+            post(pairing::handlers::token),
+        )
+        .with_state(state.clone())
         .merge(v1(state));
     router_with(routes, web_dir)
 }
@@ -104,6 +146,12 @@ fn v1(state: AppState) -> Router {
             "/v1/passkeys/revoke/finish",
             post(handlers::finish_revocation),
         )
+        .route("/v1/pairing/start", post(pairing::handlers::start_pairing))
+        .route(
+            "/v1/pairing/approve",
+            post(pairing::handlers::approve_pairing),
+        )
+        .route("/v1/pairing/deny", post(pairing::handlers::deny_pairing))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             guard_mutations,

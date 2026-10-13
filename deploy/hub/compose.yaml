@@ -15,6 +15,7 @@ services:
       OPENBAO_TOKEN: ${OPENBAO_TOKEN:-}
       DEMETEO_HUB_TRANSIT_MOUNT: ${DEMETEO_HUB_TRANSIT_MOUNT:-transit}
       DEMETEO_HUB_TRANSIT_KEY: ${DEMETEO_HUB_TRANSIT_KEY:-demeteo-hub}
+      DEMETEO_HUB_SIGNING_KEY: ${DEMETEO_HUB_SIGNING_KEY:-demeteo-hub-signing}
     depends_on:
       postgres:
         condition: service_healthy

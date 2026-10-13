@@ -6,7 +6,7 @@ This directory deploys the Hub as four Docker Compose services:
 |---|---|
 | `hub` | the axum server (`crates/demeteo-hub`), built from `deploy/hub/Dockerfile` |
 | `postgres` | the Hub's relational state |
-| `openbao` | custody: the Transit engine wraps attachment keys and the Hub's own secrets |
+| `openbao` | custody: the Transit engine wraps attachment keys and the Hub's own secrets, and holds its request-signing key |
 | `caddy` | TLS termination; the only service that publishes ports (80, 443) |
 
 Why the Hub is shaped this way, and what it will and will not hold, is decided in
@@ -56,24 +56,40 @@ survives a sealed OpenBao — `/healthz` stays 200, and the operations that need
 sealed error until you unseal. In that case nothing crash-loops, and nothing needs restarting
 once you have unsealed. A missing token is different; see [Start the stack](#start-the-stack).
 
-## Enable Transit and create the Hub's key
+## Enable Transit and create the Hub's keys
 
-With OpenBao unsealed, log in with the root token and enable the Transit engine:
+With OpenBao unsealed, log in with the root token, enable the Transit engine and create two
+keys:
 
 ```bash
 docker compose exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=<root-token> openbao \
   bao secrets enable transit
 docker compose exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=<root-token> openbao \
   bao write -f transit/keys/demeteo-hub
+docker compose exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=<root-token> openbao \
+  bao write -f transit/keys/demeteo-hub-signing type=ed25519
 ```
 
-The mount (`transit`) and key name (`demeteo-hub`) are `DEMETEO_HUB_TRANSIT_MOUNT` and
-`DEMETEO_HUB_TRANSIT_KEY`; change both sides together if you pick other names.
+| Key | Variable | What the Hub does with it |
+|---|---|---|
+| `demeteo-hub` | `DEMETEO_HUB_TRANSIT_KEY` | wraps: encrypt, decrypt, and a plaintext data key |
+| `demeteo-hub-signing` | `DEMETEO_HUB_SIGNING_KEY` | the Ed25519 request-signing key. Pairing an instance reads its public half and hands it to the desktop to pin |
+
+The mount (`transit`) is `DEMETEO_HUB_TRANSIT_MOUNT`; change both sides together if you pick
+other names.
+
+`type=ed25519` is not optional. Without it OpenBao creates its default symmetric type, which
+has no public half: the Hub cannot read one from it, and pairing answers `500 internal`.
+
+Do not rotate the signing key. A desktop pins the public half it was handed at pairing, and
+nothing carries a later one to an instance that is already paired.
 
 ### A least-privilege policy and token
 
-The Hub needs `update` on three paths of one key and nothing else: encrypt, decrypt, and a
-plaintext data key. Write the policy through stdin, then mint a token from it:
+The Hub needs five paths over those two keys and nothing else: `update` on encrypt, decrypt
+and a plaintext data key of the wrapping key; `read` on the signing key itself, which is how
+its public half is read; and `update` on sign. Write the policy through stdin, then mint a
+token from it:
 
 ```bash
 docker compose exec -i -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=<root-token> openbao \
@@ -81,6 +97,8 @@ docker compose exec -i -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=<root-toke
 path "transit/encrypt/demeteo-hub"          { capabilities = ["update"] }
 path "transit/decrypt/demeteo-hub"          { capabilities = ["update"] }
 path "transit/datakey/plaintext/demeteo-hub" { capabilities = ["update"] }
+path "transit/keys/demeteo-hub-signing"      { capabilities = ["read"] }
+path "transit/sign/demeteo-hub-signing"      { capabilities = ["update"] }
 EOF
 
 docker compose exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=<root-token> openbao \
@@ -90,6 +108,20 @@ docker compose exec -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN=<root-token> 
 Put the resulting `client_token` in `.env` as `OPENBAO_TOKEN`. Do not use the root token as
 `OPENBAO_TOKEN`, and do not add `-no-default-policy`: OpenBao's `default` policy is what lets
 the token renew and look itself up.
+
+### A deployment that predates the signing key
+
+A Hub set up before pairing existed has one Transit key and a three-path policy. It starts and
+signs users in as before, and nothing at startup reports the gap: the startup probe encrypts
+with `DEMETEO_HUB_TRANSIT_KEY` and never asks for the signing key. Pairing an instance is what
+fails. The desktop's `POST /token` is answered `503 key_service_unavailable`, and the
+authorization code it presented is spent, so that pairing is started again from the desktop.
+
+Run the `bao write -f transit/keys/demeteo-hub-signing type=ed25519` and `bao policy write`
+commands above with the root token. The policy is rewritten under the name the Hub's token
+already carries, so the token stays as it is. The Hub asks for the key again at the next
+pairing and needs no restart, unless you also changed `DEMETEO_HUB_SIGNING_KEY` in `.env`; then
+recreate `hub` as [Start the stack](#start-the-stack) describes.
 
 ### Renew the token inside every period
 
@@ -197,7 +229,7 @@ cargo run -p demeteo-hub
 | `DEMETEO_HUB_WEB_DIR` | `hub-web/dist` is where `npm run build:hub-web` writes the bundle; the Hub serves it and the `/v1` routes from one origin |
 | `DEMETEO_HUB_PUBLIC_URL` | `http://localhost:` followed by the port in `DEMETEO_HUB_BIND`. The Hub compares the origin a browser reports with this one byte for byte, so a different port, or `127.0.0.1` in place of `localhost`, is refused |
 | `DEMETEO_HUB_RP_ID` | `localhost`, the only RP ID a browser accepts over plain HTTP |
-| `OPENBAO_ADDR`, `OPENBAO_TOKEN` | the Hub refuses to start without them, but no sign-in route calls the key service. Any non-empty values do: it logs `key service is not usable yet; serving anyway` and serves |
+| `OPENBAO_ADDR`, `OPENBAO_TOKEN` | the Hub refuses to start without them, but no sign-in route calls the key service. Any non-empty values do: it logs `key service is not usable yet; serving anyway` and serves. Pairing an instance does call it, to read the signing key, so against these values `POST /token` answers `503 key_service_unavailable` |
 | `RUST_LOG` | the Hub logs errors only by default, so without it a healthy start prints nothing |
 
 `cargo run` builds the Hub on the host, where it links the system OpenSSL (the note on
@@ -247,7 +279,8 @@ in the `postgres-data` volume, and the passkey stays on the authenticator under 
 | `OPENBAO_TOKEN` | hub | the least-privilege Transit token |
 | `OPENBAO_TOKEN_FILE` | hub | path to a file holding that token, as an alternative to `OPENBAO_TOKEN` |
 | `DEMETEO_HUB_TRANSIT_MOUNT` | hub | Transit mount, default `transit` |
-| `DEMETEO_HUB_TRANSIT_KEY` | hub | Transit key name |
+| `DEMETEO_HUB_TRANSIT_KEY` | hub | name of the Transit key that wraps, default `demeteo-hub` |
+| `DEMETEO_HUB_SIGNING_KEY` | hub | name of the Ed25519 Transit key that signs requests, default `demeteo-hub-signing`. Only ASCII letters, digits, `_` and `-` are allowed (`[A-Za-z0-9_-]`); the Hub refuses to start on any other name |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | postgres, hub | database credentials; the password is required and must be URL-safe (see above) |
 | `DEMETEO_HUB_DOMAIN`, `DEMETEO_HUB_UPSTREAM` | caddy | site name and the `hub` address to proxy to |
 | `BAO_API_ADDR` | openbao | the address OpenBao advertises |
@@ -264,14 +297,15 @@ docker compose -f compose.yaml -f compose.test.yaml up -d --wait postgres openba
 ```
 
 Adding the override to services that are already up recreates their containers, so OpenBao
-comes back sealed. Initialise or unseal it, and set up Transit, the key and the token as above,
-then:
+comes back sealed. Initialise or unseal it, and set up Transit, both keys and the token as
+above, then:
 
 ```bash
 export DEMETEO_HUB_TEST_DATABASE_URL=postgres://<user>:<password>@127.0.0.1:5432/<db>
 export OPENBAO_ADDR=http://127.0.0.1:8200
 export OPENBAO_TOKEN=<the least-privilege token>
 export DEMETEO_HUB_TRANSIT_KEY=demeteo-hub
+export DEMETEO_HUB_SIGNING_KEY=demeteo-hub-signing
 cargo test -p demeteo-hub -- --ignored
 ```
 
@@ -280,9 +314,12 @@ rest. Run a later `docker compose up` from a different shell, or `unset OPENBAO_
 exported value outranks `.env`, and the Hub container would be told to find OpenBao on its own
 loopback.
 
-The least-privilege token is enough. The missing-key test asserts only that OpenBao refuses a
+The least-privilege token is enough. The missing-key tests assert only that OpenBao refuses a
 key the Hub was not given; with the policy above that refusal is the ACL layer's 403, which
-the test accepts alongside an unknown-key error from a broader token.
+the tests accept alongside an unknown-key error from a broader token.
+
+The signing round trip does need the two signing paths: under a token whose policy has only
+the three wrapping paths it fails with a 403.
 
 ### In CI
 
@@ -346,11 +383,24 @@ Ceremonies in flight are held in the `hub` process's memory and nowhere else. A 
 reaches a different replica than the one that served its start finds nothing there, so do not
 scale `hub` beyond one, and do not put a second stack behind the same domain.
 
+A pairing in flight is held the same way, in three parts: the consent a signed-in user has been
+shown and not yet answered, the authorization code an approval issued and the desktop has not
+yet redeemed, and the window in which a DPoP proof the Hub has already accepted is refused a
+second time. The first two fail on a second replica as a ceremony does. The third fails
+silently: a replica that never saw a proof does not refuse its replay.
+
 ### What a restart of `hub` loses
 
 A restart of `hub` — the `docker compose up -d hub` that follows a change to `.env` included —
 drops every ceremony in flight. A user who was part-way through one is answered
 `ceremony_expired` and starts it again. Sessions and passkeys are in Postgres and survive.
+
+It drops every pairing in flight as well. Answering a consent that is gone returns
+`pairing_expired`, redeeming a code that is gone returns `invalid_grant`, and either way the
+pairing is started again from the desktop. The DPoP replay window starts empty, so a proof
+accepted before the restart is no longer remembered for what is left of its
+`DPOP_MAX_AGE_SECS` (60 seconds). Instances already paired, and their tokens, are in Postgres
+and survive.
 
 ## What this deployment does not protect
 

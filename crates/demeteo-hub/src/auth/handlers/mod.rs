@@ -47,8 +47,8 @@ pub struct ApiError {
 
 impl ApiError {
     pub const UNAUTHENTICATED: Self = Self::new(StatusCode::UNAUTHORIZED, "unauthenticated");
-    const INTERNAL: Self = Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal");
-    const INVALID_REQUEST: Self = Self::new(StatusCode::BAD_REQUEST, "invalid_request");
+    pub(crate) const INTERNAL: Self = Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal");
+    pub(crate) const INVALID_REQUEST: Self = Self::new(StatusCode::BAD_REQUEST, "invalid_request");
     const CEREMONY_EXPIRED: Self = Self::new(StatusCode::BAD_REQUEST, "ceremony_expired");
     const ASSERTION_INVALID: Self = Self::new(StatusCode::FORBIDDEN, "assertion_invalid");
     const TOO_MANY_CEREMONIES: Self =
@@ -56,8 +56,21 @@ impl ApiError {
     const UNSUPPORTED_ALGORITHM: Self =
         Self::new(StatusCode::UNPROCESSABLE_ENTITY, "unsupported_algorithm");
     const CREDENTIAL_EXISTS: Self = Self::new(StatusCode::CONFLICT, "credential_exists");
+    pub(crate) const PAIRING_EXPIRED: Self = Self::new(StatusCode::BAD_REQUEST, "pairing_expired");
+    pub(crate) const INVALID_SCOPE: Self = Self::new(StatusCode::BAD_REQUEST, "invalid_scope");
+    pub(crate) const TOO_MANY_PAIRINGS: Self =
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, "too_many_pairings");
+    pub(crate) const INVALID_DPOP_PROOF: Self =
+        Self::new(StatusCode::BAD_REQUEST, "invalid_dpop_proof");
+    pub(crate) const INVALID_GRANT: Self = Self::new(StatusCode::BAD_REQUEST, "invalid_grant");
+    pub(crate) const UNSUPPORTED_GRANT_TYPE: Self =
+        Self::new(StatusCode::BAD_REQUEST, "unsupported_grant_type");
+    pub(crate) const KEY_SERVICE_UNAVAILABLE: Self =
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, "key_service_unavailable");
+    pub(crate) const TOO_MANY_REQUESTS: Self =
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, "too_many_requests");
 
-    const fn new(status: StatusCode, code: &'static str) -> Self {
+    pub(crate) const fn new(status: StatusCode, code: &'static str) -> Self {
         Self { status, code }
     }
 }
@@ -101,7 +114,7 @@ struct ErrorBody {
     error: &'static str,
 }
 
-fn store_failed(error: StoreError) -> ApiError {
+pub(crate) fn store_failed(error: StoreError) -> ApiError {
     tracing::error!(%error, "a store call failed");
     ApiError::INTERNAL
 }
@@ -116,7 +129,7 @@ fn ceremony_not_held(error: InsertError) -> ApiError {
     }
 }
 
-fn unix_now() -> u64 {
+pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since_epoch| since_epoch.as_secs())

@@ -41,11 +41,11 @@ full.
 
 | Part | State |
 |---|---|
-| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8). It depends on `crates/demeteo-hub-protocol`. Pairing, request handling and the WebSocket are **not built** |
+| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); and pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants. It depends on `crates/demeteo-hub-protocol`. No route takes an access token yet and none unpairs or revokes an instance; request handling and the WebSocket are **not built** |
 | `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots, and the canonical encoder of §6.1 and §8. The Hub compiles against it; the desktop does not yet |
-| `hub-web/` (second Vite entry) | **sign-in and passkey management built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, and every other route is behind the session. Fleet, Instance, Runs, Run, Dispatch and AddInstance are placeholders with no data wiring yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
+| `hub-web/` (second Vite entry) | **sign-in, passkey management and the pairing approval page built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), and every route but sign-up and sign-in is behind the session. Fleet, Instance, Runs, Run, Dispatch and AddInstance are placeholders with no data wiring yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
-| Desktop side: device key, pairing, Settings › Hub tab, socket client | **not built** |
+| Desktop side: device key, pairing, Settings › Hub tab, socket client | **not built** — nothing on the desktop creates a device key, sends the `/authorize` request of §4 or renders the fingerprint |
 | Desktop side: passkey pin set, request verification, local ceilings | **not built** |
 | An instance-wide read over `run_events` | **not built** — the read surface is per Feature today (§5) |
 | Runner dispatch from the Hub | **not built, and not part of this ticket set** — see §10 |
@@ -126,55 +126,278 @@ human signs — and differs from it on purpose.
 > the refresh token rotates. A copy of an MCP token is a local problem; a copy of a
 > Hub token is a tenant's.
 
+The Hub's half is built, in `crates/demeteo-hub/src/pairing/`, and so is the
+approval page in hub-web. **The desktop's half is not** (§2). What follows states
+the Hub's side as that code does it, and is the contract the desktop client is
+built to.
+
 <!-- EXAMPLE: new -->
 
 ```
 instance            device key: create, keep in the OS keyring           (once)
 instance ─browser─▶ GET  /authorize   PKCE S256, redirect http://127.0.0.1:<port>/…,
                                       dpop_jkt = thumbprint of the device key
-Hub                 passkey sign-in; consent: key fingerprint + scopes
-Hub ─redirect────▶ http://127.0.0.1:<port>/…?code=…&state=…
-instance ────────▶ POST /token        code + code_verifier, DPoP proof
+Hub ─303─────────▶ /#/pair/<segment>  the approval page, behind the passkey sign-in
+browser ─────────▶ POST /v1/pairing/start     fingerprint, instance labels, scopes asked for
+browser ─────────▶ POST /v1/pairing/approve   the scopes the user left checked
+browser ─────────▶ http://127.0.0.1:<port>/…?code=…&state=…
+instance ────────▶ POST /token        code + code_verifier + redirect_uri, DPoP proof
 Hub ─────────────▶ access token (15 min, bound to the thumbprint)
                    refresh token (rotating, reuse-detected)
-                   pairing response: request-signing key, RP ID, passkey keys
+                   pairing response: instance id, request-signing key, RP ID, passkey keys
 ```
 
 | Property | Value |
 |---|---|
-| Device key | created **on the instance**, private half in the OS keyring only; the Hub is sent the public half. Algorithm ES256 is the proposed default (§11) |
-| Fingerprint | a short rendering of the key's RFC 7638 thumbprint, shown **on both** the desktop and the Hub's consent screen so the user can compare them |
-| Redirect | `127.0.0.1` on an **ephemeral port** the instance opens for the one callback (RFC 8252); never a custom scheme, never `localhost` |
+| Device key | created **on the instance**, private half in the OS keyring only; the Hub is sent the public half. ES256 (P-256) is the only algorithm the Hub accepts, and is a carried default (§11). The Hub stores the public half as the four-member JWK it rebuilds from the decoded point, never the client's JSON |
+| Fingerprint | a short rendering of the key's RFC 7638 thumbprint, shown **on both** the desktop and the Hub's approval page so the user can compare them. The format is fixed — below |
+| Redirect | `http://127.0.0.1:<port>/…` on an **ephemeral port** the instance opens for the one callback (RFC 8252); never a custom scheme, never `localhost`. The rule is below |
 | PKCE | `S256`, mandatory (RFC 7636) |
-| Authorization code | single-use, bound to the device key by `dpop_jkt` (RFC 9449), so a code intercepted on the loopback cannot be redeemed with another key |
+| Authorization code | single-use and good for 60 seconds, bound to the device key by `dpop_jkt` (RFC 9449), so a code intercepted on the loopback cannot be redeemed with another key. A redemption that fails burns the code |
 | Sign-in | a **passkey**; the Hub has no password |
-| Consent | the user approves the device-key fingerprint and the scopes (§7), and may approve fewer than were asked for |
-| `/token` | a DPoP proof on the request (RFC 9449) |
-| Access token | **15 minutes**, bound to the device-key thumbprint (`cnf.jkt`); presented with a fresh DPoP proof on every use |
-| Refresh token | **rotating**: each use returns a new one and retires the old |
-| Reuse detection | a retired refresh token presented again **revokes the whole pairing** — a stolen token and the real one cannot both survive |
+| Consent | the user approves the device-key fingerprint and the scopes (§7), and may approve fewer than were asked for — never more, and never none |
+| `/token` | a DPoP proof on every request (RFC 9449), each proof accepted once |
+| Access token | **15 minutes**, bound to the device-key thumbprint. It is opaque — 32 random bytes — so the binding is the row the Hub holds for its hash, not a claim inside it. It is presented with a fresh DPoP proof on every use |
+| Refresh token | **rotating**: each use returns a new pair and retires the old refresh token. It lives 30 days, a carried default (§11) |
+| Reuse detection | a retired refresh token presented again **revokes the whole pairing** — a stolen token and the real one cannot both survive. There is no grace window |
+
+### `GET /authorize`
+
+The route reads no cookie and holds no state, so it is reachable signed out. Every
+parameter is required. One the Hub does not name is ignored — there is no
+`client_id` (§11) — and one sent twice refuses the request.
+
+| Parameter | Rule |
+|---|---|
+| `response_type` | exactly `code` |
+| `code_challenge_method` | exactly `S256` |
+| `code_challenge` | unpadded base64url of 32 bytes |
+| `redirect_uri` | the loopback rule below |
+| `dpop_jkt` | the device key's RFC 7638 thumbprint: unpadded base64url of 32 bytes |
+| `scope` | one or more of `read`, `spend`, `gates` (§7), separated by single spaces, none repeated |
+| `state` | 1–128 characters of `A-Z a-z 0-9 - . _ ~` |
+| `instance_name` | 1–64 characters after trimming |
+| `os`, `arch`, `app_version` | 1–32 characters each after trimming |
+
+`instance_name`, `os`, `arch` and `app_version` are **self-asserted**: they are
+what the caller says about itself, they are shown on the approval page as claimed
+by the machine, and they prove nothing. A label holding a control character, a
+zero-width character, a bidirectional control or a byte-order mark is refused,
+because the name a user reads would not be the characters that were sent.
+
+**The loopback rule.** `redirect_uri` is accepted only if it is, byte for byte,
+`http://127.0.0.1:`, a port of one to five digits with no leading zero and a value
+of 1–65535, and a path that begins with `/` and holds only `/` and
+`A-Z a-z 0-9 - . _ ~`, in at most 255 bytes. No other scheme or letter case, no
+`localhost`, no other address or other spelling of this one, no userinfo, query,
+fragment, percent-encoding, backslash or whitespace.
+
+> **Do not parse this URI, and do not widen the rule.** It is a comparison of
+> bytes on purpose. The authorization code leaves in this redirect, and a URL
+> parser normalises before it answers — `127.1`, `2130706433`, a host after an
+> `@` — so a browser may resolve what the parser approved to somewhere else. The
+> rustdoc of `is_loopback_redirect` in
+> [`authorize.rs`](../crates/demeteo-hub/src/pairing/authorize.rs) has the
+> reasoning, and why the desktop OAuth listener's wider rule does not apply.
+
+**A valid request** is answered `303 See Other` with `Location: /#/pair/<segment>`
+and `Cache-Control: no-store`. `<segment>` is the validated request as base64url,
+opaque to hub-web. It carries no secret and no signature and needs neither: the
+consent routes decode it and run the same validation again.
+
+**A refusal is `400 {"error":"invalid_request"}`, whatever was wrong, and is
+never a redirect to the client.** RFC 6749 has an authorization server redirect
+an error to the `redirect_uri` it registered for the client. The Hub registers no
+client, so the only address it has is the one in the request being refused.
+
+### The consent routes
+
+`/#/pair/<segment>` is hub-web's approval page. Like every hub-web route but
+sign-up and sign-in it is behind the session, so a signed-out user signs in with a
+passkey first and lands back on it. The page calls three routes, each of which
+needs the session cookie, a matching `Origin` and the CSRF header:
+
+| Route | Request body | `200` body |
+|---|---|---|
+| `POST /v1/pairing/start` | `{"request": "<segment>"}` | `{"pairing_id", "fingerprint", "instance_name", "os", "arch", "app_version", "scopes": ["read", …], "expires_at": <Unix seconds>}` |
+| `POST /v1/pairing/approve` | `{"pairing_id", "scopes": […]}` | `{"redirect": "<redirect_uri>?code=<code>&state=<state>"}` |
+| `POST /v1/pairing/deny` | `{"pairing_id"}` | `{"redirect": "<redirect_uri>?error=access_denied&state=<state>"}` |
+
+- `start` parks the request for the session's user for 300 seconds. `fingerprint`
+  is rendered by the Hub; hub-web shows it and never derives it.
+- `approve` and `deny` spend the `pairing_id`, which only the user it was parked
+  for can answer. `approve` takes a non-empty subset of the scopes that were asked
+  for, with none repeated, and mints the authorization code.
+- The browser then leaves for `redirect`. hub-web follows it only if it is a
+  loopback URL of the shape above.
+- Refusals: `400 invalid_request` (a body or segment that does not validate),
+  `400 pairing_expired` (a `pairing_id` that is unknown, expired, already
+  answered or another user's), `400 invalid_scope`, `503 too_many_pairings`, and
+  the session's own `401` and `403`.
+
+A pending consent, a pending code and the proofs already seen are held in the
+Hub's memory, bounded (§11), and are lost when it restarts.
+
+### The fingerprint
+
+**`SHA256:`, then the first 16 characters of the base64url thumbprint, in four
+groups of four separated by one space.** The thumbprint
+`0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I` is shown as:
+
+```
+SHA256:0ZcO CORZ NYy- DWpq
+```
+
+That is 96 bits of the thumbprint. **The desktop must render the identical
+string from the same thumbprint**: the two screens are compared by eye, and a
+difference in prefix, grouping or length reads as a different key. The format is
+a carried default (§11) and is not the Hub's alone to change — `fingerprint` in
+[`jwk.rs`](../crates/demeteo-hub/src/pairing/jwk.rs) writes it, and
+`the_thumbprint_and_fingerprint_match_a_published_key` in
+`src-tauri/tests/hub_pairing.rs` pins the example above, which is the key of
+RFC 9449's own example proof.
+
+The thumbprint is the SHA-256 of exactly
+`{"crv":"P-256","kty":"EC","x":"<x>","y":"<y>"}`, with `x` and `y` re-encoded from
+the decoded coordinates, as unpadded base64url.
+
+### `POST /token`
+
+The body is `application/x-www-form-urlencoded`, and the request carries exactly
+one `DPoP` header. The route sits outside `/v1` and its `Origin` and CSRF guard,
+because a desktop is not a browser; a request is held to its proof instead. Every
+answer, a refusal included, carries `Cache-Control: no-store`.
+
+**The proof** is a compact JWS of at most 4096 bytes:
+
+| Part | Rule |
+|---|---|
+| Header | `typ` is `dpop+jwt`; `alg` is `ES256` and nothing else; `jwk` is the device key's public half — `kty` `EC`, `crv` `P-256`, 32-byte `x` and `y`, and no `d` |
+| `htm` | `POST` |
+| `htu` | the Hub's configured origin followed by `/token`, compared as a whole string. It is never built from a request's `Host` |
+| `iat` | within 60 seconds of the Hub's clock, either side |
+| `jti` | 1–128 bytes. The Hub remembers it with the key's thumbprint for as long as the proof could still be accepted, and refuses a second use |
+| Signature | the 64-byte raw `r‖s` over `<header>.<payload>` |
+
+**`grant_type=authorization_code`** takes `code`, `code_verifier` (43–128
+characters of `A-Z a-z 0-9 - . _ ~`) and `redirect_uri`. The Hub verifies the
+proof, then takes the code — so a redemption that fails from here on has burned it
+— and requires that the code is not expired, that `redirect_uri` is the string
+that was approved, that the SHA-256 of `code_verifier` is the `code_challenge`,
+and that the proof was made by the key `dpop_jkt` named. It then reads the
+request-signing public key (§9) and, in one transaction, writes the instance, its
+device key and its first token pair and reads the tenant's passkeys.
+
+**`grant_type=refresh_token`** takes `refresh_token`. The Hub verifies the proof,
+takes its turn on the device key the token is bound to, so that two refreshes of
+one key never run together, and requires, in this order, that the token exists,
+is a refresh token, is bound to the proof's key, has not been retired, and has
+not expired. A rotation retires the presented token and issues a new pair in the
+same family, bound to the same key; the access token issued with the old one
+stays good until its own expiry. A retired token presented again with the right
+key is reuse: every live token of the family is retired, the newest pair
+included, and that is committed although the answer is a refusal. A used refresh
+token is remembered until its own expiry and no longer: a rotation deletes the
+key's expired tokens as it commits, and one presented after that is an unknown
+token, refused with the same `invalid_grant`.
+
+**The response.** Both grants answer `200` with JSON. A refresh carries the first
+four members and nothing else:
+
+| Member | Value | In a refresh |
+|---|---|---|
+| `access_token` | unpadded base64url of 32 random bytes | yes |
+| `token_type` | `DPoP` | yes |
+| `expires_in` | `900` | yes |
+| `refresh_token` | unpadded base64url of 32 random bytes | yes |
+| `scope` | what the user approved, space-separated | no |
+| `instance_id` | a UUID **the Hub mints** — below | no |
+| `request_signing_key` | unpadded base64url of the 32-byte Ed25519 public key | no |
+| `rp_id` | the Hub's configured WebAuthn RP ID | no |
+| `passkeys` | `[{"credential_id", "public_key"}]`: the tenant's **trusted** passkeys, each as unpadded base64url of the raw credential id and of the COSE_Key bytes | no |
+
+<!-- EXAMPLE: new -->
+
+```
+{
+  "access_token":        "…",
+  "token_type":          "DPoP",
+  "expires_in":          900,
+  "refresh_token":       "…",
+  "scope":               "read gates",
+  "instance_id":         "0f4c2f0e-7d0b-4c59-9d5e-6f1c1a2b3c4d",
+  "request_signing_key": "…",
+  "rp_id":               "hub.example",
+  "passkeys":            [{ "credential_id": "…", "public_key": "…" }]
+}
+```
+
+The plaintext of a token exists in this one answer. Postgres holds the SHA-256 of
+each token's 32 bytes, and an authorization code is held in memory by its hash.
+
+**Refusals**
+
+| Status | `error` | When |
+|---|---|---|
+| 400 | `invalid_request` | a form that cannot be read, or a missing field |
+| 400 | `unsupported_grant_type` | any other `grant_type` |
+| 400 | `invalid_dpop_proof` | no `DPoP` header or more than one, a proof that fails any rule above, a replayed `jti` |
+| 400 | `invalid_grant` | every refusal of a code or of a refresh token — unknown, expired, used, wrong verifier, wrong redirect, wrong key, reused. One answer, so a caller cannot probe which check failed |
+| 503 | `key_service_unavailable` | the request-signing key could not be read: OpenBao is sealed or unreachable, or the key does not exist yet |
+| 503 | `too_many_requests` | the Hub is remembering as many proofs as it will hold |
+| 500 | `internal` | a store failure, or a request-signing key the Hub is misconfigured for — a Transit key that is not `ed25519` among them |
 
 ### The pairing response
 
 The `/token` response of the pairing grant carries three things the instance pins.
 A refresh returns none of them.
 
-| Field | Pinned as | Used for |
-|---|---|---|
-| The Hub's **request-signing public key** | the key every envelope is verified against (§6) | rejecting a request the Hub did not sign |
-| The Hub's **WebAuthn RP ID** | the RP ID every assertion must be made for (§8) | rejecting an assertion made for another site |
-| The user's **passkey public keys** | the initial pinned set (§8) | verifying a gate decision |
+| Field | Member | Pinned as | Used for |
+|---|---|---|---|
+| The Hub's **request-signing public key** | `request_signing_key` | the key every envelope is verified against (§6) | rejecting a request the Hub did not sign |
+| The Hub's **WebAuthn RP ID** | `rp_id` | the RP ID every assertion must be made for (§8) | rejecting an assertion made for another site |
+| The user's **passkey public keys** | `passkeys` | the initial pinned set (§8) | verifying a gate decision |
+
+The passkeys are the ones trusted when the code is redeemed, read in the
+transaction that writes the pairing, not the ones the tenant had when the user
+approved.
 
 The pinned set is **trust on first pair**: the instance has no way to check these
 three values at pairing except that they arrived over the TLS connection the user
 chose and that the user approved the pairing on a screen they signed into. After
 pairing, nothing the Hub says changes the passkey set on its own authority (§8).
 
+### The instance id
+
+**The Hub mints `instance_id`**, when a device key is first paired, and returns it
+in the pairing response. It is the `instance_id` every envelope names (§6.1) and
+every challenge binds (§8). The desktop does not send an id of its own at
+pairing: what it sends is the four self-asserted labels, which the Hub stores as
+the instance's name, OS, architecture and version.
+
+### Pairing the same device key again
+
+**Pairing a device key the tenant has already paired replaces the old pairing.**
+The instance keeps its `instance_id`; its labels and granted scopes become this
+pairing's; every live token bound to the key is retired in the transaction that
+writes the new pair, so the earlier pairing's tokens stop working when it commits.
+The key is looked up among that tenant's keys alone: a thumbprint another tenant
+holds is a first pairing here.
+
+**Rejected: refusing a key that is already paired.** Reuse detection retires a
+whole family, and a refresh whose answer was lost looks the same as a stolen one,
+so an honest desktop can find every token it holds retired. **Pairing again is the
+recovery**, and the only one: with a refusal that desktop would have no way back.
+
 ### Revocation
 
-Unpairing from the desktop, or revoking an instance on the Hub, retires the refresh
-token family. The instance's local state — pinned keys, ceilings, toggles — is
-dropped on unpair. Revocation takes effect at the next refresh, so at most one
+Two things retire a pairing's tokens today: reuse detection, and pairing the same
+device key again. Both retire the access tokens with the refresh tokens.
+
+Unpairing from the desktop, and revoking an instance on the Hub, are designed and
+**not built** (§10): each retires the refresh token family, and the instance's
+local state — pinned keys, ceilings, toggles — is dropped on unpair. Such a
+revocation takes effect by the next refresh at the latest, so at most one
 access-token lifetime (15 minutes) after the Hub-side revoke.
 
 ---
@@ -582,13 +805,34 @@ as Docker Compose with four services:
 | Service | Role |
 |---|---|
 | `hub` | the axum server |
-| `postgres` | tenants, passkey public keys, instance records, event store, snapshots, request queue, refresh-token hashes |
+| `postgres` | tenants, passkey public keys, instance records, device-key public halves, event store, snapshots, request queue, access- and refresh-token hashes |
 | `openbao` | custody; the Transit engine encrypts attachments and holds the Hub's secrets |
 | `caddy` | TLS termination in front of the `hub` |
 
 **Hub server secrets live in OpenBao or are encrypted under Transit — never
 plaintext in Postgres.** That includes the request-signing key (§4) and the key
 material for attachments (§6.3).
+
+**The request-signing key is a Transit `ed25519` key, and its private half never
+enters the Hub.** OpenBao generates it and keeps it. The Hub's configuration holds
+only the key's Transit *name* (`DEMETEO_HUB_SIGNING_KEY`), and the `KeyService`
+port is the Hub's whole reach to it: `verifying_key` reads the 32-byte public
+half that a pairing response hands a desktop to pin (§4), and `sign` has Transit
+make a signature and return it. No table holds the key, and no process memory
+holds more than its public half.
+
+The public half is read on the first pairing that needs it, never at startup —
+`/healthz` and sign-in keep working beside a sealed OpenBao — and only a
+successful read is kept, for the life of the process. `sign` has no production
+caller yet: it is what request handling (§6) will sign an envelope with, and it
+is on the port now so that a test can show the advertised public key is the one
+signatures are made under. Creating the key and the policy paths it needs are an
+operator's steps, in [`deploy/hub/README.md`](../deploy/hub/README.md).
+
+**Rejected: generating the key in the Hub and storing it wrapped in Postgres.**
+It needs a table that belongs to no tenant, which the tenancy guards refuse, and
+it puts a long-lived key that every instance pins into the memory of a hosted
+process.
 
 **OpenBao is MPL-2.0, the Linux Foundation fork of Vault.**
 
@@ -605,10 +849,11 @@ material for attachments (§6.3).
 
 | Path | What it is |
 |---|---|
-| `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, and passkey auth (registration, sign-in, sessions, endorsement and revocation) **built**; pairing, request handling and the socket **not built**. It depends on `crates/demeteo-hub-protocol` |
+| `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, passkey auth (registration, sign-in, sessions, endorsement and revocation) and pairing **built**; request handling and the socket **not built**. It depends on `crates/demeteo-hub-protocol` |
+| `crates/demeteo-hub/src/pairing/` | pairing (§4) — **built**. The decisions are synchronous functions that take the time as an argument: `authorize.rs` (the `/authorize` rules and the loopback redirect), `pkce.rs`, `jwk.rs` (thumbprint and fingerprint), `dpop.rs` (proof verification) and `grant.rs` (the redeem, refresh and access verdicts, and the response bodies). `pending.rs` holds consents, codes and seen proofs in bounded process memory, `signing_key.rs` reads the request-signing public key through `KeyService`, and `handlers/` holds the routes. The rows are written by `store/instances.rs`, `store/device_keys.rs` and `store/tokens.rs` |
 | `deploy/hub` | the Compose bundle, Dockerfile and operator README — **built** |
 | `crates/demeteo-hub-protocol` | **serde-only** wire types shared by the desktop client and the Hub — **built**; the Hub is its only dependant so far |
-| `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **sign-in and passkey management built** (SignUp, SignIn, Passkeys, and a session gate in front of every other route); Fleet, Instance, Runs, Run, Dispatch and AddInstance are placeholder routes with no data wiring yet, and no view renders the canvas yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`, and `demeteo-hub` serves the directory its configuration names |
+| `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **sign-in, passkey management and the pairing approval page built** (SignUp, SignIn, Passkeys, ApprovePairing at `#/pair/<segment>`, and a session gate in front of every route but the first two); Fleet, Instance, Runs, Run, Dispatch and AddInstance are placeholder routes with no data wiring yet, and no view renders the canvas yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`, and `demeteo-hub` serves the directory its configuration names |
 
 **Rejected: the Hub linking `demeteo-core` in v1.** `demeteo-core` brings `libssh2`,
 git plumbing and `rusqlite`. A hosted container would ship all three for code that
@@ -629,6 +874,21 @@ WebAuthn verifier). Each one is a **Gate item** in
 ---
 
 ## 10. What is not built
+
+§2 has the state of every part. Of pairing (§4), the Hub's half and the approval
+page are built and three things are not:
+
+- **The desktop client** — the device key, the loopback listener, the
+  `/authorize` request, the fingerprint on the desktop, and holding and
+  refreshing the tokens.
+- **Unpairing and revoking an instance.** No route does either, and nothing
+  writes `device_keys.revoked_at`. Until one exists a pairing ends by reuse
+  detection, by its refresh token expiring, or by being replaced (§4).
+- **Any route that takes an access token.** The check exists as a function,
+  `access_verdict` in
+  [`grant.rs`](../crates/demeteo-hub/src/pairing/grant.rs), with the lookup by
+  hash beside it in the store; the socket (§5) and the attachment fetch (§6.3)
+  are its first callers, and neither is built.
 
 **Runner dispatch is out of scope for this ticket set,** and a separate discovery
 owns it. A `demeteo-runner` host is not paired with the Hub (decision 63), and no
@@ -685,7 +945,8 @@ should raise it, not pick.
    is the runner's answer and is not assumed to carry over.
 9. **Defaults carried, not measured:** ES256 for the device key, EdDSA for the
    envelope, 128 bits for a request id, the field lists of the two passkey
-   challenges, and an upper bound on `expires_at` an instance will accept. One
+   challenges, and an upper bound on `expires_at` an instance will accept.
+   Pairing carries more, listed under *Pairing's carried defaults* below. One
    more is already in stored data: the Hub's own endorsement and revocation
    assertions bind `instance_id = "*"`, a fresh `request_id` and a 300-second
    `expires_at`, all stored with the record (§8). How an instance accepts such
@@ -703,6 +964,54 @@ should raise it, not pick.
     — the last re-decides decision 64 — is open. The snapshot builder's settled
     obligations, `cwd` and `remote_url` userinfo, are in §5; the Hub-client
     build ticket owns both those and this question.
+12. **Approving a pairing on a session alone.** The consent routes (§4) take a
+    signed-in session, guarded by `Origin` and the CSRF header, and no fresh
+    assertion. §8 refuses to let a session move *passkey* trust, and part of
+    that reason applies here: a hijacked session can add an instance, which
+    then reports events and collects queued requests as the tenant's. It cannot
+    decide a gate (§8). Whether an approval should carry an assertion is open.
+13. **`client_id`.** RFC 6749 names it. The Hub registers no client and
+    `/authorize` defines no such parameter, so one that is sent is ignored like
+    any other unknown parameter. Whether desktops are ever registered, and what
+    an id would then identify, is open.
+14. **Gaps pairing leaves, known and not closed:**
+    - *The sign-up detour.* Sign-in keeps the `#/pair/<segment>` address and
+      lands back on the approval page. The link from sign-in to sign-up replaces
+      it, so a user with no passkey yet signs up, lands on Fleet, and starts the
+      pairing again from the desktop.
+    - *No framing protection.* No response sets `X-Frame-Options` or a
+      `Content-Security-Policy`, so the approval page can be framed by another
+      site.
+    - *Pending state in process memory.* Consents, authorization codes and the
+      DPoP replay window live in the Hub's memory: a restart drops every pairing
+      in flight, and a second replica would not see the first's. `Ceremonies`
+      accepts the same cost for passkey ceremonies.
+    - *A code burned by a sealed key service.* The code is taken before the
+      request-signing key is read, so with OpenBao sealed `/token` answers
+      `503 key_service_unavailable` and the code is spent. The user repeats the
+      pairing after the unseal.
+
+### Pairing's carried defaults
+
+One lifetime in §4 is decided: the access token's 15 minutes. Every other number
+pairing runs on is a **carried default** — chosen so the routes could be built,
+measured against nothing, and a human may override any of them. Each is a
+constant in [`pairing/mod.rs`](../crates/demeteo-hub/src/pairing/mod.rs).
+
+| Default | Value | What moving it changes |
+|---|---|---|
+| Refresh-token lifetime | 30 days | a desktop offline for longer must pair again |
+| Authorization-code lifetime | 60 seconds | how long the desktop has to redeem after the user approves |
+| Consent lifetime | 300 seconds | how long the approval page may sit open before its answer is `pairing_expired` |
+| DPoP proof skew | 60 seconds either side of the Hub's clock | how far a desktop's clock may drift, and how long a proof is remembered against replay |
+| Pending consents per user | 8 | a ninth concurrent request is `503 too_many_pairings` |
+| Pending consents, and pending codes | 16,384 each | the Hub-wide bound behind the same answer |
+| Remembered DPoP proofs | 65,536 | a full window answers `503 too_many_requests` and refuses, never forgets |
+
+Carried with them, and stated in §4: ES256 as the only device-key algorithm, the
+fingerprint format and its 96 bits, the Hub minting `instance_id`, a second
+pairing of the same device key replacing the first, and scopes that only narrow
+at approval with none of them mandatory.
 
 ---
 

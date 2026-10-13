@@ -13,6 +13,7 @@ export type Route =
   | { name: 'run'; instanceId: string; featureId: string }
   | { name: 'dispatch' }
   | { name: 'add-instance' }
+  | { name: 'pair'; request: string }
   | { name: 'sign-up' }
   | { name: 'sign-in' }
   | { name: 'passkeys' }
@@ -37,6 +38,8 @@ function segmentsOf(route: Exclude<Route, { name: 'not-found' }>): string[] {
     case 'sign-in':
     case 'passkeys':
       return [route.name];
+    case 'pair':
+      return ['pair', route.request];
     case 'instance':
       return ['instances', route.instanceId];
     case 'run':
@@ -73,6 +76,7 @@ function matchSegments(segments: string[] | null): Route | null {
         return null;
     }
   }
+  if (head === 'pair') return segments.length === 2 ? { name: 'pair', request: segments[1] } : null;
   if (head !== 'instances') return null;
   if (segments.length === 2) return { name: 'instance', instanceId };
   if (segments.length === 4 && tail === 'runs') return { name: 'run', instanceId, featureId };
