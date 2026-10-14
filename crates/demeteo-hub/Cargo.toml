@@ -15,7 +15,11 @@ async-trait = "0.1"
 # Already built for rustls (via reqwest) with exactly this feature set. The
 # default features add `untrusted 0.7`, which is not in Cargo.lock.
 aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys"] }
-axum = "0.8"
+# `ws` is the instance socket (src/socket). It is the one feature here that
+# grows Cargo.lock: tokio-tungstenite, tungstenite, and a second sha1 (0.10,
+# for the handshake's accept key) beside the 0.11 that sqlx-mysql locks. The
+# rest of what it turns on (hyper, base64, tokio) was already in the build.
+axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 demeteo-hub-protocol = { path = "../demeteo-hub-protocol" }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }

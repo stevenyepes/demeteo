@@ -37,10 +37,14 @@ pub mod instances;
 pub mod passkey_records;
 pub mod passkeys;
 pub mod pool;
+pub mod requests;
+pub mod run_mirror;
 pub mod sessions;
+pub mod snapshots;
 pub mod tokens;
 
 use crate::auth::policy::Status;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub use pool::{connect, migrate, Db};
@@ -104,4 +108,57 @@ pub enum StoreError {
     ChangeOutsideFamily,
     #[error("the device key, family and token rows handed over do not describe one pairing")]
     PairingDisagrees,
+    #[error("Unix time {0} is past the last TIMESTAMPTZ the store writes")]
+    TimeTooLarge(u64),
+    #[error("event offset {0} exceeds the BIGINT column")]
+    OffsetTooLarge(u64),
+    #[error("stored event cursor {0} is not an offset")]
+    CursorOutOfRange(i64),
+    #[error("unknown scope {0:?}")]
+    UnknownScope(String),
+    #[error("unknown request status {0:?}")]
+    UnknownRequestStatus(String),
+    #[error("unknown request outcome {0:?}")]
+    UnknownOutcome(String),
+    #[error("a request envelope does not convert to or from the JSON of a signed request")]
+    EnvelopeUnreadable,
+    #[error("stored delivery count {0} is not a count")]
+    DeliveriesOutOfRange(i32),
+    #[error("the tenant has no such instance")]
+    NoSuchInstance,
+    #[error("the instance has no such request")]
+    NoSuchRequest,
+    #[error("a {0} does not convert to JSON")]
+    Unencodable(&'static str),
+}
+
+/// Refuses rather than saturates: a clamped time would be stored as a moment
+/// the caller never named, and read back as if it had.
+fn timestamp(unix_seconds: u64) -> Result<OffsetDateTime, StoreError> {
+    i64::try_from(unix_seconds)
+        .ok()
+        .and_then(|seconds| OffsetDateTime::from_unix_timestamp(seconds).ok())
+        .ok_or(StoreError::TimeTooLarge(unix_seconds))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_time_the_column_cannot_hold_is_refused_and_not_clamped() {
+        let stored = timestamp(1_700_000_000).unwrap();
+        assert_eq!(stored.unix_timestamp(), 1_700_000_000);
+        assert_eq!(timestamp(0).unwrap(), OffsetDateTime::UNIX_EPOCH);
+
+        let past_i64 = u64::MAX;
+        let past_the_calendar = u64::try_from(i64::MAX).unwrap();
+        for too_large in [past_i64, past_the_calendar] {
+            let err = timestamp(too_large).unwrap_err();
+            assert!(
+                matches!(err, StoreError::TimeTooLarge(t) if t == too_large),
+                "{err}"
+            );
+        }
+    }
 }

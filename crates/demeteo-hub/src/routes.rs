@@ -7,6 +7,8 @@ use crate::pairing;
 use crate::pairing::pending::Pairings;
 use crate::pairing::signing_key::SigningKey;
 use crate::ports::KeyService;
+use crate::socket;
+use crate::socket::connections::Connections;
 use crate::store::Db;
 use axum::extract::{Request, State};
 use axum::http::header::ORIGIN;
@@ -24,6 +26,7 @@ struct Shared {
     verifier: Verifier,
     ceremonies: Ceremonies,
     pairings: Pairings,
+    connections: Connections,
     keys: Arc<dyn KeyService>,
     signing_key: SigningKey,
 }
@@ -31,8 +34,9 @@ struct Shared {
 /// axum clones the state into every request, so everything but the pool is
 /// shared, not copied: a [`Ceremonies`] per clone would hold a ceremony's
 /// start where its finish never looks, a [`Pairings`] per clone a consent
-/// where its approval never looks, and a [`SigningKey`] per clone a key that
-/// is asked for again by every request.
+/// where its approval never looks, a [`Connections`] per clone a session
+/// where no wake-up and no shutdown ever looks, and a [`SigningKey`] per
+/// clone a key that is asked for again by every request.
 #[derive(Clone)]
 pub struct AppState {
     db: Db,
@@ -56,6 +60,7 @@ impl AppState {
                 verifier,
                 ceremonies: Ceremonies::default(),
                 pairings: Pairings::default(),
+                connections: Connections::default(),
                 keys,
                 signing_key: SigningKey::new(signing_key),
             }),
@@ -82,6 +87,10 @@ impl AppState {
         &self.shared.pairings
     }
 
+    pub fn connections(&self) -> &Connections {
+        &self.shared.connections
+    }
+
     pub fn keys(&self) -> &dyn KeyService {
         self.shared.keys.as_ref()
     }
@@ -94,8 +103,10 @@ impl AppState {
 /// `/healthz` is liveness only: it must stay green while OpenBao is sealed or
 /// Postgres is away, or the orchestrator restarts a Hub that is merely waiting
 /// for a manual unseal. Its handler therefore extracts no part of `state`,
-/// though `/token` beside it and the `/v1` routes both hold it, and building
-/// the router dials nothing.
+/// though `/token` and the socket beside it and the `/v1` routes all hold it,
+/// and building the router dials nothing. Nor does it wait on a socket: a
+/// session runs in a task of its own, and the registry of them is asked
+/// nothing here.
 ///
 /// A missing `web_dir` degrades to 404s at request time, never a startup failure.
 pub fn router(state: AppState, web_dir: &Path) -> Router {
@@ -110,6 +121,12 @@ pub fn router(state: AppState, web_dir: &Path) -> Router {
             pairing::handlers::TOKEN_PATH,
             post(pairing::handlers::token),
         )
+        // Outside `v1` as `/token` is: the desktop that opens it sends no
+        // `Origin`, and an upgrade is held to the access token it carries
+        // and the proof beside it. `guard_mutations` lets every `GET`
+        // through, so in there this would be guarded by nothing and read as
+        // if it were.
+        .route(socket::handler::SOCKET_PATH, get(socket::handler::socket))
         .with_state(state.clone())
         .merge(v1(state));
     router_with(routes, web_dir)

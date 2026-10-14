@@ -12,7 +12,13 @@
 //! - **Replay.** Within [`DPOP_MAX_AGE_SECS`] of `iat` the same proof
 //!   verifies every time. Remembering [`VerifiedProof::jti`] is what makes it
 //!   single-use.
-//! - **`ath` and `nonce`.** Neither is read here.
+//! - **`ath`.** The claim is read and handed over as [`VerifiedProof::ath`],
+//!   and not judged: whether a proof has to name a token, and which, is a
+//!   question about the request it came with. `/token` presents no access
+//!   token and ignores it; the socket requires it and compares it with the
+//!   token in `Authorization`
+//!   ([`socket::handler`](crate::socket::handler)).
+//! - **`nonce`.** Not read here.
 //!
 //! # What is refused that a JOSE library would take
 //!
@@ -59,6 +65,9 @@ pub struct VerifiedProof {
     pub jkt: String,
     pub jti: String,
     pub iat: u64,
+    /// The `ath` claim as the proof spelled it, `None` when it carries none
+    /// or one that is not a string. Signed, and otherwise unexamined.
+    pub ath: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -141,6 +150,7 @@ pub fn verify(proof: &str, expected: &Expected, now: u64) -> Result<VerifiedProo
         jkt: jwk.thumbprint(),
         jti: jti.to_owned(),
         iat,
+        ath: text(&claims, "ath").map(str::to_owned),
     })
 }
 
@@ -271,8 +281,33 @@ mod tests {
                 jkt: key.thumbprint(),
                 jti: JTI.to_owned(),
                 iat: NOW,
+                ath: None,
             })
         );
+    }
+
+    #[test]
+    fn ath_is_handed_over_as_the_proof_spelled_it_and_a_proof_is_not_refused_for_it() {
+        let Control {
+            key,
+            header,
+            claims,
+        } = control();
+        let carrying = |ath: Value| key.proof_with(&header, &with(&claims, "ath", ath));
+
+        let named = verified(&carrying(json!("not-a-digest")));
+        assert_eq!(
+            named.map(|proof| proof.ath),
+            Ok(Some("not-a-digest".to_owned()))
+        );
+        for ath in [json!(7), json!(null), json!(["a"])] {
+            let shown = ath.to_string();
+            assert_eq!(
+                verified(&carrying(ath)).map(|proof| proof.ath),
+                Ok(None),
+                "{shown}"
+            );
+        }
     }
 
     /// The proof of RFC 9449 §4.1, which this crate's signer did not make:

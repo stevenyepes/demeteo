@@ -1,5 +1,6 @@
-//! The public half of the Hub's request-signing key, as a pairing response
-//! hands it to a desktop to pin.
+//! The Hub's request-signing key as the Hub holds it: a name in the key
+//! service. Its public half is what a pairing response hands a desktop to
+//! pin, and a signature under it is what the desktop checks a request by.
 
 use crate::ports::{KeyService, KeyServiceError};
 use tokio::sync::OnceCell;
@@ -37,11 +38,26 @@ impl SigningKey {
             .await
             .copied()
     }
+
+    /// The Ed25519 signature over `message` under this key. `message` is
+    /// signed as it is handed over and is not hashed first.
+    ///
+    /// Unlike the public half, nothing is kept: each call asks `keys`, and a
+    /// refusal is the caller's to answer for.
+    pub async fn sign(
+        &self,
+        keys: &dyn KeyService,
+        message: &[u8],
+    ) -> Result<[u8; 64], KeyServiceError> {
+        keys.sign(&self.name, message).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::memory_keys::MemoryKeys;
+    use crate::pairing::testing::verifies_ed25519;
     use crate::ports::DataKey;
     use async_trait::async_trait;
     use std::collections::VecDeque;
@@ -155,6 +171,25 @@ mod tests {
         assert!(
             matches!(&read, Err(KeyServiceError::UnknownKey(name)) if name == "another"),
             "{read:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_signature_is_made_under_the_name_the_key_was_built_with() {
+        let keys = MemoryKeys::with_keys([NAME, "another"]);
+        let signing_key = SigningKey::new(NAME);
+        let message = b"a request";
+
+        let signature = signing_key.sign(&keys, message).await.unwrap();
+        let public_key = signing_key.public_key(&keys).await.unwrap();
+        let of_another = SigningKey::new("another").public_key(&keys).await.unwrap();
+        let unknown = SigningKey::new("absent").sign(&keys, message).await;
+
+        assert!(verifies_ed25519(&public_key, message, &signature));
+        assert!(!verifies_ed25519(&of_another, message, &signature));
+        assert!(
+            matches!(&unknown, Err(KeyServiceError::UnknownKey(name)) if name == "absent"),
+            "{unknown:?}"
         );
     }
 }

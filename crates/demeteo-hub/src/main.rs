@@ -2,7 +2,8 @@ use demeteo_hub::adapters::openbao::{http_client, OpenBaoKeys};
 use demeteo_hub::auth::RelyingParty;
 use demeteo_hub::config::Config;
 use demeteo_hub::ports::KeyService;
-use demeteo_hub::startup::{classify_key_probe, KeyStatus};
+use demeteo_hub::socket::SHUTDOWN_DRAIN_SECS;
+use demeteo_hub::startup::{classify_key_probe, serve_until_stopped, KeyStatus};
 use demeteo_hub::{routes, store};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -62,10 +63,16 @@ async fn run() -> Result<(), String> {
     };
     let state =
         routes::AppState::new(db, rp, keys, config.signing_key).map_err(|e| e.to_string())?;
-    axum::serve(listener, routes::router(state, &config.web_dir))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .map_err(|e| e.to_string())
+    let app = routes::router(state.clone(), &config.web_dir);
+    serve_until_stopped(
+        listener,
+        app,
+        state,
+        shutdown_signal(),
+        Duration::from_secs(SHUTDOWN_DRAIN_SECS),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 async fn probe_key_service(keys: Arc<dyn KeyService>, transit_key: String) {

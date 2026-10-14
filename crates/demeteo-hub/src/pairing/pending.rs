@@ -323,6 +323,7 @@ mod tests {
             jkt: jkt.to_owned(),
             jti: jti.to_owned(),
             iat,
+            ath: None,
         }
     }
 

@@ -41,7 +41,7 @@ full.
 
 | Part | State |
 |---|---|
-| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); and pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants. It depends on `crates/demeteo-hub-protocol`. No route takes an access token yet and none unpairs or revokes an instance; request handling and the WebSocket are **not built** |
+| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each. It depends on `crates/demeteo-hub-protocol`. **Not built:** any HTTP route that queues a request — the queue is filled by a function no route calls, so nothing the Hub serves sends an instance a request yet; the desktop's socket client, so nothing dials the socket either; unpairing and revoking an instance; and the attachment fetch (§6.3) |
 | `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots, and the canonical encoder of §6.1 and §8. The Hub compiles against it; the desktop does not yet |
 | `hub-web/` (second Vite entry) | **sign-in, passkey management and the pairing approval page built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), and every route but sign-up and sign-in is behind the session. Fleet, Instance, Runs, Run, Dispatch and AddInstance are placeholders with no data wiring yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
@@ -417,17 +417,114 @@ instance → Hub   events     run events with offset > cursor, in offset order
 Hub → instance   ack        the new cursor
 instance → Hub   snapshot   Project and Workflow state, local paths stripped
 Hub → instance   request    one signed envelope (§6); queued ones first
-instance → Hub   result     request id; applied | refused | expired, and why
+instance → Hub   result     request id; accepted | refused, and why
 ```
 
-| Frame | Direction | Carries |
+| Frame | Protocol type | Direction | Carries |
+|---|---|---|---|
+| `hello` | `Hello` | instance → Hub | install id, app version, OS, arch, **granted scopes** — what the instance's toggles allow *now*, not what pairing approved |
+| `ack` | `CursorAck` | Hub → instance | the highest event offset the Hub has stored durably |
+| `events` | `RunEvent` | instance → Hub | **one** run event per frame, with its Feature and offset — not a batch |
+| `snapshot` | `Snapshot` | instance → Hub | the instance's full current Project and Workflow state in one frame, replacing the last |
+| `request` | `SignedRequest` | Hub → instance | one signed envelope |
+| `result` | `RequestResult` | instance → Hub | the outcome of one request id: `accepted`, or `refused` with a reason — `expired` is one of the reasons, not a third outcome |
+
+The names in the first column, and in the sketch above it, are this document's
+shorthand. **None of them is on the wire**: what the wire carries is in *Frames*
+below.
+
+### The upgrade
+
+The socket is `GET /socket`, outside `/v1` like `/token` and for its reason: a
+desktop is not a browser and sends no `Origin`. The request carries two things
+besides the WebSocket upgrade headers.
+
+| Header | Rule |
+|---|---|
+| `Authorization` | `DPoP <access token>`: the scheme in any case, exactly one space, and the token's text as `/token` issued it |
+| `DPoP` | exactly one, a proof as §4 specifies it for `/token`, with the three differences below |
+
+| Proof claim | Rule on the socket |
+|---|---|
+| `htm` | `GET` |
+| `htu` | the Hub's configured origin followed by `/socket`, in its **`https`** spelling. Never `wss`, although that is the scheme the client dials, and never built from a request's `Host`. `htu` is compared as a whole string, so there has to be one spelling, and it is the one a client already builds for `/token` |
+| `ath` | **required**: unpadded base64url of the SHA-256 of the access token's ASCII text, exactly as it is sent in `Authorization` (RFC 9449 §4.2). `/token` presents no access token and ignores the claim; the socket refuses a proof without it, or with another token's |
+
+The Hub verifies the proof, remembers its `jti`, checks `ath`, and only then
+looks the token up: it must be an access token, bound to the key that made the
+proof, not retired and not expired, and that key must still belong to an
+instance. **The tenant and the instance a socket writes for come from that
+token's row and that key, and from nothing the instance says afterwards.**
+
+A proof is spent by being presented, whatever becomes of the upgrade it came
+with. A client that is refused makes a new proof, with a new `jti`, for its next
+attempt.
+
+**Refusals.** Every one is answered before the upgrade, as plain HTTP, never as a
+`101` followed by a close:
+
+| Status | `error` | When |
 |---|---|---|
-| `hello` | instance → Hub | install id, app version, OS, arch, **granted scopes** — what the instance's toggles allow *now*, not what pairing approved |
-| `ack` | Hub → instance | the highest event offset the Hub has stored durably |
-| `events` | instance → Hub | a batch of run events, each with its Feature and offset |
-| `snapshot` | instance → Hub | the full current state of one kind (`projects`, `workflows`), replacing the last |
-| `request` | Hub → instance | one signed envelope |
-| `result` | instance → Hub | the outcome of one request id |
+| 401 | `invalid_token` | every credential failure: no `Authorization`, another scheme, no `DPoP` header or more than one, a proof that fails any rule, a replayed `jti`, a missing or wrong `ath`, a token that is unknown, a refresh token, bound to another key, retired or expired, a key that belongs to no instance. **One answer**, with `WWW-Authenticate: DPoP`, so a captured request cannot be used to learn which part of it was wrong |
+| 400 | `invalid_request` | the credentials passed and the request is not a WebSocket upgrade. Asked only of a request that was admitted, so one without credentials is `401` whatever else it lacks, and it is asked before the connection is registered: such a request displaces no session. Its proof is spent all the same |
+| 503 | `too_many_requests` | the Hub is remembering as many proofs as it will hold (§4). The token was not judged; retry, do not refresh |
+| 503 | `too_many_connections` | as many instances are connected to this `hub` process as it will hold, and this one is not among them. No session is closed to make room |
+| 500 | `internal` | a store failure |
+
+### Frames
+
+**A frame is a JSON text frame holding one protocol struct, and nothing around
+it.** There is no envelope and no `type` member: `crates/demeteo-hub-protocol`
+defines none, and the Hub adds none.
+
+- **Inbound** is whichever of `Hello`, `RunEvent`, `Snapshot` and
+  `RequestResult` the text parses as, and **exactly one must**. All four refuse
+  unknown fields and no two share their required members, which is what makes
+  that unambiguous. A frame that parses as none of them, or as more than one,
+  closes the socket.
+- **Outbound** is a `CursorAck` or a `SignedRequest`. They refuse unknown fields
+  and share no required member either, so an instance can tell them apart the
+  same way.
+- A **binary** frame closes the socket, as does text that is not JSON, a frame
+  with a member its type does not have, and a frame whose `v` is not the
+  protocol version. Nothing of a refused frame is stored.
+
+**Rejected for now: a tagged frame.** It is the cleaner shape, and it is a change
+to the protocol crate that both ends share, not to how the Hub reads it. If it is
+taken, it is taken there.
+
+**Order.** The first frame must be `Hello`. Anything else first is a violation,
+and so is a second `Hello`: a change of scopes is reported by reconnecting.
+After it the instance may send events, snapshots and results in any order.
+
+**One connection per instance.** A second connection of the same instance takes
+the first one's place, and the first is closed with `4002`. An instance that
+reconnects has usually lost a socket the Hub has not yet noticed is dead, so the
+newcomer is taken for the live one.
+
+**Liveness.** The Hub sends a WebSocket ping every 30 seconds. A connection on
+which **no frame of any kind** arrives for 90 seconds — a pong counts, and so
+does an event — is dropped, with no close frame, and the instance is marked
+absent. Both numbers are carried defaults (§11). The same deadline covers a
+connection that was admitted and never sent its `Hello`, and a peer that stops
+reading is dropped on it as one that stops sending is: a write of the Hub's
+still pending 90 seconds after it began ends the connection.
+
+**Close codes.** What the Hub closes a socket with, and what the instance does
+about it:
+
+| Code | When | The instance |
+|---|---|---|
+| `1001` | the Hub is shutting down | reconnects |
+| `1008` | a protocol violation: a frame before `Hello`, a second `Hello`, a binary or unparseable frame, a version mismatch, an event offset above 2⁶³−1, a U+0000 in any string of a frame, a `feature_id` over 256 bytes (`MAX_FEATURE_ID_BYTES`) | the same frame would be refused again |
+| `1011` | the Hub could not do what a frame it accepted asked — a store call failed. An event it was storing was not acked. A frame the store can never take is not this: `frame::parse` refuses it, and it closes `1008` | reconnects and resumes from its last ack; sending the same thing may succeed |
+| `4001` | the access token the socket was admitted with has expired | **refreshes and reconnects** |
+| `4002` | displaced by a newer connection of the same instance | **does not reconnect in a loop**: it would displace its successor, which would reconnect in its turn |
+
+The session ends at the expiry of the token it was *admitted* with — one
+reconnect per access-token lifetime — and the instance is marked absent before
+the close is sent. That, and closing on a version mismatch, are defaults a human
+may still overrule (§11).
 
 ### Events and the cursor
 
@@ -449,6 +546,31 @@ connection costs a resend of whatever the last `ack` did not cover, never a gap
 and never a duplicate row. The instance resumes from the Hub's `ack`, not from its
 own memory of what it sent.
 
+**When the Hub acks.** It sends one `CursorAck` after `Hello`, carrying the
+cursor it has stored for the instance (`0` when it has stored nothing), and one
+after **every** `RunEvent`. An ack is never sent before the write it reports has
+committed: the event's row and the cursor are written in one transaction, and
+the ack follows it. A re-sent event whose key the Hub already holds is dropped
+**and still acked**, with the cursor where it stands. An event the Hub could not
+store gets no ack: the socket closes with `1011`.
+
+**"Highest contiguous offset" does not mean `n, n + 1`.** The cursor is the
+highest offset `o` such that every event *received* from this instance with an
+offset at or below `o` is durably stored. Offsets are sparse by design: the
+sequence is table-global across Features, and an event whose kind is off the
+allowlist below is dropped on the instance and never sent. A cursor that waited
+for `o + 1` would stall at the first gap. The Hub processes one frame to
+completion before it reads the next and ends the session on a failed write, so
+the definition comes to the highest offset stored: after `3`, `7`, `20` the
+cursor is `20`. It never moves backwards — an event re-sent from below the
+cursor is stored if it was missing and leaves the cursor where it is.
+
+**What a mirror row holds** is the parsed `RunEvent`, serialised again — never
+the frame's text. **Nothing is stored for costs or gate summaries**, because the
+protocol types carry neither: an event is a kind from a closed list and three
+optional ids, and no kind reports a cost. Which gate summary text may cross at
+all is open (§11).
+
 **`ack` is not a delete.** `run_events` has no GC today
 ([`REMOTE_EXECUTION.md`](REMOTE_EXECUTION.md)), and an `ack` does not create one:
 it moves the cursor and nothing else. If a GC ever lands, a cursor older than the
@@ -463,9 +585,12 @@ left. Transcripts, diffs and file contents are not on it (§3).
 ### Snapshots
 
 Paired desktops report **Project and Workflow snapshots with local paths
-stripped** (decision 64). Each `snapshot` frame replaces the previous one of its
-kind, so the Hub holds one current copy and nothing to merge. A snapshot is sent
-after `hello` and whenever its content changes.
+stripped** (decision 64). A `Snapshot` is one struct carrying the instance's
+Projects, Workflow versions and run-shape settings together. **The Hub holds one
+row per instance and each snapshot replaces it wholesale**, so there is one
+current copy and nothing to merge. A snapshot is sent after `hello` and whenever
+its content changes. The Hub answers it with no frame: the instance keeps no
+cursor for snapshots, and one that was lost is made good by the next.
 
 These are what a Hub-authored `start_feature` names (§6) and what the
 future runner dispatch would build a `RunSpec` from (§10). The Hub never authors a
@@ -492,10 +617,47 @@ either — §11.
 ### Queued requests
 
 A request for an instance that is offline waits on the Hub. When the instance
-sends `hello`, the queued requests are delivered **before** any new one, in the
-order they were queued. A request that expired while it waited is delivered anyway
-and answered `expired`; the instance, not the Hub, is the judge of the clock it
-trusts (§6).
+sends `hello`, the queued requests are delivered after the `hello`'s ack,
+**before** any new one, in the order they were queued. A request queued while
+the instance is connected goes out on that connection.
+
+**An expired request is never sent.** A request is deliverable strictly before
+its `expires_at`, by the Hub's clock read at the moment it would be sent. At or
+past it the Hub marks the request `expired` and sends no frame for it.
+
+**Rejected: delivering it anyway and leaving the verdict to the instance
+alone.** A request would then take effect past its expiry on any instance whose
+clock runs behind. The instance's own check (§6.1) stands beside the Hub's and
+is not replaced by it: its clock is the one it trusts, so a request the Hub sent
+as live can still come back `refused: expired`, and that is recorded like any
+other outcome. A request takes effect only if it is live by both clocks.
+
+**Delivery is at-least-once.** A request stays queued until it is answered. One
+that was sent and not answered before the connection dropped is sent again on
+the instance's **next** connection — the same envelope, the same `request_id`,
+the same signature, since it is signed once (§6.1). It is not re-sent on the
+connection that already carried it. An instance can therefore be sent a request
+it has already acted on; it refuses that copy as `replayed` (§6.1), and is right
+to.
+
+**The first recorded outcome is kept.** A `RequestResult` is recorded against
+the request its `request_id` names, among this instance's requests only. A
+second result for the same request changes nothing, so a `refused: replayed`
+that follows a recorded `accepted` does not replace it. The same echo can be the
+*only* result to arrive, when the first was lost outright: it is then recorded,
+and what it says is that an earlier delivery's result never reached the Hub —
+not that the instance declined. A result that names no request of the instance
+changes nothing and does not close the socket. No frame acknowledges a result.
+
+`expired` is the Hub's verdict that it will not send the request (again), and it
+yields to the instance's: a late result for a request that was sent before it
+expired replaces the mark. One that was never sent keeps it.
+
+**There is no sweep.** A request is judged when its instance's queue is read —
+on `hello`, and whenever a new request is queued for a connected instance. One
+for an instance that never reconnects stays `queued` past its expiry. `queued`
+means "not answered and not judged yet", never "deliverable", and a view over
+the queue has to apply the expiry rule itself.
 
 ---
 
@@ -526,12 +688,25 @@ JSON in the shape `SignedRequest` in `crates/demeteo-hub-protocol` parses:
 **What is signed is not the JSON.** It is the pre-image `SignedRequest::signing_bytes`
 builds: the label `demeteo-hub/v1/request`, then every field above except
 `signature`, each length-prefixed or fixed-width and big-endian. The Hub builds
-those bytes from the request it is about to send, then hashes and signs them with
-its request-signing key. The instance parses the JSON, rebuilds the same bytes from
+those bytes from the request it is about to queue and signs them with its
+request-signing key. The instance parses the JSON, rebuilds the same bytes from
 the parsed request, and verifies the signature against the key it pinned at pairing
 (§4). The byte layout is specified once, in the module rustdoc of
 [`canonical.rs`](../crates/demeteo-hub-protocol/src/canonical.rs) and on
 `signing_bytes`, and is not repeated here.
+
+**The signature is Ed25519 over `signing_bytes()` itself.** There is no separate
+SHA-256: the message handed to the signer, and to the instance's verifier, is the
+pre-image as it stands. Ed25519 hashes its own input and Transit signs what it is
+handed, so a digest in between would be one more step for the two ends to disagree
+on. `signature` is the 64 signature bytes as unpadded base64url. The desktop
+verifier is not built, so what the Hub ships here is the contract it is built to.
+
+**A request is signed once, when it is queued**, and never again. The envelope is
+stored with its signature, and every delivery — a redelivery included (§5) — sends
+that stored envelope. If the key service cannot sign, nothing is queued.
+**Rejected: signing at send time**, which puts a call to the key service in the
+socket's loop and gives a redelivery a second signature to get wrong.
 
 JSON is never signed because key order, whitespace and number spelling are not
 stable across two serialisers. Instead, both ends compile against that one encoder,
@@ -545,9 +720,9 @@ dropped without a `result`. Do not add a float to any payload.
 | Property | Rule |
 |---|---|
 | Signature | the Hub's request-signing key, the one pinned at pairing (§4), over `signing_bytes`. A request that does not verify is dropped without a `result` |
-| `request_id` | **single-use**. The instance records every id it accepts in its own SQLite (an id is not a secret) for at least as long as it can still be unexpired, and refuses a repeat, including across a restart |
-| `expires_at` | checked against **the instance's clock**. An expired request is answered `expired` and has no effect |
-| `instance_id` | must equal this instance's id, so one instance's request cannot be replayed at another |
+| `request_id` | **single-use**. The Hub mints 128 random bits per request and spells them as unpadded base64url; a redelivery carries the same id. The instance records every id it accepts in its own SQLite (an id is not a secret) for at least as long as it can still be unexpired, and refuses a repeat, including across a restart |
+| `issued_at`, `expires_at` | the Hub's clock when the request was queued, and **600 seconds** after it — a carried default (§11). `expires_at` is checked against **the instance's clock**: an expired request is answered `expired` and has no effect. The Hub applies the same bound to its own clock before it sends (§5) |
+| `instance_id` | the id the pairing response gave the instance (§4), spelled the same way. It must equal this instance's id, so one instance's request cannot be replayed at another |
 | Order of checks | scope → signature → expiry → id unseen → kind-specific checks. The id is **spent when the signature verifies**, before the effect, and is **not refunded** if a later check refuses: a retry is a new request with a new id |
 
 Refusal is the default. An unknown `kind`, a kind whose scope is off, or a body
@@ -613,6 +788,21 @@ that is off is refused locally. **No Hub action can turn a scope on** — not a
 request, not a re-pairing prompt the Hub raises, not a setting the Hub reports.
 `hello` states the scopes that are on now, so the Hub can tell a refusal is
 coming; it does not ask permission.
+
+**`granted_scopes` on the Hub is what `hello` last said.** Pairing writes what
+the user approved, and the first `hello` replaces it with what the desktop says
+is on now; every later `hello` does the same. The Hub's copy is a report, one
+`hello` old, and the Hub enforces nothing with it. It stores events and
+snapshots from an instance that did not report `read`: whether to send them is
+the instance's decision.
+
+**The Hub's one use of that copy is informational.** Queueing a request whose
+scope the instance last reported as off is declined — `409 scope_not_granted`,
+and nothing is queued — because the request would only come back `refused`.
+That spares a round trip and is not the enforcement: the instance checks its own
+toggles against every request it receives (§6.1), and nothing may come to depend
+on the Hub's gate holding. `passkey_endorsement` and `passkey_revocation` need
+no scope (§6.2) and are queued for an instance with every scope off.
 
 > **Do not let the Hub widen a scope.** Any message that would "enable" `spend` or
 > `gates` from the Hub side is the Hub granting itself authority, which is the one
@@ -809,6 +999,27 @@ as Docker Compose with four services:
 | `openbao` | custody; the Transit engine encrypts attachments and holds the Hub's secrets |
 | `caddy` | TLS termination in front of the `hub` |
 
+**What the socket added to Postgres** is no table: the event store, the
+snapshots and the request queue date from the first migration.
+[`0006_instance_socket.sql`](../crates/demeteo-hub/migrations/0006_instance_socket.sql)
+adds columns to two of the tables that were there:
+
+| Column | What it means |
+|---|---|
+| `instances.install_id` | the install id the instance's last `Hello` gave. A label the peer chose: it never picks the row a write lands on (§5), and what a changed one means is open (§11 item 17) |
+| `instances.connection_id` | the one connection the instance is present through, null when it is absent. **Presence is this column being non-null**, and no column says so a second time. A connection that ends clears it only while it still holds its own id, so a displaced session ending late does not mark its successor absent |
+| `instances.connected_at` | when that connection sent its `Hello`; cleared with it |
+| `instances.event_cursor` | the cursor of §5, the highest event offset stored for the instance. It is written in the transaction that stores the event and is what a `CursorAck` carries; `0` until an event is stored |
+| `instance_requests.deliveries` | how many times the request was sent; `0` is never sent |
+| `instance_requests.last_sent_at` | when it was last sent |
+| `instance_requests.outcome` | `accepted` or `refused`, from the `RequestResult` recorded for it (§5); null until one is |
+| `instance_requests.refusal_reason` | the reason's wire name — present exactly when the outcome is `refused` |
+| `instance_requests.answered_at` | when that outcome was recorded |
+
+It also closes `instance_requests.status` to `queued`, `expired` and `answered`,
+with `answered` holding exactly when an outcome does, so the status and the
+outcome are written in one statement or the write is refused.
+
 **Hub server secrets live in OpenBao or are encrypted under Transit — never
 plaintext in Postgres.** That includes the request-signing key (§4) and the key
 material for attachments (§6.3).
@@ -823,11 +1034,15 @@ holds more than its public half.
 
 The public half is read on the first pairing that needs it, never at startup —
 `/healthz` and sign-in keep working beside a sealed OpenBao — and only a
-successful read is kept, for the life of the process. `sign` has no production
-caller yet: it is what request handling (§6) will sign an envelope with, and it
-is on the port now so that a test can show the advertised public key is the one
-signatures are made under. Creating the key and the policy paths it needs are an
-operator's steps, in [`deploy/hub/README.md`](../deploy/hub/README.md).
+successful read is kept, for the life of the process. `sign` is reached from
+one place, `enqueued` in
+[`socket/requests.rs`](../crates/demeteo-hub/src/socket/requests.rs), which signs
+an envelope as it queues it (§6.1) — and `enqueued` has no route caller yet
+(§10). So the Hub can sign a request and nothing it serves asks it to: only
+tests reach the signature today, one of which shows the advertised public key is
+the one signatures are made under. Creating the key and the policy paths it
+needs are an operator's steps, in
+[`deploy/hub/README.md`](../deploy/hub/README.md).
 
 **Rejected: generating the key in the Hub and storing it wrapped in Postgres.**
 It needs a table that belongs to no tenant, which the tenancy guards refuse, and
@@ -849,8 +1064,9 @@ process.
 
 | Path | What it is |
 |---|---|
-| `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, passkey auth (registration, sign-in, sessions, endorsement and revocation) and pairing **built**; request handling and the socket **not built**. It depends on `crates/demeteo-hub-protocol` |
+| `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, passkey auth (registration, sign-in, sessions, endorsement and revocation), pairing and the instance socket **built**; an HTTP route that queues a request, unpairing and the attachment fetch **not built** (§10). It depends on `crates/demeteo-hub-protocol` |
 | `crates/demeteo-hub/src/pairing/` | pairing (§4) — **built**. The decisions are synchronous functions that take the time as an argument: `authorize.rs` (the `/authorize` rules and the loopback redirect), `pkce.rs`, `jwk.rs` (thumbprint and fingerprint), `dpop.rs` (proof verification) and `grant.rs` (the redeem, refresh and access verdicts, and the response bodies). `pending.rs` holds consents, codes and seen proofs in bounded process memory, `signing_key.rs` reads the request-signing public key through `KeyService`, and `handlers/` holds the routes. The rows are written by `store/instances.rs`, `store/device_keys.rs` and `store/tokens.rs` |
+| `crates/demeteo-hub/src/socket/` | the instance socket (§5) — **built**. `handler.rs` holds admission (`admitted`) and the `GET /socket` upgrade, `session.rs` the loop one connection runs, `frame.rs` the rule that tells inbound frames apart, `cursor.rs` how the cursor moves, `connections.rs` the registry of live sessions in process memory, and `requests.rs` the queue: `enqueued`, delivery and outcomes. `port.rs` is the two ports the session is written against, `Transport` and `SocketStore`; `postgres.rs` is the store over one `(UserId, InstanceId)`, writing through `store/instances.rs`, `store/run_mirror.rs`, `store/snapshots.rs` and `store/requests.rs`. The module rustdoc of [`socket/mod.rs`](../crates/demeteo-hub/src/socket/mod.rs) says what an open socket proves |
 | `deploy/hub` | the Compose bundle, Dockerfile and operator README — **built** |
 | `crates/demeteo-hub-protocol` | **serde-only** wire types shared by the desktop client and the Hub — **built**; the Hub is its only dependant so far |
 | `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **sign-in, passkey management and the pairing approval page built** (SignUp, SignIn, Passkeys, ApprovePairing at `#/pair/<segment>`, and a session gate in front of every route but the first two); Fleet, Instance, Runs, Run, Dispatch and AddInstance are placeholder routes with no data wiring yet, and no view renders the canvas yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`, and `demeteo-hub` serves the directory its configuration names |
@@ -875,20 +1091,26 @@ WebAuthn verifier). Each one is a **Gate item** in
 
 ## 10. What is not built
 
-§2 has the state of every part. Of pairing (§4), the Hub's half and the approval
-page are built and three things are not:
+§2 has the state of every part. Of pairing (§4) and the socket (§5), the Hub's
+half and the approval page are built and four things are not:
 
 - **The desktop client** — the device key, the loopback listener, the
-  `/authorize` request, the fingerprint on the desktop, and holding and
-  refreshing the tokens.
+  `/authorize` request, the fingerprint on the desktop, holding and refreshing
+  the tokens, and the socket client that would present one (§5).
 - **Unpairing and revoking an instance.** No route does either, and nothing
   writes `device_keys.revoked_at`. Until one exists a pairing ends by reuse
   detection, by its refresh token expiring, or by being replaced (§4).
-- **Any route that takes an access token.** The check exists as a function,
-  `access_verdict` in
+- **The attachment fetch (§6.3).** One route takes an access token, the socket
+  (§5): its admission is the first caller of `access_verdict` in
   [`grant.rs`](../crates/demeteo-hub/src/pairing/grant.rs), with the lookup by
-  hash beside it in the store; the socket (§5) and the attachment fetch (§6.3)
-  are its first callers, and neither is built.
+  hash beside it in the store. The attachment fetch is the second and is not
+  built.
+- **Any HTTP route that queues a request.** `enqueued` in
+  [`socket/requests.rs`](../crates/demeteo-hub/src/socket/requests.rs) checks the
+  scopes the Hub holds for the instance, signs the envelope, stores it and wakes
+  a connected instance, and no route calls it. Delivery and outcomes are
+  therefore built and reachable only from tests: until a route exists the Hub
+  never has a request to send.
 
 **Runner dispatch is out of scope for this ticket set,** and a separate discovery
 owns it. A `demeteo-runner` host is not paired with the Hub (decision 63), and no
@@ -921,7 +1143,10 @@ The mockup's printed-code runner pairing
 ## 11. What is not decided
 
 Open means unresolved. Nothing below is decided, and a build ticket that needs one
-should raise it, not pick.
+should raise it, not pick. Where an item says a **default is built**, the Hub
+does that today because the socket could not be built without an answer; no
+decision stands behind it, a human may overrule it, and until one does it is
+what a desktop client implements.
 
 1. **Gate decisions other than `approve` and `cancel`.** `redirect` carries
    free-text feedback the challenge does not bind (§8). Whether the Hub offers it,
@@ -938,15 +1163,28 @@ should raise it, not pick.
    tells the Hub its cursor is older than what it holds (§5).
 6. **Renewing the access token on an open socket**, since it lives 15 minutes and
    the socket does not, and what happens to the socket when the pairing is revoked.
+   **Default built:** a token is not renewed on a socket. The Hub closes the
+   socket with `4001` at the expiry of the token it was admitted with, and the
+   instance refreshes and reconnects — one reconnect per 15 minutes per
+   instance (§5). A socket left open past that expiry would outlive §4's
+   revocation bound; this keeps it, so a revoked pairing loses its socket at
+   that expiry at the latest and cannot open another. Renewing in place, and
+   closing a revoked pairing's socket sooner, stay open.
 7. **Hub-key rotation.** The request-signing key is pinned at pairing (§4); how a
    rotated key reaches an instance is not designed.
 8. **A protocol version gate.** `hello` carries the version; what an instance and
    the Hub do on a mismatch is not decided. [Decision 55](DECISIONS.md#1-the-locked-decisions)
    is the runner's answer and is not assumed to carry over.
+   **Default built, the Hub's half only:** an inbound frame whose `v` is not
+   the Hub's protocol version closes the socket with `1008` before anything
+   is written, a `Hello` included (§5). There is no negotiation and no range
+   of versions. What an instance does about a frame of another version from
+   the Hub is still open.
 9. **Defaults carried, not measured:** ES256 for the device key, EdDSA for the
    envelope, 128 bits for a request id, the field lists of the two passkey
    challenges, and an upper bound on `expires_at` an instance will accept.
-   Pairing carries more, listed under *Pairing's carried defaults* below. One
+   Pairing carries more, listed under *Pairing's carried defaults* below, and
+   the socket under *The socket's carried defaults*. One
    more is already in stored data: the Hub's own endorsement and revocation
    assertions bind `instance_id = "*"`, a fresh `request_id` and a 300-second
    `expires_at`, all stored with the record (§8). How an instance accepts such
@@ -986,10 +1224,51 @@ should raise it, not pick.
       DPoP replay window live in the Hub's memory: a restart drops every pairing
       in flight, and a second replica would not see the first's. `Ceremonies`
       accepts the same cost for passkey ceremonies.
+    - *The connection registry in process memory.* Which instances hold a
+      socket, and the signal that wakes or displaces one, live in the same
+      memory at the same cost, so the Hub is **single-replica** for the socket
+      too. A request queued on one replica wakes no session held by another
+      and waits until that instance reconnects. Displacement does not cross
+      replicas: each can hold a connection of the same instance, and the
+      "one connection per instance" of §5 holds per process. A restart drops
+      every socket. A clean stop asks each session to end and waits, up to
+      `SHUTDOWN_DRAIN_SECS` (five seconds, under the container's ten-second
+      stop grace), for it to record its departure and send `1001`. Only a
+      kill, a crash or a session that outlasts that bound leaves its instance
+      reading as present until its next `hello`: nothing clears presence at
+      startup.
     - *A code burned by a sealed key service.* The code is taken before the
       request-signing key is read, so with OpenBao sealed `/token` answers
       `503 key_service_unavailable` and the code is spent. The user repeats the
       pairing after the unseal.
+15. **A second writer of `granted_scopes`.** Pairing writes what the user
+    approved; `hello` overwrites it with what the toggles allow now (§7).
+    **Default built:** `hello` wins and the approved set is not kept, so the
+    Hub cannot show "approved at pairing" beside "on now". Keeping the
+    approval as a ceiling takes a second column, and nothing would enforce
+    with it. Whether the Hub should remember it is open.
+16. **Nothing queues a request.** The code that signs and queues a request,
+    and the code that delivers one and records its outcome, exist (§5, §6),
+    and no route calls the first: there is no HTTP surface a browser session
+    reaches it through. A `/v1` route needs the session and CSRF guard, and a
+    decision this document has not taken — whether a session may queue a
+    `gate_decision` at all, given §8. hub-web's Dispatch view stays a
+    placeholder until then.
+17. **A changed `install_id` behind the same device key** — a desktop whose
+    database was lost under a keyring that survived. Its run log starts again
+    at offset 1, under a cursor the Hub holds from the earlier installation.
+    **Default built:** the Hub stores the new id, logs the change by instance
+    id, and **keeps the cursor**; the new installation's events arrive beneath
+    it, and one that meets an old row under the same Feature and offset is
+    dropped as a copy of it. Resetting the cursor, or setting the earlier
+    installation's rows aside, is a product decision nobody has taken. The
+    `install_id` is a label either way and never chooses the instance (§5).
+18. **Snapshot granularity.** `snapshots` is keyed to hold one row per kind
+    of snapshot — `projects`, `workflows` — each replaced on its own. The
+    protocol's `Snapshot` is one struct carrying both, with no kind on it.
+    **Default built:** one row per instance, replaced wholesale (§5).
+    Splitting it — so that a change to one Project does not resend every
+    Workflow — is a change to the protocol crate first.
 
 ### Pairing's carried defaults
 
@@ -1012,6 +1291,26 @@ Carried with them, and stated in §4: ES256 as the only device-key algorithm, th
 fingerprint format and its 96 bits, the Hub minting `instance_id`, a second
 pairing of the same device key replacing the first, and scopes that only narrow
 at approval with none of them mandatory.
+
+### The socket's carried defaults
+
+The same holds for every number the socket runs on: chosen so it could be
+built, measured against nothing. Each is a constant in
+[`socket/mod.rs`](../crates/demeteo-hub/src/socket/mod.rs).
+
+| Default | Value | What moving it changes |
+|---|---|---|
+| Ping interval | 30 seconds | how often an idle connection carries traffic, and what that costs a desktop that would otherwise sleep |
+| Silence deadline | 90 seconds | how long an instance whose connection died without a close goes on reading as present. It must stay above the ping interval |
+| Request lifetime | 600 seconds | how long a request for an offline instance stays deliverable. It is signed into the envelope, so a change reaches no request already queued |
+| Request id | 128 random bits | — |
+| Connected instances per `hub` process | 16,384 | the bound behind `503 too_many_connections` |
+| Largest message, and largest frame | 4 MiB | the largest snapshot an instance can deliver, and what one connection can make the Hub buffer. A message over it is not read: the session ends as if the connection had failed, with no close code |
+
+Carried with them, and stated in §5 and §6.1: frames with no tag, a proof's
+`htu` in its `https` spelling, the close codes, signing the pre-image with no
+digest in between, and signing once at enqueue. The two that answer an open
+question — the `4001` close and the version gate — are items 6 and 8 above.
 
 ---
 

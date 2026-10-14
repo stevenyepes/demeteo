@@ -431,6 +431,27 @@ const INSTANCE_CHILDREN: [&str; 5] = [
 ];
 const TABLE_CONSTRAINT_KEYWORDS: [&str; 5] =
     ["PRIMARY", "FOREIGN", "UNIQUE", "CONSTRAINT", "CHECK"];
+/// The tables a frame from an instance is written to.
+const INSTANCE_FED_TABLES: [&str; 3] = ["run_mirror", "snapshots", "instance_requests"];
+/// Transcripts, diffs and local paths never leave an instance (AGENTS.md §2),
+/// and the protocol types carry no cost and no gate summary, so a column named
+/// for any of them is storage for something no frame may hold. Matched as
+/// substrings of the lowercased column name; `summar` is the stem `summary`
+/// and `summaries` share.
+const CONTENT_STEMS: [&str; 5] = ["transcript", "diff", "path", "cost", "summar"];
+/// Every column `0006_instance_socket.sql` adds. The content-column check
+/// passes on a file its parser read nothing from, so it also has to find these.
+const SOCKET_COLUMNS: [(&str, &str); 9] = [
+    ("instances", "install_id"),
+    ("instances", "connection_id"),
+    ("instances", "connected_at"),
+    ("instances", "event_cursor"),
+    ("instance_requests", "deliveries"),
+    ("instance_requests", "last_sent_at"),
+    ("instance_requests", "outcome"),
+    ("instance_requests", "refusal_reason"),
+    ("instance_requests", "answered_at"),
+];
 
 struct Table {
     name: String,
@@ -643,6 +664,106 @@ fn run_mirror_violations(tables: &[Table]) -> Vec<String> {
     out
 }
 
+/// Splits on `sep` outside parentheses and single-quoted literals, so the
+/// commas of `CHECK (x IN ('a', 'b'))` do not end an `ALTER TABLE` action.
+fn split_top_level(text: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut quoted, mut start) = (0usize, false, 0);
+    for (i, c) in text.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth = depth.saturating_sub(1),
+            c if c == sep && !quoted && depth == 0 => {
+                parts.push(&text[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(&text[start..]);
+    parts
+}
+
+fn strip_keywords<'a, 'b>(words: &'a [&'b str], keywords: &[&str]) -> Option<&'a [&'b str]> {
+    let (head, rest) = words.split_at_checked(keywords.len())?;
+    head.iter()
+        .zip(keywords)
+        .all(|(word, keyword)| word.eq_ignore_ascii_case(keyword))
+        .then_some(rest)
+}
+
+/// Postgres lets `COLUMN` be left out, so `ADD notes TEXT` adds a column too;
+/// without the keyword only a table-constraint word says it does not.
+fn added_column<'a>(action: &[&'a str]) -> Option<&'a str> {
+    let rest = strip_keywords(action, &["ADD"])?;
+    let explicit = strip_keywords(rest, &["COLUMN"]);
+    let rest = explicit.unwrap_or(rest);
+    let rest = strip_keywords(rest, &["IF", "NOT", "EXISTS"]).unwrap_or(rest);
+    let name = *rest.first()?;
+    let is_constraint = TABLE_CONSTRAINT_KEYWORDS.contains(&name.to_ascii_uppercase().as_str());
+    (explicit.is_some() || !is_constraint).then_some(name)
+}
+
+/// `(table, column)` for every column an `ALTER TABLE` statement adds, which
+/// `parse_tables` never sees. Statement-wise, not line-wise like that parser:
+/// one `ALTER TABLE` may sit on a single line or carry an action per line.
+/// Comments are cut first because an apostrophe in one would open a literal
+/// that never closes.
+fn added_columns(sql: &str) -> Vec<(String, String)> {
+    let text: Vec<&str> = sql
+        .lines()
+        .map(|line| line.split("--").next().unwrap_or(""))
+        .collect();
+    let text = text.join("\n");
+    let mut out = Vec::new();
+    for statement in split_top_level(&text, ';') {
+        let mut actions = split_top_level(statement, ',')
+            .into_iter()
+            .map(|action| action.split_whitespace().collect::<Vec<&str>>());
+        let Some(first) = actions.next() else {
+            continue;
+        };
+        let Some(rest) = strip_keywords(&first, &["ALTER", "TABLE"]) else {
+            continue;
+        };
+        let rest = strip_keywords(rest, &["IF", "EXISTS"]).unwrap_or(rest);
+        let rest = strip_keywords(rest, &["ONLY"]).unwrap_or(rest);
+        let Some((table, first_action)) = rest.split_first() else {
+            continue;
+        };
+        let added = added_column(first_action)
+            .into_iter()
+            .chain(actions.filter_map(|action| added_column(&action)))
+            .map(|column| (table.to_string(), column.to_string()));
+        out.extend(added);
+    }
+    out
+}
+
+/// Takes one migration's text because half of what it reads is not a `Table`:
+/// the columns `INSTANCE_FED_TABLES` are created with, and every column any
+/// `ALTER TABLE` adds to any table.
+fn content_column_violations(sql: &str) -> Vec<String> {
+    let created = parse_tables(sql)
+        .into_iter()
+        .filter(|t| INSTANCE_FED_TABLES.contains(&t.name.as_str()))
+        .flat_map(|t| {
+            let Table { name, columns, .. } = t;
+            columns
+                .into_iter()
+                .map(move |(column, _)| (name.clone(), column))
+        });
+    created
+        .chain(added_columns(sql))
+        .filter_map(|(table, column)| {
+            let lowered = column.to_ascii_lowercase();
+            let stem = CONTENT_STEMS.iter().find(|stem| lowered.contains(**stem))?;
+            Some(format!("{table}.{column} is `{stem}`-shaped"))
+        })
+        .collect()
+}
+
 /// `^[0-9]{4}_[a-z0-9_]+\.sql$`, hand-checked so the guard needs no regex dep.
 fn is_migration_filename(name: &str) -> bool {
     let Some(stem) = name.strip_suffix(".sql") else {
@@ -663,6 +784,44 @@ fn is_migration_filename(name: &str) -> bool {
 fn migrations_create_exactly_the_expected_tables() {
     let violations = table_set_violations(&all_tables());
     assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+/// Every statement of `sql` with its comments dropped and its whitespace
+/// collapsed to single spaces, so that a statement is matched whatever its
+/// line breaks.
+fn statements(sql: &str) -> Vec<String> {
+    let code: Vec<&str> = sql
+        .lines()
+        .map(|line| line.split("--").next().unwrap_or(""))
+        .collect();
+    code.join(" ")
+        .split(';')
+        .map(|statement| statement.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|statement| !statement.is_empty())
+        .collect()
+}
+
+/// The queue is read after every `hello` and on every wake-up, and its rows
+/// are never deleted. The predicate is the literal `list_queued_requests`
+/// spells, which is what lets Postgres use the index at all.
+#[test]
+fn the_request_queue_read_has_an_index() {
+    let serving = |statement: &str| {
+        statement.starts_with("CREATE INDEX ")
+            && statement.ends_with(
+                " ON instance_requests (user_id, instance_id, queue_seq) WHERE status = 'queued'",
+            )
+    };
+    let found: Vec<String> = migration_files()
+        .iter()
+        .flat_map(|path| {
+            let sql = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+            statements(&sql)
+        })
+        .filter(|statement| serving(statement))
+        .collect();
+    assert_eq!(found.len(), 1, "{found:?}");
 }
 
 #[test]
@@ -709,6 +868,34 @@ fn child_tables_have_composite_fk_to_instances() {
 fn run_mirror_avoids_the_reserved_offset_column() {
     let violations = run_mirror_violations(&all_tables());
     assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+#[test]
+fn no_column_is_shaped_to_hold_instance_content() {
+    let mut added = Vec::new();
+    let mut violations = Vec::new();
+    for path in migration_files() {
+        let sql = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let file = path.file_name().unwrap_or_default().to_string_lossy();
+        added.extend(added_columns(&sql));
+        violations.extend(
+            content_column_violations(&sql)
+                .into_iter()
+                .map(|v| format!("{file}: {v}")),
+        );
+    }
+    assert!(
+        violations.is_empty(),
+        "the Hub stores what the protocol types carry, never a transcript, diff, path, cost or summary:\n  - {}",
+        violations.join("\n  - ")
+    );
+    for (table, column) in SOCKET_COLUMNS {
+        assert!(
+            added.contains(&(table.to_string(), column.to_string())),
+            "no `ALTER TABLE {table} … ADD COLUMN {column}` was read from the migrations: {added:?}"
+        );
+    }
 }
 
 #[test]
@@ -883,6 +1070,54 @@ fn schema_detectors_fire_on_violations() {
     ] {
         assert!(!is_migration_filename(bad), "{bad}");
     }
+}
+
+#[test]
+fn content_column_detector_fires_on_violations() {
+    let clean = "-- the Hub's cursor; `0` is none\n\
+                 CREATE TABLE run_mirror (\n  event JSONB NOT NULL,\n  PRIMARY KEY (event)\n);\n\
+                 ALTER TABLE instance_requests\n  ADD COLUMN outcome TEXT CHECK (outcome IN ('a, b', 'c;d')),\n  \
+                 ADD COLUMN answered_at TIMESTAMPTZ,\n  \
+                 ADD CONSTRAINT cost_check CHECK (outcome IS NOT NULL),\n  ADD CHECK (answered_at IS NOT NULL);\n\
+                 CREATE INDEX path_idx ON run_mirror (event);\n";
+    assert!(content_column_violations(clean).is_empty());
+    assert_eq!(
+        added_columns(clean),
+        [
+            ("instance_requests", "outcome"),
+            ("instance_requests", "answered_at")
+        ]
+        .map(|(table, column)| (table.to_string(), column.to_string()))
+    );
+
+    for name in [
+        "transcript",
+        "diff_text",
+        "worktree_path",
+        "COST_USD",
+        "gate_summary",
+        "summaries",
+    ] {
+        for table in INSTANCE_FED_TABLES {
+            let created = format!("CREATE TABLE {table} (\n  id UUID,\n  {name} TEXT\n);\n");
+            assert_eq!(
+                content_column_violations(&created).len(),
+                1,
+                "CREATE TABLE {table} ({name})"
+            );
+        }
+        for added in [
+            format!("ALTER TABLE users\n  ADD COLUMN ok TEXT,\n  ADD COLUMN {name} TEXT;\n"),
+            format!("alter table only users add column if not exists {name} text;"),
+            format!("ALTER TABLE IF EXISTS users ADD {name} TEXT DEFAULT 'a,b';"),
+            format!("{clean}ALTER TABLE users ADD COLUMN {name} TEXT;\n"),
+        ] {
+            assert_eq!(content_column_violations(&added).len(), 1, "{added}");
+        }
+    }
+
+    let elsewhere = "CREATE TABLE attachments (\n  id UUID,\n  transcript TEXT\n);\n";
+    assert!(content_column_violations(elsewhere).is_empty());
 }
 
 const EXPECTED_SERVICES: [&str; 4] = ["hub", "postgres", "openbao", "caddy"];
