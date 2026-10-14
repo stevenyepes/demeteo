@@ -205,7 +205,7 @@ fn requested_scopes(list: &str) -> Option<Vec<Scope>> {
     Some(scopes)
 }
 
-fn scope_named(name: &str) -> Option<Scope> {
+pub(crate) fn scope_named(name: &str) -> Option<Scope> {
     let name: StrDeserializer<'_, ValueError> = name.into_deserializer();
     Scope::deserialize(name).ok()
 }

@@ -59,6 +59,33 @@ pub(super) async fn lock_instance_of_key(
     .await?)
 }
 
+/// The instance the tenant's unrevoked device key `jkt` belongs to, read
+/// without a lock.
+///
+/// This is the socket's lookup and it must not become
+/// [`lock_instance_of_key`]. That row lock is held until its transaction
+/// ends: a socket that took it would queue behind the instance's own token
+/// refresh and re-pairing, and hold both up while it had it. Nothing here
+/// writes a token row, so there is nothing for the lock to order.
+///
+/// `revoked_at` is read here and not there. The turnstile has to find a
+/// revoked key's row too, or a re-pairing of that key would take it for a
+/// first pairing and fail on `UNIQUE (user_id, jkt)`.
+pub async fn instance_of_key(
+    user: UserId,
+    db: impl PgExecutor<'_>,
+    jkt: &str,
+) -> Result<Option<InstanceId>, StoreError> {
+    Ok(sqlx::query_scalar::<_, InstanceId>(
+        "SELECT instance_id FROM device_keys \
+         WHERE user_id = $1 AND jkt = $2 AND revoked_at IS NULL",
+    )
+    .bind(user)
+    .bind(jkt)
+    .fetch_optional(db)
+    .await?)
+}
+
 pub(super) async fn insert_device_key(
     user: UserId,
     db: impl PgExecutor<'_>,

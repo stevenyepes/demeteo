@@ -12,6 +12,7 @@ pub use consent::{
     approve_pairing, approved_pairing, denied_pairing, deny_pairing, narrows, start_pairing,
     started_pairing, ConsentAnswer, PairingApproval, PairingDenial, PairingPrompt, PairingRequest,
 };
+pub(crate) use token::one_proof;
 pub use token::{
     redeemed, refreshed, token, CodeRedemption, Rotated, Rotation, TokenRefresh, TOKEN_PATH,
 };
