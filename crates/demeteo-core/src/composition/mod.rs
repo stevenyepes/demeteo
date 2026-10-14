@@ -327,6 +327,12 @@ pub fn build_core_context(
         exec_inner.clone(),
     ));
 
+    let app_version = AppVersion::default();
+    let hub = match execution_mode {
+        ExecutionMode::Router => hub_pairing(db_adapter.clone(), app_version.clone()),
+        ExecutionMode::LocalOnly => None,
+    };
+
     let ctx = AppContext {
         machines: machines_repo,
         threads: threads_repo,
@@ -372,7 +378,8 @@ pub fn build_core_context(
         oauth_clients,
         oauth_grants,
         mcp_consent,
-        app_version: AppVersion::default(),
+        app_version,
+        hub,
     };
 
     // The MCP listener is the first background task that needs the *whole*
@@ -392,6 +399,39 @@ pub fn build_core_context(
     application::cache_sweep::start_cache_sweep(ctx.clone(), &runtime);
 
     ctx
+}
+
+/// Shares `app_version` with the context, so the version the desktop sets
+/// after this returns is the one the Hub's consent page shows.
+#[cfg(feature = "keyring")]
+fn hub_pairing(
+    pins: Arc<dyn ports::hub::HubPinRepository>,
+    app_version: AppVersion,
+) -> Option<Arc<adapters::hub::HubPairing>> {
+    let token = match adapters::hub::token_client::ReqwestTokenEndpoint::new() {
+        Ok(token) => token,
+        Err(e) => {
+            tracing::warn!(error = %e, "Hub pairing is off: no HTTP client for /token");
+            return None;
+        }
+    };
+    Some(Arc::new(
+        adapters::hub::HubPairing::new(
+            pins,
+            Arc::new(adapters::hub::keyring_store::KeyringSecretStore),
+            Arc::new(token),
+        )
+        .with_app_version(app_version),
+    ))
+}
+
+/// No keyring, no pairing: a file in its place is what AGENTS.md §2 forbids.
+#[cfg(not(feature = "keyring"))]
+fn hub_pairing(
+    _pins: Arc<dyn ports::hub::HubPinRepository>,
+    _app_version: AppVersion,
+) -> Option<Arc<adapters::hub::HubPairing>> {
+    None
 }
 
 #[cfg(test)]

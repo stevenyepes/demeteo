@@ -425,9 +425,10 @@ Hub yet — the desktop's half of pairing included
 | `crates/demeteo-hub-protocol` | serde-only wire types shared by the desktop client and the Hub; it does not depend on `demeteo-core` — built, and the Hub is its only dependant so far |
 | `hub-web/` | a second Vite entry in this repo, reusing `src/components/canvas` and the `src/App.css` tokens — sign-up, sign-in, passkey management and the pairing approval page built; the fleet views are placeholders |
 
-The Hub does not link `demeteo-core` in v1. Where the desktop's client for it sits in the
-hexagon above is open ([HUB.md §11](HUB.md#11-what-is-not-decided)); the Hub never
-dials a desktop. Spec:
+The Hub does not link `demeteo-core` in v1. The desktop's client for it is a slice of the
+hexagon above — `domain/hub_pairing/`, `ports/hub.rs`, `adapters/hub/` — composed only
+under `ExecutionMode::Router` ([HUB.md §9](HUB.md#9-storage-custody-and-layout)); the Hub
+never dials a desktop. Spec:
 [HUB.md](HUB.md); decisions 61–68 in [DECISIONS.md](DECISIONS.md#1-the-locked-decisions).
 
 ## 4. Tauri Command Surface

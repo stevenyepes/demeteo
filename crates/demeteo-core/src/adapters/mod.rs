@@ -4,6 +4,7 @@ pub mod attachment_store;
 pub mod create_project_adapter;
 pub mod database;
 pub mod git_push;
+pub mod hub;
 pub mod local;
 pub mod mcp;
 pub mod memory_llm;
