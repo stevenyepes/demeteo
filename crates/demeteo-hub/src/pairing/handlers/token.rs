@@ -109,7 +109,7 @@ where
 /// The proof of a request that carries exactly one `DPoP` header. A request
 /// with two is not asked which it meant (RFC 9449 §4.3): the proof names the
 /// key the tokens are bound to, and picking one would be picking the key.
-fn one_proof(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn one_proof(headers: &HeaderMap) -> Option<&str> {
     let mut presented = headers.get_all(PROOF_HEADER).iter();
     let proof = presented.next()?;
     match presented.next() {

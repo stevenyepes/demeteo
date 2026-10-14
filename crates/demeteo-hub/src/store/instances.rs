@@ -1,9 +1,9 @@
 use super::device_keys::{insert_device_key, lock_instance_of_key, NewDeviceKey};
 use super::passkeys::{list_passkeys, Passkey};
 use super::tokens::{insert_token, retire_tokens_of_key, NewToken, TokenKind};
-use super::{Db, InstanceId, StoreError, UserId};
-use crate::pairing::authorize::scope_name;
-use demeteo_hub_protocol::Scope;
+use super::{timestamp, Db, InstanceId, StoreError, UserId};
+use crate::pairing::authorize::{scope_name, scope_named};
+use demeteo_hub_protocol::{Hello, Scope};
 use sqlx::{FromRow, PgExecutor};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -19,6 +19,28 @@ pub struct Instance {
     pub last_seen: Option<OffsetDateTime>,
     pub granted_scopes: Vec<String>,
     pub created_at: OffsetDateTime,
+    /// What the desktop last called itself in a `hello`. A label: no
+    /// statement finds a row by it.
+    pub install_id: Option<String>,
+    /// The instance is present exactly when this is set. A Hub that stopped
+    /// without running [`record_departure`] leaves it set, and nothing sweeps
+    /// it clear at startup: that statement would name no tenant, which the
+    /// store module's doc rules out. The instance's next `hello` overwrites
+    /// it, so a reader that needs the truth after a restart asks the
+    /// process's own registry of connections as well.
+    pub connection_id: Option<Uuid>,
+    pub connected_at: Option<OffsetDateTime>,
+    pub event_cursor: i64,
+}
+
+/// What [`record_hello`] read from the row it wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Greeted {
+    /// The highest event offset stored for the instance; `0` when none is.
+    pub event_cursor: u64,
+    /// `install_id` as the row held it before this `hello`: `None` until the
+    /// first one.
+    pub previous_install_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,7 +87,8 @@ pub struct Paired {
 
 pub async fn list_instances(user: UserId, db: &Db) -> Result<Vec<Instance>, StoreError> {
     Ok(sqlx::query_as::<_, Instance>(
-        "SELECT id, user_id, name, os, arch, version, last_seen, granted_scopes, created_at \
+        "SELECT id, user_id, name, os, arch, version, last_seen, granted_scopes, created_at, \
+                install_id, connection_id, connected_at, event_cursor \
          FROM instances WHERE user_id = $1 ORDER BY created_at, id",
     )
     .bind(user)
@@ -88,7 +111,8 @@ pub async fn insert_instance(
     Ok(sqlx::query_as::<_, Instance>(
         "INSERT INTO instances (id, user_id, name, os, arch, version, granted_scopes) \
          VALUES ($1, $2, $3, $4, $5, $6, $7) \
-         RETURNING id, user_id, name, os, arch, version, last_seen, granted_scopes, created_at",
+         RETURNING id, user_id, name, os, arch, version, last_seen, granted_scopes, created_at, \
+                   install_id, connection_id, connected_at, event_cursor",
     )
     .bind(new.id)
     .bind(user)
@@ -124,6 +148,129 @@ async fn relabel_instance(
     Ok(())
 }
 
+fn wire_names(scopes: &[Scope]) -> Vec<String> {
+    scopes
+        .iter()
+        .map(|scope| scope_name(*scope).to_owned())
+        .collect()
+}
+
+fn scopes_named(names: Vec<String>) -> Result<Vec<Scope>, StoreError> {
+    names
+        .into_iter()
+        .map(|name| match scope_named(&name) {
+            Some(scope) => Ok(scope),
+            None => Err(StoreError::UnknownScope(name)),
+        })
+        .collect()
+}
+
+/// Writes what an instance's `hello` reported onto the row its pairing
+/// created, and makes `connection_id` the one connection the instance is
+/// present through. `None` when the tenant has no such instance. It never
+/// inserts: a row made here would be an instance that no device key and no
+/// consent stand behind.
+///
+/// `granted_scopes` has two writers, and so have `os`, `arch` and `version`.
+/// [`pair_instance`] writes what the consent screen showed and the user left
+/// checked; this replaces it with what the desktop says is allowed now. So
+/// pairing's value is a placeholder until the first `hello`, and again from a
+/// re-pairing until the `hello` after it. Keeping the approved set as a
+/// ceiling would take a second column, and nothing would read one: a scope is
+/// enforced on the instance, and the Hub's copy only spares it queueing a
+/// request that would come back refused.
+///
+/// [`Greeted::previous_install_id`] comes from the self-join, which reads the
+/// row as the statement's snapshot saw it; `RETURNING` on its own shows only
+/// what was written. Two `hello`s racing for one instance can therefore both
+/// be shown the value that preceded both. It is there for a log line and must
+/// not key a write.
+pub async fn record_hello(
+    user: UserId,
+    db: &Db,
+    id: InstanceId,
+    hello: &Hello,
+    connection_id: Uuid,
+    now: u64,
+) -> Result<Option<Greeted>, StoreError> {
+    let now = timestamp(now)?;
+    let written = sqlx::query_as::<_, (i64, Option<String>)>(
+        "UPDATE instances AS i \
+         SET install_id = $3, version = $4, os = $5, arch = $6, granted_scopes = $7, \
+             connection_id = $8, connected_at = $9, last_seen = $9 \
+         FROM instances AS was \
+         WHERE i.user_id = $1 AND i.id = $2 AND was.user_id = $1 AND was.id = $2 \
+         RETURNING i.event_cursor, was.install_id",
+    )
+    .bind(user)
+    .bind(id)
+    .bind(&hello.install_id)
+    .bind(&hello.app_version)
+    .bind(&hello.os)
+    .bind(&hello.arch)
+    .bind(wire_names(&hello.scopes))
+    .bind(connection_id)
+    .bind(now)
+    .fetch_optional(db)
+    .await?;
+    let Some((event_cursor, previous_install_id)) = written else {
+        return Ok(None);
+    };
+    Ok(Some(Greeted {
+        event_cursor: u64::try_from(event_cursor)
+            .map_err(|_| StoreError::CursorOutOfRange(event_cursor))?,
+        previous_install_id,
+    }))
+}
+
+/// Marks the instance absent as `connection_id` ends, and says whether it
+/// did: `false` when that connection is no longer the one registered, or the
+/// tenant has no such instance.
+pub async fn record_departure(
+    user: UserId,
+    db: &Db,
+    id: InstanceId,
+    connection_id: Uuid,
+    now: u64,
+) -> Result<bool, StoreError> {
+    let now = timestamp(now)?;
+    // A reconnect usually arrives before the Hub notices the old connection
+    // died, so the old one ends while its successor is live. The stale id
+    // matches nothing here, and that is the whole point: without the third
+    // condition the instance would be marked absent under a live connection.
+    let done = sqlx::query(
+        "UPDATE instances SET last_seen = $4, connection_id = NULL, connected_at = NULL \
+         WHERE user_id = $1 AND id = $2 AND connection_id = $3",
+    )
+    .bind(user)
+    .bind(id)
+    .bind(connection_id)
+    .bind(now)
+    .execute(db)
+    .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+/// The scopes the instance's row holds, which is pairing's grant until its
+/// first `hello` ([`record_hello`]). `None` when the tenant has no such
+/// instance. A stored name that is no [`Scope`] is
+/// [`StoreError::UnknownScope`] and not skipped: a list read short would pass
+/// for a narrower grant than the one written.
+pub async fn granted_scopes(
+    user: UserId,
+    db: &Db,
+    id: InstanceId,
+) -> Result<Option<Vec<Scope>>, StoreError> {
+    let stored = sqlx::query_scalar::<_, Vec<String>>(
+        "SELECT granted_scopes FROM instances WHERE user_id = $1 AND id = $2",
+    )
+    .bind(user)
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    stored.map(scopes_named).transpose()
+}
+
 /// Whether the parts of `new` name one key and one family: the thumbprint is
 /// the device key's own, and the two rows are an access and a refresh token
 /// of that family bound to that thumbprint.
@@ -145,7 +292,9 @@ fn is_one_pairing(new: &NewPairing) -> bool {
 /// here. A key the tenant has paired before keeps its instance: the labels
 /// and `granted_scopes` are replaced by this pairing's, and every live token
 /// bound to the key is retired before the new pair is written, so the
-/// earlier pairing's tokens stop working when this one commits. Pairing
+/// earlier pairing's tokens stop working when this one commits. Of what is
+/// replaced, only `name` is pairing's to keep: the instance's next `hello`
+/// states the rest again ([`record_hello`]). Pairing
 /// again replaces instead of being refused because nothing else restores a
 /// desktop whose family reuse detection revoked. The key is looked up among
 /// this tenant's alone: a thumbprint another tenant holds is a first pairing
@@ -160,11 +309,7 @@ pub async fn pair_instance(user: UserId, db: &Db, new: &NewPairing) -> Result<Pa
     if !is_one_pairing(new) {
         return Err(StoreError::PairingDisagrees);
     }
-    let granted_scopes: Vec<String> = new
-        .scopes
-        .iter()
-        .map(|scope| scope_name(*scope).to_owned())
-        .collect();
+    let granted_scopes = wire_names(&new.scopes);
     let jkt = new.device_key.jkt.as_str();
 
     let mut tx = db.begin().await?;
@@ -235,6 +380,20 @@ mod tests {
             access: token(TokenKind::Access, family_id, JKT),
             refresh: token(TokenKind::Refresh, family_id, JKT),
         }
+    }
+
+    #[test]
+    fn stored_scopes_are_read_back_as_written_and_an_unknown_name_is_refused() {
+        let every_scope = [Scope::Gates, Scope::Read, Scope::Spend];
+        assert_eq!(scopes_named(wire_names(&every_scope)).unwrap(), every_scope);
+        assert_eq!(scopes_named(Vec::new()).unwrap(), []);
+
+        let with_a_stranger = vec!["read".to_owned(), "projects:read".to_owned()];
+        let err = scopes_named(with_a_stranger).unwrap_err();
+        assert!(
+            matches!(&err, StoreError::UnknownScope(name) if name == "projects:read"),
+            "{err}"
+        );
     }
 
     #[test]

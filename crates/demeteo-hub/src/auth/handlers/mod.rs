@@ -23,6 +23,7 @@ use super::challenge::base64url_encode;
 use super::policy::Refusal;
 use super::session::{self, SessionError, SessionSecret, SESSION_TTL_SECS};
 use crate::routes::AppState;
+use crate::socket::connections::Full;
 use crate::store::{sessions, StoreError, UserId};
 use axum::extract::{FromRequest, FromRequestParts, Request, State};
 use axum::http::header::{AsHeaderName, COOKIE, SET_COOKIE};
@@ -69,6 +70,10 @@ impl ApiError {
         Self::new(StatusCode::SERVICE_UNAVAILABLE, "key_service_unavailable");
     pub(crate) const TOO_MANY_REQUESTS: Self =
         Self::new(StatusCode::SERVICE_UNAVAILABLE, "too_many_requests");
+    pub(crate) const INVALID_TOKEN: Self = Self::new(StatusCode::UNAUTHORIZED, "invalid_token");
+    pub(crate) const TOO_MANY_CONNECTIONS: Self =
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, "too_many_connections");
+    pub(crate) const SCOPE_NOT_GRANTED: Self = Self::new(StatusCode::CONFLICT, "scope_not_granted");
 
     pub(crate) const fn new(status: StatusCode, code: &'static str) -> Self {
         Self { status, code }
@@ -100,6 +105,14 @@ impl From<Refusal> for ApiError {
             Refusal::RevokerNotTrusted => (StatusCode::FORBIDDEN, "revoker_not_trusted"),
         };
         Self::new(status, code)
+    }
+}
+
+impl From<Full> for ApiError {
+    fn from(full: Full) -> Self {
+        match full {
+            Full => Self::TOO_MANY_CONNECTIONS,
+        }
     }
 }
 

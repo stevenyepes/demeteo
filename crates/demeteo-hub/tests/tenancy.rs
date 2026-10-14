@@ -10,26 +10,39 @@ use demeteo_hub::pairing::grant::{
 };
 use demeteo_hub::pairing::jwk::DeviceJwk;
 use demeteo_hub::pairing::testing::SoftDeviceKey;
+use demeteo_hub::socket::connections::Connections;
+use demeteo_hub::socket::port::SocketStore;
+use demeteo_hub::socket::postgres::PostgresStore;
+use demeteo_hub::socket::requests::OutcomeChange;
 use demeteo_hub::store::attachments::{
     get_attachment, insert_attachment, NewAttachment, WrappedKey,
 };
-use demeteo_hub::store::device_keys::NewDeviceKey;
+use demeteo_hub::store::device_keys::{instance_of_key, NewDeviceKey};
 use demeteo_hub::store::instances::{
-    insert_instance, list_instances, pair_instance, Instance, NewInstance, NewInstanceLabels,
-    NewPairing,
+    granted_scopes, insert_instance, list_instances, pair_instance, record_departure, record_hello,
+    Instance, NewInstance, NewInstanceLabels, NewPairing,
 };
 use demeteo_hub::store::passkeys::{insert_passkey, list_passkeys, NewPasskey};
 use demeteo_hub::store::pool::create_user;
+use demeteo_hub::store::requests::{
+    insert_request, list_queued_requests, mark_request_expired, mark_request_sent, record_outcome,
+    NewRequest, QueuedEnvelope, RequestId, RequestState,
+};
+use demeteo_hub::store::run_mirror::{mirror_event, NewEvent};
 use demeteo_hub::store::sessions::{
     delete_session, delete_sessions_of_credential, find_session, insert_session, NewSession,
     Session, SessionHash,
 };
+use demeteo_hub::store::snapshots::replace_snapshot;
 use demeteo_hub::store::tokens::{
     find_token_by_hash, insert_token, rotate_family, FamilyWritten, NewToken, TokenHash, TokenKind,
     TokenRecord,
 };
 use demeteo_hub::store::{Db, InstanceId, StoreError, UserId};
-use demeteo_hub_protocol::Scope;
+use demeteo_hub_protocol::{
+    CancelFeature, Hello, RefusalReason, RequestOutcome, RequestPayload, RunEvent, RunEventKind,
+    RunEventPayload, Scope, SignedRequest, Snapshot, PROTOCOL_VERSION,
+};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use support::in_fresh_schema;
@@ -263,6 +276,17 @@ async fn device_keys_of(db: &Db, user: UserId) -> Vec<(InstanceId, String, Strin
     .fetch_all(db)
     .await
     .unwrap()
+}
+
+fn hello(install_id: &str, scopes: &[Scope]) -> Hello {
+    Hello {
+        v: PROTOCOL_VERSION,
+        install_id: install_id.to_owned(),
+        app_version: "1.5.0".to_owned(),
+        os: "macos".to_owned(),
+        arch: "aarch64".to_owned(),
+        scopes: scopes.to_vec(),
+    }
 }
 
 async fn token_rows_of(db: &Db, user: UserId) -> i64 {
@@ -1213,6 +1237,597 @@ async fn list_passkeys_never_returns_another_users_passkey() {
         );
         assert_eq!(ids_seen_by(b).await, BTreeSet::from([b"b-first".to_vec()]));
         assert!(ids_seen_by(nobody).await.is_empty());
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_hello_naming_another_users_instance_writes_nothing() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let now = unix_now();
+
+        let as_b = hello("b-install", &[Scope::Gates]);
+        let greeted = record_hello(b, &db, a_instance, &as_b, Uuid::new_v4(), now)
+            .await
+            .unwrap();
+        assert_eq!(greeted, None);
+        let untouched = instance_of(&db, a, a_instance).await;
+        assert_eq!(untouched.install_id, None);
+        assert_eq!(untouched.connection_id, None);
+        assert_eq!(untouched.last_seen, None);
+        assert_eq!(untouched.version, "1.2.0");
+        assert_eq!(untouched.granted_scopes, ["projects:read"]);
+        let own = instance_of(&db, b, b_instance).await;
+        assert_eq!(own.install_id, None);
+        assert_eq!(own.connection_id, None);
+
+        let connection = Uuid::new_v4();
+        let as_a = hello("a-install", &[Scope::Read]);
+        let greeted = record_hello(a, &db, a_instance, &as_a, connection, now)
+            .await
+            .unwrap();
+        assert!(greeted.is_some());
+        let written = instance_of(&db, a, a_instance).await;
+        assert_eq!(written.install_id.as_deref(), Some("a-install"));
+        assert_eq!(written.connection_id, Some(connection));
+        assert_eq!(instance_of(&db, b, b_instance).await.install_id, None);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_departure_naming_another_users_instance_leaves_it_present() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let b = create_user(&db).await.unwrap();
+        let connection = Uuid::new_v4();
+        let now = unix_now();
+        record_hello(
+            a,
+            &db,
+            a_instance,
+            &hello("a-install", &[]),
+            connection,
+            now,
+        )
+        .await
+        .unwrap();
+        let present = instance_of(&db, a, a_instance).await;
+
+        assert!(
+            !record_departure(b, &db, a_instance, connection, now + 60)
+                .await
+                .unwrap(),
+            "the connection id of another tenant's instance is no way in"
+        );
+        let still = instance_of(&db, a, a_instance).await;
+        assert_eq!(still.connection_id, Some(connection));
+        assert_eq!(still.connected_at, present.connected_at);
+        assert_eq!(still.last_seen, present.last_seen);
+
+        assert!(record_departure(a, &db, a_instance, connection, now + 60)
+            .await
+            .unwrap());
+        assert_eq!(instance_of(&db, a, a_instance).await.connection_id, None);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn granted_scopes_are_never_read_from_another_users_instance() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let now = unix_now();
+        for (user, instance, scope) in
+            [(a, a_instance, Scope::Spend), (b, b_instance, Scope::Gates)]
+        {
+            record_hello(
+                user,
+                &db,
+                instance,
+                &hello("i", &[scope]),
+                Uuid::new_v4(),
+                now,
+            )
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(granted_scopes(b, &db, a_instance).await.unwrap(), None);
+        assert_eq!(granted_scopes(a, &db, b_instance).await.unwrap(), None);
+        assert_eq!(
+            granted_scopes(a, &db, a_instance).await.unwrap(),
+            Some(vec![Scope::Spend])
+        );
+        assert_eq!(
+            granted_scopes(b, &db, b_instance).await.unwrap(),
+            Some(vec![Scope::Gates])
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_device_key_names_the_instance_of_the_user_asking_and_no_other() {
+    in_fresh_schema(|db| async move {
+        let a = create_user(&db).await.unwrap();
+        let b = create_user(&db).await.unwrap();
+        let key = device_key(&SoftDeviceKey::new());
+        let (of_a, _) = new_pairing(&key, LAPTOP, &[Scope::Read]);
+        let a_instance = pair_instance(a, &db, &of_a).await.unwrap().instance_id;
+
+        assert_eq!(
+            instance_of_key(a, &db, &key.jkt).await.unwrap(),
+            Some(a_instance)
+        );
+        assert_eq!(instance_of_key(b, &db, &key.jkt).await.unwrap(), None);
+
+        let (of_b, _) = new_pairing(&key, LAPTOP, &[Scope::Read]);
+        let b_instance = pair_instance(b, &db, &of_b).await.unwrap().instance_id;
+        assert_ne!(b_instance, a_instance);
+        assert_eq!(
+            instance_of_key(a, &db, &key.jkt).await.unwrap(),
+            Some(a_instance)
+        );
+        assert_eq!(
+            instance_of_key(b, &db, &key.jkt).await.unwrap(),
+            Some(b_instance)
+        );
+    })
+    .await;
+}
+
+/// Every tenant's mirror rows as `(user_id, instance_id, feature_id,
+/// event_offset, event)`: read without a tenant so that a row written under
+/// the wrong one is seen too.
+async fn every_mirror_row(db: &Db) -> Vec<(UserId, InstanceId, String, i64, String)> {
+    sqlx::query_as(
+        "SELECT user_id, instance_id, feature_id, event_offset, event::text FROM run_mirror \
+         ORDER BY instance_id, feature_id, event_offset",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap()
+}
+
+/// Every tenant's snapshot rows as `(user_id, instance_id, kind, body,
+/// updated_at)`, read the way [`every_mirror_row`] reads.
+async fn every_snapshot_row(db: &Db) -> Vec<(UserId, InstanceId, String, String, OffsetDateTime)> {
+    sqlx::query_as(
+        "SELECT user_id, instance_id, kind, body::text, updated_at FROM snapshots \
+         ORDER BY instance_id, kind",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap()
+}
+
+fn new_event(feature_id: &str, event_offset: u64, event: &str) -> NewEvent {
+    NewEvent {
+        feature_id: feature_id.to_owned(),
+        event_offset,
+        event: event.to_owned(),
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn an_event_naming_another_users_instance_is_not_stored_and_moves_no_cursor() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let never_asked = |_: u64, _: u64| -> u64 { panic!("asked about another user's cursor") };
+
+        let from_b = new_event("f-1", 5, r#"{"by": "b"}"#);
+        let stored = mirror_event(b, &db, a_instance, &from_b, never_asked)
+            .await
+            .unwrap();
+        assert_eq!(stored, None);
+        assert!(every_mirror_row(&db).await.is_empty());
+        assert_eq!(instance_of(&db, a, a_instance).await.event_cursor, 0);
+
+        let from_a = new_event("f-1", 5, r#"{"by": "a"}"#);
+        let stored = mirror_event(a, &db, a_instance, &from_a, |_, offset| offset)
+            .await
+            .unwrap();
+        assert_eq!(stored, Some(5));
+        let of_a = (a, a_instance, "f-1".to_owned(), 5, from_a.event.clone());
+        assert_eq!(every_mirror_row(&db).await, std::slice::from_ref(&of_a));
+
+        let later_from_b = new_event("f-1", 9, &from_b.event);
+        for over_a in [&from_b, &later_from_b] {
+            let stored = mirror_event(b, &db, a_instance, over_a, never_asked)
+                .await
+                .unwrap();
+            assert_eq!(stored, None);
+        }
+        assert_eq!(every_mirror_row(&db).await, std::slice::from_ref(&of_a));
+        assert_eq!(instance_of(&db, a, a_instance).await.event_cursor, 5);
+        assert_eq!(instance_of(&db, b, b_instance).await.event_cursor, 0);
+
+        let stored = mirror_event(b, &db, b_instance, &later_from_b, |_, offset| offset)
+            .await
+            .unwrap();
+        assert_eq!(stored, Some(9));
+        let of_b = (b, b_instance, "f-1".to_owned(), 9, from_b.event);
+        let mut both = every_mirror_row(&db).await;
+        both.sort_by_key(|row| row.3);
+        assert_eq!(both, [of_a, of_b]);
+        assert_eq!(instance_of(&db, a, a_instance).await.event_cursor, 5);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_snapshot_naming_another_users_instance_neither_fills_nor_replaces_its_slot() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let now = unix_now();
+        let (by_a, by_b) = (r#"{"by": "a"}"#, r#"{"by": "b"}"#);
+
+        let err = replace_snapshot(b, &db, a_instance, "full", by_b, now)
+            .await
+            .expect_err("an empty slot of another tenant's instance must not be filled");
+        let StoreError::Database(err) = err else {
+            panic!("{err}");
+        };
+        assert_eq!(
+            violation_code(&err).as_deref(),
+            Some(FOREIGN_KEY_VIOLATION),
+            "{err}"
+        );
+        assert!(every_snapshot_row(&db).await.is_empty());
+
+        assert!(replace_snapshot(a, &db, a_instance, "full", by_a, now)
+            .await
+            .unwrap());
+        let of_a = every_snapshot_row(&db).await;
+        let [(owner, instance, kind, body, _)] = of_a.as_slice() else {
+            panic!("{of_a:?}");
+        };
+        assert_eq!((*owner, *instance, kind.as_str()), (a, a_instance, "full"));
+        assert_eq!(body, by_a);
+
+        assert!(
+            !replace_snapshot(b, &db, a_instance, "full", by_b, now + 60)
+                .await
+                .unwrap(),
+            "a slot found by its instance id alone is no way in"
+        );
+        assert_eq!(every_snapshot_row(&db).await, of_a);
+
+        assert!(replace_snapshot(b, &db, b_instance, "full", by_b, now + 60)
+            .await
+            .unwrap());
+        let both = every_snapshot_row(&db).await;
+        assert_eq!(both.len(), 2);
+        assert!(both.contains(&of_a[0]));
+        assert!(both.iter().any(|(owner, instance, _, body, _)| (
+            *owner,
+            *instance,
+            body.as_str()
+        ) == (b, b_instance, by_b)));
+    })
+    .await;
+}
+
+type RequestRow = (UserId, InstanceId, Vec<u8>, String, i32, Option<String>);
+
+/// Every tenant's request rows as `(user_id, instance_id, id, status,
+/// deliveries, outcome)` in queue order, read the way [`every_mirror_row`]
+/// reads.
+async fn every_request_row(db: &Db) -> Vec<RequestRow> {
+    sqlx::query_as(
+        "SELECT user_id, instance_id, id, status, deliveries, outcome FROM instance_requests \
+         ORDER BY queue_seq",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap()
+}
+
+fn new_request(id: RequestId, instance: InstanceId, expires_at: u64) -> NewRequest {
+    NewRequest {
+        id,
+        kind: "cancel_feature".to_owned(),
+        envelope: SignedRequest {
+            v: PROTOCOL_VERSION,
+            request_id: Uuid::from_bytes(id).simple().to_string(),
+            instance_id: instance.0.to_string(),
+            issued_at: expires_at - 300,
+            expires_at,
+            payload: RequestPayload::CancelFeature(CancelFeature {
+                feature_id: "f-1".to_owned(),
+            }),
+            signature: String::new(),
+        },
+        expires_at,
+    }
+}
+
+fn queued_row(owner: UserId, instance: InstanceId, id: RequestId) -> RequestRow {
+    (owner, instance, id.to_vec(), "queued".to_owned(), 0, None)
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_request_naming_another_users_instance_is_not_queued_and_no_queue_is_read_across_users() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let id = [7; 16];
+        let for_a = new_request(id, a_instance, unix_now() + 300);
+
+        let err = insert_request(b, &db, a_instance, &for_a)
+            .await
+            .expect_err("another tenant's instance must not be sent a request");
+        let StoreError::Database(err) = err else {
+            panic!("{err}");
+        };
+        assert_eq!(
+            violation_code(&err).as_deref(),
+            Some(FOREIGN_KEY_VIOLATION),
+            "{err}"
+        );
+        assert!(every_request_row(&db).await.is_empty());
+
+        insert_request(a, &db, a_instance, &for_a).await.unwrap();
+        assert_eq!(
+            every_request_row(&db).await,
+            [queued_row(a, a_instance, id)]
+        );
+        assert!(list_queued_requests(b, &db, a_instance)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(list_queued_requests(b, &db, b_instance)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let for_b = new_request(id, b_instance, unix_now() + 600);
+        insert_request(b, &db, b_instance, &for_b).await.unwrap();
+        for (owner, instance, own) in [(a, a_instance, &for_a), (b, b_instance, &for_b)] {
+            let queue = list_queued_requests(owner, &db, instance).await.unwrap();
+            let [only] = queue.as_slice() else {
+                panic!("{queue:?}");
+            };
+            assert_eq!(
+                only.envelope,
+                QueuedEnvelope::Readable(Box::new(own.envelope.clone()))
+            );
+        }
+        assert!(list_queued_requests(a, &db, b_instance)
+            .await
+            .unwrap()
+            .is_empty());
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_delivery_or_an_expiry_naming_another_users_request_changes_no_row() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let now = unix_now();
+        let id = [7; 16];
+        insert_request(a, &db, a_instance, &new_request(id, a_instance, now + 300))
+            .await
+            .unwrap();
+        let as_queued = [queued_row(a, a_instance, id)];
+
+        for named in [a_instance, b_instance] {
+            assert!(!mark_request_sent(b, &db, named, &id, now).await.unwrap());
+            assert!(!mark_request_expired(b, &db, named, &id).await.unwrap());
+        }
+        assert!(!mark_request_sent(a, &db, b_instance, &id, now)
+            .await
+            .unwrap());
+        assert!(!mark_request_expired(a, &db, b_instance, &id).await.unwrap());
+        assert_eq!(every_request_row(&db).await, as_queued);
+
+        assert!(mark_request_sent(a, &db, a_instance, &id, now)
+            .await
+            .unwrap());
+        assert!(mark_request_expired(a, &db, a_instance, &id).await.unwrap());
+        assert_eq!(
+            every_request_row(&db).await,
+            [(a, a_instance, id.to_vec(), "expired".to_owned(), 1, None)]
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn an_outcome_naming_another_users_request_is_not_recorded_and_decide_is_not_asked() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let now = unix_now();
+        let id = [7; 16];
+        insert_request(a, &db, a_instance, &new_request(id, a_instance, now + 300))
+            .await
+            .unwrap();
+        let never_asked = |state: RequestState| -> Option<RequestOutcome> {
+            panic!("asked about another user's request: {state:?}")
+        };
+
+        for (asking, named) in [(b, a_instance), (b, b_instance), (a, b_instance)] {
+            let found = record_outcome(asking, &db, named, &id, now, never_asked)
+                .await
+                .unwrap();
+            assert!(!found);
+        }
+        assert_eq!(
+            every_request_row(&db).await,
+            [queued_row(a, a_instance, id)]
+        );
+
+        let refused = |_: RequestState| {
+            Some(RequestOutcome::Refused {
+                reason: RefusalReason::ScopeOff,
+            })
+        };
+        assert!(record_outcome(a, &db, a_instance, &id, now, refused)
+            .await
+            .unwrap());
+        let answered = (
+            a,
+            a_instance,
+            id.to_vec(),
+            "answered".to_owned(),
+            0,
+            Some("refused".to_owned()),
+        );
+        assert_eq!(every_request_row(&db).await, [answered]);
+    })
+    .await;
+}
+
+/// Every row of the four tables a socket writes, as `(table, the row as
+/// Postgres spells it in JSON)`: read without a tenant, as
+/// [`every_mirror_row`] reads, and whole, so that a write to any column of
+/// any of them shows.
+async fn every_socket_row(db: &Db) -> Vec<(&'static str, String)> {
+    let mut rows = Vec::new();
+    for table in ["instances", "run_mirror", "snapshots", "instance_requests"] {
+        let select = format!("SELECT to_jsonb(t)::text FROM {table} AS t ORDER BY 1");
+        let of_table: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(select))
+            .fetch_all(db)
+            .await
+            .unwrap();
+        rows.extend(of_table.into_iter().map(|row| (table, row)));
+    }
+    rows
+}
+
+fn never_moved(before: u64, offset: u64) -> u64 {
+    panic!("asked about another user's cursor: {before}, {offset}")
+}
+
+/// The session's own store, bound as no admission binds it: the tenant of
+/// one user and the instance of another. Every method is called against an
+/// instance that has a row in each table for it to find.
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_socket_store_of_one_user_bound_to_another_users_instance_writes_nothing() {
+    in_fresh_schema(|db| async move {
+        let (a, _) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let now = unix_now();
+        let connections = Connections::default();
+        let seated = |instance| connections.register(instance).unwrap().connection;
+        let event = |offset| RunEvent {
+            v: PROTOCOL_VERSION,
+            feature_id: "f-1".to_owned(),
+            offset,
+            kind: RunEventKind::StepStarted,
+            occurred_at: now,
+            payload: RunEventPayload::default(),
+        };
+        let snapshot = Snapshot {
+            v: PROTOCOL_VERSION,
+            projects: Vec::new(),
+            workflows: Vec::new(),
+            run_shape: Vec::new(),
+        };
+        let id = [7; 16];
+
+        let own = PostgresStore::new(db.clone(), b, b_instance);
+        let b_connection = seated(b_instance);
+        let said = hello("install-b", &[Scope::Spend]);
+        assert_eq!(own.greeted(&said, b_connection, now).await.unwrap(), 0);
+        assert_eq!(
+            own.ingested(&event(5), |_, offset| offset).await.unwrap(),
+            5
+        );
+        own.snapshot_replaced(&snapshot, now).await.unwrap();
+        own.request_inserted(new_request(id, b_instance, now + 300))
+            .await
+            .unwrap();
+        let before = every_socket_row(&db).await;
+        let tables: Vec<&str> = before.iter().map(|(table, _)| *table).collect();
+        assert_eq!(
+            tables,
+            [
+                "instances",
+                "instances",
+                "run_mirror",
+                "snapshots",
+                "instance_requests"
+            ]
+        );
+
+        let crossed = PostgresStore::new(db.clone(), a, b_instance);
+        let no_instance = |err: StoreError| matches!(err, StoreError::NoSuchInstance);
+        let said = hello("install-a", &[Scope::Gates]);
+        let err = crossed
+            .greeted(&said, seated(InstanceId::generate()), now + 60)
+            .await
+            .expect_err("a hello must not be written onto another tenant's instance");
+        assert!(no_instance(err));
+        let err = crossed
+            .ingested(&event(9), never_moved)
+            .await
+            .expect_err("an event must not be stored for another tenant's instance");
+        assert!(no_instance(err));
+        let err = crossed
+            .snapshot_replaced(&snapshot, now + 60)
+            .await
+            .expect_err("another tenant's snapshot must not be replaced");
+        assert!(no_instance(err));
+        let err = crossed
+            .granted_scopes()
+            .await
+            .expect_err("another tenant's scopes must not be read");
+        assert!(no_instance(err));
+
+        let err = crossed
+            .request_inserted(new_request([9; 16], b_instance, now + 300))
+            .await
+            .expect_err("another tenant's instance must not be sent a request");
+        let StoreError::Database(err) = err else {
+            panic!("{err}");
+        };
+        assert_eq!(
+            violation_code(&err).as_deref(),
+            Some(FOREIGN_KEY_VIOLATION),
+            "{err}"
+        );
+        assert!(crossed.queued_requests().await.unwrap().is_empty());
+        let err = crossed
+            .request_sent(id, now + 60)
+            .await
+            .expect_err("a delivery must not be counted on another tenant's request");
+        assert!(matches!(err, StoreError::NoSuchRequest), "{err}");
+        crossed.request_expired(id).await.unwrap();
+        let never_asked = |state: RequestState| -> OutcomeChange {
+            panic!("asked about another user's request: {state:?}")
+        };
+        assert!(!crossed
+            .outcome_recorded(id, &never_asked, now + 60)
+            .await
+            .unwrap());
+        crossed.departed(b_connection, now + 60).await.unwrap();
+
+        assert_eq!(every_socket_row(&db).await, before);
+        assert_eq!(own.queued_requests().await.unwrap().len(), 1);
+        assert_eq!(
+            instance_of(&db, b, b_instance).await.connection_id,
+            Some(b_connection.as_uuid())
+        );
     })
     .await;
 }
