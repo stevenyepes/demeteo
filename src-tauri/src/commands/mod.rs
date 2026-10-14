@@ -13,6 +13,7 @@ pub mod discovery;
 pub mod feature_lifecycle;
 pub mod features;
 pub mod git;
+pub mod hub;
 pub mod machine;
 pub mod mcp_server;
 pub mod memory;

@@ -272,6 +272,11 @@ pub struct AppContext {
 
     /// Set only by the desktop app; see [`AppVersion`].
     pub app_version: AppVersion,
+
+    /// Desktop pairing with the Demeteo Hub. `None` outside
+    /// `ExecutionMode::Router`, and in a build without the `keyring` feature:
+    /// its secrets have nowhere else they may go (AGENTS.md §2).
+    pub hub: Option<Arc<crate::adapters::hub::HubPairing>>,
 }
 
 pub const EVENT_THREAD_STATUS_CHANGED: &str = "thread_status_changed";

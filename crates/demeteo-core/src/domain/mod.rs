@@ -51,6 +51,7 @@ pub mod harness_outcome;
 pub mod harness_preflight;
 pub mod harness_remediation;
 pub mod harness_triage;
+pub mod hub_pairing;
 pub mod ids;
 pub mod intercept;
 pub(crate) mod json_block;

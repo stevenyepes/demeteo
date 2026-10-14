@@ -161,3 +161,31 @@ fn v61_keeps_existing_tickets_local_and_places_their_attempts() {
         "an attempt is placed by its latest-submitted mirror row, else local"
     );
 }
+
+/// V64 only adds tables, so a database at V63 keeps its rows and starts
+/// unpaired, with no install_id until pairing first asks for one.
+#[test]
+fn v64_adds_empty_hub_tables_over_an_existing_database() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    migration::migrations::runner()
+        .set_target(refinery::Target::Version(63))
+        .run(&mut conn)
+        .unwrap();
+    conn.execute(
+        "INSERT INTO projects (id, name, created_at) VALUES ('p-1', 'demeteo', 0)",
+        [],
+    )
+    .unwrap();
+
+    migration::run(&mut conn).unwrap();
+
+    assert!(applied_versions(&conn).contains(&64));
+    let count = |table: &str| -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(count("projects"), 1);
+    for table in ["hub_install", "hub_pairing", "hub_pinned_passkeys"] {
+        assert_eq!(count(table), 0, "{table}");
+    }
+}

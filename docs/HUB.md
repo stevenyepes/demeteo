@@ -6,7 +6,7 @@
 > design is decided (2026-10-02); §2 says per part what is implemented.
 > [`hub-design/README.md`](hub-design/README.md) owns the mockup,
 > [`ARCHITECTURE.md`](ARCHITECTURE.md) owns the hexagon the desktop-side client
-> will sit in, [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) owns the other
+> sits in, [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) owns the other
 > external surface into a desktop — a different surface, with a different trust
 > argument (§8) — and [AGENTS.md §2](../AGENTS.md) owns the invariants this
 > document must not weaken.
@@ -45,8 +45,9 @@ full.
 | `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots, and the canonical encoder of §6.1 and §8. The Hub compiles against it; the desktop does not yet |
 | `hub-web/` (second Vite entry) | **sign-in, passkey management and the pairing approval page built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), and every route but sign-up and sign-in is behind the session. Fleet, Instance, Runs, Run, Dispatch and AddInstance are placeholders with no data wiring yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
-| Desktop side: device key, pairing, Settings › Hub tab, socket client | **not built** — nothing on the desktop creates a device key, sends the `/authorize` request of §4 or renders the fingerprint |
-| Desktop side: passkey pin set, request verification, local ceilings | **not built** |
+| Desktop side: device key, pairing, fingerprint | **built**, in `demeteo-core` under `ExecutionMode::Router` only (§9 *Code layout*) — the P-256 device key, the loopback callback, the `/authorize` and `/token` exchange, and the `hub_pair`, `hub_status` and `hub_disconnect` commands, whose typed wrappers are in `src/lib/hub.ts`. `hub_status` answers the fingerprint in the format of §4. The access token is dropped and the refresh token is held but never used: nothing refreshes yet. Unpairing is local-only (§4 *Revocation*) |
+| Desktop side: Settings › Hub tab, socket client | **not built** — no view calls the wrappers yet, so nothing on screen shows the fingerprint |
+| Desktop side: passkey pin set, request verification, local ceilings | **pin set written at pairing, nothing verifies against it** — the request-signing key, RP ID and passkey public keys are stored by migration `V64__hub_pairing.sql`. Request verification and local ceilings are **not built** |
 | An instance-wide read over `run_events` | **not built** — the read surface is per Feature today (§5) |
 | Runner dispatch from the Hub | **not built, and not part of this ticket set** — see §10 |
 
@@ -127,9 +128,9 @@ human signs — and differs from it on purpose.
 > Hub token is a tenant's.
 
 The Hub's half is built, in `crates/demeteo-hub/src/pairing/`, and so is the
-approval page in hub-web. **The desktop's half is not** (§2). What follows states
-the Hub's side as that code does it, and is the contract the desktop client is
-built to.
+approval page in hub-web. The desktop's half is built in `demeteo-core`, short of
+refreshing its tokens (§2). What follows states the Hub's side as that code does
+it, and is the contract the desktop client is built to.
 
 <!-- EXAMPLE: new -->
 
@@ -149,9 +150,9 @@ Hub ─────────────▶ access token (15 min, bound to th
 
 | Property | Value |
 |---|---|
-| Device key | created **on the instance**, private half in the OS keyring only; the Hub is sent the public half. ES256 (P-256) is the only algorithm the Hub accepts, and is a carried default (§11). The Hub stores the public half as the four-member JWK it rebuilds from the decoded point, never the client's JSON |
+| Device key | created **on the instance**, private half in the OS keyring only; the Hub is sent the public half. ES256 (P-256) is the only algorithm the Hub accepts, and is a carried default (§11). The Hub stores the public half as the four-member JWK it rebuilds from the decoded point, never the client's JSON. The desktop's key is therefore P-256, signing ES256 proofs, generated with `aws-lc-rs` in `crates/demeteo-core/src/adapters/hub/device_key.rs` |
 | Fingerprint | a short rendering of the key's RFC 7638 thumbprint, shown **on both** the desktop and the Hub's approval page so the user can compare them. The format is fixed — below |
-| Redirect | `http://127.0.0.1:<port>/…` on an **ephemeral port** the instance opens for the one callback (RFC 8252); never a custom scheme, never `localhost`. The rule is below |
+| Redirect | `http://127.0.0.1:<port>/…` on an **ephemeral port** the instance opens for the one callback (RFC 8252); never a custom scheme, never `localhost`. The rule is below. The desktop binds `127.0.0.1:0`, so the OS chooses the port, and serves one random path per pairing (`crates/demeteo-core/src/adapters/hub/loopback.rs`) |
 | PKCE | `S256`, mandatory (RFC 7636) |
 | Authorization code | single-use and good for 60 seconds, bound to the device key by `dpop_jkt` (RFC 9449), so a code intercepted on the loopback cannot be redeemed with another key. A redemption that fails burns the code |
 | Sign-in | a **passkey**; the Hub has no password |
@@ -255,7 +256,10 @@ a carried default (§11) and is not the Hub's alone to change — `fingerprint` 
 [`jwk.rs`](../crates/demeteo-hub/src/pairing/jwk.rs) writes it, and
 `the_thumbprint_and_fingerprint_match_a_published_key` in
 `src-tauri/tests/hub_pairing.rs` pins the example above, which is the key of
-RFC 9449's own example proof.
+RFC 9449's own example proof. The desktop's copy is `fingerprint` in
+`crates/demeteo-core/src/domain/hub_pairing/jwk.rs`, and
+`the_desktop_fingerprint_is_the_one_the_hub_shows_for_its_thumbprint` in
+`src-tauri/tests/hub_desktop_pairing.rs` holds the two to the same output.
 
 The thumbprint is the SHA-256 of exactly
 `{"crv":"P-256","kty":"EC","x":"<x>","y":"<y>"}`, with `x` and `y` re-encoded from
@@ -394,11 +398,17 @@ recovery**, and the only one: with a refusal that desktop would have no way back
 Two things retire a pairing's tokens today: reuse detection, and pairing the same
 device key again. Both retire the access tokens with the refresh tokens.
 
-Unpairing from the desktop, and revoking an instance on the Hub, are designed and
-**not built** (§10): each retires the refresh token family, and the instance's
-local state — pinned keys, ceilings, toggles — is dropped on unpair. Such a
-revocation takes effect by the next refresh at the latest, so at most one
-access-token lifetime (15 minutes) after the Hub-side revoke.
+**Unpairing from the desktop is built and local-only.** `hub_disconnect` deletes
+the device key and the refresh token from the keyring and the pins from SQLite,
+and tells the Hub nothing, because the Hub has no route to tell. The Hub keeps
+listing the instance, and the refresh token stays valid there, held by nobody,
+until it expires 30 days after it was issued. The next pairing proves a fresh
+device key, so it is a first pairing, not a replacement.
+
+A revocation that reaches the Hub — from the desktop's unpair or from the Hub
+itself — is designed and **not built** (§10): it retires the refresh token family,
+and takes effect by the next refresh at the latest, so at most one access-token
+lifetime (15 minutes) after the Hub-side revoke.
 
 ---
 
@@ -1066,6 +1076,9 @@ process.
 |---|---|
 | `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, passkey auth (registration, sign-in, sessions, endorsement and revocation), pairing and the instance socket **built**; an HTTP route that queues a request, unpairing and the attachment fetch **not built** (§10). It depends on `crates/demeteo-hub-protocol` |
 | `crates/demeteo-hub/src/pairing/` | pairing (§4) — **built**. The decisions are synchronous functions that take the time as an argument: `authorize.rs` (the `/authorize` rules and the loopback redirect), `pkce.rs`, `jwk.rs` (thumbprint and fingerprint), `dpop.rs` (proof verification) and `grant.rs` (the redeem, refresh and access verdicts, and the response bodies). `pending.rs` holds consents, codes and seen proofs in bounded process memory, `signing_key.rs` reads the request-signing public key through `KeyService`, and `handlers/` holds the routes. The rows are written by `store/instances.rs`, `store/device_keys.rs` and `store/tokens.rs` |
+| `crates/demeteo-core/src/domain/hub_pairing/` | the desktop's pairing policy — **built**. The rules both sides must spell alike are mirrored here, because `demeteo-core` does not depend on `demeteo-hub`: the origin and the URLs derived from it, the callback verdict, PKCE, the thumbprint and fingerprint, the DPoP signing input, and the mirror of the pairing response. `src-tauri/tests/hub_desktop_pairing.rs` runs the desktop against the Hub's own handlers, which keeps the two copies from drifting |
+| `crates/demeteo-core/src/ports/hub.rs` | the four ports pairing reaches the world through: the keyring (`HubSecretStore`), SQLite (`HubPinRepository`), the Hub's `/token` and a browser — **built**. Only the keyring port carries a secret |
+| `crates/demeteo-core/src/adapters/hub/` | the desktop's pairing I/O — **built**. `HubPairing` in `mod.rs` orders the steps; `device_key.rs`, `loopback.rs`, `token_client.rs` and `keyring_store.rs` are the adapters. It is composed only under `ExecutionMode::Router`, and `src-tauri/src/commands/hub.rs` exposes it |
 | `crates/demeteo-hub/src/socket/` | the instance socket (§5) — **built**. `handler.rs` holds admission (`admitted`) and the `GET /socket` upgrade, `session.rs` the loop one connection runs, `frame.rs` the rule that tells inbound frames apart, `cursor.rs` how the cursor moves, `connections.rs` the registry of live sessions in process memory, and `requests.rs` the queue: `enqueued`, delivery and outcomes. `port.rs` is the two ports the session is written against, `Transport` and `SocketStore`; `postgres.rs` is the store over one `(UserId, InstanceId)`, writing through `store/instances.rs`, `store/run_mirror.rs`, `store/snapshots.rs` and `store/requests.rs`. The module rustdoc of [`socket/mod.rs`](../crates/demeteo-hub/src/socket/mod.rs) says what an open socket proves |
 | `deploy/hub` | the Compose bundle, Dockerfile and operator README — **built** |
 | `crates/demeteo-hub-protocol` | **serde-only** wire types shared by the desktop client and the Hub — **built**; the Hub is its only dependant so far |
@@ -1092,14 +1105,19 @@ WebAuthn verifier). Each one is a **Gate item** in
 ## 10. What is not built
 
 §2 has the state of every part. Of pairing (§4) and the socket (§5), the Hub's
-half and the approval page are built and four things are not:
+half, the approval page and the desktop's device key, loopback listener,
+`/authorize` request, token redemption and fingerprint are built, and five things
+are not:
 
-- **The desktop client** — the device key, the loopback listener, the
-  `/authorize` request, the fingerprint on the desktop, holding and refreshing
-  the tokens, and the socket client that would present one (§5).
-- **Unpairing and revoking an instance.** No route does either, and nothing
-  writes `device_keys.revoked_at`. Until one exists a pairing ends by reuse
-  detection, by its refresh token expiring, or by being replaced (§4).
+- **The desktop's socket client and refreshing the tokens.** The desktop holds
+  the refresh token and drops the access token, since it has no socket client
+  that would present one (§5).
+- **A Settings › Hub tab.** The commands and their wrappers exist, and no view
+  renders them, so the fingerprint is not on screen yet.
+- **Unpairing and revoking an instance on the Hub.** No route does either, and
+  nothing writes `device_keys.revoked_at`. The desktop's disconnect is local
+  (§4 *Revocation*). Until a route exists a pairing ends by reuse detection, by
+  its refresh token expiring, or by being replaced (§4).
 - **The attachment fetch (§6.3).** One route takes an access token, the socket
   (§5): its admission is the first caller of `access_verdict` in
   [`grant.rs`](../crates/demeteo-hub/src/pairing/grant.rs), with the lookup by
@@ -1190,9 +1208,12 @@ what a desktop client implements.
    `expires_at`, all stored with the record (§8). How an instance accepts such
    a record — relayed as it stands, or replaced by a fresh assertion bound to
    that instance — is not decided.
-10. **Where the desktop-side client sits in the hexagon.** It must obey
-    [AGENTS.md §3](../AGENTS.md) — no business logic in `commands/` — and which
-    port it hangs from is a build ticket's call.
+10. *Decided by the desktop pairing build, kept so the numbering holds.* The
+    desktop-side client sits in `demeteo-core`: its decisions in
+    `domain/hub_pairing/`, its ports in `ports/hub.rs`, its I/O in
+    `adapters/hub/`, and `commands/hub.rs` only delegates (§9 *Code layout*).
+    Its loopback callback binds `127.0.0.1:0`, takes the port the OS assigns,
+    and serves one random path; nothing configures either.
 11. **Whether a step's `command` and prompt templates may cross at all.** They
     travel inside a Workflow snapshot's documents, and decision 64 needs them:
     a `RunSpec` cannot be built without the command and the prompt (§10). But
