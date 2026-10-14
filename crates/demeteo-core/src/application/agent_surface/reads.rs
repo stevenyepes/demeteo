@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 
+use crate::application::remote_runs::{refresh_run_for_feature, FeatureRunRefresh};
 use crate::application::run_view::FailureExplanation;
 use crate::application::tickets;
 use crate::domain::gate::pending::awaiting_unrecorded_gate;
@@ -23,6 +24,16 @@ use crate::state::AppContext;
 pub struct FeatureWithSteps {
     pub feature: Feature,
     pub steps: Vec<StepExecution>,
+}
+
+/// [`get_feature`]'s answer after [`refresh_run`] went to the runner.
+#[derive(Debug, Clone, Serialize)]
+pub struct RefreshedRun {
+    #[serde(flatten)]
+    pub run: FeatureWithSteps,
+    /// `false` when there was no runner to ask; `note` says so.
+    pub refreshed: bool,
+    pub note: Option<String>,
 }
 
 /// One project's one pending gate, named — [`list_pending_gates`] is
@@ -135,6 +146,41 @@ pub fn get_feature(
     };
     let steps = ctx.run_view.steps(feature_id)?;
     Ok(Some(FeatureWithSteps { feature, steps }))
+}
+
+/// [`get_feature`] after pulling the feature's detached run from its runner
+/// ([`refresh_run_for_feature`]), for a caller that would otherwise read a
+/// shadow only a viewer of the feature keeps current.
+///
+/// A feature that is not a detached run is returned as it is, with a note:
+/// there is nothing to pull, which is not a failure. A runner that does not
+/// answer is an error, because the alternative is a stale shadow that reads
+/// as current.
+pub async fn refresh_run(ctx: &AppContext, feature_id: &FeatureId) -> Result<RefreshedRun, String> {
+    if ctx.run_view.feature(feature_id)?.is_none() {
+        return Err("feature not found".to_string());
+    }
+    let (refreshed, note) = match refresh_run_for_feature(ctx, feature_id.as_str())
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        FeatureRunRefresh::Refreshed => (true, None),
+        FeatureRunRefresh::NotDetached => (
+            false,
+            Some("not a detached run: it runs on this machine, so there is no runner to refresh from".to_string()),
+        ),
+        FeatureRunRefresh::RunnerUnreachable { machine_id } => {
+            return Err(format!(
+                "runner on machine {machine_id} could not be reached; get_feature shows the state as of the last successful refresh"
+            ))
+        }
+    };
+    let run = get_feature(ctx, feature_id)?.ok_or_else(|| "feature not found".to_string())?;
+    Ok(RefreshedRun {
+        run,
+        refreshed,
+        note,
+    })
 }
 
 /// Per-attempt history for a step, ordered by attempt number.

@@ -10,15 +10,17 @@ use super::Scope;
 
 /// The literal table from `docs/MCP_INTEGRATION.md` §7.
 ///
-/// `refresh_discovery_prs` is `read` although it writes: what it writes is
-/// the forge's own answer for a pull request, the write the MR monitor makes
-/// unasked, and §6 of that document prices a scope by what a call costs the
-/// user rather than by whether a row changes.
+/// `refresh_discovery_prs` and `refresh_run` are `read` although they write:
+/// what they write is the forge's or the runner's own answer, the write the MR
+/// monitor and the feature view's poll make unasked, and §6 of that document
+/// prices a scope by what a call costs the user rather than by whether a row
+/// changes.
 pub fn required_scope(tool_name: &str) -> Option<Scope> {
     match tool_name {
         "list_projects"
         | "list_features"
         | "get_feature"
+        | "refresh_run"
         | "list_step_attempts"
         | "get_failure_verdict"
         | "list_pending_gates"

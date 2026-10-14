@@ -5,7 +5,7 @@ description: Query and drive a running Demeteo workspace over its MCP tool surfa
 
 # Demeteo MCP
 
-Demeteo exposes a fixed, eighteen-tool MCP surface over its workspace state:
+Demeteo exposes a fixed, nineteen-tool MCP surface over its workspace state:
 projects, Features, Steps, Gates, Discovery boards, and run events. This skill
 is the judgement a tool's own JSON schema can't carry — which tool answers
 which question, which five cost money, and which operations this surface
@@ -33,6 +33,7 @@ Fifteen tools, each answering one kind of question:
 | `list_projects` | "What workspace projects exist?" |
 | `list_features` | "What Features are active?" — omit `project_id` for a workspace-wide answer, don't loop |
 | `get_feature` | "What's the state of this one Feature, and its steps?" |
+| `refresh_run` | "Is this detached run's state current?" — asks the run's runner now and returns `get_feature`'s shape; see Spend vs. read |
 | `list_step_attempts` | "What's the per-attempt history of this Step?" |
 | `get_failure_verdict` | "Why did this Step fail?" — see Failure triage below |
 | `list_pending_gates` | "What's waiting for a human decision?" — omit `project_id` for a workspace-wide answer |
@@ -62,6 +63,14 @@ already answers.
 `get_failure_verdict`, `list_pending_gates`, `list_discoveries`,
 `get_discovery_board`, `list_machines`, and `run_events_since` are free reads:
 each inspects state and changes nothing.
+
+`refresh_run` is free too, and needs only `read`, but it is not inert: for a
+detached (remote) run it asks the machine's runner and records the answer in
+the app's own copy, which `get_feature`, `list_pending_gates` and
+`run_events_since` read and which is otherwise refreshed only while a human has
+the Feature open. Call it before trusting those on a run nobody is watching. A
+Feature that is not a detached run comes back unchanged with `refreshed: false`;
+an unreachable runner is an error, so do not read it as "no change".
 
 `refresh_discovery_prs` is free too, and needs only `read`, but it is not
 inert: it calls the forge and records what it says, so a pull request it finds
