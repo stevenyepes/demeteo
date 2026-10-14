@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 /// What a browser is told to wait for an authenticator, in the milliseconds
 /// WebAuthn counts in: as long as the ceremony is held.
-const CEREMONY_TIMEOUT_MS: u64 = CHALLENGE_TTL_SECS * 1000;
+pub(crate) const CEREMONY_TIMEOUT_MS: u64 = CHALLENGE_TTL_SECS * 1000;
 
 fn chain_refused(error: ChainError) -> ApiError {
     match error {
@@ -129,7 +129,16 @@ fn key_views(keys: &[StoredKey]) -> Vec<KeyView<'_>> {
 /// `navigator.credentials.get` options, built by hand rather than by a
 /// WebAuthn library: the challenge is a digest the Hub computed, and a
 /// library's request options carry a random one of its own.
-fn assertion_options<'a>(
+pub(crate) fn assertion_options<'a>(
+    rp: &RelyingParty,
+    challenge: &[u8; 32],
+    allowed: impl Iterator<Item = &'a str>,
+) -> serde_json::Value {
+    serde_json::json!({ "publicKey": public_key_options(rp, challenge, allowed) })
+}
+
+/// The `publicKey` member of [`assertion_options`].
+pub(crate) fn public_key_options<'a>(
     rp: &RelyingParty,
     challenge: &[u8; 32],
     allowed: impl Iterator<Item = &'a str>,
@@ -138,13 +147,11 @@ fn assertion_options<'a>(
         .map(|id| serde_json::json!({ "type": "public-key", "id": id }))
         .collect();
     serde_json::json!({
-        "publicKey": {
-            "challenge": base64url_encode(challenge),
-            "rpId": rp.rp_id,
-            "allowCredentials": allowed,
-            "userVerification": "required",
-            "timeout": CEREMONY_TIMEOUT_MS,
-        }
+        "challenge": base64url_encode(challenge),
+        "rpId": rp.rp_id,
+        "allowCredentials": allowed,
+        "userVerification": "required",
+        "timeout": CEREMONY_TIMEOUT_MS,
     })
 }
 

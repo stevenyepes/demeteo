@@ -82,22 +82,18 @@ fn kind_name(payload: &RequestPayload) -> &'static str {
 /// its signature. `instance_id` is the hyphenated text of the UUID, as a
 /// pairing response told the instance its id, because the instance compares
 /// the two as text.
-///
-/// A `now` within [`REQUEST_TTL_SECS`] of `u64::MAX` gives an `expires_at`
-/// that is not `now + REQUEST_TTL_SECS`. No row can hold either: the store
-/// refuses a time that far out, so such a request is never queued.
 pub fn unsigned(
-    request_id: RequestId,
+    minted: Minted,
     instance: InstanceId,
     payload: RequestPayload,
     now: u64,
 ) -> SignedRequest {
     SignedRequest {
         v: PROTOCOL_VERSION,
-        request_id: base64url_encode(&request_id),
+        request_id: base64url_encode(&minted.id),
         instance_id: instance.0.to_string(),
         issued_at: now,
-        expires_at: now.saturating_add(REQUEST_TTL_SECS),
+        expires_at: minted.expires_at,
         payload,
         signature: String::new(),
     }
@@ -118,6 +114,29 @@ fn fresh_id() -> Result<RequestId, RandomSourceFailed> {
     let mut id = [0u8; REQUEST_ID_BYTES];
     aws_lc_rs::rand::fill(&mut id).map_err(|_| RandomSourceFailed)?;
     Ok(id)
+}
+
+/// The id and expiry of a request, settled before it is queued. A gate
+/// decision needs them first: the challenge its passkey signs is built from
+/// both, and the instance rebuilds it from the envelope (`docs/HUB.md` §8),
+/// so the request must go out under exactly the pair the challenge named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Minted {
+    pub id: RequestId,
+    /// Unix seconds.
+    pub expires_at: u64,
+}
+
+/// A new id for a request made at `now`, expiring [`REQUEST_TTL_SECS`] later.
+///
+/// A `now` within [`REQUEST_TTL_SECS`] of `u64::MAX` gives an `expires_at`
+/// that is not `now + REQUEST_TTL_SECS`. No row can hold either: the store
+/// refuses a time that far out, so such a request is never queued.
+pub fn fresh_minted(now: u64) -> Result<Minted, RandomSourceFailed> {
+    Ok(Minted {
+        id: fresh_id()?,
+        expires_at: now.saturating_add(REQUEST_TTL_SECS),
+    })
 }
 
 /// What a session does about a request it finds in its queue.
@@ -261,12 +280,31 @@ pub async fn enqueued<S>(
 where
     S: SocketStore + ?Sized,
 {
+    let minted = fresh_minted(now)?;
+    enqueued_as(store, keys, signing_key, connections, minted, payload, now).await
+}
+
+/// [`enqueued`], under an id and expiry the caller settled beforehand. A
+/// [`Minted`] is spent by the first request queued under it: an instance's
+/// requests are keyed by id, so the store refuses a second.
+pub async fn enqueued_as<S>(
+    store: &S,
+    keys: &dyn KeyService,
+    signing_key: &SigningKey,
+    connections: &Connections,
+    minted: Minted,
+    payload: RequestPayload,
+    now: u64,
+) -> Result<Enqueued, EnqueueError>
+where
+    S: SocketStore + ?Sized,
+{
     let granted = store.granted_scopes().await?;
     enqueue_verdict(&granted, &payload)?;
 
     let instance = store.instance();
-    let id = fresh_id()?;
-    let mut envelope = unsigned(id, instance, payload, now);
+    let id = minted.id;
+    let mut envelope = unsigned(minted, instance, payload, now);
     let signature = signing_key.sign(keys, &envelope.signing_bytes()?).await?;
     envelope.signature = base64url_encode(&signature);
 
@@ -285,11 +323,15 @@ where
 /// each caller's own to make.
 ///
 /// A payload too long to encode is the request's fault and no retry
-/// changes it, so it is a `400`.
+/// changes it, so it is a `400`. An instance the store does not hold is a
+/// `404`, the answer an instance of another tenant gets, so the two cannot be
+/// told apart.
 impl From<EnqueueError> for ApiError {
     fn from(error: EnqueueError) -> Self {
         match error {
-            EnqueueError::Refused(EnqueueRefusal::ScopeNotGranted(_)) => Self::SCOPE_NOT_GRANTED,
+            EnqueueError::Refused(EnqueueRefusal::ScopeNotGranted(scope)) => {
+                Self::scope_not_granted(scope)
+            }
             EnqueueError::KeyService(
                 KeyServiceError::Sealed
                 | KeyServiceError::UnknownKey(_)
@@ -312,6 +354,7 @@ impl From<EnqueueError> for ApiError {
                 tracing::error!(%error, "a request id could not be minted");
                 Self::INTERNAL
             }
+            EnqueueError::Store(StoreError::NoSuchInstance) => Self::NOT_FOUND,
             EnqueueError::Store(error) => store_failed(error),
         }
     }
@@ -419,11 +462,27 @@ mod tests {
         }
     }
 
+    fn minted_at(now: u64) -> Minted {
+        Minted {
+            id: [7; 16],
+            expires_at: now + REQUEST_TTL_SECS,
+        }
+    }
+
     #[test]
-    fn an_unsigned_envelope_names_the_instance_and_expires_one_ttl_after_it_was_made() {
+    fn a_fresh_id_expires_one_ttl_after_it_was_minted() {
+        assert_eq!(
+            fresh_minted(NOW).unwrap().expires_at,
+            NOW + REQUEST_TTL_SECS
+        );
+        assert_eq!(fresh_minted(u64::MAX).unwrap().expires_at, u64::MAX);
+    }
+
+    #[test]
+    fn an_unsigned_envelope_names_the_instance_and_carries_the_minted_id_and_expiry() {
         let instance = InstanceId(Uuid::from_u128(0x2a));
 
-        let envelope = unsigned([7; 16], instance, cancel(), NOW);
+        let envelope = unsigned(minted_at(NOW), instance, cancel(), NOW);
 
         assert_eq!(
             envelope,
@@ -441,7 +500,12 @@ mod tests {
 
     #[test]
     fn a_row_restates_the_envelope_it_holds() {
-        let envelope = unsigned([7; 16], InstanceId(Uuid::from_u128(0x2a)), cancel(), NOW);
+        let envelope = unsigned(
+            minted_at(NOW),
+            InstanceId(Uuid::from_u128(0x2a)),
+            cancel(),
+            NOW,
+        );
 
         let queued = row([7; 16], envelope.clone());
 
@@ -479,7 +543,12 @@ mod tests {
 
     #[test]
     fn a_result_names_a_request_only_by_the_text_its_envelope_carried() {
-        let envelope = unsigned([7; 16], InstanceId(Uuid::from_u128(0x2a)), cancel(), NOW);
+        let envelope = unsigned(
+            minted_at(NOW),
+            InstanceId(Uuid::from_u128(0x2a)),
+            cancel(),
+            NOW,
+        );
         assert_eq!(named_request(&envelope.request_id), Some([7; 16]));
 
         for not_an_id in [
@@ -603,7 +672,11 @@ mod tests {
         let refused = EnqueueRefusal::ScopeNotGranted(Scope::Gates);
         assert_eq!(
             ApiError::from(EnqueueError::Refused(refused)),
-            ApiError::new(StatusCode::CONFLICT, "scope_not_granted")
+            ApiError::scope_not_granted(Scope::Gates)
+        );
+        assert_eq!(
+            ApiError::from(EnqueueError::Store(StoreError::NoSuchInstance)),
+            ApiError::new(StatusCode::NOT_FOUND, "not_found")
         );
         assert_eq!(
             ApiError::from(EnqueueError::Encode(EncodeError::TooLong)),

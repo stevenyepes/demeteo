@@ -12,6 +12,7 @@ mod register;
 mod sign_in;
 
 pub use add_passkey::{finish_addition, start_addition, stored_addition};
+pub(crate) use passkeys::public_key_options;
 pub use passkeys::{
     finish_endorsement, finish_revocation, list_passkeys, start_endorsement, start_revocation,
 };
@@ -31,6 +32,7 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use demeteo_hub_protocol::Scope;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -39,18 +41,21 @@ use time::OffsetDateTime;
 
 /// A refusal as the client sees it: `status`, and `{"error": "<code>"}`. The
 /// code is always a literal, so there is no path by which the text of the
-/// error behind it reaches a response body.
+/// error behind it reaches a response body. The one detail a body may add is
+/// the [`Scope`] a refusal is for, under `"scope"`, and only when there is one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApiError {
     status: StatusCode,
     code: &'static str,
+    scope: Option<Scope>,
 }
 
 impl ApiError {
     pub const UNAUTHENTICATED: Self = Self::new(StatusCode::UNAUTHORIZED, "unauthenticated");
     pub(crate) const INTERNAL: Self = Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal");
     pub(crate) const INVALID_REQUEST: Self = Self::new(StatusCode::BAD_REQUEST, "invalid_request");
-    const CEREMONY_EXPIRED: Self = Self::new(StatusCode::BAD_REQUEST, "ceremony_expired");
+    pub(crate) const CEREMONY_EXPIRED: Self =
+        Self::new(StatusCode::BAD_REQUEST, "ceremony_expired");
     const ASSERTION_INVALID: Self = Self::new(StatusCode::FORBIDDEN, "assertion_invalid");
     const TOO_MANY_CEREMONIES: Self =
         Self::new(StatusCode::SERVICE_UNAVAILABLE, "too_many_ceremonies");
@@ -73,10 +78,26 @@ impl ApiError {
     pub(crate) const INVALID_TOKEN: Self = Self::new(StatusCode::UNAUTHORIZED, "invalid_token");
     pub(crate) const TOO_MANY_CONNECTIONS: Self =
         Self::new(StatusCode::SERVICE_UNAVAILABLE, "too_many_connections");
-    pub(crate) const SCOPE_NOT_GRANTED: Self = Self::new(StatusCode::CONFLICT, "scope_not_granted");
+    const SCOPE_NOT_GRANTED: Self = Self::new(StatusCode::CONFLICT, "scope_not_granted");
+    pub const NOT_FOUND: Self = Self::new(StatusCode::NOT_FOUND, "not_found");
+    pub const CHALLENGE_MISMATCH: Self = Self::new(StatusCode::CONFLICT, "challenge_mismatch");
+    pub const ASSERTION_MALFORMED: Self = Self::new(StatusCode::BAD_REQUEST, "assertion_malformed");
+    pub const ATTACHMENTS_NOT_SUPPORTED: Self =
+        Self::new(StatusCode::BAD_REQUEST, "attachments_not_supported");
 
     pub(crate) const fn new(status: StatusCode, code: &'static str) -> Self {
-        Self { status, code }
+        Self {
+            status,
+            code,
+            scope: None,
+        }
+    }
+
+    pub const fn scope_not_granted(scope: Scope) -> Self {
+        Self {
+            scope: Some(scope),
+            ..Self::SCOPE_NOT_GRANTED
+        }
     }
 }
 
@@ -118,13 +139,19 @@ impl From<Full> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(ErrorBody { error: self.code })).into_response()
+        let body = ErrorBody {
+            error: self.code,
+            scope: self.scope,
+        };
+        (self.status, Json(body)).into_response()
     }
 }
 
 #[derive(Serialize)]
 struct ErrorBody {
     error: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<Scope>,
 }
 
 pub(crate) fn store_failed(error: StoreError) -> ApiError {
@@ -132,7 +159,7 @@ pub(crate) fn store_failed(error: StoreError) -> ApiError {
     ApiError::INTERNAL
 }
 
-fn ceremony_not_held(error: InsertError) -> ApiError {
+pub(crate) fn ceremony_not_held(error: InsertError) -> ApiError {
     match error {
         InsertError::Full => ApiError::TOO_MANY_CEREMONIES,
         InsertError::RandomSource(_) => {
@@ -341,6 +368,21 @@ mod tests {
                 StatusCode::FORBIDDEN,
                 r#"{"error":"csrf_required"}"#.to_owned()
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_scope_refusal_is_rendered_with_the_scope_it_is_for() {
+        assert_eq!(
+            rendered(ApiError::scope_not_granted(Scope::Spend)).await,
+            (
+                StatusCode::CONFLICT,
+                r#"{"error":"scope_not_granted","scope":"spend"}"#.to_owned()
+            )
+        );
+        assert_eq!(
+            rendered(ApiError::NOT_FOUND).await,
+            (StatusCode::NOT_FOUND, r#"{"error":"not_found"}"#.to_owned())
         );
     }
 

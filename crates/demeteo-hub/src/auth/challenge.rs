@@ -1,5 +1,5 @@
-//! What an endorsement or a revocation assertion is made over, and the one
-//! text form of every binary value that goes into it.
+//! What an endorsement, a revocation or a gate decision assertion is made
+//! over, and the one text form of every binary value that goes into it.
 //!
 //! A challenge is `SHA-256` of a pre-image that `demeteo_hub_protocol` builds.
 //! The pre-image is never assembled here: an instance rebuilds it with that
@@ -14,8 +14,11 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use demeteo_hub_protocol::EncodeError;
+use demeteo_hub_protocol::{Decision, EncodeError};
 use sha2::{Digest, Sha256};
+
+use crate::store::requests::RequestId;
+use crate::store::InstanceId;
 
 /// The `instance_id` of a challenge made at the Hub for the Hub's own trust
 /// decision: no single instance. The protocol binds an instance id into both
@@ -84,6 +87,49 @@ pub fn revocation_challenge(
         &binding.request_id,
         binding.expires_at,
         credential_id,
+    )
+    .map(|pre_image| digest(&pre_image))
+}
+
+/// The pre-image of the challenge a passkey signs to decide a gate. Unlike
+/// the two above it is addressed to one instance, which rebuilds it from the
+/// envelope of the `GateDecision` request: `instance` and `request_id` are
+/// spelled here exactly as `socket::requests::unsigned` spells them there, and
+/// a second spelling would be a challenge no instance can recompute.
+pub fn gate_challenge_pre_image(
+    instance: InstanceId,
+    feature_id: &str,
+    step_execution_id: &str,
+    decision: Decision,
+    request_id: &RequestId,
+    expires_at: u64,
+) -> Result<Vec<u8>, EncodeError> {
+    demeteo_hub_protocol::gate_challenge(
+        &instance.0.to_string(),
+        feature_id,
+        step_execution_id,
+        decision,
+        &base64url_encode(request_id),
+        expires_at,
+    )
+}
+
+/// The WebAuthn challenge over [`gate_challenge_pre_image`].
+pub fn gate_challenge_digest(
+    instance: InstanceId,
+    feature_id: &str,
+    step_execution_id: &str,
+    decision: Decision,
+    request_id: &RequestId,
+    expires_at: u64,
+) -> Result<[u8; 32], EncodeError> {
+    gate_challenge_pre_image(
+        instance,
+        feature_id,
+        step_execution_id,
+        decision,
+        request_id,
+        expires_at,
     )
     .map(|pre_image| digest(&pre_image))
 }
@@ -220,6 +266,88 @@ mod tests {
         let revoke = revocation_challenge(&binding(), CREDENTIAL_ID);
         assert!(endorse.is_ok() && revoke.is_ok());
         assert_ne!(endorse, revoke);
+    }
+
+    const INSTANCE: &str = "67e55044-10b1-426f-9247-bb680e5fe0c8";
+    const GATE_REQUEST_ID: RequestId = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+    fn instance() -> InstanceId {
+        InstanceId(INSTANCE.parse().unwrap())
+    }
+
+    /// The protocol is called with literal spellings, so a digest over the
+    /// instance's simple form or the request id's padded one does not pass.
+    #[test]
+    fn the_gate_challenge_is_sha256_of_the_protocol_pre_image() {
+        let pre_image = demeteo_hub_protocol::gate_challenge(
+            INSTANCE,
+            "feature",
+            "step-execution",
+            Decision::Approve,
+            REQUEST_ID,
+            EXPIRES_AT,
+        )
+        .unwrap();
+        let expected: [u8; 32] = Sha256::digest(&pre_image).into();
+
+        assert_eq!(
+            gate_challenge_digest(
+                instance(),
+                "feature",
+                "step-execution",
+                Decision::Approve,
+                &GATE_REQUEST_ID,
+                EXPIRES_AT,
+            ),
+            Ok(expected)
+        );
+        assert_eq!(
+            gate_challenge_pre_image(
+                instance(),
+                "feature",
+                "step-execution",
+                Decision::Approve,
+                &GATE_REQUEST_ID,
+                EXPIRES_AT,
+            ),
+            Ok(pre_image)
+        );
+    }
+
+    /// What an instance does with a `GateDecision` it is delivered: rebuild
+    /// the challenge from the envelope's own fields.
+    #[test]
+    fn the_gate_challenge_is_recomputable_from_the_envelope() {
+        use crate::socket::requests::{unsigned, Minted};
+        use demeteo_hub_protocol::{CancelFeature, RequestPayload};
+
+        let minted = Minted {
+            id: GATE_REQUEST_ID,
+            expires_at: EXPIRES_AT,
+        };
+        let payload = RequestPayload::CancelFeature(CancelFeature {
+            feature_id: "feature".to_owned(),
+        });
+        let envelope = unsigned(minted, instance(), payload, EXPIRES_AT - 1);
+
+        assert_eq!(
+            demeteo_hub_protocol::gate_challenge(
+                &envelope.instance_id,
+                "feature",
+                "step-execution",
+                Decision::Cancel,
+                &envelope.request_id,
+                envelope.expires_at,
+            ),
+            gate_challenge_pre_image(
+                instance(),
+                "feature",
+                "step-execution",
+                Decision::Cancel,
+                &minted.id,
+                minted.expires_at,
+            )
+        );
     }
 
     #[test]

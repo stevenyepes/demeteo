@@ -1098,7 +1098,7 @@ fn the_session_cookie_is_http_only_secure_and_same_site_strict() {
 /// This table and the next list every state-changing route the Hub serves.
 /// Their lengths are in their types so that losing a row is a compile error
 /// and not a loop that quietly covers one route fewer.
-const SESSION_BOUND_POSTS: [&str; 10] = [
+const SESSION_BOUND_POSTS: [&str; 15] = [
     "/v1/session/end",
     "/v1/passkeys/add/start",
     "/v1/passkeys/add/finish",
@@ -1109,6 +1109,11 @@ const SESSION_BOUND_POSTS: [&str; 10] = [
     "/v1/pairing/start",
     "/v1/pairing/approve",
     "/v1/pairing/deny",
+    "/v1/instances/{instance_id}/runs",
+    "/v1/instances/{instance_id}/runs/{feature_id}/cancel",
+    "/v1/instances/{instance_id}/runs/{feature_id}/steps/{step_id}/assignment",
+    "/v1/instances/{instance_id}/gates/challenge",
+    "/v1/instances/{instance_id}/gates/decision",
 ];
 
 /// The `POST` routes that run before there is a session to derive a token
@@ -1241,7 +1246,7 @@ async fn a_state_changing_request_from_another_origin_is_403() {
         .chain(PRE_SESSION_POSTS)
         .collect();
     let distinct: BTreeSet<&str> = every_post.iter().copied().collect();
-    assert_eq!(distinct.len(), 14, "a path is listed twice: {every_post:?}");
+    assert_eq!(distinct.len(), 19, "a path is listed twice: {every_post:?}");
 
     for path in every_post {
         assert_eq!(
@@ -1400,7 +1405,15 @@ async fn a_sign_in_is_not_finished_without_its_ceremony() {
 
 /// The `GET` routes that answer for a signed-in tenant. A `GET` changes
 /// nothing, so the guard asks no token of it and the session is its only gate.
-const SESSION_BOUND_GETS: &[&str] = &["/v1/session", "/v1/passkeys"];
+const SESSION_BOUND_GETS: &[&str] = &[
+    "/v1/session",
+    "/v1/passkeys",
+    "/v1/fleet",
+    "/v1/instances/{instance_id}",
+    "/v1/runs",
+    "/v1/instances/{instance_id}/runs/{feature_id}",
+    "/v1/instances/{instance_id}/requests/{request_id}",
+];
 
 /// No request here reaches the database, which cannot answer: a session
 /// lookup would turn each `401` into a `500`.

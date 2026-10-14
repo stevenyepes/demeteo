@@ -414,15 +414,15 @@ The tree above is `src-tauri/` only. The shared core and the remote runner live
 in `crates/demeteo-core` and `crates/demeteo-runner`. The Demeteo Hub — a hosted
 browser control plane over many instances — adds three more. All three exist, and the
 Hub is built only in part: storage, the `KeyService` port, `/healthz`, static serving,
-passkey auth, the Hub's half of pairing and the Hub's side of the instance socket, plus
-the Compose bundle in `deploy/hub`. No HTTP route queues a request for an instance yet,
-and nothing on the desktop talks to the Hub — the desktop's half of pairing and its
+passkey auth, the Hub's half of pairing, the Hub's side of the instance socket and the
+session JSON API that queues requests for an instance, plus the Compose bundle in
+`deploy/hub`. Nothing on the desktop talks to the Hub — the desktop's half of pairing and its
 socket client included
 ([HUB.md §2](HUB.md#2-status-of-the-parts) has the state per part):
 
 | Path | What it is |
 |---|---|
-| `crates/demeteo-hub` | the axum server — partly built: passkey registration, sign-in, sessions, endorsement and revocation under `/v1`, pairing in `crates/demeteo-hub/src/pairing/` (`GET /authorize`, the consent routes under `/v1/pairing`, `POST /token`), and the instance socket in `crates/demeteo-hub/src/socket/` (`GET /socket`: admission by access token, presence, the run mirror, the latest snapshot, the signed request queue and its outcomes); no HTTP route queues a request yet. It depends on `crates/demeteo-hub-protocol` |
+| `crates/demeteo-hub` | the axum server — partly built: passkey registration, sign-in, sessions, endorsement and revocation under `/v1`, pairing in `crates/demeteo-hub/src/pairing/` (`GET /authorize`, the consent routes under `/v1/pairing`, `POST /token`), and the instance socket in `crates/demeteo-hub/src/socket/` (`GET /socket`: admission by access token, presence, the run mirror, the latest snapshot, the signed request queue and its outcomes), and the session JSON API in `crates/demeteo-hub/src/api/` (fleet and run reads, dispatch, cancel, step assignment, gate challenge and decision, request status). It depends on `crates/demeteo-hub-protocol` |
 | `crates/demeteo-hub-protocol` | serde-only wire types shared by the desktop client and the Hub; it does not depend on `demeteo-core` — built, and the Hub is its only dependant so far |
 | `hub-web/` | a second Vite entry in this repo, reusing `src/components/canvas` and the `src/App.css` tokens — sign-up, sign-in, passkey management and the pairing approval page built; the fleet views are placeholders |
 

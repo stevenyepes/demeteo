@@ -3,9 +3,9 @@
 
 use async_trait::async_trait;
 use demeteo_hub_protocol::{Hello, RequestOutcome, RunEvent, Scope, SignedRequest, Snapshot};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::socket::connections::ConnectionId;
 use crate::socket::handler::Admission;
@@ -76,6 +76,7 @@ struct Rows {
     arch: Option<String>,
     scopes: Vec<Scope>,
     connection: Option<ConnectionId>,
+    connected_at: Option<u64>,
     last_seen: Option<u64>,
     cursor: u64,
     /// Keyed as `run_mirror` is, less the instance, of which there is one
@@ -89,6 +90,10 @@ struct Rows {
     /// In the order they were inserted, which is the order `queue_seq`
     /// gives the real rows.
     requests: Vec<RequestView>,
+    /// When each request was inserted, by the wall clock, as Postgres's
+    /// `created_at` is: no caller names that time. Apart from the rows
+    /// because no session reads it.
+    created_at: HashMap<RequestId, u64>,
     /// The requests whose envelope the queue reads as unreadable. Apart from
     /// the rows because a [`RequestView`] keeps the envelope it was queued
     /// with, which is what a test compares a delivery against.
@@ -117,9 +122,16 @@ pub struct MemoryHub {
 }
 
 impl MemoryHub {
-    /// An instance as its pairing left it: `scopes` are what the user left
-    /// checked, it has never connected, and nothing is stored for it.
+    /// An instance of a tenant nobody else holds, as
+    /// [`paired_to`](Self::paired_to) leaves it.
     pub fn paired(scopes: &[Scope]) -> Self {
+        Self::paired_to(UserId::generate(), scopes)
+    }
+
+    /// An instance of `user` as its pairing left it: `scopes` are what the
+    /// user left checked, it has never connected, and nothing is stored for
+    /// it.
+    pub fn paired_to(user: UserId, scopes: &[Scope]) -> Self {
         let rows = Rows {
             install_id: None,
             version: None,
@@ -127,17 +139,19 @@ impl MemoryHub {
             arch: None,
             scopes: scopes.to_vec(),
             connection: None,
+            connected_at: None,
             last_seen: None,
             cursor: 0,
             mirror: BTreeMap::new(),
             snapshot: None,
             requests: Vec::new(),
+            created_at: HashMap::new(),
             unreadable: HashSet::new(),
             failure: None,
             departure_takes: Duration::ZERO,
         };
         Self {
-            user: UserId::generate(),
+            user,
             instance: InstanceId::generate(),
             rows: Arc::new(Mutex::new(rows)),
         }
@@ -159,6 +173,64 @@ impl MemoryHub {
 
     pub fn store(&self) -> MemoryStore {
         MemoryStore(self.clone())
+    }
+
+    pub fn user_id(&self) -> UserId {
+        self.user
+    }
+
+    pub fn instance_id(&self) -> InstanceId {
+        self.instance
+    }
+
+    /// The connection the instance is present through, and when it became
+    /// so: what `instances.connection_id` and `connected_at` hold, which
+    /// [`instance`](Self::instance) folds into `present`.
+    pub fn connection(&self) -> Option<(ConnectionId, Option<u64>)> {
+        let rows = self.rows();
+        rows.connection
+            .map(|connection| (connection, rows.connected_at))
+    }
+
+    /// Unix seconds, by the wall clock at the insert. `None` for an id the
+    /// instance does not hold.
+    pub fn created_at(&self, id: RequestId) -> Option<u64> {
+        self.rows().created_at.get(&id).copied()
+    }
+
+    /// Writes the labels a `hello` writes and nothing else of it: the
+    /// scopes, the presence and the cursor stay as they were.
+    pub fn labelled(&self, version: &str, os: &str, arch: &str) {
+        let mut rows = self.rows();
+        rows.version = Some(version.to_owned());
+        rows.os = Some(os.to_owned());
+        rows.arch = Some(arch.to_owned());
+    }
+
+    /// Makes `connection` the one the instance is present through, or with
+    /// `None` makes it absent, and changes no time column: a test that needs
+    /// one drives [`SocketStore::greeted`] instead.
+    pub fn present_through(&self, connection: Option<ConnectionId>) {
+        let mut rows = self.rows();
+        if connection.is_none() {
+            rows.connected_at = None;
+        }
+        rows.connection = connection;
+    }
+
+    /// Makes `scopes` what the instance last reported, as a `hello` would.
+    pub fn scoped(&self, scopes: &[Scope]) {
+        self.rows().scopes = scopes.to_vec();
+    }
+
+    /// Stores a mirror row under `(feature_id, offset)` whose text is no
+    /// [`RunEvent`], as Postgres holds one written by another build. A row
+    /// already under the key is kept, as [`SocketStore::ingested`] keeps one.
+    pub fn mirrored_unreadable(&self, feature_id: &str, offset: u64) {
+        self.rows()
+            .mirror
+            .entry((feature_id.to_owned(), offset))
+            .or_insert_with(|| "{}".to_owned());
     }
 
     pub fn instance(&self) -> InstanceView {
@@ -282,6 +354,7 @@ impl SocketStore for MemoryStore {
         rows.arch = Some(hello.arch.clone());
         rows.scopes = hello.scopes.clone();
         rows.connection = Some(connection);
+        rows.connected_at = Some(now);
         rows.last_seen = Some(now);
         Ok(rows.cursor)
     }
@@ -330,6 +403,7 @@ impl SocketStore for MemoryStore {
         if rows.requests.iter().any(|held| held.id == request.id) {
             panic!("memory hub: a request under an id the instance already holds");
         }
+        rows.created_at.insert(request.id, wall_clock());
         rows.requests.push(RequestView {
             id: request.id,
             kind: request.kind,
@@ -418,8 +492,16 @@ impl SocketStore for MemoryStore {
         let mut rows = self.0.written()?;
         if rows.connection == Some(connection) {
             rows.connection = None;
+            rows.connected_at = None;
             rows.last_seen = Some(now);
         }
         Ok(())
+    }
+}
+
+fn wall_clock() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(since) => since.as_secs(),
+        Err(_) => panic!("memory hub: a wall clock before 1970"),
     }
 }

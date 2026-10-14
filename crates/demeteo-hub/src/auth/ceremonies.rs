@@ -9,7 +9,9 @@ use super::challenge::{
 };
 use super::webauthn::{RegistrationState, SignInState};
 use crate::store::pool::ReservedUser;
-use crate::store::UserId;
+use crate::store::requests::RequestId;
+use crate::store::{InstanceId, UserId};
+use demeteo_hub_protocol::Decision;
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -56,6 +58,24 @@ pub enum Ceremony {
         binding: ChallengeBinding,
         target_credential_id: String,
     },
+    /// A decision on one instance's gate, between the challenge that asks a
+    /// passkey to sign it and the finish that queues it. Every field the
+    /// `GateDecision` request is built from is read back from here, the
+    /// request id and expiry included, because the instance recomputes
+    /// `challenge` from that request's envelope. Like every kind it is held in
+    /// process memory on one replica and lost on restart; [`Ceremonies`] says
+    /// what that costs.
+    Gate {
+        user: UserId,
+        holder: Vec<u8>,
+        instance: InstanceId,
+        feature_id: String,
+        step_execution_id: String,
+        decision: Decision,
+        request_id: RequestId,
+        expires_at: u64,
+        challenge: [u8; 32],
+    },
 }
 
 /// Whose allowance an entry is held under.
@@ -77,7 +97,8 @@ impl Ceremony {
             Ceremony::Register { .. } | Ceremony::SignIn { .. } => Budget::Anonymous,
             Ceremony::Add { holder, .. }
             | Ceremony::Endorse { holder, .. }
-            | Ceremony::Revoke { holder, .. } => Budget::Holder(holder),
+            | Ceremony::Revoke { holder, .. }
+            | Ceremony::Gate { holder, .. } => Budget::Holder(holder),
         }
     }
 }
@@ -158,8 +179,8 @@ impl Live {
 /// - **What a caller can hold is bounded by who it is.** Anyone can start a
 ///   registration or a sign-in, so those two kinds share
 ///   [`MAX_LIVE_CEREMONIES`] and are refused beyond it: that many entries for
-///   [`CHALLENGE_TTL_SECS`] is all an anonymous caller can hold. The three
-///   kinds a session starts are held under the passkey that signed it in,
+///   [`CHALLENGE_TTL_SECS`] is all an anonymous caller can hold. The kinds a
+///   session starts are held under the passkey that signed it in,
 ///   [`MAX_LIVE_PER_HOLDER`] each, and count toward neither the anonymous
 ///   budget nor another passkey's: a cap shared with the anonymous kinds
 ///   would let a flood of sign-in starts refuse every revocation for as long
@@ -221,6 +242,18 @@ impl Ceremonies {
     pub fn take(&self, now: u64, id: &str) -> Option<Ceremony> {
         let entry = self.lock().entries.remove(id)?;
         entry.is_live(now).then_some(entry.ceremony)
+    }
+
+    /// How many entries are held under the passkey whose credential id is
+    /// `holder`, expired ones included until an `insert` drops them. What a
+    /// test reads to show a refusal held nothing.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn held_under(&self, holder: &[u8]) -> usize {
+        self.lock()
+            .entries
+            .values()
+            .filter(|entry| entry.ceremony.budget() == Budget::Holder(holder))
+            .count()
     }
 
     /// A poisoned lock still guards a whole map: nothing runs under it but
@@ -300,6 +333,33 @@ mod tests {
         }
     }
 
+    fn gate_by(holder: &[u8], step_execution_id: &str) -> Ceremony {
+        Ceremony::Gate {
+            user: UserId::generate(),
+            holder: holder.to_vec(),
+            instance: InstanceId(uuid::Uuid::new_v4()),
+            feature_id: "feature".to_owned(),
+            step_execution_id: step_execution_id.to_owned(),
+            decision: Decision::Approve,
+            request_id: [7; 16],
+            expires_at: NOW + CHALLENGE_TTL_SECS,
+            challenge: [9; 32],
+        }
+    }
+
+    fn gated_step(taken: Option<Ceremony>) -> Option<String> {
+        match taken? {
+            Ceremony::Gate {
+                step_execution_id, ..
+            } => Some(step_execution_id),
+            Ceremony::Revoke { .. }
+            | Ceremony::Endorse { .. }
+            | Ceremony::Register { .. }
+            | Ceremony::SignIn { .. }
+            | Ceremony::Add { .. } => None,
+        }
+    }
+
     fn is_a_sign_in(taken: Option<Ceremony>) -> bool {
         matches!(taken, Some(Ceremony::SignIn { .. }))
     }
@@ -313,7 +373,8 @@ mod tests {
             Ceremony::Endorse { .. }
             | Ceremony::Register { .. }
             | Ceremony::SignIn { .. }
-            | Ceremony::Add { .. } => None,
+            | Ceremony::Add { .. }
+            | Ceremony::Gate { .. } => None,
         }
     }
 
@@ -573,6 +634,39 @@ mod tests {
         assert!(ceremonies.insert(NOW, endorse_by(&holder(0))).is_ok());
         assert!(ceremonies.insert(NOW, sign_in(&verifier)).is_ok());
         assert_eq!(ceremonies.lock().session_bound(), MAX_LIVE_SESSION_BOUND);
+    }
+
+    #[test]
+    fn a_gate_is_held_under_its_holders_budget() {
+        assert!(gate_by(MINE, "step").budget() == Budget::Holder(MINE));
+    }
+
+    /// A revocation of the same passkey shares the budget, so a gate held
+    /// under the anonymous one or a budget of its own would leave it alive.
+    #[test]
+    fn gates_beyond_the_holders_budget_evict_its_oldest_entry() {
+        let ceremonies = Ceremonies::default();
+        let revoking = ceremonies.insert(NOW, revoke("oldest")).unwrap();
+        let gates: Vec<String> = (0..MAX_LIVE_PER_HOLDER)
+            .map(|place| {
+                let gate = gate_by(MINE, &format!("step {place}"));
+                ceremonies.insert(NOW, gate).unwrap()
+            })
+            .collect();
+        let theirs = ceremonies.insert(NOW, gate_by(THEIRS, "theirs")).unwrap();
+
+        assert!(ceremonies.take(NOW, &revoking).is_none());
+        assert_eq!(ceremonies.lock().entries.len(), MAX_LIVE_PER_HOLDER + 1);
+        for (place, id) in gates.iter().enumerate() {
+            assert_eq!(
+                gated_step(ceremonies.take(NOW, id)),
+                Some(format!("step {place}"))
+            );
+        }
+        assert_eq!(
+            gated_step(ceremonies.take(NOW, &theirs)),
+            Some("theirs".to_owned())
+        );
     }
 
     #[test]

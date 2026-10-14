@@ -1,3 +1,4 @@
+use crate::api;
 use crate::auth::ceremonies::Ceremonies;
 use crate::auth::handlers::{self, cookie_text, header_text, ApiError};
 use crate::auth::session::{self, Rejection};
@@ -169,6 +170,37 @@ fn v1(state: AppState) -> Router {
             post(pairing::handlers::approve_pairing),
         )
         .route("/v1/pairing/deny", post(pairing::handlers::deny_pairing))
+        .route("/v1/fleet", get(api::fleet::get_fleet))
+        .route("/v1/instances/{instance_id}", get(api::fleet::get_instance))
+        .route("/v1/runs", get(api::runs::get_runs))
+        .route(
+            "/v1/instances/{instance_id}/runs/{feature_id}",
+            get(api::runs::get_run),
+        )
+        .route(
+            "/v1/instances/{instance_id}/runs",
+            post(api::dispatch::post_dispatch),
+        )
+        .route(
+            "/v1/instances/{instance_id}/runs/{feature_id}/cancel",
+            post(api::dispatch::post_cancel),
+        )
+        .route(
+            "/v1/instances/{instance_id}/runs/{feature_id}/steps/{step_id}/assignment",
+            post(api::dispatch::post_assignment),
+        )
+        .route(
+            "/v1/instances/{instance_id}/gates/challenge",
+            post(api::gates::post_gate_challenge),
+        )
+        .route(
+            "/v1/instances/{instance_id}/gates/decision",
+            post(api::gates::post_gate_decision),
+        )
+        .route(
+            "/v1/instances/{instance_id}/requests/{request_id}",
+            get(api::request_status::get_request),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             guard_mutations,
