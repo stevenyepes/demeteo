@@ -217,6 +217,50 @@ pub async fn refresh_remote_run(
         .map_err(AppError::from)
 }
 
+/// What [`refresh_run_for_feature`] found when it went to the runner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FeatureRunRefresh {
+    /// No mirror row names this feature: it runs on the project's own
+    /// compute, so there is no runner to ask and nothing was changed.
+    NotDetached,
+    Refreshed,
+    /// The mirror row was marked `unreachable` (or, for a run already
+    /// terminal, left as it was) and the shadow is as of the last
+    /// successful poll.
+    RunnerUnreachable {
+        machine_id: String,
+    },
+}
+
+/// Pulls one feature's detached run from its runner through the same
+/// [`reconcile_one_run`] the feature view's poll uses.
+///
+/// Keyed by feature because that is what an MCP client holds; the Tauri
+/// command is keyed by `(machine_id, run_id)` because the UI holds the row.
+/// `reconcile_one_run` returns `None` for both "runner unanswered" and "row
+/// gone since the lookup", so the row is read again to tell them apart.
+pub async fn refresh_run_for_feature(
+    ctx: &AppContext,
+    feature_id: &str,
+) -> Result<FeatureRunRefresh, AppError> {
+    let Some(row) = find_mirror_for_feature(ctx, feature_id.to_string())? else {
+        return Ok(FeatureRunRefresh::NotDetached);
+    };
+    if reconcile_one_run(ctx, &row).await.is_some() {
+        return Ok(FeatureRunRefresh::Refreshed);
+    }
+    match ctx
+        .remote_run_mirror
+        .get(&row.machine_id, &row.run_id)
+        .map_err(AppError::from)?
+    {
+        Some(_) => Ok(FeatureRunRefresh::RunnerUnreachable {
+            machine_id: row.machine_id,
+        }),
+        None => Ok(FeatureRunRefresh::NotDetached),
+    }
+}
+
 pub fn list_mirrored_runs(ctx: &AppContext) -> Result<Vec<RemoteRunMirror>, AppError> {
     ctx.remote_run_mirror.list().map_err(AppError::from)
 }

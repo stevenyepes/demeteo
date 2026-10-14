@@ -658,3 +658,194 @@ async fn listing_machines_names_placements_and_none_of_the_connection_details() 
         assert!(!wire.contains(hidden), "{hidden} left on the wire: {wire}");
     }
 }
+
+// ── refresh_run ─────────────────────────────────────────────────────────────
+
+/// A runner that answers only the RPCs it was scripted with and fails every
+/// other call, recording each one.
+struct ScriptedRunner {
+    rpc: std::collections::HashMap<&'static str, Result<serde_json::Value, String>>,
+    calls: std::sync::Mutex<Vec<String>>,
+}
+
+impl ScriptedRunner {
+    fn new(rpc: Vec<(&'static str, Result<serde_json::Value, String>)>) -> Arc<Self> {
+        Arc::new(Self {
+            rpc: rpc.into_iter().collect(),
+            calls: std::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::ports::execution::ExecutionPort for ScriptedRunner {
+    async fn test_connection(&self, _machine_id: &str) -> Result<(), String> {
+        Err("unscripted test_connection".to_string())
+    }
+    async fn read_file(&self, _machine_id: &str, _path: &str) -> Result<String, String> {
+        Err("unscripted read_file".to_string())
+    }
+    async fn write_file(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Err("unscripted write_file".to_string())
+    }
+    async fn write_file_bytes(&self, _: &str, _: &str, _: &[u8]) -> Result<(), String> {
+        Err("unscripted write_file_bytes".to_string())
+    }
+    async fn get_metadata(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<crate::ports::execution::SftpEntry, String> {
+        Err("unscripted get_metadata".to_string())
+    }
+    async fn list_dir(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<crate::ports::execution::SftpEntry>, String> {
+        Err("unscripted list_dir".to_string())
+    }
+    async fn setup_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+        Err("unscripted setup_worktree".to_string())
+    }
+    async fn resolve_home(&self, _: &str) -> Result<String, String> {
+        Err("unscripted resolve_home".to_string())
+    }
+    async fn resolve_platform(&self, _: &str) -> Result<crate::domain::models::Platform, String> {
+        Err("unscripted resolve_platform".to_string())
+    }
+    async fn resolve_user(&self, _: &str) -> Result<String, String> {
+        Err("unscripted resolve_user".to_string())
+    }
+    async fn control_rpc(
+        &self,
+        _machine_id: &str,
+        method: &str,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.calls.lock().unwrap().push(method.to_string());
+        self.rpc
+            .get(method)
+            .cloned()
+            .unwrap_or_else(|| Err(format!("unscripted rpc {method}")))
+    }
+    fn spawn_interactive(
+        &self,
+        _: &str,
+        _: &str,
+        _: &[String],
+        _: &str,
+        _: &std::collections::HashMap<String, String>,
+    ) -> Result<Box<dyn crate::ports::execution::InteractiveHandle>, String> {
+        Err("unscripted spawn_interactive".to_string())
+    }
+}
+
+/// A shadow feature `f-1` (running, no steps) with a mirror row on `m-1`.
+fn detached_fixture(tag: &str, runner: Arc<ScriptedRunner>) -> AppContext {
+    let (mut ctx, project_id) = ctx_with_project(tag);
+    ctx.features.add(feature("f-1", &project_id)).unwrap();
+    ctx.remote_run_mirror
+        .upsert_submitted(
+            "m-1",
+            "r-1",
+            Some(project_id.as_str()),
+            Some("f-1"),
+            "detached",
+            0,
+        )
+        .unwrap();
+    ctx.exec = runner;
+    ctx
+}
+
+fn runner_answering_completed(tag: &str) -> Arc<ScriptedRunner> {
+    let mut runner_feature = feature("f-1", &ProjectId::from(format!("p-{tag}")));
+    runner_feature.status = "completed".to_string();
+    let runner_step = step("se-1", &runner_feature.id, 0);
+    ScriptedRunner::new(vec![
+        (
+            "get_status",
+            Ok(serde_json::json!({ "status": "completed", "feature_id": "f-1" })),
+        ),
+        (
+            "get_feature",
+            Ok(serde_json::to_value(runner_feature).unwrap()),
+        ),
+        (
+            "list_steps",
+            Ok(serde_json::to_value(vec![runner_step]).unwrap()),
+        ),
+    ])
+}
+
+fn f1() -> FeatureId {
+    FeatureId::from("f-1".to_string())
+}
+
+#[tokio::test]
+async fn refresh_run_of_a_missing_feature_is_an_error() {
+    let ctx = fixture("refresh-missing");
+    let error = refresh_run(&ctx, &FeatureId::from("f-none".to_string()))
+        .await
+        .unwrap_err();
+    assert_eq!(error, "feature not found");
+}
+
+#[tokio::test]
+async fn refresh_run_of_a_local_feature_returns_it_unchanged_without_asking_a_runner() {
+    let (mut ctx, project_id) = ctx_with_project("refresh-local");
+    let runner = ScriptedRunner::new(Vec::new());
+    ctx.exec = runner.clone();
+    ctx.features.add(feature("f-1", &project_id)).unwrap();
+
+    let refreshed = refresh_run(&ctx, &f1()).await.unwrap();
+
+    assert!(!refreshed.refreshed);
+    assert!(refreshed
+        .note
+        .as_deref()
+        .unwrap()
+        .contains("not a detached run"));
+    assert_eq!(refreshed.run.feature.status, "running");
+    assert!(runner.calls().is_empty(), "{:?}", runner.calls());
+}
+
+#[tokio::test]
+async fn refresh_run_pulls_the_runners_state_into_the_shadow_and_returns_it() {
+    let runner = runner_answering_completed("refresh-detached");
+    let ctx = detached_fixture("refresh-detached", runner.clone());
+    assert!(get_feature(&ctx, &f1()).unwrap().unwrap().steps.is_empty());
+
+    let refreshed = refresh_run(&ctx, &f1()).await.unwrap();
+
+    assert!(refreshed.refreshed);
+    assert!(refreshed.note.is_none());
+    assert_eq!(refreshed.run.feature.status, "completed");
+    assert_eq!(refreshed.run.steps.len(), 1);
+    let stored = get_feature(&ctx, &f1()).unwrap().unwrap();
+    assert_eq!(stored.feature.status, "completed");
+    assert_eq!(runner.calls(), ["get_status", "get_feature", "list_steps"]);
+}
+
+#[tokio::test]
+async fn refresh_run_reports_an_unreachable_runner_and_leaves_the_shadow_alone() {
+    let runner = ScriptedRunner::new(vec![(
+        "get_status",
+        Err("ssh: connection refused".to_string()),
+    )]);
+    let ctx = detached_fixture("refresh-unreachable", runner);
+
+    let error = refresh_run(&ctx, &f1()).await.unwrap_err();
+
+    assert!(
+        error.contains("m-1") && error.contains("could not be reached"),
+        "{error}"
+    );
+    let stored = get_feature(&ctx, &f1()).unwrap().unwrap();
+    assert_eq!(stored.feature.status, "running");
+}
