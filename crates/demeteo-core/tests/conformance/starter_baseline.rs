@@ -1,4 +1,4 @@
-//! Baseline behavioral harness for the nine bundled starter workflows
+//! Baseline behavioral harness for the ten bundled starter workflows
 //! (P0.2, `docs/TASKS_DAG_WORKFLOWS.md`).
 //!
 //! Every starter is *executed* through the engine with the deterministic
@@ -518,6 +518,11 @@ async fn starter_baseline_docs_update() {
 #[tokio::test]
 async fn starter_baseline_experiment() {
     assert_starter_baseline("experiment").await;
+}
+
+#[tokio::test]
+async fn starter_baseline_reference_feature() {
+    assert_starter_baseline("reference-feature-pipeline").await;
 }
 
 #[tokio::test]

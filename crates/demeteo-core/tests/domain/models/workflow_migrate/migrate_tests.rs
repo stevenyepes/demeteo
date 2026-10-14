@@ -8,12 +8,13 @@ use crate::domain::ids::StepId;
 use crate::domain::models::workflow_v2::{JoinSemantics, RetryStrategy};
 use std::path::Path;
 
-const STARTERS: [&str; 8] = [
+const STARTERS: [&str; 9] = [
     "bugfix-pipeline",
     "ci-fix",
     "code-review",
     "docs-update",
     "experiment",
+    "reference-feature-pipeline",
     "refactor",
     "simple-task",
     "standard-feature-pipeline",

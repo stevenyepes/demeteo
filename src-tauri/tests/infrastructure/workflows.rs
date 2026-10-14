@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 const CODE_REVIEW: &str = include_str!("../../workflows/code-review.json");
 const ADDRESS_REVIEW: &str = include_str!("../../workflows/address-review.json");
+const REFERENCE_FEATURE: &str = include_str!("../../workflows/reference-feature-pipeline.json");
 
 /// Every embedded starter workflow must deserialize into `StepConfig`
 /// (guards the V13 `model`/`verifier` JSON edits against typos).
@@ -45,7 +46,7 @@ fn all_starters_deserialize() {
     }
 }
 
-/// The six looping workflows must each have a step that both redirects on
+/// The looping workflows must each have a step that both redirects on
 /// failure AND carries a verifier (the harness + agent-judgment gate).
 #[test]
 fn looping_starters_have_verifier_and_redirect() {
@@ -56,6 +57,7 @@ fn looping_starters_have_verifier_and_redirect() {
         include_str!("../../workflows/refactor.json"),
         include_str!("../../workflows/ci-fix.json"),
         include_str!("../../workflows/simple-task.json"),
+        include_str!("../../workflows/reference-feature-pipeline.json"),
     ] {
         let steps = parse(json);
         let has_loop = steps
@@ -324,7 +326,7 @@ fn the_review_starter_passes_a_branch_no_gate_was_configured_for() {
 /// review, for a record nothing reads.
 ///
 /// Teaching the node to resolve its own base would close that, and it changes a
-/// documented invariant across all nine starters, so it is a decision rather
+/// documented invariant across every starter, so it is a decision rather
 /// than a detail. Until it is taken, the absence here is the configuration that
 /// is correct, and nothing but this assertion says so.
 #[test]
@@ -501,6 +503,65 @@ fn the_review_starter_seeds_once_and_then_stands_still() {
     assert_eq!(
         plan_seed(&starter, Some(&stored), latest.as_ref()),
         SeedAction::Skip
+    );
+}
+
+/// Confirming the user may study the reference at all is a human act, so the
+/// gate is `dangerous`: `review` asks, `clean` asks too because no review step
+/// precedes it, and only `full` skips it. It sits directly after the
+/// investigation so a wrong reference costs one step, not a plan.
+#[test]
+fn the_reference_starter_confirms_the_reference_before_planning_against_it() {
+    let steps = parse(REFERENCE_FEATURE);
+    let at = |id: &str| {
+        steps
+            .iter()
+            .position(|s| s.id.0 == id)
+            .unwrap_or_else(|| panic!("the reference starter has {id}"))
+    };
+    let gate = &steps[at("s-gate-reference")];
+    assert_eq!(gate.kind, "gate");
+    assert!(
+        gate.is_dangerous_gate(),
+        "an autonomy level short of `full` would approve the authorisation on the user's behalf"
+    );
+    assert_eq!(at("s-gate-reference"), at("s-reference") + 1);
+    assert!(
+        steps[..at("s-reference")]
+            .iter()
+            .all(|s| s.kind == "command"),
+        "an agent plans against a reference nobody has confirmed"
+    );
+}
+
+/// The investigation reads the web and may use the shell, so the artifact
+/// fence is the only thing keeping it out of the user's source.
+#[test]
+fn the_reference_starter_investigates_inside_the_artifact_fence() {
+    let steps = parse(REFERENCE_FEATURE);
+    let reference = steps
+        .iter()
+        .find(|s| s.id.0 == "s-reference")
+        .expect("the reference starter has s-reference");
+    assert_eq!(reference.capability, Some(StepCapability::Artifacts));
+    assert!(reference.allow_network && reference.allow_shell);
+}
+
+/// Clean-room separation: the brief reaches research, spec and critic, and the
+/// agents writing code work from the spec alone. Behaviour the user kept
+/// reaches them through the spec's acceptance criteria.
+#[test]
+fn the_reference_starter_implements_from_the_spec_not_the_brief() {
+    let steps = parse(REFERENCE_FEATURE);
+    let implement = steps
+        .iter()
+        .find(|s| s.kind == "sequence")
+        .expect("the reference starter implements tickets");
+    let prompt = implement.prompt_template.as_deref().unwrap_or_default();
+    assert!(prompt.contains("[attached — s-spec]"));
+    assert!(
+        !prompt.contains("s-reference"),
+        "the implementing agents are handed the reference brief"
     );
 }
 
