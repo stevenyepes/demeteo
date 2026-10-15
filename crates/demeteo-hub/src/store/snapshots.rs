@@ -1,4 +1,5 @@
 use super::{timestamp, Db, InstanceId, StoreError, UserId};
+use crate::socket::SNAPSHOT_KIND;
 
 /// Makes `body` the instance's one snapshot of `kind`, whatever that slot
 /// held before, and says whether it did.
@@ -39,4 +40,24 @@ pub async fn replace_snapshot(
     .execute(db)
     .await?;
     Ok(done.rows_affected() > 0)
+}
+
+/// The body of the instance's snapshot under [`SNAPSHOT_KIND`], as JSON text
+/// and unparsed, for the reason [`MirrorRecord::event`] is. `None` when the
+/// tenant has no such instance or the instance has sent no snapshot yet.
+///
+/// [`MirrorRecord::event`]: super::run_mirror::MirrorRecord::event
+pub async fn read_snapshot(
+    user: UserId,
+    db: &Db,
+    instance: InstanceId,
+) -> Result<Option<String>, StoreError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT body::text FROM snapshots WHERE user_id = $1 AND instance_id = $2 AND kind = $3",
+    )
+    .bind(user)
+    .bind(instance)
+    .bind(SNAPSHOT_KIND)
+    .fetch_optional(db)
+    .await?)
 }

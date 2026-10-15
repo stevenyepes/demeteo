@@ -12,6 +12,18 @@ pub struct NewEvent {
     pub event: String,
 }
 
+/// One stored entry of an instance's run log, as [`mirror_of`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirrorRecord {
+    pub feature_id: String,
+    pub offset: u64,
+    /// The `JSONB` column as text, unparsed: what it should hold is the
+    /// caller's to decide, as it was the writer's to guarantee
+    /// ([`NewEvent::event`]), and a row that does not parse is the caller's
+    /// to report rather than a failed read.
+    pub event: String,
+}
+
 fn stored_offset(offset: u64) -> Result<i64, StoreError> {
     i64::try_from(offset).map_err(|_| StoreError::OffsetTooLarge(offset))
 }
@@ -91,6 +103,39 @@ pub async fn mirror_event(
         .await?;
     tx.commit().await?;
     Ok(Some(cursor))
+}
+
+/// The instance's mirrored events, of one Feature when `feature` names it,
+/// ordered by `(feature_id, event_offset)`. Empty when the tenant has no such
+/// instance, as when it has one with nothing mirrored.
+///
+/// `instance_id` leads the mirror's primary key, so this reads one index
+/// range; a read filtered by `user_id` alone would scan the table.
+pub async fn mirror_of(
+    user: UserId,
+    db: &Db,
+    instance: InstanceId,
+    feature: Option<&str>,
+) -> Result<Vec<MirrorRecord>, StoreError> {
+    let rows = sqlx::query_as::<_, (String, i64, String)>(
+        "SELECT feature_id, event_offset, event::text FROM run_mirror \
+         WHERE user_id = $1 AND instance_id = $2 AND ($3::text IS NULL OR feature_id = $3) \
+         ORDER BY feature_id, event_offset",
+    )
+    .bind(user)
+    .bind(instance)
+    .bind(feature)
+    .fetch_all(db)
+    .await?;
+    rows.into_iter()
+        .map(|(feature_id, offset, event)| {
+            Ok(MirrorRecord {
+                feature_id,
+                offset: u64::try_from(offset).map_err(|_| StoreError::OffsetOutOfRange(offset))?,
+                event,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -14,26 +14,28 @@ use demeteo_hub::socket::connections::Connections;
 use demeteo_hub::socket::port::SocketStore;
 use demeteo_hub::socket::postgres::PostgresStore;
 use demeteo_hub::socket::requests::OutcomeChange;
+use demeteo_hub::socket::SNAPSHOT_KIND;
 use demeteo_hub::store::attachments::{
     get_attachment, insert_attachment, NewAttachment, WrappedKey,
 };
 use demeteo_hub::store::device_keys::{instance_of_key, NewDeviceKey};
 use demeteo_hub::store::instances::{
-    granted_scopes, insert_instance, list_instances, pair_instance, record_departure, record_hello,
-    Instance, NewInstance, NewInstanceLabels, NewPairing,
+    find_instance, granted_scopes, insert_instance, list_instances, pair_instance,
+    record_departure, record_hello, Instance, NewInstance, NewInstanceLabels, NewPairing,
 };
 use demeteo_hub::store::passkeys::{insert_passkey, list_passkeys, NewPasskey};
 use demeteo_hub::store::pool::create_user;
 use demeteo_hub::store::requests::{
-    insert_request, list_queued_requests, mark_request_expired, mark_request_sent, record_outcome,
-    NewRequest, QueuedEnvelope, RequestId, RequestState,
+    find_request, insert_request, list_queued_requests, mark_request_expired, mark_request_sent,
+    record_outcome, NewRequest, QueuedEnvelope, RequestId, RequestRecord, RequestState,
+    RequestStatus,
 };
-use demeteo_hub::store::run_mirror::{mirror_event, NewEvent};
+use demeteo_hub::store::run_mirror::{mirror_event, mirror_of, MirrorRecord, NewEvent};
 use demeteo_hub::store::sessions::{
     delete_session, delete_sessions_of_credential, find_session, insert_session, NewSession,
     Session, SessionHash,
 };
-use demeteo_hub::store::snapshots::replace_snapshot;
+use demeteo_hub::store::snapshots::{read_snapshot, replace_snapshot};
 use demeteo_hub::store::tokens::{
     find_token_by_hash, insert_token, rotate_family, FamilyWritten, NewToken, TokenHash, TokenKind,
     TokenRecord,
@@ -1520,6 +1522,122 @@ async fn a_snapshot_naming_another_users_instance_neither_fills_nor_replaces_its
     .await;
 }
 
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn find_instance_never_returns_another_users_instance() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+
+        assert!(find_instance(b, &db, a_instance).await.unwrap().is_none());
+        assert!(find_instance(a, &db, b_instance).await.unwrap().is_none());
+        assert!(find_instance(a, &db, InstanceId::generate())
+            .await
+            .unwrap()
+            .is_none());
+
+        let of_a = find_instance(a, &db, a_instance).await.unwrap().unwrap();
+        assert_eq!((of_a.id, of_a.user_id), (a_instance, a));
+        assert_eq!(of_a.name, "a-laptop");
+        let of_b = find_instance(b, &db, b_instance).await.unwrap().unwrap();
+        assert_eq!((of_b.id, of_b.user_id), (b_instance, b));
+    })
+    .await;
+}
+
+fn mirror_record(feature_id: &str, offset: u64, event: &str) -> MirrorRecord {
+    MirrorRecord {
+        feature_id: feature_id.to_owned(),
+        offset,
+        event: event.to_owned(),
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn mirror_of_never_returns_another_users_events() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let by_a = r#"{"by": "a"}"#;
+        for (feature_id, offset) in [("f-2", 3), ("f-1", 2), ("f-1", 1)] {
+            let new = new_event(feature_id, offset, by_a);
+            mirror_event(a, &db, a_instance, &new, u64::max)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        let by_b = r#"{"by": "b"}"#;
+        mirror_event(b, &db, b_instance, &new_event("f-1", 9, by_b), u64::max)
+            .await
+            .unwrap()
+            .unwrap();
+
+        for feature in [None, Some("f-1"), Some("f-2")] {
+            assert_eq!(
+                mirror_of(b, &db, a_instance, feature).await.unwrap(),
+                [],
+                "{feature:?}"
+            );
+        }
+
+        assert_eq!(
+            mirror_of(a, &db, a_instance, None).await.unwrap(),
+            [
+                mirror_record("f-1", 1, by_a),
+                mirror_record("f-1", 2, by_a),
+                mirror_record("f-2", 3, by_a),
+            ]
+        );
+        assert_eq!(
+            mirror_of(a, &db, a_instance, Some("f-2")).await.unwrap(),
+            [mirror_record("f-2", 3, by_a)]
+        );
+        assert_eq!(
+            mirror_of(a, &db, a_instance, Some("f-3")).await.unwrap(),
+            []
+        );
+        assert_eq!(
+            mirror_of(b, &db, b_instance, None).await.unwrap(),
+            [mirror_record("f-1", 9, by_b)]
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn read_snapshot_never_returns_another_users_snapshot() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let now = unix_now();
+        let by_a = r#"{"by": "a"}"#;
+        assert!(
+            replace_snapshot(a, &db, a_instance, SNAPSHOT_KIND, by_a, now)
+                .await
+                .unwrap()
+        );
+        assert!(
+            replace_snapshot(b, &db, b_instance, "another-kind", r#"{"by": "b"}"#, now)
+                .await
+                .unwrap()
+        );
+
+        assert_eq!(read_snapshot(b, &db, a_instance).await.unwrap(), None);
+        assert_eq!(
+            read_snapshot(a, &db, a_instance).await.unwrap().as_deref(),
+            Some(by_a)
+        );
+        assert_eq!(
+            read_snapshot(b, &db, b_instance).await.unwrap(),
+            None,
+            "a slot of another kind is not the snapshot"
+        );
+    })
+    .await;
+}
+
 type RequestRow = (UserId, InstanceId, Vec<u8>, String, i32, Option<String>);
 
 /// Every tenant's request rows as `(user_id, instance_id, id, status,
@@ -1692,6 +1810,108 @@ async fn an_outcome_naming_another_users_request_is_not_recorded_and_decide_is_n
             Some("refused".to_owned()),
         );
         assert_eq!(every_request_row(&db).await, [answered]);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn find_request_never_returns_another_users_request() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let (b, b_instance) = user_with_instance(&db, "b-laptop").await;
+        let id = [7; 16];
+        insert_request(
+            a,
+            &db,
+            a_instance,
+            &new_request(id, a_instance, unix_now() + 300),
+        )
+        .await
+        .unwrap();
+
+        for (asking, named, id) in [
+            (b, a_instance, id),
+            (b, b_instance, id),
+            (a, b_instance, id),
+            (a, a_instance, [8; 16]),
+        ] {
+            assert_eq!(
+                find_request(asking, &db, named, &id).await.unwrap(),
+                None,
+                "{named:?} {id:?}"
+            );
+        }
+        let found = find_request(a, &db, a_instance, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.id, id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs Postgres: see deploy/hub/README.md; set DEMETEO_HUB_TEST_DATABASE_URL"]
+async fn a_request_reads_back_queued_unsent_and_unanswered_until_it_is_sent_and_answered() {
+    in_fresh_schema(|db| async move {
+        let (a, a_instance) = user_with_instance(&db, "a-laptop").await;
+        let before = unix_now();
+        let id = [7; 16];
+        let expires_at = before + 300;
+        insert_request(a, &db, a_instance, &new_request(id, a_instance, expires_at))
+            .await
+            .unwrap();
+
+        let fresh = find_request(a, &db, a_instance, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        // `created_at` is the column's `DEFAULT now()`, Postgres's clock and
+        // not this process's, so it is held to a window and not a value.
+        assert!(
+            fresh.created_at + 60 >= before && fresh.created_at <= unix_now() + 60,
+            "{fresh:?}"
+        );
+        assert_eq!(
+            fresh,
+            RequestRecord {
+                id,
+                kind: "cancel_feature".to_owned(),
+                status: RequestStatus::Queued,
+                deliveries: 0,
+                outcome: None,
+                expires_at,
+                created_at: fresh.created_at,
+                answered_at: None,
+            }
+        );
+
+        let answered_at = before + 7;
+        assert!(mark_request_sent(a, &db, a_instance, &id, before)
+            .await
+            .unwrap());
+        let refused = RequestOutcome::Refused {
+            reason: RefusalReason::ScopeOff,
+        };
+        assert!(
+            record_outcome(a, &db, a_instance, &id, answered_at, |_| Some(refused))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            find_request(a, &db, a_instance, &id)
+                .await
+                .unwrap()
+                .unwrap(),
+            RequestRecord {
+                status: RequestStatus::Answered,
+                deliveries: 1,
+                outcome: Some(refused),
+                answered_at: Some(answered_at),
+                ..fresh
+            }
+        );
     })
     .await;
 }

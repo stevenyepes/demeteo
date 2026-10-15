@@ -114,6 +114,10 @@ pub enum StoreError {
     OffsetTooLarge(u64),
     #[error("stored event cursor {0} is not an offset")]
     CursorOutOfRange(i64),
+    #[error("stored time {0} is not a Unix time")]
+    TimeOutOfRange(i64),
+    #[error("stored event offset {0} is not an offset")]
+    OffsetOutOfRange(i64),
     #[error("unknown scope {0:?}")]
     UnknownScope(String),
     #[error("unknown request status {0:?}")]

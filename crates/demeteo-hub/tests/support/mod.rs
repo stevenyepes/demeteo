@@ -6,6 +6,11 @@ use std::future::Future;
 use std::str::FromStr;
 use uuid::Uuid;
 
+// Only the binaries that drive the router over HTTP use it; the rest would
+// see every item in it as dead.
+#[allow(dead_code)]
+pub mod http;
+
 const URL_ENV: &str = "DEMETEO_HUB_TEST_DATABASE_URL";
 
 /// Runs `body` against a schema migrated for it alone and dropped afterwards,

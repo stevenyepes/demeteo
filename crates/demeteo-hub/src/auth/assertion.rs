@@ -98,26 +98,17 @@ pub fn verify(
     challenge: &[u8; 32],
     assertion: &WebAuthnAssertion,
 ) -> Result<u32, AssertionError> {
-    let decode = |text: &str| base64url_decode(text).ok_or(AssertionError::Malformed);
-    let authenticator_data = decode(&assertion.authenticator_data)?;
-    let client_data_json = decode(&assertion.client_data_json)?;
-    let signature = decode(&assertion.signature)?;
-
-    let AuthenticatorData {
+    let Shaped {
+        authenticator_data,
+        client_data_json,
+        signature,
         rp_id_hash,
         flags,
         sign_count,
-    } = AuthenticatorData::parse(&authenticator_data).ok_or(AssertionError::Malformed)?;
-    let client_data: ClientData =
-        serde_json::from_slice(&client_data_json).map_err(|_| AssertionError::Malformed)?;
+        origin,
+    } = shaped(challenge, assertion)?;
 
-    if client_data.kind != GET_TYPE {
-        return Err(AssertionError::WrongType);
-    }
-    if base64url_decode(&client_data.challenge).as_deref() != Some(challenge.as_slice()) {
-        return Err(AssertionError::WrongChallenge);
-    }
-    if client_data.origin != rp.origin {
+    if origin != rp.origin {
         return Err(AssertionError::WrongOrigin);
     }
     if rp_id_hash[..] != Sha256::digest(rp.rp_id.as_bytes())[..] {
@@ -139,6 +130,57 @@ pub fn verify(
         .map_err(|_| AssertionError::BadSignature)?;
 
     Ok(sign_count)
+}
+
+/// An assertion that has passed every step of [`verify`] that needs neither
+/// a key nor a relying party.
+pub(crate) struct Shaped {
+    authenticator_data: Vec<u8>,
+    client_data_json: Vec<u8>,
+    signature: Vec<u8>,
+    rp_id_hash: [u8; RP_ID_HASH_LEN],
+    flags: u8,
+    sign_count: u32,
+    origin: String,
+}
+
+/// Decodes `assertion` and checks that its client data is a `webauthn.get`
+/// over `challenge`: [`verify`] up to the origin, refusing what it refuses
+/// there and in the same order. Nothing it accepts is evidence that anyone
+/// signed anything.
+pub(crate) fn shaped(
+    challenge: &[u8; 32],
+    assertion: &WebAuthnAssertion,
+) -> Result<Shaped, AssertionError> {
+    let decode = |text: &str| base64url_decode(text).ok_or(AssertionError::Malformed);
+    let authenticator_data = decode(&assertion.authenticator_data)?;
+    let client_data_json = decode(&assertion.client_data_json)?;
+    let signature = decode(&assertion.signature)?;
+
+    let AuthenticatorData {
+        rp_id_hash,
+        flags,
+        sign_count,
+    } = AuthenticatorData::parse(&authenticator_data).ok_or(AssertionError::Malformed)?;
+    let rp_id_hash = *rp_id_hash;
+    let client_data: ClientData =
+        serde_json::from_slice(&client_data_json).map_err(|_| AssertionError::Malformed)?;
+
+    if client_data.kind != GET_TYPE {
+        return Err(AssertionError::WrongType);
+    }
+    if base64url_decode(&client_data.challenge).as_deref() != Some(challenge.as_slice()) {
+        return Err(AssertionError::WrongChallenge);
+    }
+    Ok(Shaped {
+        authenticator_data,
+        client_data_json,
+        signature,
+        rp_id_hash,
+        flags,
+        sign_count,
+        origin: client_data.origin,
+    })
 }
 
 /// `authenticatorData ‖ SHA-256(clientDataJSON)`: what an authenticator signs.

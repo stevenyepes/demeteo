@@ -2140,7 +2140,7 @@ async fn enqueueing_a_kind_whose_scope_is_not_granted_is_refused_and_queues_noth
             assert_eq!(named, scope, "{name} with {scopes:?}");
             assert_eq!(
                 answered(ApiError::from(error)).await,
-                (409, json!({"error": "scope_not_granted"})),
+                (409, json!({"error": "scope_not_granted", "scope": scope})),
                 "{name} with {scopes:?}"
             );
         }

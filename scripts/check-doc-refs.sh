@@ -76,6 +76,10 @@ while IFS= read -r file; do
       done
 done < <(sources) >>"$manifest.refs"
 
+# A path as an ERE matching only itself. Without it the `.` of `.pi/` matches
+# any character, and a new `api/` directory reads as `.pi/` having moved there.
+ere() { printf '%s' "$1" | sed 's/[][\\.*^$+?(){}|]/\\&/g'; }
+
 while IFS=$'\t' read -r file ref; do
   [ -n "$ref" ] || continue
 
@@ -97,22 +101,22 @@ while IFS=$'\t' read -r file ref; do
       # comment is usually a runtime directory (`artifacts/_context/`, a
       # worktree layout), and guessing that it "collapsed into `<name>.rs`"
       # matches any unrelated module of that name — noise, not a finding.
-      name="$(basename "$ref")"
+      name="$(ere "$(basename "$ref")")"
       if grep -qE -- "/$name/" "$manifest"; then
         hint="a directory of that name exists elsewhere: $(grep -oE -- "[^ ]*/$name/" "$manifest" | sort -u | head -1)"
       fi
       ;;
     *.rs)
-      stem="${ref%.rs}"
-      base="$(basename "$stem")"
+      stem="$(ere "${ref%.rs}")"
+      base="$(ere "$(basename "${ref%.rs}")")"
       if grep -qE -- "/$stem/" "$manifest"; then
-        hint="split into a directory; the path is now \`$stem/\`"
+        hint="split into a directory; the path is now \`${ref%.rs}/\`"
       elif grep -qE -- "/$base\.rs$" "$manifest"; then
         hint="moved; now at $(grep -oE -- "[^ ]*/$base\.rs$" "$manifest" | sort -u | head -1)"
       fi
       ;;
     *)
-      base="$(basename "$ref")"
+      base="$(ere "$(basename "$ref")")"
       if grep -qE -- "/$base$" "$manifest"; then
         hint="moved; now at $(grep -E -- "/$base$" "$manifest" | sort -u | head -1)"
       fi

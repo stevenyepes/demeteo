@@ -96,6 +96,24 @@ pub async fn list_instances(user: UserId, db: &Db) -> Result<Vec<Instance>, Stor
     .await?)
 }
 
+/// `None` when the tenant has no such instance, which is also the answer for
+/// an id another tenant holds.
+pub async fn find_instance(
+    user: UserId,
+    db: &Db,
+    id: InstanceId,
+) -> Result<Option<Instance>, StoreError> {
+    Ok(sqlx::query_as::<_, Instance>(
+        "SELECT id, user_id, name, os, arch, version, last_seen, granted_scopes, created_at, \
+                install_id, connection_id, connected_at, event_cursor \
+         FROM instances WHERE user_id = $1 AND id = $2",
+    )
+    .bind(user)
+    .bind(id)
+    .fetch_optional(db)
+    .await?)
+}
+
 /// `instances.id` is globally unique and minted by the Hub
 /// ([`InstanceId::generate`]); it is not the desktop's install id, which is
 /// not a UUID. Naming an id another user already holds fails on the primary

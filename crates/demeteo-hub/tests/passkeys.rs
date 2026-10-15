@@ -12,11 +12,10 @@ use demeteo_hub::auth::challenge::{
     ChallengeBinding,
 };
 use demeteo_hub::auth::policy::{Refusal, Status, MAX_ACTIVE_PASSKEYS};
-use demeteo_hub::auth::session::{SessionSecret, COOKIE_NAME, CSRF_HEADER, SESSION_TTL_SECS};
-use demeteo_hub::auth::testing::{serve, SoftAuthenticator};
+use demeteo_hub::auth::session::{SessionSecret, COOKIE_NAME, SESSION_TTL_SECS};
+use demeteo_hub::auth::testing::SoftAuthenticator;
 use demeteo_hub::auth::webauthn::Verifier;
-use demeteo_hub::auth::RelyingParty;
-use demeteo_hub::routes::{self, AppState};
+use demeteo_hub::routes::AppState;
 use demeteo_hub::store::passkey_records::{
     insert_endorsement, insert_revocation, list_endorsements, list_revocations,
 };
@@ -32,9 +31,10 @@ use demeteo_hub::store::{Db, StoreError, UserId};
 use demeteo_hub_protocol::{PasskeyEndorsement, PasskeyRevocation, WebAuthnAssertion};
 use serde_json::{json, Value};
 use std::iter;
-use std::net::Ipv4Addr;
-use std::path::Path;
 use std::sync::Arc;
+use support::http::{
+    as_json, enrol, enrol_as, get_as, in_an_hour, open_session, post_as, raw_id, rp, serve_state,
+};
 use support::in_fresh_schema;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -49,10 +49,6 @@ fn new_passkey(credential_id: &[u8], label: &str) -> NewPasskey {
     }
 }
 
-fn as_json(text: &str) -> Value {
-    serde_json::from_str(text).unwrap()
-}
-
 async fn users_with_id(db: &Db, id: Uuid) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM users WHERE id = $1")
         .bind(id)
@@ -61,38 +57,8 @@ async fn users_with_id(db: &Db, id: Uuid) -> i64 {
         .unwrap()
 }
 
-fn in_an_hour() -> OffsetDateTime {
-    OffsetDateTime::now_utc() + Duration::hours(1)
-}
-
-fn rp() -> RelyingParty {
-    RelyingParty {
-        rp_id: "hub.example".to_owned(),
-        origin: "https://hub.example".to_owned(),
-    }
-}
-
 fn now() -> u64 {
     u64::try_from(OffsetDateTime::now_utc().unix_timestamp()).unwrap()
-}
-
-fn raw_id(key: &SoftAuthenticator) -> Vec<u8> {
-    base64url_decode(&key.credential_id()).unwrap()
-}
-
-async fn enrol(db: &Db, user: UserId, key: &SoftAuthenticator, status: Status) {
-    enrol_as(db, user, key, status.as_str(), status).await;
-}
-
-async fn enrol_as(db: &Db, user: UserId, key: &SoftAuthenticator, label: &str, status: Status) {
-    let new = NewPasskey {
-        credential_id: raw_id(key),
-        public_key: key.public_key_cose(),
-        label: label.to_owned(),
-        sign_count: 0,
-        credential: "{}".to_owned(),
-    };
-    insert_passkey(user, db, &new, status).await.unwrap();
 }
 
 /// No passkey route asks the key service for anything, so it holds no key and
@@ -102,22 +68,9 @@ fn state_over(db: Db) -> AppState {
     AppState::new(db, rp(), Arc::new(no_keys), String::new()).unwrap()
 }
 
-/// The Hub's real router over `db` on a loopback port, and the base URL it
-/// answers at. The web directory does not exist: no `/v1` route reads it.
+/// [`serve_state`] over `db` and no keys.
 async fn serve_hub(db: Db) -> String {
     serve_state(state_over(db)).await
-}
-
-/// [`serve_hub`] over a state the test holds a clone of, and so can reach
-/// behind the routes.
-async fn serve_state(state: AppState) -> String {
-    let web_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("no-such-web-dir");
-    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .await
-        .unwrap();
-    let addr = listener.local_addr().unwrap();
-    serve(listener, routes::router(state, &web_dir));
-    format!("http://{addr}")
 }
 
 async fn status_of(db: &Db, key: &SoftAuthenticator) -> Status {
@@ -963,36 +916,6 @@ async fn the_passkey_list_is_the_sessions_tenants_own_and_marks_the_one_that_sig
     .await;
 }
 
-async fn open_session(db: &Db, user: UserId, key: &SoftAuthenticator) -> SessionSecret {
-    let secret = SessionSecret::generate().unwrap();
-    let session = NewSession {
-        hash: secret.hash(),
-        credential_id: raw_id(key),
-        expires_at: in_an_hour(),
-    };
-    insert_session(user, db, &session).await.unwrap();
-    secret
-}
-
-/// A `POST` as the Hub's own page sends it for `session`: same origin, the
-/// cookie, and the CSRF token derived from it.
-async fn post_as(base: &str, path: &str, session: &SessionSecret, body: &Value) -> (u16, Value) {
-    let response = reqwest::Client::new()
-        .post(format!("{base}{path}"))
-        .header("origin", rp().origin)
-        .header(
-            "cookie",
-            format!("{COOKIE_NAME}={}", session.cookie_value()),
-        )
-        .header(CSRF_HEADER, session.csrf_token())
-        .json(body)
-        .send()
-        .await
-        .unwrap();
-    let status = response.status().as_u16();
-    (status, as_json(&response.text().await.unwrap()))
-}
-
 async fn start_endorsement(base: &str, session: &SessionSecret, pending: &str) -> (u16, Value) {
     let target = json!({ "credential_id": pending });
     post_as(base, "/v1/passkeys/endorse/start", session, &target).await
@@ -1511,20 +1434,6 @@ fn reserved_handle(started: &Value) -> Uuid {
         .and_then(base64url_decode)
         .expect("a base64url user handle");
     Uuid::from_slice(&handle).unwrap()
-}
-
-async fn get_as(base: &str, path: &str, session: &SessionSecret) -> (u16, Value) {
-    let response = reqwest::Client::new()
-        .get(format!("{base}{path}"))
-        .header(
-            "cookie",
-            format!("{COOKIE_NAME}={}", session.cookie_value()),
-        )
-        .send()
-        .await
-        .unwrap();
-    let status = response.status().as_u16();
-    (status, as_json(&response.text().await.unwrap()))
 }
 
 /// The session is the one the `Set-Cookie` of the finish carries and nothing

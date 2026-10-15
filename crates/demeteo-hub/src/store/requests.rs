@@ -117,6 +117,25 @@ pub struct RequestState {
     pub outcome: Option<RequestOutcome>,
 }
 
+/// One request as [`find_request`] reads it, whatever its status. There is
+/// no `delivered` status to read: a request that was sent and not answered
+/// is `Queued` with `deliveries > 0`, and a `Queued` one past `expires_at`
+/// is still `Queued` (see the [module doc](self)).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RequestRecord {
+    pub id: RequestId,
+    pub kind: String,
+    pub status: RequestStatus,
+    pub deliveries: u32,
+    pub outcome: Option<RequestOutcome>,
+    /// Unix seconds, as are the two below.
+    pub expires_at: u64,
+    /// Postgres's clock at the insert, not a time any caller named.
+    pub created_at: u64,
+    /// The `now` handed to the [`record_outcome`] that answered it.
+    pub answered_at: Option<u64>,
+}
+
 #[derive(FromRow)]
 struct QueuedRow {
     id: RequestId,
@@ -133,6 +152,17 @@ struct StateRow {
     refusal_reason: Option<String>,
 }
 
+#[derive(FromRow)]
+struct RecordRow {
+    id: RequestId,
+    kind: String,
+    #[sqlx(flatten)]
+    state: StateRow,
+    expires_at: OffsetDateTime,
+    created_at: OffsetDateTime,
+    answered_at: Option<OffsetDateTime>,
+}
+
 const ACCEPTED: &str = "accepted";
 const REFUSED: &str = "refused";
 
@@ -145,6 +175,16 @@ fn stored_envelope(text: &str) -> QueuedEnvelope {
         Ok(envelope) => QueuedEnvelope::Readable(Box::new(envelope)),
         Err(_) => QueuedEnvelope::Unreadable,
     }
+}
+
+fn stored_expiry(expires_at: OffsetDateTime) -> Result<u64, StoreError> {
+    let seconds = expires_at.unix_timestamp();
+    u64::try_from(seconds).map_err(|_| StoreError::ExpiryOutOfRange(seconds))
+}
+
+fn stored_time(at: OffsetDateTime) -> Result<u64, StoreError> {
+    let seconds = at.unix_timestamp();
+    u64::try_from(seconds).map_err(|_| StoreError::TimeOutOfRange(seconds))
 }
 
 fn stored_deliveries(deliveries: i32) -> Result<u32, StoreError> {
@@ -192,12 +232,10 @@ impl TryFrom<QueuedRow> for QueuedRequest {
     type Error = StoreError;
 
     fn try_from(row: QueuedRow) -> Result<Self, StoreError> {
-        let expires_at = row.expires_at.unix_timestamp();
         Ok(Self {
             id: row.id,
             envelope: stored_envelope(&row.envelope),
-            expires_at: u64::try_from(expires_at)
-                .map_err(|_| StoreError::ExpiryOutOfRange(expires_at))?,
+            expires_at: stored_expiry(row.expires_at)?,
             deliveries: stored_deliveries(row.deliveries)?,
         })
     }
@@ -214,6 +252,28 @@ impl TryFrom<StateRow> for RequestState {
             status,
             deliveries: stored_deliveries(row.deliveries)?,
             outcome: stored_outcome(row.outcome, row.refusal_reason)?,
+        })
+    }
+}
+
+impl TryFrom<RecordRow> for RequestRecord {
+    type Error = StoreError;
+
+    fn try_from(row: RecordRow) -> Result<Self, StoreError> {
+        let RequestState {
+            status,
+            deliveries,
+            outcome,
+        } = RequestState::try_from(row.state)?;
+        Ok(Self {
+            id: row.id,
+            kind: row.kind,
+            status,
+            deliveries,
+            outcome,
+            expires_at: stored_expiry(row.expires_at)?,
+            created_at: stored_time(row.created_at)?,
+            answered_at: row.answered_at.map(stored_time).transpose()?,
         })
     }
 }
@@ -286,6 +346,28 @@ pub async fn list_queued_requests(
         .into_iter()
         .map(QueuedRequest::try_from)
         .collect()
+}
+
+/// The request with this id under this instance of this tenant, or `None`:
+/// another tenant's request reads as one that does not exist.
+pub async fn find_request(
+    user: UserId,
+    db: &Db,
+    instance: InstanceId,
+    id: &RequestId,
+) -> Result<Option<RequestRecord>, StoreError> {
+    sqlx::query_as::<_, RecordRow>(
+        "SELECT id, kind, status, deliveries, outcome, refusal_reason, \
+         expires_at, created_at, answered_at FROM instance_requests \
+         WHERE user_id = $1 AND instance_id = $2 AND id = $3",
+    )
+    .bind(user)
+    .bind(instance)
+    .bind(id.as_slice())
+    .fetch_optional(db)
+    .await?
+    .map(RequestRecord::try_from)
+    .transpose()
 }
 
 /// Counts one more delivery of the request, whatever its status, and says
@@ -548,6 +630,54 @@ mod tests {
         };
         let err = RequestState::try_from(never_sent_less_than_never).unwrap_err();
         assert!(matches!(err, StoreError::DeliveriesOutOfRange(-1)), "{err}");
+    }
+
+    #[test]
+    fn a_record_row_is_read_with_its_state_and_its_times_as_unix_seconds() {
+        let at = |seconds| OffsetDateTime::from_unix_timestamp(seconds).unwrap();
+        let row = || RecordRow {
+            id: [7; 16],
+            kind: "cancel_feature".to_owned(),
+            state: state_row("answered", Some("accepted"), None),
+            expires_at: at(EXPIRES_AT),
+            created_at: at(1_700_000_000),
+            answered_at: Some(at(1_700_000_100)),
+        };
+        assert_eq!(
+            RequestRecord::try_from(row()).unwrap(),
+            RequestRecord {
+                id: [7; 16],
+                kind: "cancel_feature".to_owned(),
+                status: RequestStatus::Answered,
+                deliveries: 1,
+                outcome: Some(RequestOutcome::Accepted),
+                expires_at: 1_700_000_300,
+                created_at: 1_700_000_000,
+                answered_at: Some(1_700_000_100),
+            }
+        );
+
+        let created_before_the_epoch = RecordRow {
+            created_at: at(-2),
+            ..row()
+        };
+        let err = RequestRecord::try_from(created_before_the_epoch).unwrap_err();
+        assert!(matches!(err, StoreError::TimeOutOfRange(-2)), "{err}");
+        let answered_before_the_epoch = RecordRow {
+            answered_at: Some(at(-4)),
+            ..row()
+        };
+        let err = RequestRecord::try_from(answered_before_the_epoch).unwrap_err();
+        assert!(matches!(err, StoreError::TimeOutOfRange(-4)), "{err}");
+        let unknown_status = RecordRow {
+            state: state_row("delivered", None, None),
+            ..row()
+        };
+        let err = RequestRecord::try_from(unknown_status).unwrap_err();
+        assert!(
+            matches!(&err, StoreError::UnknownRequestStatus(status) if status == "delivered"),
+            "{err}"
+        );
     }
 
     #[test]

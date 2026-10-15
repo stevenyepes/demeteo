@@ -223,6 +223,14 @@ impl Connections {
         }
     }
 
+    /// Whether a session of `instance` holds a socket to this process now.
+    /// Presence is this and `instances.connection_id` together: the column
+    /// survives a restart that dropped every socket, and this registry does
+    /// not see a session held by another replica.
+    pub fn is_live(&self, instance: InstanceId) -> bool {
+        self.lock().live.contains_key(&instance)
+    }
+
     /// Removes the entry of `instance` if `connection` still holds it. A
     /// displaced session calls this as any other does, and finds its
     /// successor there.

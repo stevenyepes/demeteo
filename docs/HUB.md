@@ -41,7 +41,7 @@ full.
 
 | Part | State |
 |---|---|
-| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each. It depends on `crates/demeteo-hub-protocol`. **Not built:** any HTTP route that queues a request — the queue is filled by a function no route calls, so nothing the Hub serves sends an instance a request yet; the desktop's socket client, so nothing dials the socket either; unpairing and revoking an instance; and the attachment fetch (§6.3) |
+| `crates/demeteo-hub` (axum server) | **partly built** — Postgres storage and migrations, the `KeyService` port with an OpenBao Transit adapter, `GET /healthz`, static serving of the browser bundle, and passkey auth under `/v1`: first-passkey registration, sign-in, sessions, and the endorsement and revocation of passkeys (§8); pairing (§4): `GET /authorize`, the three consent routes under `/v1/pairing`, and `POST /token` with the `authorization_code` and `refresh_token` grants; and the instance socket at `GET /socket` (§5): admission by a DPoP-bound access token, the registry of live connections and each instance's presence, the run mirror with its cursor acks, the latest snapshot, and the queue of signed requests with the outcome recorded for each; and the session API under `/v1` (§6.4): the fleet, runs and request-status reads, and the routes that queue `start_feature`, `cancel_feature`, `set_step_assignment` and, after a gate challenge, `gate_decision`. It depends on `crates/demeteo-hub-protocol`. **Not built:** the desktop's socket client, so nothing dials the socket and no queued request is delivered yet; unpairing and revoking an instance; and the attachment fetch (§6.3) |
 | `crates/demeteo-hub-protocol` (wire types) | **built** — the socket's messages, the signed envelope and its six kinds, snapshots, and the canonical encoder of §6.1 and §8. The Hub compiles against it; the desktop does not yet |
 | `hub-web/` (second Vite entry) | **sign-in, passkey management and the pairing approval page built, the rest an app shell** — the SignUp, SignIn and Passkeys views call the Hub's `/v1` routes, ApprovePairing at `#/pair/<segment>` calls the consent routes (§4), and every route but sign-up and sign-in is behind the session. Fleet, Instance, Runs, Run, Dispatch and AddInstance are placeholders with no data wiring yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`; `demeteo-hub` serves the directory its configuration names |
 | The Docker Compose bundle (`hub`, `postgres`, `openbao`, `caddy`) | **built** — `deploy/hub`, with its own operator README |
@@ -99,7 +99,7 @@ judged by what that attacker cannot do.
 
 | Can | Cannot |
 |---|---|
-| read what an instance reported: project and workflow names, step status, cost | read a key, a transcript, a diff or a path — none was sent |
+| read what an instance reported: project and workflow names, step status | read a key, a transcript, a diff or a path — none was sent; nor a cost, which no protocol message reports (§5) |
 | withhold, delay or reorder requests | forge a request: the envelope is signed and the instance verifies it against the key it pinned (§6) |
 | replay a request | replay one that works: ids are single-use and expire (§6) |
 | queue a `start_feature` for an instance that has `spend` on | exceed the instance's local ceilings (§7) |
@@ -749,9 +749,9 @@ that does not parse is answered `refused` and does nothing.
 | `passkey_endorsement` | none — authority is an assertion | add a passkey to the pinned set; §8 |
 | `passkey_revocation` | none — authority is an assertion | remove a passkey from the pinned set; §8 |
 
-`cancel_feature`'s scope is this document's assignment, not an interview answer
-(§11). The two passkey kinds are not scope-gated because a scope toggles *what the
-Hub may ask for*, and trust in a key is not something the Hub asks for: it is
+`cancel_feature`'s scope was this document's assignment, not an interview answer;
+the session API (§6.4) settled it as `spend` (§11 item 3). The two passkey kinds
+are not scope-gated because a scope toggles *what the Hub may ask for*, and trust in a key is not something the Hub asks for: it is
 granted only by a key the instance already trusts.
 
 ### 6.3 Attachments
@@ -777,6 +777,115 @@ Hub holds it as briefly and as opaquely as it can.
 
 The Hub is not trusted with the attachment's integrity, which is why step 4 checks
 a hash the envelope carries and the envelope is signed.
+
+### 6.4 The session API
+
+**What a signed-in browser reads of its fleet, and the only way a request gets
+queued.** Every route is under `/v1`, needs a session, and is not on the
+pre-session list, so each `POST` is behind the same `Origin` and CSRF guard as
+the rest of `/v1`. The tenant, read-scope and no-path rules are stated once, in
+the module rustdoc of [`api/mod.rs`](../crates/demeteo-hub/src/api/mod.rs).
+
+| Method and path | Scope | Answer |
+|---|---|---|
+| `GET /v1/fleet` | `read`, per instance — withheld fields, not an error | `200`, every instance with presence, labels, scopes, `live_runs` and `needs_you` |
+| `GET /v1/instances/{instance_id}` | `read`, per field | `200`, the instance, its projects as `{id, name, remote_url}` and its live runs |
+| `GET /v1/runs?instance=&status=` | `read` | `200 {runs}`; `status` is `running`, `completed`, `failed` or `cancelled` |
+| `GET /v1/instances/{instance_id}/runs/{feature_id}` | `read` | `200`, status, steps, ticket progress, pending gates and events in offset order |
+| `POST /v1/instances/{instance_id}/runs` | `spend` | `202 {request_id, expires_at}`, a `start_feature` queued |
+| `POST /v1/instances/{instance_id}/runs/{feature_id}/cancel` | `spend` | `202`, a `cancel_feature` queued |
+| `POST /v1/instances/{instance_id}/runs/{feature_id}/steps/{step_id}/assignment` | `spend` | `202`, a `set_step_assignment` queued |
+| `POST /v1/instances/{instance_id}/gates/challenge` | `gates` | `200`, a held challenge and the `navigator.credentials.get` options over it |
+| `POST /v1/instances/{instance_id}/gates/decision` | `gates` | `202 {request_id, expires_at}`, a `gate_decision` queued |
+| `GET /v1/instances/{instance_id}/requests/{request_id}` | none beyond owning the instance | `200`, the request's kind, derived status, `deliveries`, `expires_at` and `answered_at` |
+
+**Which data needs `read`.** What the Hub holds of its own about an instance —
+presence, the labels its `hello` gave, the scopes it last reported — and the
+status of a request queued for it are shown without `read`. What the instance
+reported, its run mirror and its snapshot, is shown only while it reports
+`read` on. The fleet and the instance detail answer such an instance with
+`read_granted: false` and its mirror- and snapshot-derived fields `null`; the
+unfiltered runs list passes over its Features; a run detail, or a runs list
+filtered to it, is refused. A route that queues needs its kind's scope alone,
+not `read` beside it: the set is flat (§7). None of this is enforcement (§7).
+
+**Order of checks.** Once a body parses as JSON of its shape: ownership, then
+scope, then what the body says, then the work. An instance, run or request that
+is another tenant's answers `404 not_found` exactly as one that does not exist,
+and so does an id that does not parse. A missing scope is refused before the
+body is judged, so it queues nothing and holds no challenge.
+
+**Errors** are `{"error": code}` and nothing else, with one exception:
+`scope_not_granted` also names the scope, as
+`{"error": "scope_not_granted", "scope": "spend"}`.
+
+| Status | `error` | When |
+|---|---|---|
+| 404 | `not_found` | the instance, run or request is not the tenant's, or its id does not parse |
+| 409 | `scope_not_granted` | the instance last reported the route's scope as off; `scope` names it |
+| 400 | `invalid_request` | a body that does not parse or has an unknown field, a U+0000 in any string, an id over 256 bytes (`MAX_FEATURE_ID_BYTES`), an unknown `status` filter |
+| 400 | `attachments_not_supported` | a dispatch with a non-empty `attachment_ids`: the attachment upload and fetch (§6.3) are not built, so `attachments` is always empty |
+| 409 | `challenge_mismatch` | a decision whose `request_id` is not the one its challenge minted |
+| 400 | `assertion_malformed` | an assertion that fails the structural check below |
+| 400 | `ceremony_expired` | a decision naming a challenge that is not held — never issued, already spent, evicted, held for another session or user, or whose request has expired |
+| 503 | `key_service_unavailable`, `too_many_ceremonies` | the envelope could not be signed; the Hub holds as many challenges as it will |
+| 500 | `internal` | a store failure |
+
+**A request's status is derived, never stored.** The store holds `queued`,
+`expired` and `answered` (§9); the route answers one of five, read off the row,
+its outcome and the Hub's clock:
+
+| Status | When |
+|---|---|
+| `queued` | not answered, never sent, and still deliverable |
+| `delivered` | not answered and **sent at least once**; also a recorded `refused: replayed`, which says an earlier delivery's result was lost, not that the instance declined (§5) |
+| `accepted` | the instance's result was `accepted` |
+| `refused` | the instance's result was `refused`, with `reason` beside it — `expired` among them when the instance's own clock judged it |
+| `expired` | the Hub marked it so, or it is still `queued` at or past `expires_at`: there is no sweep (§5), so the route applies the expiry rule itself |
+
+`answered_at` is `null` unless the status is `accepted` or `refused`.
+
+**A gate is decided in two steps**, because the instance recomputes the
+challenge from the envelope it receives (§8), so the envelope's `request_id`
+and `expires_at` have to exist before the human signs.
+
+1. **Challenge.** The body names `feature_id`, `step_execution_id` and
+   `decision`. The Hub mints the request id and `expires_at` now — 600 seconds
+   on, the request lifetime of §6.1 — builds the pre-image with the protocol
+   crate's `gate_challenge`, and holds all six fields as a ceremony under the
+   passkey that signed the session in. The answer carries the ceremony id, the
+   request id, `expires_at`, the pre-image as `gate_challenge`, and WebAuthn
+   options whose challenge is its SHA-256, allowing the tenant's trusted
+   passkeys.
+2. **Decision.** The body carries the ceremony id, the request id, the
+   assertion and an optional `feedback`. The Hub takes the held challenge,
+   refuses a different request id, checks the assertion's shape, refuses a
+   request already past `expires_at`, and queues a `gate_decision` whose
+   `instance_id`, `request_id`, `expires_at`, `feature_id`,
+   `step_execution_id` and `decision` are **the held challenge's, never the
+   body's**. `feedback` is passed through; the challenge does not bind it
+   (§11 item 1). A challenge taken and refused is spent, so a retry starts
+   from step 1.
+
+**The Hub's assertion check is structural only.** Every field is unpadded
+base64url, the authenticator data is long enough to hold its counter, and the
+client data is a `webauthn.get` over the held digest. It checks no signature,
+origin, RP ID or flags: the passkeys the Hub holds are the ones it signs
+tenants in with, not an instance's pinned set, so a signature it accepted would
+prove nothing. It is an early filter for an assertion no instance could
+accept. **The instance is the authority** (§8, *What the desktop verifies*),
+and an assertion the Hub passed may still come back `refused`.
+
+A held challenge lives in process memory, like a passkey ceremony: for 300
+seconds at most, lost on a restart, and seen by one replica only (§11 item 14).
+Its request's `expires_at` is fixed at step 1, so a decision submitted late has
+less than the full 600 seconds left to be delivered.
+
+**What the views cannot show yet.** `cost_cents` on a run, `harnesses` on an
+instance and `workflow` on a run detail are always `null`, and a run carries no
+title. No protocol message reports a cost, a harness, the Workflow version a
+Feature runs or its title (§5). Each field fills in when a protocol change
+reports it; until then nothing is inferred.
 
 ---
 
@@ -806,13 +915,15 @@ is on now; every later `hello` does the same. The Hub's copy is a report, one
 snapshots from an instance that did not report `read`: whether to send them is
 the instance's decision.
 
-**The Hub's one use of that copy is informational.** Queueing a request whose
-scope the instance last reported as off is declined — `409 scope_not_granted`,
-and nothing is queued — because the request would only come back `refused`.
-That spares a round trip and is not the enforcement: the instance checks its own
-toggles against every request it receives (§6.1), and nothing may come to depend
-on the Hub's gate holding. `passkey_endorsement` and `passkey_revocation` need
-no scope (§6.2) and are queued for an instance with every scope off.
+**The Hub's uses of that copy are informational.** Queueing a request whose
+scope the instance last reported as off is declined — `409 scope_not_granted`
+naming the scope, and nothing is queued (§6.4) — because the request would only
+come back `refused`. That spares a round trip and is not the enforcement: the
+instance checks its own toggles against every request it receives (§6.1), and
+nothing may come to depend on the Hub's gate holding. `passkey_endorsement` and
+`passkey_revocation` need no scope (§6.2) and are queued for an instance with
+every scope off. The session API also withholds what the instance reported
+while `read` reads as off (§6.4); what it stored is unchanged.
 
 > **Do not let the Hub widen a scope.** Any message that would "enable" `spend` or
 > `gates` from the Hub side is the Hub granting itself authority, which is the one
@@ -1045,12 +1156,11 @@ holds more than its public half.
 The public half is read on the first pairing that needs it, never at startup —
 `/healthz` and sign-in keep working beside a sealed OpenBao — and only a
 successful read is kept, for the life of the process. `sign` is reached from
-one place, `enqueued` in
+one place, `enqueued_as` in
 [`socket/requests.rs`](../crates/demeteo-hub/src/socket/requests.rs), which signs
-an envelope as it queues it (§6.1) — and `enqueued` has no route caller yet
-(§10). So the Hub can sign a request and nothing it serves asks it to: only
-tests reach the signature today, one of which shows the advertised public key is
-the one signatures are made under. Creating the key and the policy paths it
+an envelope as it queues it (§6.1); the session API's queueing routes (§6.4)
+are its callers. A test shows the advertised public key is the one signatures
+are made under. Creating the key and the policy paths it
 needs are an operator's steps, in
 [`deploy/hub/README.md`](../deploy/hub/README.md).
 
@@ -1074,12 +1184,13 @@ process.
 
 | Path | What it is |
 |---|---|
-| `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, passkey auth (registration, sign-in, sessions, endorsement and revocation), pairing and the instance socket **built**; an HTTP route that queues a request, unpairing and the attachment fetch **not built** (§10). It depends on `crates/demeteo-hub-protocol` |
+| `crates/demeteo-hub` | the axum server — storage, `KeyService`, `/healthz` plus static serving, passkey auth (registration, sign-in, sessions, endorsement and revocation), pairing, the instance socket and the session API **built**; unpairing and the attachment fetch **not built** (§10). It depends on `crates/demeteo-hub-protocol` |
 | `crates/demeteo-hub/src/pairing/` | pairing (§4) — **built**. The decisions are synchronous functions that take the time as an argument: `authorize.rs` (the `/authorize` rules and the loopback redirect), `pkce.rs`, `jwk.rs` (thumbprint and fingerprint), `dpop.rs` (proof verification) and `grant.rs` (the redeem, refresh and access verdicts, and the response bodies). `pending.rs` holds consents, codes and seen proofs in bounded process memory, `signing_key.rs` reads the request-signing public key through `KeyService`, and `handlers/` holds the routes. The rows are written by `store/instances.rs`, `store/device_keys.rs` and `store/tokens.rs` |
 | `crates/demeteo-core/src/domain/hub_pairing/` | the desktop's pairing policy — **built**. The rules both sides must spell alike are mirrored here, because `demeteo-core` does not depend on `demeteo-hub`: the origin and the URLs derived from it, the callback verdict, PKCE, the thumbprint and fingerprint, the DPoP signing input, and the mirror of the pairing response. `src-tauri/tests/hub_desktop_pairing.rs` runs the desktop against the Hub's own handlers, which keeps the two copies from drifting |
 | `crates/demeteo-core/src/ports/hub.rs` | the four ports pairing reaches the world through: the keyring (`HubSecretStore`), SQLite (`HubPinRepository`), the Hub's `/token` and a browser — **built**. Only the keyring port carries a secret |
 | `crates/demeteo-core/src/adapters/hub/` | the desktop's pairing I/O — **built**. `HubPairing` in `mod.rs` orders the steps; `device_key.rs`, `loopback.rs`, `token_client.rs` and `keyring_store.rs` are the adapters. It is composed only under `ExecutionMode::Router`, and `src-tauri/src/commands/hub.rs` exposes it |
 | `crates/demeteo-hub/src/socket/` | the instance socket (§5) — **built**. `handler.rs` holds admission (`admitted`) and the `GET /socket` upgrade, `session.rs` the loop one connection runs, `frame.rs` the rule that tells inbound frames apart, `cursor.rs` how the cursor moves, `connections.rs` the registry of live sessions in process memory, and `requests.rs` the queue: `enqueued`, delivery and outcomes. `port.rs` is the two ports the session is written against, `Transport` and `SocketStore`; `postgres.rs` is the store over one `(UserId, InstanceId)`, writing through `store/instances.rs`, `store/run_mirror.rs`, `store/snapshots.rs` and `store/requests.rs`. The module rustdoc of [`socket/mod.rs`](../crates/demeteo-hub/src/socket/mod.rs) says what an open socket proves |
+| `crates/demeteo-hub/src/api/` | the session API (§6.4) — **built**. Each route is a thin handler over a use-case that takes the tenant, `now` and an `ApiStore` (`port.rs`), so it runs without Postgres: `fleet.rs`, `runs.rs`, `dispatch.rs`, `gates.rs` and `request_status.rs`. The decisions are synchronous: `run_state.rs` folds the run mirror into a Feature's status, steps, tickets and pending gates, `scope.rs` is the read-scope verdict, and `gates.rs` holds the structural assertion check. `postgres.rs` is the store over the `store/` reads, and `testing.rs` the multi-tenant in-memory double, `MemoryFleet` |
 | `deploy/hub` | the Compose bundle, Dockerfile and operator README — **built** |
 | `crates/demeteo-hub-protocol` | **serde-only** wire types shared by the desktop client and the Hub — **built**; the Hub is its only dependant so far |
 | `hub-web/` | a second Vite entry in this repo; it reuses `src/components/canvas` and the `src/App.css` tokens — **sign-in, passkey management and the pairing approval page built** (SignUp, SignIn, Passkeys, ApprovePairing at `#/pair/<segment>`, and a session gate in front of every route but the first two); Fleet, Instance, Runs, Run, Dispatch and AddInstance are placeholder routes with no data wiring yet, and no view renders the canvas yet. `npm run build:hub-web` writes a static bundle to `hub-web/dist`, and `demeteo-hub` serves the directory its configuration names |
@@ -1106,7 +1217,7 @@ WebAuthn verifier). Each one is a **Gate item** in
 
 §2 has the state of every part. Of pairing (§4) and the socket (§5), the Hub's
 half, the approval page and the desktop's device key, loopback listener,
-`/authorize` request, token redemption and fingerprint are built, and five things
+`/authorize` request, token redemption and fingerprint are built, and four things
 are not:
 
 - **The desktop's socket client and refreshing the tokens.** The desktop holds
@@ -1122,13 +1233,11 @@ are not:
   (§5): its admission is the first caller of `access_verdict` in
   [`grant.rs`](../crates/demeteo-hub/src/pairing/grant.rs), with the lookup by
   hash beside it in the store. The attachment fetch is the second and is not
-  built.
-- **Any HTTP route that queues a request.** `enqueued` in
-  [`socket/requests.rs`](../crates/demeteo-hub/src/socket/requests.rs) checks the
-  scopes the Hub holds for the instance, signs the envelope, stores it and wakes
-  a connected instance, and no route calls it. Delivery and outcomes are
-  therefore built and reachable only from tests: until a route exists the Hub
-  never has a request to send.
+  built, so the session API refuses a dispatch that names an attachment
+  (§6.4).
+
+The session API (§6.4) queues requests, so the Hub has requests to send; with
+no desktop socket client, none reaches a desktop yet.
 
 **Runner dispatch is out of scope for this ticket set,** and a separate discovery
 owns it. A `demeteo-runner` host is not paired with the Hub (decision 63), and no
@@ -1172,8 +1281,10 @@ what a desktop client implements.
 2. **What a Gate's review pane may show on the Hub.** Transcripts, diffs and file
    contents never leave an instance (§3), so a Gate reviewed on the Hub is reviewed
    without them. Which gate summary text crosses, written by whom, is open.
-3. **`cancel_feature`'s scope.** §6.2 assigns it `spend`; no interview answer
-   decided it.
+3. *Decided by the session API build, kept so the numbering holds.*
+   `cancel_feature` needs `spend`: §6.2 assigned it, `required_scope` in
+   [`socket/requests.rs`](../crates/demeteo-hub/src/socket/requests.rs) encodes
+   it, and the cancel route of §6.4 is refused without it.
 4. **What the rolling 24-hour total counts** — the budgets committed at start, or
    cost incurred — and its default. So does the default of the per-run ceiling,
    and whether `set_step_assignment` counts against either.
@@ -1268,13 +1379,13 @@ what a desktop client implements.
     Hub cannot show "approved at pairing" beside "on now". Keeping the
     approval as a ceiling takes a second column, and nothing would enforce
     with it. Whether the Hub should remember it is open.
-16. **Nothing queues a request.** The code that signs and queues a request,
-    and the code that delivers one and records its outcome, exist (§5, §6),
-    and no route calls the first: there is no HTTP surface a browser session
-    reaches it through. A `/v1` route needs the session and CSRF guard, and a
-    decision this document has not taken — whether a session may queue a
-    `gate_decision` at all, given §8. hub-web's Dispatch view stays a
-    placeholder until then.
+16. *Decided by the session API build, kept so the numbering holds.* A
+    session may queue a `gate_decision`, and only one carrying an assertion
+    over a challenge the Hub minted for that session (§6.4). That is §8's
+    rule, not an exception to it: the session is necessary and not
+    sufficient, the Hub checks the assertion's shape only, and the instance
+    verifies it against its pinned set. Every queueing route is under `/v1`
+    behind the session and CSRF guard.
 17. **A changed `install_id` behind the same device key** — a desktop whose
     database was lost under a keyring that survived. Its run log starts again
     at offset 1, under a cursor the Hub holds from the earlier installation.
