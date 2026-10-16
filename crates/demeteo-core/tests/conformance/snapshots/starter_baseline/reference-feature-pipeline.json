@@ -1,0 +1,152 @@
+{
+  "starter": "reference-feature-pipeline",
+  "terminal_status": "awaiting_mr",
+  "steps": [
+    {
+      "step_id": "s-baseline-harness",
+      "kind": "command",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-reference",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-reference",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-research",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-spec",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-tickets",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-review",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-implement",
+      "kind": "sequence",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-validate",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-critic",
+      "kind": "agent",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-gate-ship",
+      "kind": "gate",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    },
+    {
+      "step_id": "s-finalize",
+      "kind": "finalize",
+      "status": "completed",
+      "iterations": 0,
+      "error": null
+    }
+  ],
+  "artifacts": [
+    [
+      "s-baseline-harness",
+      "baseline-default.txt",
+      ""
+    ],
+    [
+      "s-critic",
+      "critic-review.md",
+      "# stub artifact\n\npath: artifacts/critic-review.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-reference",
+      "reference-brief.md",
+      "# stub artifact\n\npath: artifacts/reference-brief.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-gate-review",
+      "task-list.json",
+      "{\"tasks\":[{\"id\":\"stub-task-1\",\"title\":\"Stub task one\",\"description\":\"Deterministic stub task one.\",\"files\":[],\"acceptance\":[\"stub task one ran\"],\"blocked_by\":[]},{\"id\":\"stub-task-2\",\"title\":\"Stub task two\",\"description\":\"Deterministic stub task two.\",\"files\":[],\"acceptance\":[\"stub task two ran\"],\"blocked_by\":[\"stub-task-1\"]}]}\n"
+    ],
+    [
+      "s-gate-ship",
+      "critic-review.md",
+      "# stub artifact\n\npath: artifacts/critic-review.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-implement",
+      "code-diff.diff",
+      "diff --git a/src/s-implement.txt b/src/s-implement.txt\nnew file mode 100644\nindex 0000000..d0166fe\n--- /dev/null\n+++ b/src/s-implement.txt\n@@ -0,0 +1,4 @@\n+# stub artifact\n+\n+path: src/s-implement.txt\n+generated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-implement",
+      "implementation-report.md",
+      "# Implementation report\n\nBuilt by Demeteo from each ticket's turn, not written by an agent. Two kinds of line, and they are not interchangeable:\n\n- **self-reported** — the agent's own closing summary. A claim, not evidence.\n- **observed** — a shell command the agent's harness reported running, with the status the harness reported for it. `completed` means the tool call finished, not that its tests passed; read the claim beside it. `not observed` means the harness never reported how the command ended.\n\n## Ticket `stub-task-1` — Stub task one\n\n### Observed\n\nNo shell command was observed. Either the agent ran none, or its harness does not report tool calls — this is absence of evidence either way.\n\n### Self-reported\n\nThe agent ended its turn without a summary.\n\n## Ticket `stub-task-2` — Stub task two\n\n### Observed\n\nNo shell command was observed. Either the agent ran none, or its harness does not report tool calls — this is absence of evidence either way.\n\n### Self-reported\n\nThe agent ended its turn without a summary.\n\n"
+    ],
+    [
+      "s-reference",
+      "reference-brief.md",
+      "# stub artifact\n\npath: artifacts/reference-brief.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-research",
+      "research-report.md",
+      "# stub artifact\n\npath: artifacts/research-report.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-spec",
+      "implementation-spec.md",
+      "# stub artifact\n\npath: artifacts/implementation-spec.md\ngenerated-by: demeteo stub agent\n"
+    ],
+    [
+      "s-tickets",
+      "task-list.json",
+      "{\"tasks\":[{\"id\":\"stub-task-1\",\"title\":\"Stub task one\",\"description\":\"Deterministic stub task one.\",\"files\":[],\"acceptance\":[\"stub task one ran\"],\"blocked_by\":[]},{\"id\":\"stub-task-2\",\"title\":\"Stub task two\",\"description\":\"Deterministic stub task two.\",\"files\":[],\"acceptance\":[\"stub task two ran\"],\"blocked_by\":[\"stub-task-1\"]}]}\n"
+    ],
+    [
+      "s-validate",
+      "validation-report.md",
+      "# stub artifact\n\npath: artifacts/validation-report.md\ngenerated-by: demeteo stub agent\n"
+    ]
+  ]
+}

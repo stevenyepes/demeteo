@@ -382,6 +382,7 @@ fn migrated_starters_lint_clean() {
         ("code-review", &["no-finalize"][..]),
         ("docs-update", &[][..]),
         ("experiment", &[][..]),
+        ("reference-feature-pipeline", &[][..]),
         ("refactor", &[][..]),
         ("simple-task", &[][..]),
         ("standard-feature-pipeline", &[][..]),

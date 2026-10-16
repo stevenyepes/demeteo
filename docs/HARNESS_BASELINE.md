@@ -72,7 +72,7 @@ These are the claims the tasks below exist to restore. Each was verified by
 `prepare_command` / `test_command`. It has two call sites — the single-turn
 validate path in `steps/agent/mod.rs` and the dedicated verifier path in
 `driver/verifier.rs` — and **both are gated on the step declaring a `verifier`
-block**. Across the nine starters that is one node in most, and in
+block**. Across the starters that is one node in most, and in
 `standard-feature-pipeline.json` it is `s-validate` alone.
 
 `code-review.json` used to be the starter where this bit hardest: one `verify`

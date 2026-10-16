@@ -87,9 +87,15 @@ critical or major), or `full`.
 ### Workflows are yours to change
 
 Pipelines are versioned DAGs of Steps (`agent`, `gate`, `sequence`, `command`, `sync`,
-`finalize`). Nine starters ship with the app — Standard Feature, Bugfix, Documentation
-Update, Refactor, Experiment & Prototype, CI Fix, Simple Task, Code Review and Address
-Review Findings — and any of them can be copied and edited on the canvas.
+`finalize`). Ten starters ship with the app — Standard Feature, Reference Feature, Bugfix,
+Documentation Update, Refactor, Experiment & Prototype, CI Fix, Simple Task, Code Review
+and Address Review Findings — and any of them can be copied and edited on the canvas.
+
+Reference Feature builds behaviour another product already has. It studies the reference
+from the outside — documentation, open-source code, or static analysis with
+[REA](https://rea.tools/) when it is installed — and writes a behaviour-only brief.
+You confirm the reference and its parity cases before any planning, and the agents that
+write code are handed the resulting spec, not the brief.
 
 | | |
 |---|---|
