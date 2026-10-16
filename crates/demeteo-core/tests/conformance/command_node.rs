@@ -449,8 +449,16 @@ async fn a_non_idempotent_command_parks_on_resume_despite_a_matching_fingerprint
 
     let harness = step(&ctx2, &feature_id, "s-harness");
     assert_eq!(
-        harness.status, "interrupted",
+        harness.status, "awaiting_gate",
         "a non-idempotent command must never be re-run on a fingerprint match"
+    );
+    assert!(
+        harness
+            .error_message
+            .as_deref()
+            .is_some_and(|m| m.contains("not safe to repeat")),
+        "the park's reason must reach the person before they decide; got {:?}",
+        harness.error_message
     );
     let feature = ctx2
         .features

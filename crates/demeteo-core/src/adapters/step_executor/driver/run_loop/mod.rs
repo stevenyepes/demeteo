@@ -182,7 +182,15 @@ pub(crate) async fn run(mut driver: ExecutionDriver) {
         // mismatch parks on the synthetic gate the watchdog surfaced
         // (Decision 14). Once per driver life — an approval is a human
         // blessing for the rest of this life.
-        if step_exec.status == "interrupted" && !driver.resume_guard_done {
+        if !driver.resume_guard_done
+            && crate::domain::restart_reconcile::needs_resume_guard(
+                &step_exec.status,
+                crate::adapters::step_executor::gate_park::resume_question_posed(
+                    driver.gates.as_ref(),
+                    &step_exec.id,
+                ),
+            )
+        {
             driver.resume_guard_done = true;
             match driver.resume_fingerprint_guard(step_exec, &step_conf).await {
                 resume::GuardVerdict::Proceed => {}
