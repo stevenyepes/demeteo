@@ -547,9 +547,11 @@ fn the_reference_starter_investigates_inside_the_artifact_fence() {
     assert!(reference.allow_network && reference.allow_shell);
 }
 
-/// Clean-room separation: the brief reaches research, spec and critic, and the
-/// agents writing code work from the spec alone. Behaviour the user kept
-/// reaches them through the spec's acceptance criteria.
+/// The brief is attached to research, spec and critic, never to the agents
+/// writing code; behaviour the user kept reaches them through the spec's
+/// acceptance criteria. That is what the prompts carry, not a fence: with
+/// `commit_artifacts` on, the brief is committed like every other report and
+/// sits in each ticket's worktree.
 #[test]
 fn the_reference_starter_implements_from_the_spec_not_the_brief() {
     let steps = parse(REFERENCE_FEATURE);

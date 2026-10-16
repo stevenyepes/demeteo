@@ -95,7 +95,7 @@ Reference Feature builds behaviour another product already has. It studies the r
 from the outside — documentation, open-source code, or static analysis with
 [REA](https://rea.tools/) when it is installed — and writes a behaviour-only brief.
 You confirm the reference and its parity cases before any planning, and the agents that
-write code work from the resulting spec, never the brief.
+write code are handed the resulting spec, not the brief.
 
 | | |
 |---|---|
