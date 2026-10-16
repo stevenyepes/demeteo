@@ -22,6 +22,14 @@
 //!   gate real by parking on the same `gd-resume-*` row + [`GateWaiter`]
 //!   rendezvous the watchdog already surfaced in the UI, instead of
 //!   re-executing while the prompt is still on screen.
+//!
+//!   The park writes the step `awaiting_gate` with its reason, like every
+//!   other park ([`StepTransition::awaiting_gate`]). Left `interrupted`, the
+//!   question existed only as the `gate_required` event: a window that missed
+//!   it — and every desktop mirroring a runner, which never receives it —
+//!   showed "gate needs you" with no gate on any step. Because the status no
+//!   longer reads `interrupted`, a second restart has to find the park by its
+//!   question instead; see [`needs_resume_guard`].
 //! * **unknown** (no recorded fingerprint, one recorded under an older
 //!   scheme, or a failed probe) — proceed; missing telemetry must never
 //!   block a run.
@@ -41,8 +49,14 @@
 //! the synthetic gate's only question is "safe to re-run here?").
 
 use crate::adapters::step_executor::driver::ExecutionDriver;
+use crate::adapters::step_executor::gate_park::{
+    park_for_human, pose_synthetic_gate, resume_question_posed, SyntheticGate,
+};
 use crate::adapters::step_executor::registry::{NodeTypeRegistry, ResumePolicy};
+use crate::adapters::step_executor::step_status::{update_step_status, StepTransition};
 use crate::domain::models::{StepConfig, StepExecution};
+#[cfg(doc)]
+use crate::domain::restart_reconcile::needs_resume_guard;
 use crate::domain::step_park::{resolve_park, HumanPark, ParkResolution};
 
 /// What the run loop should do after the guard has run.
@@ -116,15 +130,44 @@ impl ExecutionDriver {
             "interrupted node cannot be resumed blindly; parking at the synthetic gate"
         );
 
-        // Everything from here is the shared park: create the row,
-        // surface it, wait, clean up. Only the reason above is this
-        // guard's own — see `domain::step_park` for what the answer means.
-        // Redirect targeting is a real-gate affordance. This park's only
-        // question is "safe to re-run here?", and no earlier step makes a
-        // moved workspace safe.
+        // The park must sit on the resume question even when the watchdog
+        // posed none (a step it found `awaiting_gate`): that row is the only
+        // thing a later process can recognise this park by.
+        if !resume_question_posed(self.gates.as_ref(), &step_exec.id) {
+            if let Err(e) = pose_synthetic_gate(self.gates.as_ref(), &step_exec.id) {
+                tracing::warn!(
+                    feature_id = %self.f_id,
+                    step_id = %step_exec.step_id.0,
+                    error = %e,
+                    "resume guard: could not pose the resume question"
+                );
+            }
+        }
+        update_step_status(
+            self.status_writers(),
+            step_exec,
+            StepTransition::awaiting_gate(
+                step_exec.cost_usd.unwrap_or(0.0),
+                step_exec.tokens.unwrap_or(0),
+                step_exec.wall_clock_secs.unwrap_or(0),
+                format!(
+                    "{mismatch}.\n\nApprove to re-run '{}' over the workspace as it is \
+                     now, or reject to fail the run.",
+                    step_exec.step_id.0
+                ),
+                self.cache_tokens(),
+            ),
+        );
+        self.park_feature();
+
+        // Everything from here is the shared park: surface it, wait, clean
+        // up. Only the reason above is this guard's own — see
+        // `domain::step_park` for what the answer means. Redirect targeting
+        // is a real-gate affordance. This park's only question is "safe to
+        // re-run here?", and no earlier step makes a moved workspace safe.
         let park = HumanPark::new(mismatch, None);
-        let decision = crate::adapters::step_executor::gate_park::park_for_human(
-            crate::adapters::step_executor::gate_park::SyntheticGate {
+        let decision = park_for_human(
+            SyntheticGate {
                 gates: self.gates.as_ref(),
                 notif: self.notif.as_ref(),
                 waiters: &self.gate_waiters,

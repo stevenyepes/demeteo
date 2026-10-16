@@ -67,6 +67,24 @@ pub fn interrupted_by_restart(step_status: &str) -> Option<InterruptedStep> {
     }
 }
 
+/// Whether a node about to be dispatched must first pass the resume
+/// fingerprint guard (`driver/run_loop/resume.rs`).
+///
+/// `interrupted` is the watchdog's mark on a node a restart cut short. The
+/// second arm is the same node one restart later: the guard parks it in
+/// `awaiting_gate`, and the watchdog reconciles only a `running` or `gated`
+/// feature, so a process that dies while the question is open comes back with
+/// the step still `awaiting_gate` and the question still on it. Without that
+/// arm the next driver dispatches the node blindly, over the very workspace
+/// the question was about.
+///
+/// `awaiting_gate` alone is not enough: a zero-ticket rework park reads the
+/// same, and it is resumed by re-dispatching the step so the park re-asks
+/// itself. Only the resume question tells the two apart.
+pub fn needs_resume_guard(step_status: &str, resume_question_posed: bool) -> bool {
+    step_status == "interrupted" || (step_status == "awaiting_gate" && resume_question_posed)
+}
+
 /// Whether a feature has reached a status its steps can never advance past.
 ///
 /// The reconciliation reads this twice — once to decide whether a feature's

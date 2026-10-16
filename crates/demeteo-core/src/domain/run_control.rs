@@ -161,10 +161,10 @@ pub fn retry_refusal(status: &str) -> Option<String> {
 ///
 /// * The **row** is what a park owns. Every park creates one with
 ///   `decision = None` and every exit deletes it or fills it in, so its absence
-///   means nothing is waiting — while the *status* cannot say that: a real gate
-///   step parks in `awaiting_gate`, but the synthetic gate a resume-fingerprint
-///   or a non-idempotent command parks on sits on a step reading `interrupted`,
-///   and the same `interrupted` on a step nothing parked on is not a gate.
+///   means nothing is waiting — while the *status* cannot say that: the
+///   watchdog poses its "may this resume?" on a step reading `interrupted`,
+///   answerable before any driver has armed to park on it, and the same
+///   `interrupted` on a step nothing asked about is not a gate.
 /// * The **status** is what says the run moved on. An answered row on a still
 ///   parked step is the ordinary re-delivery — a double-click, or the user
 ///   nudging a gate whose driver died before it reconciled — and `gate_decide`
