@@ -71,6 +71,6 @@ If you'd rather not be asked at every gate, set **gate autonomy** per project �
 
 ## Next steps
 
-- [Workflows](workflows.md) — the nine starters and how a step is put together.
+- [Workflows](workflows.md) — the starters and how a step is put together.
 - [Settings](settings.md) — machines, providers, MCP, and per-project policies.
 - [Building from source](https://github.com/stevenyepes/demeteo#building-from-source) — in the repository README.

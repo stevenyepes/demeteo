@@ -18,7 +18,7 @@ One-shotting an app of any size gets you a good demo, and then the second featur
 | | |
 |---|---|
 | **Discovery** | An interviewer agent asks about what you haven't decided yet, then a decompose pass turns the conversation into dependency-gated tickets. See [Running a Discovery](journeys/run-a-discovery.md). |
-| **Workflows** | Versioned DAGs of Steps. Nine starters ship with the app; copy and edit any of them on the canvas. See [Workflows](workflows.md). |
+| **Workflows** | Versioned DAGs of Steps. Ten starters ship with the app; copy and edit any of them on the canvas. See [Workflows](workflows.md). |
 | **Gates** | Approve, redirect back into a loop with feedback, or abort. Per project, **gate autonomy** (`attended` / `review` / `clean` / `full`) sets which gates wait for you. |
 | **Remote execution** | Run agents on another machine over SSH, or hand a whole run to `demeteo-runner`, a headless Linux binary that keeps going with your laptop closed. Every transport behaves identically. |
 | **Code Review** | Review an open pull request with the agent's own review method, then address the findings in a follow-up run. |

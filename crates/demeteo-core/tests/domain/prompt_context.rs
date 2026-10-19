@@ -184,6 +184,7 @@ fn every_token_the_starters_reference_is_bound() {
         "code-review",
         "docs-update",
         "experiment",
+        "reference-feature-pipeline",
         "refactor",
         "simple-task",
         "standard-feature-pipeline",

@@ -1,6 +1,6 @@
 # Workflows
 
-A **Workflow** is a reusable, versioned DAG of Steps. Demeteo ships nine **starter workflows** — every project can run any of them — and you can edit them, or build your own, on the canvas in the **Workflow Library** (*Workflows* in the top bar).
+A **Workflow** is a reusable, versioned DAG of Steps. Demeteo ships ten **starter workflows** — every project can run any of them — and you can edit them, or build your own, on the canvas in the **Workflow Library** (*Workflows* in the top bar).
 
 ![Workflow Library listing the nine starter pipelines, with the Standard Feature Pipeline selected: its description, shape and step configuration](assets/screenshots/workflow-library.png)
 
@@ -11,6 +11,7 @@ The starters live in `src-tauri/workflows/*.json` and are compiled into the bina
 | Workflow | When to use it | Shape |
 |----------|----------------|-------|
 | **Standard Feature Pipeline** | New features of moderate-to-high complexity. | Baseline → research → spec → tickets → **gate** → implement tickets → validate → critic → **ship gate** → open PR. |
+| **Reference Feature Pipeline** | Building something another product already does. | Baseline → investigate the reference → **confirm reference & parity cases** → research → spec → tickets → **gate** → implement tickets → validate → critic → **ship gate** → open PR. |
 | **Bugfix Pipeline** | Isolated, well-scoped bugs. | Baseline → reproduce & diagnose → **confirm root cause** → decompose the fix → apply fix → full regression check → **ship gate** → open PR. |
 | **CI Fix Pipeline** | Red CI from test failures, lint errors, or build regressions. | Baseline → diagnose from the CI log → **confirm diagnosis** → apply fix → verify locally → **ship gate** → open PR. |
 | **Documentation Update** | API docs, READMEs, guides, inline comments. | Baseline → survey docs → **approve scope** → draft → validate links & code examples → **review draft** → polish → open PR. |
@@ -21,6 +22,8 @@ The starters live in `src-tauri/workflows/*.json` and are compiled into the bina
 | **Address Review Findings** | Acting on a review that already happened. | Work through the findings on the reviewed branch → confirm every finding is closed or answered (up to two attempts) → open PR. |
 
 *Baseline* is a `command` step that measures the project's own test harness before any change, so a check that was already failing is reported as pre-existing instead of being blamed on the feature. *Open PR* is the `finalize` step (**Summarize & open PR**).
+
+The Reference Feature Pipeline studies the reference named in the feature description, or in files you attach, from the outside: its documentation, its source when it is open source, and static analysis with [REA](https://rea.tools/) when `rea` is already installed. Demeteo never installs REA and never runs the reference. The investigation writes a behaviour-only brief, with a numbered parity case for each behaviour. At the first gate you confirm the reference is the one you meant and that you may study it, drop parity cases you do not want, and answer what the brief could not establish. That gate waits for you at every gate-autonomy level except **full**. Each parity case you keep becomes an acceptance criterion. The agents that write the code are handed the spec, not the brief. The brief is a report like the others, so it reaches the feature branch, and the pull request, only when the project commits artifacts.
 
 Code Review and Address Review Findings are usually launched from the **Code Review** button on a project's home, which lists the project's open pull requests.
 

@@ -155,7 +155,10 @@ export const GateView: React.FC<GateViewProps> = ({
     if (settled) return;
     setLoading(true);
     try {
-      const gateFeedback = decision === 'redirect' ? feedback : null;
+      // An approval's notes reach later steps through `{{gate_feedback}}` and
+      // `{{gate_decision_log}}`, which several starters' gate prompts promise.
+      const gateFeedback =
+        decision === 'redirect' ? feedback : decision === 'approve' ? feedback.trim() || null : null;
       if (remoteRun) {
         // The runner's `decide_gate` RPC keys the gate by its
         // step_execution_id and delegates to the same `GatePresenter`
@@ -282,6 +285,21 @@ export const GateView: React.FC<GateViewProps> = ({
                 placeholder="Instruct the agent on what failed, what they need to fix, or which step to retry."
                 rows={3}
                 className="w-full bg-[#050608] border border-white/10 focus:border-violet-500 rounded-lg p-3 text-xs text-white focus:outline-none transition resize-none leading-relaxed font-sans"
+              />
+            </div>
+          )}
+
+          {!isRedirecting && settled === null && (
+            <div className="space-y-2">
+              <label className="block text-xs uppercase tracking-wider text-slate-400 font-bold">
+                Approval Notes (optional)
+              </label>
+              <textarea
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                placeholder="Anything the next steps should know: scope to drop, questions you can answer."
+                rows={2}
+                className="w-full bg-[#050608] border border-white/10 focus:border-emerald-500 rounded-lg p-3 text-xs text-white focus:outline-none transition resize-none leading-relaxed font-sans"
               />
             </div>
           )}

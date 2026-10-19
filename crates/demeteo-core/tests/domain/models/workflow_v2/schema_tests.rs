@@ -43,6 +43,7 @@ fn valid_v2_documents_pass_validation() {
         "code-review",
         "docs-update",
         "experiment",
+        "reference-feature-pipeline",
         "refactor",
         "simple-task",
         "standard-feature-pipeline",
