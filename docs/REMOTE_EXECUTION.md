@@ -254,6 +254,37 @@ credential helper / askpass instead. Per run:
 - A compromised *idle* runner therefore has no git secret to steal — it exists
   only for the lifetime of an active run.
 
+**How the runner's own git calls find the PAT.** Core's origin git — fetch,
+branch cut, sync, land — asks a `GitCredentialSource` (`ports/git_credentials.rs`)
+for a token, passing the provider and the directory git runs in. The runner
+injects `RunnerCredentialSource` (`crates/demeteo-runner/src/credentials.rs`),
+which resolves **repo dir → project → run → `CredentialStore`** and nothing
+else. It is never keyed on the provider id: every run registers the same
+`runner-provider` row, so that id names no run, and a lookup by it would hand one
+run another's token. A step, sync or cache worktree is a sibling of its repo dir
+under the same project root, so it resolves to the run its repo does; a path
+outside the workspace, an unbound source, or a run with no PAT yields no
+credential and git runs unauthenticated. The source never writes the desktop
+`credential_cache`, so the PAT stays in runner memory and reaches git only as
+child-process env behind the per-invocation credential helper — never `.git/config`,
+a remote URL, argv, or a run event.
+
+**One push driver per run.** `inject_credentials`, `retry_step`, `publish_run`,
+reconcile and `submit_run` can all try to drive the same run's terminal push at
+once. They all go through `spawn_run_driver`, which takes a per-run slot in
+`RunDrivers` (`crates/demeteo-runner/src/driver.rs`). The caller that gets the
+slot is the driver; any other *attaches* — it records a re-arm request and
+returns without settling the run, removing the PAT, or cleaning the attachment
+spool, so it cannot fail a run or strip credentials from under the live driver.
+The driver consumes the request when it finishes and runs another pass instead of
+exiting.
+
+**Push idempotency.** If the push fails for a reason other than a stale lease
+and `origin` already holds the branch at exactly the local commit
+(`domain::push_lease::already_published`, via `ls-remote`), the push is treated
+as success: a concurrent push of the same commit won the race. A ref at any other
+commit is still an error, and the branch is never fetched to find out.
+
 **Restart tradeoff.** Because the PAT is memory-only, a runner crash mid-run
 loses it. If the run is at a point that needs git access (its terminal push, or
 a mid-run fetch), it **parks in a `needs-credentials` state** and is re-injected

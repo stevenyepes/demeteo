@@ -1,6 +1,5 @@
 use crate::services::RunnerServices;
 use demeteo_core::domain::run_spec::RunSpec;
-use demeteo_core::paths;
 use demeteo_core::ports::runner_run::RunnerRun;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -78,25 +77,7 @@ pub(super) async fn inject_credentials(
 
     let spec: RunSpec =
         serde_json::from_str(&run.spec_json).map_err(|e| format!("unparseable spec: {}", e))?;
-    let now = paths::now_ms();
-    svc.ctx
-        .runner_runs
-        .update_status(&params.run_id, "running", None, None, None, None, now)?;
-
-    let svc_bg = svc.clone();
-    let run_id_bg = params.run_id.clone();
-    let project_id = run.project_id.clone();
-    let feature_id = run.feature_id.clone();
-    tokio::spawn(async move {
-        let result =
-            crate::run::resume_or_run(&svc_bg, &run_id_bg, &spec, project_id, feature_id).await;
-        crate::run::settle_run(
-            svc_bg.ctx.run_events.as_ref(),
-            svc_bg.ctx.runner_runs.as_ref(),
-            &run_id_bg,
-            result,
-        );
-    });
+    crate::run::reopen_run_driver(svc, &params.run_id, spec)?;
 
     svc.ctx
         .runner_runs

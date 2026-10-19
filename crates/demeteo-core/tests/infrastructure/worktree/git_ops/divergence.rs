@@ -4,6 +4,7 @@ use super::{
     BASE_FETCH_TIMEOUT,
 };
 use crate::adapters::database::SqliteAdapter;
+use crate::adapters::git_credentials::KeyringCredentialSource;
 use crate::adapters::git_push::{credential_helper, GitCredential, PAT_ENV_VAR, USER_ENV_VAR};
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::ids::ProviderId;
@@ -591,6 +592,7 @@ async fn refresh_against(
     let fetched = refresh_base_ref(
         &*exec,
         &*db_with_provider(provider_id),
+        &KeyringCredentialSource,
         "local",
         "/repos/demeteo",
         "master",
@@ -632,4 +634,47 @@ async fn an_unreadable_origin_still_fetches_without_a_helper() {
         .iter()
         .any(|a| a.starts_with("credential.helper")));
     assert_eq!(fetch.timeout, Some(BASE_FETCH_TIMEOUT));
+}
+
+/// The base refresh asks the source it is handed, with the repo dir it fetches
+/// in, and never the keyring: the provider id below is in no cache.
+#[tokio::test]
+async fn refreshing_the_base_authenticates_through_the_injected_source() {
+    const INJECTED_PAT: &str = "tok-base-injected-3be1";
+    let credentialed = format!(
+        "git -C /repos/demeteo -c credential.helper= -c credential.helper={} fetch --no-recurse-submodules origin -- master",
+        credential_helper()
+    );
+    let exec = Arc::new(ScriptedExec::new(&[]).with_programs(&[
+        (
+            "git -C /repos/demeteo remote get-url origin",
+            Ok("https://x-access-token@github.com/acme/demeteo\n"),
+        ),
+        (credentialed.as_str(), Ok("")),
+    ]));
+    let source = FakeCredentialSource::new(&[("/repos/demeteo", INJECTED_PAT)]);
+
+    let fetched = refresh_base_ref(
+        &*exec,
+        &*db_with_provider("prov-base-injected"),
+        source.as_ref(),
+        "local",
+        "/repos/demeteo",
+        "master",
+    )
+    .await;
+
+    assert!(fetched);
+    let requests = exec.requests();
+    assert_eq!(
+        requests[1].env.get(PAT_ENV_VAR).map(String::as_str),
+        Some(INJECTED_PAT)
+    );
+    assert_eq!(
+        source.asked(),
+        vec![(
+            "prov-base-injected".to_string(),
+            "/repos/demeteo".to_string()
+        )]
+    );
 }

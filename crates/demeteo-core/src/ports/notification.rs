@@ -50,8 +50,10 @@ pub enum DomainEvent {
     /// `"syncing_origin"`) the frontend orders by; `label` is the
     /// human-readable text the frontend renders verbatim so the phase
     /// vocabulary lives in one place (the emitter). `status` is one of
-    /// `"running" | "completed" | "failed" | "skipped"`. `detail`
-    /// carries an optional log line or, for `"failed"`, the error text.
+    /// `"running" | "completed" | "warning" | "failed" | "skipped"`.
+    /// `"warning"` is a phase that finished with a problem the run survived.
+    /// `detail` carries an optional log line or, for `"warning"` and
+    /// `"failed"`, the error text.
     BootstrapProgress {
         feature_id: FeatureId,
         phase: String,

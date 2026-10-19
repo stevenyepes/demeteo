@@ -5,6 +5,7 @@ use crate::adapters::git_push::{
 use crate::domain::git_push::{embeds_secret, host_without_port, token_free_origin};
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
+use crate::ports::git_credentials::GitCredentialSource;
 #[cfg(feature = "keyring")]
 use keyring::Entry;
 use std::time::Duration;
@@ -171,18 +172,28 @@ async fn probe_origin(
 /// password-bearing URL. The migration half is [`migrate_origin`], which is
 /// also what [`scrub_origin`] runs on its own. An unreadable origin degrades to
 /// no migration and no credential, as in
-/// [`credential_for_repo`](crate::adapters::git_push::credential_for_repo).
+/// [`credential_for_repo_with`](crate::adapters::git_push::credential_for_repo_with).
 pub(crate) async fn prepare_origin(
     exec: &dyn ExecutionPort,
     app_settings: &dyn AppSettingsRepository,
+    credentials: &dyn GitCredentialSource,
     machine_id: &str,
     repo_dir: &str,
 ) -> Option<GitCredential> {
     let origin = probe_origin(exec, machine_id, repo_dir).await?;
     match origin.clean.as_deref() {
-        None => credential_for_remote(app_settings, &origin.url),
+        None => credential_for_remote(app_settings, credentials, repo_dir, &origin.url),
         Some(clean) => {
-            migrate_origin(exec, app_settings, machine_id, repo_dir, &origin.url, clean).await
+            migrate_origin(
+                exec,
+                app_settings,
+                credentials,
+                machine_id,
+                repo_dir,
+                &origin.url,
+                clean,
+            )
+            .await
         }
     }
 }
@@ -196,6 +207,7 @@ pub(crate) async fn prepare_origin(
 pub(crate) async fn scrub_origin(
     exec: &dyn ExecutionPort,
     app_settings: &dyn AppSettingsRepository,
+    credentials: &dyn GitCredentialSource,
     machine_id: &str,
     repo_dir: &str,
 ) {
@@ -203,7 +215,16 @@ pub(crate) async fn scrub_origin(
         return;
     };
     if let Some(clean) = origin.clean.as_deref() {
-        migrate_origin(exec, app_settings, machine_id, repo_dir, &origin.url, clean).await;
+        migrate_origin(
+            exec,
+            app_settings,
+            credentials,
+            machine_id,
+            repo_dir,
+            &origin.url,
+            clean,
+        )
+        .await;
     }
 }
 
@@ -237,12 +258,13 @@ pub(crate) async fn scrub_origin(
 async fn migrate_origin(
     exec: &dyn ExecutionPort,
     app_settings: &dyn AppSettingsRepository,
+    credentials: &dyn GitCredentialSource,
     machine_id: &str,
     repo_dir: &str,
     remote: &str,
     clean: &str,
 ) -> Option<GitCredential> {
-    let credential = credential_for_remote(app_settings, clean)?;
+    let credential = credential_for_remote(app_settings, credentials, repo_dir, clean)?;
     if credential.pat.is_empty() {
         return None;
     }

@@ -1,7 +1,9 @@
 // Tests for `prepare_origin` in `crates/demeteo-core/src/adapters/worktree/git_ops/clone.rs` (mirrored-tests convention). `super` = that module.
 
+use super::super::common::FakeCredentialSource;
 use super::{prepare_origin, ORIGIN_PROBE_TIMEOUT};
 use crate::adapters::database::SqliteAdapter;
+use crate::adapters::git_credentials::KeyringCredentialSource;
 use crate::adapters::git_push::fetch_request;
 use crate::adapters::git_push::GitCredential;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
@@ -67,7 +69,7 @@ async fn prepare(
         Some(pat) => crate::credential_cache::set(provider_id, pat),
         None => crate::credential_cache::invalidate(provider_id),
     }
-    prepare_origin(exec.as_ref(), db, "local", REPO).await
+    prepare_origin(exec.as_ref(), db, &KeyringCredentialSource, "local", REPO).await
 }
 
 #[tokio::test]
@@ -196,6 +198,26 @@ async fn an_embedded_token_that_differs_from_the_keyring_is_left_in_place() {
             "log leaked {secret:?}: {logged:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn an_embedded_token_that_differs_from_the_injected_sources_is_left_in_place() {
+    let db = db_with_provider("prov-mig-injected", "github", "github.com");
+    let exec = exec_for(
+        "https://x-access-token:ghp-working-embedded@github.com/acme/widgets\n",
+        Some("https://x-access-token@github.com/acme/widgets"),
+    );
+    let source = FakeCredentialSource::new(&[(REPO, PAT)]);
+
+    let credential = prepare_origin(exec.as_ref(), &db, source.as_ref(), "local", REPO).await;
+
+    assert!(credential.is_none());
+    assert!(set_urls(&exec).is_empty(), "the irreversible rewrite ran");
+    assert_eq!(exec.requests().len(), 1, "only the probe");
+    assert_eq!(
+        source.asked(),
+        vec![("prov-mig-injected".to_string(), REPO.to_string())]
+    );
 }
 
 #[tokio::test]
@@ -432,7 +454,15 @@ async fn the_probe_and_the_rewrite_are_bounded_and_the_fetches_keep_their_own_de
         Some("https://x-access-token@github.com/acme/widgets"),
     );
 
-    refresh_base_ref(exec.as_ref(), &db, "local", REPO, "main").await;
+    refresh_base_ref(
+        exec.as_ref(),
+        &db,
+        &KeyringCredentialSource,
+        "local",
+        REPO,
+        "main",
+    )
+    .await;
 
     let requests = exec.requests();
     let with = |needle: &str| {

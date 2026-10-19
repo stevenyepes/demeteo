@@ -83,6 +83,12 @@ pub(super) async fn refresh_feature_branch(
 
 /// The whole refresh against one clone, free of [`RunnerServices`] so a test
 /// can drive it over a real repository.
+///
+/// It never takes the run's [`RunDrivers`](crate::driver::RunDrivers) slot: the
+/// settled-run refusal is read once, before any git, so a `retry_step` or
+/// `publish_run` that starts a push driver afterwards is not seen. The branch
+/// move is a compare-and-swap on `from`, but the tracking-ref writes are not,
+/// and the driver's push lease reads that ref.
 pub(crate) async fn refresh_clone(
     askpass_path: &Path,
     repo_dir: &str,

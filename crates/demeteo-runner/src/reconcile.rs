@@ -12,7 +12,9 @@
 //!
 //! A run whose driver never got as far as `feature_start` (crashed before
 //! any project/feature existed) has nothing for the engine to resume —
-//! this module re-runs `execute_run` from scratch for those instead.
+//! this module re-runs `execute_run` from scratch for those instead. Both go
+//! through [`crate::run::spawn_run_driver`], so a `retry_step` that arrives
+//! while the re-attached driver is still live attaches to it.
 
 use crate::services::RunnerServices;
 use demeteo_core::domain::ids::FeatureId;
@@ -137,23 +139,11 @@ pub async fn reconcile_on_startup(svc: Arc<RunnerServices>, process_started_at: 
             continue;
         };
 
-        let svc_bg = svc.clone();
-        let run_id_bg = run.run_id.clone();
-        let project_id = run.project_id.clone();
-        let feature_id = run.feature_id.clone();
-        tokio::spawn(async move {
-            // The engine already re-armed any existing feature's driver
-            // (project_id/feature_id both set); a run that died before
-            // `feature_start` has nothing to resume and runs from scratch.
-            let result =
-                crate::run::resume_or_run(&svc_bg, &run_id_bg, &spec, project_id, feature_id).await;
-            crate::run::settle_run(
-                svc_bg.ctx.run_events.as_ref(),
-                svc_bg.ctx.runner_runs.as_ref(),
-                &run_id_bg,
-                result,
-            );
-        });
+        // The engine already re-armed any existing feature's driver; a run
+        // that died before `feature_start` has nothing to resume and runs from
+        // scratch. `settle_restart` already wrote `running`, so this is not a
+        // re-open.
+        crate::run::spawn_run_driver(&svc, run.run_id.clone(), spec);
     }
 }
 

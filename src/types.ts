@@ -234,12 +234,13 @@ export interface RunEvent {
  *  a Tauri `bootstrap_progress` event (local) or a `bootstrap_progress`
  *  {@link RunEvent} in the durable log (remote/detached). `phase` is a stable
  *  id the UI orders by; `label` is rendered verbatim; `status` drives the
- *  status dot. */
+ *  status dot. `warning` marks a best-effort phase that did not do its job but
+ *  did not stop the bootstrap; `detail` carries the reason. */
 export interface BootstrapProgressPayload {
   feature_id?: string;
   phase: string;
   label: string;
-  status: 'running' | 'completed' | 'failed' | 'skipped' | string;
+  status: 'running' | 'completed' | 'warning' | 'failed' | 'skipped' | string;
   detail?: string | null;
 }
 

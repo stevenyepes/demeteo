@@ -664,9 +664,10 @@ impl GitOpsHelper {
                     }
 
                     // Push the successful clean merge to origin so remote MR is updated
-                    let credential = crate::adapters::git_push::credential_for_repo(
+                    let credential = crate::adapters::git_push::credential_for_repo_with(
                         &*self.exec,
                         self.app_settings.as_ref(),
+                        self.credentials.as_ref(),
                         machine_str,
                         &wt_path,
                     )

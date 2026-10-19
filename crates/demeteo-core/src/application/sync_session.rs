@@ -40,6 +40,8 @@ pub struct SyncPorts<'a> {
     /// a token-free HTTPS URL, so a push with no credential attached is a push
     /// that cannot happen.
     pub app_settings: &'a Arc<dyn crate::ports::db::AppSettingsRepository>,
+    /// Where the token for that provider comes from.
+    pub credentials: &'a Arc<dyn crate::ports::git_credentials::GitCredentialSource>,
 }
 
 /// The feature's session as the working tree says it stands.
@@ -217,6 +219,7 @@ pub async fn publish(
         sessions,
         exec,
         app_settings,
+        credentials,
         ..
     } = ports;
     let Some(read) = reconciled(ports.clone(), feature_id).await? else {
@@ -251,9 +254,10 @@ pub async fn publish(
         Some(worktree) if worktree != session.repo_dir && worktree_present => worktree.to_string(),
         _ => session.repo_dir.clone(),
     };
-    let credential = crate::adapters::git_push::credential_for_repo(
+    let credential = crate::adapters::git_push::credential_for_repo_with(
         &**exec,
         &**app_settings,
+        &**credentials,
         &session.machine_id,
         &push_dir,
     )

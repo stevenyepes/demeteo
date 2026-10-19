@@ -9,13 +9,15 @@
 
 use std::sync::Arc;
 
-use super::harness::{build_test_executor_in, scratch_dir, FakeNotif};
+use super::harness::{build_test_executor_in, scratch_dir, CapturingNotif};
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
 use crate::domain::feature_origin::FeatureOrigin;
 use crate::domain::ids::{FeatureId, ProjectId, ProviderId, RepositoryId};
 use crate::paths;
 use crate::ports::db::{FeatureRepository, ProjectRepository, WorkflowRepository};
+use crate::ports::notification::DomainEvent;
 use crate::ports::step_executor::{FeatureLaunch, StepExecutor};
+use crate::support::fake_credentials::FakeCredentialSource;
 
 const REPO_PATH: &str = "demeteo/origin-cut";
 
@@ -46,6 +48,30 @@ async fn bootstrap_git(
     origin: FeatureOrigin,
     script: &[(String, Result<&'static str, &'static str>)],
 ) -> (Vec<String>, Option<String>) {
+    let run = bootstrap_git_via(label, origin, script, None).await;
+    (run.ran, run.recorded)
+}
+
+/// What a bootstrap did, as far as these tests can see it.
+struct BootstrapRun {
+    ran: Vec<String>,
+    recorded: Option<String>,
+    requests: Vec<crate::ports::execution::ProgramRequest>,
+    repo_dir: String,
+    /// The `(provider_id, repo_dir)` pairs the injected source was asked for.
+    asked: Vec<(String, String)>,
+    events: Vec<DomainEvent>,
+}
+
+/// [`bootstrap_git`] with the executor's credential source replaced by one that
+/// holds `pat` for the run's repo dir and for nothing else, and a provider for
+/// `github.com` configured.
+async fn bootstrap_git_via(
+    label: &str,
+    origin: FeatureOrigin,
+    script: &[(String, Result<&'static str, &'static str>)],
+    pat: Option<&str>,
+) -> BootstrapRun {
     let temp_dir = scratch_dir(label);
     let project_id = format!("p-{label}");
     let feature_id = format!("f-{label}");
@@ -67,8 +93,28 @@ async fn bootstrap_git(
             .with_dirs(&[&repo_dir])
             .with_programs(&programs),
     );
+    let notif = Arc::new(CapturingNotif::default());
     let (executor, db) =
-        build_test_executor_in(temp_dir.clone(), Arc::new(FakeNotif), exec.clone()).await;
+        build_test_executor_in(temp_dir.clone(), notif.clone(), exec.clone()).await;
+    let source = pat.map(|pat| FakeCredentialSource::new(&[(repo_dir.as_str(), pat)]));
+    let executor = match &source {
+        Some(source) => executor.with_credential_source(source.clone()),
+        None => executor,
+    };
+    if source.is_some() {
+        crate::ports::db::AppSettingsRepository::add_provider_instance(
+            &*db,
+            crate::domain::models::ProviderInstance {
+                id: ProviderId::from("origin-cut-provider"),
+                kind: "github".to_string(),
+                host: "github.com".to_string(),
+                username: "someone".to_string(),
+                avatar_url: String::new(),
+                created_at: 0,
+            },
+        )
+        .expect("add provider");
+    }
 
     let projects: &dyn ProjectRepository = &*db;
     projects
@@ -126,8 +172,17 @@ async fn bootstrap_git(
     }
 
     let ran = exec.programs();
+    let requests = exec.requests();
     let _ = std::fs::remove_dir_all(temp_dir);
-    (ran, recorded)
+    let events = notif.events.lock().unwrap().clone();
+    BootstrapRun {
+        ran,
+        recorded,
+        requests,
+        repo_dir,
+        asked: source.map(|s| s.asked()).unwrap_or_default(),
+        events,
+    }
 }
 
 /// Every argv in `expected` succeeds, and the run is expected to cut.
@@ -216,6 +271,51 @@ async fn a_branch_origin_survives_an_unreachable_origin() {
     );
 }
 
+/// The survived failure is reported as what it is. `completed` would tell the
+/// stepper the sync went well, and the git error is the only thing that says
+/// the run is cutting from a stale ref.
+#[tokio::test]
+async fn a_failed_best_effort_fetch_is_reported_as_a_warning() {
+    const ERR: &str = "fatal: could not read from remote repository";
+    let script = [
+        ("fetch origin -- release/2.0".to_string(), Err(ERR)),
+        (
+            "branch -f demeteo/features/f-origin_warn origin/release/2.0".to_string(),
+            Ok(""),
+        ),
+    ];
+    let run = bootstrap_git_via(
+        "origin_warn",
+        FeatureOrigin::Branch {
+            base: "release/2.0".to_string(),
+        },
+        &script[..],
+        None,
+    )
+    .await;
+
+    let sync: Vec<(&str, Option<&str>)> = run
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            DomainEvent::BootstrapProgress {
+                phase,
+                status,
+                detail,
+                ..
+            } if phase == "syncing_origin" => Some((status.as_str(), detail.as_deref())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sync.len(), 2, "running, then the outcome: {sync:?}");
+    assert_eq!(sync[0].0, "running");
+    assert_eq!(sync[1].0, "warning", "the git it ran: {:?}", run.ran);
+    assert!(
+        sync[1].1.is_some_and(|d| d.contains(ERR)),
+        "the detail carries the git error: {sync:?}"
+    );
+}
+
 /// And the other half: a fetched ref has no predecessor in the clone, so the
 /// same failure has to stop the run rather than cut from whatever else
 /// resolves.
@@ -263,6 +363,47 @@ async fn ref_origin_fetches_the_refspec_then_cuts_from_it() {
     )
     .await;
     assert_git_prefix(&ran, &expected);
+}
+
+/// The fetch that cuts a `Ref` run authenticates through the source the
+/// executor was composed with, asked about the run's own repo dir. The fake
+/// holds a token for that directory only, so a helper built on the default
+/// source asks nobody.
+#[tokio::test]
+async fn the_cut_fetch_asks_the_executors_credential_source() {
+    const PAT: &str = "tok-origin-cut-6d20";
+    let script = [(
+        "remote get-url origin".to_string(),
+        Ok("https://github.com/demeteo/origin-cut.git\n"),
+    )];
+    let run = bootstrap_git_via(
+        "origin_ref_source",
+        FeatureOrigin::Ref {
+            fetch_spec: "refs/pull/42/head".to_string(),
+            label: "PR #42".to_string(),
+        },
+        &script[..],
+        Some(PAT),
+    )
+    .await;
+
+    assert_eq!(
+        run.asked,
+        vec![("origin-cut-provider".to_string(), run.repo_dir.clone())],
+        "the git it ran: {:?}",
+        run.ran
+    );
+    let fetch = run
+        .requests
+        .iter()
+        .find(|r| r.args.iter().any(|a| a == "fetch"))
+        .unwrap_or_else(|| panic!("no fetch was issued: {:?}", run.ran));
+    assert!(
+        fetch.env.iter().any(|(_, v)| v == PAT),
+        "the fetch must carry the injected token in its environment: {:?}",
+        fetch.env
+    );
+    assert!(fetch.args.iter().all(|a| !a.contains(PAT)));
 }
 
 /// The bootstrap's git must be the *opening* of the log: the driver it starts

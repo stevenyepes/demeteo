@@ -1615,7 +1615,7 @@ mod feature_upstream {
 /// `ensure_default_branch_updated` share one resolved credential, and the one
 /// fetch whose failure a user reads cannot echo it.
 mod credentialed_fetches {
-    use super::stage_at_each_call::{as_script, full_run, BASE, BRANCH, REPO};
+    use super::stage_at_each_call::{as_script, full_run, push, wt, BASE, BRANCH, REPO};
     use super::*;
     use crate::adapters::database::SqliteAdapter;
     use crate::adapters::git_push::{credential_helper, PAT_ENV_VAR, USER_ENV_VAR};
@@ -1636,6 +1636,12 @@ mod credentialed_fetches {
         programs: &[(String, Result<String, String>)],
     ) -> (Arc<ScriptedExec>, GitOpsHelper) {
         crate::credential_cache::set(PROVIDER, PAT);
+        helper_without_cache(programs)
+    }
+
+    fn helper_without_cache(
+        programs: &[(String, Result<String, String>)],
+    ) -> (Arc<ScriptedExec>, GitOpsHelper) {
         let db = SqliteAdapter::new(Connection::open_in_memory().unwrap()).unwrap();
         db.add_provider_instance(ProviderInstance {
             id: ProviderId::from(PROVIDER),
@@ -1766,6 +1772,63 @@ mod credentialed_fetches {
             );
             assert!(fetch.env.iter().any(|(k, _)| k == USER_ENV_VAR));
         }
+    }
+
+    #[tokio::test]
+    async fn an_injected_source_authenticates_both_the_fetches_and_the_push_of_a_sync() {
+        const INJECTED_PAT: &str = "tok-sync-injected-6d20";
+        let wt_get_url = format!("git -C {} remote get-url origin", wt());
+        let credentialed_push = format!(
+            "git -C {} -c credential.helper= -c credential.helper={} push origin {BRANCH}",
+            wt(),
+            credential_helper()
+        );
+        let mut run = credentialed_run(None);
+        run.retain(|(key, _)| *key != push());
+        run.push((
+            wt_get_url,
+            Ok("https://github.com/acme/widgets\n".to_string()),
+        ));
+        run.push((credentialed_push, Ok(String::new())));
+        let (exec, helper) = helper_without_cache(&run);
+        let source =
+            FakeCredentialSource::new(&[(REPO, INJECTED_PAT), (wt().as_str(), INJECTED_PAT)]);
+        let helper = helper.with_credential_source(source.clone());
+
+        helper
+            .sync_feature_with_upstream(None, REPO, BRANCH, BASE, MergeGate::default(), &())
+            .await
+            .expect("the scripted run merges and pushes cleanly");
+
+        let carrying: Vec<ProgramRequest> = exec
+            .requests()
+            .into_iter()
+            .filter(|r| {
+                r.env
+                    .iter()
+                    .any(|(k, v)| k == PAT_ENV_VAR && v == INJECTED_PAT)
+            })
+            .collect();
+        let subcommands: Vec<&str> = carrying
+            .iter()
+            .filter_map(|r| r.args.iter().find(|a| *a == "fetch" || *a == "push"))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            subcommands,
+            vec!["fetch", "fetch", "push"],
+            "{:?}",
+            exec.programs()
+        );
+        let dirs: Vec<String> = source.asked().into_iter().map(|(_, dir)| dir).collect();
+        assert!(
+            dirs.contains(&REPO.to_string()) && dirs.contains(&wt()),
+            "{dirs:?}"
+        );
+        assert!(exec
+            .requests()
+            .iter()
+            .all(|r| r.args.iter().all(|a| !a.contains(INJECTED_PAT))));
     }
 
     #[tokio::test]

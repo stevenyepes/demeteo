@@ -186,3 +186,5 @@ pub(super) async fn two_repos_with_origin_ahead(
     let remote = remote_dir.to_string_lossy().to_string();
     (local_dir, remote_dir, helper, remote)
 }
+
+pub(super) use crate::support::fake_credentials::FakeCredentialSource;

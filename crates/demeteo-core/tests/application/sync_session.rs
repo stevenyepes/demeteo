@@ -7,7 +7,9 @@
 use super::*;
 use crate::adapters::database::SqliteAdapter;
 use crate::adapters::step_executor::scripted_exec::ScriptedExec;
-use crate::domain::models::ConflictFile;
+use crate::domain::ids::ProviderId;
+use crate::domain::models::{ConflictFile, ProviderInstance};
+use crate::support::fake_credentials::FakeCredentialSource;
 use rusqlite::Connection;
 
 const REPO: &str = "/repos/demeteo";
@@ -36,6 +38,7 @@ struct Fixture {
     features: Arc<dyn crate::ports::db::FeatureRepository>,
     turns: Arc<crate::application::sync_turns::SyncTurns>,
     app_settings: Arc<dyn crate::ports::db::AppSettingsRepository>,
+    credentials: Arc<dyn crate::ports::git_credentials::GitCredentialSource>,
 }
 
 impl Fixture {
@@ -46,6 +49,7 @@ impl Fixture {
             features: &self.features,
             turns: &self.turns,
             app_settings: &self.app_settings,
+            credentials: &self.credentials,
         }
     }
 }
@@ -77,11 +81,12 @@ fn ports(scripted: ScriptedExec) -> Fixture {
         git: scripted,
         features: db.clone(),
         turns: Arc::new(crate::application::sync_turns::SyncTurns::default()),
-        // No provider instance is seeded, so `credential_for_repo` answers
+        // No provider instance is seeded, so `credential_for_repo_with` answers
         // `None` and the push these tests script is the uncredentialed one —
         // which is what a project cloned over ssh gets, and what every
         // assertion here was written against.
         app_settings: db,
+        credentials: Arc::new(crate::adapters::git_credentials::KeyringCredentialSource),
     }
 }
 
@@ -585,6 +590,48 @@ async fn a_rejected_push_is_not_recorded_as_published() {
     assert!(err.contains("origin refused the push"), "{err}");
     assert!(err.contains("fetch and sync again"), "{err}");
     assert_eq!(fx.sessions.get(&fid()).unwrap().unwrap().pushed_at, None);
+}
+
+/// The token for a publish comes from the source the caller's ports carry,
+/// asked about the directory the push runs from — the sync worktree here — and
+/// not from the process cache or the clone.
+#[tokio::test]
+async fn publish_asks_the_injected_source_for_the_directory_it_pushes_from() {
+    const PAT: &str = "tok-sync-publish-5e1c";
+    let source = FakeCredentialSource::new(&[(WT, PAT)]);
+    let mut fx = ports(
+        script(&[]).with_programs(&[(REMOTE_URL, Ok("https://github.com/acme/widgets.git\n"))]),
+    );
+    fx.credentials = source.clone();
+    fx.app_settings
+        .add_provider_instance(ProviderInstance {
+            id: ProviderId::from("prov-sync-publish"),
+            kind: "github".to_string(),
+            host: "github.com".to_string(),
+            username: "someone".to_string(),
+            avatar_url: String::new(),
+            created_at: 0,
+        })
+        .unwrap();
+    fx.sessions.open(&resolved(Some("aaaaaaa"))).unwrap();
+
+    let _ = publish(fx.ports(), &fid()).await;
+
+    assert_eq!(
+        source.asked(),
+        vec![("prov-sync-publish".to_string(), WT.to_string())]
+    );
+    let requests = fx.git.requests();
+    let push = requests
+        .iter()
+        .find(|r| r.args.iter().any(|a| a == "push"))
+        .unwrap_or_else(|| panic!("no push was issued: {:?}", fx.git.programs()));
+    assert!(
+        push.env.iter().any(|(_, v)| v == PAT),
+        "the push must carry the injected token in its environment: {:?}",
+        push.env
+    );
+    assert!(push.args.iter().all(|a| !a.contains(PAT)));
 }
 
 const HOOK_FAILURE: &str = "running the gate\nclippy: 3 errors\n\

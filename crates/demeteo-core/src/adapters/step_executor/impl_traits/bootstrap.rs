@@ -1,7 +1,7 @@
 use crate::adapters::step_executor::preflight::PREFLIGHT_PROBE_TIMEOUT_S;
 use crate::adapters::worktree::git_ops::GitOpsHelper;
 use crate::application::attachments::{commit_staged_attachments, StagedAttachmentInput};
-use crate::domain::feature_origin::BranchCut;
+use crate::domain::feature_origin::{sync_phase_status, BranchCut};
 use crate::domain::ids::FeatureId;
 use crate::domain::step_seed::seed_step_executions;
 use crate::paths;
@@ -116,7 +116,8 @@ impl DagStepExecutor {
             .resolve_execution_context(fid, project_id, workflow_id, description, true)
             .await?;
 
-        let git_ops = GitOpsHelper::new(self.app_settings.clone(), self.exec.clone());
+        let git_ops = GitOpsHelper::new(self.app_settings.clone(), self.exec.clone())
+            .with_credential_source(self.credentials.clone());
         self.cut_run_branch(feature_id, &git_ops, &ctx).await?;
 
         self.run_harness_preflight(fid, &ctx).await?;
@@ -196,13 +197,15 @@ impl DagStepExecutor {
                     .fetch_origin_refspec(machine, &ctx.target_dir, refspec)
                     .await
                 {
-                    self.emit_bootstrap(fid, sync, "failed", Some(e.clone()));
+                    let status = sync_phase_status(Some(&cut), Some(&e));
+                    self.emit_bootstrap(fid, sync, status, Some(e.clone()));
                     return Err(e);
                 }
                 None
             }
         };
-        self.emit_bootstrap(fid, sync, "completed", sync_detail);
+        let status = sync_phase_status(Some(&cut), sync_detail.as_deref());
+        self.emit_bootstrap(fid, sync, status, sync_detail);
 
         self.emit_bootstrap(fid, branch, "running", None);
         let cut_result = match &cut {
