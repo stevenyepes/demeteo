@@ -187,9 +187,10 @@ pub(super) async fn land(
         // which of the two it is.
         // Pushed from `resolved_cwd`, the tree the resolution was committed in,
         // so a `pre-push` hook sees what it is judging.
-        let credential = crate::adapters::git_push::credential_for_repo(
+        let credential = crate::adapters::git_push::credential_for_repo_with(
             &**exec,
             app_settings.as_ref(),
+            git_ops.credentials.as_ref(),
             machine_str,
             resolved_cwd,
         )

@@ -16,6 +16,7 @@ use crate::ports::db::{
     WorkflowRepository,
 };
 use crate::ports::execution::ExecutionPort;
+use crate::ports::git_credentials::GitCredentialSource;
 use crate::ports::merge::MergeExecutor;
 use crate::ports::notification::NotificationPort;
 use crate::ports::pricing::PricingTable;
@@ -98,6 +99,9 @@ pub struct DagStepExecutor {
     /// `feature_sync` and `feature_resolve_sync_conflicts` paths
     /// so the two flows don't share transient state.
     pub git_ops: GitOpsHelper,
+    /// The source `git_ops` and the helpers built beside it authenticate
+    /// `origin` through.
+    credentials: Arc<dyn GitCredentialSource>,
     /// Artifact persistence port. The step executor and the tool
     /// bridge both route artifact I/O through this so a future S3
     /// or SFTP-on-remote adapter can swap in without touching either
@@ -211,6 +215,7 @@ impl DagStepExecutor {
         sync_turns: Arc<SyncTurns>,
     ) -> Self {
         let git_ops = GitOpsHelper::new(app_settings.clone(), exec.clone());
+        let credentials = git_ops.credentials.clone();
         Self {
             machines,
             projects,
@@ -230,6 +235,7 @@ impl DagStepExecutor {
             subtask_runs,
             sequence_resume,
             git_ops,
+            credentials,
             artifacts,
             attachments,
             attachment_json,
@@ -244,6 +250,23 @@ impl DagStepExecutor {
         }
     }
 
+    /// Route this executor's origin credential lookups, and those of its
+    /// [`GitOpsHelper`], through `credentials`. The runner passes a run-scoped
+    /// in-memory source; the desktop keeps the keyring default.
+    pub fn with_credential_source(mut self, credentials: Arc<dyn GitCredentialSource>) -> Self {
+        self.git_ops = self.git_ops.with_credential_source(credentials.clone());
+        self.credentials = credentials;
+        self
+    }
+
+    pub fn with_cache_reclaim(
+        mut self,
+        reclaim: Arc<dyn crate::ports::cache_reclaim::CacheReclaimPort>,
+    ) -> Self {
+        self.git_ops = self.git_ops.with_cache_reclaim(reclaim);
+        self
+    }
+
     /// Give the executor a publisher, so a finished run opens its own PR from
     /// the summary the `finalize` step authored.
     ///
@@ -253,14 +276,6 @@ impl DagStepExecutor {
     /// PAT instead (docs/REMOTE_EXECUTION.md §6.2). A runner that wired one up
     /// here would fail the publish and force a credential to be resident for
     /// the whole run — the exact thing that design avoids.
-    pub fn with_cache_reclaim(
-        mut self,
-        reclaim: Arc<dyn crate::ports::cache_reclaim::CacheReclaimPort>,
-    ) -> Self {
-        self.git_ops = self.git_ops.with_cache_reclaim(reclaim);
-        self
-    }
-
     pub fn with_mr_publisher(
         mut self,
         publisher: Arc<dyn crate::ports::mr_publisher::MrPublisher>,

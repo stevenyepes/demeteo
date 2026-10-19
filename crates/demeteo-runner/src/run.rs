@@ -6,6 +6,8 @@
 //! CLI command (M1) and the `submit_run` RPC method (M3.2) so there is
 //! exactly one code path, not two copies that drift.
 
+use crate::credentials::CredentialStore;
+use crate::driver::{Acquire, DriverGuard, RunDrivers};
 use crate::git_askpass;
 use crate::services::RunnerServices;
 use demeteo_core::adapters::step_executor::setup::fetch_default_settings;
@@ -25,6 +27,8 @@ use demeteo_core::ports::runner_run::RunnerRunPort;
 use demeteo_core::state::AppContext;
 use serde::Serialize;
 use std::collections::HashSet;
+use std::future::Future;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The one Provider Instance a run's repo is registered under. M1/M3 have
@@ -197,17 +201,27 @@ async fn pre_clone_with_askpass(
 }
 
 /// Fresh submission: register the provider, clone the repo, bootstrap a
-/// project, ingest the workflow, start the feature, then hand off to
-/// [`await_terminal_and_push`]. This is the *only* path that creates a
+/// project, ingest the workflow, start the feature, then hand off to the
+/// terminal-wait-and-push tail. This is the *only* path that creates a
 /// new project/feature — a resume (M2.3/M4.3) must never call this again
 /// for a run that already has a `feature_id`, or it would create a second
-/// project from scratch instead of resuming the first. Use
-/// [`resume_or_run`] to pick the right path.
+/// project from scratch instead of resuming the first. [`run_pass`] picks
+/// the right path.
 ///
 /// The origin is resolved before any of that, because
 /// [`RunSpec::origin_to_honour`] can refuse and a refused run must leave no
 /// project, no clone and no feature behind.
 pub async fn execute_run(
+    svc: &RunnerServices,
+    run_id: &str,
+    spec: &RunSpec,
+) -> Result<RunOutcome, String> {
+    let result = execute_run_inner(svc, run_id, spec).await;
+    release_run_secrets(&svc.creds, spec, run_id, &result);
+    result
+}
+
+async fn execute_run_inner(
     svc: &RunnerServices,
     run_id: &str,
     spec: &RunSpec,
@@ -401,7 +415,7 @@ pub async fn execute_run(
         );
     }
 
-    await_terminal_and_push(svc, run_id, &project.id, &feature.id, spec).await
+    await_terminal_and_push_inner(svc, run_id, &project.id, &feature.id, spec).await
 }
 
 /// MC-D4 merge (P0.5): compose the `ProjectSettings` row the runner
@@ -468,34 +482,6 @@ fn merge_project_settings(
     settings
 }
 
-/// Dispatch to [`execute_run`] (nothing created yet) or
-/// [`await_terminal_and_push`] (project/feature already exist — the
-/// engine's own restart reconciliation already re-armed the driver) based
-/// on what the `runner_runs` row remembers. Shared by the M2.3 restart
-/// path and the M4.3 `inject_credentials`-triggered resume-from-park
-/// path so there is exactly one "how do I pick up a run" decision.
-pub async fn resume_or_run(
-    svc: &RunnerServices,
-    run_id: &str,
-    spec: &RunSpec,
-    project_id: Option<String>,
-    feature_id: Option<String>,
-) -> Result<RunOutcome, String> {
-    match (project_id, feature_id) {
-        (Some(pid), Some(fid)) => {
-            await_terminal_and_push(
-                svc,
-                run_id,
-                &ProjectId::from(pid),
-                &FeatureId::from(fid),
-                spec,
-            )
-            .await
-        }
-        _ => execute_run(svc, run_id, spec).await,
-    }
-}
-
 /// Tell the away notifier about the feature's pending gate, once per gate.
 ///
 /// The engine already approved every gate the run's
@@ -525,31 +511,21 @@ async fn announce_parked_gate(
         .await;
 }
 
-/// Resume path (M2.3/M4.3): the feature already exists (created by a
-/// prior, interrupted or credential-parked `execute_run`) and the
-/// engine's own restart reconciliation has already re-armed its driver.
-/// Polls to a terminal state — applying the unattended gate policy
-/// (M5.1) and budget caps (M5.2) along the way — then pushes and
-/// auto-opens the PR (M5.3). Never touches project/workflow creation.
-pub async fn await_terminal_and_push(
-    svc: &RunnerServices,
-    run_id: &str,
-    project_id: &ProjectId,
-    feature_id: &FeatureId,
+/// Wipe the run's credential the moment we reach any outcome that isn't itself
+/// "still waiting on one" — `needs-credentials` means there was nothing to wipe
+/// yet (§6.2: wiped at run end — success, failure, or cancel). The attachment
+/// spool shares the credential's lifetime: staged for the run, deleted with it.
+fn release_run_secrets(
+    creds: &CredentialStore,
     spec: &RunSpec,
-) -> Result<RunOutcome, String> {
-    let result = await_terminal_and_push_inner(svc, run_id, project_id, feature_id, spec).await;
-    // Wipe the run's credential the moment we reach any outcome that
-    // isn't itself "still waiting on one" — `needs-credentials` means
-    // there was nothing to wipe yet (§6.2: wiped at run end — success,
-    // failure, or cancel). The attachment spool shares the credential's
-    // lifetime: staged for the run, deleted with it.
-    let still_needs_pat = matches!(&result, Ok(o) if o.status == "needs-credentials");
+    run_id: &str,
+    result: &Result<RunOutcome, String>,
+) {
+    let still_needs_pat = matches!(result, Ok(o) if o.status == "needs-credentials");
     if !still_needs_pat {
-        svc.creds.remove(run_id);
+        creds.remove(run_id);
         cleanup_attachment_spool(spec, run_id);
     }
-    result
 }
 
 /// Delete the per-run attachment spool the laptop SFTP'd before
@@ -578,6 +554,12 @@ fn cleanup_attachment_spool(spec: &RunSpec, run_id: &str) {
     }
 }
 
+/// Resume path (M2.3/M4.3): the feature already exists (created by a
+/// prior, interrupted or credential-parked `execute_run`) and the
+/// engine's own restart reconciliation has already re-armed its driver.
+/// Polls to a terminal state — applying the unattended gate policy
+/// (M5.1) and budget caps (M5.2) along the way — then pushes and
+/// auto-opens the PR (M5.3). Never touches project/workflow creation.
 async fn await_terminal_and_push_inner(
     svc: &RunnerServices,
     run_id: &str,
@@ -923,7 +905,7 @@ pub(crate) async fn push_leased(
         .await
         .map_err(|e| format!("failed to read origin/{branch} before the push: {e}"))?;
     let lease = push_lease::lease_from_tracking(branch, &tracking);
-    git_askpass::run_git(
+    let pushed = git_askpass::run_git(
         askpass_path,
         &[
             "-C".to_string(),
@@ -935,15 +917,263 @@ pub(crate) async fn push_leased(
         ],
         Some(pat),
     )
-    .await
-    .map(|_| ())
-    .map_err(|e| {
-        if push_lease::is_stale_lease(&e) {
-            lease.refusal()
-        } else {
-            format!("failed to push feature branch to origin: {}", e)
+    .await;
+    let Err(error) = pushed else {
+        return Ok(());
+    };
+    if push_lease::is_stale_lease(&error) {
+        return Err(lease.refusal());
+    }
+    if remote_already_at_local(askpass_path, repo_dir, branch, pat).await {
+        return Ok(());
+    }
+    Err(format!(
+        "failed to push feature branch to origin: {}",
+        error
+    ))
+}
+
+/// Whether `origin` holds `branch` at the commit `repo_dir` has it at. Any
+/// failure to find out reads as "no", so the push's own error stands.
+async fn remote_already_at_local(
+    askpass_path: &std::path::Path,
+    repo_dir: &str,
+    branch: &str,
+    pat: &str,
+) -> bool {
+    let dir = ["-C".to_string(), repo_dir.to_string()];
+    let local_query: Vec<String> = dir
+        .iter()
+        .cloned()
+        .chain(push_lease::ref_query(&format!("refs/heads/{branch}")))
+        .collect();
+    let Ok(local) = git_askpass::run_git(askpass_path, &local_query, None).await else {
+        return false;
+    };
+    let Some(local_head) = push_lease::ref_tip(&local, &format!("refs/heads/{branch}")) else {
+        return false;
+    };
+    let remote_query: Vec<String> = dir
+        .into_iter()
+        .chain(push_lease::remote_tip_query(branch))
+        .collect();
+    match git_askpass::run_git(askpass_path, &remote_query, Some(pat)).await {
+        Ok(remote) => push_lease::already_published(&local_head, &remote, branch),
+        Err(_) => false,
+    }
+}
+
+/// One pass of a run, without releasing its secrets: [`execute_run`] when
+/// nothing exists yet, otherwise the tail over what the row recorded. The
+/// driver loop calls this under a single [`DriverGuard`], so the hand-off from
+/// creation to the tail never asks the registry for a second slot.
+async fn run_pass(
+    svc: &RunnerServices,
+    run_id: &str,
+    spec: &RunSpec,
+    project_id: Option<String>,
+    feature_id: Option<String>,
+) -> Result<RunOutcome, String> {
+    match (project_id, feature_id) {
+        (Some(pid), Some(fid)) => {
+            await_terminal_and_push_inner(
+                svc,
+                run_id,
+                &ProjectId::from(pid),
+                &FeatureId::from(fid),
+                spec,
+            )
+            .await
         }
-    })
+        _ => execute_run_inner(svc, run_id, spec).await,
+    }
+}
+
+/// What a run's driver needs once it is spawned, owned so the task is `'static`.
+pub(crate) struct DriverPorts {
+    pub creds: Arc<CredentialStore>,
+    pub run_events: Arc<dyn RunEventsPort>,
+    pub runner_runs: Arc<dyn RunnerRunPort>,
+    pub features: Arc<dyn FeatureRepository>,
+}
+
+pub(crate) enum Spawned {
+    Driving,
+    /// A driver for this run is already live and has been asked for another
+    /// pass. The caller must not settle the run, wipe its credential or delete
+    /// its spool: all three belong to the driver, which is still using them.
+    Attached,
+}
+
+/// Start `run_id`'s driver, or attach to the one already live.
+///
+/// The decision is made before this returns, so a caller that flips the row to
+/// `running` can do it only when it is the driver. Every task that drives a
+/// run goes through here; the guard is held for the whole task so the
+/// `execute_run` → `await_terminal_and_push` hand-off is one acquisition.
+pub(crate) fn spawn_run_driver(
+    svc: &Arc<RunnerServices>,
+    run_id: String,
+    spec: RunSpec,
+) -> Spawned {
+    match svc.drivers.try_acquire(&run_id) {
+        Acquire::Attached => Spawned::Attached,
+        Acquire::Driver(guard) => {
+            start_run_driver(svc, guard, run_id, spec);
+            Spawned::Driving
+        }
+    }
+}
+
+fn start_run_driver(svc: &Arc<RunnerServices>, guard: DriverGuard, run_id: String, spec: RunSpec) {
+    let ports = DriverPorts {
+        creds: Arc::clone(&svc.creds),
+        run_events: Arc::clone(&svc.ctx.run_events),
+        runner_runs: Arc::clone(&svc.ctx.runner_runs),
+        features: Arc::clone(&svc.ctx.features),
+    };
+    let svc = Arc::clone(svc);
+    let spec = Arc::new(spec);
+    let pass_run_id = run_id.clone();
+    let pass_spec = Arc::clone(&spec);
+    start_driver(ports, guard, run_id, spec, move |project_id, feature_id| {
+        let svc = Arc::clone(&svc);
+        let run_id = pass_run_id.clone();
+        let spec = Arc::clone(&pass_spec);
+        async move { run_pass(&svc, &run_id, &spec, project_id, feature_id).await }
+    });
+}
+
+/// [`spawn_run_driver`] for a caller that re-opens a run, which is the only
+/// kind that flips the row to `running`.
+pub(crate) fn reopen_run_driver(
+    svc: &Arc<RunnerServices>,
+    run_id: &str,
+    spec: RunSpec,
+) -> Result<Spawned, String> {
+    let started = reopen_via(
+        svc.ctx.runner_runs.as_ref(),
+        &svc.drivers,
+        run_id,
+        |guard| start_run_driver(svc, guard, run_id.to_string(), spec),
+    )?;
+    Ok(started.map_or(Spawned::Attached, |()| Spawned::Driving))
+}
+
+/// Flip `run_id` to `running` and `start` its driver, unless one is already
+/// live: `None` then, with the row untouched.
+///
+/// The slot is taken before the row is written, so the flip happens only when
+/// nobody else can be settling the run. An attacher that flipped first would
+/// have to put the row back afterwards, and by then the live driver may have
+/// settled `pr_ready` and released the slot; the restore would overwrite that
+/// with a stale status and leave the run `running` with no driver. The live
+/// driver runs the re-armed pass itself and writes the next status.
+fn reopen_via<T>(
+    runs: &dyn RunnerRunPort,
+    drivers: &Arc<RunDrivers>,
+    run_id: &str,
+    start: impl FnOnce(DriverGuard) -> T,
+) -> Result<Option<T>, String> {
+    let Acquire::Driver(guard) = drivers.try_acquire(run_id) else {
+        return Ok(None);
+    };
+    // An error here drops the guard, which releases the slot.
+    runs.update_status(run_id, "running", None, None, None, None, paths::now_ms())?;
+    Ok(Some(start(guard)))
+}
+
+/// Run `run_id`'s passes on a new task. The guard is the proof that the caller
+/// is the run's only driver.
+pub(crate) fn start_driver<P, Fut>(
+    ports: DriverPorts,
+    guard: DriverGuard,
+    run_id: String,
+    spec: Arc<RunSpec>,
+    pass: P,
+) -> tokio::task::JoinHandle<()>
+where
+    P: FnMut(Option<String>, Option<String>) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<RunOutcome, String>> + Send + 'static,
+{
+    tokio::spawn(drive_run(ports, guard, run_id, spec, pass))
+}
+
+/// Run passes until nobody asked for another. A request that lands while a
+/// pass is ending is consumed by [`DriverGuard::finish_or_rearm`], so it is
+/// run rather than dropped. A re-armed pass over a run that already ended
+/// `pr_ready` with a PR is skipped: the request raced a publish that happened.
+async fn drive_run<P, Fut>(
+    ports: DriverPorts,
+    mut guard: DriverGuard,
+    run_id: String,
+    spec: Arc<RunSpec>,
+    mut pass: P,
+) where
+    P: FnMut(Option<String>, Option<String>) -> Fut,
+    Fut: Future<Output = Result<RunOutcome, String>> + Send + 'static,
+{
+    let mut rearmed = false;
+    loop {
+        if rearmed && is_published(&ports, &run_id) {
+            ports.creds.remove(&run_id);
+        } else {
+            let result = match ports.runner_runs.get(&run_id) {
+                Ok(row) => {
+                    let (project_id, feature_id) = row
+                        .map(|row| (row.project_id, row.feature_id))
+                        .unwrap_or_default();
+                    run_contained(pass(project_id, feature_id)).await
+                }
+                Err(e) => Err(format!("failed to read run {run_id}: {e}")),
+            };
+            release_run_secrets(&ports.creds, &spec, &run_id, &result);
+            settle_run(
+                ports.run_events.as_ref(),
+                ports.runner_runs.as_ref(),
+                &run_id,
+                result,
+            );
+        }
+        if !guard.finish_or_rearm() {
+            return;
+        }
+        rearmed = true;
+    }
+}
+
+/// Run one pass on its own task so a panic in it comes back as an `Err`
+/// instead of unwinding the driver, which would drop the guard and leave the
+/// row `running` with its PAT still in the store. The message is fixed: a panic
+/// payload may carry whatever the pass was holding, secrets included, and it
+/// would be written to the `failed` event.
+async fn run_contained<Fut>(pass: Fut) -> Result<RunOutcome, String>
+where
+    Fut: Future<Output = Result<RunOutcome, String>> + Send + 'static,
+{
+    match tokio::spawn(pass).await {
+        Ok(result) => result,
+        Err(e) if e.is_panic() => Err("driver pass panicked".to_string()),
+        Err(_) => Err("driver pass was cancelled".to_string()),
+    }
+}
+
+fn is_published(ports: &DriverPorts, run_id: &str) -> bool {
+    let Ok(Some(run)) = ports.runner_runs.get(run_id) else {
+        return false;
+    };
+    let Some(feature_id) = run.feature_id else {
+        return false;
+    };
+    let mr_url = match ports.features.get(&FeatureId::from(feature_id)) {
+        Ok(Some(feature)) => feature.mr_url,
+        _ => None,
+    };
+    publish_is_settled(&run.status, mr_url.as_deref())
+}
+
+fn publish_is_settled(status: &str, mr_url: Option<&str>) -> bool {
+    status == "pr_ready" && mr_url.is_some()
 }
 
 #[cfg(test)]

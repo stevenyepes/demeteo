@@ -228,6 +228,8 @@ async fn publish_runs_the_sync_worktrees_pre_push_hook_not_the_clones() {
     let features: Arc<dyn crate::ports::db::FeatureRepository> = db.clone();
     let app_settings: Arc<dyn crate::ports::db::AppSettingsRepository> = db;
     let turns = Arc::new(SyncTurns::default());
+    let credentials: Arc<dyn crate::ports::git_credentials::GitCredentialSource> =
+        Arc::new(crate::adapters::git_credentials::KeyringCredentialSource);
     let published = publish(
         SyncPorts {
             sessions: &sessions,
@@ -235,6 +237,7 @@ async fn publish_runs_the_sync_worktrees_pre_push_hook_not_the_clones() {
             features: &features,
             turns: &turns,
             app_settings: &app_settings,
+            credentials: &credentials,
         },
         &feature_id,
     )

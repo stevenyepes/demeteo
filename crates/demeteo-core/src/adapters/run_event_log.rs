@@ -30,7 +30,7 @@
 //! | `gate_held_by_review` | `step_execution_id`, `reason` | written just before `gate_required` when `clean` gate autonomy would have approved the gate and its review did not allow it; `reason` is shown to the person deciding |
 //! | `gate_decided`       | `step_execution_id`, `decision`, `feedback` | the human's answer (`approve`/`reject`/`redirect`) |
 //! | `gate_auto_approved` | `step_execution_id`, `decision`, `feedback` | the project's gate autonomy approved the gate; nobody was asked |
-//! | `bootstrap_progress` | `phase`, `label`, `status`, `detail` | feature-start sub-steps |
+//! | `bootstrap_progress` | `phase`, `label`, `status`, `detail` | feature-start sub-steps; `status` ∈ `running \| completed \| warning \| failed \| skipped`, `warning` being a phase that finished with a problem the run survived |
 //! | `step_output`        | `step_execution_id`, `text` | coalesced agent output — **remote only** (the runner bridge buffers `AgentStream` deltas; locally the durable transcript already lives in the `messages` table, so the recorder skips it) |
 //!
 //! Plus the coarse run-lifecycle kinds `run.rs` appends by hand on the

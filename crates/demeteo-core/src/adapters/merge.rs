@@ -135,6 +135,7 @@ impl SqliteMergeExecutor {
             features: &self.features,
             turns: &self.turns,
             app_settings: &self.git_ops.app_settings,
+            credentials: &self.git_ops.credentials,
         }
     }
 
@@ -604,6 +605,7 @@ impl MergeExecutor for SqliteMergeExecutor {
             && crate::adapters::worktree::git_ops::divergence::refresh_base_ref(
                 &*self.exec,
                 &*self.git_ops.app_settings,
+                self.git_ops.credentials.as_ref(),
                 machine_str,
                 &repo_dir,
                 base_branch,

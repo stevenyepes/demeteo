@@ -521,6 +521,22 @@ mod from_the_remote {
     const REPO: &str = "/repos/demeteo";
     const GET_URL: &str = "git -C /repos/demeteo remote get-url origin";
 
+    async fn keyring_credential_for_repo(
+        exec: &dyn crate::ports::execution::ExecutionPort,
+        app_settings: &dyn AppSettingsRepository,
+        machine: &str,
+        repo_dir: &str,
+    ) -> Option<GitCredential> {
+        credential_for_repo_with(
+            exec,
+            app_settings,
+            &crate::adapters::git_credentials::KeyringCredentialSource,
+            machine,
+            repo_dir,
+        )
+        .await
+    }
+
     /// A provider for `host`, with `provider_id`'s PAT already in the process
     /// cache so the lookup never reaches the OS keyring — which a test has no
     /// business writing to.
@@ -550,13 +566,44 @@ mod from_the_remote {
         )]);
         let db = seeded("github.com", "github", "prov-token-free");
 
-        let cred = credential_for_repo(&exec, db.as_ref(), "local", REPO)
+        let cred = keyring_credential_for_repo(&exec, db.as_ref(), "local", REPO)
             .await
             .expect("a token-free https remote needs a credential");
 
         assert_eq!(cred.user, "x-access-token");
         assert_eq!(cred.host, "github.com");
         assert_eq!(cred.pat, PAT);
+    }
+
+    struct OnlyFor(&'static str);
+
+    impl GitCredentialSource for OnlyFor {
+        fn pat_for(&self, _provider_id: &str, repo_dir: &str) -> Result<String, String> {
+            (repo_dir == self.0)
+                .then(|| "tok-from-the-source".to_string())
+                .ok_or_else(|| format!("no credential for {repo_dir}"))
+        }
+    }
+
+    /// The token comes from the source handed in, keyed by the directory the
+    /// push runs in, and not from the process cache the provider id is seeded in.
+    #[tokio::test]
+    async fn the_pat_comes_from_the_source_for_the_repo_dir_asked_about() {
+        let exec = ScriptedExec::new(&[]).with_programs(&[(
+            GET_URL,
+            Ok("https://x-access-token@github.com/acme/widgets\n"),
+        )]);
+        let db = seeded("github.com", "github", "prov-from-source");
+
+        let cred = credential_for_repo_with(&exec, db.as_ref(), &OnlyFor(REPO), "local", REPO)
+            .await
+            .expect("the source knows this directory");
+        assert_eq!(cred.pat, "tok-from-the-source");
+
+        let other =
+            credential_for_repo_with(&exec, db.as_ref(), &OnlyFor("/elsewhere"), "local", REPO)
+                .await;
+        assert!(other.is_none(), "a source with no answer degrades to none");
     }
 
     /// `sanitize_host` keeps a `:port`, so a self-hosted provider is stored with
@@ -567,7 +614,7 @@ mod from_the_remote {
             .with_programs(&[(GET_URL, Ok("https://oauth2@git.internal:8443/o/r.git\n"))]);
         let db = seeded("git.internal:8443", "gitlab", "prov-ported");
 
-        let cred = credential_for_repo(&exec, db.as_ref(), "local", REPO)
+        let cred = keyring_credential_for_repo(&exec, db.as_ref(), "local", REPO)
             .await
             .expect("the port is not part of the host a provider is matched by");
 
@@ -583,9 +630,11 @@ mod from_the_remote {
             .with_programs(&[(GET_URL, Ok("git@github.com:acme/widgets.git\n"))]);
         let db = seeded("github.com", "github", "prov-ssh");
 
-        assert!(credential_for_repo(&exec, db.as_ref(), "local", REPO)
-            .await
-            .is_none());
+        assert!(
+            keyring_credential_for_repo(&exec, db.as_ref(), "local", REPO)
+                .await
+                .is_none()
+        );
     }
 
     /// A host nothing is configured for degrades to an uncredentialed push
@@ -597,9 +646,11 @@ mod from_the_remote {
             .with_programs(&[(GET_URL, Ok("https://git.internal/acme/widgets\n"))]);
         let db = seeded("github.com", "github", "prov-elsewhere");
 
-        assert!(credential_for_repo(&exec, db.as_ref(), "local", REPO)
-            .await
-            .is_none());
+        assert!(
+            keyring_credential_for_repo(&exec, db.as_ref(), "local", REPO)
+                .await
+                .is_none()
+        );
     }
 
     /// The probe itself failing is not evidence either way, and must not stop
@@ -609,9 +660,11 @@ mod from_the_remote {
         let exec = ScriptedExec::new(&[]);
         let db = seeded("github.com", "github", "prov-unreadable");
 
-        assert!(credential_for_repo(&exec, db.as_ref(), "local", REPO)
-            .await
-            .is_none());
+        assert!(
+            keyring_credential_for_repo(&exec, db.as_ref(), "local", REPO)
+                .await
+                .is_none()
+        );
     }
 }
 

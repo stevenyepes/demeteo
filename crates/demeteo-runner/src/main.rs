@@ -21,6 +21,7 @@
 
 mod away_notify;
 mod credentials;
+mod driver;
 mod git_askpass;
 mod notify_bridge;
 mod reconcile;
@@ -29,8 +30,8 @@ mod run;
 mod services;
 
 use away_notify::{AwayNotifier, NoopAwayNotifier, WebhookAwayNotifier};
-use credentials::CredentialStore;
-use demeteo_core::composition::{build_core_context, CoreConfig, ExecutionMode};
+use credentials::{CredentialStore, RunnerCredentialSource};
+use demeteo_core::composition::{build_core_context_with_credentials, CoreConfig, ExecutionMode};
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::paths;
 use notify_bridge::RunEventBridge;
@@ -216,15 +217,19 @@ async fn serve(runtime: tokio::runtime::Handle) -> i32 {
     // the `run_events`/`runner_runs` ports the build constructs); until then
     // it drops events exactly as the old noop adapter did.
     let notify_bridge = Arc::new(RunEventBridge::new());
-    let ctx = Arc::new(build_core_context(
+    let creds = Arc::new(CredentialStore::new());
+    let git_credentials = Arc::new(RunnerCredentialSource::new(creds.clone(), &app_data_dir));
+    let ctx = Arc::new(build_core_context_with_credentials(
         CoreConfig {
             app_data_dir: app_data_dir.clone(),
             execution_mode: ExecutionMode::LocalOnly,
         },
         notify_bridge.clone(),
         runtime,
+        git_credentials.clone(),
     ));
     notify_bridge.wire(ctx.run_events.clone(), ctx.runner_runs.clone());
+    git_credentials.bind(ctx.runner_runs.clone());
     let askpass_path = git_askpass::ensure_askpass_script(&app_data_dir)
         .unwrap_or_else(|e| panic!("failed to write askpass helper: {}", e));
     let away_notifier: Arc<dyn AwayNotifier> = match WebhookAwayNotifier::from_env() {
@@ -233,9 +238,10 @@ async fn serve(runtime: tokio::runtime::Handle) -> i32 {
     };
     let svc = Arc::new(RunnerServices {
         ctx: ctx.clone(),
-        creds: Arc::new(CredentialStore::new()),
+        creds,
         askpass_path,
         away_notifier,
+        drivers: Arc::default(),
     });
     reconcile::reconcile_on_startup(svc.clone(), process_started_at).await;
 
@@ -305,18 +311,21 @@ async fn submit(spec_path: &str, runtime: tokio::runtime::Handle) -> i32 {
     }
 
     let notify_bridge = Arc::new(RunEventBridge::new());
-    let ctx = Arc::new(build_core_context(
+    let creds = Arc::new(CredentialStore::new());
+    let git_credentials = Arc::new(RunnerCredentialSource::new(creds.clone(), &app_data_dir));
+    let ctx = Arc::new(build_core_context_with_credentials(
         CoreConfig {
             app_data_dir: app_data_dir.clone(),
             execution_mode: ExecutionMode::LocalOnly,
         },
         notify_bridge.clone(),
         runtime,
+        git_credentials.clone(),
     ));
     notify_bridge.wire(ctx.run_events.clone(), ctx.runner_runs.clone());
+    git_credentials.bind(ctx.runner_runs.clone());
     let askpass_path = git_askpass::ensure_askpass_script(&app_data_dir)
         .unwrap_or_else(|e| panic!("failed to write askpass helper: {}", e));
-    let creds = Arc::new(CredentialStore::new());
 
     // No RPC client submitted this, so there's no laptop-generated
     // run_id (M3.2) to key the event log by — mint one so `submit`'s run
@@ -340,6 +349,7 @@ async fn submit(spec_path: &str, runtime: tokio::runtime::Handle) -> i32 {
         creds,
         askpass_path,
         away_notifier,
+        drivers: Arc::default(),
     });
     match run::execute_run(&svc, &run_id, &spec).await {
         Ok(outcome) if outcome.pushed_branch.is_some() => 0,

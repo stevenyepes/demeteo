@@ -1,3 +1,4 @@
+use crate::adapters::git_credentials::KeyringCredentialSource;
 use crate::adapters::git_push::{fetch_request, GitCredential};
 use crate::domain::branch_listing::BranchOption;
 use crate::domain::feature_origin::Refspec;
@@ -5,6 +6,7 @@ use crate::domain::models::{WorktreeInfo, WorktreeStrategy};
 use crate::ports::cache_reclaim::CacheReclaimPort;
 use crate::ports::db::AppSettingsRepository;
 use crate::ports::execution::{ExecutionPort, ProgramRequest};
+use crate::ports::git_credentials::GitCredentialSource;
 use crate::ports::worktree_ops::{
     CommitMessageRejected, MergeGate, SquashOutcome, SyncFailure, SyncOutcome,
     TerminalWorktreeCreated, TerminalWorktreeRequest, WorktreeOpsPort,
@@ -31,6 +33,7 @@ pub struct GitOpsHelper {
     pub(crate) app_settings: Arc<dyn AppSettingsRepository>,
     pub(crate) exec: Arc<dyn ExecutionPort>,
     pub(crate) cache_reclaim: Option<Arc<dyn CacheReclaimPort>>,
+    pub(crate) credentials: Arc<dyn GitCredentialSource>,
 }
 
 impl GitOpsHelper {
@@ -39,7 +42,21 @@ impl GitOpsHelper {
             app_settings,
             exec,
             cache_reclaim: None,
+            // A helper built here authenticates against the OS keyring, which a
+            // `demeteo-runner` build cannot read: its fetches would go out
+            // unauthenticated and nothing would say why. Any construction a
+            // runner can reach must call `with_credential_source`. The
+            // `application/ask`, `application/discovery` and
+            // `application/remote_runs` sites build it desktop-only.
+            credentials: Arc::new(KeyringCredentialSource),
         }
+    }
+
+    /// Where the provider PAT for `origin` comes from; the keyring unless a
+    /// process that holds it elsewhere says otherwise.
+    pub fn with_credential_source(mut self, credentials: Arc<dyn GitCredentialSource>) -> Self {
+        self.credentials = credentials;
+        self
     }
 
     /// `git fetch <args>` in `repo_dir`, carrying the provider credential when
@@ -75,6 +92,7 @@ impl GitOpsHelper {
         prepare_origin(
             self.exec.as_ref(),
             self.app_settings.as_ref(),
+            self.credentials.as_ref(),
             machine_str,
             repo_dir,
         )
@@ -291,6 +309,7 @@ impl WorktreeOpsPort for GitOpsHelper {
         scrub_origin(
             self.exec.as_ref(),
             self.app_settings.as_ref(),
+            self.credentials.as_ref(),
             machine_str,
             repo_dir,
         )

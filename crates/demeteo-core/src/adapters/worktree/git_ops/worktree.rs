@@ -551,9 +551,10 @@ impl GitOpsHelper {
             .await?;
 
         let machine_str = machine_id.unwrap_or(crate::domain::ids::LOCAL_MACHINE);
-        let credential = crate::adapters::git_push::credential_for_repo(
+        let credential = crate::adapters::git_push::credential_for_repo_with(
             self.exec.as_ref(),
             self.app_settings.as_ref(),
+            self.credentials.as_ref(),
             machine_str,
             repo_dir,
         )

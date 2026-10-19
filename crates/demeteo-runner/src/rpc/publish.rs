@@ -8,10 +8,9 @@
 //! event log.
 
 use crate::services::RunnerServices;
-use demeteo_core::domain::ids::{FeatureId, ProjectId};
+use demeteo_core::domain::ids::FeatureId;
 use demeteo_core::domain::run_spec::RunSpec;
 use demeteo_core::domain::runner_publish::publish_refusal;
-use demeteo_core::paths;
 use demeteo_core::ports::runner_run::RunnerRun;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -32,8 +31,7 @@ pub(super) async fn publish_run(
     let params: PublishRunParams =
         serde_json::from_value(params).map_err(|e| format!("invalid params: {}", e))?;
     let run = require_owner(svc, &params.run_id, client_id)?;
-    let (Some(project_id), Some(feature_id)) = (run.project_id.clone(), run.feature_id.clone())
-    else {
+    let (Some(_), Some(feature_id)) = (&run.project_id, run.feature_id.clone()) else {
         return Err(format!(
             "run {} never bootstrapped a feature, so it has no branch to publish",
             run.run_id
@@ -52,35 +50,8 @@ pub(super) async fn publish_run(
         .map_err(|e| format!("run {} has an unparseable spec: {}", run.run_id, e))?;
 
     svc.creds.insert(&run.run_id, params.git_pat);
-    svc.ctx.runner_runs.update_status(
-        &run.run_id,
-        "running",
-        None,
-        None,
-        None,
-        None,
-        paths::now_ms(),
-    )?;
     crate::run::emit(&svc.ctx, &run.run_id, "publish_requested", &feature_id);
-
-    let svc_bg = svc.clone();
-    let run_id_bg = run.run_id.clone();
-    tokio::spawn(async move {
-        let result = crate::run::await_terminal_and_push(
-            &svc_bg,
-            &run_id_bg,
-            &ProjectId::from(project_id),
-            &FeatureId::from(feature_id),
-            &spec,
-        )
-        .await;
-        crate::run::settle_run(
-            svc_bg.ctx.run_events.as_ref(),
-            svc_bg.ctx.runner_runs.as_ref(),
-            &run_id_bg,
-            result,
-        );
-    });
+    crate::run::reopen_run_driver(svc, &run.run_id, spec)?;
 
     svc.ctx
         .runner_runs

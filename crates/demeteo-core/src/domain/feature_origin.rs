@@ -136,6 +136,23 @@ pub enum BranchCut {
     },
 }
 
+/// The `BootstrapProgress` status the `syncing_origin` phase ends on.
+///
+/// `cut` is `None` when no origin was resolved to sync, which is not the same
+/// as a sync that went well. `failure` is the git error the fetch or
+/// fast-forward returned. A failure the cut survives is `warning`, not
+/// `completed`: the run goes on from a possibly stale ref and the stepper has
+/// to say so. Only [`BranchCut::FromFetchedRef`] has nothing to fall back to,
+/// so only its failure is `failed`.
+pub fn sync_phase_status(cut: Option<&BranchCut>, failure: Option<&str>) -> &'static str {
+    match (cut, failure) {
+        (None, _) => "skipped",
+        (Some(BranchCut::FromFetchedRef { .. }), Some(_)) => "failed",
+        (Some(_), Some(_)) => "warning",
+        (Some(_), None) => "completed",
+    }
+}
+
 /// Refs fetched for a [`FeatureOrigin::Ref`] land under this namespace.
 ///
 /// Not `refs/heads/`: a fetched PR head is a snapshot to cut from, and a local
