@@ -34,19 +34,49 @@
   --color-ruby-950: #450a0a;
 }
 
+/* The surfaces as Tailwind colours, so a call site writes `bg-surface-panel`
+   or `border-hairline` rather than a hex. `static` makes Tailwind emit every one
+   of these variables whether or not a utility uses it, because the --bg-* and
+   --border-* names below alias them. */
+@theme static {
+  --color-surface-app: #08090c;
+  --color-surface-sidebar: #0d0f14;
+  --color-surface-well: #050608;
+  --color-surface-panel: #11151d;
+  --color-surface-panel-hover: #191e29;
+  --color-surface-raised: #181d28;
+  --color-hairline: rgb(255 255 255 / 0.05);
+  --color-hairline-raised: rgb(255 255 255 / 0.09);
+}
+
 @layer base {
   :root {
     /* Color Palette */
-    --bg-app: #08090c;
-    --bg-sidebar: #0d0f14;
+    --bg-app: var(--color-surface-app);
+    --bg-sidebar: var(--color-surface-sidebar);
     /* The darkest surface — terminal and code wells sunk into a panel. */
-    --bg-well: #050608;
-    --bg-panel: rgba(18, 22, 30, 0.92);
-    --bg-panel-hover: rgba(28, 34, 46, 0.85);
+    --bg-well: var(--color-surface-well);
+    /* Three solid surfaces, each a step lighter than the one it sits on: the app,
+       a panel on it, and the raised layer (menus, dialogs) over both. Solid on
+       purpose: a translucent panel takes its colour from whatever scrolls behind
+       it, so the same card read differently on every screen, and the blur that
+       hid that cost a WebKitGTK frame per scroll. The panel and hover values are
+       the old translucent ones composited over --bg-app, so a panel on the app
+       background looks as it did. */
+    --bg-panel: var(--color-surface-panel);
+    --bg-panel-hover: var(--color-surface-panel-hover);
+    --bg-raised: var(--color-surface-raised);
     --bg-input: rgba(10, 12, 16, 0.6);
-  
-    --border-glass: rgba(255, 255, 255, 0.05);
+
+    /* The edge every surface states. Raised surfaces take a brighter one, since
+       they sit on a panel rather than on the near-black app background. */
+    --border-glass: var(--color-hairline);
+    --border-raised: var(--color-hairline-raised);
     --border-glass-focus: rgba(139, 92, 246, 0.4);
+
+    /* The only shadow in the system, and only the raised layer casts it: a panel
+       is separated by its step and its hairline, a menu also by floating. */
+    --shadow-raised: 0 12px 32px -8px rgba(0, 0, 0, 0.6);
 
     /* One corner radius for every panel-level surface. A card, a canvas well and
        a banner are the same object at different depths, and a run view showing
