@@ -332,7 +332,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
               ),
               // Blockquote
               blockquote: ({ children }) => (
-                <blockquote className="border-l-4 border-violet-500 bg-violet-950/10 backdrop-blur-md px-4 py-3 rounded-r-xl my-4 text-slate-400 text-sm leading-relaxed italic border-r border-y border-white/[0.02] select-text break-words">
+                <blockquote className="border-l-4 border-violet-500 bg-violet-950/10 px-4 py-3 rounded-r-xl my-4 text-slate-400 text-sm leading-relaxed italic border-r border-y border-white/[0.02] select-text break-words">
                   {children}
                 </blockquote>
               ),
@@ -348,7 +348,7 @@ const ArtifactViewerInner: React.FC<ArtifactViewerProps> = ({
               // fits and wraps. The scroll wrapper stays as the last resort
               // for a table too column-heavy to fit at any wrapping.
               table: ({ children }) => (
-                <div className="w-full overflow-x-auto my-6 rounded-xl border border-white/5 bg-[#0d0f14]/40 backdrop-blur-md">
+                <div className="nested-card w-full overflow-x-auto my-6">
                   <table className="w-full border-collapse text-left text-xs font-sans">
                     {children}
                   </table>

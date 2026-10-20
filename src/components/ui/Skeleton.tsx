@@ -46,7 +46,7 @@ function Card(): React.ReactElement {
   return (
     <div
       data-testid="skeleton-card"
-      className="glass-panel border border-white/5 p-5 space-y-4"
+      className="glass-panel p-5 space-y-4"
     >
       <div className="flex items-center gap-3">
         <div className={`${BAR} h-4 w-20 rounded-full`} />

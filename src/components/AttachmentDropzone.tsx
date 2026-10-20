@@ -470,9 +470,9 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
       className={[
         "rounded-xl border transition-all",
         isHovered
-          ? "border-cyan-400/60 bg-[rgba(18,22,30,0.85)]"
-          : "border-white/10 bg-[rgba(18,22,30,0.75)]",
-        "backdrop-blur-md p-3",
+          ? "border-cyan-400/60 bg-surface-panel-hover"
+          : "border-white/10 bg-surface-panel",
+        "p-3",
       ].join(" ")}
       tabIndex={0}
       onPaste={handlePaste}

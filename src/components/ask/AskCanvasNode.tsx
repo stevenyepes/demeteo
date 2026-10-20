@@ -150,7 +150,7 @@ export function AskCanvasNode({
 
   const shell = [
     'absolute flex flex-col justify-center gap-1.5 rounded-xl border px-3.5',
-    'bg-slate-900/70 backdrop-blur-sm',
+    'bg-surface-raised',
     STATE_CARD[state],
     pathState === 'missing' ? UNRESOLVED_OVERLAY : '',
   ].join(' ');

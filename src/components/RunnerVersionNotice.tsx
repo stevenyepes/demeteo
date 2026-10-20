@@ -43,7 +43,7 @@ export function RunnerVersionNotice({
   return (
     <div
       role={alarming ? 'alert' : 'status'}
-      className={`rounded-xl border bg-[var(--bg-panel)] backdrop-blur-md ${alarming ? 'border-ruby-500/30' : 'border-amber-500/30'}`}
+      className={`rounded-xl border bg-surface-panel ${alarming ? 'border-ruby-500/30' : 'border-amber-500/30'}`}
     >
       <div
         className={`flex items-start gap-2.5 px-3 py-2.5 rounded-xl ${alarming ? 'bg-ruby-500/10' : 'bg-amber-500/10'}`}

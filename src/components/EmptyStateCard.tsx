@@ -42,7 +42,7 @@ function InlineEmptyState({
   return (
     <div
       data-testid="empty-state-inline"
-      className="glass-panel p-8 border border-white/5 text-center flex flex-col items-center justify-center space-y-4 relative overflow-hidden"
+      className="glass-panel p-8 text-center flex flex-col items-center justify-center space-y-4 relative overflow-hidden"
     >
       <div className="absolute -top-10 -left-10 w-40 h-40 bg-violet-600/5 rounded-full blur-2xl pointer-events-none" />
       <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-cyan-600/5 rounded-full blur-2xl pointer-events-none" />
@@ -83,9 +83,9 @@ const EmptyStateCard: React.FC<EmptyStateCardProps> = (props) => {
       <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-violet-600/20 rounded-full blur-[120px] pointer-events-none" />
       <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-cyan-600/20 rounded-full blur-[100px] pointer-events-none" />
 
-      <div className="glass-panel max-w-2xl w-full p-10 flex flex-col items-center text-center relative z-10 border-white/10 hover:border-white/20 transition-all duration-500">
+      <div className="glass-panel max-w-2xl w-full p-10 flex flex-col items-center text-center relative z-10">
 
-        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center mb-6 shadow-[0_0_30px_rgba(139,92,246,0.2)]">
+        <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center mb-6 shadow-[0_0_30px_rgba(139,92,246,0.2)]">
             <Sparkles className="w-8 h-8 text-cyan-400" />
         </div>
 

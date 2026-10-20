@@ -186,10 +186,10 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                   <div
                     key={w.id}
                     onClick={() => setSelectedId(w.id)}
-                    className={`p-4 rounded-lg cursor-pointer transition-all duration-300 border backdrop-blur-md ${
+                    className={`p-4 rounded-lg cursor-pointer transition-all duration-300 border ${
                       selectedId === w.id
                         ? 'bg-violet-950/20 border-violet-500/50 shadow-[0_0_15px_rgba(139,92,246,0.15)]'
-                        : 'bg-white/2 hover:bg-white/5 border-white/5'
+                        : 'bg-surface-panel hover:bg-surface-panel-hover border-white/5'
                     }`}
                   >
                     <div className="flex items-center justify-between">
@@ -220,10 +220,10 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
                     <div
                       key={w.id}
                       onClick={() => setSelectedId(w.id)}
-                      className={`p-4 rounded-lg cursor-pointer transition-all duration-300 border backdrop-blur-md ${
+                      className={`p-4 rounded-lg cursor-pointer transition-all duration-300 border ${
                         selectedId === w.id
                           ? 'bg-violet-950/20 border-violet-500/50 shadow-[0_0_15px_rgba(139,92,246,0.15)]'
-                          : 'bg-white/2 hover:bg-white/5 border-white/5'
+                          : 'bg-surface-panel hover:bg-surface-panel-hover border-white/5'
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -253,7 +253,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
         {selectedWorkflow ? (
           <div className="space-y-8 max-w-3xl">
             {/* Header Card */}
-            <div className="p-6 rounded-xl border border-white/5 bg-white/[0.02] backdrop-blur-xl flex justify-between items-start">
+            <div className="glass-panel p-6 flex justify-between items-start">
               <div className="space-y-2">
                 <div className="flex items-center gap-3">
                   <h1 className="text-2xl font-bold font-heading text-white">{selectedWorkflow.name}</h1>

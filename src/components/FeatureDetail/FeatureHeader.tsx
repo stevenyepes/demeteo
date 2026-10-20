@@ -76,9 +76,8 @@ interface FeatureHeaderProps {
  * size step, and no id. Status, transport, telemetry and the actions are the
  * reason someone scrolls back up to this, so they stay where they were, which
  * makes the change a restyle rather than a remount. The transition stays on
- * padding: this element is `backdrop-blur-md` over a translucent surface, and
- * animating `box-shadow` or `scale` on one of those cost a WKWebView GPU
- * incident already — src/App.css records it above `pulse-glow`.
+ * padding: animating `box-shadow` or `scale` on a header like this one cost a
+ * WKWebView GPU incident already — src/App.css records it above `pulse-glow`.
  */
 export function FeatureHeader({
   featureId,
@@ -141,7 +140,7 @@ export function FeatureHeader({
       data-testid="feature-header"
       className={`px-6 ${
         collapsed ? 'py-3' : 'py-4'
-      } border-b border-white/5 bg-[#0d0f14]/80 flex flex-col gap-1.5 backdrop-blur-md transition-[padding] duration-200 ease-out motion-reduce:transition-none`}
+      } border-b border-white/5 bg-surface-sidebar flex flex-col gap-1.5 transition-[padding] duration-200 ease-out motion-reduce:transition-none`}
     >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div className="flex min-w-0 flex-1 items-center gap-3">

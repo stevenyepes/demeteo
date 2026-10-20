@@ -392,7 +392,6 @@ src/                              # React frontend
 │   ├── ProviderSettings.tsx
 │   ├── ProvidersPage.tsx
 │   ├── settings/
-│   ├── Sidebar.tsx
 │   ├── StartFeatureModal.tsx
 │   ├── TerminalStatusOverlay.tsx
 │   ├── TerminalWindow.tsx

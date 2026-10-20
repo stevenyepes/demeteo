@@ -53,8 +53,7 @@ export interface InspectorProps<T extends string> {
  * the app. Seated as the middle of the run's three tracks, that made the one
  * surface between two cards the only thing on screen with square corners and
  * a border on a single side. `glass-panel` brings all four decisions back to
- * the card language, and the blur down from 24px to the panel's 12 — the run
- * column already stacks translucency and the plan's §7 treats it as a budget.
+ * the card language, and drops the blur with them: a panel has none.
  */
 export const INSPECTOR_SURFACE = 'glass-panel flex h-full flex-col overflow-hidden';
 

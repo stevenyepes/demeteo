@@ -91,7 +91,7 @@ export function GeneralTab() {
             {s.isLoadingHealth ? 'Checking workspace health...' : 'Check Workspace Health'}
           </button>
         ) : (
-          <div className="glass-panel border border-white/5 overflow-hidden">
+          <div className="glass-panel overflow-hidden">
             <div role="button" tabIndex={0} onClick={() => s.setHealthExpanded(!s.healthExpanded)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); s.setHealthExpanded(!s.healthExpanded); } }} className="w-full flex items-center justify-between px-5 py-3.5 bg-white/[0.02] hover:bg-white/[0.04] transition-colors cursor-pointer">
               <div className="flex items-center gap-2.5">
                 <Activity className="w-4 h-4 text-cyan-400" />
@@ -165,7 +165,7 @@ export function GeneralTab() {
       </div>
 
       {/* Danger zone */}
-      <div className="glass-panel p-6 border border-ruby-500/10 md:col-span-2 flex flex-col md:flex-row items-center justify-between gap-4">
+      <div className="glass-panel p-6 border-ruby-500/10 md:col-span-2 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex gap-3">
           <Trash2 className="w-10 h-10 text-ruby-400 shrink-0" />
           <div>

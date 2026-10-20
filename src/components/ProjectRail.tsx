@@ -51,7 +51,7 @@ function ProjectRail() {
     const hiddenSummary = activityTitle(hiddenActivity);
     const hiddenTitle = `${hidden.length} more project${hidden.length === 1 ? '' : 's'}`;
     return (
-      <aside className="w-14 border-r border-white/5 bg-[#0d0f14]/50 backdrop-blur-xl flex flex-col items-center py-3 z-10 shrink-0 gap-3">
+      <aside className="w-14 border-r border-white/5 bg-surface-sidebar flex flex-col items-center py-3 z-10 shrink-0 gap-3">
         <button
           onClick={onToggleCollapse}
           className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
@@ -116,7 +116,7 @@ function ProjectRail() {
   }
 
   return (
-    <aside className="w-60 border-r border-white/5 bg-[#0d0f14]/50 backdrop-blur-xl flex flex-col z-10 shrink-0">
+    <aside className="w-60 border-r border-white/5 bg-surface-sidebar flex flex-col z-10 shrink-0">
       <div className="p-3 border-b border-white/5 flex justify-between items-center">
         <h2 className="text-[10px] font-heading font-semibold text-slate-500 tracking-wider uppercase">Workspaces</h2>
         <div className="flex gap-1">
@@ -167,7 +167,7 @@ function ProjectRail() {
                 title={summary ? `${p.name} — ${summary}` : p.name}
                 className={`flex items-center justify-between px-3 py-2 mx-2 rounded-lg cursor-pointer transition-all duration-200 ${
                   currentProject === p.id
-                    ? 'glass-panel text-white'
+                    ? 'bg-surface-panel-hover text-white'
                     : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
                 }`}
               >

@@ -90,7 +90,7 @@ export function OverridesTab() {
             const agentSteps = wf.steps.filter(st => st.kind !== 'gate');
             const wfLevel = s.overrides[ovKey(wf.id, WF_LEVEL)];
             return (
-              <div key={wf.id} className={`glass-panel border transition-all ${isActive ? 'border-violet-500/30 bg-violet-500/[0.03]' : 'border-white/5'}`}>
+              <div key={wf.id} className={`glass-panel transition-all ${isActive ? 'border-violet-500/30 bg-violet-500/[0.03]' : ''}`}>
                 <div role="button" tabIndex={0} onClick={() => s.toggleWorkflowExpanded(wf)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); s.toggleWorkflowExpanded(wf); } }} className="flex items-center gap-3 p-5 cursor-pointer select-none">
                   <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border ${isActive ? 'bg-violet-500/10 border-violet-500/30 text-violet-300' : 'bg-white/5 border-white/10 text-slate-400'}`}>
                     <WorkflowIcon className="w-4 h-4" />
