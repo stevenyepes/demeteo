@@ -1276,7 +1276,7 @@ hazard cheap enough to design around. See §5 F2 for the wiring that shipped.
   `src/components/settings/StrategyTab.tsx` + `ProjectSettingsContext.tsx`.
 
 - **Touch:** those, plus the new `HarnessesSection` component. Design tokens per
-  AGENTS.md §4 — emerald for resolved, ruby for missing, read from `App.css`,
+  AGENTS.md §4 — emerald for resolved, ruby for missing, read from `src/styles/tokens.css`,
   never hard-coded.
 
 - **Done when:** typing a nonexistent binary into `test_command` shows it

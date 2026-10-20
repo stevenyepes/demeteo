@@ -246,7 +246,7 @@ its Feature, or, for a plain shell, in a Feature-less drawer on Project home
 
 ## 4. Views
 
-Tokens are the ones in `src/App.css`, and colour semantics follow AGENTS.md §4.
+Tokens are the ones in `src/styles/tokens.css`, and colour semantics follow AGENTS.md §4.
 In this spec: **amber** means a human is needed · **emerald** means healthy or
 done · **cyan** means interactive, terminal or running · **violet** means an
 active connection (and here, specifically, *not your machine*) · **ruby** means an

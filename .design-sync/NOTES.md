@@ -86,7 +86,7 @@ alone does not re-stamp.
 ## A finding about the repo itself (not a sync issue)
 
 `font-outfit` is used **80 times across 31 files** under `src/`, but Tailwind
-generates font utilities from the `--font-*` theme keys, and `App.css` defines
+generates font utilities from the `--font-*` theme keys, and `src/styles/tokens.css` defines
 `--font-heading` (not `--font-outfit`). So `.font-outfit` has no rule anywhere
 and every one of those headings silently falls back to the body font (Inter)
 instead of Outfit. The design-system previews use `font-heading`, which does

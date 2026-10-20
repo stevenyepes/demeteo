@@ -272,7 +272,7 @@ Dependency order: `T1.1 ─▶ T1.2, T1.3, T1.4, T1.6, T1.8` · `T1.2 ─▶ T1.
 - **Context:** spec §4.6-4.8, §4.3 (collapsed bar), §4.4 last paragraph, §5.2;
   `TerminalsView.tsx`, `TerminalPanelProvider.tsx`, `TerminalSurface.tsx`,
   `FeatureDetail.tsx`, `RunPanes.tsx`, `src/lib/uiPrefs.ts` (drawer height per
-  window size is a new pref), `src/App.css` tokens (AGENTS.md §4).
+  window size is a new pref), `src/styles/tokens.css` tokens (AGENTS.md §4).
 - **Touch:** new `src/components/sessions/{SessionDrawer,SessionFocus,
   SessionTabBar,CollapsedSessionBar,AttachPopover,TerminalHost}.tsx` (one per
   file, <400 LOC each), `FeatureDetail.tsx`, `RunPanes.tsx`, router, delete

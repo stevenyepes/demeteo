@@ -1602,7 +1602,7 @@ Note the two amber/slate grades of *blocked* (§3.5.5) and that ruby appears
 | `.dz`, `.pick`, `.att`, `.thumb`, `.mime` | `AttachmentDropzone.tsx`, `AttachmentChip.tsx` | verbatim reproductions of the real components |
 | `.warn` | the vision-warning block in `StartFeatureModal.tsx` | verbatim |
 | Tailwind palettes `amber-*`, `cyan-*`, `emerald-*`, `violet-*`, `slate-*` | Tailwind v4 defaults | present |
-| `ruby-*` | `@theme --color-ruby-50…950` in `src/App.css` | present (`text-ruby-400` = `#f87171`, `ruby-200` = `#fecaca`, `ruby-300` = `#fca5a5`) |
+| `ruby-*` | `@theme --color-ruby-50…950` in `src/styles/tokens.css` | present (`text-ruby-400` = `#f87171`, `ruby-200` = `#fecaca`, `ruby-300` = `#fca5a5`) |
 
 ### 6.4 What does **not** exist — the gaps
 
