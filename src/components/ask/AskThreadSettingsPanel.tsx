@@ -89,7 +89,7 @@ export function AskThreadSettingsPanel({
         role="dialog"
         aria-modal="true"
         aria-label="Thread settings"
-        className="panel flex max-h-[85vh] flex-col overflow-hidden"
+        className="raised flex max-h-[85vh] flex-col overflow-hidden"
       >
         <div className="flex shrink-0 items-center justify-between border-b border-white/5 px-5 py-[18px]">
           <h2 className="font-heading text-[15px] font-semibold text-white">Thread settings</h2>
@@ -243,7 +243,7 @@ export function AskThreadSettingsPanel({
           )}
         </div>
 
-        <div className="flex shrink-0 justify-end gap-2.5 border-t border-white/5 bg-[#0d0f14]/90 px-5 py-4">
+        <div className="flex shrink-0 justify-end gap-2.5 border-t border-white/5 px-5 py-4">
           <button type="button" onClick={onClose} className="btn-secondary text-[13px]">
             Cancel
           </button>

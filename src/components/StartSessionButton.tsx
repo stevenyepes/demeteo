@@ -184,7 +184,7 @@ export function StartSessionButton({
       {menuOpen && (
         <div
           role="menu"
-          className="absolute right-0 top-full mt-1.5 z-30 w-52 rounded-lg border border-white/10 bg-[#0c0d12] shadow-2xl overflow-hidden p-1"
+          className="raised absolute right-0 top-full mt-1.5 z-30 w-52 overflow-hidden p-1"
           data-testid="start-session-dropdown"
         >
           {Object.values(AGENTS).map((agent) => (

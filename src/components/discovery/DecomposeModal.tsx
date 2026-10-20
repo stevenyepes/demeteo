@@ -100,7 +100,7 @@ export function DecomposeModal({
         role="dialog"
         aria-modal="true"
         aria-label="Proposed changes"
-        className="panel flex max-h-[88vh] flex-col overflow-hidden"
+        className="raised flex max-h-[88vh] flex-col overflow-hidden"
       >
         <header className="flex shrink-0 items-start justify-between gap-5 border-b border-white/5 px-6 py-5">
           <div className="min-w-0">
@@ -238,7 +238,7 @@ export function DecomposeModal({
           </p>
         )}
 
-        <footer className="flex shrink-0 items-center justify-between gap-5 border-t border-white/5 bg-[#0d0f14]/90 px-6 py-4">
+        <footer className="flex shrink-0 items-center justify-between gap-5 border-t border-white/5 px-6 py-4">
           <p className="m-0 text-[11px] text-slate-500">
             {renumberNote(proposal)}
           </p>

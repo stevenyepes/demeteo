@@ -203,7 +203,7 @@ export function NewAskThreadModal({
         role="dialog"
         aria-modal="true"
         aria-label="New ask thread"
-        className="panel flex max-h-[85vh] flex-col overflow-hidden"
+        className="raised flex max-h-[85vh] flex-col overflow-hidden"
       >
         <div className="shrink-0 border-b border-white/5 px-5 py-[18px]">
           <p className="mb-1.5 font-heading text-[11px] font-semibold uppercase tracking-[0.15em] text-cyan-400">
@@ -360,7 +360,7 @@ export function NewAskThreadModal({
           )}
         </div>
 
-        <div className="flex shrink-0 justify-end gap-2.5 border-t border-white/5 bg-[#0d0f14]/90 px-5 py-4">
+        <div className="flex shrink-0 justify-end gap-2.5 border-t border-white/5 px-5 py-4">
           <button type="button" onClick={onClose} className="btn-secondary text-[13px]">
             Cancel
           </button>
