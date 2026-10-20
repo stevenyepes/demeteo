@@ -20,7 +20,7 @@ function Shell() {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none" />
-        <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative">
+        <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative">
           <RotateCw className="w-12 h-12 text-cyan-400 animate-spin mb-6" />
           <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Re-bootstrap In Progress</h2>
           <p className="text-sm text-slate-400 mb-6 leading-relaxed">Demeteo is updating your cloned repositories and analyzing codebase strategies.</p>
@@ -37,7 +37,7 @@ function Shell() {
   if (s.bootstrapStep === 'error') {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
-        <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-ruby-500/20">
+        <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-ruby-500/20">
           <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4" />
           <h2 className="text-2xl font-heading font-bold text-white mb-2">Re-bootstrap Failed</h2>
           <p className="text-sm text-slate-400 mb-6">An error occurred while re-building the project workspace.</p>
@@ -56,7 +56,7 @@ function Shell() {
       <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-emerald-600/10 rounded-full blur-[120px] pointer-events-none" />
         <div className="absolute bottom-1/4 left-1/4 w-[300px] h-[300px] bg-violet-600/10 rounded-full blur-[100px] pointer-events-none" />
-        <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-emerald-500/20">
+        <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-emerald-500/20">
           <div className="relative mb-6">
             <div className="w-20 h-20 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
               <div className="w-14 h-14 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
@@ -83,7 +83,7 @@ function Shell() {
     return (
       <div className="flex-1 overflow-y-auto p-8 relative flex items-center justify-center">
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none" />
-        <div className="glass-panel max-w-xl w-full p-6 flex flex-col">
+        <div className="panel max-w-xl w-full p-6 flex flex-col">
           <div className="mb-6 border-b border-white/5 pb-4">
             <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY UPDATED</h3>
             <h2 className="text-xl font-bold text-white">Approve Detected Worktree Strategy</h2>

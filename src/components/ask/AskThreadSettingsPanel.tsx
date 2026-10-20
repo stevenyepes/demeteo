@@ -89,7 +89,7 @@ export function AskThreadSettingsPanel({
         role="dialog"
         aria-modal="true"
         aria-label="Thread settings"
-        className="glass-panel flex max-h-[85vh] flex-col overflow-hidden"
+        className="panel flex max-h-[85vh] flex-col overflow-hidden"
       >
         <div className="flex shrink-0 items-center justify-between border-b border-white/5 px-5 py-[18px]">
           <h2 className="font-heading text-[15px] font-semibold text-white">Thread settings</h2>

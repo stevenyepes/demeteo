@@ -70,7 +70,7 @@ describe('EmptyStateCard', () => {
 // The inline variant is what lets one component serve both empty surfaces —
 // the first-run landing page and a list section that is merely empty. The
 // tests below are about the difference between the two, since sharing the
-// glass card, the glow pair and the icon tile is the whole point.
+// panel card, the glow pair and the icon tile is the whole point.
 describe('EmptyStateCard, inline', () => {
   it('says what is missing without offering the first-run tiles', () => {
     render(

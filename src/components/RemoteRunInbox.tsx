@@ -223,7 +223,7 @@ const RemoteRunInbox: React.FC = () => {
             Loading…
           </div>
         ) : runs.length === 0 ? (
-          <div className="glass-panel p-8 text-center flex flex-col items-center justify-center">
+          <div className="panel p-8 text-center flex flex-col items-center justify-center">
             <Inbox className="w-8 h-8 text-slate-500 mb-3" />
             <h3 className="text-base font-heading font-semibold text-white mb-1">No remote runs yet</h3>
             <p className="text-sm text-slate-400 max-w-md">
@@ -248,7 +248,7 @@ const RemoteRunInbox: React.FC = () => {
                       <div
                         key={`${run.machine_id}:${run.run_id}`}
                         onClick={() => openRun(run)}
-                        className={`glass-panel p-3.5 flex items-start justify-between gap-4 border-l-2 ${TONE_BORDER_L[meta.tone]} ${
+                        className={`panel p-3.5 flex items-start justify-between gap-4 border-l-2 ${TONE_BORDER_L[meta.tone]} ${
                           run.feature_id ? 'cursor-pointer' : ''
                         }`}
                         title={run.feature_id ? 'Open this run' : undefined}

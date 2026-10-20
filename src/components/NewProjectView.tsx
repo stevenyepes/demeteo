@@ -251,7 +251,7 @@ const NewProjectView = () => {
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
                 <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
-                <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative">
+                <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative">
                     <RotateCw className="w-12 h-12 text-cyan-400 animate-spin mb-6" />
                     <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap In Progress</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
@@ -283,7 +283,7 @@ const NewProjectView = () => {
     if (bootstrapStep === 'error') {
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
-                <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-ruby-500/20">
+                <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-ruby-500/20">
                     <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4" />
                     <h2 className="text-2xl font-heading font-bold text-white mb-2">Bootstrap Failed</h2>
                     <p className="text-sm text-slate-400 mb-6">
@@ -384,7 +384,7 @@ const NewProjectView = () => {
                         <p className="text-sm text-slate-400">Map your repositories to a secure orchestrator workspace.</p>
                     </div>
 
-                    <div className="glass-panel p-6 space-y-5">
+                    <div className="panel p-6 space-y-5">
                         <div>
                             <label className="text-xs font-mono text-slate-400 uppercase tracking-widest mb-2 block">Project Name</label>
                             <input
@@ -576,7 +576,7 @@ const NewProjectView = () => {
                     and a sticky right panel would visually overlap
                     the left-panel rows as the user scrolls, blocking
                     access to the Save button. */}
-                <div className="glass-panel p-6 flex flex-col h-fit">
+                <div className="panel p-6 flex flex-col h-fit">
                     {bootstrapStep === 'form' ? (
                         <>
                             <div className="mb-6">

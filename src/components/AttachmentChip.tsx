@@ -17,7 +17,7 @@ interface AttachmentChipProps {
 }
 
 /**
- * One attachment chip — glass surface, image thumbnail when a
+ * One attachment chip — raised surface, image thumbnail when a
  * previewUrl is available and the mime is image/*, file-icon glyph
  * fallback otherwise. Filename + size are stacked under the
  * thumbnail; mime is rendered as a pill on the right.

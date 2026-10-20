@@ -100,7 +100,7 @@ export function DecomposeModal({
         role="dialog"
         aria-modal="true"
         aria-label="Proposed changes"
-        className="glass-panel flex max-h-[88vh] flex-col overflow-hidden"
+        className="panel flex max-h-[88vh] flex-col overflow-hidden"
       >
         <header className="flex shrink-0 items-start justify-between gap-5 border-b border-white/5 px-6 py-5">
           <div className="min-w-0">

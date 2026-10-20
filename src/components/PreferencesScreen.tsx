@@ -177,7 +177,7 @@ const PreferencesScreen = () => {
           <MachinesView onChange={() => {}} />
         )}
         {activeTab === 'providers' && (
-          <div className="glass-panel p-6 text-center">
+          <div className="panel p-6 text-center">
             <Globe className="w-8 h-8 text-slate-500 mx-auto mb-3" />
             <h3 className="text-sm font-heading font-semibold text-white mb-1">Provider Management</h3>
             <p className="text-xs text-slate-400 mb-4">Manage Git hosting provider connections.</p>
@@ -192,7 +192,7 @@ const PreferencesScreen = () => {
         {activeTab === 'defaults' && (
           <div className="space-y-4">
             {/* Workspace Storage */}
-            <div className="glass-panel p-6">
+            <div className="panel p-6">
               <h3 className="text-sm font-heading font-semibold text-white mb-1 flex items-center gap-2">
                 <FolderOpen className="w-4 h-4 text-cyan-400" />
                 Workspace Storage
@@ -255,7 +255,7 @@ const PreferencesScreen = () => {
             </div>
 
             {/* Default Agent & Model */}
-            <div className="glass-panel p-6">
+            <div className="panel p-6">
               <h3 className="text-sm font-heading font-semibold text-white mb-3 flex items-center gap-2">
                 <Cpu className="w-4 h-4 text-violet-400" />
                 Default Agent & Model
@@ -276,7 +276,7 @@ const PreferencesScreen = () => {
             </div>
 
             {/* Agent Timeouts */}
-            <div className="glass-panel p-6">
+            <div className="panel p-6">
               <h3 className="text-sm font-heading font-semibold text-white mb-1 flex items-center gap-2">
                 <Timer className="w-4 h-4 text-cyan-400" />
                 Agent Timeouts
@@ -339,7 +339,7 @@ const PreferencesScreen = () => {
             </div>
 
             {/* Run in background */}
-            <div className="glass-panel p-6">
+            <div className="panel p-6">
               <h3 className="text-sm font-heading font-semibold text-white mb-1 flex items-center gap-2">
                 <Minimize2 className="w-4 h-4 text-cyan-400" />
                 Run in background
@@ -387,7 +387,7 @@ const PreferencesScreen = () => {
         {activeTab === 'memory' && <MemoryAgentSettings />}
         {activeTab === 'mcp' && <McpGrantsTab />}
         {activeTab === 'about' && (
-          <div className="glass-panel p-6 space-y-4">
+          <div className="panel p-6 space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center">
                 <Activity className="w-5 h-5 text-cyan-400" />

@@ -46,8 +46,8 @@ Never use raw `red-*`; the red alias here is **ruby**.
 
 ### Surfaces and type
 
-- **`glass-panel`** is the signature card: `var(--bg-panel)` +
-  `backdrop-filter: blur(12px)` + a hairline `var(--border-glass)` + a soft drop
+- **`panel`** is the signature card: `var(--bg-panel)` +
+  `backdrop-filter: blur(12px)` + a hairline `var(--border-hairline)` + a soft drop
   shadow. Reach for it before hand-rolling a card.
 - Fonts: **`font-heading`** (Outfit) for headings, **`font-mono`** (Fira Code)
   for identifiers, paths, statuses and counts — this UI uses mono heavily for

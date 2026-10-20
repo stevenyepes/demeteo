@@ -45,7 +45,7 @@
    Tailwind v4 emits every utility into `@layer utilities`, and CSS ranks an
    unlayered rule above every layered one whatever its specificity. While
    this file was unlayered, a utility refining one of its classes matched and
-   lost without a trace: `rounded-xl` and `shadow-2xl` on a `.glass-panel`, the
+   lost without a trace: `rounded-xl` and `shadow-2xl` on a `.panel`, the
    ruby border on a destructive confirm, and dozens more. `check-classes.mjs`
    cannot see that, because every one of those classes resolves.
 
@@ -110,9 +110,9 @@
      `border border-white/5` is re-spelling this rule and one adding
      `border-white/10` is silently leaving the card language — which is how the
      harness panel came to read heavier than the panels beside it. */
-  .glass-panel {
+  .panel {
     background: var(--bg-panel);
-    border: 1px solid var(--border-glass);
+    border: 1px solid var(--border-hairline);
     border-radius: var(--radius-panel);
     transition: border-color var(--transition-normal), background-color var(--transition-normal);
   }
@@ -144,11 +144,11 @@
      for: the ticket editor groups its twelve fields into four of these, and a
      flat column of twelve gave the form no reading order at all. */
   .nested-card {
-    border: 1px solid var(--border-glass);
+    border: 1px solid var(--border-hairline);
     border-radius: var(--radius-panel);
   }
 
-  .glass-panel-hover:hover {
+  .panel-hover:hover {
     background: var(--bg-panel-hover);
     border-color: rgba(255, 255, 255, 0.08);
   }
@@ -219,7 +219,7 @@
   .chat-input {
     flex: 1;
     background: var(--bg-input);
-    border: 1px solid var(--border-glass);
+    border: 1px solid var(--border-hairline);
     border-radius: 8px;
     padding: 10px 14px;
     color: var(--text-primary);
@@ -240,7 +240,7 @@
 
   .input-field {
     background: var(--bg-input);
-    border: 1px solid var(--border-glass);
+    border: 1px solid var(--border-hairline);
     border-radius: 6px;
     padding: 10px 12px;
     color: var(--text-primary);
@@ -274,7 +274,7 @@
 
   .btn-secondary {
     background: transparent;
-    border: 1px solid var(--border-glass);
+    border: 1px solid var(--border-hairline);
     color: var(--text-secondary);
     border-radius: 6px;
     padding: 10px 18px;

@@ -114,7 +114,7 @@ export function WizardShell(props: WizardShellProps) {
           </div>
         </header>
 
-        <div className="glass-panel p-6 space-y-6">
+        <div className="panel p-6 space-y-6">
           <StepDots step={step} history={history} />
 
           {/* Step body. The `key` swap is what drives the

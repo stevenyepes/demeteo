@@ -73,7 +73,7 @@ interface AttachmentDropzoneProps {
 }
 
 /**
- * Glass-surface panel with drag-and-drop + click-to-pick behavior.
+ * Panel with drag-and-drop + click-to-pick behavior.
  *
  * In `direct` mode the dropzone calls the `feature_add_attachment`
  * Tauri command as soon as a file is dropped or picked. In `launch`

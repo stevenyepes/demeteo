@@ -214,7 +214,7 @@ This is **exactly `src/components/EmptyStateCard.tsx`** — the mock reproduces
 that component's markup line for line. Reuse it, do not re-author:
 
 ```
-glass-panel p-8 rounded-2xl border border-white/5 text-center bg-black/20
+panel p-8 rounded-2xl border border-white/5 text-center bg-black/20
 flex flex-col items-center justify-center space-y-4 relative overflow-hidden
 ```
 
@@ -277,7 +277,7 @@ is the backdrop, not part of the dialog.
 
 ### 2.2 Frame
 
-Column flex, `glass-panel` surface (`rgba(18,22,30,0.92)`, `backdrop-filter:
+Column flex, `panel` surface (`rgba(18,22,30,0.92)`, `backdrop-filter:
 blur(12px)`, border `rgba(255,255,255,0.05)`, `box-shadow: 0 8px 32px 0
 rgba(0,0,0,0.4)`, radius 12px, `overflow:hidden`).
 
@@ -1581,8 +1581,8 @@ Note the two amber/slate grades of *blocked* (§3.5.5) and that ruby appears
 | `.h { font-family:'Outfit' }` | `font-heading` (via `--font-heading` in `@theme`) | exact |
 | `.m { font-family:'Fira Code','JetBrains Mono' }` | `font-mono` (via `--font-mono`) | exact |
 | `body { font-family:'Inter' }` | `--font-sans`, already on `body` — **UI text needs no class** | exact |
-| `.glass { … }` | `.glass-panel` | **byte-identical** values (`--bg-panel`, `blur(12px)`, `--border-glass`, `0 8px 32px 0 rgba(0,0,0,0.4)`, `--radius-panel`) |
-| `.glass:hover` | `.glass-panel-hover` | exact (`--bg-panel-hover`, `rgba(255,255,255,0.08)`) |
+| `.glass { … }` | `.panel` | **byte-identical** values (`--bg-panel`, `blur(12px)`, `--border-hairline`, `0 8px 32px 0 rgba(0,0,0,0.4)`, `--radius-panel`) |
+| `.glass:hover` | `.panel-hover` | exact (`--bg-panel-hover`, `rgba(255,255,255,0.08)`) |
 | `.btn-p` | `.btn-primary` | identical but for padding (mocks use `8px 16px`/`9px 16px`/`10px 20px` vs `10px 18px`) and `font-size:13px`, which `.btn-primary` does not set |
 | `.btn-s` (Main/NewDiscovery/Decompose/TicketEdit) | `.btn-secondary` | identical but for `font-size:13px` |
 | `.fld` | `.input-field` | identical values; `.input-field` sets `font-size:0.9rem` (14.4 px) where the mocks use 13 px |
@@ -1665,8 +1665,8 @@ does, so it is precedent, not a new problem.
    denser (`padding:2px`, `gap:2px`, `4px 10px` segments, 11 px). Either accept
    the app's cyan and reuse the component, or add a tone axis to it. **Do not
    fork it** — it is a `radiogroup` with its own arrow-key contract.
-2. **`.card` in TicketEdit is not `glass-panel`.** `rgba(18,22,30,0.55)`, no blur,
-   no shadow. `SectionCard` (`glass-panel p-5`) is heavier. A nested card inside
+2. **`.card` in TicketEdit is not `panel`.** `rgba(18,22,30,0.55)`, no blur,
+   no shadow. `SectionCard` (`panel p-5`) is heavier. A nested card inside
    a panel wanting a lighter surface is a real gap; name it once rather than
    inlining `bg-[rgba(18,22,30,0.55)]` five times.
 3. **`.btn-s` has two spellings across the mocks.** ProjectHome's is *filled*

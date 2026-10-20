@@ -253,7 +253,7 @@ export const WorkflowList: React.FC<WorkflowListProps> = ({ onEdit, onNew, onSta
         {selectedWorkflow ? (
           <div className="space-y-8 max-w-3xl">
             {/* Header Card */}
-            <div className="glass-panel p-6 flex justify-between items-start">
+            <div className="panel p-6 flex justify-between items-start">
               <div className="space-y-2">
                 <div className="flex items-center gap-3">
                   <h1 className="text-2xl font-bold font-heading text-white">{selectedWorkflow.name}</h1>

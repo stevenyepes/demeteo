@@ -70,7 +70,7 @@
 
     /* The edge every surface states. Raised surfaces take a brighter one, since
        they sit on a panel rather than on the near-black app background. */
-    --border-glass: var(--color-hairline);
+    --border-hairline: var(--color-hairline);
     --border-raised: var(--color-hairline-raised);
     --border-glass-focus: rgba(139, 92, 246, 0.4);
 

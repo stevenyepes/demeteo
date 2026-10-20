@@ -251,7 +251,7 @@ In this spec: **amber** means a human is needed · **emerald** means healthy or
 done · **cyan** means interactive, terminal or running · **violet** means an
 active connection (and here, specifically, *not your machine*) · **ruby** means an
 error. Chips are the `Chip` primitive (uppercase mono, `TONE_CHIP`). Cards are
-`glass-panel`. Icons are lucide.
+`panel`. Icons are lucide.
 
 ### 4.1 Project home: pipeline cards and rail
 
@@ -299,7 +299,7 @@ of Project home, with the same tab bar as 4.6 and no hand-back bar.
 
 **Purpose.** Find any session and jump to it at its pipeline.
 
-**Placement.** A `glass-panel` popover, 500 px wide, anchored to the rail's
+**Placement.** A `panel` popover, 500 px wide, anchored to the rail's
 Terminals entry, opening upwards. Esc or a click outside closes it.
 
 **Anatomy.**
@@ -347,7 +347,7 @@ icon):
 interactive launch (§4.5). For the others the primary is `Open shell` and the
 brief is still drafted and copyable from the drawer, so nothing pretends.
 
-The **caret menu** (330 px, `glass-panel`) lists:
+The **caret menu** (330 px, `panel`) lists:
 
 - `<primary>`: *Briefed agent in a session worktree* `↵`
 - `Shell in the feature worktree`: *No brief, no agent* `⌘⇧\``
@@ -455,7 +455,7 @@ terminal. Hiding the drawer brings the full run view back exactly as it was left
 **Purpose.** Give the agent the pipeline's context before it starts, editable,
 for the cost of one keystroke.
 
-**Frame.** A 680 px `glass-panel` over a 62% black scrim. It is opened by the
+**Frame.** A 680 px `panel` over a 62% black scrim. It is opened by the
 header primary, the strip's `Fix with agent`, the inspector's `Fix with agent`, or
 the caret menu.
 
@@ -585,7 +585,7 @@ on the Feature page.
 
 ### 4.8 Attach popover
 
-A 470 px `glass-panel`, anchored to the copy icon.
+A 470 px `panel`, anchored to the copy icon.
 
 - **`SAME SESSION — IT LIVES IN TMUX ON THE RUNNER`**: a mono well containing
   `ssh <runner> -t 'tmux attach -t <tmux-name>'`, and an emerald `copied` chip
@@ -602,7 +602,7 @@ A 470 px `glass-panel`, anchored to the copy icon.
 **Purpose.** Show exactly what is about to happen, name the commit, and block on
 unsaved work.
 
-**Frame.** A 640 px `glass-panel` over the scrim, with an emerald icon box
+**Frame.** A 640 px `panel` over the scrim, with an emerald icon box
 (`CornerDownLeft`). Title: `Hand back to the pipeline`, or `Push to PR #163`.
 Subtitle: the origin and the Feature.
 

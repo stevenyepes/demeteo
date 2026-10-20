@@ -5,7 +5,7 @@ import type { AttachedFile } from '../../lib/attachments';
 /**
  * For image/* attachments the bytes are fetched via the `attachment_read`
  * IPC and rendered inline as a `data:<mime>;base64,…` URL. Non-image mimes
- * (pdf / txt / md / json) skip the IPC and show a generic glass metadata
+ * (pdf / txt / md / json) skip the IPC and show a generic metadata
  * panel instead — no inline renderer for those kinds in v1.
  */
 export function AttachmentPreviewModal({

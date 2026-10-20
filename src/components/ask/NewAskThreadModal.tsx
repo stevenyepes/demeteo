@@ -203,7 +203,7 @@ export function NewAskThreadModal({
         role="dialog"
         aria-modal="true"
         aria-label="New ask thread"
-        className="glass-panel flex max-h-[85vh] flex-col overflow-hidden"
+        className="panel flex max-h-[85vh] flex-col overflow-hidden"
       >
         <div className="shrink-0 border-b border-white/5 px-5 py-[18px]">
           <p className="mb-1.5 font-heading text-[11px] font-semibold uppercase tracking-[0.15em] text-cyan-400">
