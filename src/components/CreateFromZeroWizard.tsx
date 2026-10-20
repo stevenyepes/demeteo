@@ -196,7 +196,7 @@ const CreateFromZeroWizard: React.FC = () => {
           </div>
         </header>
 
-        <div className="glass-panel p-6 rounded-2xl border-white/10 shadow-2xl space-y-6">
+        <div className="glass-panel p-6 border-white/10 space-y-6">
           <CreateZeroStepHeader steps={STEP_DESCRIPTORS} activeId={step} completedIds={completedIds} />
 
           <div key={step} className="animate-fade-in">

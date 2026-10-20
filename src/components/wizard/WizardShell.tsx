@@ -118,7 +118,7 @@ export function WizardShell(props: WizardShellProps) {
             documented surface colour give the wizard its signature
             frosted look. */}
         <div
-          className="glass-panel p-6 rounded-2xl border border-white/5 shadow-2xl space-y-6"
+          className="glass-panel p-6 border border-white/5 space-y-6"
           style={{
             background: 'rgba(18,22,30,0.75)',
             backdropFilter: 'blur(12px)',

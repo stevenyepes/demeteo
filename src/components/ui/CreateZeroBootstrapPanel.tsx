@@ -56,7 +56,7 @@ export function CreateZeroBootstrapPanel({
   const isError = phases.some((p) => p.status === 'error');
 
   return (
-    <div className="glass-panel p-6 rounded-xl border-white/10 shadow-2xl flex flex-col gap-4">
+    <div className="glass-panel p-6 border-white/10 flex flex-col gap-4">
       <div>
         <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">
           {isError ? 'Bootstrap failed' : 'Workspace bootstrap'}

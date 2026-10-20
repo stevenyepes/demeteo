@@ -90,7 +90,7 @@ function PipelineCardInner({
     return (
         <div
             onClick={handleOpen}
-            className={`pipeline-card glass-panel glass-panel-hover rounded-xl cursor-pointer relative overflow-hidden group ${density.card} ${scan.needsYou ? 'ring-1 ring-amber-500/40' : ''}`}
+            className={`pipeline-card glass-panel glass-panel-hover cursor-pointer relative overflow-hidden group ${density.card} ${scan.needsYou ? 'ring-1 ring-amber-500/40' : ''}`}
         >
             <div className={`absolute left-0 top-0 bottom-0 w-1 ${TONE_ACCENT[scan.status.tone]}`}></div>
 
