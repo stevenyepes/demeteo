@@ -109,11 +109,15 @@ Token values live in `src/App.css`; colour *semantics* are AGENTS.md §4. Mappin
 re-introducing F27. New surfaces get a tone from `runStatusMeta()` and read the class
 out of `TONE_CHIP` / `TONE_TEXT` / `TONE_BORDER_L`.
 
-**WebKitGTK caveat.** The `WEBKITGTK / TAURI COMPATIBILITY LAYER` block in `src/App.css`
-carries an `!important` safelist of specific utility classes for the Linux webview. Any *new* arbitrary-value colour utility is
-outside it. Either express the colour as a token or verify it renders under
-`npm run dev:tauri` on Linux before calling the phase done — a class that silently
-no-ops there is invisible to `npm run checks`.
+**Cascade caveat.** A utility does nothing when an unlayered rule sets the same
+property, whatever the specificity, because Tailwind v4 emits utilities into
+`@layer utilities`. That is why `src/App.css` keeps its rules in `@layer base` and
+`@layer components` (see the note at the top of that file). Its old `!important`
+"WebKitGTK" safelist was a workaround for the same thing rather than for the
+webview: on WebKitGTK 2.52, v4's oklch and `color-mix()` render natively. What remains is the
+`PINNED UTILITY COLOURS` block, which holds some colours at their v3 values until
+the token rewrite. A class that silently no-ops is still invisible to
+`npm run checks`, so look at new surfaces under `npm run dev:tauri`.
 
 ---
 
@@ -601,9 +605,9 @@ density, last view mode and filter. Audit *Opportunity 2* notes
 
 **Risks:**
 
-- **WebKitGTK invisibility.** `npm run checks` compiles for the host and never renders.
-  A new arbitrary-value utility outside the `App.css` safelist can silently no-op on
-  Linux. Every phase with new colour classes needs a `dev:tauri` look on Linux.
+- **Render invisibility.** `npm run checks` compiles for the host and never renders.
+  A utility beside an unlayered rule that sets the same property silently no-ops.
+  Every phase with new colour classes needs a `dev:tauri` look on Linux.
 - **Glassmorphism cost.** `backdrop-filter: blur(12px)` is cheap once and expensive
   nested. The inspector sitting inside the run column must not stack a third blur
   layer over the two already there. `App.css` records a real WKWebView GPU incident;

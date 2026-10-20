@@ -551,56 +551,58 @@ body {
   font-family: 'Inter', -apple-system, sans-serif !important;
 }
 
-/* Safe backgrounds */
-.bg-\[\#050508\] { background-color: #050508 !important; }
-.bg-\[\#0a0a0e\] { background-color: #0a0a0e !important; }
-.bg-slate-900\/80 { background-color: rgba(15, 23, 42, 0.8) !important; }
-.bg-slate-900 { background-color: #0f172a !important; }
-.bg-slate-950\/40 { background-color: rgba(2, 6, 23, 0.4) !important; }
-.bg-slate-950\/80 { background-color: rgba(2, 6, 23, 0.8) !important; }
-.bg-cyan-500\/10 { background-color: rgba(6, 182, 212, 0.1) !important; }
-.bg-cyan-500\/20 { background-color: rgba(6, 182, 212, 0.2) !important; }
-.bg-emerald-500\/10 { background-color: rgba(16, 185, 129, 0.1) !important; }
-.bg-emerald-500\/20 { background-color: rgba(16, 185, 129, 0.2) !important; }
-.bg-amber-500\/10 { background-color: rgba(245, 158, 11, 0.1) !important; }
-.bg-red-500\/10 { background-color: rgba(239, 68, 68, 0.1) !important; }
-.bg-violet-500\/10 { background-color: rgba(139, 92, 246, 0.1) !important; }
-.bg-white\/5 { background-color: rgba(255, 255, 255, 0.05) !important; }
-.bg-white\/10 { background-color: rgba(255, 255, 255, 0.1) !important; }
-.bg-\[\#0a0a0e\]\/50 { background-color: rgba(10, 10, 14, 0.5) !important; }
+/* ----------------------------------------------------
+   PINNED UTILITY COLOURS
+   ----------------------------------------------------
+   These re-declare a few dozen Tailwind colour utilities at their Tailwind v3
+   values, so they render slightly off their v4 neighbours: `text-cyan-400`
+   here is v3's #22d3ee, while `text-cyan-300` beside it is v4's oklch. Deleting
+   the block re-tints the app's most common classes, which is a palette
+   decision for the token rewrite rather than a compatibility fix: WebKitGTK
+   2.52 renders v4's oklch and color-mix() natively.
 
-/* Safe borders */
-.border-white\/5 { border-color: rgba(255, 255, 255, 0.05) !important; }
-.border-white\/10 { border-color: rgba(255, 255, 255, 0.1) !important; }
-.border-white\/20 { border-color: rgba(255, 255, 255, 0.2) !important; }
-.border-cyan-500\/30 { border-color: rgba(6, 182, 212, 0.3) !important; }
-.border-cyan-500\/50 { border-color: rgba(6, 182, 212, 0.5) !important; }
-.border-amber-500\/20 { border-color: rgba(245, 158, 11, 0.2) !important; }
-.border-amber-500\/30 { border-color: rgba(245, 158, 11, 0.3) !important; }
-.border-red-500\/20 { border-color: rgba(239, 68, 68, 0.2) !important; }
-.border-red-500\/30 { border-color: rgba(239, 68, 68, 0.3) !important; }
-.border-violet-500\/50 { border-color: rgba(139, 92, 246, 0.5) !important; }
-.border-slate-800 { border-color: #1e293b !important; }
-
-/* Safe text colors */
-.text-cyan-400 { color: #22d3ee !important; }
-.text-cyan-500 { color: #06b6d4 !important; }
-.text-cyan-500\/70 { color: rgba(6, 182, 212, 0.7) !important; }
-.text-cyan-600 { color: #0891b2 !important; }
-.text-emerald-400 { color: #34d399 !important; }
-.text-emerald-500 { color: #10b981 !important; }
-.text-amber-500 { color: #f59e0b !important; }
-.text-red-400 { color: #f87171 !important; }
-.text-slate-200 { color: #e2e8f0 !important; }
-.text-slate-300 { color: #cbd5e1 !important; }
-.text-slate-400 { color: #94a3b8 !important; }
-.text-slate-500 { color: #64748b !important; }
-.text-slate-600 { color: #475569 !important; }
+   They sit at the end of `utilities`, so they still beat Tailwind's own rule
+   of the same name. They used to be unlayered `!important`, which also beat
+   every `hover:` and `focus:` variant on the same element, so
+   `text-slate-400 hover:text-white` never turned white. Do not put
+   `!important` back. */
+@layer utilities {
+  .bg-slate-900\/80 { background-color: rgba(15, 23, 42, 0.8); }
+  .bg-cyan-500\/10 { background-color: rgba(6, 182, 212, 0.1); }
+  .bg-cyan-500\/20 { background-color: rgba(6, 182, 212, 0.2); }
+  .bg-emerald-500\/10 { background-color: rgba(16, 185, 129, 0.1); }
+  .bg-emerald-500\/20 { background-color: rgba(16, 185, 129, 0.2); }
+  .bg-amber-500\/10 { background-color: rgba(245, 158, 11, 0.1); }
+  .bg-red-500\/10 { background-color: rgba(239, 68, 68, 0.1); }
+  .bg-violet-500\/10 { background-color: rgba(139, 92, 246, 0.1); }
+  .bg-white\/5 { background-color: rgba(255, 255, 255, 0.05); }
+  .bg-white\/10 { background-color: rgba(255, 255, 255, 0.1); }
+  .border-white\/5 { border-color: rgba(255, 255, 255, 0.05); }
+  .border-white\/10 { border-color: rgba(255, 255, 255, 0.1); }
+  .border-white\/20 { border-color: rgba(255, 255, 255, 0.2); }
+  .border-cyan-500\/30 { border-color: rgba(6, 182, 212, 0.3); }
+  .border-cyan-500\/50 { border-color: rgba(6, 182, 212, 0.5); }
+  .border-amber-500\/20 { border-color: rgba(245, 158, 11, 0.2); }
+  .border-amber-500\/30 { border-color: rgba(245, 158, 11, 0.3); }
+  .border-red-500\/20 { border-color: rgba(239, 68, 68, 0.2); }
+  .border-red-500\/30 { border-color: rgba(239, 68, 68, 0.3); }
+  .border-violet-500\/50 { border-color: rgba(139, 92, 246, 0.5); }
+  .text-cyan-400 { color: #22d3ee; }
+  .text-cyan-500 { color: #06b6d4; }
+  .text-cyan-500\/70 { color: rgba(6, 182, 212, 0.7); }
+  .text-emerald-400 { color: #34d399; }
+  .text-emerald-500 { color: #10b981; }
+  .text-amber-500 { color: #f59e0b; }
+  .text-red-400 { color: #f87171; }
+  .text-slate-200 { color: #e2e8f0; }
+  .text-slate-300 { color: #cbd5e1; }
+  .text-slate-400 { color: #94a3b8; }
+  .text-slate-500 { color: #64748b; }
+  .text-slate-600 { color: #475569; }
+}
 
 /* Selections */
 ::selection { background-color: rgba(6, 182, 212, 0.3) !important; }
-.selection\:bg-cyan-500\/30 ::selection { background-color: rgba(6, 182, 212, 0.3) !important; }
-.selection\:bg-cyan-500\/30::selection { background-color: rgba(6, 182, 212, 0.3) !important; }
 
 @layer components {
   /* `content-visibility: auto` skips layout and paint for off-screen cards, which
