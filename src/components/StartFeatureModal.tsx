@@ -790,14 +790,14 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-4 select-none"
+      className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 select-none"
       onKeyDown={onKey}
     >
       {/* Viewport-capped panel: the form body scrolls internally while the
           header and footer stay pinned, so expanding "Customize…" (per-step
           overrides) can never grow the modal past the screen. */}
-      <div ref={modalRef} className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
-        <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-[#050508] shrink-0">
+      <div ref={modalRef} className="raised w-full max-w-2xl overflow-hidden max-h-[85vh] flex flex-col">
+        <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center shrink-0">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-cyan-400" />
             <h3 className="text-sm font-semibold text-white">
@@ -1252,7 +1252,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           )}
         </div>
 
-        <div className="px-6 py-4 border-t border-white/5 bg-[#050508] flex flex-col gap-3">
+        <div className="px-6 py-4 border-t border-white/5 flex flex-col gap-3">
           {showVisionWarning && !visionWarningDismissed && (
             <div
               role="alert"
@@ -1276,7 +1276,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
             </div>
           )}
         </div>
-        <div className="px-6 py-4 border-t border-white/5 bg-[#050508] shrink-0 flex justify-between items-center">
+        <div className="px-6 py-4 border-t border-white/5 shrink-0 flex justify-between items-center">
           <span className="text-[10px] text-slate-500 font-mono">
             {canLaunch
               ? '⌘/Ctrl + Enter to launch'

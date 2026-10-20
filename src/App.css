@@ -118,9 +118,9 @@
   }
 
   /* Menus, popovers, dialogs and toasts: whatever floats over the page. It is
-     the one surface with a shadow, and a call site adds none of its own. Blur
-     is allowed here and only here (AGENTS.md §4), so it is the call site's
-     `backdrop-blur-*` to add when the thing behind it is live content. */
+     the one surface with a shadow, and a call site adds none of its own. It is
+     opaque, so a `backdrop-blur-*` under it would show nothing and still cost
+     WebKitGTK a frame per scroll; don't add one. */
   .raised {
     background: var(--bg-raised);
     border: 1px solid var(--border-raised);
@@ -136,14 +136,14 @@
     background: var(--bg-well);
   }
 
-  /* A card *inside* a panel. It keeps the panel's own fill and is set apart by
-     its hairline alone: a lighter step would read as a third surface, and the
-     depth would stop meaning anything. One rule rather than five call
+  /* A card *inside* a panel or a dialog. It has no fill of its own and is set
+     apart by its hairline alone, so it reads as a group on whatever surface holds
+     it: a step of its own would read as a third surface, and the depth would stop
+     meaning anything. One rule rather than five call
      sites spelling the colour, which is what `DISCOVERY_UI_SPEC.md` §6.5 asks
      for: the ticket editor groups its twelve fields into four of these, and a
      flat column of twelve gave the form no reading order at all. */
   .nested-card {
-    background: var(--bg-panel);
     border: 1px solid var(--border-glass);
     border-radius: var(--radius-panel);
   }

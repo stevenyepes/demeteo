@@ -314,7 +314,7 @@ export function AddressFindingsLaunch({
             role="dialog"
             aria-modal="true"
             aria-label={CONFIRM_TITLE}
-            className="w-full max-w-lg rounded-xl border border-white/10 bg-slate-900/95 p-5 backdrop-blur-xl"
+            className="raised w-full max-w-lg p-5"
           >
             <h2 className="font-heading text-base font-semibold text-white">{CONFIRM_TITLE}</h2>
             <p className="mt-2 text-sm leading-relaxed text-slate-400">

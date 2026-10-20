@@ -100,9 +100,9 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4 select-none">
-      <div className="bg-[#0a0a0e] border border-white/10 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-fade-in">
-        <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between bg-[#050508]">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 select-none">
+      <div className="raised w-full max-w-lg overflow-hidden animate-fade-in">
+        <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-white flex items-center gap-2">
             {title}
             {currentLabel && (
@@ -224,7 +224,7 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
           ) : null}
         </div>
 
-        <div className="px-6 py-3 border-t border-white/5 bg-[#050508] flex justify-end">
+        <div className="px-6 py-3 border-t border-white/5 flex justify-end">
           <button
             type="button"
             onClick={onClose}

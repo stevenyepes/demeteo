@@ -70,7 +70,7 @@ export function OverflowMenu({ label, items, className = '' }: OverflowMenuProps
         <div
           id={menuId}
           role="menu"
-          className="absolute right-0 top-full z-30 mt-1.5 min-w-48 rounded-lg border border-white/10 bg-[var(--bg-sidebar)] p-1 shadow-xl shadow-black/50 animate-fade-in"
+          className="raised absolute right-0 top-full z-30 mt-1.5 min-w-48 p-1 animate-fade-in"
         >
           {items.map((item) => (
             <button

@@ -116,8 +116,8 @@ export default function ProvidersPage() {
 
       {pendingDelete && (
         <OverlayPortal>
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-          <div className="glass-panel p-6 max-w-md w-full mx-4 border border-amber-500/30">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="raised p-6 max-w-md w-full mx-4 border-amber-500/30">
             <div className="flex items-start gap-3 mb-4">
               <AlertTriangle className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
               <div>

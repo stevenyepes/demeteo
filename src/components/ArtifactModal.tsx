@@ -60,11 +60,11 @@ export function ArtifactModal({
   return (
     <Modal
       onClose={onClose}
-      backdropClassName="bg-black/70 p-4"
+      backdropClassName="p-4"
       // Wider than the app default for the same reason `GateView` documents:
       // an artifact at 42rem wraps every line. `max-h-[85vh]` + a `min-h-0`
       // scroll body is what keeps the card inside the viewport.
-      className="w-full max-w-6xl mx-4 bg-[var(--bg-sidebar)] border border-violet-500/30 rounded-2xl shadow-[0_0_50px_rgba(139,92,246,0.15)] overflow-hidden flex flex-col font-sans max-h-[85vh]"
+      className="raised w-full max-w-6xl mx-4 overflow-hidden flex flex-col font-sans max-h-[85vh]"
     >
       <div className="p-6 border-b border-white/5 bg-white/[0.01] flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">

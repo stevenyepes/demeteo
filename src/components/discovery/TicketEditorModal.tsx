@@ -210,7 +210,7 @@ export function TicketEditorModal({
       role="dialog"
       aria-modal="true"
       aria-label={`Edit ${ticketLabel(ticket.seq)}`}
-      className="flex max-h-[calc(100vh-48px)] w-[min(880px,calc(100vw-48px))] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0d0f14] shadow-[0_30px_80px_rgba(0,0,0,0.6)]"
+      className="flex max-h-[calc(100vh-48px)] w-[min(880px,calc(100vw-48px))] flex-col overflow-hidden raised"
     >
       <ColumnSubHeader title={ticketLabel(ticket.seq)}>
         <Chip size="sm" tone={ticketTone(view, index)} dot>
@@ -396,7 +396,7 @@ export function TicketEditorModal({
       </div>
       </div>
 
-      <div className="shrink-0 border-t border-white/5 bg-[#0b0d12] px-5 py-3.5">
+      <div className="shrink-0 border-t border-white/5 px-5 py-3.5">
         <TicketForceStart
           view={view}
           index={index}

@@ -251,7 +251,7 @@ const NewProjectView = () => {
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
                 <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
-                <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border border-white/10">
+                <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative">
                     <RotateCw className="w-12 h-12 text-cyan-400 animate-spin mb-6" />
                     <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap In Progress</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
@@ -283,7 +283,7 @@ const NewProjectView = () => {
     if (bootstrapStep === 'error') {
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
-                <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border border-ruby-500/20">
+                <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-ruby-500/20">
                     <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4" />
                     <h2 className="text-2xl font-heading font-bold text-white mb-2">Bootstrap Failed</h2>
                     <p className="text-sm text-slate-400 mb-6">
@@ -311,15 +311,15 @@ const NewProjectView = () => {
 
             {/* Repo Selection Modal */}
             {isRepoModalOpen && (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#08090c]/80 backdrop-blur-sm">
-                    <div className="glass-panel w-[500px] border border-white/10 overflow-hidden flex flex-col">
-                        <div className="p-4 border-b border-white/5 flex justify-between items-center bg-[#0d0f14]">
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60">
+                    <div className="raised w-[500px] overflow-hidden flex flex-col">
+                        <div className="p-4 border-b border-white/5 flex justify-between items-center">
                             <h3 className="font-heading font-semibold text-white">Select Repositories</h3>
                             <button onClick={() => setIsRepoModalOpen(false)} className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/5 transition-colors">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
-                        <div className="p-4 border-b border-white/5 bg-[#08090c]">
+                        <div className="p-4 border-b border-white/5">
                             <div className="relative">
                                 <Search className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
                                 <input
@@ -331,7 +331,7 @@ const NewProjectView = () => {
                                 />
                             </div>
                         </div>
-                        <div className="overflow-y-auto max-h-[300px] p-2 space-y-1 bg-[#08090c]">
+                        <div className="overflow-y-auto max-h-[300px] p-2 space-y-1">
                             {isLoadingRepos ? (
                                 <div className="p-4 text-center text-sm text-slate-500">Fetching repositories from connected providers...</div>
                             ) : availableRepos.length === 0 ? (
@@ -355,7 +355,7 @@ const NewProjectView = () => {
                                 );
                             })}
                         </div>
-                        <div className="p-4 border-t border-white/5 flex justify-end gap-3 bg-[#0d0f14]">
+                        <div className="p-4 border-t border-white/5 flex justify-end gap-3">
                             <button onClick={() => setIsRepoModalOpen(false)} className="px-4 py-2 text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white rounded-md transition-colors">Done</button>
                         </div>
                     </div>
@@ -576,7 +576,7 @@ const NewProjectView = () => {
                     and a sticky right panel would visually overlap
                     the left-panel rows as the user scrolls, blocking
                     access to the Save button. */}
-                <div className="glass-panel p-6 flex flex-col h-fit border-white/10">
+                <div className="glass-panel p-6 flex flex-col h-fit">
                     {bootstrapStep === 'form' ? (
                         <>
                             <div className="mb-6">

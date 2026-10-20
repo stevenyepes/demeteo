@@ -129,7 +129,7 @@ export function AccountMenu({
       {open && (
         <div
           data-testid="topbar-account-menu"
-          className="glass-panel absolute right-0 top-full mt-2 w-56 border border-white/10 overflow-hidden z-50"
+          className="raised absolute right-0 top-full mt-2 w-56 overflow-hidden z-50"
         >
           {/* Outside the `menu` role deliberately: a screen reader announcing a
               menu of two items, one of which is inert text, is worse than the

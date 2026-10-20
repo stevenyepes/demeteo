@@ -112,7 +112,7 @@ export function DiscoveryActionsMenu({ actions }: DiscoveryActionsMenuProps): Re
           aria-label="Discovery actions"
           data-testid="discovery-actions-menu"
           onKeyDown={onMenuKeyDown}
-          className="glass-panel absolute right-0 top-full z-50 mt-2 flex w-72 flex-col border border-white/10 p-1.5"
+          className="raised absolute right-0 top-full z-50 mt-2 flex w-72 flex-col p-1.5"
         >
           {actions.map((action, i) => {
             const body = (
