@@ -33,14 +33,8 @@ describe('segmentFor', () => {
     },
   );
 
-  it.each(['pending', 'running', 'verifying'])('puts %s in active', (status) => {
+  it.each(['pending', 'bootstrapping', 'running', 'verifying'])('puts %s in active', (status) => {
     expect(segmentFor(row('f', status, 1))).toBe('active');
-  });
-
-  // Amber *and* still moving on its own: nothing is waiting on a human yet, so
-  // it must not jump the queue ahead of a real gate.
-  it('puts bootstrapping in active despite its amber tone', () => {
-    expect(segmentFor(row('f', 'bootstrapping', 1))).toBe('active');
   });
 
   it.each(['completed', 'published', 'merged', 'pr_closed', 'awaiting_mr', 'pr_ready', 'failed', 'error', 'over-budget', 'cancelled', 'unreachable'])(

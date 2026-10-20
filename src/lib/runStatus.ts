@@ -6,14 +6,17 @@
  * FeatureDetail, the Runs inbox, and the TopBar badge all speak the same
  * color language instead of each view keeping its own ternary chain.
  *
- * Tone semantics (docs/UX_JOURNEYS.md §2, as settled by F27):
- *   cyan    = in motion (running)
- *   violet  = in motion, agent-judged (verifying), or out with a reviewer
- *             (published PR) — work that is moving without this app doing it
- *   amber   = needs a human (gates, credentials, interruptions)
- *   emerald = done well (completed / PR ready)
+ * Tone semantics (AGENTS.md §4; F27 settled the single mapping):
+ *   cyan    = in motion, whether this app is driving it (bootstrapping,
+ *             running, verifying) or a reviewer is (published PR)
+ *   amber   = needs a human (gates, credentials, interruptions) and nothing
+ *             else — `segmentFor` derives the "Needs you" band from it
+ *   emerald = done well (completed / PR ready / merged)
  *   ruby    = done badly (failed / over budget)
  *   slate   = inert (queued, cancelled, unreachable, skipped, PR closed)
+ * Violet names no status: it sits beside the indigo accent that marks primary
+ * actions, selection and focus, so a violet chip reads as something to click.
+ * The `violet` tone stays only for non-status accents.
  */
 
 export type RunStatusTone = 'emerald' | 'cyan' | 'violet' | 'amber' | 'ruby' | 'slate';
@@ -27,9 +30,9 @@ export interface RunStatusMeta {
 
 const META: Record<string, RunStatusMeta> = {
   pending:              { label: 'Queued',            tone: 'slate',   active: true },
-  bootstrapping:        { label: 'Bootstrapping',     tone: 'amber',   active: true },
+  bootstrapping:        { label: 'Bootstrapping',     tone: 'cyan',    active: true },
   running:              { label: 'Running',           tone: 'cyan',    active: true },
-  verifying:            { label: 'Verifying',         tone: 'violet',  active: true },
+  verifying:            { label: 'Verifying',         tone: 'cyan',    active: true },
   gated:                { label: 'Gate needs you',    tone: 'amber',   active: false },
   awaiting_gate:        { label: 'Gate needs you',    tone: 'amber',   active: false },
   parked:               { label: 'Gate needs you',    tone: 'amber',   active: false },
@@ -38,7 +41,7 @@ const META: Record<string, RunStatusMeta> = {
   'over-budget':        { label: 'Over budget',       tone: 'ruby',    active: false },
   awaiting_mr:          { label: 'PR ready',          tone: 'emerald', active: false },
   pr_ready:             { label: 'PR ready',          tone: 'emerald', active: false },
-  published:            { label: 'Published',         tone: 'violet',  active: false },
+  published:            { label: 'Published',         tone: 'cyan',    active: false },
   merged:               { label: 'Merged',            tone: 'emerald', active: false },
   pr_closed:            { label: 'PR closed',         tone: 'slate',   active: false },
   completed:            { label: 'Completed',         tone: 'emerald', active: false },
