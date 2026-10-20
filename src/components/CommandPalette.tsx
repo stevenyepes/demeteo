@@ -84,7 +84,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, entrie
     <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[15vh]" onClick={onClose}>
       <div className="absolute inset-0 bg-black/70" />
       <div
-        className="relative w-full max-w-xl glass-panel border border-white/10 rounded-xl shadow-2xl overflow-hidden"
+        className="relative w-full max-w-xl glass-panel border border-white/10 overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 px-5 py-3.5 border-b border-white/5 bg-[#0d0f14]/80">

@@ -59,7 +59,7 @@ export default function ProviderSettings({ onConnected, onClose, initialProvider
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#08090c]/85 p-4">
             <div className="absolute w-[600px] h-[600px] bg-cyan-600/10 rounded-full blur-[120px] pointer-events-none"></div>
             
-            <div className="glass-panel w-full max-w-xl p-8 relative z-10 flex flex-col shadow-2xl animate-fade-in border border-white/10">
+            <div className="glass-panel w-full max-w-xl p-8 relative z-10 flex flex-col animate-fade-in border border-white/10">
                 <button 
                     onClick={onClose}
                     className="absolute top-6 right-6 p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-white/5 transition-colors"

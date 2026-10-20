@@ -57,7 +57,7 @@ export function ReviewFailureCard({
       data-testid="code-review-failure"
       data-failure={failure.kind}
       data-tone={tone}
-      className={`glass-panel rounded-2xl border ${border} p-6 space-y-4`}
+      className={`glass-panel border ${border} p-6 space-y-4`}
     >
       <div className="flex items-start gap-3">
         <Icon aria-hidden="true" className={`mt-0.5 w-5 h-5 shrink-0 ${TONE_TEXT[tone]}`} />

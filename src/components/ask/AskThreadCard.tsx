@@ -51,7 +51,7 @@ export function AskThreadCard({
       type="button"
       data-testid="ask-thread-card"
       onClick={() => onOpen(thread.id)}
-      className="glass-panel glass-panel-hover relative w-full overflow-hidden rounded-xl p-5 text-left"
+      className="glass-panel glass-panel-hover relative w-full overflow-hidden p-5 text-left"
     >
       <span
         aria-hidden="true"

@@ -249,7 +249,7 @@ const RemoteRunInbox: React.FC = () => {
                         key={`${run.machine_id}:${run.run_id}`}
                         onClick={() => openRun(run)}
                         className={`glass-panel p-3.5 flex items-start justify-between gap-4 border-l-2 ${TONE_BORDER_L[meta.tone]} ${
-                          run.feature_id ? 'cursor-pointer hover:bg-white/[0.03] transition-colors' : ''
+                          run.feature_id ? 'cursor-pointer' : ''
                         }`}
                         title={run.feature_id ? 'Open this run' : undefined}
                       >

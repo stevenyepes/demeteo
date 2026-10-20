@@ -451,7 +451,7 @@ const ProjectHome = () => {
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
                 <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
-                <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-white/10 shadow-2xl">
+                <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border border-white/10">
                     <RotateCw className="w-12 h-12 text-cyan-400 animate-spin mb-6" />
                     <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap In Progress</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
@@ -479,7 +479,7 @@ const ProjectHome = () => {
     if (currentStep === 'error') {
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
-                <div className="glass-panel max-w-lg w-full p-8 rounded-xl flex flex-col items-center text-center relative border border-ruby-500/20 shadow-2xl">
+                <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border border-ruby-500/20">
                     <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4" />
                     <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Bootstrap Failed</h2>
                     <p className="text-sm text-slate-400 mb-6 leading-relaxed">
@@ -507,7 +507,7 @@ const ProjectHome = () => {
         return (
             <div className="flex-1 overflow-y-auto p-8 relative flex items-center justify-center bg-[#08090c]">
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none"></div>
-                <div className="glass-panel max-w-xl w-full p-6 rounded-xl flex flex-col border-white/10 shadow-2xl text-left">
+                <div className="glass-panel max-w-xl w-full p-6 flex flex-col border-white/10 text-left">
                     <div className="mb-6 border-b border-white/5 pb-4">
                         <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
                         <h2 className="text-xl font-bold text-white">Configure Worktree Strategy</h2>
@@ -715,7 +715,7 @@ const ProjectHome = () => {
                             Feature modal, which owns every launch knob
                             and the actual start_feature call. Ctrl/Cmd+T
                             opens the same modal with no seed. */}
-                        <div className="glass-panel rounded-2xl p-4 relative group overflow-hidden">
+                        <div className="glass-panel p-4 relative group overflow-hidden">
                             <div className="absolute inset-0 bg-gradient-to-r from-violet-500/10 to-cyan-500/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
                             <div className="relative flex items-start gap-4">
                                 <div className="mt-2 ml-1 text-violet-400 shrink-0">

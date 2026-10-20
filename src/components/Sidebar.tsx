@@ -42,7 +42,7 @@ const Sidebar: React.FC<SidebarProps> = ({ projects, currentProject, setCurrentP
                             setView('home');
                         }}
                         className={`flex items-center justify-between px-4 py-2.5 mx-2 rounded-lg cursor-pointer transition-all duration-200 ${currentProject === p.id
-                                ? 'glass-panel text-white shadow-[0_0_15px_rgba(139,92,246,0.15)]'
+                                ? 'glass-panel text-white'
                                 : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
                             }`}
                     >

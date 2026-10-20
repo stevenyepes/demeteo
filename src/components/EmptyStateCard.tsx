@@ -42,7 +42,7 @@ function InlineEmptyState({
   return (
     <div
       data-testid="empty-state-inline"
-      className="glass-panel p-8 rounded-2xl border border-white/5 text-center bg-black/20 flex flex-col items-center justify-center space-y-4 relative overflow-hidden"
+      className="glass-panel p-8 border border-white/5 text-center flex flex-col items-center justify-center space-y-4 relative overflow-hidden"
     >
       <div className="absolute -top-10 -left-10 w-40 h-40 bg-violet-600/5 rounded-full blur-2xl pointer-events-none" />
       <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-cyan-600/5 rounded-full blur-2xl pointer-events-none" />
