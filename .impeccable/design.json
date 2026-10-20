@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-20T19:43:37Z",
+  "generatedAt": "2026-10-20T20:28:16Z",
   "title": "Design System: Demeteo",
   "extensions": {
     "colorMeta": {
@@ -212,7 +212,7 @@
         ],
         "note": "@theme --color-ruby-400."
       },
-      "ground-app": {
+      "surface-app": {
         "role": "neutral",
         "displayName": "App Ground",
         "canonical": "#08090c",
@@ -221,30 +221,30 @@
           "#050508",
           "#050608",
           "#08090c",
-          "#0a0c10",
-          "#0b0d12",
           "#0d0f14",
-          "#12161e"
+          "#11151d",
+          "#181d28",
+          "#191e29"
         ],
-        "note": "--bg-app. Ramp is the observed near-black ladder in use, not a synthesized scale."
+        "note": "--color-surface-app (@theme static in tokens.css), aliased by --bg-app. Body and root shell."
       },
-      "ground-rail": {
+      "surface-sidebar": {
         "role": "neutral",
-        "displayName": "Rail Ground",
+        "displayName": "Sidebar",
         "canonical": "#0d0f14",
         "tonalRamp": [
           "#020304",
           "#050508",
           "#050608",
           "#08090c",
-          "#0a0c10",
-          "#0b0d12",
           "#0d0f14",
-          "#12161e"
+          "#11151d",
+          "#181d28",
+          "#191e29"
         ],
-        "note": "--bg-sidebar."
+        "note": "--color-surface-sidebar, aliased by --bg-sidebar. Top bar, project rail, feature header; solid."
       },
-      "ground-well": {
+      "surface-well": {
         "role": "neutral",
         "displayName": "Well",
         "canonical": "#050608",
@@ -253,30 +253,60 @@
           "#050508",
           "#050608",
           "#08090c",
-          "#0a0c10",
-          "#0b0d12",
           "#0d0f14",
-          "#12161e"
+          "#11151d",
+          "#181d28",
+          "#191e29"
         ],
-        "note": "--bg-well."
+        "note": "--color-surface-well, aliased by --bg-well. Terminal and code wells, .panel-field, the top-bar search field."
       },
-      "panel-glass": {
+      "surface-panel": {
         "role": "neutral",
-        "displayName": "Panel Glass",
-        "canonical": "rgba(18, 22, 30, 0.92)",
-        "note": "--bg-panel; translucent as shipped. Section 4 wants an opaque panel surface (drift 1.1)."
+        "displayName": "Panel",
+        "canonical": "#11151d",
+        "tonalRamp": [
+          "#020304",
+          "#050508",
+          "#050608",
+          "#08090c",
+          "#0d0f14",
+          "#11151d",
+          "#181d28",
+          "#191e29"
+        ],
+        "note": "--color-surface-panel, aliased by --bg-panel. The .panel fill: solid, the old rgba(18,22,30,.92) composited over the app ground."
       },
-      "panel-glass-hover": {
+      "surface-panel-hover": {
         "role": "neutral",
-        "displayName": "Panel Glass Hover",
-        "canonical": "rgba(28, 34, 46, 0.85)",
-        "note": "--bg-panel-hover."
+        "displayName": "Panel Hover",
+        "canonical": "#191e29",
+        "tonalRamp": [
+          "#020304",
+          "#050508",
+          "#050608",
+          "#08090c",
+          "#0d0f14",
+          "#11151d",
+          "#181d28",
+          "#191e29"
+        ],
+        "note": "--color-surface-panel-hover, aliased by --bg-panel-hover. .panel-hover and the selected rail project."
       },
-      "panel-nested": {
+      "surface-raised": {
         "role": "neutral",
-        "displayName": "Nested Panel",
-        "canonical": "rgba(18, 22, 30, 0.55)",
-        "note": ".nested-card fill."
+        "displayName": "Raised",
+        "canonical": "#181d28",
+        "tonalRamp": [
+          "#020304",
+          "#050508",
+          "#050608",
+          "#08090c",
+          "#0d0f14",
+          "#11151d",
+          "#181d28",
+          "#191e29"
+        ],
+        "note": "--color-surface-raised, aliased by --bg-raised. The .raised fill: menus, popovers, dialogs, toasts."
       },
       "field-fill": {
         "role": "neutral",
@@ -287,8 +317,14 @@
       "hairline": {
         "role": "neutral",
         "displayName": "Hairline",
-        "canonical": "rgba(255, 255, 255, 0.05)",
-        "note": "--border-glass."
+        "canonical": "rgb(255 255 255 / 0.05)",
+        "note": "--color-hairline, aliased by --border-hairline (formerly --border-glass). The edge .panel and .nested-card state."
+      },
+      "hairline-raised": {
+        "role": "neutral",
+        "displayName": "Hairline Raised",
+        "canonical": "rgb(255 255 255 / 0.09)",
+        "note": "--color-hairline-raised, aliased by --border-raised. The .raised edge."
       },
       "hairline-strong": {
         "role": "neutral",
@@ -443,9 +479,9 @@
     },
     "shadows": [
       {
-        "name": "panel-drop",
-        "value": "0 8px 32px 0 rgba(0, 0, 0, 0.4)",
-        "purpose": "Built into glass-panel; the only resting neutral shadow.",
+        "name": "raised",
+        "value": "0 12px 32px -8px rgba(0, 0, 0, 0.6)",
+        "purpose": "--shadow-raised, built into .raised (menus, popovers, dialogs, toasts). The one shadow token; panels cast none.",
         "status": "kept"
       },
       {
@@ -482,18 +518,6 @@
         "name": "attention-glow",
         "value": "0 0 10px 1px rgba(245, 158, 11, 0.5)",
         "purpose": "Static halo on .animate-pulse-glow-amber (needs a human).",
-        "status": "shipped, retired by section 4 (no glow)"
-      },
-      {
-        "name": "modal-halo",
-        "value": "0 0 50px rgba(139, 92, 246, 0.15)",
-        "purpose": "Gate modal and ArtifactModal.",
-        "status": "shipped, retired by section 4 (no glow)"
-      },
-      {
-        "name": "focus-glow",
-        "value": "0 0 8px rgba(139,92,246,0.25) / 0 0 8px rgba(6,182,212,0.15)",
-        "purpose": ".input-field:focus (violet) and .chat-input:focus (cyan).",
         "status": "shipped, retired by section 4 (no glow)"
       },
       {
@@ -607,20 +631,28 @@
   },
   "components": [
     {
-      "name": "Glass Panel",
+      "name": "Panel",
       "kind": "card",
-      "refersTo": "card-glass",
-      "description": "The panel as shipped: translucent fill, 12px backdrop blur, hairline, one drop shadow. Section 4 wants it solid and unblurred (drift 1.1).",
-      "html": "<div class=\"ds-glass-panel\"><h3 class=\"ds-section\">Execution</h3><p class=\"ds-body-dense\">build-01 is idle.</p></div>",
-      "css": ".ds-glass-panel{background:var(--bg-panel);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid var(--border-glass);border-radius:var(--radius-panel);box-shadow:0 8px 32px 0 rgba(0,0,0,.4);padding:20px;transition:border-color var(--transition-normal),background var(--transition-normal);color:#f3f4f6}.ds-glass-panel:hover{background:var(--bg-panel-hover);border-color:rgba(255,255,255,.08)}.ds-section{font-family:var(--font-heading);font-size:14px;font-weight:600;color:#cbd5e1;margin:0 0 8px}.ds-body-dense{font-family:var(--font-ui);font-size:12px;line-height:16px;color:#94a3b8;margin:0}"
+      "refersTo": "panel",
+      "description": "The card: solid --bg-panel, the hairline and the panel radius; no blur, no shadow. .panel-hover lifts to --bg-panel-hover with an 8% edge.",
+      "html": "<div class=\"ds-panel\"><h3 class=\"ds-section\">Execution</h3><p class=\"ds-body-dense\">build-01 is idle.</p></div>",
+      "css": ".ds-panel{background:var(--bg-panel);border:1px solid var(--border-hairline);border-radius:var(--radius-panel);padding:20px;transition:border-color var(--transition-normal),background-color var(--transition-normal);color:#f3f4f6}.ds-panel:hover{background:var(--bg-panel-hover);border-color:rgba(255,255,255,.08)}.ds-section{font-family:var(--font-heading);font-size:14px;font-weight:600;color:#cbd5e1;margin:0 0 8px}.ds-body-dense{font-family:var(--font-ui);font-size:12px;line-height:16px;color:#94a3b8;margin:0}"
+    },
+    {
+      "name": "Raised Surface",
+      "kind": "card",
+      "refersTo": "raised",
+      "description": "Whatever floats over the page (menus, popovers, dialogs, toasts): solid --bg-raised, the brighter --border-raised edge, the panel radius and --shadow-raised, the one shadow token. Opaque, so nothing blurs under it.",
+      "html": "<div class=\"ds-raised\" role=\"menu\" aria-label=\"Feature actions\"><button class=\"ds-raised-item\" role=\"menuitem\">Open in editor</button><button class=\"ds-raised-item\" role=\"menuitem\">Copy branch name</button><div class=\"ds-raised-sep\" role=\"separator\"></div><button class=\"ds-raised-item ds-raised-danger\" role=\"menuitem\">Delete feature</button></div>",
+      "css": ".ds-raised{display:flex;flex-direction:column;width:208px;padding:4px;background:var(--bg-raised);border:1px solid var(--border-raised);border-radius:var(--radius-panel);box-shadow:var(--shadow-raised)}.ds-raised-item{background:none;border:none;text-align:left;padding:8px 12px;border-radius:6px;font-family:var(--font-ui);font-size:12px;color:#e2e8f0;cursor:pointer;transition:background .15s}.ds-raised-item:hover,.ds-raised-item:focus-visible{background:rgba(255,255,255,.06);outline:none}.ds-raised-sep{height:1px;margin:4px 0;background:var(--border-hairline)}.ds-raised-danger{color:#f87171}"
     },
     {
       "name": "Pipeline Card",
       "kind": "custom",
-      "refersTo": "card-glass",
-      "description": "Project view row: glass card, 4px status bar (glowing as shipped), three tiers (scan, context, detail).",
+      "refersTo": "panel",
+      "description": "Project view row: a hoverable panel, 4px status bar (glowing as shipped), three tiers (scan, context, detail).",
       "html": "<div class=\"ds-pipe\" tabindex=\"0\"><span class=\"ds-pipe-bar\"></span><div class=\"ds-pipe-scan\"><h3 class=\"ds-pipe-title\">Add retry budget to verifier</h3><span class=\"ds-chip ds-chip-cyan ds-chip-sm\"><span class=\"ds-chip-dot\"></span>Running</span><span class=\"ds-pipe-elapsed\">12m 04s</span></div><div class=\"ds-pipe-ctx\"><span class=\"ds-chip ds-chip-violet ds-chip-sm\">standard-pipeline</span><span>$0.84</span><span>182k tok</span></div><div class=\"ds-pipe-detail\"><span>f-3a9c</span><span>Retry transient verifier failures up to a budget.</span></div></div>",
-      "css": ".ds-pipe{position:relative;overflow:hidden;cursor:pointer;background:var(--bg-panel);backdrop-filter:blur(12px);border:1px solid var(--border-glass);border-radius:var(--radius-panel);box-shadow:0 8px 32px rgba(0,0,0,.4);padding:20px;transition:background var(--transition-normal),border-color var(--transition-normal)}.ds-pipe:hover,.ds-pipe:focus-visible{background:var(--bg-panel-hover);border-color:rgba(255,255,255,.08);outline:none}.ds-pipe-bar{position:absolute;left:0;top:0;bottom:0;width:4px;background:#06b6d4;box-shadow:0 0 10px rgba(6,182,212,.8)}.ds-pipe-scan{display:flex;align-items:flex-start;gap:12px}.ds-pipe-title{flex:1;margin:0;font-family:var(--font-heading);font-weight:400;font-size:18px;line-height:28px;color:#fff}.ds-pipe-elapsed{font-family:var(--font-mono);font-size:14px;font-weight:500;color:#fff}.ds-pipe-ctx{margin-top:8px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font-family:var(--font-mono);font-size:12px;color:#94a3b8}.ds-pipe-detail{margin-top:8px;display:flex;gap:8px;font-size:12px;color:#64748b}.ds-pipe-detail span:first-child{font-family:var(--font-mono)}.ds-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border:1px solid;border-radius:4px;font-family:var(--font-mono);font-size:12px;text-transform:uppercase;letter-spacing:.025em}.ds-chip-sm{gap:4px;padding:2px 8px;font-size:10px}.ds-chip-cyan{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.2)}.ds-chip-violet{background:rgba(139,92,246,.1);color:#a78bfa;border-color:rgba(139,92,246,.2)}.ds-chip-dot{width:6px;height:6px;border-radius:9999px;background:currentColor;animation:ds-pulse 2s cubic-bezier(.4,0,.6,1) infinite}@keyframes ds-pulse{50%{opacity:.5}}@media (prefers-reduced-motion:reduce){.ds-chip-dot{animation:none}}"
+      "css": ".ds-pipe{position:relative;overflow:hidden;cursor:pointer;background:var(--bg-panel);border:1px solid var(--border-hairline);border-radius:var(--radius-panel);padding:20px;transition:background var(--transition-normal),border-color var(--transition-normal)}.ds-pipe:hover,.ds-pipe:focus-visible{background:var(--bg-panel-hover);border-color:rgba(255,255,255,.08);outline:none}.ds-pipe-bar{position:absolute;left:0;top:0;bottom:0;width:4px;background:#06b6d4;box-shadow:0 0 10px rgba(6,182,212,.8)}.ds-pipe-scan{display:flex;align-items:flex-start;gap:12px}.ds-pipe-title{flex:1;margin:0;font-family:var(--font-heading);font-weight:400;font-size:18px;line-height:28px;color:#fff}.ds-pipe-elapsed{font-family:var(--font-mono);font-size:14px;font-weight:500;color:#fff}.ds-pipe-ctx{margin-top:8px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font-family:var(--font-mono);font-size:12px;color:#94a3b8}.ds-pipe-detail{margin-top:8px;display:flex;gap:8px;font-size:12px;color:#64748b}.ds-pipe-detail span:first-child{font-family:var(--font-mono)}.ds-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border:1px solid;border-radius:4px;font-family:var(--font-mono);font-size:12px;text-transform:uppercase;letter-spacing:.025em}.ds-chip-sm{gap:4px;padding:2px 8px;font-size:10px}.ds-chip-cyan{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.2)}.ds-chip-violet{background:rgba(139,92,246,.1);color:#a78bfa;border-color:rgba(139,92,246,.2)}.ds-chip-dot{width:6px;height:6px;border-radius:9999px;background:currentColor;animation:ds-pulse 2s cubic-bezier(.4,0,.6,1) infinite}@keyframes ds-pulse{50%{opacity:.5}}@media (prefers-reduced-motion:reduce){.ds-chip-dot{animation:none}}"
     },
     {
       "name": "Status Chip",
@@ -681,22 +713,22 @@
     {
       "name": "Rail Item",
       "kind": "nav",
-      "refersTo": "rail-item-active",
-      "description": "Project rail entry: status dot (with halo as shipped), 12px name, 9px mono sub-line. The active item is a glass-panel at the 8px control radius; its violet halo was removed in PR #250.",
+      "refersTo": "rail-project-active",
+      "description": "Project rail entry: status dot (with halo as shipped), 12px name, 9px mono sub-line. The active item is a selected row: the panel-hover surface with white text at the 8px control radius.",
       "html": "<div class=\"ds-rail\"><div class=\"ds-rail-item ds-rail-on\"><span class=\"ds-dot ds-dot-cyan\"></span><div><div class=\"ds-rail-name\">demeteo</div><div class=\"ds-rail-sub\">3 running</div></div></div><div class=\"ds-rail-item\" tabindex=\"0\"><span class=\"ds-dot ds-dot-amber\"></span><div><div class=\"ds-rail-name\">runner</div><div class=\"ds-rail-sub\">gate needs you</div></div></div></div>",
-      "css": ".ds-rail{width:240px;padding:8px 0;background:rgba(13,15,20,.5);border-right:1px solid rgba(255,255,255,.05)}.ds-rail-item{display:flex;align-items:center;gap:10px;margin:0 8px;padding:8px 12px;border-radius:8px;color:#94a3b8;cursor:pointer;transition:background .2s,color .2s}.ds-rail-item:hover,.ds-rail-item:focus-visible{background:rgba(255,255,255,.05);color:#e2e8f0;outline:none}.ds-rail-on{background:var(--bg-panel);backdrop-filter:blur(12px);border:1px solid var(--border-glass);color:#fff;box-shadow:0 8px 32px rgba(0,0,0,.4)}.ds-rail-name{font-family:var(--font-ui);font-size:12px;font-weight:500}.ds-rail-sub{font-family:var(--font-mono);font-size:9px;color:#64748b}.ds-dot{width:8px;height:8px;border-radius:9999px;flex-shrink:0}.ds-dot-cyan{background:#06b6d4;box-shadow:0 0 8px rgba(6,182,212,.8)}.ds-dot-amber{background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,.8)}"
+      "css": ".ds-rail{width:240px;padding:8px 0;background:var(--bg-sidebar);border-right:1px solid rgba(255,255,255,.05)}.ds-rail-item{display:flex;align-items:center;gap:10px;margin:0 8px;padding:8px 12px;border-radius:8px;color:#94a3b8;cursor:pointer;transition:background .2s,color .2s}.ds-rail-item:hover,.ds-rail-item:focus-visible{background:rgba(255,255,255,.05);color:#e2e8f0;outline:none}.ds-rail-on{background:var(--bg-panel-hover);color:#fff}.ds-rail-name{font-family:var(--font-ui);font-size:12px;font-weight:500}.ds-rail-sub{font-family:var(--font-mono);font-size:9px;color:#64748b}.ds-dot{width:8px;height:8px;border-radius:9999px;flex-shrink:0}.ds-dot-cyan{background:#06b6d4;box-shadow:0 0 8px rgba(6,182,212,.8)}.ds-dot-amber{background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,.8)}"
     }
   ],
   "narrative": {
     "northStar": "A Quiet Instrument",
-    "overview": "The direction is AGENTS.md §4's, adopted in 2026-10: a developer keeps Demeteo open all day to supervise agents, so the chrome recedes and the work and its state carry the screen. Colour is spent only on meaning, with one accent, indigo \"Signal\" (decision 61), for primary actions, selection and focus. Depth is a solid surface step with a 1px hairline rather than an effect, and type is set in sentence case at 11px or more. The benchmarks are developer tools (Linear, Zed, Ghostty, GitHub Primer). The retired direction, \"dark neon glassmorphism\", is named in §4 as the look a generator reaches for by default.\n\nThe shipped code is partway there. The parts that already fit are structural: one status vocabulary (`src/lib/runStatus.ts`) with violet taken out of it, a motion budget that keeps infinite animation to small liveness marks, a single panel class whose radius call sites no longer re-spell, and cascade layers in `src/App.css` so a utility beside a class takes effect. Most surfaces, though, are still the old look: the accent is stock violet-500/600 rather than Signal, `.glass-panel` blurs and is translucent, glows mark status dots, accent bars and primary buttons, decorative blur blobs sit behind status screens, and labels are uppercase mono with wide tracking. The Drift section lists these as follow-up PRs.\n\nIt is an Operate tool, and density shows it. The commonest text sizes are 12px (`text-xs`, 408 uses), hand-set 11px (371) and 10px (289). Machine output (ids, costs, token counts, statuses, paths) is set in Fira Code and headings in Outfit. There is no light theme and no theme switch.",
+    "overview": "The direction is AGENTS.md §4's, adopted in 2026-10: a developer keeps Demeteo open all day to supervise agents, so the chrome recedes and the work and its state carry the screen. Colour is spent only on meaning, with one accent, indigo \"Signal\" (decision 61), for primary actions, selection and focus. Depth is a solid surface step with a 1px hairline rather than an effect, and type is set in sentence case at 11px or more. The benchmarks are developer tools (Linear, Zed, Ghostty, GitHub Primer). The retired direction, \"dark neon glassmorphism\", is named in §4 as the look a generator reaches for by default.\n\nThe shipped code is partway there. The parts that already fit are structural: one status vocabulary (`src/lib/runStatus.ts`) with violet taken out of it, a motion budget that keeps infinite animation to small liveness marks, cascade layers in `src/App.css` so a utility beside a class takes effect, and, since branch `design/surfaces`, solid surfaces: a panel, a raised layer for whatever floats, and a nested card, each with a hairline, one shadow token (the raised layer's), and no blur except on controls floating over a live canvas. Much of the rest is still the old look: the accent is stock violet-500/600 rather than Signal, glows mark status dots, accent bars and primary buttons, decorative blur blobs sit behind status screens, and labels are uppercase mono with wide tracking. The Drift section lists these as follow-up PRs.\n\nIt is an Operate tool, and density shows it. The commonest text sizes are 12px (`text-xs`, 408 uses), hand-set 11px (371) and 10px (289). Machine output (ids, costs, token counts, statuses, paths) is set in Fira Code and headings in Outfit. There is no light theme and no theme switch.",
     "keyCharacteristics": [
-      "Dark-only. Grounds sit between #050608 and #12161e, never lighter.",
+      "Dark-only. Surfaces sit between the well (#050608) and panel hover (#191e29), never lighter.",
       "Colour is meaning. `runStatus.ts` maps every run status to one of five status hues; neither the accent nor violet names a status.",
       "One accent for primary actions, selection and focus: stock violet as shipped, indigo \"Signal\" as decided (not shipped).",
-      "One panel class (`glass-panel`, 91 call sites), still translucent and blurred as shipped.",
+      "Three solid surface classes, each stating its own hairline and radius: `.panel` (77 call sites in 41 files), `.raised` for menus, dialogs and toasts (33 in 27), and `.nested-card` to group content inside either.",
       "Mono-heavy and dense, with an ungoverned type scale (14 arbitrary text sizes).",
-      "Depth is still mostly translucency, blur and coloured glow; §4 replaces all three with solid surface steps.",
+      "Depth is a solid surface step plus a hairline, and only the raised layer casts a shadow. Coloured glow is still shipped on status marks and buttons (Drift 2.1).",
       "Motion is budgeted for cost: `data-motion=\"paused\"` freezes everything while the window is unfocused."
     ],
     "rules": [
@@ -747,17 +779,17 @@
       },
       {
         "name": "The Blur-Only-On-Overlays Rule",
-        "body": "Backdrop blur belongs to an overlay floating over live content (command palette, dialogs), never to a card, a rail or a header.",
+        "body": "Backdrop blur belongs only to a translucent control floating over live content (the canvas zoom controls and legends, the terminal status overlay), never to a card, a rail or a header, and never under an opaque raised surface, where it shows nothing and still costs WebKitGTK a frame per scroll.",
         "section": "elevation"
       },
       {
-        "name": "The No-Glass-In-Glass Rule",
-        "body": "A card inside a panel is a `.nested-card` (55% panel fill, hairline, 12px radius, no blur, no shadow), never a second panel. A field filling a panel (canvas, stream log) is a `.panel-field`: well fill, no border, no radius.",
+        "name": "The No-Panel-In-Panel Rule",
+        "body": "A card inside a panel or a dialog is a `.nested-card` (no fill, a hairline, 12px radius, no blur, no shadow), never a second panel, so it groups content on either surface without reading as a third. A field filling a panel (canvas, stream log) is a `.panel-field`: well fill, no border, no radius.",
         "section": "elevation"
       },
       {
         "name": "The No-Blur-On-Scrims Rule",
-        "body": "A full-window scrim never takes `backdrop-blur`. `Modal` uses a flat `#08090c` at 85%, because a blurred scrim re-blurs the whole window every frame something animates beneath it.",
+        "body": "A full-window scrim never takes `backdrop-blur`. Every dialog scrim, `Modal`'s default included, is a flat `bg-black/60`, because a blurred scrim re-blurs the whole window every frame something animates beneath it.",
         "section": "elevation"
       },
       {
@@ -776,19 +808,19 @@
       "**Do** pick a status hue through `runStatusMeta` / `TONE_CHIP` / `TONE_TEXT` / `TONE_BADGE` / `TONE_BORDER_L`, render status pills with `Chip`, and ship every status colour with a label or icon.",
       "**Do** keep the accent for primary actions, selection and focus, with a white label on an accent fill. New code waits for the Signal tokens rather than adding stock `violet-*`.",
       "**Do** use amber only for \"a human is needed\", and let its pulse run three beats, then rest lit.",
-      "**Do** use `.glass-panel` for a panel, `.nested-card` for a card inside one, and `.panel-field` for a field filling one, and keep the panel's radius and shadow unspelled at the call site.",
-      "**Do** keep blur for overlays floating over live content (command palette, dialogs).",
+      "**Do** use `.panel` for a panel, `.raised` for anything floating (menu, popover, dialog, toast), `.nested-card` for a group inside either, and `.panel-field` for a field filling a panel, and keep their fill, border, radius and shadow unspelled at the call site.",
+      "**Do** keep blur for translucent controls floating over live content (canvas zoom controls and legends, the terminal status overlay); an opaque raised surface takes none.",
       "**Do** write labels and headings in sentence case, at 11px or more, and say Project, not Workspace.",
       "**Do** set machine output (ids, paths, counts, costs, statuses) in Fira Code and headings in `font-heading`.",
       "**Do** put an infinite pulse only on a small liveness dot or spinner, and animate opacity only.",
-      "**Do** use `Modal` for overlays: portalled, a flat 85% #08090c scrim, Escape to close.",
+      "**Do** use `Modal` for overlays: portalled, a flat `bg-black/60` scrim, Escape to close, with a `.raised` body.",
       "**Do** keep inline `style` for geometry (heights, offsets, measured widths)."
     ],
     "donts": [
       "**Don't** build a light theme or place these surfaces on a light ground.",
       "**Don't** add glow shadows or `text-shadow`, or a gradient fill on a button or text.",
       "**Don't** add decorative blurred blobs, sparkle icons as ornament, `hover:scale`, or shimmer outside an indeterminate progress bar.",
-      "**Don't** blur a card, a rail or a header, nest a panel in a panel, or blur a full-window scrim.",
+      "**Don't** blur a card, a rail, a header or a raised surface, nest a panel in a panel, or blur a full-window scrim.",
       "**Don't** use all-caps letter-spaced labels or text under 11px.",
       "**Don't** pass a colour into `Chip`, or hand-write `bg-<hue>-500/10 text-<hue>-400` for a status.",
       "**Don't** give the accent or violet a status, use violet as decoration, or give amber a state that needs nobody.",
@@ -799,48 +831,58 @@
     "drift": [
       {
         "group": "1. Surfaces and depth",
-        "id": "1.1",
-        "text": "**`.glass-panel` is translucent and blurred.** Breaks: three solid surfaces; blur only on overlays. Evidence: the `.glass-panel` rule in `src/App.css` sets `background: var(--bg-panel)` (`rgba(18,22,30,0.92)` in `tokens.css`) and `backdrop-filter: blur(12px)`; it has 91/49 call sites (`\\bglass-panel(?!-)`), every card in the app. Fix: make `--bg-panel` opaque and drop the `backdrop-filter` from the rule; one change reaches every card."
+        "id": "1.8",
+        "text": "**Overlays hand-rolled instead of `Modal`.** Breaks: one raised surface for menus and dialogs, reached one way. Evidence: `fixed inset-0` = 13/13, of which 12 are overlays outside `ui/Modal.tsx` (`<Modal\\b` = 12/10): GateView, McpConsentView, CommandPalette, DocsPanel, CommandSelector, EnvModal, StartFeatureModal, ShortcutHelp, the ProvidersPage \"provider in use\" confirm, AddressFindingsLaunch, ProviderSettings and NewTerminalMenu's centred variant. All now have a `.raised` body over a `bg-black/60` scrim, but each spells its own scrim and dismissal. NewProjectView's repo picker and WorkflowBuilder's unsaved-changes guard use `absolute inset-0`, so they cover only their own view; `Modal` is portalled and would cover the window. Fix: route the 12 through `Modal`; decide whether the two scoped ones stay scoped."
       },
       {
         "group": "1. Surfaces and depth",
-        "id": "1.2",
-        "text": "**Blur on cards, rails and headers.** Breaks: blur only on overlays. Evidence: `backdrop-blur(-[a-z0-9]+|-\\[[^\\]]+\\])?` = 35/27. Read one by one: 18 in 14 files are in-flow chrome or cards (`TopBar`, `ProjectRail` ×2, `Sidebar`, `FeatureHeader`, `VersionDrawer`, `ConfigPanel`, `WorkflowList` ×3, `ArtifactViewer` ×2, `RunnerVersionNotice`, `AttachmentChip`, `AttachmentDropzone`, `WorkflowNode`, `AskCanvasNode`, `TicketGraphNode`); 9 in 5 files float over a canvas (`Palette` ×3, `WorkflowCanvas` ×3, `CanvasZoomControls`, the `AskCanvasView` and `TicketGraph` legends); 6 are real overlays (dialogs, a popover, a toast, the terminal status overlay); 2 blur a scrim (`NewProjectView` repo picker, `WorkflowBuilder` unsaved-changes guard). `WizardShell` blurs a card through `style=` as well. Fix: remove blur and translucency from the 18 and the two scrims; decide whether canvas chrome counts as an overlay."
+        "id": "1.9",
+        "text": "**ShortcutHelp's group cards are a fourth surface.** Breaks: a card inside a dialog is a `.nested-card`. Evidence: ShortcutHelp.tsx renders each shortcut group as `rounded-xl border border-white/5 bg-[#0d0f14]/40` inside its `.raised` body (one class string, repeated per group). Fix: `.nested-card`."
       },
       {
         "group": "1. Surfaces and depth",
-        "id": "1.3",
-        "text": "**Glass in glass, and the panel used as a control.** Breaks: a card inside a panel is a `.nested-card`; controls take smaller radii. Evidence: the active project in `ProjectRail` is a `glass-panel` at `rounded-lg` inside a `backdrop-blur-xl` aside; the `TopBar` search button is a `glass-panel` at `rounded-md` inside a `backdrop-blur-md` header. Fix: give the rail item `RailNavItem`'s selected treatment with a Signal selection mark, and the search button a field style."
+        "id": "1.10",
+        "text": "**DocsPanel's panes are darker bands.** Breaks: no band darker than the surface it sits on. Evidence: inside DocsPanel's `.raised` body, the nav is `bg-[#08090c]/40` and the content pane `bg-[#08090c]/60`. Fix: drop both fills; the nav keeps its hairline divider."
       },
       {
         "group": "1. Surfaces and depth",
-        "id": "1.4",
-        "text": "**No token for the raised layer; panel tokens are translucent and split.** Breaks: three solid surfaces, values in `tokens.css`. Evidence: `tokens.css` declares six background tokens (`--bg-app`, `--bg-sidebar`, `--bg-well`, `--bg-panel`, `--bg-panel-hover`, `--bg-input`) and none for menus and dialogs. `.nested-card` and `.bubble-code` spell their fills as raw rgba in `App.css`, and call sites re-spell the panel fill at other alphas (`bg-\\[rgba\\(18,\\s*22,\\s*30` = 6/4, plus the two `style=` props in 5.3). Fix: define app, panel and raised surface tokens plus the hairline, and map well, input and nested onto them."
+        "id": "1.11",
+        "text": "**WorkflowBuilder's root is an untokened near-black.** Breaks: three solid surfaces, values in `tokens.css`. Evidence: the WorkflowBuilder root is `bg-[#0b0d12]`, between the app and sidebar surfaces with no token of its own. Fix: `bg-surface-app`, or no fill."
       },
       {
         "group": "1. Surfaces and depth",
-        "id": "1.5",
-        "text": "**The raised layer is spelled a dozen ways.** Breaks: one raised surface for menus and dialogs. Evidence: `fixed inset-0` = 13/13, of which 12 are hand-rolled overlays outside `ui/Modal.tsx` (12 `<Modal>` uses in 10 files). Their scrims are `bg-black/70` ×6, `bg-black/60` ×2, `#08090c/85` ×1 and none ×3. Dialog and menu bodies use `bg-[#0d0f14]` (GateView), `bg-[var(--bg-sidebar)]` (ArtifactModal, OverflowMenu), `glass-panel` (CommandPalette, DocsPanel, NotificationBell, AccountMenu, DiscoveryActionsMenu), `bg-slate-900/95` (AddressFindingsLaunch, canvas `Palette`), `bg-[#0c0d12]/95` (TerminalWorktreeLocationPicker), `bg-[#0d0f14]/90` (PostReviewComment) and an inline rgba (ShortcutHelp). Fix: a raised-surface class on the token from 1.4, and route the 12 through `Modal`."
+        "id": "1.12",
+        "text": "**AddressFindingsLaunch's card is hand-spelled.** Breaks: one panel class. Evidence: its in-flow launch card is `rounded-xl border border-white/5 bg-black/20`, a translucent card with no class. Fix: `.nested-card` if its host is a panel, else `.panel`."
       },
       {
         "group": "1. Surfaces and depth",
-        "id": "1.6",
-        "text": "**Panel-level radius beyond the panel token.** Breaks: the panel radius is `--radius-panel`. Evidence: `\\brounded-2xl\\b` = 12/12 (16px on the gate modal, dialogs, the composer, the hero icon tile); `\\brounded-xl\\b` = 71/46 spells 12px without the token. Fix: dialogs and raised surfaces take `--radius-panel`; expose it as a utility."
+        "id": "1.13",
+        "text": "**Chrome spells the hairline by hand.** Breaks: the edge is a token. Evidence: the outer edges of TopBar, both ProjectRail asides, FeatureHeader, VersionDrawer, ConfigPanel and WorkflowBuilder's drawer spell `border-white/5` (7 sites), as do their inner dividers (10 more) and WorkflowList's rows on `bg-surface-panel` (2), read one by one. Tree-wide, `\\bborder(-[trblxy])?-white/5\\b` = 246/101 against `\\bborder-hairline\\b` = 1/1 (the top-bar search). Same value, so nothing renders differently. Fix: `border-hairline` on the chrome, then sweep the rest."
       },
       {
         "group": "1. Surfaces and depth",
-        "id": "1.7",
-        "text": "**The panel hairline is re-spelled.** Breaks: the panel states its own border (§4, and the `.glass-panel` comment). Evidence: 24 of the 91 `glass-panel` call sites add `border-white/*` (`/10` ×17, `/5` ×6, `/20` ×2; one site has two). `/5` is a no-op, `/10` and `/20` are heavier panels. Fix: delete them; a panel that needs emphasis takes a hue border, not a heavier white."
+        "id": "1.14",
+        "text": "**12px spelled without the panel token.** Breaks: the panel radius is `--radius-panel`. Evidence: `\\brounded-xl\\b` = 62/41 (`rg -c '\\brounded-xl\\b' src` = 63/42 with one comment line), none on the same line as `.panel`, `.raised` or `.nested-card`. They are mostly panel-like boxes (artifact wells, notices, canvas ticket nodes, toasts, ShortcutHelp's cards from 1.9) plus some icon tiles. `--radius-panel` is a `:root` property, not a `@theme` key, so no `rounded-panel` utility exists. Fix: move each onto a surface class, or expose the radius as a utility for the ones that are not surfaces."
+      },
+      {
+        "group": "1. Surfaces and depth",
+        "id": "1.15",
+        "text": "**Shadows cast outside `.raised`.** Breaks: only the raised surface casts a shadow. Evidence: neutral shadows at call sites, `(?<![\\w:-])shadow-(sm|md|lg|xl|2xl)\\b|shadow-\\[0_(?!0_)[^\\]]*\\]` = 13/9 (no `shadow-2xl` left), among them canvas nodes `shadow-lg shadow-black/30` and artifact wells `shadow-lg`. Fix: delete in-flow shadows; decide whether a canvas node is raised (and casts `--shadow-raised`) or a panel."
+      },
+      {
+        "group": "1. Surfaces and depth",
+        "id": "1.16",
+        "text": "**Translucent near-black fills.** Breaks: three solid surfaces. Evidence: `bg-\\[#[0-9a-fA-F]{6}\\]/\\d+` = 36/27, 16 distinct values, led by `bg-[#0d0f14]/90` ×6 (Ask and Discovery composers and the 1.15 footers), `bg-[#08090c]/40` ×5 (read-only fields in StrategyTab and HarnessModelPicker, DocsPanel's nav) and `bg-[#050608]/85` ×4 (artifact wells); also WorkflowList's and CodeEditorView's side panes at `/50`. It includes 1.9, 1.10, and 1.15's footers and translucent bodies. Fix: the solid `surface-*` utilities, or no fill where the host already has one."
       },
       {
         "group": "2. Accent and buttons",
         "id": "2.0",
-        "text": "**Stock violet is the accent.** Breaks: the accent is indigo \"Signal\" (decision 61), and violet names nothing. Evidence: every `violet-` utility is to migrate or remove: `\\bviolet-` = 450/107. Split by role: solid fills `(?<![\\w/-])bg-violet-(500|600|700)(?![\\w/])` = 41/21 plus state fills `(hover|active|disabled):bg-violet-` = 44/30 (primary buttons); focus `(focus|focus-visible|focus-within):[\\w-]*violet` = 19/11; text `text-violet-` = 136/74; borders `border-(l-)?violet-` = 84/57; tints `bg-violet-\\d+/` = 84/50; `rgba(139,92,246…)` literals in TSX = 34/25 (mostly glows, 2.1). In CSS: `--accent-purple` and `--accent-purple-glow` and `--border-glass-focus` in `tokens.css`; in `App.css`, `var(--accent-purple)` ×3 (scrollbar thumb while dragged, agent chat-bubble sender, `.btn-primary`), `rgba(139,92,246,…)` ×6 (agent chat bubble, `.btn-primary` border and glow, progress shimmer, two pinned utilities), `#7c3aed` and the caret's `#a78bfa`. Which of these are action, selection or focus (migrate to Signal) and which are decoration or status (2.5, remove) takes reading each site; the fill, focus and selection counts above are the migrate set. Fix: once the Signal tokens land as `@theme` colours, replace action, selection and focus uses with them, then delete `--accent-purple*`."
+        "text": "**Stock violet is the accent.** Breaks: the accent is indigo \"Signal\" (decision 61), and violet names nothing. Evidence: every `violet-` utility is to migrate or remove: `\\bviolet-` = 446/106. Split by role: solid fills `(?<![\\w/-])bg-violet-(500|600|700)(?![\\w/])` = 41/21 plus state fills `(hover|active|disabled):bg-violet-` = 44/30 (primary buttons); focus `(focus|focus-visible|focus-within):[\\w-]*violet` = 19/11; text `(?<![\\w:-])text-violet-` = 136/74; borders `(?<![\\w:-])border-(l-)?violet-` = 80/56; tints `(?<![\\w:-])bg-violet-\\d+/` = 84/50; `rgba(139,92,246…)` literals in TSX = 31/23 (mostly glows, 2.1). In CSS: `--accent-purple` and `--accent-purple-glow` and `--border-glass-focus` in `tokens.css`; in `App.css`, `var(--accent-purple)` ×3 (scrollbar thumb while dragged, agent chat-bubble sender, `.btn-primary`), `rgba(139,92,246,…)` ×6 (agent chat bubble, `.btn-primary` border and glow, progress shimmer, two pinned utilities), `#7c3aed` and the caret's `#a78bfa`. Which of these are action, selection or focus (migrate to Signal) and which are decoration or status (2.5, remove) takes reading each site; the fill, focus and selection counts above are the migrate set. Fix: once the Signal tokens land as `@theme` colours, replace action, selection and focus uses with them, then delete `--accent-purple*`."
       },
       {
         "group": "2. Accent and buttons",
         "id": "2.1",
-        "text": "**Glow shadows.** Breaks: never glow shadows. Evidence: `shadow-\\[0_0_[^\\]]*\\]` = 101/41, 61 distinct strings; by colour, violet 34, emerald 22, cyan 18, amber 9, ruby 6, slate 3, black 2, other 7. They include `StatusBadge`'s `TONE_DOT`, `PipelineCard`'s `TONE_ACCENT`, the gate and artifact modal halos, and primary buttons (`hover:shadow-\\[0_0_` = 7/5). `App.css` adds five more: `.animate-pulse-glow` (static cyan halo; 16/12 uses), `.animate-pulse-glow-amber` (2/2), and the focus glows on `.input-field` and `.chat-input` and the hover glow on `.btn-primary`. `tokens.css` keeps four `--accent-*-glow` values, one of them used. Fix: delete the glows; dots and bars go solid, focus becomes a ring, and the `--accent-*-glow` tokens go."
+        "text": "**Glow shadows.** Breaks: never glow shadows. Evidence: `shadow-\\[0_0_[^\\]]*\\]` = 94/38, 59 distinct strings; by colour, violet 31, emerald 21, cyan 18, amber 9, ruby 5, slate 3, other 7. They include `StatusBadge`'s `TONE_DOT`, `PipelineCard`'s `TONE_ACCENT` and primary buttons (`hover:shadow-\\[0_0_` = 7/5). The gate and artifact modal halos and the two black ones went with the raised surface on branch `design/surfaces`. `App.css` adds five more: `.animate-pulse-glow` (static cyan halo; 16/12 uses), `.animate-pulse-glow-amber` (2/2), and the focus glows on `.input-field` and `.chat-input` and the hover glow on `.btn-primary`. `tokens.css` keeps four `--accent-*-glow` values, one of them used. Fix: delete the glows; dots and bars go solid, focus becomes a ring, and the `--accent-*-glow` tokens go."
       },
       {
         "group": "2. Accent and buttons",
@@ -870,7 +912,7 @@
       {
         "group": "2. Accent and buttons",
         "id": "2.7",
-        "text": "**Three reds and off-palette hues.** Breaks: ruby = failed or destructive; colour only for meaning. Evidence: ruby classes 290/74, rose 92/19, red 29/5 (`(?<![\\w-])(text|bg|border|ring|from|to|via|fill|stroke|shadow|outline)-<hue>-`). Rose carries GateView's Abort and \"decision blocked\". `App.css` pins `text-red-400`, `bg-red-500/10` and two `border-red-500/*`. Yellow, orange and blue add 12/4 (`CodeEditorView` git letters and folder icons, `ErrorToast`'s orange accent, `GeneralTab`'s unpushed chip, a yellow button in `WorkflowList`). Fix: rose and red to ruby; orange and yellow to amber only where a human is needed, else slate."
+        "text": "**Three reds and off-palette hues.** Breaks: ruby = failed or destructive; colour only for meaning. Evidence: ruby classes 289/73, rose 92/19, red 29/5 (`(?<![\\w-])(text|bg|border|ring|from|to|via|fill|stroke|shadow|outline)-<hue>-`). Rose carries GateView's Abort and \"decision blocked\". `App.css` pins `text-red-400`, `bg-red-500/10` and two `border-red-500/*`. Yellow, orange and blue add 12/4 (`CodeEditorView` git letters and folder icons, `ErrorToast`'s orange accent, `GeneralTab`'s unpushed chip, a yellow button in `WorkflowList`). Fix: rose and red to ruby; orange and yellow to amber only where a human is needed, else slate."
       },
       {
         "group": "2. Accent and buttons",
@@ -910,12 +952,12 @@
       {
         "group": "4. Type and copy",
         "id": "4.1",
-        "text": "**All-caps letter-spaced labels.** Breaks: never all-caps letter-spaced labels; meaning not carried by letter case. Evidence: `\\buppercase\\b` = 276/109, and 275 of those lines also carry positive tracking (`tracking-(wide|wider|widest|\\[[0-9.]+(em|px)\\])` = 296/116 overall; `tracking-wider` 179, `tracking-widest` 66, `tracking-wide` 35, six arbitrary values). The primitives multiply it: `Chip` is always `uppercase tracking-wide` (`<Chip\\b` = 64/24), `FieldLabel` is `uppercase tracking-wider` (49/17), `SectionCard` too (0 uses), and `App.css`'s `.chat-bubble-sender`. Fix: sentence case in `Chip` and `FieldLabel` first (two one-line changes), then sweep the hand-rolled ones."
+        "text": "**All-caps letter-spaced labels.** Breaks: never all-caps letter-spaced labels; meaning not carried by letter case. Evidence: `\\buppercase\\b` = 275/108, and 274 of those lines also carry positive tracking (`tracking-(wide|wider|widest|\\[[0-9.]+(em|px)\\])` = 295/115 overall; `tracking-wider` 178, `tracking-widest` 66, `tracking-wide` 35, six arbitrary values). The primitives multiply it: `Chip` is always `uppercase tracking-wide` (`<Chip\\b` = 64/24), `FieldLabel` is `uppercase tracking-wider` (49/17), `SectionCard` too (0 uses), and `App.css`'s `.chat-bubble-sender`. Fix: sentence case in `Chip` and `FieldLabel` first (two one-line changes), then sweep the hand-rolled ones."
       },
       {
         "group": "4. Type and copy",
         "id": "4.2",
-        "text": "**Text under 11px.** Breaks: never text under 11px. Evidence: `(?<![\\w-])text-\\[(?:[0-9]|10)(?:\\.\\d+)?px\\]` = 346/126: `text-[10px]` 289/114, `text-[9px]` 53/28, `text-[10.5px]` 3, `text-[9.5px]` 1. `Chip size=\"sm\"` is 10px (`<Chip\\b[^>]*size=\"sm\"` = 47/19 on one line) and `RailBadge` is 10px. Fix: raise `Chip` `sm` and `RailBadge` to 11px, then replace 9px and 10px with an 11px step."
+        "text": "**Text under 11px.** Breaks: never text under 11px. Evidence: `(?<![\\w-])text-\\[(?:[0-9]|10)(?:\\.\\d+)?px\\]` = 345/125: `text-[10px]` 288/113, `text-[9px]` 53/28, `text-[10.5px]` 3, `text-[9.5px]` 1. `Chip size=\"sm\"` is 10px (`<Chip\\b[^>]*size=\"sm\"` = 47/19 on one line) and `RailBadge` is 10px. Fix: raise `Chip` `sm` and `RailBadge` to 11px, then replace 9px and 10px with an 11px step."
       },
       {
         "group": "4. Type and copy",
@@ -930,7 +972,7 @@
       {
         "group": "4. Type and copy",
         "id": "4.5",
-        "text": "**\"Workspace\" where the noun is Project.** Breaks: PRODUCT.md Vocabulary (the UI says Project); §4's translatable-copy rule. Evidence: `(?<![\\w./-])[Ww]orkspaces?(?![\\w/-])` on user-facing lines = 57 matches on 55 lines in 19 files, excluding the unused `Sidebar.tsx` (2 more); every line was read. About 45 lines name a Project (settings headings, bootstrap screens, the rail's \"Workspaces\" header, \"Delete Workspace\"). The other 10 use the word for something else and need their own noun: the app-wide data directory (`PreferencesScreen` ×3), the whole install (`McpConsentView` ×2), a Git host account (`ProvidersPage`), the Discovery pane (`DiscoveryWorkspaceRow`), a feature worktree path (`NewProjectView`), the command palette placeholder (`TopBar`) and the empty-state back label (`parentView.ts`). Fix: rename to Project; give the other 10 their own words."
+        "text": "**\"Workspace\" where the noun is Project.** Breaks: PRODUCT.md Vocabulary (the UI says Project); §4's translatable-copy rule. Evidence: `(?<![\\w./-])[Ww]orkspaces?(?![\\w/-])` on user-facing lines = 57 matches on 55 lines in 19 files; every line was read. About 45 lines name a Project (settings headings, bootstrap screens, the rail's \"Workspaces\" header, \"Delete Workspace\"). The other 10 use the word for something else and need their own noun: the app-wide data directory (`PreferencesScreen` ×3), the whole install (`McpConsentView` ×2), a Git host account (`ProvidersPage`), the Discovery pane (`DiscoveryWorkspaceRow`), a feature worktree path (`NewProjectView`), the command palette placeholder (`TopBar`) and the empty-state back label (`parentView.ts`). Fix: rename to Project; give the other 10 their own words."
       },
       {
         "group": "4. Type and copy",
@@ -945,22 +987,22 @@
       {
         "group": "5. Raw hex and `style=` tokens",
         "id": "5.1",
-        "text": "**Arbitrary hex classes.** Breaks: never raw hex for design tokens. Evidence: `\\[#[0-9a-fA-F]{3,8}\\]` = 176/74, 13 distinct values. 113 restate tokens: `#08090c` ×52 (`--bg-app`), `#0d0f14` ×44 (`--bg-sidebar`), `#050608` ×17 (`--bg-well`). 63 are near-blacks with no token: `#050508` ×26, `#0b0d12` ×11, `#0a0c10` ×8, `#0c0d12` ×7, `#0a0a0e` ×4, `#12161e` ×3 and four singletons. Fix: expose the surface tokens from 1.4 as `@theme` colours, replace the 113, and fold the 63 onto the nearest surface."
+        "text": "**Arbitrary hex classes.** Breaks: never raw hex for design tokens. Evidence: `\\[#[0-9a-fA-F]{3,8}\\]` = 131/60, 12 distinct values. 83 restate tokens: `#08090c` ×45 (`surface-app`), `#0d0f14` ×21 (`surface-sidebar`), `#050608` ×17 (`surface-well`). 48 are near-blacks with no token: `#050508` ×19, `#0b0d12` ×10, `#0a0c10` ×8, `#0c0d12` ×4, `#12161e` ×3 and four singletons. Fix: replace the 83 with the `surface-*` utilities that branch `design/surfaces` added, and fold the 48 onto the nearest surface."
       },
       {
         "group": "5. Raw hex and `style=` tokens",
         "id": "5.2",
-        "text": "**Tokens are bypassed.** Breaks: values live in `tokens.css` and are read from there. Evidence: TSX reaches a token only through 13 `bg-[var(--…)]` uses; `--accent-*` and `--text-*` are referenced from TSX zero times. Components colour through palette classes (cyan 540, violet 448, ruby 290, amber 259, emerald 259). The two neutral ladders disagree: `--text-*` are Tailwind gray (#f3f4f6 / #9ca3af / #6b7280), while components use slate and `text-white` (386), and the root shell sets `text-white` over `body`'s `--text-primary`. Fix: one neutral ladder as tokens; the status hues stay behind `runStatus.ts`'s `TONE_*` maps."
+        "text": "**Tokens are bypassed.** Breaks: values live in `tokens.css` and are read from there. Evidence: TSX reaches a token only through 10 `bg-[var(--…)]` uses and the surface utilities (`bg-surface-*` 21/14, `border-hairline` 1/1); `--accent-*` and `--text-*` are referenced from TSX zero times. Components colour through palette classes (by 2.7's pattern: cyan 540, violet 439, ruby 289, amber 259, emerald 258). The two neutral ladders disagree: `--text-*` are Tailwind gray (#f3f4f6 / #9ca3af / #6b7280), while components use slate and `text-white` (383), and the root shell sets `text-white` over `body`'s `--text-primary`. Fix: one neutral ladder as tokens; the status hues stay behind `runStatus.ts`'s `TONE_*` maps."
       },
       {
         "group": "5. Raw hex and `style=` tokens",
         "id": "5.3",
-        "text": "**`style=` props carrying design values.** Breaks: never `style=` for design tokens. Evidence: `style=\\{\\{` = 22/15. Two set a surface: `ShortcutHelp` (the dialog body) and `WizardShell` (a card that is already a `glass-panel`), each `background: 'rgba(18,22,30,0.75)'` plus a 12px backdrop blur. The previous record said all 22 were geometry; these two are not. Fix: classes (the raised surface for `ShortcutHelp`, plain `.glass-panel` for `WizardShell`)."
+        "text": "**`style=` props carrying design values.** Breaks: never `style=` for design tokens. Evidence: `style=\\{\\{` = 20/13, read one by one. The two that set a surface (`ShortcutHelp`, `WizardShell`) are gone (see Resolved). One still carries type: EnvModal's Browse button overrides `.btn-secondary` with `padding: \"0 12px\", fontSize: \"0.8rem\"`. The rest are geometry. Fix: a size utility on the EnvModal button."
       },
       {
         "group": "5. Raw hex and `style=` tokens",
         "id": "5.4",
-        "text": "**Colour values outside `tokens.css`.** Breaks: token values live in `tokens.css`. Evidence: `App.css` still declares 22 hex literals in rules: 11 in the `PINNED UTILITY COLOURS` block (32 utility classes re-declared at Tailwind v3 values) and 11 elsewhere (`.btn-primary`'s `#7c3aed` and `#fff`, the caret's `#a78bfa`, the native-control rules), plus rgba fills in `.nested-card`, `.bubble-code`, the chat bubbles, the scrollbar and the skeleton. Fix: move the values to tokens; whether to keep the v3 pins is a palette decision, per the block's own comment."
+        "text": "**Colour values outside `tokens.css`.** Breaks: token values live in `tokens.css`. Evidence: `App.css` still declares 22 hex literals in rules: 11 in the `PINNED UTILITY COLOURS` block (32 utility classes re-declared at Tailwind v3 values) and 11 elsewhere (`.btn-primary`'s `#7c3aed` and `#fff`, the caret's `#a78bfa`, the native-control rules), plus rgba values in `.panel-hover`'s 8% border, `.bubble-code`, the chat bubbles, the scrollbar and the skeleton. Fix: move the values to tokens; whether to keep the v3 pins is a palette decision, per the block's own comment."
       },
       {
         "group": "5. Raw hex and `style=` tokens",
@@ -970,7 +1012,7 @@
       {
         "group": "5. Raw hex and `style=` tokens",
         "id": "5.6",
-        "text": "**Token comments contradict §4.** Evidence: `tokens.css` labels `--accent-purple` \"Active Connections\", `--accent-emerald` \"Active running agents\", `--accent-ruby` \"Off / Stopped / Connection Error\" and the block \"Neon Accents\". Unused: `--accent-emerald`, `--accent-ruby`, three of the four `--accent-*-glow`, `--text-muted`, `--text-dark`, `--transition-spring`, `--transition-smooth`. Fix: drop the meanings from the comments (§4 owns them) and delete the unused tokens."
+        "text": "**Unused tokens.** Evidence: no `var()` or utility reads `--accent-emerald`, `--accent-ruby`, three of the four `--accent-*-glow`, `--text-muted`, `--text-dark`, `--transition-spring` or `--transition-smooth`. Fix: delete them."
       },
       {
         "group": "6. Form controls",
@@ -989,14 +1031,24 @@
       "**Stale written guidance.** `.design-sync/conventions.md` still teaches the retired system: violet = \"agent working\", emerald = \"running agent\", `style={{ background: 'var(--bg-panel)' }}` for tokens, uppercase `tracking-widest` small labels, `SectionCard` first, and `StatusBadge variant=\"pill\"`, a prop that no longer exists."
     ],
     "driftResolved": [
+      "The four `Modal` dialogs whose body was a `.panel` (AskThreadSettingsPanel, NewAskThreadModal, NewDiscoveryModal, DecomposeModal) and four hand-spelled floating bodies (StartSessionButton's menu, ScheduleDrawer, TurnCompleteToast, TerminalStatusOverlay's card) are on the raised surface, and their footer bands are gone (this branch).",
+      "The token comments that gave each accent a meaning were replaced by a pointer to AGENTS.md §4 (PR #251).",
       "Dead CSS: `.app-container`, `.sidebar-*`, `.list-item`, `.panel-header`, `.glow-*`, `.text-glow-*`, `.supervisor-*`, `.agent-markdown`, `.card-grid`/`.metric-*` and the `translateX` hover motion were deleted in PR #250.",
       "Unlayered `App.css` rules silently beating utilities: rules moved into `@layer base` / `@layer components` in PR #250, so the amber \"needs you\" ring, ruby confirm borders and row status stripes now render.",
       "The `!important` colour safelist beating `hover:`/`focus:` variants: now a non-important `@layer utilities` block in PR #250. Its v3 values remain (5.4).",
-      "Radius and shadow re-spellings on `.glass-panel` call sites (`rounded-lg/xl/2xl`, `shadow-2xl`), and the violet halo on the active rail project, were removed in PR #250. The rail item and the search box keep control radii (1.3).",
-      "Token values moved verbatim to `src/styles/tokens.css` on this branch, and §4 now points there.",
-      "`runStatus.ts` re-toned on this branch: `bootstrapping` amber→cyan, `verifying` violet→cyan, `published` violet→cyan. Violet names no run status in `META`, and amber in `META` marks only the settled needs-a-human statuses (plus `REVIEW_READY_META`).",
-      "The App.css banner naming the system \"High-Tech Dark Neon Glassmorphism\" and its \"Glassmorphism\" section titles were replaced on this branch by a pointer to `tokens.css`, §4 and this file.",
-      "Old §4 wording no longer in conflict: \"emerald = running agents\", four hues instead of six, \"status dots pulse\", and a \"card-surface token\" that never existed. §4 was rewritten."
+      "Radius and shadow re-spellings on what is now `.panel` (`rounded-lg/xl/2xl`, `shadow-2xl`), and the violet halo on the active rail project, were removed in PR #250.",
+      "Token values moved verbatim to `src/styles/tokens.css` in PR #251, and §4 now points there.",
+      "`runStatus.ts` re-toned in PR #251: `bootstrapping` amber→cyan, `verifying` violet→cyan, `published` violet→cyan. Violet names no run status in `META`, and amber in `META` marks only the settled needs-a-human statuses (plus `REVIEW_READY_META`).",
+      "The App.css banner naming the system \"High-Tech Dark Neon Glassmorphism\" and its \"Glassmorphism\" section titles were replaced in PR #251 by a pointer to `tokens.css`, §4 and this file.",
+      "Old §4 wording no longer in conflict: \"emerald = running agents\", four hues instead of six, \"status dots pulse\", and a \"card-surface token\" that never existed. §4 was rewritten.",
+      "1.1 `.glass-panel` translucent and blurred: on branch `design/surfaces` the panel is solid (`--bg-panel` #11151d, the old colour composited over the app ground) with no blur and no shadow, and is renamed `.panel` (`.panel-hover`), with `--border-glass` renamed `--border-hairline`.",
+      "1.2 Blur on cards, rails and headers: on branch `design/surfaces` the top bar, project rail, feature header, drawers, list rows, attachment chip and dropzone, canvas nodes and `WizardShell` stopped blurring and took solid surfaces, and the two blurred scrims went flat. `backdrop-blur…` is down from 35/27 to 7/5, all on controls over a live canvas or the terminal status overlay; `Sidebar.tsx`, which nothing imported, was deleted.",
+      "1.3 Panel in a blurred rail, panel as a control: on branch `design/surfaces` the active project is a selected row (`bg-surface-panel-hover`) and the top-bar search trigger a field (`bg-surface-well border-hairline`).",
+      "1.4 No raised token, translucent and split panel tokens: on branch `design/surfaces` a `@theme static` block in `tokens.css` defines `surface-app`, `-sidebar`, `-well`, `-panel`, `-panel-hover`, `-raised`, `hairline` and `hairline-raised`, which the `--bg-*` and `--border-*` names alias, plus `--shadow-raised`; `.nested-card` lost its rgba fill, and `bg-[rgba(18,22,30…` re-spellings are down from 6/4 to 0.",
+      "1.5 The raised layer spelled a dozen ways: on branch `design/surfaces` 27 files' menu, popover, dialog, palette and toast bodies use `.raised` (33 uses), every dialog scrim is a flat `bg-black/60` (`Modal`'s default included), and the gate and artifact modal halos are gone. Routing the hand-rolled overlays through `Modal` remains (1.8).",
+      "1.6 Radius beyond the panel token: on branch `design/surfaces` `rounded-2xl` went from 12/12 to 0, so no surface is rounder than the panel. `rounded-xl` without a surface class remains (1.14).",
+      "1.7 The panel hairline re-spelled: on branch `design/surfaces` the white re-spellings were dropped (hue borders with meaning kept), so no `.panel` or `.raised` call site adds a `border-white/*`, radius or shadow (was 24 of 91 panel sites).",
+      "5.3, in part: the surface `style=` props on `ShortcutHelp` and `WizardShell` were removed on branch `design/surfaces`."
     ]
   }
 }
