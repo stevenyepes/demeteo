@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   featureRunStatus,
+  RUN_STATUSES,
   runStatusMeta,
   TONE_CHIP,
   type FeatureRunStatusFields,
@@ -127,5 +128,22 @@ describe('unknown statuses', () => {
       tone: 'slate',
       active: false,
     });
+  });
+});
+
+describe('tone rules', () => {
+  /** Violet sits beside the indigo action and focus accent (AGENTS.md §4), so
+   *  a violet chip would read as something to click rather than as a state. */
+  it('gives no status the violet tone', () => {
+    expect(RUN_STATUSES.filter((s) => runStatusMeta(s).tone === 'violet')).toEqual([]);
+  });
+
+  /** `segmentFor` files every settled amber status under "Needs you", so an
+   *  amber status that is still moving on its own would either sit there
+   *  while nothing waits on a human, or need the band rule to special-case it. */
+  it('keeps amber for settled statuses only', () => {
+    expect(
+      RUN_STATUSES.filter((s) => runStatusMeta(s).tone === 'amber' && runStatusMeta(s).active),
+    ).toEqual([]);
   });
 });

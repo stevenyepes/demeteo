@@ -13,22 +13,12 @@ Demeteo has pivoted from a single-agent chat interface into a **fleet-style mult
 - **Step:** An individual node in a workflow (`agent`, `parallel`, or `gate`).
 - **Gate:** A pause in execution where the system waits for human approval, feedback, or conflict resolution.
 
-## 2. Design Language: Dark Neon Glassmorphism
+## 2. Design Language
 
-To ensure Demeteo feels like a premium desktop control center, all mockups must strictly adhere to the following visual design rules:
-
-- **Backgrounds:** Obsidian and deep carbon gradients (`#08090c` and `#0d0f14`), with subtle radial violet and cyan gradients for depth.
-- **Surfaces & Blurs:** Translucent cards (`rgba(18, 22, 30, 0.75)`) using `backdrop-filter: blur(12px)` and thin border glows (`rgba(255,255,255,0.05)`).
-- **Typography:**
-  - Headings: **Outfit** (sharp, geometric)
-  - General UI: **Inter** (clean, readable)
-  - Terminals/Code: **Fira Code** or **JetBrains Mono**
-- **Status Accents:**
-  - **Violet (`#8b5cf6`):** Active connection tunnels and core operations.
-  - **Cyan (`#06b6d4`):** Real-time data streams and interactive sessions.
-  - **Emerald (`#10b981`):** Running processes and healthy statuses.
-  - **Ruby (`#ef4444`):** Inactive servers, stopped tasks, failed states.
-- **Motion:** Micro-animations, subtle pulsing glows for status dots, and smooth view transitions.
+The visual rules live in one place, [AGENTS.md §4](../AGENTS.md#4-visual-design), and
+mockups follow them like code does. The design system as shipped, and where it still
+drifts from those rules, is recorded in [DESIGN.md](../DESIGN.md). This section used to
+carry its own copy of the retired glassmorphism mandate.
 
 ## 3. Global Shell & Navigation Structure
 

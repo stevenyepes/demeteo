@@ -451,7 +451,7 @@ for (const [token, rows] of ordered) {
 console.log();
 console.log("  ^ used in a class attribute, but no rule defines them, so they style");
 console.log("    nothing at all. Either switch to one of the names listed above, or");
-console.log("    register the `@theme` key in src/App.css that Tailwind derives the");
+console.log("    register the `@theme` key in src/styles/tokens.css that Tailwind derives the");
 console.log("    utility from — `--font-*` feeds `font-*`, `--animate-*` feeds");
 console.log("    `animate-*`. Tailwind emits no rule and no warning for a candidate");
 console.log("    it cannot resolve, which is why nothing else here reports this.");

@@ -47,3 +47,7 @@ ds-bundle/
 
 # Design canvas scratch — the durable capture is docs/DISCOVERY_UI_SPEC.md
 ui-mocks/
+
+# Impeccable's 21MB per-platform engine; scripts/impeccable downloads a
+# version-pinned copy to ~/.impeccable when the sibling binary is absent.
+.claude/skills/impeccable/scripts/bin/

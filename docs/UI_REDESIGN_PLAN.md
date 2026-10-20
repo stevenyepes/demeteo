@@ -1,8 +1,9 @@
 # UI Redesign Plan — Pipeline View & Project View
 
 > Source of the visual direction: `ui-mocks/orchestrator_mockup.tsx`.
-> Design language, token values and colour semantics: **AGENTS.md §4** and
-> `src/App.css` — this plan defers to both and never restates them.
+> Design language, token values and colour semantics: **AGENTS.md §4**,
+> `src/App.css` and `src/styles/tokens.css` — this plan defers to all three and
+> never restates them.
 > Existing UX defects it folds in: [`docs/ux-audit/findings.md`](ux-audit/findings.md).
 
 The mock is a *direction*, not an implementation. It is untyped JS on a GitHub-dark
@@ -90,7 +91,7 @@ both cheaper and lower-risk.
 
 ## 2. Design translation
 
-Token values live in `src/App.css`; colour *semantics* are AGENTS.md §4. Mapping:
+Token values live in `src/styles/tokens.css`; colour *semantics* are AGENTS.md §4. Mapping:
 
 | Mock literal | Use instead | Why |
 |---|---|---|
