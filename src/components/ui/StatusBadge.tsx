@@ -1,5 +1,5 @@
 /**
- * StatusBadge — the standalone glow dot (UI redesign plan §5.1).
+ * StatusBadge — the standalone status dot (UI redesign plan §5.1).
  *
  * `Chip` owns every labelled pill; this badge kept the one job a pill cannot
  * do — a label-less liveness mark in a rail or list row, where the row's own
@@ -19,15 +19,14 @@ const NON_RUN_TONES: Record<string, RunStatusTone> = {
   skipped: 'slate',
 };
 
-/** Dot rendering per tone: solid fill + a soft glow for anything that
- *  isn't inert. Component-specific (the glow shadow only exists here),
- *  so it lives beside the badge rather than in the shared tone maps. */
+/** A solid fill per tone. The shared maps carry tints and inks, and a dot
+ *  needs the full-strength hue, so this one lives beside the badge. */
 const TONE_DOT: Record<RunStatusTone, string> = {
-  emerald: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]',
-  cyan: 'bg-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.8)]',
-  violet: 'bg-violet-500 shadow-[0_0_8px_rgba(139,92,246,0.8)]',
-  amber: 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]',
-  ruby: 'bg-ruby-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]',
+  emerald: 'bg-emerald-500',
+  cyan: 'bg-cyan-500',
+  violet: 'bg-violet-500',
+  amber: 'bg-amber-500',
+  ruby: 'bg-ruby-500',
   slate: 'bg-slate-500',
 };
 

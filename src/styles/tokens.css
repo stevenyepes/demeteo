@@ -47,6 +47,18 @@
   --color-surface-raised: #181d28;
   --color-hairline: rgb(255 255 255 / 0.05);
   --color-hairline-raised: rgb(255 255 255 / 0.09);
+
+  /* The accent, indigo "Signal" (docs/DECISIONS.md, decision 61): primary
+     actions, selection and focus, and never a status. The fill always carries
+     a white label, which is 5.40:1 on it; the ink is for accent text on a dark
+     surface. The ring and edge were chosen to clear 3:1 against the panel, which
+     stock violet's focus and selection borders did not. */
+  --color-accent: #5a60c2;
+  --color-accent-hover: #6269cc;
+  --color-accent-ink: #838ef4;
+  --color-accent-ring: #6e78db;
+  --color-accent-edge: #6972c0;
+  --color-accent-tint: rgb(90 96 194 / 0.16);
 }
 
 @layer base {
@@ -72,7 +84,6 @@
        they sit on a panel rather than on the near-black app background. */
     --border-hairline: var(--color-hairline);
     --border-raised: var(--color-hairline-raised);
-    --border-glass-focus: rgba(139, 92, 246, 0.4);
 
     /* The only shadow in the system, and only the raised layer casts it: a panel
        is separated by its step and its hairline, a menu also by floating. */
@@ -85,17 +96,12 @@
        inputs are not panels. */
     --radius-panel: 12px;
 
-    /* Accents. What each hue may mean is AGENTS.md §4; status hues reach the UI
+    /* Status hues. What each may mean is AGENTS.md §4; components reach them
        through src/lib/runStatus.ts, not these properties. */
-    --accent-purple: #8b5cf6;
-    --accent-purple-glow: rgba(139, 92, 246, 0.25);
     --accent-cyan: #06b6d4;
-    --accent-cyan-glow: rgba(6, 182, 212, 0.25);
     --accent-emerald: #10b981;
-    --accent-emerald-glow: rgba(16, 185, 129, 0.2);
     --accent-ruby: #ef4444;
-    --accent-ruby-glow: rgba(239, 68, 68, 0.2);
-  
+
     /* Text colors */
     --text-primary: #f3f4f6;
     --text-secondary: #9ca3af;

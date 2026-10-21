@@ -110,9 +110,7 @@ describe('TabBar', () => {
     expect([page, dense]).toEqual(['md', 'sm']);
     // Density is the only axis the two sizes differ on: the selected treatment
     // is one decision, so both carry the same accent classes.
-    expect(denseSelected).toContain('border-cyan-500');
-    expect(pageSelected).toContain('border-cyan-500');
-    expect(denseSelected).toContain('text-cyan-400');
-    expect(pageSelected).toContain('text-cyan-400');
+    expect(denseSelected).toContain('border-accent-edge');
+    expect(pageSelected).toContain('border-accent-edge');
   });
 });
