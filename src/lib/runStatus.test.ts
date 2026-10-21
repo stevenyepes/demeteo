@@ -132,12 +132,6 @@ describe('unknown statuses', () => {
 });
 
 describe('tone rules', () => {
-  /** Violet sits beside the indigo action and focus accent (AGENTS.md §4), so
-   *  a violet chip would read as something to click rather than as a state. */
-  it('gives no status the violet tone', () => {
-    expect(RUN_STATUSES.filter((s) => runStatusMeta(s).tone === 'violet')).toEqual([]);
-  });
-
   /** `segmentFor` files every settled amber status under "Needs you", so an
    *  amber status that is still moving on its own would either sit there
    *  while nothing waits on a human, or need the band rule to special-case it. */

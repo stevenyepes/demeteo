@@ -24,7 +24,6 @@ const NON_RUN_TONES: Record<string, RunStatusTone> = {
 const TONE_DOT: Record<RunStatusTone, string> = {
   emerald: 'bg-emerald-500',
   cyan: 'bg-cyan-500',
-  violet: 'bg-violet-500',
   amber: 'bg-amber-500',
   ruby: 'bg-ruby-500',
   slate: 'bg-slate-500',

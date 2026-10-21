@@ -14,8 +14,9 @@ import type React from 'react';
  * padding passed there fights the variant's class at equal specificity and
  * wins or loses by stylesheet order, so add a variant instead.
  *
- * Hover is spelled `enabled:hover:` so a disabled button does not light up
- * under the pointer. Focus is the global `:focus-visible` ring in `App.css`.
+ * Hover is spelled `not-disabled:hover:` so a disabled button does not light
+ * up under the pointer. Not `enabled:`, which never matches the `<a>` that
+ * `buttonClasses` styles. Focus is the global `:focus-visible` ring in `App.css`.
  */
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-subtle';
@@ -33,14 +34,14 @@ const BASE =
   'inline-flex items-center justify-center gap-1.5 rounded-md border font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40';
 
 const VARIANT: Record<ButtonVariant, string> = {
-  primary: 'border-transparent bg-accent text-white enabled:hover:bg-accent-hover',
+  primary: 'border-transparent bg-accent text-white not-disabled:hover:bg-accent-hover',
   secondary:
-    'border-white/10 bg-white/5 text-slate-200 enabled:hover:bg-white/10 enabled:hover:text-white',
-  ghost: 'border-transparent text-slate-400 enabled:hover:bg-white/5 enabled:hover:text-white',
+    'border-white/10 bg-white/5 text-slate-200 not-disabled:hover:bg-white/10 not-disabled:hover:text-white',
+  ghost: 'border-transparent text-slate-400 not-disabled:hover:bg-white/5 not-disabled:hover:text-white',
   // Hover steps darker, not lighter: white on ruby-500 is under 4.5:1.
-  danger: 'border-transparent bg-ruby-600 text-white enabled:hover:bg-ruby-700',
+  danger: 'border-transparent bg-ruby-600 text-white not-disabled:hover:bg-ruby-700',
   'danger-subtle':
-    'border-ruby-500/30 text-ruby-400 enabled:hover:bg-ruby-500/10 enabled:hover:text-ruby-300',
+    'border-ruby-500/30 text-ruby-400 not-disabled:hover:bg-ruby-500/10 not-disabled:hover:text-ruby-300',
 };
 
 const SIZE: Record<ButtonSize, string> = {

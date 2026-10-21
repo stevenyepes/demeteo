@@ -96,11 +96,6 @@
        inputs are not panels. */
     --radius-panel: 12px;
 
-    /* Status hues. What each may mean is AGENTS.md §4; components reach them
-       through src/lib/runStatus.ts, not these properties. */
-    --accent-cyan: #06b6d4;
-    --accent-emerald: #10b981;
-    --accent-ruby: #ef4444;
 
     /* Text colors */
     --text-primary: #f3f4f6;
