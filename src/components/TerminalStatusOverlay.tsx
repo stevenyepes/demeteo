@@ -27,7 +27,7 @@ const TerminalStatusOverlay: React.FC<TerminalStatusOverlayProps> = ({ phase, ho
       <div className="raised pointer-events-auto min-w-[320px] max-w-[480px] overflow-hidden">
         <div className="px-4 py-3 border-b border-white/5 flex items-center gap-2.5">
           {isError ? (
-            <div className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_2px_rgba(239,68,68,0.6)]" />
+            <div className="w-2 h-2 rounded-full bg-red-500" />
           ) : (
             <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse-glow" />
           )}
@@ -81,7 +81,7 @@ const TerminalStatusOverlay: React.FC<TerminalStatusOverlayProps> = ({ phase, ho
                         {done ? (
                           <CheckCircle2 size={12} />
                         ) : active ? (
-                          <span className="block w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_6px_1px_rgba(6,182,212,0.7)]" />
+                          <span className="block w-1.5 h-1.5 rounded-full bg-cyan-400" />
                         ) : (
                           <span className="block w-1.5 h-1.5 rounded-full bg-slate-700" />
                         )}

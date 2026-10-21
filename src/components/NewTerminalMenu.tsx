@@ -419,7 +419,7 @@ export function NewTerminalMenu({
           type="button"
           onClick={launchLocalShell}
           disabled={launching}
-          className="flex items-center gap-1.5 pl-2 pr-2 py-1 rounded-l-md text-[11px] font-mono whitespace-nowrap border border-white/10 border-r-0 bg-white/5 text-slate-300 hover:bg-cyan-500/15 hover:border-cyan-500/40 hover:text-cyan-300 transition disabled:opacity-40"
+          className="flex items-center gap-1.5 pl-2 pr-2 py-1 rounded-l-md text-[11px] font-mono whitespace-nowrap border border-white/10 border-r-0 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white transition disabled:opacity-40"
           title="Open a shell on this machine"
           data-testid="new-terminal-trigger"
         >
@@ -430,7 +430,7 @@ export function NewTerminalMenu({
           type="button"
           onClick={() => setOpenMenu((v) => !v)}
           disabled={launching}
-          className="flex items-center px-1.5 py-1 rounded-r-md text-[11px] font-mono border border-white/10 bg-white/5 text-slate-300 hover:bg-cyan-500/15 hover:border-cyan-500/40 hover:text-cyan-300 transition disabled:opacity-40"
+          className="flex items-center px-1.5 py-1 rounded-r-md text-[11px] font-mono border border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white transition disabled:opacity-40"
           title="More — pick a machine, agent, or terminal location"
           aria-haspopup="menu"
           aria-expanded={openMenu}
@@ -491,7 +491,7 @@ export function NewTerminalMenu({
                       type="button"
                       role="menuitem"
                       onClick={() => void launch(target, agent)}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-mono text-slate-300 hover:bg-violet-500/15 hover:border-violet-400/40 hover:text-violet-200 transition"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-mono text-slate-300 hover:bg-white/5 hover:border-white/20 hover:text-white transition"
                       title={`Open ${label ?? 'shell'} on ${target.machineLabel}`}
                     >
                       <MachineDot
@@ -500,7 +500,7 @@ export function NewTerminalMenu({
                       />
                       <span className="truncate max-w-[110px]">{target.machineLabel}</span>
                       <span className="text-slate-600">·</span>
-                      <span className={label ? 'text-violet-300' : 'text-cyan-300'}>
+                      <span className={label ? 'text-slate-200' : 'text-slate-400'}>
                         {label ?? 'shell'}
                       </span>
                     </button>
@@ -533,14 +533,14 @@ export function NewTerminalMenu({
                     onClick={() => setActiveMachineId(target.machineId)}
                     className={`group relative w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11.5px] font-mono transition ${
                       active
-                        ? 'bg-cyan-500/[0.12] text-slate-100'
+                        ? 'bg-accent-tint text-slate-100'
                         : 'text-slate-400 hover:bg-white/[0.04]'
                     }`}
                     data-testid={`new-terminal-machine-${target.machineId}`}
                     aria-current={active}
                   >
                     {active && (
-                      <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-cyan-400" />
+                      <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-accent-edge" />
                     )}
                     <MachineDot
                       machineId={target.machineId}
@@ -580,7 +580,7 @@ export function NewTerminalMenu({
                           onChange={(e) => setSelectedRepositoryId(e.target.value)}
                           disabled={launching}
                           aria-label="Repository"
-                          className="mb-1.5 w-full rounded-md border border-white/10 bg-[#0c0d12] px-2 py-1.5 text-[11px] font-mono text-slate-300 outline-none focus:border-violet-400 disabled:opacity-40"
+                          className="mb-1.5 w-full rounded-md border border-white/10 bg-[#0c0d12] px-2 py-1.5 text-[11px] font-mono text-slate-300 outline-none focus:border-accent-ring disabled:opacity-40"
                           data-testid="new-terminal-repo-select"
                         >
                           {projectRepositories.map((repo) => (
@@ -607,10 +607,10 @@ export function NewTerminalMenu({
                     role="menuitem"
                     onClick={() => void launch(activeTarget)}
                     disabled={launching || locationBusy || (showLocationSwitch && !location)}
-                    className="w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] font-mono text-slate-300 hover:bg-cyan-500/15 hover:text-cyan-200 transition"
+                    className="w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] font-mono text-slate-300 hover:bg-white/5 hover:text-white transition"
                     title={`Open a shell on ${activeTarget.machineLabel}`}
                   >
-                    <TerminalSquare className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <TerminalSquare className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                     <span>New shell</span>
                     <span className="ml-auto text-[9px] font-mono text-slate-600 border border-white/10 rounded px-1">
                       ⏎
@@ -628,10 +628,10 @@ export function NewTerminalMenu({
                       role="menuitem"
                       onClick={() => void launch(activeTarget, agent)}
                       disabled={launching || locationBusy || (showLocationSwitch && !location)}
-                      className="w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] font-mono text-slate-300 hover:bg-violet-500/15 hover:text-violet-200 transition"
+                      className="w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] font-mono text-slate-300 hover:bg-white/5 hover:text-white transition"
                       title={`Run ${agent.binary} in a new terminal on ${activeTarget.machineLabel}`}
                     >
-                      <Sparkles className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                      <Sparkles className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                       <span>{agent.label}</span>
                     </button>
                   ))}

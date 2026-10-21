@@ -449,7 +449,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
     <div
       ref={inspectorPaneRef}
       tabIndex={-1}
-      className="h-full min-h-0 outline-none focus-visible:ring-1 focus-visible:ring-cyan-500/50"
+      className="h-full min-h-0 outline-none focus-visible:ring-1 focus-visible:ring-accent-ring"
     >
       <InspectorColumn
         pane={inspectorPane}
@@ -658,7 +658,7 @@ function FeatureDetailView({ view, navigate }: FeatureDetailViewProps) {
 
       {run.loading ? (
         <div className="flex-1 flex items-center justify-center">
-          <RefreshCw className="w-8 h-8 text-violet-500 animate-spin" />
+          <RefreshCw className="w-8 h-8 text-slate-400 animate-spin" />
         </div>
       ) : run.error ? (
         <div className="flex-1 p-8 text-rose-400 flex items-center gap-2">

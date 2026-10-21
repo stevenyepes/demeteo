@@ -163,6 +163,9 @@ agent reproduced it.
 **Colour is spent only on meaning.** Neutral greys do everything else.
 - **the accent**, indigo "Signal" (decision 61 in [docs/DECISIONS.md](docs/DECISIONS.md)) = primary
   actions, selection, focus. It is never a status, and neither is violet, which sits too close to it.
+  A button is `src/components/ui/Button.tsx`, whose variant names a role: there is no
+  status-hue button, so approving a gate is `primary`. Focus is the one `:focus-visible`
+  ring in `src/App.css`; a field may show focus with `border-accent-ring` instead, never a hue of its own.
 - Status hues come from `src/lib/runStatus.ts`: a surface may keep its own labels, but its
   tones are a `RunStatusTone` drawn through the `TONE_*` maps, never a hue spelled locally.
   - **cyan** = in motion (running, bootstrapping, verifying, a PR out for review)

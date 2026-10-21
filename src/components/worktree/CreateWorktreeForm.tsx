@@ -3,6 +3,7 @@ import { Check, Pencil, RefreshCw, X } from 'lucide-react';
 
 import type { TerminalBranchOption } from '../../types';
 import { deriveWorktreeName } from '../../lib/worktrees';
+import { Button } from '../ui/Button';
 
 /** What the picker needs to ask the backend for a worktree. */
 export interface WorktreeDraft {
@@ -90,7 +91,7 @@ export function CreateWorktreeForm({
         aria-label="Branch name"
         autoComplete="off"
         spellCheck={false}
-        className="w-full rounded-md border border-white/10 bg-black/25 px-2 py-1.5 text-[11.5px] font-mono text-slate-200 outline-none focus:border-violet-400 disabled:opacity-40"
+        className="w-full rounded-md border border-white/10 bg-black/25 px-2 py-1.5 text-[11.5px] font-mono text-slate-200 outline-none focus:border-accent-ring disabled:opacity-40"
       />
 
       <label className="block px-1 pt-2 pb-0.5 text-[9px] font-mono text-slate-500" htmlFor="worktree-base">
@@ -102,7 +103,7 @@ export function CreateWorktreeForm({
         onChange={(event) => setBase(event.target.value)}
         disabled={busy || loadingBranches}
         aria-label="Base branch"
-        className="w-full rounded-md border border-white/10 bg-[#0c0d12] px-2 py-1.5 text-[11.5px] font-mono text-slate-200 outline-none focus:border-violet-400 disabled:opacity-40"
+        className="w-full rounded-md border border-white/10 bg-[#0c0d12] px-2 py-1.5 text-[11.5px] font-mono text-slate-200 outline-none focus:border-accent-ring disabled:opacity-40"
         data-testid="terminal-location-base"
       >
         {branches.length === 0 && <option value={selectedBase}>{selectedBase}</option>}
@@ -160,20 +161,21 @@ export function CreateWorktreeForm({
           aria-label="Worktree name"
           autoComplete="off"
           spellCheck={false}
-          className="w-full rounded-md border border-white/10 bg-black/25 px-2 py-1.5 text-[11.5px] font-mono text-slate-200 outline-none focus:border-violet-400 disabled:opacity-40"
+          className="w-full rounded-md border border-white/10 bg-black/25 px-2 py-1.5 text-[11.5px] font-mono text-slate-200 outline-none focus:border-accent-ring disabled:opacity-40"
         />
       )}
 
-      <button
-        type="button"
+      <Button
+        variant="primary"
+        size="sm"
         onClick={() => onSubmit({ branch: branch.trim(), baseBranch: selectedBase, worktreeName: folder })}
         disabled={!canSubmit}
-        className="mt-2.5 w-full flex items-center justify-center gap-1.5 rounded-md bg-violet-600 px-2 py-1.5 text-[11.5px] font-mono text-white shadow-[0_0_15px_rgba(139,92,246,0.35)] hover:bg-violet-500 transition disabled:opacity-40 disabled:shadow-none"
+        className="mt-2.5 w-full"
         data-testid="terminal-location-create"
       >
         <Check className="w-3 h-3" />
         {busy ? 'Creating…' : 'Create worktree'}
-      </button>
+      </Button>
 
       {error && (
         <div

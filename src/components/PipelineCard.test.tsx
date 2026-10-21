@@ -256,7 +256,7 @@ describe('card contents', () => {
 
     expect(card.className).toContain('panel panel-hover');
     expect(card.className).toContain('pipeline-card');
-    expect(card.firstElementChild?.className).toContain('bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.8)]');
+    expect(card.firstElementChild?.className).toContain('bg-cyan-500');
   });
 
   it('spells the status through Chip so the tone stays in one registry', () => {

@@ -2,8 +2,7 @@
 //
 // Pins the contract that survives the split from `Chip`: no label, a tone
 // resolved through the shared vocabulary rather than spelled here (F27), and
-// the glow that is the only reason this component is not a `Chip` with a
-// smaller dot.
+// a flat dot, because AGENTS.md §4 allows no glow.
 
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
@@ -52,12 +51,12 @@ describe('StatusBadge', () => {
     expect(badge()).toHaveClass('bg-slate-500');
   });
 
-  it('glows for a live tone and stays flat for an inert one', () => {
+  it('draws every tone as a flat dot', () => {
     const { rerender } = render(<StatusBadge status="running" />);
-    expect(badge().className).toContain('shadow-[');
-
-    rerender(<StatusBadge status="cancelled" />);
-    expect(badge().className).not.toContain('shadow-[');
+    for (const status of ['running', 'completed', 'failed', 'awaiting_gate', 'cancelled']) {
+      rerender(<StatusBadge status={status} />);
+      expect(badge().className).not.toContain('shadow');
+    }
   });
 
   it('merges a caller-supplied className', () => {

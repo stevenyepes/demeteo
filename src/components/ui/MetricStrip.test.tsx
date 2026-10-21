@@ -31,9 +31,9 @@ describe('Metric', () => {
   });
 
   it('takes the value colour from the shared tone vocabulary', () => {
-    render(<Metric label="Tokens" value="600.7K" tone="violet" />);
+    render(<Metric label="Tokens" value="600.7K" tone="cyan" />);
 
-    expect(metricValue()).toHaveClass(TONE_TEXT.violet);
+    expect(metricValue()).toHaveClass(TONE_TEXT.cyan);
   });
 
   it('leaves an untoned value neutral rather than picking a status colour', () => {

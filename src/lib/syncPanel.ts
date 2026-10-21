@@ -66,12 +66,15 @@ export type SyncIntent =
 
 /** Tones an action row may take. A subset of `RunStatusTone`: `slate` is what
  *  an inert row looks like, and nothing offering a press is inert. */
-export type SyncActionTone = 'violet' | 'cyan' | 'amber' | 'ruby' | 'emerald';
+export type SyncActionTone = 'cyan' | 'amber' | 'ruby' | 'emerald';
 
 export interface SyncAction {
   intent: SyncIntent;
   label: string;
-  tone: SyncActionTone;
+  /** Absent for an action that announces no state — sync, merge, resolve,
+   *  review. Its row stays neutral; the press is the accent either way, so a
+   *  hue here would only claim a status the branch is not in. */
+  tone?: SyncActionTone;
   title: string;
   desc: string;
 }
@@ -184,7 +187,6 @@ function syncAction(baseRef: string | null | undefined): SyncAction {
   return {
     intent: 'sync',
     label: 'Sync',
-    tone: 'violet',
     title: `Merge ${base} into this feature branch`,
     desc: `Merges ${base} in. A clean merge finishes here; a conflicted one comes back to this pane.`,
   };
@@ -201,7 +203,6 @@ const ABORT: SyncAction = {
 const RESOLVE: SyncAction = {
   intent: 'resolve',
   label: 'Resolve with agent',
-  tone: 'violet',
   title: 'Spawn an agent in the sync worktree to clean up the markers',
   desc: 'Spawns a fresh agent in the sync worktree to clean up the conflict markers and commit the result.',
 };
@@ -689,7 +690,6 @@ function reconcileActions(branch: string, move: DivergenceMove): SyncAction[] {
   const merge: SyncAction = {
     intent: 'reconcile',
     label: 'Merge origin into this branch',
-    tone: 'violet',
     title: `Merge origin/${branch} into ${branch}`,
     desc: 'Writes a merge that keeps both sides. Nothing is dropped on either — sync again afterwards to bring the base branch in.',
   };
@@ -717,7 +717,7 @@ function resolvingArm(base: PanelBase, session: SyncSessionView): SyncPanelModel
   return {
     ...base,
     state: 'resolving',
-    tone: 'violet',
+    tone: 'cyan',
     chipLabel: 'Resolving',
     live: true,
     headline: 'An agent is resolving the conflict',
@@ -786,7 +786,6 @@ function reviewActions(session: SyncSessionView): SyncAction[] {
     actions.push({
       intent: 'review',
       label: 'Review diff',
-      tone: 'violet',
       title: `Diff ${session.head_before?.slice(0, 7)}..${session.merge_commit_sha?.slice(0, 7)}`,
       desc: 'Opens the read-only editor on the merge alone — what the resolution changed, not what the branch did.',
     });

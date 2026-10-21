@@ -285,7 +285,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
           onClick={() => node.entry.is_dir ? toggleDir(node.entry.path) : openFile(node.entry.path)}
           className={`w-full flex items-center gap-1.5 py-[3px] text-xs rounded transition-colors text-left group ${
             selectedPath === node.entry.path
-              ? 'bg-violet-600/25 text-violet-200'
+              ? 'bg-accent-tint text-white'
               : 'hover:bg-white/5 text-slate-300 hover:text-white'
           }`}
           style={{ paddingLeft: `${8 + depth * 14}px`, paddingRight: '8px' }}
@@ -339,7 +339,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
               onClick={() => setSidebarTab('files')}
               className={`flex-1 py-2 text-[10px] uppercase font-bold tracking-widest transition-colors ${
                 sidebarTab === 'files'
-                  ? 'text-white border-b-2 border-violet-500 -mb-px'
+                  ? 'text-white border-b-2 border-accent-edge -mb-px'
                   : 'text-slate-600 hover:text-slate-400'
               }`}
             >
@@ -350,14 +350,14 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
               onClick={() => setSidebarTab('changes')}
               className={`flex-1 py-2 text-[10px] uppercase font-bold tracking-widest transition-colors flex items-center justify-center gap-1 ${
                 sidebarTab === 'changes'
-                  ? 'text-white border-b-2 border-violet-500 -mb-px'
+                  ? 'text-white border-b-2 border-accent-edge -mb-px'
                   : 'text-slate-600 hover:text-slate-400'
               }`}
             >
               <GitCommit className="w-3 h-3" />
               Changes
               {changedFiles.length > 0 && (
-                <span className="ml-0.5 bg-violet-600/60 text-violet-200 text-[9px] font-bold rounded px-1 leading-4">
+                <span className="ml-0.5 bg-white/10 text-slate-300 text-[9px] font-bold rounded px-1 leading-4">
                   {changedFiles.length}
                 </span>
               )}
@@ -369,7 +369,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
             {sidebarTab === 'files' && (
               treeLoading ? (
                 <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-4 h-4 text-violet-400 animate-spin" />
+                  <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />
                 </div>
               ) : treeError ? (
                 <div className="p-3 text-xs text-rose-400 font-mono">{treeError}</div>
@@ -379,7 +379,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
             {sidebarTab === 'changes' && (
               changesLoading ? (
                 <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-4 h-4 text-violet-400 animate-spin" />
+                  <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />
                 </div>
               ) : changesError ? (
                 <div className="p-3 text-xs text-rose-400 font-mono whitespace-pre-wrap break-all select-text" title={changesError}>{changesError}</div>
@@ -393,7 +393,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
                   onClick={() => openDiff(f)}
                   className={`w-full flex items-center gap-2 px-3 py-[4px] text-xs rounded transition-colors text-left ${
                     diffPath === f.path
-                      ? 'bg-violet-600/25 text-violet-200'
+                      ? 'bg-accent-tint text-white'
                       : 'hover:bg-white/5 text-slate-300 hover:text-white'
                   }`}
                   title={f.path}
@@ -418,7 +418,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
           {/* File tab bar */}
           {activeRelPath && (
             <div className="flex items-center gap-2 px-4 py-1.5 border-b border-white/5 bg-[#0d0f14]/40 shrink-0">
-              <File className="w-3.5 h-3.5 text-violet-400/70 shrink-0" />
+              <File className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               <span className="text-xs font-mono text-slate-300 truncate" title={activeRelPath}>
                 {activeRelPath}
               </span>
@@ -445,7 +445,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
             {/* File loading */}
             {selectedPath && fileLoading && !fileContent && (
               <div className="flex items-center justify-center h-full">
-                <Loader2 className="w-5 h-5 text-violet-400 animate-spin" />
+                <Loader2 className="w-5 h-5 text-slate-400 animate-spin" />
               </div>
             )}
 
@@ -482,7 +482,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
             {/* Diff loading */}
             {diffPath && diffLoading && (
               <div className="flex items-center justify-center h-full">
-                <Loader2 className="w-5 h-5 text-violet-400 animate-spin" />
+                <Loader2 className="w-5 h-5 text-slate-400 animate-spin" />
               </div>
             )}
 

@@ -76,15 +76,15 @@ export function QuestionCard({
       data-testid="question-card"
       data-settled={settled}
       className={`w-full rounded-xl border px-4 py-3.5 ${
-        settled ? 'border-white/[0.06] bg-white/[0.02]' : 'border-violet-500/20 bg-violet-500/5'
+        settled ? 'border-white/[0.06] bg-white/[0.02]' : 'border-white/10 bg-white/[0.04]'
       }`}
     >
       <div className="mb-2.5 flex items-start justify-between gap-2.5">
-        <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-wider text-violet-400">
+        <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-wider text-slate-400">
           <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
           Interviewer
           {question.header && (
-            <Chip size="sm" tone="violet" className="ml-1">
+            <Chip size="sm" tone="slate" className="ml-1">
               {question.header}
             </Chip>
           )}
@@ -94,7 +94,7 @@ export function QuestionCard({
             Answered
           </Chip>
         ) : (
-          <Chip size="sm" tone="violet">
+          <Chip size="sm" tone="amber">
             Needs you
           </Chip>
         )}
@@ -124,7 +124,7 @@ export function QuestionCard({
             onClick={onAnswerInOwnWords}
             className={`flex w-full items-start gap-2.5 rounded-lg border border-white/[0.06] bg-black/50 px-3 py-2.5 text-left transition ${
               answerable
-                ? 'cursor-pointer hover:translate-x-0.5 hover:border-violet-500/45 hover:bg-violet-500/[0.08]'
+                ? 'cursor-pointer hover:translate-x-0.5 hover:border-white/15 hover:bg-white/5'
                 : 'cursor-not-allowed'
             }`}
           >
@@ -193,7 +193,7 @@ function OptionButton({
       onClick={onClick}
       className={`flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left transition ${treatment} ${
         answerable
-          ? 'cursor-pointer hover:translate-x-0.5 hover:border-violet-500/45 hover:bg-violet-500/[0.08]'
+          ? 'cursor-pointer hover:translate-x-0.5 hover:border-white/15 hover:bg-white/5'
           : 'cursor-default'
       }`}
     >

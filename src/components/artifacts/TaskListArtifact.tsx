@@ -10,7 +10,7 @@ interface CycleGroup {
 }
 
 const CYCLE_BORDER: Record<PlanKind, string> = {
-  greenfield: 'border-violet-500/50',
+  greenfield: 'border-slate-500/50',
   rework: 'border-cyan-500/50',
 };
 
@@ -99,7 +99,7 @@ export function TaskListArtifact({ plan }: { plan: TaskPlan }) {
         <div key={`${groupIndex}-${group.cycle}`} className="space-y-3">
           {labelled && (
             <div className="flex items-baseline justify-between px-1">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-violet-400/70">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
                 {group.cycle === 0 ? 'Original decomposition' : `Rework ${group.cycle}`}
               </span>
               <span className="font-mono text-[10px] text-slate-500">

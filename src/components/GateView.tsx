@@ -17,6 +17,7 @@ import {
 import { decideRemoteGate, remoteRunForFeature } from '../lib/remoteRuns';
 import { findImplementationReport, listReviewableGateArtifacts } from '../lib/stepArtifacts';
 import { GateParkReason } from './GateParkReason';
+import { Button } from './ui/Button';
 
 interface GateViewProps {
   stepExecutionId: string;
@@ -196,7 +197,7 @@ export const GateView: React.FC<GateViewProps> = ({
         {/* Modal Header */}
         <div className="p-6 border-b border-white/5 bg-white/[0.01] flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="p-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.1)]">
+            <span className="p-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
               <ShieldAlert className="w-5 h-5" />
             </span>
             <div>
@@ -238,7 +239,7 @@ export const GateView: React.FC<GateViewProps> = ({
           {/* Artifact Preview */}
           <div className="space-y-2 flex flex-col">
             <div className="text-white font-semibold flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-300 shrink-0">
-              <Sparkles className="w-3.5 h-3.5 text-violet-400" /> Artifact Output
+              <Sparkles className="w-3.5 h-3.5 text-slate-400" /> Artifact Output
             </div>
             {/* A definite height, not a min-height: this box sits inside a
                 scrollable body, so `flex-1` here resolves against nothing and
@@ -284,7 +285,7 @@ export const GateView: React.FC<GateViewProps> = ({
                 onChange={(e) => setFeedback(e.target.value)}
                 placeholder="Instruct the agent on what failed, what they need to fix, or which step to retry."
                 rows={3}
-                className="w-full bg-[#050608] border border-white/10 focus:border-violet-500 rounded-lg p-3 text-xs text-white focus:outline-none transition resize-none leading-relaxed font-sans"
+                className="w-full bg-[#050608] border border-white/10 focus:border-accent-ring rounded-lg p-3 text-xs text-white focus:outline-none transition resize-none leading-relaxed font-sans"
               />
             </div>
           )}
@@ -299,7 +300,7 @@ export const GateView: React.FC<GateViewProps> = ({
                 onChange={(e) => setFeedback(e.target.value)}
                 placeholder="Anything the next steps should know: scope to drop, questions you can answer."
                 rows={2}
-                className="w-full bg-[#050608] border border-white/10 focus:border-emerald-500 rounded-lg p-3 text-xs text-white focus:outline-none transition resize-none leading-relaxed font-sans"
+                className="w-full bg-[#050608] border border-white/10 focus:border-accent-ring rounded-lg p-3 text-xs text-white focus:outline-none transition resize-none leading-relaxed font-sans"
               />
             </div>
           )}
@@ -343,25 +344,23 @@ export const GateView: React.FC<GateViewProps> = ({
 
         {/* Modal Footer Actions */}
         <div className="p-6 border-t border-white/5 bg-white/[0.01] flex items-center justify-between">
-          <button
+          <Button
+            variant="danger-subtle"
             onClick={() => submitDecision('cancel')}
             disabled={settled !== null}
             title={settled ?? 'Abort the whole feature'}
-            className="px-4 py-2 border border-rose-500/20 hover:border-rose-500/50 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-white disabled:border-rose-900/30 disabled:bg-rose-900/20 disabled:text-rose-800 disabled:hover:text-rose-800 disabled:cursor-not-allowed rounded-lg text-xs font-bold transition duration-300"
           >
             Abort feature
-          </button>
+          </Button>
 
           <div className="flex gap-2">
             {isRedirecting ? (
               <>
-                <button
-                  onClick={() => setIsRedirecting(false)}
-                  className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-semibold transition"
-                >
+                <Button onClick={() => setIsRedirecting(false)}>
                   Back
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="primary"
                   onClick={() => submitDecision('redirect')}
                   disabled={decisionsBlocked}
                   title={
@@ -370,14 +369,13 @@ export const GateView: React.FC<GateViewProps> = ({
                         ? `Cannot redirect while '${blockedBy.step_id}' is ${blockedBy.status}`
                         : 'Send the redirect feedback to the agent')
                   }
-                  className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 hover:bg-violet-500 hover:shadow-[0_0_15px_rgba(139,92,246,0.4)] disabled:bg-violet-900/40 disabled:hover:bg-violet-900/40 disabled:cursor-not-allowed disabled:shadow-none rounded-lg text-xs font-bold text-white transition duration-300"
                 >
                   Send Redirect <ArrowRight className="w-3.5 h-3.5" />
-                </button>
+                </Button>
               </>
             ) : (
               <>
-                <button
+                <Button
                   onClick={() => setIsRedirecting(true)}
                   disabled={decisionsBlocked}
                   title={
@@ -386,11 +384,11 @@ export const GateView: React.FC<GateViewProps> = ({
                         ? `Cannot redirect while '${blockedBy.step_id}' is ${blockedBy.status}`
                         : 'Switch into redirect / loop mode')
                   }
-                  className="px-4 py-2 border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 text-violet-400 hover:text-white disabled:border-violet-900/30 disabled:bg-violet-900/20 disabled:text-violet-700 disabled:cursor-not-allowed rounded-lg text-xs font-bold transition duration-300"
                 >
                   Redirect / Loop
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="primary"
                   onClick={() => submitDecision('approve')}
                   disabled={decisionsBlocked}
                   title={
@@ -399,10 +397,9 @@ export const GateView: React.FC<GateViewProps> = ({
                         ? `Cannot approve while '${blockedBy.step_id}' is ${blockedBy.status}`
                         : 'Approve this gate and let the pipeline continue')
                   }
-                  className="flex items-center gap-1.5 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.5)] disabled:bg-emerald-900/40 disabled:hover:bg-emerald-900/40 disabled:cursor-not-allowed disabled:shadow-none rounded-lg text-xs font-bold text-white transition duration-300 shadow-[0_0_15px_rgba(16,185,129,0.3)]"
                 >
                   Approve step <Check className="w-3.5 h-3.5" />
-                </button>
+                </Button>
               </>
             )}
           </div>

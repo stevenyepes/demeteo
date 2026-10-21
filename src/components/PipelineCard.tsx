@@ -29,17 +29,16 @@ import { describeStaleness } from '../lib/staleness';
 import type { Feature, FeatureDrift } from '../types';
 
 /**
- * Left accent bar per tone. Local to this component (the way StatusBadge
- * keeps its own TONE_DOT) because the glow is specific to these cards —
- * the shared registry only carries the flat `TONE_BORDER_L` border.
+ * Left status bar per tone. Local to this component (the way StatusBadge
+ * keeps its own TONE_DOT) because the bar is a solid fill — the shared
+ * registry only carries the `TONE_BORDER_L` border.
  */
 const TONE_ACCENT: Record<RunStatusTone, string> = {
-    emerald: 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]',
-    cyan:    'bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.8)]',
-    violet:  'bg-violet-500 shadow-[0_0_10px_rgba(139,92,246,0.8)]',
-    amber:   'bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.8)]',
-    ruby:    'bg-ruby-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]',
-    slate:   'bg-slate-600 shadow-[0_0_10px_rgba(100,116,139,0.6)]',
+    emerald: 'bg-emerald-500',
+    cyan:    'bg-cyan-500',
+    amber:   'bg-amber-500',
+    ruby:    'bg-ruby-500',
+    slate:   'bg-slate-600',
 };
 
 const COMFORTABLE = pipelineDensityClasses(DEFAULT_DENSITY);
@@ -126,7 +125,7 @@ function PipelineCardInner({
                     </Chip>
                 ) : (
                     <Chip
-                        tone="violet"
+                        tone="slate"
                         size="sm"
                         maxWidth="220px"
                         title={`Workflow: ${context.workflow.name} (${context.workflow.is_starter ? 'starter' : 'custom'})`}

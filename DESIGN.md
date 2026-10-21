@@ -1,19 +1,22 @@
 ---
 name: Demeteo
-description: Dark-only desktop control plane for coding agents, headed for a quiet instrument with an indigo "Signal" accent; its surfaces are solid steps as shipped, while the accent, glows and labels are still the retired stock-violet, neon look.
+description: Dark-only desktop control plane for coding agents, built as a quiet instrument: solid surface steps, one indigo "Signal" accent for action, selection and focus, and status hues spent only on meaning. Decorative blobs, uppercase tracked labels and sub-11px type remain from the retired neon look.
 colors:
-  violet-signal: "#8b5cf6"
-  violet-action: "oklch(54.1% 0.281 293.009)"
-  violet-ink: "oklch(70.2% 0.183 293.541)"
+  accent: "#5a60c2"
+  accent-hover: "#6269cc"
+  accent-ink: "#838ef4"
+  accent-ring: "#6e78db"
+  accent-edge: "#6972c0"
+  accent-tint: "rgb(90 96 194 / 0.16)"
   cyan-stream: "#06b6d4"
   cyan-ink: "#22d3ee"
   emerald-done: "#10b981"
-  emerald-action: "oklch(59.6% 0.145 163.225)"
   emerald-ink: "#34d399"
   amber-needs-you: "oklch(76.9% 0.188 70.08)"
   amber-ink: "oklch(82.8% 0.189 84.429)"
   ruby-failure: "#ef4444"
   ruby-action: "#dc2626"
+  ruby-action-deep: "#b91c1c"
   ruby-ink: "#f87171"
   surface-app: "#08090c"
   surface-sidebar: "#0d0f14"
@@ -25,7 +28,6 @@ colors:
   hairline: "rgb(255 255 255 / 0.05)"
   hairline-raised: "rgb(255 255 255 / 0.09)"
   hairline-strong: "rgba(255, 255, 255, 0.10)"
-  focus-violet: "rgba(139, 92, 246, 0.4)"
   token-ink-primary: "#f3f4f6"
   token-ink-secondary: "#9ca3af"
   token-ink-muted: "#6b7280"
@@ -119,12 +121,6 @@ components:
     typography: "{typography.label}"
     rounded: "{rounded.control}"
     padding: "2px 10px"
-  chip-violet:
-    backgroundColor: "rgba(139, 92, 246, 0.10)"
-    textColor: "{colors.violet-ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    padding: "2px 10px"
   chip-emerald:
     backgroundColor: "rgba(16, 185, 129, 0.10)"
     textColor: "{colors.emerald-ink}"
@@ -154,40 +150,54 @@ components:
     rounded: "{rounded.control}"
     padding: "2px 8px"
   button-primary:
-    backgroundColor: "{colors.violet-action}"
+    backgroundColor: "{colors.accent}"
     textColor: "{colors.ink-white}"
     typography: "{typography.body-dense}"
-    rounded: "{rounded.control-lg}"
+    rounded: "{rounded.field}"
     padding: "8px 16px"
   button-primary-hover:
-    backgroundColor: "{colors.violet-signal}"
-  button-approve:
-    backgroundColor: "{colors.emerald-action}"
-    textColor: "{colors.ink-white}"
-    typography: "{typography.body-dense}"
-    rounded: "{rounded.control-lg}"
-    padding: "8px 20px"
-  button-approve-hover:
-    backgroundColor: "{colors.emerald-done}"
-  button-destructive:
-    backgroundColor: "{colors.ruby-action}"
-    textColor: "{colors.ink-white}"
-    typography: "{typography.body}"
-    rounded: "{rounded.control-lg}"
-    padding: "10px 20px"
+    backgroundColor: "{colors.accent-hover}"
   button-secondary:
     backgroundColor: "rgba(255, 255, 255, 0.05)"
-    textColor: "{colors.ink-white}"
+    textColor: "{colors.ink-slate-200}"
     typography: "{typography.body-dense}"
-    rounded: "{rounded.control-lg}"
+    rounded: "{rounded.field}"
     padding: "8px 16px"
   button-secondary-hover:
     backgroundColor: "rgba(255, 255, 255, 0.10)"
-  button-legacy-primary:
-    backgroundColor: "{colors.violet-signal}"
     textColor: "{colors.ink-white}"
+  button-ghost:
+    backgroundColor: "transparent"
+    textColor: "{colors.ink-slate-400}"
+    typography: "{typography.body-dense}"
     rounded: "{rounded.field}"
-    padding: "10px 18px"
+    padding: "8px 16px"
+  button-ghost-hover:
+    backgroundColor: "rgba(255, 255, 255, 0.05)"
+    textColor: "{colors.ink-white}"
+  button-danger:
+    backgroundColor: "{colors.ruby-action}"
+    textColor: "{colors.ink-white}"
+    typography: "{typography.body-dense}"
+    rounded: "{rounded.field}"
+    padding: "8px 16px"
+  button-danger-hover:
+    backgroundColor: "{colors.ruby-action-deep}"
+  button-danger-subtle:
+    backgroundColor: "transparent"
+    textColor: "{colors.ruby-ink}"
+    typography: "{typography.body-dense}"
+    rounded: "{rounded.field}"
+    padding: "8px 16px"
+  button-danger-subtle-hover:
+    backgroundColor: "rgba(239, 68, 68, 0.10)"
+    textColor: "#fca5a5"
+  button-sm:
+    typography: "{typography.body-dense}"
+    padding: "4px 10px"
+  button-lg:
+    typography: "{typography.body}"
+    padding: "10px 20px"
   input-field:
     backgroundColor: "{colors.field-fill}"
     textColor: "{colors.token-ink-primary}"
@@ -204,11 +214,15 @@ components:
     textColor: "{colors.ink-slate-400}"
     typography: "{typography.label}"
   tab-active:
-    textColor: "{colors.cyan-ink}"
+    textColor: "{colors.ink-white}"
     typography: "{typography.body}"
     padding: "10px 16px"
   tab-idle:
     textColor: "{colors.ink-slate-400}"
+  segment-selected:
+    backgroundColor: "{colors.accent-tint}"
+    textColor: "{colors.ink-white}"
+    rounded: "{rounded.field}"
   rail-item-active:
     backgroundColor: "rgba(255, 255, 255, 0.07)"
     textColor: "{colors.ink-white}"
@@ -236,9 +250,10 @@ components:
 ---
 
 <!--
-  Record of the system AS SHIPPED on branch design/surfaces (master
+  Record of the system AS SHIPPED on branch design/accent-buttons (master
   f0a06579 = PR #251, which carried the token move and runStatus
-  re-toning, plus this branch's solid surfaces: Drift group 1), refreshed
+  re-toning; PR #252's solid surfaces, Drift group 1; and this branch's
+  Signal accent and Button primitive, Drift group 2), refreshed
   2026-10-20 from code, not intentions. The direction
   it is measured against is AGENTS.md §4 ("a quiet instrument"); where the
   code still does something else, the body records what the code does and
@@ -250,8 +265,9 @@ components:
   comment-only lines dropped; the exact patterns are in the Drift section.
 
   The frontmatter holds only shipped values. The indigo "Signal" accent
-  (decision 61) is decided and not yet shipped, so it appears only in the
-  Colors section, marked as the target.
+  (decision 61) is shipped as `@theme static` colours in tokens.css
+  (`accent`, `-hover`, `-ink`, `-ring`, `-edge`, `-tint`), and the
+  frontmatter carries those six values.
 
   Colour values: tokens the project declares itself (tokens.css, the pinned
   utility block in App.css) are sRGB hex/rgba. Colours that reach the screen
@@ -276,65 +292,66 @@ direction, "dark neon glassmorphism", is named in §4 as the look a
 generator reaches for by default.
 
 The shipped code is partway there. The parts that already fit are
-structural: one status vocabulary (`src/lib/runStatus.ts`) with violet
-taken out of it, a motion budget that keeps infinite animation to small
-liveness marks, cascade layers in `src/App.css` so a utility beside a class
-takes effect, and, since branch `design/surfaces`, solid surfaces: a
-panel, a raised layer for whatever floats, and a nested card, each with a
-hairline, one shadow token (the raised layer's), and no blur except on
-controls floating over a live canvas. Much of the rest is still the old look: the
-accent is stock violet-500/600 rather than Signal, glows mark status dots,
-accent bars and primary buttons, decorative blur blobs sit behind status
-screens, and labels are uppercase mono with wide tracking. The Drift
-section lists these as follow-up PRs.
+structural: one status vocabulary (`src/lib/runStatus.ts`) with no violet
+tone, a motion budget that keeps infinite animation to small liveness
+marks, cascade layers in `src/App.css` so a utility beside a class takes
+effect, and solid surfaces (a panel, a raised layer for whatever floats,
+and a nested card, each with a hairline, one shadow token, and no blur
+except on controls floating over a live canvas). Since branch
+`design/accent-buttons` the accent is Signal: one `Button` primitive
+whose primary fill is the accent, one global focus ring, and selection
+in the accent's edge and tint, with no glow on a control or a status
+mark. Much of the rest is still the old look: decorative blur blobs and
+gradient tiles sit behind status screens, cyan marks some things that
+are not in motion, and labels are uppercase mono with wide tracking.
+The Drift section lists these as follow-up PRs.
 
 It is an Operate tool, and density shows it. The commonest text sizes are
-12px (`text-xs`, 408 uses), hand-set 11px (371) and 10px (289). Machine
+hand-set 11px (`text-[11px]`, 352 uses), 12px (`text-xs`, 340) and 10px (287). Machine
 output (ids, costs, token counts, statuses, paths) is set in Fira Code
 and headings in Outfit. There is no light theme and no theme switch.
 
 **Key Characteristics:**
 - Dark-only. Surfaces sit between the well (#050608) and panel hover (#191e29), never lighter.
 - Colour is meaning. `runStatus.ts` maps every run status to one of five status hues; neither the accent nor violet names a status.
-- One accent for primary actions, selection and focus: stock violet as shipped, indigo "Signal" as decided (not shipped).
+- One accent, indigo "Signal", for primary actions, selection and focus: the `Button` primary fill, a 2px focus ring, a selected edge and tint.
 - Three solid surface classes, each stating its own hairline and radius: `.panel` (77 call sites in 41 files), `.raised` for menus, dialogs and toasts (33 in 27), and `.nested-card` to group content inside either.
 - Mono-heavy and dense, with an ungoverned type scale (14 arbitrary text sizes).
-- Depth is a solid surface step plus a hairline, and only the raised layer casts a shadow. Coloured glow is still shipped on status marks and buttons (Drift 2.1).
+- Depth is a solid surface step plus a hairline, and only the raised layer casts a shadow. No control or status mark glows; the last glows are in the first-run hero (Drift 3.6).
 - Motion is budgeted for cost: `data-motion="paused"` freezes everything while the window is unfocused.
 
 ## Colors
 
 Near-black neutrals, five status hues plus inert slate, and one accent
-held back for action, selection and focus. As shipped the accent is
-Tailwind's stock violet; the decided accent is indigo "Signal" (below). Values live in
-`src/styles/tokens.css`; most components still reach colour through
-Tailwind palette classes rather than those tokens (see Drift).
+held back for action, selection and focus. Values live in
+`src/styles/tokens.css`; the surfaces and the accent are Tailwind colours
+there, while status hues still reach components through Tailwind palette
+classes behind the `TONE_*` maps (see Drift).
 
 ### Primary
-- **Electric Violet** (`violet-signal`, `--accent-purple`): the shipped accent, for primary actions and some selection and focus, and no run status. It is drift to migrate to Signal (Drift 2.0). The fill on primary buttons is the deeper **Violet Action** (`violet-action`, violet-600), stepping to violet-500 on hover. `.input-field` focuses to **Focus Violet** (`focus-violet`, `--border-glass-focus`). As shipped, violet also still tints model and workflow chips, lifecycle labels outside `runStatus.ts`, canvas node kinds and the streaming caret (Drift 2.5).
-- **Violet Ink** (`violet-ink`): violet text in chips and icons.
-
-**Decided, not shipped: indigo "Signal"** (decision 61 in
-`docs/DECISIONS.md`, values arriving in a follow-up PR). These are the
-target, not tokens; nothing in `tokens.css` or `src/` carries them yet.
-- Fill `#5a60c2`, always with a white label (5.40:1); hover `#6269cc`.
-- Text `#838ef4`.
-- Focus ring `#6e78db`.
-- Selected border `#6972c0`; selected tint `rgba(90,96,194,.16)`.
+Indigo **Signal** (decision 61 in `docs/DECISIONS.md`), declared as
+`@theme static` colours in `tokens.css`. It marks primary actions,
+selection and focus, and never a status.
+- **Signal** (`accent`, `bg-accent`): the primary fill, always with a white label (5.40:1). The `Button` primary variant and StartSessionButton's split button are the fills.
+- **Signal Hover** (`accent-hover`): the primary fill under the pointer (white label 4.76:1).
+- **Signal Ring** (`accent-ring`): the global 2px focus ring and the focused border of a field (`focus:border-accent-ring`, `.input-field`, `.chat-input`); 4.68:1 against the panel.
+- **Signal Edge** (`accent-edge`): the selected border on tabs, segments, rows, tiles and the selected canvas node; 4.15:1 against the panel.
+- **Signal Tint** (`accent-tint`): the selected fill behind segments, rows, palette highlights and the selected `<option>`; `::selection` uses the same hue at 45%.
+- **Signal Ink** (`accent-ink`): accent text on a dark surface (6.22:1 against the panel), and the selected `<option>` text. Checkboxes take `accent-accent`.
 
 Decision 61 records why stock violet was dropped: white on violet-500
 measured 4.23:1 (under AA), and its focus and selection borders measured
-under 2:1. Signal is never a status, and violet stays out of statuses too,
-because it sits too close to the accent.
+under 2:1. Violet stays out of statuses too, because it sits too close to
+the accent; what violet is left in `src/` is decoration (Drift group 3).
 
 ### Secondary
-- **Stream Cyan** (`cyan-stream`, `--accent-cyan`): in motion. Running, bootstrapping, verifying, and a published PR out for review all resolve to cyan. As shipped it is also the selected tab and segment, `::selection`, the selected `<option>`, the scrollbar thumb on hover and most input focus borders, all of which §4 gives to violet (Drift 2.4). Cyan is the most-used hue (540 palette-class uses).
-- **Cyan Ink** (`cyan-ink`): selected-tab text, token-count icons, markdown links.
+- **Stream Cyan** (`cyan-stream`): in motion. Running, bootstrapping, verifying, a published PR out for review, an "Asking" or "Interviewing" turn while it runs, and the one shimmer, the indeterminate progress bar. Some cyan still marks nothing in motion (Drift 2.9). 207 palette-class uses.
+- **Cyan Ink** (`cyan-ink`): token-count icons, markdown links, in-motion chip text.
 
 ### Tertiary
-- **Done Emerald** (`emerald-done`, `--accent-emerald`): finished well (completed, PR ready, merged). `StatusBadge` also maps machine `idle`/`active` to emerald. **Emerald Action** (`emerald-action`, emerald-600) fills the gate's Approve and other confirm-and-proceed buttons.
-- **Needs-You Amber** (`amber-needs-you`, amber-500): a human is needed, and in `runStatus.ts` only that: the settled gate, credential and interrupted statuses, plus `REVIEW_READY_META`. `pipelineFilter.ts` derives the "Needs you" band from it. Amber has no token in `tokens.css`; it comes from Tailwind's palette. It is the only hue with its own finite animation (`pulse-attention`, three beats, then lit) and its own card treatment (`ring-1 ring-amber-500/40` on a pipeline card that needs you).
-- **Ruby** (`ruby-failure`, `--accent-ruby`, `@theme --color-ruby-*`): failed or destructive. A full 50–950 scale in `tokens.css` at Tailwind v3's sRGB red values, so `ruby-500` is #ef4444 while v4's own `red-500` is a slightly different OKLCH red. Rose and raw red are also in use (Drift 2.7).
+- **Done Emerald** (`emerald-done`): finished well, or healthy (completed, PR ready, merged; `StatusBadge` maps machine `idle`/`active` to it, which §4's "or healthy" covers). It fills no button: approving is the gate's primary action, so it is Signal.
+- **Needs-You Amber** (`amber-needs-you`, amber-500): a human is needed, and in `runStatus.ts` only that: the settled gate, credential and interrupted statuses, plus `REVIEW_READY_META`. `pipelineFilter.ts` derives the "Needs you" band from it. Amber has no token in `tokens.css`; it comes from Tailwind's palette. It is the only hue with its own finite animation (`pulse-attention`, three beats, then lit) and its own card treatment (`ring-1 ring-amber-500/40` on a pipeline card that needs you). Discovery's QuestionCard "Needs you" and the NotificationBell `gate_pending` dot are amber for the same reason.
+- **Ruby** (`ruby-failure`, `@theme --color-ruby-*`): failed or destructive. A full 50–950 scale in `tokens.css` at Tailwind v3's sRGB red values, so `ruby-500` is #ef4444 while v4's own `red-500` is a slightly different OKLCH red. **Ruby Action** (`ruby-action`, ruby-600) fills the `danger` button and steps darker to **Ruby Action Deep** (`ruby-action-deep`, ruby-700) on hover, because white on ruby-500 is under 4.5:1. Rose and raw red are also in use (Drift 2.7).
 
 ### Neutral
 The surfaces and hairlines are Tailwind colours, declared in a `@theme
@@ -356,7 +373,7 @@ except the hairlines and the field fill.
 
 **The Colour-Is-Meaning Rule.** Neutral greys do everything that is not a status, an action, a selection or focus. A status colour always ships with a label or icon, because hue alone carries no state (WCAG 2.2 AA is the target).
 
-**The Accent-Is-Not-A-Status Rule.** The accent marks primary actions, selection and focus, never a status, and neither does violet, which sits too close to it. `runStatus.ts` still exports a `violet` tone in `RunStatusTone` for non-status accents; every use of it is drift (2.5).
+**The Accent-Is-Not-A-Status Rule.** The accent marks primary actions, selection and focus, never a status, and neither does violet, which sits too close to it. `RunStatusTone` has no violet and no accent-hued tone, and no `Button` variant takes a status hue: a status colour on a control would say the action is that state.
 
 **The Amber-Is-A-Human Rule.** Amber means a human is needed and nothing else. "Needs you" is derived from a settled amber status, so an amber status that needs nobody is a bug. Amber is the one hue allowed to call for attention after it settles: three pulses, then it rests lit.
 
@@ -435,7 +452,7 @@ static because an animated blur pinned the WKWebView GPU process. §4
 forbids them (Drift 3.1).
 
 **Scrolling.** The global WebKit scrollbar and `ScrollArea` are 10px, with
-a translucent thumb that turns cyan on hover and violet while dragged.
+a translucent white thumb that brightens on hover and while dragged, with no hue.
 Long lists use `content-visibility: auto` with measured intrinsic sizes
 (`.pipeline-card`, `.timeline-step-card`) rather than a virtualisation
 dependency.
@@ -452,18 +469,16 @@ The ladder is solid: well #050608 < app #08090c < sidebar #0d0f14 <
 panel #11151d < raised #181d28 (panel hover #191e29). A panel states a
 5% hairline and casts nothing; a raised surface states a 9% hairline and
 casts the one shadow token. Backdrop blur is left only on translucent
-controls floating over a live canvas (6 uses in 4 files). Two things
-are not yet surface steps: coloured halos still mark status, buttons and
-focus (the glows below, Drift 2.1), and call sites still cast 13 neutral
-shadows in 9 files, on canvas nodes and in-flow boxes (Drift 1.15).
+controls floating over a live canvas (6 uses in 4 files). No status
+mark, button or field glows: status dots and accent bars are flat, focus
+is a ring or a border, and `.animate-pulse-glow(-amber)` keep their names
+but fade opacity only. The exceptions are the first-run hero's glows
+(Drift 3.6) and 22 neutral shadows in 8 files cast by canvas nodes and
+in-flow boxes (Drift 1.15).
 
 ### Shadow Vocabulary
 - **Raised** (`box-shadow: 0 12px 32px -8px rgba(0,0,0,0.6)`, `--shadow-raised`): built into `.raised`, for menus, popovers, dialogs and toasts. The one shadow §4 keeps; panels cast none, and call sites do not re-spell it.
-- **Status dot halo** (`0 0 8px rgba(<tone>, 0.8)`): `StatusBadge` dots. Retired by §4.
-- **Accent bar halo** (`0 0 10px rgba(<tone>, 0.8)`): the 4px left bar on a pipeline card (slate at 0.6). Retired.
-- **Primary glow** (`0 0 15px rgba(139,92,246,0.4)` and variants): violet buttons; Approve has the emerald equivalent. Retired.
-- **Live pulse glow** (`0 0 10px 1px rgba(6,182,212,0.5)`): static halo on `.animate-pulse-glow`, faded by opacity; amber variant on `.animate-pulse-glow-amber`. Retired.
-- **Focus glow** (`0 0 8px` violet on `.input-field:focus`, cyan on `.chat-input:focus`). Retired.
+- **No glow.** The status-dot, accent-bar, primary-button, live-pulse and focus glows are gone; `shadow-[0_0_` survives only in `EmptyStateCard` (4/1, Drift 3.6).
 
 ### Named Rules
 
@@ -481,9 +496,9 @@ Softly squared. Controls take small radii and panels take
 `--radius-panel` (12px). Circles are for status dots, count badges and
 avatar or icon tiles.
 
-- **Control** (4px, `rounded`, 124 uses): chips, keyboard hints, `.btn-icon`, inline code.
-- **Field** (6px, `rounded-md`, 69): `.input-field`, `.btn-primary`, `.btn-secondary`, selected segments, the top-bar search.
-- **Control Large** (8px, `rounded-lg`, 418): the de facto default for buttons, inputs, rail items, icon buttons and inner boxes.
+- **Control** (4px, `rounded`, 119 uses): chips, keyboard hints, `.btn-icon`, header nav items, inline code.
+- **Field** (6px, `rounded-md`, 56 at call sites): every `Button` (172 call sites), `.input-field`, selected segments, the top-bar search.
+- **Control Large** (8px, `rounded-lg`, 315): the de facto default for hand-spelled inputs, rail items, icon buttons and inner boxes.
 - **Panel** (12px, `--radius-panel`): `.panel`, `.raised`, `.nested-card`, and so every dialog and menu on `.raised`. Elsewhere 12px is still spelled `rounded-xl` (62 uses in 41 files, Drift 1.14). No surface is rounder than the panel since `rounded-2xl` was removed.
 - **Pill** (`rounded-full`, 132): status dots (8px), chip dots (6px), count badges, avatars.
 
@@ -500,24 +515,29 @@ pipeline card's status is a 4px left bar clipped by the card
 ## Components
 
 Tailwind class strings in TSX, with primitives in `src/components/ui/`
-that own a decision so call sites cannot re-open it. There is no Button
-primitive, so buttons are spelled per call site. `SectionCard` exists
-and has no call sites.
+that own a decision so call sites cannot re-open it. `Button` owns every
+button's fill, radius and padding. `SectionCard` exists and has no call
+sites.
 
 ### Buttons
-- **Character (shipped):** a saturated fill, often with a glow, for the action that moves the pipeline; quiet translucent white for the rest.
-- **Shape:** 8px at most call sites (`rounded-lg`); 6px on the `App.css` `.btn-*` classes.
-- **Primary:** violet-600 fill, white text, 8px × 16px at 12px semibold or bold, or 10px × 20px at 14px on status screens. Hover steps to violet-500, usually adding a violet glow. Disabled drops to violet-900 at 40%.
-- **Approve / Proceed:** emerald-600 fill with a resting emerald glow, stepping to emerald-500 on hover. The gate's Approve is the canonical one.
-- **Destructive:** a ruby-600 fill (ProjectHome retry) or a rose tint (rose-500/10 fill, rose-500/20 border, rose-400 text; GateView "Abort feature").
-- **Secondary:** white at 5% (10% on hover), optional `border-white/10`, white or slate-300 text.
-- **Tone-tint:** hue/10 fill, hue/30 border, hue-400 text, turning white on hover (GateView "Redirect / Loop").
-- **Ghost / Icon:** no fill, slate-400 icon, `hover:bg-white/5 hover:text-white`, 4–8px padding.
-- **Legacy class buttons:** `.btn-primary` (135° violet-500 → #7c3aed gradient, `0 0 14px` violet glow on hover, weight 550, 15 uses in the Ask and Discovery views) and `.btn-secondary` (transparent with hairline, 28 uses).
+- **Character:** one accent fill for the action that moves the work forward, quiet neutrals for the rest, and no glow, gradient or hue that names a state.
+- **Primitive:** `Button` in `src/components/ui/Button.tsx` (`<Button` 172 call sites in 63 files). The variant names a role, never a hue; `className` is for layout only. It defaults to `variant="secondary"`, `size="md"` and `type="button"`. `buttonClasses(variant, size)` gives the same classes to a control that cannot be a `<button>`, such as a file-input `<label>` or an `<a>` (7 uses in 5 files).
+- **Shape:** 6px (`rounded-md`), 1px border, semibold, `gap-1.5` for an icon.
+- **Sizes:** `sm` 4px × 10px at 12px; `md` 8px × 16px at 12px, the dialog and toolbar default; `lg` 10px × 20px at 14px, a status screen's one action.
+- **Primary:** Signal fill, white label, hover to Signal Hover. Gate Approve, Send redirect, Replay, Retry and every other proceed action are primary; there is no emerald or cyan variant.
+- **Secondary:** white at 5% with a `border-white/10` edge, slate-200 label; hover to 10% and white.
+- **Ghost:** no fill, slate-400 label; hover to white at 5% and white.
+- **Danger:** ruby-600 fill, white label, hover steps darker to ruby-700.
+- **Danger subtle:** no fill, `ruby-500/30` edge, ruby-400 label; hover to a ruby-500/10 tint and ruby-300 (GateView's Abort).
+- **State:** disabled is 40% opacity with a not-allowed cursor, and hover is spelled `not-disabled:hover:` so a disabled button never lights up. Focus is the global ring.
+- **Icon:** `.btn-icon` (4px) remains for bare icon buttons; `.btn-primary` and `.btn-secondary` no longer exist.
+- **Outside the primitive:** StartSessionButton's split button spells `bg-accent` by hand, because its two halves share one rounded outline that a `<Button>` cannot draw. Hue-tinted controls remain at TicketForceStart (an amber force-start), WorkflowList (rose Delete, yellow Revert icon buttons) and the first-run hero's violet sample-project button (Drift 2.7, 3.6).
 
 ### Chips
 - **Style:** `Chip` is the one pill (64 call sites). Fira Code, uppercase, `tracking-wide`, 4px radius, 1px hue border at `/20`, hue fill at `/10`, hue ink at `-400`. `md` is 12px with 2px × 10px padding; `sm` is 10px with 2px × 8px.
 - **State:** a status chip resolves its label, hue and liveness from `runStatusMeta`. A live status gets a leading 6px `bg-current` dot with `animate-pulse`. The dot pulses, never the pill, because a pulsing box holding text re-rasterises the text every frame. `maxWidth` is the only inline-style escape.
+- **Names:** a model, workflow, harness or placement is a slate chip. A name is not a state, so it takes no hue.
+- **Don't:** give a chip a hue for something that is not a status; `Chip` has no violet tone. Cyan `agent_kind` chips are drift (2.9).
 
 ### Cards / Containers
 - **Corner Style:** 12px (`--radius-panel`).
@@ -535,10 +555,10 @@ and has no call sites.
 
 ### Pipeline Card (signature)
 The project view's row: a hoverable `.panel` with a 4px left accent
-bar in the status hue (with a glow, as shipped), laid out in three tiers
+bar in the status hue (flat, no glow), laid out in three tiers
 (`data-tier`):
 1. **Scan:** the title (Outfit, 18px or 14px, white, two-line clamp), a status `Chip` (`sm`), elapsed time in white mono, and a chevron that appears on hover.
-2. **Context:** workflow (violet chip), transport (hue chip with a CPU icon), optional staleness chip, cost and tokens in slate mono.
+2. **Context:** workflow (slate chip), transport (hue chip with a CPU icon), optional staleness chip, cost and tokens in slate mono.
 3. **Detail:** feature id and description in slate-500, truncated.
 
 A card that needs a human adds `ring-1 ring-amber-500/40`, which renders
@@ -546,20 +566,20 @@ since PR #250.
 
 ### Inputs / Fields
 - **Style:** `.input-field` (field fill, hairline, 6px, 10px × 12px, 14px Inter). Most inputs are hand-spelled: `bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white`. Native `select`, text-like `input`s and `textarea` are forced to #0a0a0e with slate-200 text and slate-600 placeholders by unlayered `!important` rules in `App.css`, and `select` gets a chevron image with 28px right padding. Those rules beat the call sites' own background and text utilities (Drift 6.1).
-- **Focus:** a border shift. `.input-field` goes violet with a soft glow; call-site inputs mostly go `focus:border-cyan-500/50` (81 uses) against `focus:border-violet-*` (19). `focus:outline-none` appears 98 times and a visible `focus-visible:` style in 7 files.
+- **Focus:** fields keep a border shift to Signal Ring and no glow: `focus:border-accent-ring` at call sites (102 in 42 files), and `.input-field` and `.chat-input` in `App.css`. They drop the global ring with `focus:outline-none` (94 in 39 files). Every other focusable element gets the one ring: `:focus-visible` in `@layer base`, a 2px `accent-ring` outline at a 2px offset. A `tabindex="-1"` element, focused by code rather than Tab, gets none.
 - **Labels:** `FieldLabel`: 12px uppercase Fira Code, slate-400, `tracking-wider`, 6px below.
 
 ### Navigation
-- **Top bar:** brand mark plus lowercase "demeteo" (Outfit 700, 18px). A centred command-palette trigger styled as a field: well fill, hairline, 6px. On the right, `HeaderNavItem`s: 16px icons tinted by an `accent` prop (violet, cyan or amber), mono 12px labels at `labels` density, `aria-label` only at `icons` density. Active is `bg-white/[0.04]` with white text. The corner badge is a solid amber count, a cyan activity dot or an emerald pulse dot.
-- **Project rail:** projects with a `StatusBadge` dot, a 12px name and a 9px mono sub-line. The active item is a selected row: the panel-hover surface with white text at the 8px control radius, with no border and no halo. Collapsed, 36px initial tiles (active: violet-500/20 fill, violet-300 text, violet-500/30 border). `RailNavItem` renders the Terminals entry (active `bg-white/[0.07]` plus `border-white/10`). `RailBadge` handles counts (mono 10px, capped at 9+ or 99+).
-- **Tabs:** `TabBar` is a `tablist` with a 2px bottom border. Selected is a cyan border and cyan-400 text; idle is slate-400, turning slate-200 on hover. `md` is 14px Outfit medium, `sm` 12px semibold.
-- **Segmented control:** `SegmentedControl` is a `radiogroup` in an 8px `bg-white/[0.02]` frame. The selected segment takes `TONE_CHIP.cyan` with a cyan focus ring; the optional count badge is tinted by tone.
+- **Top bar:** brand mark plus lowercase "demeteo" (Outfit 700, 18px). A centred command-palette trigger styled as a field: well fill, hairline, 6px. On the right, `HeaderNavItem`s: 16px icons in the item's own text colour (slate-400, white when active or hovered), mono 12px labels at `labels` density, `aria-label` only at `icons` density. Active is `bg-white/[0.04]` with white text. The corner badge is a solid amber count, a cyan activity dot or an emerald pulse dot.
+- **Project rail:** projects with a `StatusBadge` dot, a 12px name and a 9px mono sub-line. The active item is a selected row: the panel-hover surface with white text at the 8px control radius, with no border and no halo. Collapsed, 36px initial tiles (active: Signal Tint fill, Signal Edge border, white text). `RailNavItem` renders the Terminals entry (active `bg-white/[0.07]` plus `border-white/10`). `RailBadge` handles counts (mono 10px, capped at 9+ or 99+).
+- **Tabs:** `TabBar` is a `tablist` with a 2px bottom border. Selected is a Signal Edge border and white text; idle is slate-400, turning slate-200 on hover. `md` is 14px Outfit medium, `sm` 12px semibold.
+- **Segmented control:** `SegmentedControl` is a `radiogroup` in an 8px `bg-white/[0.02]` frame. The selected segment takes a Signal Edge border, Signal Tint fill and white text, and focus is the global ring; the optional count badge is tinted by tone.
 
 ### Status Dot
-`StatusBadge` is an 8px solid hue dot with an 8px halo (none for slate).
+`StatusBadge` is an 8px solid hue dot, flat, with no halo.
 It has no label of its own: the row's text is the label. Liveness marks
 elsewhere are 6–8px dots with `animate-pulse` (cyan, in progress) or
-`animate-pulse-glow` (emerald, live sessions).
+`animate-pulse-glow` (emerald, live sessions), which fades opacity and casts no halo.
 
 ### Gate Modal
 The human-approval checkpoint. A `.raised` body (raised fill, brighter
@@ -567,9 +587,10 @@ hairline, panel radius, the raised shadow), capped at `max-w-4xl` and
 85vh, over its own `bg-black/60` scrim rather than `Modal`. The header has
 an amber shield tile and an Outfit 700 18px title; the artifact output
 sits in a well. Warning strips are amber ("already decided") or rose
-("decision blocked"). The footer puts Abort (rose tint) on the left and
-Redirect (violet tint, or a violet fill when sending) plus Approve
-(emerald fill with glow) on the right.
+("decision blocked"). The footer puts Abort (`danger-subtle`) on the left
+and Redirect (`secondary`, then a `primary` send) plus Approve (`primary`)
+on the right. Approve is the gate's primary action, so it carries the
+accent, not emerald.
 
 ### Empty State
 `EmptyStateCard` has a first-run **hero** (a large panel over static
@@ -600,7 +621,8 @@ These restate AGENTS.md §4 and the invariants the code already enforces.
 ### Do:
 - **Do** read token values from `src/styles/tokens.css`; never hard-code hex.
 - **Do** pick a status hue through `runStatusMeta` / `TONE_CHIP` / `TONE_TEXT` / `TONE_BADGE` / `TONE_BORDER_L`, render status pills with `Chip`, and ship every status colour with a label or icon.
-- **Do** keep the accent for primary actions, selection and focus, with a white label on an accent fill. New code waits for the Signal tokens rather than adding stock `violet-*`.
+- **Do** keep the accent for primary actions, selection and focus: `<Button variant="primary">` for the action, `border-accent-edge` with `bg-accent-tint` for a selected item, and the global ring for focus. A field shows focus with `focus:border-accent-ring`.
+- **Do** build every button with `Button` (or `buttonClasses` for a `<label>` or `<a>`), choosing a variant by role, and pass only layout classes.
 - **Do** use amber only for "a human is needed", and let its pulse run three beats, then rest lit.
 - **Do** use `.panel` for a panel, `.raised` for anything floating (menu, popover, dialog, toast), `.nested-card` for a group inside either, and `.panel-field` for a field filling a panel, and keep their fill, border, radius and shadow unspelled at the call site.
 - **Do** keep blur for translucent controls floating over live content (canvas zoom controls and legends, the terminal status overlay); an opaque raised surface takes none.
@@ -613,11 +635,12 @@ These restate AGENTS.md §4 and the invariants the code already enforces.
 ### Don't:
 - **Don't** build a light theme or place these surfaces on a light ground.
 - **Don't** add glow shadows or `text-shadow`, or a gradient fill on a button or text.
+- **Don't** fill a button with a status hue (an emerald Approve); proceed actions are primary.
 - **Don't** add decorative blurred blobs, sparkle icons as ornament, `hover:scale`, or shimmer outside an indeterminate progress bar.
 - **Don't** blur a card, a rail, a header or a raised surface, nest a panel in a panel, or blur a full-window scrim.
 - **Don't** use all-caps letter-spaced labels or text under 11px.
 - **Don't** pass a colour into `Chip`, or hand-write `bg-<hue>-500/10 text-<hue>-400` for a status.
-- **Don't** give the accent or violet a status, use violet as decoration, or give amber a state that needs nobody.
+- **Don't** give the accent or violet a status, use violet or cyan as decoration, or give amber a state that needs nobody.
 - **Don't** put design tokens in `style=` props or raw hex.
 - **Don't** name a font utility after a face (`font-outfit`); a key with no `@theme` entry silently renders Inter.
 - **Don't** copy a pattern because it sits nearby; check it against the Drift list first.
@@ -631,10 +654,14 @@ follow-up PR that would close it, in the order to work them.
 **How counts were taken.** `rg -n -P '<pattern>' src -g '*.{ts,tsx}' -g
 '!*.test.*' -g '!src/test/**'`, lines whose code starts with `//`, `*`,
 `/*` or `{/*` dropped, then matches counted with `grep -oP`. "N/F" means N
-matches in F files. Group 1 and the counts in 2.0, 2.1, 2.7, 4.1, 4.2,
-4.5 and 5.1–5.3 were re-measured on branch `design/surfaces`, which
-deleted `src/components/Sidebar.tsx` (nothing imported it); the other
-counts were taken before that and may include a match or two from it.
+matches in F files. Group 2, 1.15, 3.3, 5.2, 5.4, 5.6, the violet and
+glow facts in group 3, and the type and radius counts in Overview and
+Shapes were re-measured on branch `design/accent-buttons`. The rest of
+group 1 and 4.1, 4.2, 4.5, 5.1 and 5.3 were measured on branch
+`design/surfaces`, which deleted `src/components/Sidebar.tsx` (nothing
+imported it); the other counts were taken before that and may include a
+match or two from it. Group 2 rewrote many class strings, so those older
+counts may have moved by a few.
 Where a classification needed reading the code (overlay or card, Project
 or not), it says so.
 
@@ -657,43 +684,38 @@ What is left is call sites the surface classes have not reached yet.
 
 1.14 **12px spelled without the panel token.** Breaks: the panel radius is `--radius-panel`. Evidence: `\brounded-xl\b` = 62/41 (`rg -c '\brounded-xl\b' src` = 63/42 with one comment line), none on the same line as `.panel`, `.raised` or `.nested-card`. They are mostly panel-like boxes (artifact wells, notices, canvas ticket nodes, toasts, ShortcutHelp's cards from 1.9) plus some icon tiles. `--radius-panel` is a `:root` property, not a `@theme` key, so no `rounded-panel` utility exists. Fix: move each onto a surface class, or expose the radius as a utility for the ones that are not surfaces.
 
-1.15 **Shadows cast outside `.raised`.** Breaks: only the raised surface casts a shadow. Evidence: neutral shadows at call sites, `(?<![\w:-])shadow-(sm|md|lg|xl|2xl)\b|shadow-\[0_(?!0_)[^\]]*\]` = 13/9 (no `shadow-2xl` left), among them canvas nodes `shadow-lg shadow-black/30` and artifact wells `shadow-lg`. Fix: delete in-flow shadows; decide whether a canvas node is raised (and casts `--shadow-raised`) or a panel.
+1.15 **Shadows cast outside `.raised`.** Breaks: only the raised surface casts a shadow. Evidence: neutral shadows at call sites, `(?<![\w:-])shadow-(sm|md|lg|xl|2xl)\b|shadow-\[0_(?!0_)[^\]]*\]` = 22/8 (no `shadow-2xl` left): `WorkflowNode` ×11, where every state now casts the resting `shadow-lg shadow-black/30` in place of its tone, diff and selection glows; `ArtifactViewer` ×3 (artifact wells `shadow-lg`); `AskCanvasNode` ×3; one each in `PinnedCanvasArtifact`, `TicketGraphNode`, `NewTerminalMenu`, `ProjectSettingsShell` and `StartSessionButton`. Fix: delete in-flow shadows; decide whether a canvas node is raised (and casts `--shadow-raised`) or a panel.
 
 1.16 **Translucent near-black fills.** Breaks: three solid surfaces. Evidence: `bg-\[#[0-9a-fA-F]{6}\]/\d+` = 36/27, 16 distinct values, led by `bg-[#0d0f14]/90` ×6 (Ask and Discovery composers and the 1.15 footers), `bg-[#08090c]/40` ×5 (read-only fields in StrategyTab and HarnessModelPicker, DocsPanel's nav) and `bg-[#050608]/85` ×4 (artifact wells); also WorkflowList's and CodeEditorView's side panes at `/50`. It includes 1.9, 1.10, and 1.15's footers and translucent bodies. Fix: the solid `surface-*` utilities, or no fill where the host already has one.
 
 ### 2. Accent and buttons
 
-2.0 **Stock violet is the accent.** Breaks: the accent is indigo "Signal" (decision 61), and violet names nothing. Evidence: every `violet-` utility is to migrate or remove: `\bviolet-` = 446/106. Split by role: solid fills `(?<![\w/-])bg-violet-(500|600|700)(?![\w/])` = 41/21 plus state fills `(hover|active|disabled):bg-violet-` = 44/30 (primary buttons); focus `(focus|focus-visible|focus-within):[\w-]*violet` = 19/11; text `(?<![\w:-])text-violet-` = 136/74; borders `(?<![\w:-])border-(l-)?violet-` = 80/56; tints `(?<![\w:-])bg-violet-\d+/` = 84/50; `rgba(139,92,246…)` literals in TSX = 31/23 (mostly glows, 2.1). In CSS: `--accent-purple` and `--accent-purple-glow` and `--border-glass-focus` in `tokens.css`; in `App.css`, `var(--accent-purple)` ×3 (scrollbar thumb while dragged, agent chat-bubble sender, `.btn-primary`), `rgba(139,92,246,…)` ×6 (agent chat bubble, `.btn-primary` border and glow, progress shimmer, two pinned utilities), `#7c3aed` and the caret's `#a78bfa`. Which of these are action, selection or focus (migrate to Signal) and which are decoration or status (2.5, remove) takes reading each site; the fill, focus and selection counts above are the migrate set. Fix: once the Signal tokens land as `@theme` colours, replace action, selection and focus uses with them, then delete `--accent-purple*`.
+Items 2.0–2.5 and 2.8 were closed on branch `design/accent-buttons` (see
+Resolved). What is left is hue spent where §4 gives it no meaning.
 
-2.1 **Glow shadows.** Breaks: never glow shadows. Evidence: `shadow-\[0_0_[^\]]*\]` = 94/38, 59 distinct strings; by colour, violet 31, emerald 21, cyan 18, amber 9, ruby 5, slate 3, other 7. They include `StatusBadge`'s `TONE_DOT`, `PipelineCard`'s `TONE_ACCENT` and primary buttons (`hover:shadow-\[0_0_` = 7/5). The gate and artifact modal halos and the two black ones went with the raised surface on branch `design/surfaces`. `App.css` adds five more: `.animate-pulse-glow` (static cyan halo; 16/12 uses), `.animate-pulse-glow-amber` (2/2), and the focus glows on `.input-field` and `.chat-input` and the hover glow on `.btn-primary`. `tokens.css` keeps four `--accent-*-glow` values, one of them used. Fix: delete the glows; dots and bars go solid, focus becomes a ring, and the `--accent-*-glow` tokens go.
+2.6 **Amber for states that need nobody.** Breaks: amber = a human is needed, and only that. Evidence: `(tone|accent)\s*[:=]\s*['"]amber['"]|: 'amber'` = 32/17, 7 of them in `runStatus.ts` itself. Read one by one, these need nobody: `activitySync.ts` "reconnecting", `decomposeReview.ts` "Revised" and "blocked by …", `ticketPresentation.ts` "Blocked" ("waiting on an edge"), the `AskThreadCard` "network" chip, and `harnessVerdict.ts`'s "unrunnable" (multi-line, not in the count). Gate nodes, credential failures, PR conflicts, "Undecided — left for you", QuestionCard's "Needs you" and NotificationBell's `gate_pending` do. Fix: in-motion states to cyan, dependency and change kinds to slate; §4 needs a home for "warning".
 
-2.2 **Gradient primary button.** Breaks: no gradient fills on buttons. Evidence: `.btn-primary` in `App.css` is `linear-gradient(135deg, var(--accent-purple), #7c3aed)` with a hover glow; `\bbtn-primary\b` = 15/14, all in `ask/`, `discovery/` and their modals. `AskCanvasNodeInspector` has one more gradient button (`bg-gradient-to-br from-violet-600 to-violet-700`). Fix: a solid Signal fill (`#5a60c2`, hover `#6269cc`, white label), the same one 2.3's primitive uses.
+2.7 **Three reds and off-palette hues.** Breaks: ruby = failed or destructive; colour only for meaning. Evidence: ruby classes 261/72, rose 68/17, red 21/4 (`(?<![\w-])(text|bg|border|ring|from|to|via|fill|stroke|shadow|outline)-<hue>-`). Rose carries GateView's "decision blocked" strip and WorkflowList's Delete icon button (a rose tint that fills `rose-600` on hover). `App.css` pins `text-red-400`, `bg-red-500/10` and two `border-red-500/*`. Yellow, orange and blue add 12/4 (`CodeEditorView` git letters and folder icons, `ErrorToast`'s orange "Network" accent, `GeneralTab`'s unpushed chip, WorkflowList's yellow Revert icon button). Fix: rose and red to ruby, and WorkflowList's two icon buttons to `Button` (`danger-subtle`, `ghost`); orange and yellow to amber only where a human is needed, else slate.
 
-2.3 **Two primary spellings, no primitive.** Breaks: one primary action treatment (inferred from §4's "the accent = primary actions"; §4 does not name a Button primitive). Evidence: inline `\bbg-violet-600\b` = 35/21 and `\bhover:bg-violet-500\b` = 38/29 beside the 15 `.btn-primary`. Fix: a `Button` primitive in `src/components/ui/` with primary (Signal fill, white label), secondary, ghost and destructive variants; it is the natural place for 2.0's migration.
+2.9 **Cyan as decoration.** Breaks: cyan = in motion; colour only for meaning. Evidence: cyan that marks no motion, read site by site: WorkflowList's "Custom" chip (the "Starter" chip beside it is emerald, the same mistake in another hue), VersionDrawer's "Current" badge, ErrorToast's `database` kind (`text-cyan-300`, `border-l-cyan-400/70`), CodeEditorView's branch name and icon, `agent_kind` as a cyan `Chip` (`Chip[^>]*tone="cyan"[^>]*>\{[\w.]*agent_kind\}` = 3/3: AskThreadCard, AskThreadSettingsPanel, DiscoveryCard), StartFeatureModal's remote-placement hints (`Server` icon, two `text-cyan-300/80` notes and the "Always unattended" box), and cyan left-border accents on cards (`\bborder-l-(2|4)\b[^"`]*\bborder-l-cyan-` = 2/2, ProvidersPage and MachinesView). Tree-wide `tone=["']cyan["']|tone:\s*['"]cyan['"]` = 34/21, most of it legitimate motion. Fix: names and kinds to slate, the remote hints and card accents neutral, the "Current" badge slate.
 
-2.4 **Focus and selection are cyan.** Breaks: the accent = selection and focus. Evidence: `focus(-visible|-within)?:border-cyan-` = 81/32 against `…:border-violet-` = 19/11; `focus(-visible)?:ring-cyan` = 4/4 (including `SegmentedControl`), `ring-violet` = 0. `TabBar` selects with `border-cyan-500` plus `TONE_TEXT.cyan`, and `SegmentedControl` with `TONE_CHIP.cyan`. In `App.css`, `::selection`, `select option:checked` and the scrollbar thumb on hover are cyan. The 19 violet focus borders are drift too (2.0). Fix: one shared focus ring in Signal (`#6e78db`), and Signal selected states (border `#6972c0`, tint `rgba(90,96,194,.16)`) in `TabBar`, `SegmentedControl` and `App.css`.
-
-2.5 **Violet still names states and decorates.** Breaks: neither the accent nor violet is a status, colour is spent only on meaning, and status hues resolve through `runStatus.ts`. Evidence: `tone=["']violet["']|tone:\s*['"]violet['"]|TONE_(CHIP|TEXT|BADGE|BORDER_L)\.violet|\['violet'\]` = 27/17. Among them: `discoveryProgress.ts` ("Interviewing"), `askLifecycle.ts` ("Asking", "Open"), `ticketPresentation.ts` (the "Ready" lane), `StorageProjectCard`/`StoragePanel` ("Reclaimable"), canvas node kinds in `canvas/types.ts`, and model or workflow names as violet `Chip`s (`PipelineCard`, `FeatureHeader`, `AskThreadCard`, `DiscoveryCard`, discovery views). `syncPanel.ts`'s violet entries are actions ("Sync", "Resolve with agent"), so they move to the accent (2.0) rather than going away. `App.css` tints the agent's chat bubble violet. `HeaderNavItem` tints icons violet, cyan or amber by an `accent` prop (4 uses in `TopBar`). Fix: lifecycle states to cyan or slate by meaning, names to slate chips, header icons and the agent bubble neutral; then drop `violet` from `RunStatusTone`.
-
-2.6 **Amber for states that need nobody.** Breaks: amber = a human is needed, and only that. Evidence: amber tone references outside `runStatus.ts` (`(tone|accent)\s*[:=]\s*['"]amber['"]|: 'amber'`) = 25/16. Read one by one, these need nobody: `activitySync.ts` "reconnecting", `decomposeReview.ts` "Revised" and "blocked by …", `ticketPresentation.ts` "Blocked" ("waiting on an edge"), the `AskThreadCard` "network" chip, and `harnessVerdict.ts`'s "unrunnable" (multi-line, not in the count). Gate nodes, credential failures, PR conflicts and "Undecided — left for you" arguably do. Fix: in-motion states to cyan, dependency and change kinds to slate; §4 needs a home for "warning".
-
-2.7 **Three reds and off-palette hues.** Breaks: ruby = failed or destructive; colour only for meaning. Evidence: ruby classes 289/73, rose 92/19, red 29/5 (`(?<![\w-])(text|bg|border|ring|from|to|via|fill|stroke|shadow|outline)-<hue>-`). Rose carries GateView's Abort and "decision blocked". `App.css` pins `text-red-400`, `bg-red-500/10` and two `border-red-500/*`. Yellow, orange and blue add 12/4 (`CodeEditorView` git letters and folder icons, `ErrorToast`'s orange accent, `GeneralTab`'s unpushed chip, a yellow button in `WorkflowList`). Fix: rose and red to ruby; orange and yellow to amber only where a human is needed, else slate.
-
-2.8 **Emerald for healthy machines.** Breaks: emerald = finished well (§4 no longer names "healthy"). Evidence: `StatusBadge`'s `NON_RUN_TONES` maps `idle` and `active` to emerald. Fix: decide whether a healthy machine is "finished well" or slate, and record it in §4.
+TicketForceStart's force-start is an amber-tinted hand-spelled button (`border-amber-500/25 bg-amber-500/[0.08] text-amber-400`). Forcing a ticket past its dependencies is a human decision, so the hue may stand; the hand-spelling is a `Button` miss either way.
 
 ### 3. Decoration
+
+Violet is now only decoration, and all of it is this group's: `\bviolet-` = 35/10, in the blurred blobs (`ProjectSettingsShell` ×4, `ProjectHome`, `NewProjectView`, `PreferencesScreen`, `WizardShell`, `CreateFromZeroWizard`), the gradient avatars and tiles (`AccountMenu`, `ProvidersPage`, `PreferencesScreen`, `MachinesView`), `ProjectHome`'s hover wash, and `EmptyStateCard` ×12.
 
 3.1 **Decorative blurred blobs.** Breaks: never decorative blurred blobs. Evidence: `rounded-full[^"`]*(?<![-\w])blur-(\[\d+px\]|xl|2xl|3xl)` = 20 lines in 11 files: `ProjectSettingsShell` ×5, `EmptyStateCard` ×4, `ProjectHome` ×2, `NewProjectView` ×2, and one each in `RemoteRunInbox`, `WizardShell`, `ProviderSettings`, `PreferencesScreen`, `CreateFromZeroWizard`, `MachinesView`, `ProvidersPage`. Fix: delete them.
 
 3.2 **Sparkles as ornament.** Breaks: never sparkle icons as ornament. Evidence: `<Sparkles\b` = 12/10 (`ProjectRail` ×2, `EmptyStateCard` ×2, `NewProjectView`, `CreateFromZeroWizard`, `GateView`, `AgentBadge`, `StartFeatureModal`, `ShortcutHelp`, `NewTerminalMenu`, `StartSessionButton`). Most sit beside a text label that already says what the control does. `AgentBadge` in compact mode shows only the sparkle, so there it may carry meaning. Fix: use the icon of the thing (a plus, a terminal, a file) or none.
 
-3.3 **Gradient ornament.** Breaks: no gradient fills on buttons or text (strictly, these are on tiles, avatars and washes, which §4's wording does not name; they are ornament either way). Evidence: `\bbg-gradient-to-[a-z]+` = 12/8: icon tiles (`MachinesView` ×2, `PreferencesScreen`, `EmptyStateCard`), avatars (`AccountMenu`, `ProvidersPage`), a hover wash on a `ProjectHome` card, `ShortcutHelp`'s header bands ×2, the `EmptyStateCard` CTA overlay and sheen, and the `AskCanvasNodeInspector` button (2.2). The two `radial-gradient` uses are canvas dot grids and are functional. Fix: flat fills.
+3.3 **Gradient ornament.** Breaks: no gradient fills on buttons or text (strictly, these are on tiles, avatars and washes, which §4's wording does not name; they are ornament either way). Evidence: `\bbg-gradient-to-[a-z]+` = 9/6: icon tiles (`MachinesView` ×2, `PreferencesScreen`, `EmptyStateCard`), avatars (`AccountMenu`, `ProvidersPage`), a hover wash on a `ProjectHome` card, and the `EmptyStateCard` CTA overlay and sheen. The two `radial-gradient` uses are canvas dot grids and are functional. Fix: flat fills.
 
 3.4 **`hover:scale`.** Breaks: never `hover:scale`. Evidence: `(?<![\w-])hover:scale-` = 4/1 and `group-hover:scale-` = 4/1, all in the `EmptyStateCard` hero tiles. Fix: a border or background shift on hover.
 
-3.5 **Shimmer outside progress.** Breaks: shimmer only on an indeterminate progress bar. Evidence: the `EmptyStateCard` sample-project button sweeps a `via-white/10` gradient across itself on hover. The one allowed shimmer, `.animate-progress-shimmer` (1/1, `TerminalStatusOverlay`), runs its gradient through violet, which is decoration. Fix: delete the sheen; make the progress bar cyan (in motion).
+3.5 **Shimmer outside progress.** Breaks: shimmer only on an indeterminate progress bar. Evidence: the `EmptyStateCard` sample-project button sweeps a `via-white/10` gradient across itself on hover. The one allowed shimmer, `.animate-progress-shimmer` (1/1, `TerminalStatusOverlay`), is cyan only. Fix: delete the sheen.
 
-3.6 **The first-run hero.** `EmptyStateCard` combines 3.1–3.5, two glows and a gradient icon tile, and its copy ("a modern, premium control center…") breaks PRODUCT.md's binding voice (direct, no hype). Fix: rebuild it as one solid panel, three plain actions and plain copy; it is the first thing a new user sees.
+3.6 **The first-run hero.** `EmptyStateCard` combines 3.1–3.5, the tree's last glows (`shadow-[0_0_` = 4/1), a gradient icon tile and a hand-spelled violet-600 sample-project button with a violet glow, not a `Button`, and its copy ("a modern, premium control center…") breaks PRODUCT.md's binding voice (direct, no hype). Fix: rebuild it as one solid panel, three plain actions and plain copy; it is the first thing a new user sees.
 
 ### 4. Type and copy
 
@@ -715,25 +737,23 @@ What is left is call sites the surface classes have not reached yet.
 
 5.1 **Arbitrary hex classes.** Breaks: never raw hex for design tokens. Evidence: `\[#[0-9a-fA-F]{3,8}\]` = 131/60, 12 distinct values. 83 restate tokens: `#08090c` ×45 (`surface-app`), `#0d0f14` ×21 (`surface-sidebar`), `#050608` ×17 (`surface-well`). 48 are near-blacks with no token: `#050508` ×19, `#0b0d12` ×10, `#0a0c10` ×8, `#0c0d12` ×4, `#12161e` ×3 and four singletons. Fix: replace the 83 with the `surface-*` utilities that branch `design/surfaces` added, and fold the 48 onto the nearest surface.
 
-5.2 **Tokens are bypassed.** Breaks: values live in `tokens.css` and are read from there. Evidence: TSX reaches a token only through 10 `bg-[var(--…)]` uses and the surface utilities (`bg-surface-*` 21/14, `border-hairline` 1/1); `--accent-*` and `--text-*` are referenced from TSX zero times. Components colour through palette classes (by 2.7's pattern: cyan 540, violet 439, ruby 289, amber 259, emerald 258). The two neutral ladders disagree: `--text-*` are Tailwind gray (#f3f4f6 / #9ca3af / #6b7280), while components use slate and `text-white` (383), and the root shell sets `text-white` over `body`'s `--text-primary`. Fix: one neutral ladder as tokens; the status hues stay behind `runStatus.ts`'s `TONE_*` maps.
+5.2 **Tokens are bypassed.** Breaks: values live in `tokens.css` and are read from there. Evidence: TSX reaches a token only through 10 `bg-[var(--…)]` uses and the surface utilities (`bg-surface-*` 21/14, `border-hairline` 1/1); `--text-*` is referenced from TSX zero times. Components colour status hues through palette classes (by 2.7's pattern: cyan 207, ruby 261, amber 247, emerald 207, violet 35); only the surfaces and the accent are reached as token utilities (`bg-accent` 72/39, `border-accent-ring` 102/42, `border-accent-edge` 52/36, `bg-accent-tint` 51/34, `text-accent-ink` 23/15). The two neutral ladders disagree: `--text-*` are Tailwind gray (#f3f4f6 / #9ca3af / #6b7280), while components use slate and `text-white` (383), and the root shell sets `text-white` over `body`'s `--text-primary`. Fix: one neutral ladder as tokens; the status hues stay behind `runStatus.ts`'s `TONE_*` maps.
 
-5.3 **`style=` props carrying design values.** Breaks: never `style=` for design tokens. Evidence: `style=\{\{` = 20/13, read one by one. The two that set a surface (`ShortcutHelp`, `WizardShell`) are gone (see Resolved). One still carries type: EnvModal's Browse button overrides `.btn-secondary` with `padding: "0 12px", fontSize: "0.8rem"`. The rest are geometry. Fix: a size utility on the EnvModal button.
-
-5.4 **Colour values outside `tokens.css`.** Breaks: token values live in `tokens.css`. Evidence: `App.css` still declares 22 hex literals in rules: 11 in the `PINNED UTILITY COLOURS` block (32 utility classes re-declared at Tailwind v3 values) and 11 elsewhere (`.btn-primary`'s `#7c3aed` and `#fff`, the caret's `#a78bfa`, the native-control rules), plus rgba values in `.panel-hover`'s 8% border, `.bubble-code`, the chat bubbles, the scrollbar and the skeleton. Fix: move the values to tokens; whether to keep the v3 pins is a palette decision, per the block's own comment.
+5.4 **Colour values outside `tokens.css`.** Breaks: token values live in `tokens.css`. Evidence: `App.css` still declares 18 hex literals in rules: 11 in the `PINNED UTILITY COLOURS` block (32 utility classes re-declared at Tailwind v3 values) and 7 in the native-control rules, plus rgba values in `.panel-hover`'s 8% border, `.bubble-code`, the agent chat bubble, the scrollbar, the progress shimmer and the skeleton. Fix: move the values to tokens; whether to keep the v3 pins is a palette decision, per the block's own comment.
 
 5.5 **Hex in library themes.** Breaks: no raw hex (lower priority: the libraries need values, not classes). Evidence: `['"]#[0-9a-fA-F]{3,8}['"]` = 18/3: `TerminalSurface` (xterm theme) ×11, `canvas/flowGraph.ts` ×5, `WorkflowCanvas` ×2. Fix: read them from the CSS custom properties at runtime, or from one exported token map.
 
-5.6 **Unused tokens.** Evidence: no `var()` or utility reads `--accent-emerald`, `--accent-ruby`, three of the four `--accent-*-glow`, `--text-muted`, `--text-dark`, `--transition-spring` or `--transition-smooth`. Fix: delete them.
+5.6 **Unused tokens.** Evidence: no `var()` or utility reads `--text-muted`, `--text-dark`, `--transition-spring` or `--transition-smooth`. Fix: delete them.
 
 ### 6. Form controls
 
-6.1 **`!important` native-control rules beat call-site utilities.** Breaks: no raw hex for tokens; a call site's utilities should apply (the reason for PR #250's layers). Evidence: the unlayered rules at the end of `App.css` hold 17 `!important` declarations on `select`, `option`/`optgroup`, `input[type=text|search|email|password|url]`, `textarea` and placeholders (#0a0a0e fill, #e2e8f0 text, #475569 placeholder, a cyan checked option, and on `select` `appearance: none`, a chevron `background-image` and `padding-right: 28px`). A scripted pass over JSX tags found 128 matching fields in 54 files (`select` 45, `input type="text"` 62, `password` 7, `search` 2, `textarea` 12). 98 of them carry a `bg-*` utility and 94 a text-colour utility that never apply, and the 14 using `.input-field` lose its background too. Inputs without a `type` attribute (8) and number inputs (10) are not matched, so they render differently. Moving the rules into `@layer base` would let 31 of the 45 selects' padding utilities (`p-`/`px-`/`pr-`) override the 28px chevron gutter. That it would also lose the chevron `background-image` was reported to me and not verified here. Fix: move the rules to `@layer base` on token colours, give `select` its chevron and gutter through a class or a `pr-7` convention, then remove the dead `bg-*` and text utilities.
+6.1 **`!important` native-control rules beat call-site utilities.** Breaks: no raw hex for tokens; a call site's utilities should apply (the reason for PR #250's layers). Evidence: the unlayered rules at the end of `App.css` hold 17 `!important` declarations on `select`, `option`/`optgroup`, `input[type=text|search|email|password|url]`, `textarea` and placeholders (#0a0a0e fill, #e2e8f0 text, #475569 placeholder, an accent tint and ink checked option, and on `select` `appearance: none`, a chevron `background-image` and `padding-right: 28px`). A scripted pass over JSX tags found 128 matching fields in 54 files (`select` 45, `input type="text"` 62, `password` 7, `search` 2, `textarea` 12). 98 of them carry a `bg-*` utility and 94 a text-colour utility that never apply, and the 14 using `.input-field` lose its background too. Inputs without a `type` attribute (8) and number inputs (10) are not matched, so they render differently. Moving the rules into `@layer base` would let 31 of the 45 selects' padding utilities (`p-`/`px-`/`pr-`) override the 28px chevron gutter. That it would also lose the chevron `background-image` was reported to me and not verified here. Fix: move the rules to `@layer base` on token colours, give `select` its chevron and gutter through a class or a `pr-7` convention, then remove the dead `bg-*` and text utilities.
 
-6.2 **Selection and body font as `!important`.** Evidence: `::selection` is an unlayered `!important` cyan (see 2.4), and the "WebKitGTK / Tauri compatibility layer" re-declares `body`'s font with `!important`, duplicating the `@layer base` rule. Fix: fold both into `@layer base`, with selection in violet.
+6.2 **Selection and body font as `!important`.** Evidence: `::selection` is an unlayered `!important` (the accent at 45%), and the "WebKitGTK / Tauri compatibility layer" re-declares `body`'s font with `!important`, duplicating the `@layer base` rule. Fix: fold both into `@layer base`.
 
 ### Outside the PR groups
 
-- **Status vocabularies outside `runStatus.ts`.** §4 says status hues resolve through `runStatus.ts` and nowhere else. About a dozen modules keep their own label→tone tables, reusing its `RunStatusTone` type and `TONE_*` maps: `syncPanel`, `discoveryProgress`, `askLifecycle`, `ticketPresentation`, `decomposeReview`, `activitySync`, `pullRequestRow`, `harnessVerdict`, `staleness` and `pipelineCard` in `src/lib/`, plus `RemoteRunInbox`, `canvas/types`, `StorageProjectCard` and `ReviewFailureCard`. Whether reusing the `TONE_*` maps satisfies "through runStatus.ts" is for §4 to say; 2.5 and 2.6 are where these tables disagree with it.
+- **Status vocabularies outside `runStatus.ts`.** §4 says status hues resolve through `runStatus.ts` and nowhere else. About a dozen modules keep their own label→tone tables, reusing its `RunStatusTone` type and `TONE_*` maps: `syncPanel`, `discoveryProgress`, `askLifecycle`, `ticketPresentation`, `decomposeReview`, `activitySync`, `pullRequestRow`, `harnessVerdict`, `staleness` and `pipelineCard` in `src/lib/`, plus `RemoteRunInbox`, `canvas/types`, `StorageProjectCard` and `ReviewFailureCard`. Whether reusing the `TONE_*` maps satisfies "through runStatus.ts" is for §4 to say; 2.6 and 2.9 are where these tables disagree with it.
 - **No-op animation.** `NotificationBell`'s toast uses `animate-[fadeIn_120ms_ease-out]`, and no `fadeIn` keyframe exists (the keyframe is `fade-in`).
 - **Stale written guidance.** `.design-sync/conventions.md` still teaches the retired system: violet = "agent working", emerald = "running agent", `style={{ background: 'var(--bg-panel)' }}` for tokens, uppercase `tracking-widest` small labels, `SectionCard` first, and `StatusBadge variant="pill"`, a prop that no longer exists.
 
@@ -756,4 +776,11 @@ What is left is call sites the surface classes have not reached yet.
 - 1.5 The raised layer spelled a dozen ways: on branch `design/surfaces` 27 files' menu, popover, dialog, palette and toast bodies use `.raised` (33 uses), every dialog scrim is a flat `bg-black/60` (`Modal`'s default included), and the gate and artifact modal halos are gone. Routing the hand-rolled overlays through `Modal` remains (1.8).
 - 1.6 Radius beyond the panel token: on branch `design/surfaces` `rounded-2xl` went from 12/12 to 0, so no surface is rounder than the panel. `rounded-xl` without a surface class remains (1.14).
 - 1.7 The panel hairline re-spelled: on branch `design/surfaces` the white re-spellings were dropped (hue borders with meaning kept), so no `.panel` or `.raised` call site adds a `border-white/*`, radius or shadow (was 24 of 91 panel sites).
-- 5.3, in part: the surface `style=` props on `ShortcutHelp` and `WizardShell` were removed on branch `design/surfaces`.
+- 5.3 `style=` props carrying design values: the surface props on `ShortcutHelp` and `WizardShell` went on branch `design/surfaces`, and EnvModal's Browse button override (padding and font size on `.btn-secondary`) went with that class on `design/accent-buttons`. `style=\{\{` = 19/12, the rest geometry as read before.
+- 2.0 Stock violet as the accent: on branch `design/accent-buttons` Signal is six `@theme static` colours in `tokens.css` (`accent`, `-hover`, `-ink`, `-ring`, `-edge`, `-tint`), every action, selection and focus use moved to them, and `--accent-purple*`, `--border-glass-focus` and the unused `--accent-cyan/emerald/ruby` are deleted. `\bviolet-` is down from 446/106 to 35/10, all decoration (group 3).
+- 2.1 Glow shadows: `shadow-[0_0_` is down from 94/38 to 4/1, all in `EmptyStateCard` (3.6). `StatusBadge` dots and pipeline-card accent bars are flat, `.animate-pulse-glow(-amber)` keep their names but cast no shadow, the `.input-field` and `.chat-input` focus glows are gone, canvas nodes lost their tone, diff and selection glows, and every `--accent-*-glow` token is deleted.
+- 2.2 Gradient primary button: `.btn-primary` and `.btn-secondary` are deleted from `App.css`, and `AskCanvasNodeInspector`'s gradient button is a `Button`.
+- 2.3 Two primary spellings, no primitive: `Button` (`src/components/ui/Button.tsx`) with primary, secondary, ghost, danger and danger-subtle variants and sm/md/lg sizes; `<Button` = 172/63, `buttonClasses(` = 7/5. No status-hue variant, so gate Approve, Replay and Retry are primary.
+- 2.4 Focus and selection in cyan: one `:focus-visible` ring (2px `accent-ring`, offset 2px) in `@layer base`; fields focus to `border-accent-ring` (`focus:border-cyan-` 81/32 → 0); `TabBar`, `SegmentedControl`, rows, tiles, palette highlights and the selected canvas node select with `accent-edge` and `accent-tint`; `::selection` and `select option:checked` are the accent; the scrollbar thumb and splitter hover are neutral.
+- 2.5 Violet naming states and decorating: `violet` is out of `RunStatusTone` and every `TONE_*` map, `HeaderNavItem` lost its `accent` prop, and `ActionRow`'s tone is optional with a primary or danger button. Chat bubbles are neutral and the stream caret is `--text-secondary`. "Asking" and "Interviewing" are cyan while a turn runs and slate otherwise; "Open", the "Ready" lane, "Reclaimable", canvas node kinds other than gate (amber), and model, workflow and placement chips are slate; `syncPanel.ts`'s state-free actions (sync, merge, resolve, review) carry no tone, so their rows are neutral and the press is the accent.
+- 2.8 Emerald for healthy machines: §4 now reads "emerald = finished well, or healthy", so `StatusBadge` mapping machine `idle`/`active` to emerald is within it.

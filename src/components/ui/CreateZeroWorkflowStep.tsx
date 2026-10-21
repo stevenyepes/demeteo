@@ -30,13 +30,13 @@ export function CreateZeroWorkflowStep(props: CreateZeroWorkflowStepProps) {
           onClick={() => onWorkflowChange(w.id)}
           className={`w-full text-left p-3 rounded-lg border transition-all ${
             workflowId === w.id
-              ? 'bg-violet-500/10 border-violet-500/50 text-violet-100'
+              ? 'bg-accent-tint border-accent-edge text-white'
               : 'bg-black/30 border-white/10 text-slate-300 hover:border-white/20'
           }`}
         >
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
-              <Workflow className="w-4 h-4 text-violet-400 shrink-0" />
+              <Workflow className="w-4 h-4 text-slate-400 shrink-0" />
               <span className="font-medium truncate">{w.name}</span>
             </div>
             <span className="text-[10px] font-mono text-slate-500 shrink-0">v{w.version}</span>

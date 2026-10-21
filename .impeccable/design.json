@@ -1,56 +1,94 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-20T20:28:16Z",
+  "generatedAt": "2026-10-21T01:36:29Z",
   "title": "Design System: Demeteo",
   "extensions": {
     "colorMeta": {
-      "violet-signal": {
+      "accent": {
         "role": "primary",
-        "displayName": "Electric Violet (shipped accent, to migrate)",
-        "canonical": "#8b5cf6",
+        "displayName": "Signal",
+        "canonical": "#5a60c2",
         "tonalRamp": [
-          "oklch(38% 0.189 293.745)",
-          "oklch(43.2% 0.232 292.759)",
-          "oklch(49.1% 0.27 292.581)",
-          "oklch(54.1% 0.281 293.009)",
-          "oklch(60.6% 0.25 292.717)",
-          "oklch(70.2% 0.183 293.541)",
-          "oklch(81.1% 0.111 293.571)",
-          "oklch(89.4% 0.057 293.283)"
+          "#3a3e85",
+          "#474ca3",
+          "#5a60c2",
+          "#6269cc",
+          "#6972c0",
+          "#6e78db",
+          "#838ef4",
+          "#b4bbf9"
         ],
-        "note": "--accent-purple. The SHIPPED accent (stock violet-500). Decision 61 replaces it with indigo \"Signal\" (see extensions.decidedAccent); every action/selection/focus use is drift to migrate, every decorative or status use is drift to remove."
+        "note": "--color-accent (@theme static, tokens.css), decision 61. Primary fill (bg-accent), always with a white label: 5.40:1."
       },
-      "violet-action": {
+      "accent-hover": {
         "role": "primary",
-        "displayName": "Violet Action",
-        "canonical": "oklch(54.1% 0.281 293.009)",
+        "displayName": "Signal Hover",
+        "canonical": "#6269cc",
         "tonalRamp": [
-          "oklch(38% 0.189 293.745)",
-          "oklch(43.2% 0.232 292.759)",
-          "oklch(49.1% 0.27 292.581)",
-          "oklch(54.1% 0.281 293.009)",
-          "oklch(60.6% 0.25 292.717)",
-          "oklch(70.2% 0.183 293.541)",
-          "oklch(81.1% 0.111 293.571)",
-          "oklch(89.4% 0.057 293.283)"
+          "#3a3e85",
+          "#474ca3",
+          "#5a60c2",
+          "#6269cc",
+          "#6972c0",
+          "#6e78db",
+          "#838ef4",
+          "#b4bbf9"
         ],
-        "note": "Tailwind violet-600; shipped primary button fill. To migrate to Signal fill #5a60c2."
+        "note": "--color-accent-hover. Primary fill on hover; white label 4.76:1."
       },
-      "violet-ink": {
+      "accent-ink": {
         "role": "primary",
-        "displayName": "Violet Ink",
-        "canonical": "oklch(70.2% 0.183 293.541)",
+        "displayName": "Signal Ink",
+        "canonical": "#838ef4",
         "tonalRamp": [
-          "oklch(38% 0.189 293.745)",
-          "oklch(43.2% 0.232 292.759)",
-          "oklch(49.1% 0.27 292.581)",
-          "oklch(54.1% 0.281 293.009)",
-          "oklch(60.6% 0.25 292.717)",
-          "oklch(70.2% 0.183 293.541)",
-          "oklch(81.1% 0.111 293.571)",
-          "oklch(89.4% 0.057 293.283)"
+          "#3a3e85",
+          "#474ca3",
+          "#5a60c2",
+          "#6269cc",
+          "#6972c0",
+          "#6e78db",
+          "#838ef4",
+          "#b4bbf9"
         ],
-        "note": "Tailwind violet-400; shipped violet text in chips and icons. Decorative uses are drift."
+        "note": "--color-accent-ink. Accent text on a dark surface (6.22:1 on the panel) and the selected <option> text."
+      },
+      "accent-ring": {
+        "role": "primary",
+        "displayName": "Signal Ring",
+        "canonical": "#6e78db",
+        "tonalRamp": [
+          "#3a3e85",
+          "#474ca3",
+          "#5a60c2",
+          "#6269cc",
+          "#6972c0",
+          "#6e78db",
+          "#838ef4",
+          "#b4bbf9"
+        ],
+        "note": "--color-accent-ring. The global :focus-visible ring (2px, offset 2px) and field focus borders; 4.68:1 on the panel."
+      },
+      "accent-edge": {
+        "role": "primary",
+        "displayName": "Signal Edge",
+        "canonical": "#6972c0",
+        "tonalRamp": [
+          "#3a3e85",
+          "#474ca3",
+          "#5a60c2",
+          "#6269cc",
+          "#6972c0",
+          "#6e78db",
+          "#838ef4",
+          "#b4bbf9"
+        ],
+        "note": "--color-accent-edge. Selected border on tabs, segments, rows, tiles, the selected canvas node; 4.15:1 on the panel."
+      },
+      "accent-tint": {
+        "role": "primary",
+        "displayName": "Signal Tint",
+        "canonical": "rgb(90 96 194 / 0.16)",
+        "note": "--color-accent-tint. Selected fill behind segments, rows, palette highlights and select option:checked. ::selection uses the hue at 45%."
       },
       "cyan-stream": {
         "role": "secondary",
@@ -66,7 +104,7 @@
           "oklch(86.5% 0.127 207.078)",
           "oklch(91.7% 0.08 205.041)"
         ],
-        "note": "--accent-cyan. In motion: running, bootstrapping, verifying, published PR. Also shipped as selection/focus (drift 2.4)."
+        "note": "Tailwind cyan-500. In motion: running, bootstrapping, verifying, published PR, a running Ask/Interview turn, the progress shimmer. Cyan on things not in motion is drift 2.9."
       },
       "cyan-ink": {
         "role": "secondary",
@@ -98,23 +136,7 @@
           "oklch(84.5% 0.143 164.978)",
           "oklch(90.5% 0.093 164.15)"
         ],
-        "note": "--accent-emerald."
-      },
-      "emerald-action": {
-        "role": "tertiary",
-        "displayName": "Emerald Action",
-        "canonical": "oklch(59.6% 0.145 163.225)",
-        "tonalRamp": [
-          "oklch(37.8% 0.077 168.94)",
-          "oklch(43.2% 0.095 166.913)",
-          "oklch(50.8% 0.118 165.612)",
-          "oklch(59.6% 0.145 163.225)",
-          "oklch(69.6% 0.17 162.48)",
-          "oklch(76.5% 0.177 163.223)",
-          "oklch(84.5% 0.143 164.978)",
-          "oklch(90.5% 0.093 164.15)"
-        ],
-        "note": "Tailwind emerald-600; Approve fill."
+        "note": "Tailwind emerald-500. Finished well, or healthy (machine idle/active). Fills no button."
       },
       "emerald-ink": {
         "role": "tertiary",
@@ -195,6 +217,22 @@
           "#fecaca"
         ],
         "note": "@theme --color-ruby-600."
+      },
+      "ruby-action-deep": {
+        "role": "tertiary",
+        "displayName": "Ruby Action Deep",
+        "canonical": "#b91c1c",
+        "tonalRamp": [
+          "#7f1d1d",
+          "#991b1b",
+          "#b91c1c",
+          "#dc2626",
+          "#ef4444",
+          "#f87171",
+          "#fca5a5",
+          "#fecaca"
+        ],
+        "note": "@theme --color-ruby-700. The danger button hover: steps darker because white on ruby-500 is under 4.5:1."
       },
       "ruby-ink": {
         "role": "tertiary",
@@ -331,12 +369,6 @@
         "displayName": "Hairline Strong",
         "canonical": "rgba(255, 255, 255, 0.10)",
         "note": "border-white/10."
-      },
-      "focus-violet": {
-        "role": "neutral",
-        "displayName": "Focus Violet",
-        "canonical": "rgba(139, 92, 246, 0.4)",
-        "note": "--border-glass-focus; .input-field focus border. To migrate to Signal ring #6e78db."
       },
       "token-ink-primary": {
         "role": "neutral",
@@ -483,48 +515,6 @@
         "value": "0 12px 32px -8px rgba(0, 0, 0, 0.6)",
         "purpose": "--shadow-raised, built into .raised (menus, popovers, dialogs, toasts). The one shadow token; panels cast none.",
         "status": "kept"
-      },
-      {
-        "name": "status-dot-halo",
-        "value": "0 0 8px rgba(<tone>, 0.8)",
-        "purpose": "StatusBadge dot for every non-slate tone.",
-        "status": "shipped, retired by section 4 (no glow)"
-      },
-      {
-        "name": "accent-bar-halo",
-        "value": "0 0 10px rgba(<tone>, 0.8)",
-        "purpose": "Pipeline card 4px left status bar (slate at 0.6).",
-        "status": "shipped, retired by section 4 (no glow)"
-      },
-      {
-        "name": "primary-glow",
-        "value": "0 0 15px rgba(139, 92, 246, 0.4)",
-        "purpose": "Violet primary buttons at rest or on hover.",
-        "status": "shipped, retired by section 4 (no glow)"
-      },
-      {
-        "name": "approve-glow",
-        "value": "0 0 15px rgba(16, 185, 129, 0.3)",
-        "purpose": "Emerald approve at rest; 0 0 20px rgba(16,185,129,0.5) on hover.",
-        "status": "shipped, retired by section 4 (no glow)"
-      },
-      {
-        "name": "live-pulse-glow",
-        "value": "0 0 10px 1px rgba(6, 182, 212, 0.5)",
-        "purpose": "Static halo on .animate-pulse-glow, faded by opacity.",
-        "status": "shipped, retired by section 4 (no glow)"
-      },
-      {
-        "name": "attention-glow",
-        "value": "0 0 10px 1px rgba(245, 158, 11, 0.5)",
-        "purpose": "Static halo on .animate-pulse-glow-amber (needs a human).",
-        "status": "shipped, retired by section 4 (no glow)"
-      },
-      {
-        "name": "focus-glow",
-        "value": "0 0 8px rgba(139,92,246,0.25) / 0 0 8px rgba(6,182,212,0.15)",
-        "purpose": ".input-field:focus (violet) and .chat-input:focus (cyan).",
-        "status": "shipped, retired by section 4 (no glow)"
       }
     ],
     "motion": [
@@ -611,22 +601,40 @@
         "value": "768px"
       }
     ],
-    "decidedAccent": {
-      "status": "decided, not shipped",
-      "source": "docs/DECISIONS.md decision 61; AGENTS.md section 4",
+    "accent": {
+      "status": "shipped",
+      "source": "docs/DECISIONS.md decision 61; AGENTS.md section 4; src/styles/tokens.css @theme static",
       "name": "Signal",
       "hue": "indigo",
-      "values": {
-        "fill": "#5a60c2",
-        "fillHover": "#6269cc",
-        "text": "#838ef4",
-        "focusRing": "#6e78db",
-        "selectedBorder": "#6972c0",
-        "selectedTint": "rgba(90,96,194,.16)"
+      "tokens": [
+        "accent",
+        "accent-hover",
+        "accent-ink",
+        "accent-ring",
+        "accent-edge",
+        "accent-tint"
+      ],
+      "utilities": [
+        "bg-accent",
+        "not-disabled:hover:bg-accent-hover",
+        "text-accent-ink",
+        "border-accent-ring",
+        "focus:border-accent-ring",
+        "ring-accent-ring",
+        "border-accent-edge",
+        "bg-accent-tint",
+        "accent-accent"
+      ],
+      "focus": ":focus-visible { outline: 2px solid var(--color-accent-ring); outline-offset: 2px } in @layer base; [tabindex=-1] gets none; fields use focus:border-accent-ring with focus:outline-none.",
+      "selection": "border-accent-edge + bg-accent-tint + text-white (segments, rows, tiles); TabBar border-accent-edge + text-white; ::selection accent at 45%.",
+      "contrast": {
+        "whiteOnFill": "5.40:1",
+        "whiteOnHover": "4.76:1",
+        "ringOnPanel": "4.68:1",
+        "edgeOnPanel": "4.15:1",
+        "inkOnPanel": "6.22:1"
       },
-      "label": "white label required on the fill (5.40:1)",
-      "rule": "Primary actions, selection and focus only. Neither the accent nor violet names a status.",
-      "replaces": "stock violet-500 (#8b5cf6, --accent-purple, violet-* utilities)"
+      "rule": "Primary actions, selection and focus only. Neither the accent nor violet names a status."
     }
   },
   "components": [
@@ -650,85 +658,101 @@
       "name": "Pipeline Card",
       "kind": "custom",
       "refersTo": "panel",
-      "description": "Project view row: a hoverable panel, 4px status bar (glowing as shipped), three tiers (scan, context, detail).",
-      "html": "<div class=\"ds-pipe\" tabindex=\"0\"><span class=\"ds-pipe-bar\"></span><div class=\"ds-pipe-scan\"><h3 class=\"ds-pipe-title\">Add retry budget to verifier</h3><span class=\"ds-chip ds-chip-cyan ds-chip-sm\"><span class=\"ds-chip-dot\"></span>Running</span><span class=\"ds-pipe-elapsed\">12m 04s</span></div><div class=\"ds-pipe-ctx\"><span class=\"ds-chip ds-chip-violet ds-chip-sm\">standard-pipeline</span><span>$0.84</span><span>182k tok</span></div><div class=\"ds-pipe-detail\"><span>f-3a9c</span><span>Retry transient verifier failures up to a budget.</span></div></div>",
-      "css": ".ds-pipe{position:relative;overflow:hidden;cursor:pointer;background:var(--bg-panel);border:1px solid var(--border-hairline);border-radius:var(--radius-panel);padding:20px;transition:background var(--transition-normal),border-color var(--transition-normal)}.ds-pipe:hover,.ds-pipe:focus-visible{background:var(--bg-panel-hover);border-color:rgba(255,255,255,.08);outline:none}.ds-pipe-bar{position:absolute;left:0;top:0;bottom:0;width:4px;background:#06b6d4;box-shadow:0 0 10px rgba(6,182,212,.8)}.ds-pipe-scan{display:flex;align-items:flex-start;gap:12px}.ds-pipe-title{flex:1;margin:0;font-family:var(--font-heading);font-weight:400;font-size:18px;line-height:28px;color:#fff}.ds-pipe-elapsed{font-family:var(--font-mono);font-size:14px;font-weight:500;color:#fff}.ds-pipe-ctx{margin-top:8px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font-family:var(--font-mono);font-size:12px;color:#94a3b8}.ds-pipe-detail{margin-top:8px;display:flex;gap:8px;font-size:12px;color:#64748b}.ds-pipe-detail span:first-child{font-family:var(--font-mono)}.ds-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border:1px solid;border-radius:4px;font-family:var(--font-mono);font-size:12px;text-transform:uppercase;letter-spacing:.025em}.ds-chip-sm{gap:4px;padding:2px 8px;font-size:10px}.ds-chip-cyan{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.2)}.ds-chip-violet{background:rgba(139,92,246,.1);color:#a78bfa;border-color:rgba(139,92,246,.2)}.ds-chip-dot{width:6px;height:6px;border-radius:9999px;background:currentColor;animation:ds-pulse 2s cubic-bezier(.4,0,.6,1) infinite}@keyframes ds-pulse{50%{opacity:.5}}@media (prefers-reduced-motion:reduce){.ds-chip-dot{animation:none}}"
+      "description": "Project view row: a hoverable panel, a flat 4px status bar, three tiers (scan, context, detail); the workflow is a slate chip.",
+      "html": "<div class=\"ds-pipe\" tabindex=\"0\"><span class=\"ds-pipe-bar\"></span><div class=\"ds-pipe-scan\"><h3 class=\"ds-pipe-title\">Add retry budget to verifier</h3><span class=\"ds-chip ds-chip-cyan ds-chip-sm\"><span class=\"ds-chip-dot\"></span>Running</span><span class=\"ds-pipe-elapsed\">12m 04s</span></div><div class=\"ds-pipe-ctx\"><span class=\"ds-chip ds-chip-slate ds-chip-sm\">standard-pipeline</span><span>$0.84</span><span>182k tok</span></div><div class=\"ds-pipe-detail\"><span>f-3a9c</span><span>Retry transient verifier failures up to a budget.</span></div></div>",
+      "css": ".ds-pipe{position:relative;overflow:hidden;cursor:pointer;background:var(--bg-panel);border:1px solid var(--border-hairline);border-radius:var(--radius-panel);padding:20px;transition:background var(--transition-normal),border-color var(--transition-normal)}.ds-pipe:hover,.ds-pipe:focus-visible{background:var(--bg-panel-hover);border-color:rgba(255,255,255,.08);outline:none}.ds-pipe-bar{position:absolute;left:0;top:0;bottom:0;width:4px;background:#06b6d4}.ds-pipe-scan{display:flex;align-items:flex-start;gap:12px}.ds-pipe-title{flex:1;margin:0;font-family:var(--font-heading);font-weight:400;font-size:18px;line-height:28px;color:#fff}.ds-pipe-elapsed{font-family:var(--font-mono);font-size:14px;font-weight:500;color:#fff}.ds-pipe-ctx{margin-top:8px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font-family:var(--font-mono);font-size:12px;color:#94a3b8}.ds-pipe-detail{margin-top:8px;display:flex;gap:8px;font-size:12px;color:#64748b}.ds-pipe-detail span:first-child{font-family:var(--font-mono)}.ds-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border:1px solid;border-radius:4px;font-family:var(--font-mono);font-size:12px;text-transform:uppercase;letter-spacing:.025em}.ds-chip-sm{gap:4px;padding:2px 8px;font-size:10px}.ds-chip-cyan{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.2)}.ds-chip-slate{background:rgba(100,116,139,.1);color:#94a3b8;border-color:rgba(100,116,139,.2)}.ds-chip-dot{width:6px;height:6px;border-radius:9999px;background:currentColor;animation:ds-pulse 2s cubic-bezier(.4,0,.6,1) infinite}@keyframes ds-pulse{50%{opacity:.5}}@media (prefers-reduced-motion:reduce){.ds-chip-dot{animation:none}}"
     },
     {
       "name": "Status Chip",
       "kind": "chip",
       "refersTo": "chip-amber",
-      "description": "Chip: the one pill. Mono, uppercase and tracked as shipped (drift 4.1); hue from runStatus, dot pulses only when live. Verifying is cyan since this branch.",
+      "description": "Chip: the one pill. Mono, uppercase and tracked as shipped (drift 4.1); hue from runStatus, dot pulses only when live. Names (model, workflow, placement) are slate.",
       "html": "<div style=\"display:flex;gap:8px;flex-wrap:wrap\"><span class=\"ds-chip ds-chip-cyan\"><span class=\"ds-chip-dot ds-live\"></span>Running</span><span class=\"ds-chip ds-chip-amber\">Gate needs you</span><span class=\"ds-chip ds-chip-emerald\">Completed</span><span class=\"ds-chip ds-chip-ruby\">Failed</span><span class=\"ds-chip ds-chip-cyan\"><span class=\"ds-chip-dot ds-live\"></span>Verifying</span><span class=\"ds-chip ds-chip-slate\">Cancelled</span></div>",
-      "css": ".ds-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border:1px solid;border-radius:4px;font-family:var(--font-mono);font-size:12px;line-height:16px;text-transform:uppercase;letter-spacing:.025em}.ds-chip-cyan{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.2)}.ds-chip-amber{background:rgba(245,158,11,.1);color:#fbbf24;border-color:rgba(245,158,11,.2)}.ds-chip-emerald{background:rgba(16,185,129,.1);color:#34d399;border-color:rgba(16,185,129,.2)}.ds-chip-ruby{background:rgba(239,68,68,.1);color:#f87171;border-color:rgba(239,68,68,.2)}.ds-chip-violet{background:rgba(139,92,246,.1);color:#a78bfa;border-color:rgba(139,92,246,.2)}.ds-chip-slate{background:rgba(100,116,139,.1);color:#94a3b8;border-color:rgba(100,116,139,.2)}.ds-chip-dot{width:6px;height:6px;border-radius:9999px;background:currentColor}.ds-live{animation:ds-pulse 2s cubic-bezier(.4,0,.6,1) infinite}@keyframes ds-pulse{50%{opacity:.5}}@media (prefers-reduced-motion:reduce){.ds-live{animation:none}}"
+      "css": ".ds-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border:1px solid;border-radius:4px;font-family:var(--font-mono);font-size:12px;line-height:16px;text-transform:uppercase;letter-spacing:.025em}.ds-chip-cyan{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.2)}.ds-chip-amber{background:rgba(245,158,11,.1);color:#fbbf24;border-color:rgba(245,158,11,.2)}.ds-chip-emerald{background:rgba(16,185,129,.1);color:#34d399;border-color:rgba(16,185,129,.2)}.ds-chip-ruby{background:rgba(239,68,68,.1);color:#f87171;border-color:rgba(239,68,68,.2)}.ds-chip-slate{background:rgba(100,116,139,.1);color:#94a3b8;border-color:rgba(100,116,139,.2)}.ds-chip-dot{width:6px;height:6px;border-radius:9999px;background:currentColor}.ds-live{animation:ds-pulse 2s cubic-bezier(.4,0,.6,1) infinite}@keyframes ds-pulse{50%{opacity:.5}}@media (prefers-reduced-motion:reduce){.ds-live{animation:none}}"
     },
     {
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Shipped: violet-600 fill stepping to violet-500 with a violet glow on hover. Decided target (not shipped): Signal fill #5a60c2, hover #6269cc, white label, no glow.",
-      "html": "<button class=\"ds-btn-primary\">Send Redirect</button>",
-      "css": ".ds-btn-primary{background:oklch(54.1% 0.281 293.009);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:var(--font-ui);font-size:12px;font-weight:700;cursor:pointer;transition:background .3s,box-shadow .3s}.ds-btn-primary:hover{background:oklch(60.6% 0.25 292.717);box-shadow:0 0 15px rgba(139,92,246,.4)}.ds-btn-primary:focus-visible{outline:none;box-shadow:0 0 0 1px rgba(6,182,212,.5),0 0 15px rgba(139,92,246,.4)}.ds-btn-primary:disabled{background:oklch(38% 0.189 293.745 / .4);box-shadow:none;cursor:not-allowed}"
-    },
-    {
-      "name": "Approve Button",
-      "kind": "button",
-      "refersTo": "button-approve",
-      "description": "Emerald fill with a resting glow; the gate's Approve step.",
-      "html": "<button class=\"ds-btn-approve\">Approve step &#10003;</button>",
-      "css": ".ds-btn-approve{background:oklch(59.6% 0.145 163.225);color:#fff;border:none;border-radius:8px;padding:8px 20px;font-family:var(--font-ui);font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 0 15px rgba(16,185,129,.3);transition:background .3s,box-shadow .3s}.ds-btn-approve:hover{background:oklch(69.6% 0.17 162.48);box-shadow:0 0 20px rgba(16,185,129,.5)}.ds-btn-approve:focus-visible{outline:none;box-shadow:0 0 0 1px rgba(6,182,212,.5),0 0 20px rgba(16,185,129,.5)}"
+      "description": "Button variant=\"primary\": the Signal fill with a white label (5.40:1), hover #6269cc, no glow. Every proceed action, gate Approve included.",
+      "html": "<button type=\"button\" class=\"ds-btn ds-btn-primary\">Approve</button>",
+      "css": ".ds-btn{font-family:var(--font-ui);font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;padding:8px 16px;display:inline-flex;align-items:center;gap:6px;transition:background-color .15s,color .15s;border:1px solid transparent}.ds-btn:focus-visible{outline:2px solid #6e78db;outline-offset:2px}.ds-btn:disabled{opacity:.4;cursor:not-allowed}.ds-btn-primary{background:#5a60c2;color:#fff}.ds-btn-primary:not(:disabled):hover{background:#6269cc}"
     },
     {
       "name": "Secondary Button",
       "kind": "button",
       "refersTo": "button-secondary",
-      "description": "Quiet translucent white; Back, Cancel and most non-primary actions.",
-      "html": "<button class=\"ds-btn-secondary\">Back</button>",
-      "css": ".ds-btn-secondary{background:rgba(255,255,255,.05);color:#fff;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:8px 16px;font-family:var(--font-ui);font-size:12px;font-weight:600;cursor:pointer;transition:background .15s}.ds-btn-secondary:hover{background:rgba(255,255,255,.1)}.ds-btn-secondary:focus-visible{outline:none;border-color:rgba(6,182,212,.5)}"
+      "description": "Button's default variant: white at 5% with a 10% edge, slate-200 label.",
+      "html": "<button type=\"button\" class=\"ds-btn ds-btn-secondary\">Back</button>",
+      "css": ".ds-btn{font-family:var(--font-ui);font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;padding:8px 16px;display:inline-flex;align-items:center;gap:6px;transition:background-color .15s,color .15s;border:1px solid transparent}.ds-btn:focus-visible{outline:2px solid #6e78db;outline-offset:2px}.ds-btn:disabled{opacity:.4;cursor:not-allowed}.ds-btn-secondary{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.1);color:#e2e8f0}.ds-btn-secondary:not(:disabled):hover{background:rgba(255,255,255,.1);color:#fff}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Button variant=\"ghost\": no fill, slate-400 label, a 5% wash on hover.",
+      "html": "<button type=\"button\" class=\"ds-btn ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn{font-family:var(--font-ui);font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;padding:8px 16px;display:inline-flex;align-items:center;gap:6px;transition:background-color .15s,color .15s;border:1px solid transparent}.ds-btn:focus-visible{outline:2px solid #6e78db;outline-offset:2px}.ds-btn:disabled{opacity:.4;cursor:not-allowed}.ds-btn-ghost{background:none;color:#94a3b8}.ds-btn-ghost:not(:disabled):hover{background:rgba(255,255,255,.05);color:#fff}"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Button variant=\"danger\": ruby-600 fill, white label, hover steps darker to ruby-700.",
+      "html": "<button type=\"button\" class=\"ds-btn ds-btn-danger\">Delete project</button>",
+      "css": ".ds-btn{font-family:var(--font-ui);font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;padding:8px 16px;display:inline-flex;align-items:center;gap:6px;transition:background-color .15s,color .15s;border:1px solid transparent}.ds-btn:focus-visible{outline:2px solid #6e78db;outline-offset:2px}.ds-btn:disabled{opacity:.4;cursor:not-allowed}.ds-btn-danger{background:#dc2626;color:#fff}.ds-btn-danger:not(:disabled):hover{background:#b91c1c}"
+    },
+    {
+      "name": "Danger Subtle Button",
+      "kind": "button",
+      "refersTo": "button-danger-subtle",
+      "description": "Button variant=\"danger-subtle\": ruby edge and ink, a ruby tint on hover. GateView's Abort.",
+      "html": "<button type=\"button\" class=\"ds-btn ds-btn-danger-subtle\">Abort feature</button>",
+      "css": ".ds-btn{font-family:var(--font-ui);font-size:12px;font-weight:600;cursor:pointer;border-radius:6px;padding:8px 16px;display:inline-flex;align-items:center;gap:6px;transition:background-color .15s,color .15s;border:1px solid transparent}.ds-btn:focus-visible{outline:2px solid #6e78db;outline-offset:2px}.ds-btn:disabled{opacity:.4;cursor:not-allowed}.ds-btn-danger-subtle{background:none;border-color:rgba(239,68,68,.3);color:#f87171}.ds-btn-danger-subtle:not(:disabled):hover{background:rgba(239,68,68,.1);color:#fca5a5}"
     },
     {
       "name": "Text Field",
       "kind": "input",
       "refersTo": "input-inline",
-      "description": "The common call-site input with FieldLabel: black/40 fill, hairline, focus shifts the border to cyan.",
+      "description": "The common call-site input with FieldLabel: black/40 fill, hairline, focus shifts the border to Signal Ring (focus:border-accent-ring), no glow.",
       "html": "<label class=\"ds-field-label\" for=\"ds-in\">Branch name</label><input id=\"ds-in\" class=\"ds-input\" placeholder=\"feat/retry-budget\" />",
-      "css": ".ds-field-label{display:flex;align-items:center;gap:6px;margin-bottom:6px;font-family:var(--font-mono);font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em}.ds-input{width:100%;box-sizing:border-box;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:10px;font-family:var(--font-ui);font-size:12px;color:#fff;outline:none;transition:border-color .15s}.ds-input::placeholder{color:#475569}.ds-input:hover{border-color:rgba(255,255,255,.2)}.ds-input:focus{border-color:rgba(6,182,212,.5)}"
+      "css": ".ds-field-label{display:flex;align-items:center;gap:6px;margin-bottom:6px;font-family:var(--font-mono);font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em}.ds-input{width:100%;box-sizing:border-box;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:10px;font-family:var(--font-ui);font-size:12px;color:#fff;outline:none;transition:border-color .15s}.ds-input::placeholder{color:#475569}.ds-input:hover{border-color:rgba(255,255,255,.2)}.ds-input:focus{border-color:#6e78db}"
     },
     {
       "name": "Tab Bar",
       "kind": "nav",
       "refersTo": "tab-active",
-      "description": "TabBar md: 2px bottom border, cyan when selected, slate when idle.",
+      "description": "TabBar md: 2px bottom border, Signal Edge with a white label when selected, slate when idle; focus is the global ring.",
       "html": "<div class=\"ds-tabs\" role=\"tablist\"><button class=\"ds-tab ds-tab-on\" role=\"tab\" aria-selected=\"true\">Pipeline</button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\">Artifacts</button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\">Settings</button></div>",
-      "css": ".ds-tabs{display:flex;gap:4px;border-bottom:1px solid rgba(255,255,255,.05);padding-bottom:1px}.ds-tab{background:none;border:none;border-bottom:2px solid transparent;padding:10px 16px;font-family:var(--font-heading);font-size:14px;font-weight:500;color:#94a3b8;cursor:pointer;transition:color .15s,border-color .15s}.ds-tab:hover{color:#e2e8f0}.ds-tab:focus-visible{outline:none;color:#e2e8f0;border-bottom-color:rgba(6,182,212,.5)}.ds-tab-on{color:#22d3ee;border-bottom-color:#06b6d4}"
+      "css": ".ds-tabs{display:flex;gap:4px;border-bottom:1px solid rgba(255,255,255,.05);padding-bottom:1px}.ds-tab{background:none;border:none;border-bottom:2px solid transparent;padding:10px 16px;font-family:var(--font-heading);font-size:14px;font-weight:500;color:#94a3b8;cursor:pointer;transition:color .15s,border-color .15s}.ds-tab:hover{color:#e2e8f0}.ds-tab:focus-visible{outline:2px solid #6e78db;outline-offset:2px}.ds-tab-on{color:#fff;border-bottom-color:#6972c0}"
     },
     {
       "name": "Segmented Control",
       "kind": "nav",
-      "refersTo": "chip-cyan",
-      "description": "Exclusive filter (radiogroup); the selected segment takes the cyan chip treatment.",
+      "refersTo": "segment-selected",
+      "description": "Exclusive filter (radiogroup); the selected segment takes a Signal Edge border, Signal Tint fill and white label; focus is the global ring.",
       "html": "<div class=\"ds-seg\" role=\"radiogroup\" aria-label=\"Filter\"><button class=\"ds-seg-btn ds-seg-on\" role=\"radio\" aria-checked=\"true\">All</button><button class=\"ds-seg-btn\" role=\"radio\" aria-checked=\"false\">Needs you <span class=\"ds-seg-count\">2</span></button><button class=\"ds-seg-btn\" role=\"radio\" aria-checked=\"false\">Done</button></div>",
-      "css": ".ds-seg{display:inline-flex;align-items:center;gap:4px;padding:4px;border:1px solid rgba(255,255,255,.1);border-radius:8px;background:rgba(255,255,255,.02)}.ds-seg-btn{display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid transparent;border-radius:6px;background:none;font-family:var(--font-ui);font-size:12px;font-weight:600;color:#94a3b8;cursor:pointer;transition:background .15s,color .15s}.ds-seg-btn:hover{background:rgba(255,255,255,.05);color:#e2e8f0}.ds-seg-btn:focus-visible{outline:none;box-shadow:0 0 0 1px rgba(6,182,212,.5)}.ds-seg-on{background:rgba(6,182,212,.1);color:#22d3ee;border-color:rgba(6,182,212,.2)}.ds-seg-count{border-radius:9999px;background:rgba(255,255,255,.1);padding:0 6px;font-family:var(--font-mono);font-size:10px;color:#fbbf24}"
+      "css": ".ds-seg{display:inline-flex;align-items:center;gap:4px;padding:4px;border:1px solid rgba(255,255,255,.1);border-radius:8px;background:rgba(255,255,255,.02)}.ds-seg-btn{display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid transparent;border-radius:6px;background:none;font-family:var(--font-ui);font-size:12px;font-weight:600;color:#94a3b8;cursor:pointer;transition:background .15s,color .15s}.ds-seg-btn:hover{background:rgba(255,255,255,.05);color:#e2e8f0}.ds-seg-btn:focus-visible{outline:2px solid #6e78db;outline-offset:2px}.ds-seg-on{background:rgba(90,96,194,.16);color:#fff;border-color:#6972c0}.ds-seg-count{border-radius:9999px;background:rgba(255,255,255,.1);padding:0 6px;font-family:var(--font-mono);font-size:10px;color:#fbbf24}"
     },
     {
       "name": "Rail Item",
       "kind": "nav",
       "refersTo": "rail-project-active",
-      "description": "Project rail entry: status dot (with halo as shipped), 12px name, 9px mono sub-line. The active item is a selected row: the panel-hover surface with white text at the 8px control radius.",
+      "description": "Project rail entry: flat status dot, 12px name, 9px mono sub-line. The active item is a selected row: the panel-hover surface with white text at the 8px control radius.",
       "html": "<div class=\"ds-rail\"><div class=\"ds-rail-item ds-rail-on\"><span class=\"ds-dot ds-dot-cyan\"></span><div><div class=\"ds-rail-name\">demeteo</div><div class=\"ds-rail-sub\">3 running</div></div></div><div class=\"ds-rail-item\" tabindex=\"0\"><span class=\"ds-dot ds-dot-amber\"></span><div><div class=\"ds-rail-name\">runner</div><div class=\"ds-rail-sub\">gate needs you</div></div></div></div>",
       "css": ".ds-rail{width:240px;padding:8px 0;background:var(--bg-sidebar);border-right:1px solid rgba(255,255,255,.05)}.ds-rail-item{display:flex;align-items:center;gap:10px;margin:0 8px;padding:8px 12px;border-radius:8px;color:#94a3b8;cursor:pointer;transition:background .2s,color .2s}.ds-rail-item:hover,.ds-rail-item:focus-visible{background:rgba(255,255,255,.05);color:#e2e8f0;outline:none}.ds-rail-on{background:var(--bg-panel-hover);color:#fff}.ds-rail-name{font-family:var(--font-ui);font-size:12px;font-weight:500}.ds-rail-sub{font-family:var(--font-mono);font-size:9px;color:#64748b}.ds-dot{width:8px;height:8px;border-radius:9999px;flex-shrink:0}.ds-dot-cyan{background:#06b6d4;box-shadow:0 0 8px rgba(6,182,212,.8)}.ds-dot-amber{background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,.8)}"
     }
   ],
   "narrative": {
     "northStar": "A Quiet Instrument",
-    "overview": "The direction is AGENTS.md §4's, adopted in 2026-10: a developer keeps Demeteo open all day to supervise agents, so the chrome recedes and the work and its state carry the screen. Colour is spent only on meaning, with one accent, indigo \"Signal\" (decision 61), for primary actions, selection and focus. Depth is a solid surface step with a 1px hairline rather than an effect, and type is set in sentence case at 11px or more. The benchmarks are developer tools (Linear, Zed, Ghostty, GitHub Primer). The retired direction, \"dark neon glassmorphism\", is named in §4 as the look a generator reaches for by default.\n\nThe shipped code is partway there. The parts that already fit are structural: one status vocabulary (`src/lib/runStatus.ts`) with violet taken out of it, a motion budget that keeps infinite animation to small liveness marks, cascade layers in `src/App.css` so a utility beside a class takes effect, and, since branch `design/surfaces`, solid surfaces: a panel, a raised layer for whatever floats, and a nested card, each with a hairline, one shadow token (the raised layer's), and no blur except on controls floating over a live canvas. Much of the rest is still the old look: the accent is stock violet-500/600 rather than Signal, glows mark status dots, accent bars and primary buttons, decorative blur blobs sit behind status screens, and labels are uppercase mono with wide tracking. The Drift section lists these as follow-up PRs.\n\nIt is an Operate tool, and density shows it. The commonest text sizes are 12px (`text-xs`, 408 uses), hand-set 11px (371) and 10px (289). Machine output (ids, costs, token counts, statuses, paths) is set in Fira Code and headings in Outfit. There is no light theme and no theme switch.",
+    "overview": "The direction is AGENTS.md §4's, adopted in 2026-10: a developer keeps Demeteo open all day to supervise agents, so the chrome recedes and the work and its state carry the screen. Colour is spent only on meaning, with one accent, indigo \"Signal\" (decision 61), for primary actions, selection and focus. Depth is a solid surface step with a 1px hairline rather than an effect, and type is set in sentence case at 11px or more. The benchmarks are developer tools (Linear, Zed, Ghostty, GitHub Primer). The retired direction, \"dark neon glassmorphism\", is named in §4 as the look a generator reaches for by default.\n\nThe shipped code is partway there. The parts that already fit are structural: one status vocabulary (`src/lib/runStatus.ts`) with no violet tone, a motion budget that keeps infinite animation to small liveness marks, cascade layers in `src/App.css` so a utility beside a class takes effect, and solid surfaces (a panel, a raised layer for whatever floats, and a nested card, each with a hairline, one shadow token, and no blur except on controls floating over a live canvas). Since branch `design/accent-buttons` the accent is Signal: one `Button` primitive whose primary fill is the accent, one global focus ring, and selection in the accent's edge and tint, with no glow on a control or a status mark. Much of the rest is still the old look: decorative blur blobs and gradient tiles sit behind status screens, cyan marks some things that are not in motion, and labels are uppercase mono with wide tracking. The Drift section lists these as follow-up PRs.\n\nIt is an Operate tool, and density shows it. The commonest text sizes are hand-set 11px (`text-[11px]`, 352 uses), 12px (`text-xs`, 340) and 10px (287). Machine output (ids, costs, token counts, statuses, paths) is set in Fira Code and headings in Outfit. There is no light theme and no theme switch.",
     "keyCharacteristics": [
       "Dark-only. Surfaces sit between the well (#050608) and panel hover (#191e29), never lighter.",
       "Colour is meaning. `runStatus.ts` maps every run status to one of five status hues; neither the accent nor violet names a status.",
-      "One accent for primary actions, selection and focus: stock violet as shipped, indigo \"Signal\" as decided (not shipped).",
+      "One accent, indigo \"Signal\", for primary actions, selection and focus: the `Button` primary fill, a 2px focus ring, a selected edge and tint.",
       "Three solid surface classes, each stating its own hairline and radius: `.panel` (77 call sites in 41 files), `.raised` for menus, dialogs and toasts (33 in 27), and `.nested-card` to group content inside either.",
       "Mono-heavy and dense, with an ungoverned type scale (14 arbitrary text sizes).",
-      "Depth is a solid surface step plus a hairline, and only the raised layer casts a shadow. Coloured glow is still shipped on status marks and buttons (Drift 2.1).",
+      "Depth is a solid surface step plus a hairline, and only the raised layer casts a shadow. No control or status mark glows; the last glows are in the first-run hero (Drift 3.6).",
       "Motion is budgeted for cost: `data-motion=\"paused\"` freezes everything while the window is unfocused."
     ],
     "rules": [
@@ -739,7 +763,7 @@
       },
       {
         "name": "The Accent-Is-Not-A-Status Rule",
-        "body": "The accent marks primary actions, selection and focus, never a status, and neither does violet, which sits too close to it. `runStatus.ts` still exports a `violet` tone in `RunStatusTone` for non-status accents; every use of it is drift (2.5).",
+        "body": "The accent marks primary actions, selection and focus, never a status, and neither does violet, which sits too close to it. `RunStatusTone` has no violet and no accent-hued tone, and no `Button` variant takes a status hue: a status colour on a control would say the action is that state.",
         "section": "colors"
       },
       {
@@ -806,7 +830,8 @@
     "dos": [
       "**Do** read token values from `src/styles/tokens.css`; never hard-code hex.",
       "**Do** pick a status hue through `runStatusMeta` / `TONE_CHIP` / `TONE_TEXT` / `TONE_BADGE` / `TONE_BORDER_L`, render status pills with `Chip`, and ship every status colour with a label or icon.",
-      "**Do** keep the accent for primary actions, selection and focus, with a white label on an accent fill. New code waits for the Signal tokens rather than adding stock `violet-*`.",
+      "**Do** keep the accent for primary actions, selection and focus: `<Button variant=\"primary\">` for the action, `border-accent-edge` with `bg-accent-tint` for a selected item, and the global ring for focus. A field shows focus with `focus:border-accent-ring`.",
+      "**Do** build every button with `Button` (or `buttonClasses` for a `<label>` or `<a>`), choosing a variant by role, and pass only layout classes.",
       "**Do** use amber only for \"a human is needed\", and let its pulse run three beats, then rest lit.",
       "**Do** use `.panel` for a panel, `.raised` for anything floating (menu, popover, dialog, toast), `.nested-card` for a group inside either, and `.panel-field` for a field filling a panel, and keep their fill, border, radius and shadow unspelled at the call site.",
       "**Do** keep blur for translucent controls floating over live content (canvas zoom controls and legends, the terminal status overlay); an opaque raised surface takes none.",
@@ -819,11 +844,12 @@
     "donts": [
       "**Don't** build a light theme or place these surfaces on a light ground.",
       "**Don't** add glow shadows or `text-shadow`, or a gradient fill on a button or text.",
+      "**Don't** fill a button with a status hue (an emerald Approve); proceed actions are primary.",
       "**Don't** add decorative blurred blobs, sparkle icons as ornament, `hover:scale`, or shimmer outside an indeterminate progress bar.",
       "**Don't** blur a card, a rail, a header or a raised surface, nest a panel in a panel, or blur a full-window scrim.",
       "**Don't** use all-caps letter-spaced labels or text under 11px.",
       "**Don't** pass a colour into `Chip`, or hand-write `bg-<hue>-500/10 text-<hue>-400` for a status.",
-      "**Don't** give the accent or violet a status, use violet as decoration, or give amber a state that needs nobody.",
+      "**Don't** give the accent or violet a status, use violet or cyan as decoration, or give amber a state that needs nobody.",
       "**Don't** put design tokens in `style=` props or raw hex.",
       "**Don't** name a font utility after a face (`font-outfit`); a key with no `@theme` entry silently renders Inter.",
       "**Don't** copy a pattern because it sits nearby; check it against the Drift list first."
@@ -867,7 +893,7 @@
       {
         "group": "1. Surfaces and depth",
         "id": "1.15",
-        "text": "**Shadows cast outside `.raised`.** Breaks: only the raised surface casts a shadow. Evidence: neutral shadows at call sites, `(?<![\\w:-])shadow-(sm|md|lg|xl|2xl)\\b|shadow-\\[0_(?!0_)[^\\]]*\\]` = 13/9 (no `shadow-2xl` left), among them canvas nodes `shadow-lg shadow-black/30` and artifact wells `shadow-lg`. Fix: delete in-flow shadows; decide whether a canvas node is raised (and casts `--shadow-raised`) or a panel."
+        "text": "**Shadows cast outside `.raised`.** Breaks: only the raised surface casts a shadow. Evidence: neutral shadows at call sites, `(?<![\\w:-])shadow-(sm|md|lg|xl|2xl)\\b|shadow-\\[0_(?!0_)[^\\]]*\\]` = 22/8 (no `shadow-2xl` left): `WorkflowNode` ×11, where every state now casts the resting `shadow-lg shadow-black/30` in place of its tone, diff and selection glows; `ArtifactViewer` ×3 (artifact wells `shadow-lg`); `AskCanvasNode` ×3; one each in `PinnedCanvasArtifact`, `TicketGraphNode`, `NewTerminalMenu`, `ProjectSettingsShell` and `StartSessionButton`. Fix: delete in-flow shadows; decide whether a canvas node is raised (and casts `--shadow-raised`) or a panel."
       },
       {
         "group": "1. Surfaces and depth",
@@ -876,48 +902,18 @@
       },
       {
         "group": "2. Accent and buttons",
-        "id": "2.0",
-        "text": "**Stock violet is the accent.** Breaks: the accent is indigo \"Signal\" (decision 61), and violet names nothing. Evidence: every `violet-` utility is to migrate or remove: `\\bviolet-` = 446/106. Split by role: solid fills `(?<![\\w/-])bg-violet-(500|600|700)(?![\\w/])` = 41/21 plus state fills `(hover|active|disabled):bg-violet-` = 44/30 (primary buttons); focus `(focus|focus-visible|focus-within):[\\w-]*violet` = 19/11; text `(?<![\\w:-])text-violet-` = 136/74; borders `(?<![\\w:-])border-(l-)?violet-` = 80/56; tints `(?<![\\w:-])bg-violet-\\d+/` = 84/50; `rgba(139,92,246…)` literals in TSX = 31/23 (mostly glows, 2.1). In CSS: `--accent-purple` and `--accent-purple-glow` and `--border-glass-focus` in `tokens.css`; in `App.css`, `var(--accent-purple)` ×3 (scrollbar thumb while dragged, agent chat-bubble sender, `.btn-primary`), `rgba(139,92,246,…)` ×6 (agent chat bubble, `.btn-primary` border and glow, progress shimmer, two pinned utilities), `#7c3aed` and the caret's `#a78bfa`. Which of these are action, selection or focus (migrate to Signal) and which are decoration or status (2.5, remove) takes reading each site; the fill, focus and selection counts above are the migrate set. Fix: once the Signal tokens land as `@theme` colours, replace action, selection and focus uses with them, then delete `--accent-purple*`."
-      },
-      {
-        "group": "2. Accent and buttons",
-        "id": "2.1",
-        "text": "**Glow shadows.** Breaks: never glow shadows. Evidence: `shadow-\\[0_0_[^\\]]*\\]` = 94/38, 59 distinct strings; by colour, violet 31, emerald 21, cyan 18, amber 9, ruby 5, slate 3, other 7. They include `StatusBadge`'s `TONE_DOT`, `PipelineCard`'s `TONE_ACCENT` and primary buttons (`hover:shadow-\\[0_0_` = 7/5). The gate and artifact modal halos and the two black ones went with the raised surface on branch `design/surfaces`. `App.css` adds five more: `.animate-pulse-glow` (static cyan halo; 16/12 uses), `.animate-pulse-glow-amber` (2/2), and the focus glows on `.input-field` and `.chat-input` and the hover glow on `.btn-primary`. `tokens.css` keeps four `--accent-*-glow` values, one of them used. Fix: delete the glows; dots and bars go solid, focus becomes a ring, and the `--accent-*-glow` tokens go."
-      },
-      {
-        "group": "2. Accent and buttons",
-        "id": "2.2",
-        "text": "**Gradient primary button.** Breaks: no gradient fills on buttons. Evidence: `.btn-primary` in `App.css` is `linear-gradient(135deg, var(--accent-purple), #7c3aed)` with a hover glow; `\\bbtn-primary\\b` = 15/14, all in `ask/`, `discovery/` and their modals. `AskCanvasNodeInspector` has one more gradient button (`bg-gradient-to-br from-violet-600 to-violet-700`). Fix: a solid Signal fill (`#5a60c2`, hover `#6269cc`, white label), the same one 2.3's primitive uses."
-      },
-      {
-        "group": "2. Accent and buttons",
-        "id": "2.3",
-        "text": "**Two primary spellings, no primitive.** Breaks: one primary action treatment (inferred from §4's \"the accent = primary actions\"; §4 does not name a Button primitive). Evidence: inline `\\bbg-violet-600\\b` = 35/21 and `\\bhover:bg-violet-500\\b` = 38/29 beside the 15 `.btn-primary`. Fix: a `Button` primitive in `src/components/ui/` with primary (Signal fill, white label), secondary, ghost and destructive variants; it is the natural place for 2.0's migration."
-      },
-      {
-        "group": "2. Accent and buttons",
-        "id": "2.4",
-        "text": "**Focus and selection are cyan.** Breaks: the accent = selection and focus. Evidence: `focus(-visible|-within)?:border-cyan-` = 81/32 against `…:border-violet-` = 19/11; `focus(-visible)?:ring-cyan` = 4/4 (including `SegmentedControl`), `ring-violet` = 0. `TabBar` selects with `border-cyan-500` plus `TONE_TEXT.cyan`, and `SegmentedControl` with `TONE_CHIP.cyan`. In `App.css`, `::selection`, `select option:checked` and the scrollbar thumb on hover are cyan. The 19 violet focus borders are drift too (2.0). Fix: one shared focus ring in Signal (`#6e78db`), and Signal selected states (border `#6972c0`, tint `rgba(90,96,194,.16)`) in `TabBar`, `SegmentedControl` and `App.css`."
-      },
-      {
-        "group": "2. Accent and buttons",
-        "id": "2.5",
-        "text": "**Violet still names states and decorates.** Breaks: neither the accent nor violet is a status, colour is spent only on meaning, and status hues resolve through `runStatus.ts`. Evidence: `tone=[\"']violet[\"']|tone:\\s*['\"]violet['\"]|TONE_(CHIP|TEXT|BADGE|BORDER_L)\\.violet|\\['violet'\\]` = 27/17. Among them: `discoveryProgress.ts` (\"Interviewing\"), `askLifecycle.ts` (\"Asking\", \"Open\"), `ticketPresentation.ts` (the \"Ready\" lane), `StorageProjectCard`/`StoragePanel` (\"Reclaimable\"), canvas node kinds in `canvas/types.ts`, and model or workflow names as violet `Chip`s (`PipelineCard`, `FeatureHeader`, `AskThreadCard`, `DiscoveryCard`, discovery views). `syncPanel.ts`'s violet entries are actions (\"Sync\", \"Resolve with agent\"), so they move to the accent (2.0) rather than going away. `App.css` tints the agent's chat bubble violet. `HeaderNavItem` tints icons violet, cyan or amber by an `accent` prop (4 uses in `TopBar`). Fix: lifecycle states to cyan or slate by meaning, names to slate chips, header icons and the agent bubble neutral; then drop `violet` from `RunStatusTone`."
-      },
-      {
-        "group": "2. Accent and buttons",
         "id": "2.6",
-        "text": "**Amber for states that need nobody.** Breaks: amber = a human is needed, and only that. Evidence: amber tone references outside `runStatus.ts` (`(tone|accent)\\s*[:=]\\s*['\"]amber['\"]|: 'amber'`) = 25/16. Read one by one, these need nobody: `activitySync.ts` \"reconnecting\", `decomposeReview.ts` \"Revised\" and \"blocked by …\", `ticketPresentation.ts` \"Blocked\" (\"waiting on an edge\"), the `AskThreadCard` \"network\" chip, and `harnessVerdict.ts`'s \"unrunnable\" (multi-line, not in the count). Gate nodes, credential failures, PR conflicts and \"Undecided — left for you\" arguably do. Fix: in-motion states to cyan, dependency and change kinds to slate; §4 needs a home for \"warning\"."
+        "text": "**Amber for states that need nobody.** Breaks: amber = a human is needed, and only that. Evidence: `(tone|accent)\\s*[:=]\\s*['\"]amber['\"]|: 'amber'` = 32/17, 7 of them in `runStatus.ts` itself. Read one by one, these need nobody: `activitySync.ts` \"reconnecting\", `decomposeReview.ts` \"Revised\" and \"blocked by …\", `ticketPresentation.ts` \"Blocked\" (\"waiting on an edge\"), the `AskThreadCard` \"network\" chip, and `harnessVerdict.ts`'s \"unrunnable\" (multi-line, not in the count). Gate nodes, credential failures, PR conflicts, \"Undecided — left for you\", QuestionCard's \"Needs you\" and NotificationBell's `gate_pending` do. Fix: in-motion states to cyan, dependency and change kinds to slate; §4 needs a home for \"warning\"."
       },
       {
         "group": "2. Accent and buttons",
         "id": "2.7",
-        "text": "**Three reds and off-palette hues.** Breaks: ruby = failed or destructive; colour only for meaning. Evidence: ruby classes 289/73, rose 92/19, red 29/5 (`(?<![\\w-])(text|bg|border|ring|from|to|via|fill|stroke|shadow|outline)-<hue>-`). Rose carries GateView's Abort and \"decision blocked\". `App.css` pins `text-red-400`, `bg-red-500/10` and two `border-red-500/*`. Yellow, orange and blue add 12/4 (`CodeEditorView` git letters and folder icons, `ErrorToast`'s orange accent, `GeneralTab`'s unpushed chip, a yellow button in `WorkflowList`). Fix: rose and red to ruby; orange and yellow to amber only where a human is needed, else slate."
+        "text": "**Three reds and off-palette hues.** Breaks: ruby = failed or destructive; colour only for meaning. Evidence: ruby classes 261/72, rose 68/17, red 21/4 (`(?<![\\w-])(text|bg|border|ring|from|to|via|fill|stroke|shadow|outline)-<hue>-`). Rose carries GateView's \"decision blocked\" strip and WorkflowList's Delete icon button (a rose tint that fills `rose-600` on hover). `App.css` pins `text-red-400`, `bg-red-500/10` and two `border-red-500/*`. Yellow, orange and blue add 12/4 (`CodeEditorView` git letters and folder icons, `ErrorToast`'s orange \"Network\" accent, `GeneralTab`'s unpushed chip, WorkflowList's yellow Revert icon button). Fix: rose and red to ruby, and WorkflowList's two icon buttons to `Button` (`danger-subtle`, `ghost`); orange and yellow to amber only where a human is needed, else slate."
       },
       {
         "group": "2. Accent and buttons",
-        "id": "2.8",
-        "text": "**Emerald for healthy machines.** Breaks: emerald = finished well (§4 no longer names \"healthy\"). Evidence: `StatusBadge`'s `NON_RUN_TONES` maps `idle` and `active` to emerald. Fix: decide whether a healthy machine is \"finished well\" or slate, and record it in §4."
+        "id": "2.9",
+        "text": "**Cyan as decoration.** Breaks: cyan = in motion; colour only for meaning. Evidence: cyan that marks no motion, read site by site: WorkflowList's \"Custom\" chip (the \"Starter\" chip beside it is emerald, the same mistake in another hue), VersionDrawer's \"Current\" badge, ErrorToast's `database` kind (`text-cyan-300`, `border-l-cyan-400/70`), CodeEditorView's branch name and icon, `agent_kind` as a cyan `Chip` (`Chip[^>]*tone=\"cyan\"[^>]*>\\{[\\w.]*agent_kind\\}` = 3/3: AskThreadCard, AskThreadSettingsPanel, DiscoveryCard), StartFeatureModal's remote-placement hints (`Server` icon, two `text-cyan-300/80` notes and the \"Always unattended\" box), and cyan left-border accents on cards (`\\bborder-l-(2|4)\\b[^\"`]*\\bborder-l-cyan-` = 2/2, ProvidersPage and MachinesView). Tree-wide `tone=[\"']cyan[\"']|tone:\\s*['\"]cyan['\"]` = 34/21, most of it legitimate motion. Fix: names and kinds to slate, the remote hints and card accents neutral, the \"Current\" badge slate."
       },
       {
         "group": "3. Decoration",
@@ -932,7 +928,7 @@
       {
         "group": "3. Decoration",
         "id": "3.3",
-        "text": "**Gradient ornament.** Breaks: no gradient fills on buttons or text (strictly, these are on tiles, avatars and washes, which §4's wording does not name; they are ornament either way). Evidence: `\\bbg-gradient-to-[a-z]+` = 12/8: icon tiles (`MachinesView` ×2, `PreferencesScreen`, `EmptyStateCard`), avatars (`AccountMenu`, `ProvidersPage`), a hover wash on a `ProjectHome` card, `ShortcutHelp`'s header bands ×2, the `EmptyStateCard` CTA overlay and sheen, and the `AskCanvasNodeInspector` button (2.2). The two `radial-gradient` uses are canvas dot grids and are functional. Fix: flat fills."
+        "text": "**Gradient ornament.** Breaks: no gradient fills on buttons or text (strictly, these are on tiles, avatars and washes, which §4's wording does not name; they are ornament either way). Evidence: `\\bbg-gradient-to-[a-z]+` = 9/6: icon tiles (`MachinesView` ×2, `PreferencesScreen`, `EmptyStateCard`), avatars (`AccountMenu`, `ProvidersPage`), a hover wash on a `ProjectHome` card, and the `EmptyStateCard` CTA overlay and sheen. The two `radial-gradient` uses are canvas dot grids and are functional. Fix: flat fills."
       },
       {
         "group": "3. Decoration",
@@ -942,12 +938,12 @@
       {
         "group": "3. Decoration",
         "id": "3.5",
-        "text": "**Shimmer outside progress.** Breaks: shimmer only on an indeterminate progress bar. Evidence: the `EmptyStateCard` sample-project button sweeps a `via-white/10` gradient across itself on hover. The one allowed shimmer, `.animate-progress-shimmer` (1/1, `TerminalStatusOverlay`), runs its gradient through violet, which is decoration. Fix: delete the sheen; make the progress bar cyan (in motion)."
+        "text": "**Shimmer outside progress.** Breaks: shimmer only on an indeterminate progress bar. Evidence: the `EmptyStateCard` sample-project button sweeps a `via-white/10` gradient across itself on hover. The one allowed shimmer, `.animate-progress-shimmer` (1/1, `TerminalStatusOverlay`), is cyan only. Fix: delete the sheen."
       },
       {
         "group": "3. Decoration",
         "id": "3.6",
-        "text": "**The first-run hero.** `EmptyStateCard` combines 3.1–3.5, two glows and a gradient icon tile, and its copy (\"a modern, premium control center…\") breaks PRODUCT.md's binding voice (direct, no hype). Fix: rebuild it as one solid panel, three plain actions and plain copy; it is the first thing a new user sees."
+        "text": "**The first-run hero.** `EmptyStateCard` combines 3.1–3.5, the tree's last glows (`shadow-[0_0_` = 4/1), a gradient icon tile and a hand-spelled violet-600 sample-project button with a violet glow, not a `Button`, and its copy (\"a modern, premium control center…\") breaks PRODUCT.md's binding voice (direct, no hype). Fix: rebuild it as one solid panel, three plain actions and plain copy; it is the first thing a new user sees."
       },
       {
         "group": "4. Type and copy",
@@ -992,17 +988,12 @@
       {
         "group": "5. Raw hex and `style=` tokens",
         "id": "5.2",
-        "text": "**Tokens are bypassed.** Breaks: values live in `tokens.css` and are read from there. Evidence: TSX reaches a token only through 10 `bg-[var(--…)]` uses and the surface utilities (`bg-surface-*` 21/14, `border-hairline` 1/1); `--accent-*` and `--text-*` are referenced from TSX zero times. Components colour through palette classes (by 2.7's pattern: cyan 540, violet 439, ruby 289, amber 259, emerald 258). The two neutral ladders disagree: `--text-*` are Tailwind gray (#f3f4f6 / #9ca3af / #6b7280), while components use slate and `text-white` (383), and the root shell sets `text-white` over `body`'s `--text-primary`. Fix: one neutral ladder as tokens; the status hues stay behind `runStatus.ts`'s `TONE_*` maps."
-      },
-      {
-        "group": "5. Raw hex and `style=` tokens",
-        "id": "5.3",
-        "text": "**`style=` props carrying design values.** Breaks: never `style=` for design tokens. Evidence: `style=\\{\\{` = 20/13, read one by one. The two that set a surface (`ShortcutHelp`, `WizardShell`) are gone (see Resolved). One still carries type: EnvModal's Browse button overrides `.btn-secondary` with `padding: \"0 12px\", fontSize: \"0.8rem\"`. The rest are geometry. Fix: a size utility on the EnvModal button."
+        "text": "**Tokens are bypassed.** Breaks: values live in `tokens.css` and are read from there. Evidence: TSX reaches a token only through 10 `bg-[var(--…)]` uses and the surface utilities (`bg-surface-*` 21/14, `border-hairline` 1/1); `--text-*` is referenced from TSX zero times. Components colour status hues through palette classes (by 2.7's pattern: cyan 207, ruby 261, amber 247, emerald 207, violet 35); only the surfaces and the accent are reached as token utilities (`bg-accent` 72/39, `border-accent-ring` 102/42, `border-accent-edge` 52/36, `bg-accent-tint` 51/34, `text-accent-ink` 23/15). The two neutral ladders disagree: `--text-*` are Tailwind gray (#f3f4f6 / #9ca3af / #6b7280), while components use slate and `text-white` (383), and the root shell sets `text-white` over `body`'s `--text-primary`. Fix: one neutral ladder as tokens; the status hues stay behind `runStatus.ts`'s `TONE_*` maps."
       },
       {
         "group": "5. Raw hex and `style=` tokens",
         "id": "5.4",
-        "text": "**Colour values outside `tokens.css`.** Breaks: token values live in `tokens.css`. Evidence: `App.css` still declares 22 hex literals in rules: 11 in the `PINNED UTILITY COLOURS` block (32 utility classes re-declared at Tailwind v3 values) and 11 elsewhere (`.btn-primary`'s `#7c3aed` and `#fff`, the caret's `#a78bfa`, the native-control rules), plus rgba values in `.panel-hover`'s 8% border, `.bubble-code`, the chat bubbles, the scrollbar and the skeleton. Fix: move the values to tokens; whether to keep the v3 pins is a palette decision, per the block's own comment."
+        "text": "**Colour values outside `tokens.css`.** Breaks: token values live in `tokens.css`. Evidence: `App.css` still declares 18 hex literals in rules: 11 in the `PINNED UTILITY COLOURS` block (32 utility classes re-declared at Tailwind v3 values) and 7 in the native-control rules, plus rgba values in `.panel-hover`'s 8% border, `.bubble-code`, the agent chat bubble, the scrollbar, the progress shimmer and the skeleton. Fix: move the values to tokens; whether to keep the v3 pins is a palette decision, per the block's own comment."
       },
       {
         "group": "5. Raw hex and `style=` tokens",
@@ -1012,21 +1003,21 @@
       {
         "group": "5. Raw hex and `style=` tokens",
         "id": "5.6",
-        "text": "**Unused tokens.** Evidence: no `var()` or utility reads `--accent-emerald`, `--accent-ruby`, three of the four `--accent-*-glow`, `--text-muted`, `--text-dark`, `--transition-spring` or `--transition-smooth`. Fix: delete them."
+        "text": "**Unused tokens.** Evidence: no `var()` or utility reads `--text-muted`, `--text-dark`, `--transition-spring` or `--transition-smooth`. Fix: delete them."
       },
       {
         "group": "6. Form controls",
         "id": "6.1",
-        "text": "**`!important` native-control rules beat call-site utilities.** Breaks: no raw hex for tokens; a call site's utilities should apply (the reason for PR #250's layers). Evidence: the unlayered rules at the end of `App.css` hold 17 `!important` declarations on `select`, `option`/`optgroup`, `input[type=text|search|email|password|url]`, `textarea` and placeholders (#0a0a0e fill, #e2e8f0 text, #475569 placeholder, a cyan checked option, and on `select` `appearance: none`, a chevron `background-image` and `padding-right: 28px`). A scripted pass over JSX tags found 128 matching fields in 54 files (`select` 45, `input type=\"text\"` 62, `password` 7, `search` 2, `textarea` 12). 98 of them carry a `bg-*` utility and 94 a text-colour utility that never apply, and the 14 using `.input-field` lose its background too. Inputs without a `type` attribute (8) and number inputs (10) are not matched, so they render differently. Moving the rules into `@layer base` would let 31 of the 45 selects' padding utilities (`p-`/`px-`/`pr-`) override the 28px chevron gutter. That it would also lose the chevron `background-image` was reported to me and not verified here. Fix: move the rules to `@layer base` on token colours, give `select` its chevron and gutter through a class or a `pr-7` convention, then remove the dead `bg-*` and text utilities."
+        "text": "**`!important` native-control rules beat call-site utilities.** Breaks: no raw hex for tokens; a call site's utilities should apply (the reason for PR #250's layers). Evidence: the unlayered rules at the end of `App.css` hold 17 `!important` declarations on `select`, `option`/`optgroup`, `input[type=text|search|email|password|url]`, `textarea` and placeholders (#0a0a0e fill, #e2e8f0 text, #475569 placeholder, an accent tint and ink checked option, and on `select` `appearance: none`, a chevron `background-image` and `padding-right: 28px`). A scripted pass over JSX tags found 128 matching fields in 54 files (`select` 45, `input type=\"text\"` 62, `password` 7, `search` 2, `textarea` 12). 98 of them carry a `bg-*` utility and 94 a text-colour utility that never apply, and the 14 using `.input-field` lose its background too. Inputs without a `type` attribute (8) and number inputs (10) are not matched, so they render differently. Moving the rules into `@layer base` would let 31 of the 45 selects' padding utilities (`p-`/`px-`/`pr-`) override the 28px chevron gutter. That it would also lose the chevron `background-image` was reported to me and not verified here. Fix: move the rules to `@layer base` on token colours, give `select` its chevron and gutter through a class or a `pr-7` convention, then remove the dead `bg-*` and text utilities."
       },
       {
         "group": "6. Form controls",
         "id": "6.2",
-        "text": "**Selection and body font as `!important`.** Evidence: `::selection` is an unlayered `!important` cyan (see 2.4), and the \"WebKitGTK / Tauri compatibility layer\" re-declares `body`'s font with `!important`, duplicating the `@layer base` rule. Fix: fold both into `@layer base`, with selection in violet."
+        "text": "**Selection and body font as `!important`.** Evidence: `::selection` is an unlayered `!important` (the accent at 45%), and the \"WebKitGTK / Tauri compatibility layer\" re-declares `body`'s font with `!important`, duplicating the `@layer base` rule. Fix: fold both into `@layer base`."
       }
     ],
     "driftOutsideGroups": [
-      "**Status vocabularies outside `runStatus.ts`.** §4 says status hues resolve through `runStatus.ts` and nowhere else. About a dozen modules keep their own label→tone tables, reusing its `RunStatusTone` type and `TONE_*` maps: `syncPanel`, `discoveryProgress`, `askLifecycle`, `ticketPresentation`, `decomposeReview`, `activitySync`, `pullRequestRow`, `harnessVerdict`, `staleness` and `pipelineCard` in `src/lib/`, plus `RemoteRunInbox`, `canvas/types`, `StorageProjectCard` and `ReviewFailureCard`. Whether reusing the `TONE_*` maps satisfies \"through runStatus.ts\" is for §4 to say; 2.5 and 2.6 are where these tables disagree with it.",
+      "**Status vocabularies outside `runStatus.ts`.** §4 says status hues resolve through `runStatus.ts` and nowhere else. About a dozen modules keep their own label→tone tables, reusing its `RunStatusTone` type and `TONE_*` maps: `syncPanel`, `discoveryProgress`, `askLifecycle`, `ticketPresentation`, `decomposeReview`, `activitySync`, `pullRequestRow`, `harnessVerdict`, `staleness` and `pipelineCard` in `src/lib/`, plus `RemoteRunInbox`, `canvas/types`, `StorageProjectCard` and `ReviewFailureCard`. Whether reusing the `TONE_*` maps satisfies \"through runStatus.ts\" is for §4 to say; 2.6 and 2.9 are where these tables disagree with it.",
       "**No-op animation.** `NotificationBell`'s toast uses `animate-[fadeIn_120ms_ease-out]`, and no `fadeIn` keyframe exists (the keyframe is `fade-in`).",
       "**Stale written guidance.** `.design-sync/conventions.md` still teaches the retired system: violet = \"agent working\", emerald = \"running agent\", `style={{ background: 'var(--bg-panel)' }}` for tokens, uppercase `tracking-widest` small labels, `SectionCard` first, and `StatusBadge variant=\"pill\"`, a prop that no longer exists."
     ],
@@ -1048,7 +1039,14 @@
       "1.5 The raised layer spelled a dozen ways: on branch `design/surfaces` 27 files' menu, popover, dialog, palette and toast bodies use `.raised` (33 uses), every dialog scrim is a flat `bg-black/60` (`Modal`'s default included), and the gate and artifact modal halos are gone. Routing the hand-rolled overlays through `Modal` remains (1.8).",
       "1.6 Radius beyond the panel token: on branch `design/surfaces` `rounded-2xl` went from 12/12 to 0, so no surface is rounder than the panel. `rounded-xl` without a surface class remains (1.14).",
       "1.7 The panel hairline re-spelled: on branch `design/surfaces` the white re-spellings were dropped (hue borders with meaning kept), so no `.panel` or `.raised` call site adds a `border-white/*`, radius or shadow (was 24 of 91 panel sites).",
-      "5.3, in part: the surface `style=` props on `ShortcutHelp` and `WizardShell` were removed on branch `design/surfaces`."
+      "5.3 `style=` props carrying design values: the surface props on `ShortcutHelp` and `WizardShell` went on branch `design/surfaces`, and EnvModal's Browse button override (padding and font size on `.btn-secondary`) went with that class on `design/accent-buttons`. `style=\\{\\{` = 19/12, the rest geometry as read before.",
+      "2.0 Stock violet as the accent: on branch `design/accent-buttons` Signal is six `@theme static` colours in `tokens.css` (`accent`, `-hover`, `-ink`, `-ring`, `-edge`, `-tint`), every action, selection and focus use moved to them, and `--accent-purple*`, `--border-glass-focus` and the unused `--accent-cyan/emerald/ruby` are deleted. `\\bviolet-` is down from 446/106 to 35/10, all decoration (group 3).",
+      "2.1 Glow shadows: `shadow-[0_0_` is down from 94/38 to 4/1, all in `EmptyStateCard` (3.6). `StatusBadge` dots and pipeline-card accent bars are flat, `.animate-pulse-glow(-amber)` keep their names but cast no shadow, the `.input-field` and `.chat-input` focus glows are gone, canvas nodes lost their tone, diff and selection glows, and every `--accent-*-glow` token is deleted.",
+      "2.2 Gradient primary button: `.btn-primary` and `.btn-secondary` are deleted from `App.css`, and `AskCanvasNodeInspector`'s gradient button is a `Button`.",
+      "2.3 Two primary spellings, no primitive: `Button` (`src/components/ui/Button.tsx`) with primary, secondary, ghost, danger and danger-subtle variants and sm/md/lg sizes; `<Button` = 172/63, `buttonClasses(` = 7/5. No status-hue variant, so gate Approve, Replay and Retry are primary.",
+      "2.4 Focus and selection in cyan: one `:focus-visible` ring (2px `accent-ring`, offset 2px) in `@layer base`; fields focus to `border-accent-ring` (`focus:border-cyan-` 81/32 → 0); `TabBar`, `SegmentedControl`, rows, tiles, palette highlights and the selected canvas node select with `accent-edge` and `accent-tint`; `::selection` and `select option:checked` are the accent; the scrollbar thumb and splitter hover are neutral.",
+      "2.5 Violet naming states and decorating: `violet` is out of `RunStatusTone` and every `TONE_*` map, `HeaderNavItem` lost its `accent` prop, and `ActionRow`'s tone is optional with a primary or danger button. Chat bubbles are neutral and the stream caret is `--text-secondary`. \"Asking\" and \"Interviewing\" are cyan while a turn runs and slate otherwise; \"Open\", the \"Ready\" lane, \"Reclaimable\", canvas node kinds other than gate (amber), and model, workflow and placement chips are slate; `syncPanel.ts`'s state-free actions (sync, merge, resolve, review) carry no tone, so their rows are neutral and the press is the accent.",
+      "2.8 Emerald for healthy machines: §4 now reads \"emerald = finished well, or healthy\", so `StatusBadge` mapping machine `idle`/`active` to emerald is within it."
     ]
   }
 }

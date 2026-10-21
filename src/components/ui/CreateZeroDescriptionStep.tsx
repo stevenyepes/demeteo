@@ -19,7 +19,7 @@ export function CreateZeroDescriptionStep(props: CreateZeroDescriptionStepProps)
         onChange={(e) => onChange(e.target.value)}
         rows={8}
         placeholder="Describe the feature. The pipeline will research, draft a spec, implement, review, validate, and ship."
-        className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 resize-y"
+        className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-accent-ring resize-y"
       />
       <p className="text-[10px] text-slate-500 font-mono">
         {description.trim().length} characters · minimum 8.

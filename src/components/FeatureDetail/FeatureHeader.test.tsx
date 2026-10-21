@@ -84,7 +84,7 @@ describe('FeatureHeader telemetry', () => {
 
     expect(metricValue('Cost')).toHaveClass(TONE_TEXT.emerald);
     expect(metricValue('Tokens')).toHaveClass(TONE_TEXT.cyan);
-    expect(metricValue('Cache Reads')).toHaveClass(TONE_TEXT.violet);
+    expect(metricValue('Cache Reads')).toHaveClass(TONE_TEXT.slate);
     expect(metricValue('Elapsed')).toHaveClass('text-white');
   });
 
@@ -347,7 +347,7 @@ describe('the header action ranking', () => {
     renderHeader({ status: 'completed', statusMeta: runStatusMeta('completed'), mrUrl: null });
 
     const filled = Array.from(screen.getByTestId('feature-header').querySelectorAll('button, a'))
-      .filter((el) => /(^|\s)bg-(violet|cyan|emerald|rose)-600(\s|$)/.test(el.className))
+      .filter((el) => /(^|\s)bg-(accent|cyan|emerald|rose|ruby)(-600)?(\s|$)/.test(el.className))
       .map((el) => el.textContent?.trim());
     expect(filled).toEqual(['Publish MR']);
   });

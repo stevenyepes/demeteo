@@ -1,4 +1,5 @@
 import { RotateCcw } from 'lucide-react';
+import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import type { ReplayTarget } from './useRerunActions';
 
@@ -46,18 +47,10 @@ export function ReplayModal({
       </p>
 
       <div className="flex justify-end gap-2">
-        <button
-          onClick={onClose}
-          className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-semibold transition"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={onConfirm}
-          className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.5)] rounded-lg text-xs font-bold text-white transition duration-300 shadow-[0_0_15px_rgba(16,185,129,0.3)]"
-        >
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={onConfirm}>
           <RotateCcw className="w-3 h-3" /> Replay
-        </button>
+        </Button>
       </div>
     </Modal>
   );

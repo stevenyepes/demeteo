@@ -9,6 +9,7 @@ import type { AskThread } from '../../types';
 import EmptyStateCard from '../EmptyStateCard';
 import { PipelineListSkeleton } from '../PipelineListSkeleton';
 import { SessionFilterBar } from '../SessionFilterBar';
+import { Button } from '../ui/Button';
 import { AskThreadCard } from './AskThreadCard';
 import { NewAskThreadModal } from './NewAskThreadModal';
 
@@ -78,7 +79,7 @@ export function AskSection({
     <div className="flex flex-col gap-5">
       <div className="panel relative overflow-hidden p-4">
         <div className="flex items-start gap-4">
-          <MessageSquare className="mt-1.5 ml-1 h-5 w-5 shrink-0 text-violet-400" aria-hidden="true" />
+          <MessageSquare className="mt-1.5 ml-1 h-5 w-5 shrink-0 text-slate-400" aria-hidden="true" />
           <div className="min-w-0 flex-1">
             <input
               type="text"
@@ -104,14 +105,14 @@ export function AskSection({
               </span>
             </div>
           </div>
-          <button
-            type="button"
+          <Button
+            variant="primary"
             onClick={() => setModalOpen(true)}
             data-testid="open-new-ask-thread"
-            className="btn-primary mt-1 shrink-0 text-[13px]"
+            className="mt-1 shrink-0"
           >
             New thread
-          </button>
+          </Button>
         </div>
       </div>
 

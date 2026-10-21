@@ -70,7 +70,7 @@ export function RunPlacementSelect({
         className={`w-full bg-[var(--bg-input)] border rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none ${
           blocked || orphaned
             ? 'border-ruby-500/50 focus:border-ruby-500/70'
-            : 'border-white/10 focus:border-violet-500/50'
+            : 'border-white/10 focus:border-accent-ring'
         }`}
       >
         {defaultLabel !== undefined && <option value={NULL_VALUE}>Default ({defaultLabel})</option>}

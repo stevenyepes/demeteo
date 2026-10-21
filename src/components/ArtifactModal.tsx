@@ -22,6 +22,7 @@
 import { X, ExternalLink } from 'lucide-react';
 
 import { ArtifactViewer } from './ArtifactViewer';
+import { Button } from './ui/Button';
 import { Modal } from './ui/Modal';
 import {
   ARTIFACT_KIND_COLORS,
@@ -118,12 +119,9 @@ export function ArtifactModal({
           {artifactPath}
         </span>
         {onOpenEditorForPath && (
-          <button
-            onClick={() => onOpenEditorForPath(artifactPath)}
-            className="px-4 py-2 border border-cyan-500/20 hover:border-cyan-500/50 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 hover:text-white rounded-lg text-xs font-bold transition duration-300 flex items-center gap-1.5 shrink-0"
-          >
+          <Button onClick={() => onOpenEditorForPath(artifactPath)} className="shrink-0">
             <ExternalLink className="w-3.5 h-3.5" /> Open in editor
-          </button>
+          </Button>
         )}
       </div>
     </Modal>

@@ -2,6 +2,7 @@ import React from 'react';
 
 import { pendingProposalNote } from '../../lib/decomposeReview';
 import type { DecomposeProposal } from '../../types';
+import { Button } from '../ui/Button';
 
 interface PendingProposalNoticeProps {
   proposal: DecomposeProposal;
@@ -52,35 +53,29 @@ export function PendingProposalNotice({
         {pendingProposalNote(proposal)}
       </p>
       <div className="flex shrink-0 items-center gap-2.5">
-        <button
-          type="button"
+        <Button
           data-testid="pending-proposal-discard"
           onClick={onDiscard}
           disabled={busy}
-          className="btn-secondary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
         >
           {stopped ? 'Dismiss' : 'Discard'}
-        </button>
+        </Button>
         {stopped ? (
-          <button
-            type="button"
+          <Button
             data-testid="pending-proposal-decompose"
             onClick={onDecompose}
             disabled={busy}
-            className="btn-secondary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
           >
             Decompose again
-          </button>
+          </Button>
         ) : (
-          <button
-            type="button"
+          <Button
             data-testid="pending-proposal-review"
             onClick={onReview}
             disabled={busy}
-            className="btn-secondary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
           >
             Review
-          </button>
+          </Button>
         )}
       </div>
     </div>

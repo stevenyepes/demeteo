@@ -16,6 +16,7 @@ import {
 import { phaseOfStatus, type TurnPhase } from '../../lib/askActivity';
 import { formatError } from '../../lib/errors';
 import type { AskMessage, AskThread, AskThreadDetail } from '../../types';
+import { Button } from '../ui/Button';
 import { AskCanvasPane } from './AskCanvasPane';
 import { AskChatCollapsedRail } from './AskChatCollapsedRail';
 import { AskChatColumn } from './AskChatColumn';
@@ -303,14 +304,13 @@ export function AskThreadView({
             <h1 className="m-0 font-heading text-xl font-bold tracking-tight text-white">New thread</h1>
           </div>
           <div className="flex shrink-0 items-center gap-4">
-            <button
-              type="button"
+            <Button
+              variant="primary"
               data-testid="ask-new-thread"
               onClick={() => setNewThread({ seedTitle: '' })}
-              className="btn-primary inline-flex items-center gap-2"
             >
               New thread
-            </button>
+            </Button>
           </div>
         </header>
       )}

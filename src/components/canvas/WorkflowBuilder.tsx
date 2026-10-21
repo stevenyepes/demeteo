@@ -51,6 +51,7 @@ import { useErrorBus } from '../../lib/errorBus';
 import { MONACO_RESIZE_SAFE } from '../../lib/monaco';
 import { useNavigationGuard } from '../../hooks/useNavigationGuard';
 import { BackButton } from '../ui/BackButton';
+import { Button } from '../ui/Button';
 import type { NavigationIntent } from '../../context/NavigationContext';
 import { ConfigPanel } from './ConfigPanel';
 import { ScheduleDrawer, type WorkflowScheduleValue } from './ScheduleDrawer';
@@ -404,7 +405,7 @@ export function WorkflowBuilder({
           onChange={(e) => setName(e.target.value)}
           placeholder="Workflow name"
           aria-label="Workflow name"
-          className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-base font-medium text-slate-100 outline-none transition-colors hover:border-slate-700/60 focus:border-cyan-500/50"
+          className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-base font-medium text-slate-100 outline-none transition-colors hover:border-slate-700/60 focus:border-accent-ring"
         />
 
         {/* The version chip is the history affordance once there is a stored
@@ -418,7 +419,7 @@ export function WorkflowBuilder({
             className={[
               'flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px] transition-colors',
               showHistory
-                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                ? 'border-accent-edge bg-accent-tint text-white'
                 : 'border-slate-700/60 text-slate-400 hover:border-slate-600 hover:text-slate-200',
             ].join(' ')}
           >
@@ -455,7 +456,7 @@ export function WorkflowBuilder({
             className={[
               'rounded-lg border p-1.5 transition-colors',
               showSchedule || schedule
-                ? 'border-violet-500/40 bg-violet-500/10 text-violet-200'
+                ? 'border-accent-edge bg-accent-tint text-white'
                 : 'border-slate-700/60 text-slate-300 hover:border-slate-600 hover:text-white',
             ].join(' ')}
           >
@@ -471,7 +472,7 @@ export function WorkflowBuilder({
           className={[
             'rounded-lg border p-1.5 transition-colors',
             showSource
-              ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+              ? 'border-accent-edge bg-accent-tint text-white'
               : 'border-slate-700/60 text-slate-300 hover:border-slate-600 hover:text-white',
           ].join(' ')}
         >
@@ -527,16 +528,16 @@ export function WorkflowBuilder({
           {summary ?? (checking ? 'Checking…' : 'Valid')}
         </span>
 
-        <button
-          type="button"
+        <Button
+          variant="primary"
+          size="sm"
           onClick={() => void save()}
           disabled={saving || lint.hasErrors}
           title={lint.hasErrors ? blockingReasons.join('\n') : 'Save a new version (⌘S)'}
-          className="flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition-colors hover:border-cyan-400/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Save className="h-3.5 w-3.5" />
           {saving ? 'Saving…' : 'Save'}
-        </button>
+        </Button>
       </header>
 
       {draftOffer && (
@@ -712,29 +713,21 @@ export function WorkflowBuilder({
               discards them.
             </p>
             <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setPendingExit(null)}
-                className="rounded-lg border border-slate-700/60 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-slate-600 hover:text-white"
-              >
+              <Button size="sm" onClick={() => setPendingExit(null)}>
                 Keep editing
-              </button>
-              <button
-                type="button"
-                onClick={exitDiscarding}
-                className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-200 transition-colors hover:border-rose-400/60"
-              >
+              </Button>
+              <Button variant="danger-subtle" size="sm" onClick={exitDiscarding}>
                 Discard
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={() => void exitSaving()}
                 disabled={saving || lint.hasErrors}
                 title={lint.hasErrors ? blockingReasons.join('\n') : undefined}
-                className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition-colors hover:border-cyan-400/60 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Save and leave
-              </button>
+              </Button>
             </div>
           </div>
         </div>

@@ -112,7 +112,6 @@ function TopBar({ connectedProvider }: TopBarProps) {
           icon={Sliders}
           label="Workflows"
           density={density}
-          accent="violet"
           active={view.kind === 'workflows'}
           title="Templates Hub"
           onClick={() => navigate({ kind: 'workflows' })}
@@ -121,7 +120,6 @@ function TopBar({ connectedProvider }: TopBarProps) {
           icon={Globe}
           label="Providers"
           density={density}
-          accent="cyan"
           active={view.kind === 'providers'}
           title="Source Providers"
           onClick={() => navigate({ kind: 'providers' })}
@@ -130,7 +128,6 @@ function TopBar({ connectedProvider }: TopBarProps) {
           icon={Inbox}
           label="Runs"
           density={density}
-          accent="amber"
           active={view.kind === 'remote-inbox'}
           count={actionableCount}
           activity={runningCount > 0}
@@ -147,7 +144,6 @@ function TopBar({ connectedProvider }: TopBarProps) {
           icon={TerminalSquare}
           label="Terminals"
           density={density}
-          accent="cyan"
           active={terminalsActive}
           pulse={liveTerminals > 0 && !terminalsActive}
           title={liveTerminals > 0 ? `Open the Terminals view — ${liveTerminals} live session${liveTerminals === 1 ? '' : 's'}` : 'Open the Terminals view — sessions stay alive as you navigate'}

@@ -64,7 +64,7 @@ import type {
 } from './types';
 
 const INPUT_CLASS =
-  'w-full rounded-lg border border-slate-700/60 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/50 focus:outline-none';
+  'w-full rounded-lg border border-slate-700/60 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:border-accent-ring focus:outline-none';
 
 const MONACO_OPTIONS = {
   ...MONACO_RESIZE_SAFE,
@@ -443,7 +443,7 @@ function FieldControlView({
             type="checkbox"
             checked={value === true}
             onChange={(evt) => onChange(evt.target.checked)}
-            className="h-3.5 w-3.5 accent-violet-500"
+            className="h-3.5 w-3.5 accent-accent"
           />
           {value === true ? 'Enabled' : 'Disabled'}
         </label>
@@ -596,7 +596,7 @@ function VerifierForm({
           type="checkbox"
           checked={enabled}
           onChange={(evt) => onChange(evt.target.checked ? { ...VERIFIER_DEFAULTS } : null)}
-          className="h-3.5 w-3.5 accent-violet-500"
+          className="h-3.5 w-3.5 accent-accent"
         />
         <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" aria-hidden />
         Verify this node&rsquo;s output with a second agent turn
@@ -796,7 +796,7 @@ function RetryForm({
                         type="checkbox"
                         checked={rule.feedback !== false}
                         onChange={(evt) => setRule(cls, { ...rule, feedback: evt.target.checked })}
-                        className="h-3.5 w-3.5 accent-violet-500"
+                        className="h-3.5 w-3.5 accent-accent"
                       />
                       Pass the failure back as feedback
                     </label>

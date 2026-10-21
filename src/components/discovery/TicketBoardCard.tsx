@@ -9,7 +9,6 @@ import { Chip } from '../ui/Chip';
 const TONE_BORDER: Record<RunStatusTone, string> = {
   emerald: 'border-emerald-500/40',
   cyan: 'border-cyan-500/50',
-  violet: 'border-violet-500/50',
   amber: 'border-amber-500/50',
   ruby: 'border-ruby-500/50',
   slate: 'border-slate-700/60',
@@ -18,7 +17,6 @@ const TONE_BORDER: Record<RunStatusTone, string> = {
 const LANE_DOT: Record<RunStatusTone, string> = {
   emerald: 'bg-emerald-400',
   cyan: 'bg-cyan-400',
-  violet: 'bg-violet-400',
   amber: 'bg-amber-400',
   ruby: 'bg-ruby-400',
   slate: 'bg-slate-500',
@@ -59,7 +57,7 @@ export function TicketBoardCard({
       onClick={onSelect}
       className={`w-[190px] rounded-[10px] border bg-slate-900/70 px-3 py-2.5 text-left transition hover:-translate-y-px ${
         selected
-          ? 'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.4),0_0_18px_rgba(34,211,238,0.25)]'
+          ? 'border-accent-edge'
           : TONE_BORDER[tone]
       } ${dropped ? 'border-dashed opacity-50' : ''}`}
     >

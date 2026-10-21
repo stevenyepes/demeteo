@@ -84,7 +84,7 @@ export function HarnessModelPicker({
           aria-label="Harness"
           value={agentKind}
           onChange={(e) => onAgentKindChange(e.target.value)}
-          className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-violet-500/50 capitalize"
+          className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring capitalize"
         >
           <option value="">{agentPlaceholder}</option>
           {agentKinds.map((k) => (
@@ -109,7 +109,7 @@ export function HarnessModelPicker({
             value={model}
             onChange={(e) => onModelChange(e.target.value)}
             disabled={!modelEnabled}
-            className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-violet-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <option value="">{modelEnabled ? modelPlaceholder : 'Pick a harness first'}</option>
             {models.map((m) => (
@@ -135,7 +135,7 @@ export function HarnessModelPicker({
                 ? undefined
                 : `${effortLabel} does not support effort selection`
             }
-            className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-violet-500/50 disabled:opacity-40 disabled:cursor-not-allowed capitalize"
+            className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-accent-ring disabled:opacity-40 disabled:cursor-not-allowed capitalize"
           >
             <option value="">
               {effortSupported ? effortPlaceholder : 'Not supported'}

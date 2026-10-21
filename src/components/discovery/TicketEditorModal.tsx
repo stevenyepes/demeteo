@@ -24,6 +24,7 @@ import type {
   TicketView,
   WorkflowWithSteps,
 } from '../../types';
+import { Button } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { Modal } from '../ui/Modal';
 import { FieldLabel } from '../ui/FieldLabel';
@@ -188,18 +189,10 @@ export function TicketEditorModal({
 
   const saveControls = !locked && (
     <>
-      <button type="button" onClick={onClose} className="btn-secondary text-[13px]">
-        Discard
-      </button>
-      <button
-        type="button"
-        data-testid="ticket-save"
-        disabled={!dirty || disabled}
-        onClick={() => void save()}
-        className="btn-secondary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
-      >
+      <Button onClick={onClose}>Discard</Button>
+      <Button data-testid="ticket-save" disabled={!dirty || disabled} onClick={() => void save()}>
         {saving ? 'Saving…' : 'Save ticket'}
-      </button>
+      </Button>
     </>
   );
 

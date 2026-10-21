@@ -98,7 +98,7 @@ export function DiscoveryActionsMenu({ actions }: DiscoveryActionsMenuProps): Re
         data-testid="discovery-actions-trigger"
         className={`inline-flex h-10 w-10 items-center justify-center rounded-md border transition-colors hover:text-slate-100 ${
           open
-            ? 'border-violet-500/45 bg-violet-500/10 text-slate-100'
+            ? 'border-accent-edge bg-accent-tint text-slate-100'
             : 'border-white/5 text-slate-400 hover:border-white/15'
         }`}
       >

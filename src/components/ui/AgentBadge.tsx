@@ -14,11 +14,10 @@ export interface AgentBadgeProps {
 }
 
 /**
- * A small violet pill marking a terminal that is running a coding agent
- * (spec: "if it is running a coding agent, show a label"). Violet keeps it
- * visually distinct from the machine dot (cyan local / emerald remote), so
- * a glance down the session list separates *where* a terminal runs from
- * *what* it runs.
+ * A small neutral pill marking a terminal that is running a coding agent
+ * (spec: "if it is running a coding agent, show a label"). It names *what*
+ * runs, which is not a state, so it takes no hue: the machine dot beside it
+ * already spends one on *where*.
  */
 function AgentBadgeImpl({
   agentKind,
@@ -34,8 +33,8 @@ function AgentBadgeImpl({
       data-agent-kind={agentKind ?? ''}
       title={`Running ${label}`}
       className={[
-        'inline-flex items-center gap-1 rounded-full border border-violet-400/30',
-        'bg-violet-500/15 text-violet-300 font-mono shrink-0',
+        'inline-flex items-center gap-1 rounded-full border border-white/10',
+        'bg-white/5 text-slate-300 font-mono shrink-0',
         compact ? 'px-1 py-0.5' : 'px-1.5 py-0.5 text-[9px]',
         className,
       ].join(' ')}

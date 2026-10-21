@@ -26,7 +26,7 @@ const ACTIVITY_LABEL: Record<'working' | 'awaiting_input' | 'awaiting_approval',
  * deliberately ordered so *needs a decision* out-shouts *waiting*, which
  * out-shouts *working*:
  *
- *   working          → violet animated spinner (matches AgentBadge's violet)
+ *   working          → cyan animated spinner (in motion)
  *   awaiting_input   → steady amber dot ("your turn")
  *   awaiting_approval→ pulsing red-amber dot, highest salience
  */
@@ -46,7 +46,7 @@ function ActivityIndicatorImpl({
         role="status"
         title={label}
         aria-label={label}
-        className={['inline-flex items-center text-violet-300 shrink-0', className].join(' ')}
+        className={['inline-flex items-center text-cyan-400 shrink-0', className].join(' ')}
       >
         <Loader2 className="w-2.5 h-2.5 shrink-0 animate-spin" aria-hidden="true" />
       </span>

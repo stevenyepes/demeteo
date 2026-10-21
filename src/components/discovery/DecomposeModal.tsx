@@ -19,6 +19,7 @@ import { formatError } from '../../lib/errors';
 import { TONE_TEXT } from '../../lib/runStatus';
 import { stateLabel, ticketTone, type TicketIndex } from '../../lib/ticketPresentation';
 import type { DecomposeProposal, DiscoveryBoard } from '../../types';
+import { Button } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { Modal } from '../ui/Modal';
 import { DecomposeChangeCard } from './DecomposeChangeCard';
@@ -114,14 +115,9 @@ export function DecomposeModal({
               interviewer worked around.
             </p>
           </div>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={onClose}
-            className="btn-secondary shrink-0 px-2.5 py-1.5"
-          >
+          <Button size="sm" aria-label="Close" onClick={onClose} className="shrink-0">
             <X className="h-4 w-4" aria-hidden="true" />
-          </button>
+          </Button>
         </header>
 
         <div
@@ -243,18 +239,15 @@ export function DecomposeModal({
             {renumberNote(proposal)}
           </p>
           <div className="flex shrink-0 items-center gap-2.5">
-            <button type="button" onClick={onClose} className="btn-secondary text-[13px]">
-              Keep talking
-            </button>
-            <button
-              type="button"
+            <Button onClick={onClose}>Keep talking</Button>
+            <Button
+              variant="primary"
               data-testid="decompose-apply"
               disabled={!applicable}
               onClick={() => void apply()}
-              className="btn-primary text-[13px] disabled:cursor-not-allowed disabled:opacity-35"
             >
               {applying ? 'Applying…' : applyLabel(accepted.size, proposal.changes.length)}
-            </button>
+            </Button>
           </div>
         </footer>
       </div>

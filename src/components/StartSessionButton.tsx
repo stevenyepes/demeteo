@@ -160,7 +160,7 @@ export function StartSessionButton({
           type="button"
           onClick={() => void launch()}
           disabled={disabled}
-          className="flex items-center gap-1.5 pl-3.5 pr-3.5 py-2 rounded-l-lg text-xs font-mono whitespace-nowrap border border-white/10 border-r-0 bg-violet-600 hover:bg-violet-500 text-white shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all disabled:opacity-40"
+          className="flex items-center gap-1.5 pl-3.5 pr-3.5 py-2 rounded-l-lg text-xs font-mono whitespace-nowrap border border-white/10 border-r-0 bg-accent enabled:hover:bg-accent-hover text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           title={repoPath ? 'Start a shell session at the selected location' : 'No repository resolved for this workspace yet'}
           data-testid="start-session-primary"
         >
@@ -171,7 +171,7 @@ export function StartSessionButton({
           type="button"
           onClick={() => setMenuOpen((v) => !v)}
           disabled={disabled}
-          className="flex items-center px-2 py-2 rounded-r-lg text-xs font-mono border border-white/10 border-l-white/25 bg-violet-600 hover:bg-violet-500 text-white transition-all disabled:opacity-40"
+          className="flex items-center px-2 py-2 rounded-r-lg text-xs font-mono border border-white/10 border-l-white/25 bg-accent enabled:hover:bg-accent-hover text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           title="Choose an agent to launch"
           aria-haspopup="menu"
           aria-expanded={menuOpen}
@@ -194,11 +194,11 @@ export function StartSessionButton({
               role="menuitem"
               onClick={() => void launch(agent)}
               disabled={disabled}
-              className="w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] font-mono text-slate-300 hover:bg-violet-500/15 hover:text-violet-200 transition disabled:opacity-40"
+              className="w-full flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] font-mono text-slate-300 hover:bg-white/5 hover:text-white transition disabled:opacity-40"
               title={`Run ${agent.binary} in a new session`}
               data-testid={`start-session-agent-${agent.kind}`}
             >
-              <Sparkles className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+              <Sparkles className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               <span>{agent.label}</span>
             </button>
           ))}

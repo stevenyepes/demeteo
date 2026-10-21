@@ -35,7 +35,6 @@ interface AskChatColumnProps {
  *  a fourth, and never one naming a specific run or ticket. */
 function tryChips(resolvedProjectName: string): ReadonlyArray<{
   icon: React.ReactElement;
-  tone: 'violet' | 'cyan' | 'emerald';
   text: React.ReactNode;
   seed: string;
   webChip?: boolean;
@@ -43,7 +42,6 @@ function tryChips(resolvedProjectName: string): ReadonlyArray<{
   return [
     {
       icon: <Network className="h-3.5 w-3.5" aria-hidden="true" />,
-      tone: 'violet',
       text: (
         <>
           Draw the architecture of{' '}
@@ -56,13 +54,11 @@ function tryChips(resolvedProjectName: string): ReadonlyArray<{
     },
     {
       icon: <Route className="h-3.5 w-3.5" aria-hidden="true" />,
-      tone: 'cyan',
       text: 'Map the journey from New Feature to a merged branch',
       seed: 'Map the journey from New Feature to a merged branch',
     },
     {
       icon: <Globe className="h-3.5 w-3.5" aria-hidden="true" />,
-      tone: 'emerald',
       text: "What changed in this project's dependencies recently?",
       seed: "What changed in this project's dependencies recently?",
       webChip: true,
@@ -121,7 +117,7 @@ export function AskChatColumn({
         />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-8 pt-12 text-center">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-violet-500/30 bg-violet-500/10 text-violet-300">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-300">
             <MessageSquare className="h-5 w-5" aria-hidden="true" />
           </div>
           <h2 className="mt-4 font-heading text-[17px] font-semibold text-white">
@@ -144,15 +140,7 @@ export function AskChatColumn({
                 onClick={() => onPickChip(chip.seed)}
                 className="mb-2 flex w-full items-center gap-2.5 rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2.5 text-left"
               >
-                <span
-                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${
-                    chip.tone === 'violet'
-                      ? 'border-violet-500/20 bg-violet-500/10 text-violet-300'
-                      : chip.tone === 'cyan'
-                        ? 'border-cyan-500/20 bg-cyan-500/10 text-cyan-300'
-                        : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
-                  }`}
-                >
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-slate-300">
                   {chip.icon}
                 </span>
                 <span className="min-w-0 flex-1 text-[13px] leading-snug text-slate-200">

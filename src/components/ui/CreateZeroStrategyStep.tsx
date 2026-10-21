@@ -28,7 +28,7 @@ const FieldInput: React.FC<{
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+      className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
     />
   </div>
 );
@@ -63,7 +63,7 @@ export function CreateZeroStrategyStep(props: CreateZeroStrategyStepProps) {
           <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-widest mb-1.5">
             Feature lifecycle
           </label>
-          <select value={featureLifecycle} onChange={(e) => onFeatureLifecycleChange(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50">
+          <select value={featureLifecycle} onChange={(e) => onFeatureLifecycleChange(e.target.value)} className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-accent-ring">
             <option value="archive">Archive by default</option>
             <option value="keep">Keep active</option>
             <option value="auto_delete">Auto delete branch</option>

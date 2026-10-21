@@ -7,6 +7,7 @@ import { deleteProviderInstance } from '../lib/providers';
 import ProviderSettings from './ProviderSettings';
 import { OverlayPortal } from './ui/OverlayPortal';
 import { BackButton } from './ui/BackButton';
+import { Button } from './ui/Button';
 
 export default function ProvidersPage() {
   const { state: { providers, projects, reposByProject }, dispatch: projDispatch } = useProject();
@@ -56,9 +57,9 @@ export default function ProvidersPage() {
           <p className="text-sm text-slate-400">Manage Git hosting endpoints for cloning repositories and creating merge requests.</p>
           </div>
         </div>
-        <button onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true })} className="bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-sm px-4 py-2 rounded-lg transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)] flex items-center gap-2">
+        <Button variant="primary" onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true })}>
           <Plus className="w-4 h-4" /> Connect Provider
-        </button>
+        </Button>
       </div>
 
       <div className="space-y-4 z-10">
@@ -67,9 +68,9 @@ export default function ProvidersPage() {
             <Globe className="w-12 h-12 text-slate-500 mb-4" />
             <h3 className="text-lg font-heading font-semibold text-white mb-2">No Providers Mapped</h3>
             <p className="text-sm text-slate-400 max-w-md mb-6">Connect your GitHub or GitLab workspace to enable repository cloning, branch management, and automatic pull requests.</p>
-            <button onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true })} className="bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-sm px-5 py-2.5 rounded-lg transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)]">
+            <Button variant="primary" size="lg" onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true })}>
               Connect Your First Account
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -93,7 +94,7 @@ export default function ProvidersPage() {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true, editing: prov })} className="text-slate-500 hover:text-cyan-400 p-2 rounded-lg hover:bg-white/5 transition-all" title="Edit Provider">
+                  <button onClick={() => uiDispatch({ type: 'SET_CONNECT_MODAL', open: true, editing: prov })} className="text-slate-500 hover:text-white p-2 rounded-lg hover:bg-white/5 transition-all" title="Edit Provider">
                     <Edit2 className="w-4 h-4" />
                   </button>
                   <button onClick={() => handleDeleteClick(prov.id)} className="text-slate-500 hover:text-ruby-400 p-2 rounded-lg hover:bg-white/5 transition-all" title="Disconnect Provider">
@@ -137,12 +138,12 @@ export default function ProvidersPage() {
               ))}
             </ul>
             <div className="flex gap-3 justify-end">
-              <button onClick={() => setPendingDelete(null)} className="px-4 py-2 text-sm text-slate-300 hover:text-white rounded-lg hover:bg-white/5 transition-all">
+              <Button variant="ghost" onClick={() => setPendingDelete(null)}>
                 Cancel
-              </button>
-              <button onClick={() => confirmDelete(pendingDelete.provId)} className="px-4 py-2 text-sm bg-red-600/80 hover:bg-red-500 text-white rounded-lg transition-all">
+              </Button>
+              <Button variant="danger" onClick={() => confirmDelete(pendingDelete.provId)}>
                 Disconnect anyway
-              </button>
+              </Button>
             </div>
           </div>
         </div>

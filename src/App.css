@@ -60,6 +60,19 @@
     box-sizing: border-box;
   }
 
+  /* The one focus ring. It sits in `base` so a field that shows focus with its
+     own border can still drop it with `focus:outline-none`. A `tabIndex={-1}`
+     element is focused by code, not reached by Tab, so it never gets a ring:
+     a dialog focused as it opens would otherwise be outlined whole. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent-ring);
+    outline-offset: 2px;
+  }
+
+  [tabindex='-1']:focus-visible {
+    outline: none;
+  }
+
   body {
     font-family: var(--font-ui);
     background-color: var(--bg-app);
@@ -89,13 +102,13 @@
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: var(--accent-cyan);
+    background: rgba(255, 255, 255, 0.28);
     border: 2px solid transparent;
     background-clip: padding-box;
   }
 
   ::-webkit-scrollbar-thumb:active {
-    background: var(--accent-purple);
+    background: rgba(255, 255, 255, 0.4);
     border: 2px solid transparent;
     background-clip: padding-box;
   }
@@ -171,24 +184,26 @@
     font-size: 0.9rem;
   }
 
+  /* Who is speaking is said by the sender line and the side the bubble sits
+     on. A hue per speaker would be colour without a meaning (AGENTS.md §4). */
   .chat-bubble.agent {
-    background: rgba(139, 92, 246, 0.08);
-    border: 1px solid rgba(139, 92, 246, 0.15);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-hairline);
     color: var(--text-primary);
     align-self: flex-start;
     border-top-left-radius: 2px;
   }
 
   .chat-bubble.user {
-    background: rgba(6, 182, 212, 0.1);
-    border: 1px solid rgba(6, 182, 212, 0.2);
+    background: var(--bg-raised);
+    border: 1px solid var(--border-raised);
     color: var(--text-primary);
     align-self: flex-end;
     border-top-right-radius: 2px;
   }
 
-  /* Code inside a chat bubble. The bubble already carries a violet or cyan tint,
-     so a code surface has to read against that rather than against the page —
+  /* Code inside a chat bubble. The bubble is a step off the page already, so a
+     code surface has to read against that rather than against the page —
      `--bg-well` sits at the page's own depth and simply disappears here.
      Declared once because inline code and fenced blocks must land on the same
      surface. */
@@ -208,12 +223,8 @@
     gap: 6px;
   }
 
-  .chat-bubble.agent .chat-bubble-sender {
-    color: var(--accent-purple);
-  }
-
-  .chat-bubble.user .chat-bubble-sender {
-    color: var(--accent-cyan);
+  .chat-bubble .chat-bubble-sender {
+    color: var(--text-secondary);
   }
 
   .chat-input {
@@ -230,8 +241,7 @@
   }
 
   .chat-input:focus {
-    border-color: var(--accent-cyan);
-    box-shadow: 0 0 8px rgba(6, 182, 212, 0.15);
+    border-color: var(--color-accent-ring);
   }
 
   /* ----------------------------------------------------
@@ -252,41 +262,7 @@
   }
 
   .input-field:focus {
-    border-color: var(--border-glass-focus);
-    box-shadow: 0 0 8px var(--accent-purple-glow);
-  }
-
-  .btn-primary {
-    background: linear-gradient(135deg, var(--accent-purple), #7c3aed);
-    border: 1px solid rgba(139, 92, 246, 0.4);
-    color: #fff;
-    border-radius: 6px;
-    padding: 10px 18px;
-    font-weight: 550;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-
-  .btn-primary:hover {
-    box-shadow: 0 0 14px rgba(139, 92, 246, 0.4);
-    filter: brightness(1.1);
-  }
-
-  .btn-secondary {
-    background: transparent;
-    border: 1px solid var(--border-hairline);
-    color: var(--text-secondary);
-    border-radius: 6px;
-    padding: 10px 18px;
-    font-weight: 550;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-
-  .btn-secondary:hover {
-    border-color: rgba(255, 255, 255, 0.15);
-    color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.02);
+    border-color: var(--color-accent-ring);
   }
 
   .btn-icon {
@@ -315,10 +291,8 @@
     animation: spin 1s linear infinite;
   }
 
-  /* Animate ONLY opacity. The glow is a STATIC box-shadow on the element, faded
-     in and out by the opacity keyframe — so we get the same visual pulse without
-     re-rasterizing box-shadow/scale every frame. Animating box-shadow or scale
-     here previously pinned the WKWebView GPU process at idle.
+  /* Animate ONLY opacity. Animating box-shadow or scale here previously pinned
+     the WKWebView GPU process at idle.
 
      Opacity-only is cheap per frame on macOS, and that is all it buys. On
      WebKitGTK *any* running animation makes the webview produce a frame per
@@ -341,7 +315,6 @@
   }
 
   .animate-pulse-glow {
-    box-shadow: 0 0 10px 1px rgba(6, 182, 212, 0.5);
     animation: pulse-glow 1.2s ease-in-out infinite;
   }
 
@@ -356,7 +329,6 @@
   }
 
   .animate-pulse-glow-amber {
-    box-shadow: 0 0 10px 1px rgba(245, 158, 11, 0.5);
     animation: pulse-attention 1.2s ease-in-out 3;
   }
 
@@ -383,7 +355,7 @@
     width: 7px;
     height: 13px;
     vertical-align: -2px;
-    background: #a78bfa;
+    background: var(--text-secondary);
     animation: blink 1s steps(1) infinite;
   }
 
@@ -416,7 +388,7 @@
     background: linear-gradient(
       90deg,
       rgba(6, 182, 212, 0.15) 0%,
-      rgba(139, 92, 246, 0.5) 50%,
+      rgba(6, 182, 212, 0.6) 50%,
       rgba(6, 182, 212, 0.15) 100%
     );
     background-size: 200% 100%;
@@ -510,7 +482,6 @@ body {
   .bg-emerald-500\/20 { background-color: rgba(16, 185, 129, 0.2); }
   .bg-amber-500\/10 { background-color: rgba(245, 158, 11, 0.1); }
   .bg-red-500\/10 { background-color: rgba(239, 68, 68, 0.1); }
-  .bg-violet-500\/10 { background-color: rgba(139, 92, 246, 0.1); }
   .bg-white\/5 { background-color: rgba(255, 255, 255, 0.05); }
   .bg-white\/10 { background-color: rgba(255, 255, 255, 0.1); }
   .border-white\/5 { border-color: rgba(255, 255, 255, 0.05); }
@@ -522,7 +493,6 @@ body {
   .border-amber-500\/30 { border-color: rgba(245, 158, 11, 0.3); }
   .border-red-500\/20 { border-color: rgba(239, 68, 68, 0.2); }
   .border-red-500\/30 { border-color: rgba(239, 68, 68, 0.3); }
-  .border-violet-500\/50 { border-color: rgba(139, 92, 246, 0.5); }
   .text-cyan-400 { color: #22d3ee; }
   .text-cyan-500 { color: #06b6d4; }
   .text-cyan-500\/70 { color: rgba(6, 182, 212, 0.7); }
@@ -538,7 +508,7 @@ body {
 }
 
 /* Selections */
-::selection { background-color: rgba(6, 182, 212, 0.3) !important; }
+::selection { background-color: rgb(90 96 194 / 0.45) !important; }
 
 @layer components {
   /* `content-visibility: auto` skips layout and paint for off-screen cards, which
@@ -600,8 +570,8 @@ select optgroup {
 
 select option:checked,
 select option:hover {
-  background-color: rgba(6, 182, 212, 0.15) !important;
-  color: #06b6d4 !important;
+  background-color: var(--color-accent-tint) !important;
+  color: var(--color-accent-ink) !important;
 }
 
 input[type="text"],

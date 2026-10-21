@@ -14,12 +14,12 @@
  *   emerald = done well (completed / PR ready / merged)
  *   ruby    = done badly (failed / over budget)
  *   slate   = inert (queued, cancelled, unreachable, skipped, PR closed)
- * Violet names no status: it sits beside the indigo accent that marks primary
- * actions, selection and focus, so a violet chip reads as something to click.
- * The `violet` tone stays only for non-status accents.
+ * There is no violet tone, and no tone in the accent's hue: the accent marks
+ * primary actions, selection and focus, so a chip in it reads as something to
+ * click rather than as a state.
  */
 
-export type RunStatusTone = 'emerald' | 'cyan' | 'violet' | 'amber' | 'ruby' | 'slate';
+export type RunStatusTone = 'emerald' | 'cyan' | 'amber' | 'ruby' | 'slate';
 
 export interface RunStatusMeta {
   label: string;
@@ -130,7 +130,6 @@ export function featureRunStatus(feature: FeatureRunStatusFields): string {
 export const TONE_CHIP: Record<RunStatusTone, string> = {
   emerald: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
   cyan:    'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-  violet:  'bg-violet-500/10 text-violet-400 border-violet-500/20',
   amber:   'bg-amber-500/10 text-amber-400 border-amber-500/20',
   ruby:    'bg-ruby-500/10 text-ruby-400 border-ruby-500/20',
   slate:   'bg-slate-500/10 text-slate-400 border-slate-500/20',
@@ -146,7 +145,6 @@ export const TONE_CHIP: Record<RunStatusTone, string> = {
 export const TONE_BADGE: Record<RunStatusTone, string> = {
   emerald: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
   cyan:    'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
-  violet:  'bg-violet-500/20 text-violet-300 border-violet-500/30',
   amber:   'bg-amber-500/20 text-amber-300 border-amber-500/40',
   ruby:    'bg-ruby-500/20 text-ruby-300 border-ruby-500/40',
   slate:   'bg-slate-500/20 text-slate-300 border-slate-500/30',
@@ -156,7 +154,6 @@ export const TONE_BADGE: Record<RunStatusTone, string> = {
 export const TONE_TEXT: Record<RunStatusTone, string> = {
   emerald: 'text-emerald-400',
   cyan:    'text-cyan-400',
-  violet:  'text-violet-400',
   amber:   'text-amber-400',
   ruby:    'text-ruby-400',
   slate:   'text-slate-500',
@@ -166,7 +163,6 @@ export const TONE_TEXT: Record<RunStatusTone, string> = {
 export const TONE_BORDER_L: Record<RunStatusTone, string> = {
   emerald: 'border-l-emerald-500/60',
   cyan:    'border-l-cyan-500/60',
-  violet:  'border-l-violet-500/60',
   amber:   'border-l-amber-500/60',
   ruby:    'border-l-ruby-500/60',
   slate:   'border-l-slate-600/60',

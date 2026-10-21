@@ -259,7 +259,7 @@ export function VersionDrawer({
           id="compare-target"
           value={target}
           onChange={(e) => retarget(e.target.value)}
-          className="min-w-0 flex-1 rounded border border-slate-700/60 bg-slate-900/60 px-1.5 py-1 text-[11px] text-slate-200 outline-none focus:border-cyan-500/50"
+          className="min-w-0 flex-1 rounded border border-slate-700/60 bg-slate-900/60 px-1.5 py-1 text-[11px] text-slate-200 outline-none focus:border-accent-ring"
         >
           <option value="working">Working copy</option>
           {versions.map((v) => (

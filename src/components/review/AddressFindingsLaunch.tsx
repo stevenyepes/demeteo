@@ -21,6 +21,7 @@ import {
 import { runChoiceGap } from '../../lib/reviewLaunch';
 import { listWorkflows } from '../../lib/workflows';
 import { formatError } from '../../lib/errors';
+import { Button } from '../ui/Button';
 import { PostReviewComment } from './PostReviewComment';
 import { FORK_EXPOSURE } from './PullRequestLaunch';
 import { ReviewRunOptions, type ReviewRunInputs } from './ReviewRunOptions';
@@ -272,16 +273,16 @@ export function AddressFindingsLaunch({
           )}
         </div>
 
-        <button
-          type="button"
+        <Button
+          variant="primary"
           data-testid="address-findings"
           disabled={!plan.ok || held || modelGap !== null || launching}
           onClick={() => setConfirming(true)}
-          className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
+          className="shrink-0"
         >
           <Wrench aria-hidden="true" className="h-4 w-4" />
           {launching ? 'Starting…' : 'Address these findings'}
-        </button>
+        </Button>
       </div>
 
       {failure !== null && (
@@ -334,29 +335,22 @@ export function AddressFindingsLaunch({
             {pullRequest.from_fork && (
               <p
                 data-testid="fix-fork-notice"
-                className="mt-3 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-[11px] leading-relaxed text-violet-200"
+                className="mt-3 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 text-[11px] leading-relaxed text-slate-300"
               >
                 This pull request comes from a fork, and this run starts from its code: it runs{' '}
                 {FORK_EXPOSURE}
               </p>
             )}
             <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirming(false)}
-                className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
+              <Button onClick={() => setConfirming(false)}>Cancel</Button>
+              <Button
+                variant="primary"
                 data-testid="address-findings-confirm"
                 disabled={launching}
                 onClick={launch}
-                className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Start the run
-              </button>
+              </Button>
             </div>
           </div>
         </div>

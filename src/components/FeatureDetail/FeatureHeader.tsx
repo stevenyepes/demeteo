@@ -4,6 +4,7 @@ import { runStatusMeta, TERMINAL_STATUSES } from '../../lib/runStatus';
 import { describeStaleness, REFRESH_HINT } from '../../lib/staleness';
 import { formatCost, formatTokens } from '../../lib/utils';
 import { BackButton } from '../ui/BackButton';
+import { Button, buttonClasses } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { Metric, MetricStrip } from '../ui/MetricStrip';
 import { OverflowMenu, type OverflowMenuItem } from '../ui/OverflowMenu';
@@ -212,7 +213,7 @@ export function FeatureHeader({
                 rel="noopener noreferrer"
                 data-testid="header-pr-link"
                 title={mrUrl}
-                className="flex items-center gap-1 whitespace-nowrap font-mono text-xs text-cyan-400 transition hover:text-cyan-300"
+                className="flex items-center gap-1 whitespace-nowrap font-mono text-xs text-accent-ink transition hover:text-white"
               >
                 <GitPullRequest className="h-3.5 w-3.5" />
                 PR {mrState ?? 'unknown'}
@@ -224,29 +225,26 @@ export function FeatureHeader({
 
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {live && (
-            <button
-              onClick={onCancelFeature}
-              className="h-8 px-3 border border-rose-500/30 bg-rose-600/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg text-xs font-bold transition"
-            >
+            <Button variant="danger-subtle" onClick={onCancelFeature} className="h-8">
               Cancel Feature
-            </button>
+            </Button>
           )}
           {finished && syncOffered && (
-            <button
+            <Button
               onClick={onOpenSync}
               data-testid="open-sync"
-              className="flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 text-xs font-semibold text-slate-200 transition hover:bg-white/[0.08]"
+              className="h-8"
               title="Show this branch's sync: how far behind it is, any conflict, and what to do about it"
             >
               <GitBranch className="w-3.5 h-3.5" />
               {syncBadge > 0 ? `Sync · ${syncBadge}` : 'Sync'}
-            </button>
+            </Button>
           )}
           <button
             onClick={onOpenTerminalTab}
             aria-label="Code with Agent"
             title="Code with Agent — open an interactive agent coding session in this feature's worktree"
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-slate-400 transition hover:bg-white/[0.08] hover:text-cyan-300"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-slate-400 transition hover:bg-white/[0.08] hover:text-white"
           >
             <Terminal className="w-4 h-4" />
           </button>
@@ -254,7 +252,7 @@ export function FeatureHeader({
             onClick={onBrowseCode}
             aria-label="Browse Code"
             title="Browse Code — the feature branch, read-only"
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-slate-400 transition hover:bg-white/[0.08] hover:text-cyan-300"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-slate-400 transition hover:bg-white/[0.08] hover:text-white"
           >
             <Code2 className="w-4 h-4" />
           </button>
@@ -269,22 +267,23 @@ export function FeatureHeader({
                 href={mrUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-3.5 text-xs font-bold text-white transition hover:bg-violet-500"
+                className={`${buttonClasses('primary')} h-8`}
                 title="Open the pull request in your browser"
               >
                 <GitPullRequest className="w-3.5 h-3.5" />
                 View PR
               </a>
             ) : (
-              <button
+              <Button
+                variant="primary"
                 onClick={onPublish}
                 disabled={publishing}
-                className="flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-3.5 text-xs font-bold text-white transition hover:bg-violet-500 disabled:opacity-40"
+                className="h-8"
                 title="Open a PR/MR for review. The title and description are written by the agent; there is nothing to fill in."
               >
                 {publishing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <GitPullRequest className="w-3.5 h-3.5" />}
                 Publish MR
-              </button>
+              </Button>
             ))}
         </div>
       </div>
@@ -305,7 +304,7 @@ export function FeatureHeader({
               inline
               label="Cache Reads"
               value={formatTokens(cacheReadTokens)}
-              tone="violet"
+              tone="slate"
               tooltip={`${cacheReadTokens.toLocaleString()} tokens served from prompt cache (billed at ~10% of base input price) across this pipeline. ${cacheCreationTokens.toLocaleString()} tokens written to cache.`}
             />
           )}

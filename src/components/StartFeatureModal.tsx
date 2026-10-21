@@ -25,6 +25,7 @@ import { blocksLaunch } from '../lib/runnerCompatibility';
 import { useRunnerCompatibility } from '../hooks/useRunnerCompatibility';
 import { RunPlacementSelect } from './discovery/RunPlacementSelect';
 import { DetachedCapsFields } from './DetachedCapsFields';
+import { Button } from './ui/Button';
 import { NO_CAP, parseDetachedCap } from '../lib/detachedCaps';
 import type { StartFeatureSeed } from '../context/UIStateContext';
 import type { WorkflowDefinitionV2 } from './canvas/types';
@@ -861,7 +862,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Add OAuth2 login flow"
-              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-accent-ring"
             />
           </div>
 
@@ -875,7 +876,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               onChange={(e) => setDescription(e.target.value)}
               rows={5}
               placeholder="What does this feature do? Who uses it? Any constraints, edge cases, or non-goals? Reference repo names — the modal will auto-detect them."
-              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 resize-y"
+              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-accent-ring resize-y"
             />
           </div>
 
@@ -891,7 +892,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
               id="start-feature-workflow"
               value={workflowId}
               onChange={(e) => setWorkflowId(e.target.value)}
-              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50"
+              className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-accent-ring"
             >
               {/* Named, because no rule picked one: without an option matching
                   the empty value the select renders blank, which reads as a
@@ -987,7 +988,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           {repositories.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-2">
-                <GitBranch className="w-3.5 h-3.5 text-violet-400" />
+                <GitBranch className="w-3.5 h-3.5 text-slate-400" />
                 <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider">
                   Target repositories
                 </span>
@@ -1020,7 +1021,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                         type="checkbox"
                         checked={checked}
                         onChange={toggle}
-                        className="accent-cyan-500"
+                        className="accent-accent"
                       />
                       <span className="truncate">{r.repo_path}</span>
                       {inUse && (
@@ -1053,7 +1054,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
             <button
               type="button"
               onClick={() => setShowAdvanced((v) => !v)}
-              className="flex items-center gap-1.5 text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
+              className="flex items-center gap-1.5 text-xs text-accent-ink hover:text-white transition-colors"
             >
               {showAdvanced ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
               {showAdvanced ? 'Hide' : 'Customize…'}
@@ -1180,7 +1181,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   value={loopIterations}
                   onChange={(e) => setLoopIterations(e.target.value)}
                   placeholder="blank = project default (3)"
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
                 />
                 <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">
                   Max times a validation step loops back to implementation before giving up.
@@ -1198,7 +1199,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                   value={maxBudgetUsd}
                   onChange={(e) => setMaxBudgetUsd(e.target.value)}
                   placeholder="blank = project default ($20)"
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
                 />
                 <p className="text-[10px] font-mono text-slate-500 mt-1.5 leading-relaxed">
                   Dollar ceiling per agent turn (<span className="font-mono">--max-budget-usd</span>);
@@ -1223,7 +1224,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                       onClick={() => setCommitArtifacts(opt.key)}
                       className={`px-2.5 py-2 rounded-lg text-[11px] font-semibold uppercase tracking-wider border transition-colors ${
                         commitArtifacts === opt.key
-                          ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-200'
+                          ? 'bg-accent-tint border-accent-edge text-white'
                           : 'bg-[#050508] border-white/10 text-slate-400 hover:border-white/20'
                       }`}
                       title={opt.desc}
@@ -1256,7 +1257,7 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
           {showVisionWarning && !visionWarningDismissed && (
             <div
               role="alert"
-              className="flex items-start gap-2 px-3 py-2 rounded-lg border border-violet-500/40 bg-ruby-500/10 text-ruby-200"
+              className="flex items-start gap-2 px-3 py-2 rounded-lg border border-ruby-500/40 bg-ruby-500/10 text-ruby-200"
             >
               <EyeOff className="w-4 h-4 mt-0.5 shrink-0 text-ruby-300" />
               <div className="flex-1 min-w-0 text-[11px] font-mono leading-snug">
@@ -1285,25 +1286,12 @@ const StartFeatureModal: React.FC<StartFeatureModalProps> = ({
                 : 'Fill in title, description, and workflow to launch'}
           </span>
           <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition-colors"
-            >
+            <Button variant="ghost" onClick={onClose}>
               Cancel
-            </button>
-            <button
-              type="button"
-              onClick={launch}
-              disabled={!canLaunch}
-              className={`px-5 py-2 rounded-lg text-xs font-bold transition-all ${
-                canLaunch
-                  ? 'bg-cyan-500 text-slate-950 hover:bg-cyan-400'
-                  : 'bg-white/5 text-slate-600 cursor-not-allowed'
-              }`}
-            >
+            </Button>
+            <Button variant="primary" onClick={launch} disabled={!canLaunch}>
               Launch feature
-            </button>
+            </Button>
           </div>
         </div>
       </div>

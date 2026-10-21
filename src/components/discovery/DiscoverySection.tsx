@@ -10,6 +10,7 @@ import { useTauriEvent } from '../../hooks/useTauriEvent';
 import EmptyStateCard from '../EmptyStateCard';
 import { PipelineListSkeleton } from '../PipelineListSkeleton';
 import { SessionFilterBar } from '../SessionFilterBar';
+import { Button } from '../ui/Button';
 import { DiscoveryCard } from './DiscoveryCard';
 import { NewDiscoveryModal } from './NewDiscoveryModal';
 
@@ -102,7 +103,7 @@ export function DiscoverySection({
     <div className="flex flex-col gap-5">
       <div className="panel relative overflow-hidden p-4">
         <div className="flex items-start gap-4">
-          <Compass className="mt-1.5 ml-1 h-5 w-5 shrink-0 text-violet-400" aria-hidden="true" />
+          <Compass className="mt-1.5 ml-1 h-5 w-5 shrink-0 text-slate-400" aria-hidden="true" />
           <div className="min-w-0 flex-1">
             <input
               type="text"
@@ -129,14 +130,14 @@ export function DiscoverySection({
               </span>
             </div>
           </div>
-          <button
-            type="button"
+          <Button
+            variant="primary"
             onClick={openModal}
             data-testid="open-new-discovery"
-            className="btn-primary mt-1 shrink-0 text-[13px]"
+            className="mt-1 shrink-0"
           >
             New discovery
-          </button>
+          </Button>
         </div>
       </div>
 

@@ -29,7 +29,7 @@ export function AttemptTable({
         <EmptyHint>This node hasn&apos;t started yet.</EmptyHint>
       ) : loading && attempts.length === 0 ? (
         <div className="flex items-center gap-2 py-6 text-xs text-slate-500">
-          <Loader2 className="h-4 w-4 animate-spin text-violet-400" /> Loading attempts…
+          <Loader2 className="h-4 w-4 animate-spin text-slate-400" /> Loading attempts…
         </div>
       ) : error ? (
         <div className="flex items-start gap-2 rounded-lg border border-rose-500/20 bg-rose-950/20 p-3 text-xs text-rose-300">

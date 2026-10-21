@@ -13,6 +13,7 @@ import {
   TITLE_MAX_CHARS,
 } from '../../lib/newDiscovery';
 import type { AskThread, ConfigOptionValue, Machine } from '../../types';
+import { Button } from '../ui/Button';
 import { FieldLabel } from '../ui/FieldLabel';
 import { HarnessModelPicker } from '../ui/HarnessModelPicker';
 import { Modal } from '../ui/Modal';
@@ -306,7 +307,7 @@ export function NewAskThreadModal({
                 <span
                   className={`absolute top-0.5 h-4 w-4 rounded-full transition-all ${
                     network
-                      ? 'left-[18px] bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.7)]'
+                      ? 'left-[18px] bg-emerald-400'
                       : 'left-0.5 bg-slate-400'
                   }`}
                 />
@@ -361,17 +362,10 @@ export function NewAskThreadModal({
         </div>
 
         <div className="flex shrink-0 justify-end gap-2.5 border-t border-white/5 px-5 py-4">
-          <button type="button" onClick={onClose} className="btn-secondary text-[13px]">
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={start}
-            disabled={!canStart}
-            className="btn-primary text-[13px] disabled:cursor-not-allowed disabled:opacity-40"
-          >
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={start} disabled={!canStart}>
             Start thread
-          </button>
+          </Button>
         </div>
       </div>
     </Modal>
@@ -426,9 +420,9 @@ function NoAgentNote({
           ? `No coding agent is available on ${machineLabel} — its agents could not be checked. Re-check, or pick another machine.`
           : `No coding agent is available on ${machineLabel}: none is installed and enabled there, or the machine could not be reached. Install or enable one, re-check, or pick another machine.`}
       </p>
-      <button type="button" onClick={onRecheck} className="btn-secondary shrink-0 text-[11px]">
+      <Button size="sm" onClick={onRecheck} className="shrink-0">
         Re-check
-      </button>
+      </Button>
     </div>
   );
 }

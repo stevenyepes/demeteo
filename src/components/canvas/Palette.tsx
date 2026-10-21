@@ -75,7 +75,7 @@ function NodeTypeRow({ entry, draggable, active, onSelect }: NodeTypeRowProps) {
         disabled
           ? 'cursor-not-allowed border-slate-800/60 bg-slate-900/40 opacity-50'
           : active
-            ? 'border-cyan-400/60 bg-slate-800/70'
+            ? 'border-accent-edge bg-accent-tint'
             : 'border-slate-700/50 bg-slate-900/60 hover:border-slate-600 hover:bg-slate-800/60',
       ].join(' ')}
     >
@@ -124,7 +124,7 @@ export function Palette({ entries, onSelect, className = '' }: PaletteProps) {
           onChange={(evt) => setQuery(evt.target.value)}
           placeholder="Search nodes"
           aria-label="Search node types"
-          className="w-full rounded-lg border border-slate-700/60 bg-slate-950/60 py-1.5 pl-7 pr-2 text-xs text-slate-200 placeholder:text-slate-500 focus:border-cyan-500/50 focus:outline-none"
+          className="w-full rounded-lg border border-slate-700/60 bg-slate-950/60 py-1.5 pl-7 pr-2 text-xs text-slate-200 placeholder:text-slate-500 focus:border-accent-ring focus:outline-none"
         />
       </div>
 
@@ -235,7 +235,7 @@ export function NodeTypePicker({
           }}
           placeholder="Search node types"
           aria-label="Search node types"
-          className="mb-2 w-full rounded-lg border border-slate-700/60 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:border-cyan-500/50 focus:outline-none"
+          className="mb-2 w-full rounded-lg border border-slate-700/60 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:border-accent-ring focus:outline-none"
         />
         <div role="listbox" aria-label={title} className="flex max-h-72 flex-col gap-1.5 overflow-y-auto">
           {shown.map((entry, i) => (

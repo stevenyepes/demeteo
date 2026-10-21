@@ -2,8 +2,8 @@
 // run column's view mode.
 //
 // Two things have to survive that binding: the selected mode still reads as
-// selected through the shared `TONE_CHIP` treatment (a local cyan style here is
-// the F27 drift the redesign closed), and `onSelect` still speaks `RunViewMode`
+// selected through the primitive's accent treatment (a local style here is the
+// F27 drift the redesign closed), and `onSelect` still speaks `RunViewMode`
 // rather than the primitive's generic.
 //
 // Measurement is no longer this component's: the run view seats it in a chrome
@@ -14,7 +14,6 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { TONE_CHIP } from '../lib/runStatus';
 import { RunViewToggle } from './RunViewToggle';
 
 describe('RunViewToggle', () => {
@@ -33,11 +32,11 @@ describe('RunViewToggle', () => {
     expect(screen.getByRole('radio', { name: /graph/i })).toHaveAttribute('aria-checked', 'false');
   });
 
-  it('dresses the active mode in the shared cyan chip, not a local one', () => {
+  it('dresses the active mode in the shared selected treatment, not a local one', () => {
     render(<RunViewToggle mode="graph" onSelect={() => {}} />);
 
-    expect(screen.getByRole('radio', { name: /graph/i }).className).toContain(TONE_CHIP.cyan);
-    expect(screen.getByRole('radio', { name: /timeline/i }).className).not.toContain(TONE_CHIP.cyan);
+    expect(screen.getByRole('radio', { name: /graph/i })).toHaveClass('border-accent-edge', 'bg-accent-tint');
+    expect(screen.getByRole('radio', { name: /timeline/i })).not.toHaveClass('bg-accent-tint');
   });
 
   it('reports the mode the user picked', async () => {

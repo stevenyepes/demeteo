@@ -9,6 +9,7 @@ import { fetchProviderRepos } from '../lib/providers';
 import { bootstrapProject, createProject } from '../lib/createProjectWizard';
 import { useNavigation, useProject } from '../context';
 import { BackButton } from './ui/BackButton';
+import { Button } from './ui/Button';
 
 interface AvailableRepo {
     path: string;
@@ -293,12 +294,12 @@ const NewProjectView = () => {
                         {bootstrapError}
                     </div>
                     <div className="flex gap-3">
-                        <button onClick={() => setBootstrapStep('form')} className="px-5 py-2.5 text-sm bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all">
+                        <Button size="lg" onClick={() => setBootstrapStep('form')}>
                             Back to Settings
-                        </button>
-                        <button onClick={handleCreate} className="px-5 py-2.5 text-sm bg-ruby-600 hover:bg-ruby-500 text-white rounded-lg transition-all font-medium">
+                        </Button>
+                        <Button variant="primary" size="lg" onClick={handleCreate}>
                             Retry Build
-                        </button>
+                        </Button>
                     </div>
                 </div>
             </div>
@@ -327,7 +328,7 @@ const NewProjectView = () => {
                                     value={repoSearch}
                                     onChange={(e) => setRepoSearch(e.target.value)}
                                     placeholder="Search repositories..."
-                                    className="w-full bg-black/40 border border-white/10 rounded-lg py-2.5 pl-9 pr-4 text-sm text-white focus:outline-none focus:border-cyan-500/50"
+                                    className="w-full bg-black/40 border border-white/10 rounded-lg py-2.5 pl-9 pr-4 text-sm text-white focus:outline-none focus:border-accent-ring"
                                 />
                             </div>
                         </div>
@@ -342,21 +343,21 @@ const NewProjectView = () => {
                                     <div
                                         key={repo.path}
                                         onClick={() => toggleRepo(repo)}
-                                        className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${isSelected ? 'bg-cyan-500/10 border border-cyan-500/30' : 'hover:bg-white/5 border border-transparent'
+                                        className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${isSelected ? 'bg-accent-tint border border-accent-edge' : 'hover:bg-white/5 border border-transparent'
                                             }`}
                                     >
-                                        <div className={`w-4 h-4 rounded border flex items-center justify-center ${isSelected ? 'bg-cyan-500 border-cyan-500 text-black' : 'border-slate-600'
+                                        <div className={`w-4 h-4 rounded border flex items-center justify-center ${isSelected ? 'bg-accent border-accent text-white' : 'border-slate-600'
                                             }`}>
                                             {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
                                         </div>
-                                        <Box className={`w-4 h-4 ${isSelected ? 'text-cyan-400' : 'text-slate-500'}`} />
+                                        <Box className={`w-4 h-4 ${isSelected ? 'text-accent-ink' : 'text-slate-500'}`} />
                                         <span className={isSelected ? 'text-white' : 'text-slate-300'}>{repo.path}</span>
                                     </div>
                                 );
                             })}
                         </div>
                         <div className="p-4 border-t border-white/5 flex justify-end gap-3">
-                            <button onClick={() => setIsRepoModalOpen(false)} className="px-4 py-2 text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white rounded-md transition-colors">Done</button>
+                            <Button variant="primary" onClick={() => setIsRepoModalOpen(false)}>Done</Button>
                         </div>
                     </div>
                 </div>
@@ -371,15 +372,14 @@ const NewProjectView = () => {
                                 <BackButton />
                                 <h1 className="text-3xl font-heading font-bold text-white">Project Bootstrap</h1>
                             </div>
-                            <button
-                                type="button"
+                            <Button
                                 onClick={() => navigate({ kind: 'create-project' })}
                                 disabled={bootstrapStep !== 'form'}
-                                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold bg-violet-500/10 border border-violet-500/40 text-violet-200 hover:bg-violet-500/20 hover:border-violet-500/60 transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                                className="shrink-0"
                                 title="Create a brand-new repo on a connected provider, then launch the Standard Feature Pipeline"
                             >
                                 <Sparkles className="w-3.5 h-3.5" /> Create a project from zero
-                            </button>
+                            </Button>
                         </div>
                         <p className="text-sm text-slate-400">Map your repositories to a secure orchestrator workspace.</p>
                     </div>
@@ -392,7 +392,7 @@ const NewProjectView = () => {
                                 value={projectName}
                                 onChange={e => setProjectName(e.target.value)}
                                 placeholder="e.g. billing-service-rust"
-                                className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-violet-500/50 transition-all"
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-accent-ring transition-all"
                                 disabled={bootstrapStep !== 'form'}
                             />
                         </div>
@@ -402,7 +402,7 @@ const NewProjectView = () => {
                             <div className="flex gap-2">
                                 <button
                                     onClick={() => setComputeType('local')}
-                                    className={`flex-1 flex items-center justify-center gap-2 border rounded-lg p-3 text-sm transition-all ${computeType === 'local' ? 'bg-violet-500/10 border-violet-500/50 text-violet-300' : 'bg-black/40 border-white/5 text-slate-400'
+                                    className={`flex-1 flex items-center justify-center gap-2 border rounded-lg p-3 text-sm transition-all ${computeType === 'local' ? 'bg-accent-tint border-accent-edge text-white' : 'bg-black/40 border-white/5 text-slate-400'
                                         }`}
                                     disabled={bootstrapStep !== 'form'}
                                 >
@@ -410,7 +410,7 @@ const NewProjectView = () => {
                                 </button>
                                 <button
                                     onClick={() => setComputeType('remote')}
-                                    className={`flex-1 flex items-center justify-center gap-2 border rounded-lg p-3 text-sm transition-all ${computeType === 'remote' ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-300' : 'bg-black/40 border-white/5 text-slate-400'
+                                    className={`flex-1 flex items-center justify-center gap-2 border rounded-lg p-3 text-sm transition-all ${computeType === 'remote' ? 'bg-accent-tint border-accent-edge text-white' : 'bg-black/40 border-white/5 text-slate-400'
                                         }`}
                                     disabled={bootstrapStep !== 'form'}
                                 >
@@ -424,7 +424,7 @@ const NewProjectView = () => {
                                             value={remoteHost}
                                             onChange={e => setRemoteHost(e.target.value)}
                                             disabled={bootstrapStep !== 'form' || machines.length === 0}
-                                            className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white font-mono focus:outline-none focus:border-cyan-500/50 disabled:opacity-60"
+                                            className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white font-mono focus:outline-none focus:border-accent-ring disabled:opacity-60"
                                         >
                                             <option value="">
                                                 {machines.length === 0 ? 'No machines configured — add one in Settings → Machines' : 'Select a machine…'}
@@ -435,8 +435,7 @@ const NewProjectView = () => {
                                                 </option>
                                             ))}
                                         </select>
-                                        <button
-                                            type="button"
+                                        <Button
                                             onClick={handleTestConnection}
                                             disabled={!remoteHost || isTestingConnection || bootstrapStep !== 'form'}
                                             title={
@@ -449,7 +448,7 @@ const NewProjectView = () => {
                                                             : 'Test SSH connection to the selected machine'
                                             }
                                             aria-label="Test SSH connection"
-                                            className="px-3 py-2 text-xs font-semibold rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-white disabled:opacity-40 flex items-center gap-1.5 transition-all shrink-0"
+                                            className="shrink-0"
                                         >
                                             {isTestingConnection ? (
                                                 <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
@@ -458,10 +457,10 @@ const NewProjectView = () => {
                                             ) : connectionStatus === 'error' ? (
                                                 <X className="w-3.5 h-3.5 text-ruby-400" />
                                             ) : (
-                                                <Server className="w-3.5 h-3.5 text-cyan-400" />
+                                                <Server className="w-3.5 h-3.5 text-slate-400" />
                                             )}
                                             <span className="hidden sm:inline">Test</span>
-                                        </button>
+                                        </Button>
                                     </div>
 
                                     {/* Connection status — small inline chip
@@ -493,7 +492,7 @@ const NewProjectView = () => {
                                         <button
                                             type="button"
                                             onClick={onOpenMachinesSettings}
-                                            className="text-[11px] text-cyan-400 hover:text-cyan-300 font-mono underline-offset-2 hover:underline"
+                                            className="text-[11px] text-accent-ink hover:text-white font-mono underline-offset-2 hover:underline"
                                         >
                                             Manage machines… (open Settings)
                                         </button>
@@ -513,7 +512,7 @@ const NewProjectView = () => {
                                                 onChange={e => setKeyPassphrase(e.target.value)}
                                                 placeholder="Leave blank if the key has no passphrase, or to keep the stored one"
                                                 autoComplete="off"
-                                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
                                                 disabled={bootstrapStep !== 'form'}
                                             />
                                             {selectedMachine?.key_path && (
@@ -538,12 +537,12 @@ const NewProjectView = () => {
                         <div>
                             <label className="text-xs font-mono text-slate-400 uppercase tracking-widest mb-2 flex justify-between items-center">
                                 <span>Select Repositories</span>
-                                <span className="text-cyan-500">{selectedRepos.length} Mapped</span>
+                                <span className="text-slate-300">{selectedRepos.length} Mapped</span>
                             </label>
                             <div className="space-y-2">
                                 {selectedRepos.map(repo => (
-                                    <div key={repo.path} className="flex items-center gap-3 p-3 rounded-lg border border-cyan-500/30 bg-cyan-500/5">
-                                        <Box className="w-4 h-4 text-cyan-400" />
+                                    <div key={repo.path} className="flex items-center gap-3 p-3 rounded-lg border border-white/10 bg-white/[0.02]">
+                                        <Box className="w-4 h-4 text-slate-400" />
                                         <span className="text-sm text-white truncate w-4/5">{repo.path}</span>
                                         {bootstrapStep === 'form' && (
                                             <button onClick={() => toggleRepo(repo)} className="ml-auto text-slate-500 hover:text-ruby-400 transition-all">
@@ -590,7 +589,7 @@ const NewProjectView = () => {
                                     <span>base: [Detected Default Branch]</span>
                                 </div>
                                 <div className="h-4 w-px bg-white/10 ml-2"></div>
-                                <div className="flex items-center gap-2 text-violet-400">
+                                <div className="flex items-center gap-2 text-slate-300">
                                     <GitPullRequest className="w-4 h-4" />
                                     <span>feature workspace: demeteo/features/*</span>
                                 </div>
@@ -600,16 +599,16 @@ const NewProjectView = () => {
                             </div>
 
                             <div className="mt-6 flex justify-end gap-3">
-                                <button onClick={() => navigate({ kind: 'home' })} className="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors">Cancel</button>
-                                <button onClick={handleCreate} disabled={!projectName || selectedRepos.length === 0} className="disabled:opacity-40 disabled:cursor-not-allowed px-5 py-2.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-md shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all flex items-center gap-2">
+                                <Button variant="ghost" size="lg" onClick={() => navigate({ kind: 'home' })}>Cancel</Button>
+                                <Button variant="primary" size="lg" onClick={handleCreate} disabled={!projectName || selectedRepos.length === 0}>
                                     <Check className="w-4 h-4" /> Initialize & Analyze
-                                </button>
+                                </Button>
                             </div>
                         </>
                     ) : (
                         <>
                             <div className="mb-6 border-b border-white/5 pb-4">
-                                <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
+                                <h3 className="font-heading font-semibold text-slate-400 uppercase tracking-widest text-xs mb-1">STRATEGY DETECTED</h3>
                                 <h2 className="text-xl font-bold text-white">Configure Worktree Strategy</h2>
                             </div>
 
@@ -620,7 +619,7 @@ const NewProjectView = () => {
                                         type="text" 
                                         value={defaultBranch} 
                                         onChange={e => setDefaultBranch(e.target.value)}
-                                        className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                        className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring"
                                     />
                                 </div>
 
@@ -630,7 +629,7 @@ const NewProjectView = () => {
                                         type="text" 
                                         value={branchPrefix} 
                                         onChange={e => setBranchPrefix(e.target.value)}
-                                        className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                        className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring"
                                     />
                                 </div>
 
@@ -641,7 +640,7 @@ const NewProjectView = () => {
                                         value={testCommand} 
                                         onChange={e => setTestCommand(e.target.value)}
                                         placeholder="e.g. npm test or cargo test"
-                                        className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                                        className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring placeholder-slate-600"
                                     />
                                 </div>
 
@@ -674,7 +673,7 @@ const NewProjectView = () => {
                                     <select 
                                         value={featureLifecycle} 
                                         onChange={e => setFeatureLifecycle(e.target.value)}
-                                        className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                        className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring"
                                     >
                                         <option value="archive">Archive by default</option>
                                         <option value="keep">Keep active</option>
@@ -693,10 +692,10 @@ const NewProjectView = () => {
                             </div>
 
                             <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-4">
-                                <button onClick={() => setBootstrapStep('form')} className="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors">Back</button>
-                                <button onClick={handleApproveStrategy} className="px-6 py-2.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all flex items-center gap-2">
+                                <Button variant="ghost" size="lg" onClick={() => setBootstrapStep('form')}>Back</Button>
+                                <Button variant="primary" size="lg" onClick={handleApproveStrategy}>
                                     <Check className="w-4 h-4" /> Approve & Build Workspace
-                                </button>
+                                </Button>
                             </div>
                         </>
                     )}

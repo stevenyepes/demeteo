@@ -27,7 +27,7 @@ export function AgentStep({ agentKinds, value, onSubmit }: AgentStepProps) {
         value={value}
         onChange={(e) => onSubmit({ step: 'agent', kind: e.target.value })}
         data-testid="wizard-agent-select-input"
-        className="w-full bg-[#08090c] border border-white/10 rounded-lg py-3 px-3 text-sm text-white capitalize focus:outline-none focus:border-violet-500/50"
+        className="w-full bg-[#08090c] border border-white/10 rounded-lg py-3 px-3 text-sm text-white capitalize focus:outline-none focus:border-accent-ring"
       >
         <option value="">Pick a harness…</option>
         {agentKinds.map((k) => (

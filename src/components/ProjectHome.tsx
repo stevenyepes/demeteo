@@ -20,6 +20,7 @@ import { AskSection } from './ask/AskSection';
 import { DiscoverySection } from './discovery/DiscoverySection';
 import { ProjectTelemetry } from './ProjectTelemetry';
 import { StartSessionButton } from './StartSessionButton';
+import { Button } from './ui/Button';
 import { DensityToggle } from './ui/DensityToggle';
 import { TabBar, type TabDef } from './ui/TabBar';
 import { DEFAULT_DENSITY, pipelineDensityClasses } from '../lib/density';
@@ -491,12 +492,12 @@ const ProjectHome = () => {
                         </div>
                     )}
                     <div className="flex gap-3">
-                        <button onClick={() => navigate({ kind: 'project-settings' })} className="px-5 py-2.5 text-sm bg-white/5 border border-white/10 hover:bg-white/10 text-white rounded-lg transition-all flex items-center gap-1.5 font-medium">
+                        <Button size="lg" onClick={() => navigate({ kind: 'project-settings' })}>
                             <Settings className="w-4 h-4" /> Configure Workspace
-                        </button>
-                        <button onClick={handleRetryBootstrap} className="px-5 py-2.5 text-sm bg-ruby-600 hover:bg-ruby-500 text-white rounded-lg transition-all font-semibold shadow-[0_0_15px_rgba(239,68,68,0.3)] flex items-center gap-1.5">
+                        </Button>
+                        <Button variant="primary" size="lg" onClick={handleRetryBootstrap}>
                             <RotateCw className="w-4 h-4" /> Retry Bootstrap
-                        </button>
+                        </Button>
                     </div>
                 </div>
             </div>
@@ -520,7 +521,7 @@ const ProjectHome = () => {
                                 type="text" 
                                 value={defaultBranch} 
                                 onChange={e => setDefaultBranch(e.target.value)}
-                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring"
                             />
                         </div>
 
@@ -530,7 +531,7 @@ const ProjectHome = () => {
                                 type="text" 
                                 value={branchPrefix} 
                                 onChange={e => setBranchPrefix(e.target.value)}
-                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring"
                             />
                         </div>
 
@@ -541,7 +542,7 @@ const ProjectHome = () => {
                                 value={testCommand} 
                                 onChange={e => setTestCommand(e.target.value)}
                                 placeholder="e.g. npm test or cargo test"
-                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring placeholder-slate-600"
                             />
                         </div>
 
@@ -551,7 +552,7 @@ const ProjectHome = () => {
                             <select 
                                 value={featureLifecycle} 
                                 onChange={e => setFeatureLifecycle(e.target.value)}
-                                className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+                                className="w-full bg-[#08090c] border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-accent-ring"
                             >
                                 <option value="archive">Archive by default</option>
                                 <option value="keep">Keep active</option>
@@ -570,10 +571,10 @@ const ProjectHome = () => {
                     </div>
 
                     <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-4">
-                        <button onClick={() => setLocalBootstrapStep('idle')} className="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors">Cancel</button>
-                        <button onClick={handleApproveStrategy} className="px-6 py-2.5 text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all flex items-center gap-2">
+                        <Button variant="ghost" size="lg" onClick={() => setLocalBootstrapStep('idle')}>Cancel</Button>
+                        <Button variant="primary" size="lg" onClick={handleApproveStrategy}>
                             <Check className="w-4 h-4" /> Approve & Build Workspace
-                        </button>
+                        </Button>
                     </div>
                 </div>
             </div>
@@ -634,7 +635,7 @@ const ProjectHome = () => {
                             <select
                                 value={activeRepositoryId}
                                 onChange={(e) => setActiveRepositoryId(e.target.value)}
-                                className="w-52 rounded-lg border border-white/10 bg-black/20 px-2.5 py-2 text-[11.5px] font-mono text-slate-300 outline-none hover:border-white/20 focus:border-cyan-500/50"
+                                className="w-52 rounded-lg border border-white/10 bg-black/20 px-2.5 py-2 text-[11.5px] font-mono text-slate-300 outline-none hover:border-white/20 focus:border-accent-ring"
                                 aria-label="Repository"
                                 data-testid="project-home-repo-select"
                             >
@@ -669,15 +670,15 @@ const ProjectHome = () => {
                         ariaLabel="Project sections"
                         className="min-w-0 flex-1"
                     />
-                    <button
-                        type="button"
+                    <Button
+                        size="sm"
                         data-testid="open-code-review"
                         onClick={() => navigate({ kind: 'code-review' })}
-                        className="mb-1 flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-white/10 hover:text-slate-100"
+                        className="mb-1 shrink-0"
                     >
                         <GitPullRequest className="w-3.5 h-3.5" />
                         Code Review
-                    </button>
+                    </Button>
                 </div>
 
                 {activeTab === 'ask' ? (
@@ -718,7 +719,7 @@ const ProjectHome = () => {
                         <div className="panel p-4 relative group overflow-hidden">
                             <div className="absolute inset-0 bg-gradient-to-r from-violet-500/10 to-cyan-500/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
                             <div className="relative flex items-start gap-4">
-                                <div className="mt-2 ml-1 text-violet-400 shrink-0">
+                                <div className="mt-2 ml-1 text-slate-400 shrink-0">
                                     <Zap className="w-5 h-5" />
                                 </div>
                                 <div
@@ -762,12 +763,9 @@ const ProjectHome = () => {
                                         <span className="text-[11px] text-slate-500 font-mono">
                                             Press <kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400">Enter</kbd> to configure &amp; launch · paste an image to attach
                                         </span>
-                                        <button
-                                            onClick={openStartFeature}
-                                            className="px-4 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white rounded-md shadow-[0_0_15px_rgba(139,92,246,0.4)] transition-all flex items-center gap-1.5"
-                                        >
+                                        <Button variant="primary" onClick={openStartFeature}>
                                             Continue <ChevronRight className="w-4 h-4" />
-                                        </button>
+                                        </Button>
                                     </div>
                                 </div>
                             </div>

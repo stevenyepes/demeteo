@@ -7,6 +7,7 @@ import { noVisionNote } from '../../lib/newDiscovery';
 import type { AttachedFile } from '../../lib/attachments';
 import type { ConfigOptionValue } from '../../types';
 import { AttachmentDropzone, type DirectAttachmentPort } from '../AttachmentDropzone';
+import { Button } from '../ui/Button';
 import { FieldLabel } from '../ui/FieldLabel';
 
 interface InterviewComposerProps {
@@ -127,28 +128,25 @@ export function InterviewComposer({
           placeholder={awaiting ? 'Answer in your own words...' : 'Ask, answer, or push back...'}
           className="chat-input disabled:opacity-50"
         />
-        <button
-          type="button"
+        <Button
           data-testid="interview-attach"
           title="Attach a file or image"
           aria-label="Attach a file or image"
           aria-expanded={attachOpen}
           disabled={disabled}
           onClick={() => setAttachOpen((open) => !open)}
-          className="btn-secondary disabled:cursor-not-allowed disabled:opacity-35"
         >
           <Paperclip className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="primary"
           data-testid="interview-send"
           aria-label="Send this turn"
           disabled={blocked || value.trim().length === 0}
           onClick={onSend}
-          className="btn-primary disabled:cursor-not-allowed disabled:opacity-35"
         >
           <Send className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
+        </Button>
       </div>
 
       {(attachOpen || attachments.length > 0) && (

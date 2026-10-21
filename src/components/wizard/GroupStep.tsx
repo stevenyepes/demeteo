@@ -47,11 +47,11 @@ export function GroupStep({ namespaces, loading, value, onSubmit }: GroupStepPro
               data-testid={`wizard-namespace-${n.id}`}
               className={`flex items-center gap-3 p-2.5 rounded-lg border text-left text-sm transition-all ${
                 value === n.id
-                  ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-100'
+                  ? 'bg-accent-tint border-accent-edge text-white'
                   : 'bg-black/30 border-white/10 text-slate-300 hover:border-white/20'
               }`}
             >
-              <FolderGit2 className={`w-4 h-4 ${value === n.id ? 'text-cyan-300' : 'text-slate-500'}`} />
+              <FolderGit2 className={`w-4 h-4 ${value === n.id ? 'text-accent-ink' : 'text-slate-500'}`} />
               <div className="min-w-0">
                 <div className="truncate">{n.name}</div>
                 <div className="text-[10px] font-mono text-slate-500">{n.kind}</div>
@@ -88,7 +88,7 @@ export function GroupStep({ namespaces, loading, value, onSubmit }: GroupStepPro
               name: match?.name ?? v,
             });
           }}
-          className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+          className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
         />
       </div>
     </div>
