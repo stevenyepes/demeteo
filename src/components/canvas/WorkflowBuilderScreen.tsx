@@ -157,7 +157,7 @@ export function WorkflowBuilderScreen({ workflowId, onBack }: WorkflowBuilderScr
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center bg-[#0b0d12]">
-        <RefreshCw className="h-8 w-8 animate-spin text-violet-500" />
+        <RefreshCw className="h-8 w-8 animate-spin text-slate-400" />
       </div>
     );
   }

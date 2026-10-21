@@ -86,15 +86,15 @@ function QuickReferenceCallout({ platform }: { platform: ShortcutPlatform }): Re
   return (
     <div
       data-testid="shortcut-help-quick-reference"
-      className="mx-4 mt-4 mb-2 grid grid-cols-1 md:grid-cols-2 gap-2 rounded-xl border border-white/[0.08] bg-gradient-to-r from-violet-500/[0.06] to-cyan-500/[0.06] p-3"
+      className="mx-4 mt-4 mb-2 grid grid-cols-1 md:grid-cols-2 gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3"
     >
       <div className="flex items-start gap-2 min-w-0">
-        <Command className="w-4 h-4 text-violet-300 mt-0.5 shrink-0" />
+        <Command className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-xs">
             <span className="text-slate-200 font-medium">Command palette</span>
             {palette && (
-              <kbd className="ml-auto shrink-0 text-[10px] font-mono text-violet-200 bg-violet-500/10 border border-violet-500/30 px-1.5 py-0.5 rounded shadow-inner whitespace-nowrap">
+              <kbd className="ml-auto shrink-0 text-[10px] font-mono text-slate-200 bg-white/5 border border-white/10 px-1.5 py-0.5 rounded shadow-inner whitespace-nowrap">
                 {formatEntryChords(palette, platform)}
               </kbd>
             )}
@@ -105,12 +105,12 @@ function QuickReferenceCallout({ platform }: { platform: ShortcutPlatform }): Re
         </div>
       </div>
       <div className="flex items-start gap-2 min-w-0">
-        <TerminalSquare className="w-4 h-4 text-cyan-300 mt-0.5 shrink-0" />
+        <TerminalSquare className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-xs">
             <span className="text-slate-200 font-medium">Open Terminals view</span>
             {terminalPanel && (
-              <kbd className="ml-auto shrink-0 text-[10px] font-mono text-cyan-200 bg-cyan-500/10 border border-cyan-500/30 px-1.5 py-0.5 rounded shadow-inner whitespace-nowrap">
+              <kbd className="ml-auto shrink-0 text-[10px] font-mono text-slate-200 bg-white/5 border border-white/10 px-1.5 py-0.5 rounded shadow-inner whitespace-nowrap">
                 {formatEntryChords(terminalPanel, platform)}
               </kbd>
             )}
@@ -159,7 +159,7 @@ function ShortcutRow({ entry, platform }: ShortcutRowProps): React.ReactElement 
           entry.chords.map((chord, index) => (
             <kbd
               key={index}
-              className="text-[11px] font-mono text-violet-200 bg-violet-500/10 border border-violet-500/30 px-2 py-1 rounded shadow-inner whitespace-nowrap"
+              className="text-[11px] font-mono text-slate-200 bg-white/5 border border-white/10 px-2 py-1 rounded shadow-inner whitespace-nowrap"
             >
               {formatEntryChords({ ...entry, chords: [chord] }, platform)}
             </kbd>
@@ -322,8 +322,8 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
         {/* ── Header ────────────────────────────────────────────── */}
         <header className="flex items-center justify-between gap-4 px-6 py-4 border-b border-white/5 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-violet-500/10 border border-violet-500/30 flex items-center justify-center">
-              <Keyboard className="w-5 h-5 text-violet-300" />
+            <div className="w-9 h-9 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
+              <Keyboard className="w-5 h-5 text-slate-300" />
             </div>
             <div className="flex flex-col leading-tight">
               <h2
@@ -334,8 +334,8 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
               </h2>
               <span className="text-xs text-slate-400 flex items-center gap-1.5">
                 <Sparkles className="w-3 h-3 text-cyan-400" />
-                Press <kbd className="font-mono text-violet-300">F1</kbd> or{' '}
-                <kbd className="font-mono text-violet-300">?</kbd> to reopen
+                Press <kbd className="font-mono text-slate-300">F1</kbd> or{' '}
+                <kbd className="font-mono text-slate-300">?</kbd> to reopen
               </span>
             </div>
           </div>
@@ -365,8 +365,8 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
                   className="rounded-xl border border-white/5 bg-[#0d0f14]/40 overflow-hidden"
                   data-testid={`shortcut-help-group-${group.id}`}
                 >
-                  <header className="px-4 py-3 border-b border-white/5 bg-gradient-to-r from-violet-500/[0.07] to-transparent">
-                    <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-violet-300 font-heading">
+                  <header className="px-4 py-3 border-b border-white/5 bg-white/[0.02]">
+                    <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-slate-300 font-heading">
                       {group.title}
                     </h3>
                     {group.description && (
@@ -398,7 +398,7 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
           </span>
           <span className="flex items-center gap-1.5">
             Press{' '}
-            <kbd className="font-mono text-violet-300">Esc</kbd>
+            <kbd className="font-mono text-slate-300">Esc</kbd>
             to close
           </span>
         </footer>

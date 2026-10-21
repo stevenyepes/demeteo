@@ -118,8 +118,8 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, entrie
                 }}
                 className={`flex items-center gap-3 px-5 py-2.5 cursor-pointer transition-all mx-1.5 rounded-lg ${
                   idx === selectedIndex
-                    ? 'bg-violet-500/15 text-white border border-violet-500/20'
-                    : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                    ? 'bg-accent-tint text-white border border-accent-edge'
+                    : 'text-slate-300 border border-transparent hover:bg-white/5 hover:text-white'
                 }`}
               >
                 <span className="shrink-0 opacity-70">{entry.icon}</span>
@@ -130,12 +130,12 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, entrie
                   </div>
                 </div>
                 <span className={`text-[10px] font-mono uppercase tracking-wider shrink-0 ${
-                  idx === selectedIndex ? 'text-violet-400' : 'text-slate-600'
+                  idx === selectedIndex ? 'text-accent-ink' : 'text-slate-600'
                 }`}>
                   {entry.category}
                 </span>
                 {idx === selectedIndex && (
-                  <ArrowRight className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                  <ArrowRight className="w-3.5 h-3.5 text-accent-ink shrink-0" />
                 )}
               </div>
             ))

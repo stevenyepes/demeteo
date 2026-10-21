@@ -106,7 +106,7 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
           <h3 className="text-sm font-semibold text-white flex items-center gap-2">
             {title}
             {currentLabel && (
-              <span className="text-[10px] font-mono text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+              <span className="text-[10px] font-mono text-slate-300 bg-white/5 px-2 py-0.5 rounded border border-white/10">
                 current: {currentLabel}
               </span>
             )}
@@ -134,13 +134,13 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
                   }}
                   onKeyDown={handleInputKeyDown}
                   placeholder={placeholder}
-                  className="w-full bg-[#050508] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 focus:shadow-[0_0_15px_rgba(6,182,212,0.15)] transition-all placeholder-slate-600"
+                  className="w-full bg-[#050508] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-slate-200 font-mono focus:outline-none focus:border-accent-ring transition-all placeholder-slate-600"
                 />
                 {customValue.trim() ? (
                   <button
                     type="button"
                     onClick={handleCustomSubmit}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 transition-all"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-accent-tint text-accent-ink hover:bg-accent hover:text-white transition-all"
                   >
                     <Send size={14} />
                   </button>
@@ -148,7 +148,7 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
                   <button
                     type="button"
                     onClick={handleCustomSubmit}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 transition-all"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-accent-tint text-accent-ink hover:bg-accent hover:text-white transition-all"
                     title="Select first option"
                   >
                     <ChevronRight size={14} />
@@ -175,9 +175,9 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
                   const isCurrent = opt.current;
                   let bgClass = "bg-transparent border border-transparent hover:bg-white/5 hover:border-white/10";
                   if (isSelected) {
-                    bgClass = "bg-cyan-500/20 border border-cyan-500/40";
+                    bgClass = "bg-accent-tint border border-accent-edge";
                   } else if (isCurrent) {
-                    bgClass = "bg-cyan-500/10 border border-cyan-500/25";
+                    bgClass = "border border-accent-edge";
                   }
                   return (
                     <button
@@ -193,7 +193,7 @@ const CommandSelector: React.FC<CommandSelectorProps> = ({
                             {opt.label}
                           </span>
                           {isCurrent && (
-                            <span className="text-[10px] font-mono text-cyan-400 flex items-center gap-0.5">
+                            <span className="text-[10px] font-mono text-accent-ink flex items-center gap-0.5">
                               <Check size={10} />
                               active
                             </span>

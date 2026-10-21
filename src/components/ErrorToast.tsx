@@ -69,8 +69,8 @@ const KIND_META: Record<
   provider: {
     icon: ShieldAlert,
     label: "Provider",
-    accent: "text-violet-300",
-    leftBar: "border-l-violet-400/70",
+    accent: "text-slate-300",
+    leftBar: "border-l-slate-500/60",
   },
   transport: {
     icon: WifiOff,
@@ -193,7 +193,7 @@ const ErrorToastRow: React.FC<{
                 action.onClick();
                 if (dismissable) dismiss(id);
               }}
-              className="inline-flex items-center gap-1 text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
+              className="inline-flex items-center gap-1 text-xs text-accent-ink hover:text-white transition-colors"
             >
               {action.label}
             </button>
@@ -203,7 +203,7 @@ const ErrorToastRow: React.FC<{
               key={cta}
               type="button"
               onClick={() => handleCta(cta)}
-              className="inline-flex items-center gap-1 text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
+              className="inline-flex items-center gap-1 text-xs text-accent-ink hover:text-white transition-colors"
             >
               <CtaIcon className="w-3 h-3" />
               {label}

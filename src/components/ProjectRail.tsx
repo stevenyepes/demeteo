@@ -68,7 +68,7 @@ function ProjectRail() {
         </button>
         <button
           onClick={() => navigate({ kind: 'create-project' })}
-          className="p-2 text-violet-300 hover:text-white rounded-lg hover:bg-violet-500/10 border border-transparent hover:border-violet-500/30 transition-colors shadow-[0_0_12px_rgba(139,92,246,0.2)]"
+          className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
           title="New from zero"
         >
           <Sparkles className="w-5 h-5" />
@@ -80,7 +80,7 @@ function ProjectRail() {
             onClick={() => { setCurrentProject(p.id); setView('home'); }}
             className={`relative w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold font-mono transition-all ${
               currentProject === p.id
-                ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
+                ? 'bg-accent-tint text-white border border-accent-edge'
                 : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'
             }`}
             title={p.name}
@@ -125,7 +125,7 @@ function ProjectRail() {
           </button>
           <button
             onClick={() => navigate({ kind: 'create-project' })}
-            className="p-1 text-violet-300 hover:text-white rounded hover:bg-violet-500/10 border border-transparent hover:border-violet-500/30 transition-colors shadow-[0_0_10px_rgba(139,92,246,0.2)]"
+            className="p-1 text-slate-400 hover:text-white rounded hover:bg-white/5 transition-colors"
             title="New from zero"
           >
             <Sparkles className="w-4 h-4" />
@@ -145,7 +145,7 @@ function ProjectRail() {
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="Filter projects..."
-            className="w-full bg-black/30 border border-white/5 rounded-md py-1.5 pl-8 pr-2 text-[11px] text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500/30"
+            className="w-full bg-black/30 border border-white/5 rounded-md py-1.5 pl-8 pr-2 text-[11px] text-white placeholder-slate-600 focus:outline-none focus:border-accent-ring"
           />
         </div>
       </div>

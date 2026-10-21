@@ -3,6 +3,7 @@ import { Check, GitBranch, Trash2 } from 'lucide-react';
 
 import type { TerminalWorktree } from '../../types';
 import { formatError } from '../../lib/errors';
+import { Button } from '../ui/Button';
 
 export interface WorktreeRowProps {
   worktree: TerminalWorktree;
@@ -79,26 +80,27 @@ export function WorktreeRow({
           </div>
         )}
         <div className="flex items-center gap-1.5 pt-1.5">
-          <button
-            type="button"
+          <Button
+            size="sm"
             onClick={() => {
               setConfirming(false);
               setError(null);
             }}
             disabled={removing}
-            className="flex-1 rounded px-2 py-1 text-[10.5px] font-mono text-slate-400 border border-white/10 hover:bg-white/5 transition disabled:opacity-40"
+            className="flex-1"
           >
             Cancel
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
             onClick={() => void remove(error !== null)}
             disabled={removing}
-            className="flex-1 rounded px-2 py-1 text-[10.5px] font-mono text-white bg-ruby-600 hover:bg-ruby-500 transition disabled:opacity-40"
+            className="flex-1"
             data-testid={`terminal-location-remove-confirm-${worktree.path}`}
           >
             {removing ? 'Removing…' : error ? 'Remove anyway' : 'Remove'}
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -112,14 +114,14 @@ export function WorktreeRow({
         onClick={onSelect}
         disabled={disabled}
         className={`min-w-0 flex-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] font-mono transition disabled:opacity-40 ${
-          active ? 'bg-violet-500/[0.14] text-slate-100' : 'text-slate-300 hover:bg-violet-500/15'
+          active ? 'bg-accent-tint text-slate-100' : 'text-slate-300 hover:bg-white/5'
         }`}
         data-testid={`terminal-location-worktree-${worktree.path}`}
       >
-        <GitBranch className="w-3 h-3 text-violet-400 shrink-0" />
+        <GitBranch className="w-3 h-3 text-slate-400 shrink-0" />
         <span className="flex-1 truncate">{label}</span>
         {worktree.isLocked && <span className="text-[9px] text-amber-300 shrink-0">locked</span>}
-        {active && <Check className="w-3 h-3 text-cyan-400 shrink-0" />}
+        {active && <Check className="w-3 h-3 text-accent-ink shrink-0" />}
       </button>
       <button
         type="button"
