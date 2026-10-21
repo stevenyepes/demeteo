@@ -65,7 +65,7 @@ export function RunnerStatusPill({ status, pushLabel }: RunnerStatusPillProps) {
       ? 'border-white/10 bg-white/5 text-slate-300'
       : 'border-white/10 bg-white/5 text-slate-400';
   const dotTone = isRunning
-    ? 'bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.7)] animate-pulse'
+    ? 'bg-emerald-400 animate-pulse'
     : stopped
       ? 'bg-slate-500'
       : 'bg-slate-600';

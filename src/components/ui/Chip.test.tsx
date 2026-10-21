@@ -70,7 +70,7 @@ describe('Chip', () => {
   });
 
   it('renders a still dot when the dot is asked for without a pulse', () => {
-    render(<Chip tone="violet" dot>Connected</Chip>);
+    render(<Chip tone="slate" dot>Connected</Chip>);
 
     expect(screen.getByTestId('chip-dot')).not.toHaveClass('animate-pulse');
   });
@@ -96,14 +96,14 @@ describe('Chip', () => {
   });
 
   it('exposes a tooltip through the title attribute', () => {
-    render(<Chip tone="violet" title="Workflow: Standard Feature Pipeline">Standard Feature Pipeline</Chip>);
+    render(<Chip tone="slate" title="Workflow: Standard Feature Pipeline">Standard Feature Pipeline</Chip>);
 
     expect(chip()).toHaveAttribute('title', 'Workflow: Standard Feature Pipeline');
   });
 
   it('truncates the label under a caller-set max width', () => {
     render(
-      <Chip tone="violet" maxWidth="220px">
+      <Chip tone="slate" maxWidth="220px">
         A workflow name long enough to need the cap
       </Chip>,
     );
@@ -113,7 +113,7 @@ describe('Chip', () => {
   });
 
   it('leaves the label untruncated when no max width is set', () => {
-    render(<Chip tone="violet">Short</Chip>);
+    render(<Chip tone="slate">Short</Chip>);
 
     expect(screen.getByTestId('chip-label')).not.toHaveClass('truncate');
   });

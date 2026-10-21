@@ -20,6 +20,7 @@ import {
 } from '../../lib/mcpServer';
 import { reportError } from '../../lib/errorBus';
 import { McpConnectAgentPanel } from './McpConnectAgentPanel';
+import { Button } from '../ui/Button';
 
 /** A grant is flagged as expiring rather than merely active once it has less
  *  than this much life left — the 30-day lifetime (`docs/MCP_INTEGRATION.md` §5) makes a same-day expiry worth calling out before
@@ -155,7 +156,7 @@ export function McpGrantsTab() {
     <div className="space-y-4">
       <div className="panel p-6 space-y-4">
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-          <Server className="w-4 h-4 text-violet-400" /> MCP Server
+          <Server className="w-4 h-4 text-slate-400" /> MCP Server
         </h3>
         <p className="text-xs text-slate-400 leading-relaxed">
           Expose this workspace to external MCP clients over a local HTTP endpoint. Off by
@@ -190,7 +191,7 @@ export function McpGrantsTab() {
             onClick={handleToggleServerEnabled}
             disabled={serverSaving || serverLoading}
             className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
-              serverEnabled ? 'bg-cyan-600' : 'bg-white/10'
+              serverEnabled ? 'bg-accent' : 'bg-white/10'
             }`}
           >
             <span
@@ -211,7 +212,7 @@ export function McpGrantsTab() {
                 type="button"
                 onClick={handleCopyUrl}
                 aria-label="Copy MCP server URL"
-                className="shrink-0 p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-violet-500/10 hover:border-violet-500/30 hover:text-violet-400 text-slate-400 transition-all"
+                className="shrink-0 p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white text-slate-400 transition-all"
               >
                 {urlCopied ? (
                   <Check className="w-3.5 h-3.5 text-emerald-400" />
@@ -219,19 +220,14 @@ export function McpGrantsTab() {
                   <Copy className="w-3.5 h-3.5" />
                 )}
               </button>
-              <button
-                type="button"
-                onClick={handleTestConnection}
-                disabled={testing}
-                className="shrink-0 flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-cyan-500/10 hover:border-cyan-500/30 hover:text-cyan-400 text-slate-300 transition-all disabled:opacity-50"
-              >
+              <Button onClick={handleTestConnection} disabled={testing} className="shrink-0">
                 {testing ? (
                   <RotateCw className="w-3.5 h-3.5 animate-spin" />
                 ) : (
                   <Plug2 className="w-3.5 h-3.5" />
                 )}
                 Test connection
-              </button>
+              </Button>
             </div>
             {testResult?.status === 'reachable' && (
               <p className="text-xs text-emerald-400">
@@ -261,7 +257,7 @@ export function McpGrantsTab() {
 
       <div className="panel p-6 space-y-4">
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-          <Plug className="w-4 h-4 text-violet-400" /> MCP Client Grants
+          <Plug className="w-4 h-4 text-slate-400" /> MCP Client Grants
         </h3>
         <p className="text-xs text-slate-400 leading-relaxed">
           External MCP clients that have completed the consent flow and hold an active access
@@ -318,7 +314,7 @@ export function McpGrantsTab() {
                       {grant.scopes.map((scope) => (
                         <span
                           key={scope}
-                          className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400 uppercase tracking-wider"
+                          className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300 uppercase tracking-wider"
                         >
                           {scope}
                         </span>
@@ -328,11 +324,12 @@ export function McpGrantsTab() {
                       Expires {new Date(grant.expires_at).toLocaleString()}
                     </p>
                   </div>
-                  <button
-                    type="button"
+                  <Button
+                    variant="danger-subtle"
+                    size="sm"
                     onClick={() => handleRevoke(grant.id)}
                     disabled={revokingId === grant.id}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-ruby-500/10 hover:border-ruby-500/30 hover:text-ruby-400 text-slate-300 transition-all disabled:opacity-50 shrink-0"
+                    className="shrink-0"
                   >
                     {revokingId === grant.id ? (
                       <RotateCw className="w-3.5 h-3.5 animate-spin" />
@@ -340,7 +337,7 @@ export function McpGrantsTab() {
                       <Trash2 className="w-3.5 h-3.5" />
                     )}
                     Revoke
-                  </button>
+                  </Button>
                 </div>
               );
             })}

@@ -113,7 +113,7 @@ export function ListFilterBar<S extends string>({
             onChange={(event) => onQueryChange(event.target.value)}
             placeholder={`Filter ${noun}...`}
             aria-label={`Filter ${noun} by text`}
-            className="w-full rounded-md border border-white/5 bg-black/30 py-1.5 pl-7 pr-7 text-[11px] text-white placeholder-slate-600 focus:border-cyan-500/30 focus:outline-none"
+            className="w-full rounded-md border border-white/5 bg-black/30 py-1.5 pl-7 pr-7 text-[11px] text-white placeholder-slate-600 focus:border-accent-ring focus:outline-none"
           />
           {query !== '' && (
             <button
@@ -133,7 +133,7 @@ export function ListFilterBar<S extends string>({
             value={select.value}
             onChange={(event) => select.onChange(event.target.value)}
             aria-label={select.label}
-            className="shrink-0 rounded-md border border-white/10 bg-black/20 px-2 py-1.5 text-[11px] font-mono text-slate-300 outline-none hover:border-white/20 focus:border-cyan-500/50"
+            className="shrink-0 rounded-md border border-white/10 bg-black/20 px-2 py-1.5 text-[11px] font-mono text-slate-300 outline-none hover:border-white/20 focus:border-accent-ring"
           >
             {select.options.map((option) => (
               <option key={option.value} value={option.value}>
@@ -151,7 +151,7 @@ export function ListFilterBar<S extends string>({
             <button
               type="button"
               onClick={onClear}
-              className="font-medium text-cyan-400 transition-colors hover:text-cyan-300"
+              className="font-medium text-accent-ink transition-colors hover:text-white"
             >
               Clear filters
             </button>

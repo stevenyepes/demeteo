@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { RotateCw, Check, AlertTriangle } from 'lucide-react';
+import { Button } from './Button';
 
 export type BootstrapPhase =
   | 'create_repo'
@@ -111,13 +112,9 @@ export function CreateZeroBootstrapPanel({
 
       {canRetry && isError && (
         <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={onRetry}
-            className="px-4 py-2 text-xs font-medium bg-ruby-600 hover:bg-ruby-500 text-white rounded-md transition-all flex items-center gap-2"
-          >
+          <Button variant="primary" onClick={onRetry}>
             <RotateCw className="w-3.5 h-3.5" /> Retry bootstrap
-          </button>
+          </Button>
         </div>
       )}
     </div>

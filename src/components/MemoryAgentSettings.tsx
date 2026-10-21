@@ -8,6 +8,7 @@ import {
 } from '../lib/project';
 import { formatError } from '../lib/errors';
 import type { MemoryAgentConfig, MemoryAgentTestResult } from '../types';
+import { Button } from './ui/Button';
 
 const EMPTY: MemoryAgentConfig = {
   enabled: false,
@@ -119,14 +120,14 @@ const MemoryAgentSettings: React.FC = () => {
     </label>
   );
   const inputCls =
-    'w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600';
+    'w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600';
 
   return (
     <div className="space-y-4">
       <div className="panel p-6">
         <div className="flex items-start justify-between mb-1">
           <h3 className="text-sm font-heading font-semibold text-white flex items-center gap-2">
-            <Brain className="w-4 h-4 text-violet-400" />
+            <Brain className="w-4 h-4 text-slate-400" />
             Memory Agent
           </h3>
           <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
@@ -134,7 +135,7 @@ const MemoryAgentSettings: React.FC = () => {
               type="checkbox"
               checked={config.enabled}
               onChange={(e) => update('enabled', e.target.checked)}
-              className="accent-violet-500"
+              className="accent-accent"
             />
             Enabled
           </label>
@@ -163,7 +164,7 @@ const MemoryAgentSettings: React.FC = () => {
                 type="button"
                 onClick={() => loadModels(config, apiKey === '' ? undefined : apiKey)}
                 disabled={modelsLoading}
-                className="mb-1.5 text-[10px] font-mono text-slate-500 hover:text-cyan-400 flex items-center gap-1 disabled:opacity-50"
+                className="mb-1.5 text-[10px] font-mono text-slate-500 hover:text-white flex items-center gap-1 disabled:opacity-50"
                 title="Fetch models from the endpoint"
               >
                 <RefreshCw className={`w-3 h-3 ${modelsLoading ? 'animate-spin' : ''}`} />
@@ -251,22 +252,14 @@ const MemoryAgentSettings: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 mt-4">
-          <button
-            onClick={handleTest}
-            disabled={testing}
-            className="px-3 py-2 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-50 text-slate-300 transition-all flex items-center gap-1.5"
-          >
+          <Button onClick={handleTest} disabled={testing}>
             {testing ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
             Test connection
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="px-4 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white transition-all flex items-center gap-1.5"
-          >
+          </Button>
+          <Button variant="primary" onClick={handleSave} disabled={saving}>
             {saving ? <RotateCw className="w-3 h-3 animate-spin" /> : saved ? <Check className="w-3 h-3" /> : null}
             {saved ? 'Saved' : 'Save'}
-          </button>
+          </Button>
 
           {testResult && (
             <span

@@ -37,7 +37,7 @@ export function DetachedCapsFields({
           placeholder="no cap"
           aria-invalid={costCap.error !== null}
           aria-describedby={costCap.error ? 'start-feature-max-cost-error' : undefined}
-          className="w-full bg-[var(--bg-input)] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+          className="w-full bg-[var(--bg-input)] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
         />
         {costCap.error && (
           <p id="start-feature-max-cost-error" className="mt-1 text-[10px] font-mono text-ruby-300">
@@ -61,7 +61,7 @@ export function DetachedCapsFields({
           placeholder="no cap"
           aria-invalid={wallClockCap.error !== null}
           aria-describedby={wallClockCap.error ? 'start-feature-max-wall-clock-error' : undefined}
-          className="w-full bg-[var(--bg-input)] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 placeholder-slate-600"
+          className="w-full bg-[var(--bg-input)] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
         />
         {wallClockCap.error && (
           <p id="start-feature-max-wall-clock-error" className="mt-1 text-[10px] font-mono text-ruby-300">

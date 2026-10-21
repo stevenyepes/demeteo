@@ -28,6 +28,7 @@ import {
   reconcileRuns,
   remoteRunDiffUrl,
 } from '../lib/remoteRuns';
+import { Button, buttonClasses } from './ui/Button';
 
 /**
  * Runs — the cross-machine attention hub (docs/REMOTE_EXECUTION.md
@@ -96,7 +97,7 @@ const DiffLinkButton: React.FC<{ run: RemoteRunMirror }> = ({ run }) => {
       href={url}
       target="_blank"
       rel="noreferrer"
-      className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5"
+      className={buttonClasses('secondary', 'sm')}
       title={`View the diff for the pushed branch (${run.pushed_branch})`}
     >
       <ExternalLink className="w-3 h-3" /> View branch diff
@@ -201,14 +202,10 @@ const RemoteRunInbox: React.FC = () => {
             </p>
             </div>
           </div>
-          <button
-            onClick={reconcile}
-            disabled={reconciling}
-            className="px-3 py-2 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5 disabled:opacity-50"
-          >
+          <Button onClick={reconcile} disabled={reconciling}>
             <RefreshCw className={`w-3.5 h-3.5 ${reconciling ? 'animate-spin' : ''}`} />
             Refresh
-          </button>
+          </Button>
         </div>
 
         {error && (
@@ -274,11 +271,10 @@ const RemoteRunInbox: React.FC = () => {
                           className="shrink-0 flex items-center gap-2"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <button
-                            type="button"
+                          <Button
+                            size="sm"
                             onClick={() => openRun(run)}
                             disabled={!run.feature_id}
-                            className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                             title={
                               run.feature_id
                                 ? 'Open the run — step timeline, activity log, artifacts, and cost'
@@ -286,13 +282,13 @@ const RemoteRunInbox: React.FC = () => {
                             }
                           >
                             <ListTree className="w-3 h-3" /> Open run
-                          </button>
+                          </Button>
                           {bucket === 'pr_ready' && run.pr_url && (
                             <a
                               href={run.pr_url}
                               target="_blank"
                               rel="noreferrer"
-                              className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-300 flex items-center gap-1.5"
+                              className={buttonClasses('primary', 'sm')}
                             >
                               <ExternalLink className="w-3 h-3" /> Open PR
                             </a>
@@ -305,14 +301,9 @@ const RemoteRunInbox: React.FC = () => {
                             <ReinjectCredentials run={run} onResolved={reconcile} />
                           )}
                           {(bucket === 'running' || bucket === 'parked') && (
-                            <button
-                              type="button"
-                              onClick={() => cancelRun(run)}
-                              className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5"
-                              title="Cancel this run"
-                            >
+                            <Button size="sm" onClick={() => cancelRun(run)} title="Cancel this run">
                               <Ban className="w-3 h-3" /> Cancel
-                            </button>
+                            </Button>
                           )}
                         </div>
                       </div>

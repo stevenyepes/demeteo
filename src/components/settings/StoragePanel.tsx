@@ -11,6 +11,7 @@ import {
   startCacheSweep,
   subscribeCacheSweep,
 } from '../../lib/cacheSweepSession';
+import { Button } from '../ui/Button';
 
 export function StoragePanel() {
   const { state } = useProject();
@@ -42,7 +43,7 @@ export function StoragePanel() {
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
           <div>
             <h3 className="text-sm font-heading font-semibold text-white mb-1 flex items-center gap-2">
-              <HardDrive className="w-4 h-4 text-cyan-400" />
+              <HardDrive className="w-4 h-4 text-slate-400" />
               Dependency Caches & Worktrees
             </h3>
             <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
@@ -51,22 +52,16 @@ export function StoragePanel() {
             </p>
           </div>
           <div className="flex gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => run(true)}
-              disabled={busy !== null}
-              className="px-3 py-2 text-xs rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-white disabled:opacity-40 flex items-center gap-1.5 transition-all"
-            >
+            <Button onClick={() => run(true)} disabled={busy !== null}>
               <RefreshCw className="w-3.5 h-3.5" /> Rescan
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="danger"
               onClick={() => setConfirming(true)}
               disabled={busy !== null || reclaimable === 0}
-              className="px-3 py-2 text-xs font-semibold rounded-lg bg-ruby-600 hover:bg-ruby-500 text-white disabled:opacity-40 disabled:hover:bg-ruby-600 flex items-center gap-1.5 transition-all"
             >
               <Trash2 className="w-3.5 h-3.5" /> Reclaim
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -76,12 +71,12 @@ export function StoragePanel() {
               Delete the {reclaimable} {reclaimable === 1 ? 'entry' : 'entries'} this scan marked reclaimable? Each is judged again just before it goes, and one that has become needed since is spared. Undecided and kept entries are not touched.
             </p>
             <div className="flex gap-2 shrink-0">
-              <button type="button" onClick={() => setConfirming(false)} className="px-3 py-1.5 text-xs rounded-md border border-white/10 text-slate-300 hover:bg-white/5 transition-all">
+              <Button size="sm" onClick={() => setConfirming(false)}>
                 Cancel
-              </button>
-              <button type="button" onClick={() => run(false)} className="px-3 py-1.5 text-xs font-semibold rounded-md bg-ruby-600 hover:bg-ruby-500 text-white transition-all">
+              </Button>
+              <Button variant="danger" size="sm" onClick={() => run(false)}>
                 Delete {reclaimable}
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -108,7 +103,7 @@ export function StoragePanel() {
           <div className="flex flex-wrap gap-2">
             {report?.dry_run ? (
               <>
-                <Chip tone="violet">{view.totals.delete} reclaimable</Chip>
+                <Chip tone="slate">{view.totals.delete} reclaimable</Chip>
                 <Chip tone="amber">{view.totals.unknown} undecided</Chip>
                 <Chip tone="slate">{view.totals.keep} kept</Chip>
               </>

@@ -60,7 +60,7 @@ export function ModelStep({ enabled, loading, models, value, effort, effortLevel
             value={models.some((m) => m.value === value) ? value : ''}
             onChange={(e) => onSubmit({ step: 'model', model: e.target.value, effort: effort || null })}
             data-testid="wizard-model-select"
-            className="w-full bg-[#08090c] border border-white/10 rounded-lg py-3 px-3 text-sm text-white focus:outline-none focus:border-violet-500/50"
+            className="w-full bg-[#08090c] border border-white/10 rounded-lg py-3 px-3 text-sm text-white focus:outline-none focus:border-accent-ring"
           >
             <option value="">Pick a model…</option>
             {models.map((m) => (
@@ -92,7 +92,7 @@ export function ModelStep({ enabled, loading, models, value, effort, effortLevel
                 }
               }}
               placeholder="e.g. anthropic/claude-sonnet-4"
-              className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-violet-500/50 placeholder-slate-600"
+              className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-accent-ring placeholder-slate-600"
             />
           </div>
 
@@ -118,7 +118,7 @@ export function ModelStep({ enabled, loading, models, value, effort, effortLevel
               }
               disabled={!effortSupported}
               title={effortSupported ? undefined : 'This agent does not support effort selection'}
-              className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-violet-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="w-full bg-[#08090c] border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-accent-ring disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <option value="">
                 {effortSupported ? `Engine default (${EFFORT_LABELS[DEFAULT_EFFORT]})` : 'Not supported'}

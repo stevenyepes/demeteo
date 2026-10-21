@@ -14,13 +14,13 @@ describe('ActivityIndicator', () => {
     expect(screen.queryByTestId('activity-indicator')).not.toBeInTheDocument();
   });
 
-  it('renders a violet animated spinner while working', () => {
+  it('renders a cyan animated spinner while working', () => {
     render(<ActivityIndicator activity="working" />);
 
     const mark = screen.getByTestId('activity-indicator');
     expect(mark).toHaveAttribute('data-activity', 'working');
     expect(mark).toHaveAccessibleName('Working');
-    expect(mark).toHaveClass('text-violet-300');
+    expect(mark).toHaveClass('text-cyan-400');
     // The spinner animates.
     expect(mark.querySelector('.animate-spin')).not.toBeNull();
   });

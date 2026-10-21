@@ -22,6 +22,7 @@ import {
 import { invalidateRunnerCompatibility, pushActionLabel } from '../lib/runnerCompatibility';
 import { RunnerStatusPill } from './RunnerStatusPill';
 import type { Machine, RunnerCompatibilityReport } from '../types';
+import { Button } from './ui/Button';
 
 interface MachinesViewProps {
   /** Optional callback fired when a machine is added/updated/deleted,
@@ -266,21 +267,14 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
             </p>
           </div>
           <div className="flex gap-2">
-            <button
-              onClick={fetchMachines}
-              className="px-3 py-2 text-xs font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5"
-              title="Refresh"
-            >
+            <Button onClick={fetchMachines} title="Refresh">
               <RefreshCw className="w-3.5 h-3.5" />
               Refresh
-            </button>
-            <button
-              onClick={handleAdd}
-              className="px-4 py-2 text-xs font-bold rounded-lg bg-cyan-500 text-slate-950 hover:bg-cyan-400 transition-all flex items-center gap-1.5"
-            >
+            </Button>
+            <Button variant="primary" onClick={handleAdd}>
               <Plus className="w-4 h-4" />
               Add Machine
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -340,13 +334,10 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
             <p className="text-sm text-slate-400 max-w-md mb-5">
               Add a remote SSH host to run agents on cloud instances or other servers.
             </p>
-            <button
-              onClick={handleAdd}
-              className="px-5 py-2.5 text-sm font-bold rounded-lg bg-cyan-500 text-slate-950 hover:bg-cyan-400 transition-all flex items-center gap-1.5"
-            >
+            <Button variant="primary" size="lg" onClick={handleAdd}>
               <Plus className="w-4 h-4" />
               Add remote machine
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -371,11 +362,11 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                   <div className="flex items-start gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center shrink-0">
                       {m.auth_type === 'key' ? (
-                        <Key className="w-4 h-4 text-cyan-400" />
+                        <Key className="w-4 h-4 text-slate-400" />
                       ) : m.auth_type === 'password' ? (
-                        <Lock className="w-4 h-4 text-violet-400" />
+                        <Lock className="w-4 h-4 text-slate-400" />
                       ) : (
-                        <Server className="w-4 h-4 text-emerald-400" />
+                        <Server className="w-4 h-4 text-slate-400" />
                       )}
                     </div>
                     <div className="min-w-0">
@@ -480,10 +471,10 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                         <RefreshCw className="w-3.5 h-3.5" />
                       )}
                     </button>
-                    <button
+                    <Button
+                      size="sm"
                       onClick={() => enableRunner(m)}
                       disabled={runnerState[m.id]?.status === 'installing' || runnerState[m.id]?.status === 'downloading'}
-                      className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5 disabled:opacity-50"
                       title={runnerState[m.id]?.version ? 'Download (if needed), push the latest build and restart the runner' : 'Download and install demeteo-runner as a systemd --user service'}
                     >
                       {runnerState[m.id]?.status === 'installing' || runnerState[m.id]?.status === 'downloading' ? (
@@ -492,7 +483,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                         <Rocket className="w-3.5 h-3.5" />
                       )}
                       {runnerState[m.id]?.status === 'downloading' ? 'Downloading…' : pushLabel}
-                    </button>
+                    </Button>
                     {runnerState[m.id]?.status === 'downloading' && (
                       <button
                         onClick={cancelDownload}
@@ -502,10 +493,10 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                         <X className="w-3.5 h-3.5" />
                       </button>
                     )}
-                    <button
+                    <Button
+                      size="sm"
                       onClick={() => handleTest(m)}
                       disabled={conn === 'testing'}
-                      className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5 disabled:opacity-50"
                       title="Test SSH connection"
                     >
                       {conn === 'testing' ? (
@@ -518,15 +509,11 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
                         <Wifi className="w-3.5 h-3.5" />
                       )}
                       Test
-                    </button>
-                    <button
-                      onClick={() => handleEdit(m)}
-                      className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 flex items-center gap-1.5"
-                      title="Edit machine"
-                    >
+                    </Button>
+                    <Button size="sm" onClick={() => handleEdit(m)} title="Edit machine">
                       <Edit2 className="w-3.5 h-3.5" />
                       Edit
-                    </button>
+                    </Button>
                     <button
                       onClick={() => handleQuickDelete(m)}
                       className="px-2 py-1.5 text-[11px] rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all"

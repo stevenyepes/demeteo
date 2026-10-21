@@ -8,6 +8,7 @@ import {
   parkedGateId,
   reinjectRemoteCredentials,
 } from '../lib/remoteRuns';
+import { Button } from './ui/Button';
 
 /**
  * The two decisions a parked detached run can be unblocked with, factored out
@@ -74,22 +75,12 @@ export const RemoteGateActions: React.FC<{ run: RemoteRunMirror; onResolved: () 
   }
   return (
     <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={() => decide('approve')}
-        disabled={deciding}
-        className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-300 flex items-center gap-1.5 disabled:opacity-50"
-      >
+      <Button variant="primary" size="sm" onClick={() => decide('approve')} disabled={deciding}>
         <ThumbsUp className="w-3 h-3" /> Approve
-      </button>
-      <button
-        type="button"
-        onClick={() => decide('reject')}
-        disabled={deciding}
-        className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-ruby-500/10 border border-ruby-500/30 hover:bg-ruby-500/20 text-ruby-300 flex items-center gap-1.5 disabled:opacity-50"
-      >
+      </Button>
+      <Button variant="danger-subtle" size="sm" onClick={() => decide('reject')} disabled={deciding}>
         <ThumbsDown className="w-3 h-3" /> Reject
-      </button>
+      </Button>
       {err && <span className="text-[10px] text-ruby-300 font-mono break-all">{err}</span>}
     </div>
   );
@@ -125,16 +116,16 @@ export const ReinjectCredentials: React.FC<{ run: RemoteRunMirror; onResolved: (
 
   return (
     <div className="flex items-center gap-2">
-      <button
-        type="button"
+      <Button
+        variant="primary"
+        size="sm"
         onClick={reinject}
         disabled={busy}
         title="Re-send this machine's git credentials so the run can resume"
-        className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-200 flex items-center gap-1.5 disabled:opacity-50"
       >
         {busy ? <Loader className="w-3 h-3 animate-spin" /> : <KeyRound className="w-3 h-3" />}
         {busy ? 'Re-injecting…' : 'Re-inject credentials'}
-      </button>
+      </Button>
       {err && <span className="text-[10px] text-ruby-300 font-mono break-all">{err}</span>}
     </div>
   );

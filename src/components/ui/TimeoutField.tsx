@@ -18,7 +18,7 @@ export function TimeoutField({ label, hint, value, onChange }: TimeoutFieldProps
           step={30}
           value={value}
           onChange={e => onChange(Math.max(10, Number(e.target.value) || 0))}
-          className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-cyan-500/50"
+          className="flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-accent-ring"
         />
         <span className="text-[10px] font-mono text-slate-600 uppercase tracking-widest shrink-0">sec</span>
       </div>

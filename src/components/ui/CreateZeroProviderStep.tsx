@@ -57,11 +57,11 @@ export function CreateZeroProviderStep(props: CreateZeroProviderStepProps) {
                 onClick={() => onProviderChange(p.id)}
                 className={`flex items-center gap-3 p-3 rounded-lg border text-left text-sm transition-all ${
                   providerId === p.id
-                    ? 'bg-violet-500/10 border-violet-500/50 text-violet-100'
+                    ? 'bg-accent-tint border-accent-edge text-white'
                     : 'bg-black/40 border-white/10 text-slate-300 hover:border-white/20'
                 }`}
               >
-                <Globe className={`w-4 h-4 ${providerId === p.id ? 'text-violet-300' : 'text-cyan-400'}`} />
+                <Globe className={`w-4 h-4 ${providerId === p.id ? 'text-accent-ink' : 'text-slate-400'}`} />
                 <div className="min-w-0">
                   <div className="font-medium truncate">{p.name}</div>
                   <div className="text-[10px] font-mono text-slate-500 truncate">{p.host}</div>
@@ -95,11 +95,11 @@ export function CreateZeroProviderStep(props: CreateZeroProviderStepProps) {
                 onClick={() => onNamespaceChange(n.id)}
                 className={`flex items-center gap-3 p-2.5 rounded-lg border text-left text-sm transition-all ${
                   namespaceId === n.id
-                    ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-100'
+                    ? 'bg-accent-tint border-accent-edge text-white'
                     : 'bg-black/30 border-white/10 text-slate-300 hover:border-white/20'
                 }`}
               >
-                <FolderGit2 className={`w-4 h-4 ${namespaceId === n.id ? 'text-cyan-300' : 'text-slate-500'}`} />
+                <FolderGit2 className={`w-4 h-4 ${namespaceId === n.id ? 'text-accent-ink' : 'text-slate-500'}`} />
                 <div className="min-w-0">
                   <div className="truncate">{n.name}</div>
                   <div className="text-[10px] font-mono text-slate-500">{n.kind}</div>
@@ -120,7 +120,7 @@ export function CreateZeroProviderStep(props: CreateZeroProviderStepProps) {
             value={repoSlug}
             onChange={(e) => onSlugChange(e.target.value.toLowerCase().trim())}
             placeholder={slugPlaceholder}
-            className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white font-mono placeholder-slate-600 focus:outline-none focus:border-cyan-500/50"
+            className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-sm text-white font-mono placeholder-slate-600 focus:outline-none focus:border-accent-ring"
           />
           {slugError && (
             <p className="mt-1 text-[10px] text-amber-300 font-mono">{slugError}</p>
@@ -136,7 +136,7 @@ export function CreateZeroProviderStep(props: CreateZeroProviderStepProps) {
               onClick={() => onPrivateChange(true)}
               className={`px-3 py-2 rounded-lg text-[11px] font-mono border transition-all flex items-center justify-center gap-1.5 ${
                 repoPrivate
-                  ? 'bg-violet-500/10 border-violet-500/50 text-violet-200'
+                  ? 'bg-accent-tint border-accent-edge text-white'
                   : 'bg-black/30 border-white/10 text-slate-400 hover:border-white/20'
               }`}
             >
@@ -147,7 +147,7 @@ export function CreateZeroProviderStep(props: CreateZeroProviderStepProps) {
               onClick={() => onPrivateChange(false)}
               className={`px-3 py-2 rounded-lg text-[11px] font-mono border transition-all flex items-center justify-center gap-1.5 ${
                 !repoPrivate
-                  ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-200'
+                  ? 'bg-accent-tint border-accent-edge text-white'
                   : 'bg-black/30 border-white/10 text-slate-400 hover:border-white/20'
               }`}
             >
