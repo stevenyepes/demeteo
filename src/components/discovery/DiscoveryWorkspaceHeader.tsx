@@ -12,6 +12,7 @@ import { listTerminalBranches } from '../../lib/terminal';
 import { formatCost, formatTokens } from '../../lib/utils';
 import type { Discovery, DiscoveryBoard, TerminalBranchOption } from '../../types';
 import { BackButton } from '../ui/BackButton';
+import { Button, buttonClasses } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { FieldLabel } from '../ui/FieldLabel';
 import { DiscoveryActionsMenu, type DiscoveryMenuAction } from './DiscoveryActionsMenu';
@@ -137,16 +138,15 @@ export function DiscoveryWorkspaceHeader({
   const toggleLabel = discovery.status === 'open' ? 'Close discovery' : 'Reopen discovery';
 
   const decomposeButton = (
-    <button
-      type="button"
+    <Button
+      variant="primary"
       data-testid="discovery-decompose"
       onClick={onDecompose}
       disabled={busy || decomposing}
-      className="btn-primary inline-flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-40"
     >
       <Code className="h-3.5 w-3.5" aria-hidden="true" />
       {decomposing ? 'Decomposing…' : 'Decompose'}
-    </button>
+    </Button>
   );
 
   const menuActions: DiscoveryMenuAction[] = [];
@@ -221,27 +221,25 @@ export function DiscoveryWorkspaceHeader({
 
         {wide ? (
           <div className="flex shrink-0 items-center gap-2">
-            <button type="button" onClick={onToggleOpen} disabled={busy} className="btn-secondary">
+            <Button onClick={onToggleOpen} disabled={busy}>
               {toggleLabel}
-            </button>
+            </Button>
             {integration.showControls && (
               <>
-                <button
-                  type="button"
+                <Button
                   data-testid="discovery-update-base"
                   onClick={onUpdateBase}
                   disabled={busy || !integration.sync.enabled}
-                  className="btn-secondary disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Update from default branch
-                </button>
+                </Button>
                 {discovery.integration_mr_url ? (
                   <div className="flex items-center gap-2">
                     <a
                       href={discovery.integration_mr_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="btn-secondary"
+                      className={buttonClasses()}
                     >
                       View integration PR
                     </a>
@@ -250,16 +248,14 @@ export function DiscoveryWorkspaceHeader({
                     </Chip>
                   </div>
                 ) : (
-                  <button
-                    type="button"
+                  <Button
                     data-testid="discovery-publish-integration"
                     onClick={onPublishIntegration}
                     disabled={busy || !integration.publish.enabled}
                     title={integration.publish.reason ?? undefined}
-                    className="btn-secondary disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Open integration PR
-                  </button>
+                  </Button>
                 )}
               </>
             )}
@@ -285,7 +281,7 @@ export function DiscoveryWorkspaceHeader({
                 type="button"
                 onClick={openEditingBase}
                 disabled={lock.locked || busy}
-                className="shrink-0 rounded px-1 py-0.5 text-[11px] font-medium text-violet-300 transition-colors hover:text-violet-200 disabled:cursor-not-allowed disabled:text-slate-600"
+                className="shrink-0 rounded px-1 py-0.5 text-[11px] font-medium text-accent-ink transition-colors hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
               >
                 Change
               </button>
@@ -358,24 +354,19 @@ export function DiscoveryWorkspaceHeader({
               </p>
             )}
             <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={cancelEditingBase}
-                disabled={baseSubmitting}
-                className="btn-secondary text-[11px] disabled:cursor-not-allowed disabled:opacity-40"
-              >
+              <Button size="sm" onClick={cancelEditingBase} disabled={baseSubmitting}>
                 Cancel
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={() => void saveBase()}
                 disabled={
                   baseSubmitting || (baseDraft.mode === 'named' && baseDraft.name.trim().length === 0)
                 }
-                className="btn-primary text-[11px] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {baseSubmitting ? 'Saving…' : 'Save'}
-              </button>
+              </Button>
             </div>
           </div>
         )}

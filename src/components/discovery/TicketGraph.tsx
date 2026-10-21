@@ -17,7 +17,7 @@ interface TicketGraphProps {
 /** The five buckets, in the order §3.5.3 lists them. */
 const LEGEND: readonly { label: string; dot: string }[] = [
   { label: 'Blocked', dot: 'bg-amber-400' },
-  { label: 'Ready', dot: 'bg-violet-400' },
+  { label: 'Ready', dot: 'bg-slate-300' },
   { label: 'In flight', dot: 'bg-cyan-400' },
   { label: 'Landed', dot: 'bg-emerald-400' },
   { label: 'Dropped', dot: 'bg-slate-500' },

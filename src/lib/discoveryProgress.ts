@@ -104,9 +104,9 @@ export function discoveryLifecycle(
   turnRunning: boolean,
 ): DiscoveryLifecycle {
   if (discovery.status === 'closed') return { label: 'Closed', tone: 'slate', live: false };
-  if (turnRunning) return { label: 'Interviewing', tone: 'violet', live: true };
+  if (turnRunning) return { label: 'Interviewing', tone: 'cyan', live: true };
   if (ticketCount > 0) return { label: 'Decomposed', tone: 'cyan', live: false };
-  return { label: 'Interviewing', tone: 'violet', live: false };
+  return { label: 'Interviewing', tone: 'slate', live: false };
 }
 
 /**

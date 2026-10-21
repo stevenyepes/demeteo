@@ -108,7 +108,7 @@ export function TicketAttachmentsCard({
       {note && !dismissed && (
         <div
           data-testid="ticket-no-vision"
-          className="flex items-start gap-2 rounded-lg border border-violet-500/40 bg-ruby-500/10 px-3 py-2 text-[11px] leading-relaxed text-ruby-200"
+          className="flex items-start gap-2 rounded-lg border border-ruby-500/30 bg-ruby-500/10 px-3 py-2 text-[11px] leading-relaxed text-ruby-200"
         >
           <EyeOff className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ruby-300" aria-hidden="true" />
           <span className="min-w-0 flex-1">

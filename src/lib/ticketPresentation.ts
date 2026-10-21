@@ -33,7 +33,7 @@ export interface LaneMeta {
 /** All five, always, in this order (`DISCOVERY_UI_SPEC.md` §3.5.4). */
 export const TICKET_LANES: readonly LaneMeta[] = [
   { lane: 'blocked', label: 'Blocked', note: 'waiting on an edge', tone: 'amber' },
-  { lane: 'ready', label: 'Ready', note: 'you start these', tone: 'violet' },
+  { lane: 'ready', label: 'Ready', note: 'you start these', tone: 'slate' },
   { lane: 'in_flight', label: 'In flight', note: 'PR open', tone: 'cyan' },
   { lane: 'landed', label: 'Landed', note: 'merged into master', tone: 'emerald' },
   { lane: 'dropped', label: 'Dropped', note: 'decided against, with a reason', tone: 'slate' },
@@ -62,7 +62,6 @@ export function ticketTone(view: TicketView, index: TicketIndex): RunStatusTone 
     case 'in_flight':
       return 'cyan';
     case 'ready':
-      return 'violet';
     case 'dropped':
       return 'slate';
     case 'blocked':

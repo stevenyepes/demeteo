@@ -11,7 +11,6 @@ import { FieldLabel } from '../ui/FieldLabel';
 const DOT: Record<RunStatusTone, string> = {
   emerald: 'bg-emerald-400',
   cyan: 'bg-cyan-400',
-  violet: 'bg-violet-400',
   amber: 'bg-amber-400',
   ruby: 'bg-ruby-400',
   slate: 'bg-slate-400',
@@ -126,7 +125,7 @@ export function TicketEdgesCard({
           type="button"
           disabled={disabled || options.length === 0}
           onClick={() => setAdding(true)}
-          className="inline-flex items-center gap-1.5 self-start rounded-md border border-dashed border-white/10 px-3 py-[7px] text-xs text-slate-400 transition hover:border-violet-500/35 hover:bg-violet-500/5 hover:text-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 self-start rounded-md border border-dashed border-white/10 px-3 py-[7px] text-xs text-slate-400 transition hover:border-white/20 hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Plus className="h-[13px] w-[13px]" aria-hidden="true" />
           Add an edge

@@ -8,6 +8,7 @@ import { formatError } from '../../lib/errors';
 import type { AskThread, ConfigOptionValue } from '../../types';
 import { OptionPill } from '../discovery/OptionPill';
 import { NetworkUnenforcedNote } from './NetworkUnenforcedNote';
+import { Button } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { FieldLabel } from '../ui/FieldLabel';
 import { Modal } from '../ui/Modal';
@@ -202,7 +203,7 @@ export function AskThreadSettingsPanel({
                 <span
                   className={`absolute top-0.5 h-4 w-4 rounded-full transition-all ${
                     network
-                      ? 'left-[18px] bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.7)]'
+                      ? 'left-[18px] bg-emerald-400'
                       : 'left-0.5 bg-slate-400'
                   }`}
                 />
@@ -244,17 +245,10 @@ export function AskThreadSettingsPanel({
         </div>
 
         <div className="flex shrink-0 justify-end gap-2.5 border-t border-white/5 px-5 py-4">
-          <button type="button" onClick={onClose} className="btn-secondary text-[13px]">
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={save}
-            disabled={submitting}
-            className="btn-primary text-[13px] disabled:cursor-not-allowed disabled:opacity-40"
-          >
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={save} disabled={submitting}>
             Save for this thread
-          </button>
+          </Button>
         </div>
       </div>
     </Modal>

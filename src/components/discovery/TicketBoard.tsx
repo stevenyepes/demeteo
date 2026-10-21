@@ -7,7 +7,7 @@ import { TicketBoardCard } from './TicketBoardCard';
 
 const LANE_DOT = {
   blocked: 'bg-amber-400',
-  ready: 'bg-violet-400',
+  ready: 'bg-slate-300',
   in_flight: 'bg-cyan-400',
   landed: 'bg-emerald-400',
   dropped: 'bg-slate-500',

@@ -33,7 +33,7 @@ const LANE_LABEL_H = 22;
  *  readable diagram. */
 const EDGE_CLASS: Record<EdgeKind, string> = {
   hands_off: 'stroke-cyan-400/70',
-  goes_back: 'stroke-violet-400/70 [stroke-dasharray:6_4]',
+  goes_back: 'stroke-slate-400/70 [stroke-dasharray:6_4]',
 };
 
 const EDGE_MARKER: Record<EdgeKind, string> = {
@@ -43,13 +43,13 @@ const EDGE_MARKER: Record<EdgeKind, string> = {
 
 const MARKER_FILL: Record<EdgeKind, string> = {
   hands_off: 'fill-cyan-400/70',
-  goes_back: 'fill-violet-400/70',
+  goes_back: 'fill-slate-400/70',
 };
 
 const LEGEND: readonly NodeRole[] = ['orchestration', 'boundary', 'agent', 'needs_human'];
 
 const LEGEND_DOT: Record<NodeRole, string> = {
-  orchestration: 'bg-violet-400',
+  orchestration: 'bg-slate-400',
   boundary: 'bg-cyan-400',
   agent: 'bg-emerald-400',
   needs_human: 'bg-amber-400',

@@ -4,6 +4,7 @@ import { Plus, Settings, Trash2 } from 'lucide-react';
 import { formatCost, formatTokens } from '../../lib/utils';
 import type { AskThread } from '../../types';
 import { BackButton } from '../ui/BackButton';
+import { Button } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { Metric, MetricStrip } from '../ui/MetricStrip';
 
@@ -58,46 +59,28 @@ export function AskWorkspaceHeader({
           <Metric label="Tokens" value={formatTokens(thread.tokens)} tone="cyan" />
         </MetricStrip>
 
-        <button
-          type="button"
-          data-testid="ask-toggle-open"
-          onClick={onToggleOpen}
-          disabled={busy}
-          className="btn-secondary text-[13px] disabled:cursor-not-allowed disabled:opacity-40"
-        >
+        <Button data-testid="ask-toggle-open" onClick={onToggleOpen} disabled={busy}>
           {closed ? 'Reopen thread' : 'Close thread'}
-        </button>
+        </Button>
 
-        <button
-          type="button"
+        <Button
+          variant="danger-subtle"
           data-testid="ask-delete-thread"
           aria-label="Delete thread"
           onClick={onDelete}
           disabled={busy}
-          className="btn-secondary inline-flex items-center gap-2 text-ruby-200 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
+        </Button>
 
-        <button
-          type="button"
-          data-testid="ask-open-settings"
-          aria-label="Thread settings"
-          onClick={onOpenSettings}
-          className="btn-secondary inline-flex items-center gap-2"
-        >
+        <Button data-testid="ask-open-settings" aria-label="Thread settings" onClick={onOpenSettings}>
           <Settings className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
+        </Button>
 
-        <button
-          type="button"
-          data-testid="ask-new-thread"
-          onClick={onNewThread}
-          className="btn-primary inline-flex items-center gap-2"
-        >
+        <Button variant="primary" data-testid="ask-new-thread" onClick={onNewThread}>
           <Plus className="h-3.5 w-3.5" aria-hidden="true" />
           New thread
-        </button>
+        </Button>
       </div>
     </header>
   );

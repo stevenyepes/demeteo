@@ -16,6 +16,7 @@ import {
 } from '../../lib/ticketPresentation';
 import { placementLabel } from '../../lib/ticketPlacement';
 import type { Machine, RunPlacement, TicketView } from '../../types';
+import { Button } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 import { FieldLabel } from '../ui/FieldLabel';
 import { AgentMarkdown } from './AgentMarkdown';
@@ -24,7 +25,6 @@ import { ColumnSubHeader } from './ColumnSubHeader';
 const VERDICT_SURFACE: Record<RunStatusTone, string> = {
   emerald: 'border-emerald-500/20 bg-emerald-500/5',
   cyan: 'border-cyan-500/20 bg-cyan-500/5',
-  violet: 'border-violet-500/20 bg-violet-500/5',
   amber: 'border-amber-500/20 bg-amber-500/5',
   ruby: 'border-ruby-500/20 bg-ruby-500/5',
   slate: 'border-white/5 bg-white/[0.02]',
@@ -33,7 +33,6 @@ const VERDICT_SURFACE: Record<RunStatusTone, string> = {
 const VERDICT_DOT: Record<RunStatusTone, string> = {
   emerald: 'bg-emerald-400',
   cyan: 'bg-cyan-400',
-  violet: 'bg-violet-400',
   amber: 'bg-amber-400',
   ruby: 'bg-ruby-400',
   slate: 'bg-slate-400',
@@ -42,7 +41,6 @@ const VERDICT_DOT: Record<RunStatusTone, string> = {
 const VERDICT_TEXT: Record<RunStatusTone, string> = {
   emerald: 'text-emerald-400',
   cyan: 'text-cyan-400',
-  violet: 'text-violet-400',
   amber: 'text-amber-400',
   ruby: 'text-ruby-400',
   slate: 'text-slate-400',
@@ -141,9 +139,7 @@ export function TicketInspector({
         <Chip size="sm" tone={tone}>
           {stateLabel(view)}
         </Chip>
-        <button type="button" onClick={onClose} className="btn-secondary text-xs">
-          Close
-        </button>
+        <Button onClick={onClose}>Close</Button>
       </ColumnSubHeader>
 
       <div className="flex flex-col gap-[18px] p-4">
@@ -206,7 +202,7 @@ export function TicketInspector({
         <div>
           <FieldLabel>Execution</FieldLabel>
           <div className="flex flex-wrap items-center gap-1.5">
-            <Chip size="sm" tone={placement?.kind === 'detached' ? 'violet' : 'slate'} maxWidth="14rem">
+            <Chip size="sm" tone="slate" maxWidth="14rem">
               {placement
                 ? `${placementLabel(placement, machines)}${inherited ? ' · default' : ''}`
                 : 'Placement unknown'}
@@ -217,7 +213,7 @@ export function TicketInspector({
               </span>
             )}
             {workflowName && (
-              <Chip size="sm" tone="violet" maxWidth="12rem">
+              <Chip size="sm" tone="slate" maxWidth="12rem">
                 {workflowName}
               </Chip>
             )}
@@ -227,7 +223,7 @@ export function TicketInspector({
               </Chip>
             )}
             {view.ticket.model && (
-              <Chip size="sm" tone="violet" maxWidth="10rem">
+              <Chip size="sm" tone="slate" maxWidth="10rem">
                 {view.ticket.model}
               </Chip>
             )}
@@ -273,26 +269,21 @@ export function TicketInspector({
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
+          <Button
+            variant="primary"
             data-testid="ticket-primary-action"
             disabled={action.disabled || busy}
             onClick={() => {
               if (action.kind === 'start') onStart();
               if (action.kind === 'open' && view.feature) onOpenFeature(view.feature.id);
             }}
-            className="btn-primary flex-1 disabled:cursor-not-allowed disabled:opacity-35"
+            className="flex-1"
           >
             {action.label}
-          </button>
-          <button
-            type="button"
-            data-testid="ticket-edit"
-            onClick={onEdit}
-            className="btn-secondary shrink-0"
-          >
+          </Button>
+          <Button data-testid="ticket-edit" onClick={onEdit} className="shrink-0">
             Edit
-          </button>
+          </Button>
         </div>
 
         {forced && (
@@ -345,9 +336,7 @@ export function TicketInspector({
                   >
                     Force start {ticketLabel(view.ticket.seq)}
                   </button>
-                  <button type="button" onClick={() => setAsking(false)} className="btn-secondary">
-                    Cancel
-                  </button>
+                  <Button onClick={() => setAsking(false)}>Cancel</Button>
                   <span className="ml-auto text-[11px] text-slate-500">
                     {reason.trim().length < MIN_REASON
                       ? 'A reason is required.'

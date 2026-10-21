@@ -14,6 +14,7 @@ import { resolveNode } from '../../lib/ask';
 import { fetchActiveFeatures, listStepsForRun } from '../../lib/features';
 import type { CanvasNeighbor } from '../../lib/askCanvasEdges';
 import type { CanvasNode, Feature, NodeResolution, StepExecution } from '../../types';
+import { Button } from '../ui/Button';
 import { INSPECTOR_SURFACE } from '../ui/Inspector';
 import { ROLE_CHIP, ROLE_ICON, ROLE_LABEL, type NodePathState } from './AskCanvasNode';
 
@@ -242,24 +243,16 @@ export function AskCanvasNodeInspector({
 
       <div className="flex shrink-0 flex-col gap-2 border-t border-white/5 px-5 py-4">
         {resolution.status === 'ready' && resolution.result.kind === 'editor' && (
-          <button
-            type="button"
-            onClick={handleOpenInEditor}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-violet-600 to-violet-700 px-3.5 py-2 text-xs font-semibold text-white"
-          >
+          <Button variant="primary" onClick={handleOpenInEditor} className="w-full">
             <ExternalLink className="h-3.5 w-3.5" aria-hidden />
             Open in editor
-          </button>
+          </Button>
         )}
         {pipelineMatch && (
-          <button
-            type="button"
-            onClick={handleShowInPipeline}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 px-3.5 py-2 text-xs font-medium text-slate-300"
-          >
+          <Button onClick={handleShowInPipeline} className="w-full">
             <PipelineIcon className="h-3.5 w-3.5" aria-hidden />
             Show in the pipeline
-          </button>
+          </Button>
         )}
       </div>
     </div>

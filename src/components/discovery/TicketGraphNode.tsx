@@ -35,15 +35,13 @@ const LANE_ICON: Record<TicketLane, LucideIcon> = {
 
 const TONE_BORDER: Record<RunStatusTone, string> = {
   emerald: 'border-emerald-500/40',
-  cyan: 'border-cyan-500/50 shadow-[0_0_18px_rgba(6,182,212,0.18)]',
-  violet: 'border-violet-500/50 shadow-[0_0_18px_rgba(139,92,246,0.18)]',
-  amber: 'border-amber-500/50 shadow-[0_0_18px_rgba(245,158,11,0.20)]',
+  cyan: 'border-cyan-500/50',
+  amber: 'border-amber-500/50',
   ruby: 'border-ruby-500/50',
   slate: 'border-slate-700/60',
 };
 
-const SELECTED =
-  'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.4),0_0_18px_rgba(34,211,238,0.25)]';
+const SELECTED = 'border-accent-edge';
 
 interface TicketGraphNodeProps {
   view: TicketView;
