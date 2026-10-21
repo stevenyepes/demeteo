@@ -114,17 +114,7 @@ export function WizardShell(props: WizardShellProps) {
           </div>
         </header>
 
-        {/* Glassmorphism card per AGENTS.md §5. Backdrop-blur + the
-            documented surface colour give the wizard its signature
-            frosted look. */}
-        <div
-          className="glass-panel p-6 border border-white/5 space-y-6"
-          style={{
-            background: 'rgba(18,22,30,0.75)',
-            backdropFilter: 'blur(12px)',
-            WebkitBackdropFilter: 'blur(12px)',
-          }}
-        >
+        <div className="panel p-6 space-y-6">
           <StepDots step={step} history={history} />
 
           {/* Step body. The `key` swap is what drives the

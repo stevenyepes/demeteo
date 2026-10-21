@@ -172,7 +172,7 @@ export function NotificationBell() {
           )}
         </button>
         {open && (
-          <div className="absolute right-0 top-full mt-2 w-80 glass-panel border border-white/10 overflow-hidden z-50">
+          <div className="raised absolute right-0 top-full mt-2 w-80 overflow-hidden z-50">
             <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
               <span className="font-heading text-xs font-semibold uppercase tracking-wider text-slate-400">
                 Notifications
@@ -202,7 +202,7 @@ export function NotificationBell() {
       {toast && (
         <div
           data-testid="notif-toast"
-          className={`fixed bottom-6 right-6 z-50 glass-panel border-l-2 px-4 py-3 flex items-start gap-3 max-w-md animate-[fadeIn_120ms_ease-out] ${
+          className={`raised fixed bottom-6 right-6 z-50 border-l-2 px-4 py-3 flex items-start gap-3 max-w-md animate-[fadeIn_120ms_ease-out] ${
             toast.accent === "amber"
               ? "border-l-amber-400"
               : toast.accent === "ruby"

@@ -23,7 +23,7 @@ export function ReplayModal({
 }) {
   if (!target) return null;
   return (
-    <Modal onClose={onClose} backdropClassName="bg-black/60" className="bg-[#0d0f14] border border-white/10 rounded-2xl p-6 max-w-md w-full mx-4 shadow-[0_0_40px_rgba(0,0,0,0.5)]">
+    <Modal onClose={onClose} className="raised p-6 max-w-md w-full mx-4">
       <div className="flex items-center gap-3 mb-4">
         <div className="w-8 h-8 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
           <RotateCcw className="w-4 h-4 text-cyan-400" />

@@ -153,7 +153,7 @@ export function McpGrantsTab() {
 
   return (
     <div className="space-y-4">
-      <div className="glass-panel p-6 space-y-4">
+      <div className="panel p-6 space-y-4">
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
           <Server className="w-4 h-4 text-violet-400" /> MCP Server
         </h3>
@@ -259,7 +259,7 @@ export function McpGrantsTab() {
 
       {serverState === 'listening' && serverUrl && <McpConnectAgentPanel serverUrl={serverUrl} />}
 
-      <div className="glass-panel p-6 space-y-4">
+      <div className="panel p-6 space-y-4">
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
           <Plug className="w-4 h-4 text-violet-400" /> MCP Client Grants
         </h3>

@@ -45,7 +45,7 @@
    Tailwind v4 emits every utility into `@layer utilities`, and CSS ranks an
    unlayered rule above every layered one whatever its specificity. While
    this file was unlayered, a utility refining one of its classes matched and
-   lost without a trace: `rounded-xl` and `shadow-2xl` on a `.glass-panel`, the
+   lost without a trace: `rounded-xl` and `shadow-2xl` on a `.panel`, the
    ruby border on a destructive confirm, and dozens more. `check-classes.mjs`
    cannot see that, because every one of those classes resolves.
 
@@ -110,14 +110,22 @@
      `border border-white/5` is re-spelling this rule and one adding
      `border-white/10` is silently leaving the card language — which is how the
      harness panel came to read heavier than the panels beside it. */
-  .glass-panel {
+  .panel {
     background: var(--bg-panel);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid var(--border-glass);
-    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--border-hairline);
     border-radius: var(--radius-panel);
-    transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+    transition: border-color var(--transition-normal), background-color var(--transition-normal);
+  }
+
+  /* Menus, popovers, dialogs and toasts: whatever floats over the page. It is
+     the one surface with a shadow, and a call site adds none of its own. It is
+     opaque, so a `backdrop-blur-*` under it would show nothing and still cost
+     WebKitGTK a frame per scroll; don't add one. */
+  .raised {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-raised);
+    border-radius: var(--radius-panel);
+    box-shadow: var(--shadow-raised);
   }
 
   /* A field sunk *into* a card rather than a card of its own: the graph canvas,
@@ -128,19 +136,19 @@
     background: var(--bg-well);
   }
 
-  /* A card *inside* a panel. Lighter than `.glass-panel` on purpose — no blur
-     and no shadow, because a glass card nested in a glass card reads as a third
-     surface and the depth stops meaning anything. One rule rather than five call
+  /* A card *inside* a panel or a dialog. It has no fill of its own and is set
+     apart by its hairline alone, so it reads as a group on whatever surface holds
+     it: a step of its own would read as a third surface, and the depth would stop
+     meaning anything. One rule rather than five call
      sites spelling the colour, which is what `DISCOVERY_UI_SPEC.md` §6.5 asks
      for: the ticket editor groups its twelve fields into four of these, and a
      flat column of twelve gave the form no reading order at all. */
   .nested-card {
-    background: rgba(18, 22, 30, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 12px;
+    border: 1px solid var(--border-hairline);
+    border-radius: var(--radius-panel);
   }
 
-  .glass-panel-hover:hover {
+  .panel-hover:hover {
     background: var(--bg-panel-hover);
     border-color: rgba(255, 255, 255, 0.08);
   }
@@ -211,7 +219,7 @@
   .chat-input {
     flex: 1;
     background: var(--bg-input);
-    border: 1px solid var(--border-glass);
+    border: 1px solid var(--border-hairline);
     border-radius: 8px;
     padding: 10px 14px;
     color: var(--text-primary);
@@ -232,7 +240,7 @@
 
   .input-field {
     background: var(--bg-input);
-    border: 1px solid var(--border-glass);
+    border: 1px solid var(--border-hairline);
     border-radius: 6px;
     padding: 10px 12px;
     color: var(--text-primary);
@@ -266,7 +274,7 @@
 
   .btn-secondary {
     background: transparent;
-    border: 1px solid var(--border-glass);
+    border: 1px solid var(--border-hairline);
     color: var(--text-secondary);
     border-radius: 6px;
     padding: 10px 18px;

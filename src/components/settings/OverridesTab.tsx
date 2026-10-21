@@ -53,7 +53,7 @@ export function OverridesTab() {
 
   return (
     <div className="space-y-4 animate-fade-in">
-      <div className="glass-panel p-6 space-y-2">
+      <div className="panel p-6 space-y-2">
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2"><WorkflowIcon className="w-4 h-4 text-violet-400" /> Workflow &amp; Step Harness, Model &amp; Effort</h3>
         <p className="text-xs text-slate-400 leading-relaxed">Workflows are shared across projects. Pin a coding agent (<span className="text-slate-300">harness</span>), a model and a reasoning <span className="text-slate-300">effort</span> for a whole workflow — or a single step — <span className="text-white font-medium">when it runs in {s.activeProject.name}</span>. Models are probed live from your {s.computeType === 'remote' ? 'remote machine' : 'local machine'}, so you only pick what's actually available; effort levels come from what each agent declares.</p>
         <p className="text-[11px] text-slate-500 leading-relaxed">Precedence, most specific first: a choice made at launch → a step override here → the workflow author's step setting → a workflow override here → the project default. Expand a workflow to override individual steps. Changes save instantly.</p>
@@ -90,7 +90,7 @@ export function OverridesTab() {
             const agentSteps = wf.steps.filter(st => st.kind !== 'gate');
             const wfLevel = s.overrides[ovKey(wf.id, WF_LEVEL)];
             return (
-              <div key={wf.id} className={`glass-panel border transition-all ${isActive ? 'border-violet-500/30 bg-violet-500/[0.03]' : 'border-white/5'}`}>
+              <div key={wf.id} className={`panel transition-all ${isActive ? 'border-violet-500/30 bg-violet-500/[0.03]' : ''}`}>
                 <div role="button" tabIndex={0} onClick={() => s.toggleWorkflowExpanded(wf)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); s.toggleWorkflowExpanded(wf); } }} className="flex items-center gap-3 p-5 cursor-pointer select-none">
                   <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border ${isActive ? 'bg-violet-500/10 border-violet-500/30 text-violet-300' : 'bg-white/5 border-white/10 text-slate-400'}`}>
                     <WorkflowIcon className="w-4 h-4" />

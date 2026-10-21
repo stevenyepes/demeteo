@@ -97,12 +97,12 @@ Token values live in `src/styles/tokens.css`; colour *semantics* are AGENTS.md �
 |---|---|---|
 | `#0d1117`, `#090c10` | `--bg-app`, `--bg-well` | App shell / sunk wells |
 | `#161b22`, `#1c2128` | `--bg-panel`, `--bg-panel-hover` | Glass card surfaces |
-| `#30363d`, `#484f58` | `--border-glass` (+ hover variant) | One border language |
+| `#30363d`, `#484f58` | `--border-hairline` (+ hover variant) | One border language |
 | `teal-400/500` | `--accent-cyan` | Cyan = terminal streams, interactive states |
 | `purple-600` | `--accent-purple` (violet) | Violet = active connections, primary actions |
 | `green-500` | `--accent-emerald` | Emerald = running agents, healthy status |
 | `red-400/500` | `--accent-ruby` / `ruby-*` scale | Ruby = errors, stopped, failures |
-| Flat card + `border-l-4` | `.glass-panel` + tone accent bar | Glassmorphism is the card language; `TONE_ACCENT` in `ProjectHome.tsx:28` already implements the bar |
+| Flat card + `border-l-4` | `.panel` + tone accent bar | Glassmorphism is the card language; `TONE_ACCENT` in `ProjectHome.tsx:28` already implements the bar |
 | Ad-hoc chip colours | `TONE_CHIP` from `lib/runStatus.ts` | F27 fixed status-colour drift once; do not re-open it |
 
 **Rule for the whole redesign:** every status colour resolves through
@@ -746,12 +746,12 @@ it, and spent no new height at all.**
 - **The surface pass, same day.** Three tracks side by side made the app's card
   vocabulary legible for the first time, and it was four languages: a sunken well
   (graph), a borderless sidebar blurred at 24px (inspector), glass cards, and an
-  8px-radius banner. The cause is that `.glass-panel` bakes `border` and
+  8px-radius banner. The cause is that `.panel` bakes `border` and
   `border-radius` into CSS, so it cannot be composed — **39 call sites add a
   `border` on top of the one it already sets**, and the harness panel's
   `border-white/10` was a silent departure from the card language that read as
   "heavier" without saying why. `--radius-panel` is the token now; the graph and
-  the inspector are `glass-panel` like their neighbour, and the canvas inside the
+  the inspector are `panel` like their neighbour, and the canvas inside the
   graph is `panel-field` — the same well the terminal uses, previously spelled as
   a raw `#050608` (a hex of a token that already existed, AGENTS.md §4).
 - **A measure caps the line, not the box.** `max-w-[96ch]` sat on the
@@ -764,7 +764,7 @@ it, and spent no new height at all.**
   `px-6`; the run column was `p-8`, so the view stepped in by 8px exactly where the
   eye tracks a vertical edge. Aligned down, because five blocks already agreed.
 - **A metric strip is chrome inside chrome.** `MetricStrip` gains an `inset`
-  variant and the feature header uses it: a `glass-panel` inside a `backdrop-blur-md`
+  variant and the feature header uses it: a `panel` inside a `backdrop-blur-md`
   header is a blur reading a blur — invisible, and §7 treats stacked translucency
   as a budget.
 - **The `Graph | Timeline` chrome row sits above all three tracks, not inside one.**

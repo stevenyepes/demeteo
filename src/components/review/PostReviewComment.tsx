@@ -99,7 +99,7 @@ export function PostReviewComment({
       {stage.kind === 'confirming' && (
         <Modal
           onClose={() => setStage({ kind: 'idle' })}
-          className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0d0f14]/90 p-6 shadow-2xl backdrop-blur-xl"
+          className="raised w-full max-w-md p-6"
         >
           <h2 className="font-heading text-base font-semibold text-white">{BUTTON}</h2>
           <p className="mt-3 text-sm leading-relaxed text-slate-300">

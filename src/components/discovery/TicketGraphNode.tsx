@@ -83,7 +83,7 @@ export function TicketGraphNode({
       // The one legitimate inline style here: a computed coordinate is the
       // datum, and no utility can express "wherever this plan's shape put it".
       style={{ left: x, top: y, width: NODE_W, height: NODE_H }}
-      className={`absolute flex flex-col overflow-hidden rounded-xl border bg-slate-900/70 px-3.5 py-2.5 text-left shadow-[0_10px_15px_-3px_rgba(0,0,0,0.35)] backdrop-blur-[4px] transition-colors ${
+      className={`absolute flex flex-col overflow-hidden rounded-xl border bg-surface-raised px-3.5 py-2.5 text-left shadow-[0_10px_15px_-3px_rgba(0,0,0,0.35)] transition-colors ${
         selected ? SELECTED : TONE_BORDER[tone]
       } ${dropped ? 'border-dashed opacity-50' : ''}`}
     >

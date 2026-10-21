@@ -86,7 +86,7 @@ export function Disclosure({
             data-testid="disclosure-body"
             role="region"
             aria-labelledby={triggerId}
-            className={`glass-panel animate-fade-in order-last basis-full overflow-hidden ${bodyClassName}`}
+            className={`panel animate-fade-in order-last basis-full overflow-hidden ${bodyClassName}`}
           >
             {children}
           </div>
@@ -99,7 +99,7 @@ export function Disclosure({
     <div
       data-testid="disclosure"
       data-open={open ? 'true' : 'false'}
-      className={`glass-panel overflow-hidden ${className}`}
+      className={`panel overflow-hidden ${className}`}
     >
       <div className="flex items-center gap-2">
         <button

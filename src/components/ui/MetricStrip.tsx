@@ -97,18 +97,17 @@ export function Metric({
  * background. `inset` is for one sitting *inside* another surface — a flat
  * fill and a hairline, no blur and no shadow.
  *
- * The distinction is not cosmetic. A `glass-panel` inside the feature header,
- * which is itself `backdrop-blur-md`, is a blur reading a blur: the effect is
- * invisible because the thing behind it is already frosted, and the plan's §7
- * names stacked translucency as a budget rather than a free finish. A metric
- * strip is chrome inside chrome, and was never a card of its own.
+ * The distinction is not cosmetic. A `panel` inside the feature header
+ * is a card inside chrome: a surface step and a second border where the header
+ * already supplies both. A metric strip is chrome inside chrome, and was never
+ * a card of its own.
  */
 export type MetricStripVariant = 'panel' | 'inset' | 'line';
 
 /** `line` is no surface at all: a strip of inline metrics read as a sentence
  *  under a title, where any box would be chrome around four numbers. */
 const SURFACE: Record<MetricStripVariant, string> = {
-  panel: 'glass-panel px-4 py-2',
+  panel: 'panel px-4 py-2',
   inset: 'rounded-xl border border-white/5 bg-white/[0.03] px-4 py-2',
   line: '',
 };

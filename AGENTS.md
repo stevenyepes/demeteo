@@ -179,7 +179,7 @@ agent reproduced it.
 
 **Depth is a surface step, not an effect.** There are three solid surfaces: the app
 background, the panel, and the raised layer (menus and dialogs). Each has a 1px hairline
-border. `.glass-panel` is the panel, and its radius (`--radius-panel`) is never
+border. `.panel` is the panel, and its radius (`--radius-panel`) is never
 re-spelled at a call site. Controls take smaller radii. Only the raised layer casts a
 shadow, a single token, so a call site never adds `shadow-*`. A card inside a panel is a
 `.nested-card`, never a second panel. Backdrop blur belongs only to something floating

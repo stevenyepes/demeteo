@@ -20,7 +20,7 @@ function Shell() {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none" />
-        <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border border-white/10">
+        <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative">
           <RotateCw className="w-12 h-12 text-cyan-400 animate-spin mb-6" />
           <h2 className="text-2xl font-heading font-bold text-white mb-2">Workspace Re-bootstrap In Progress</h2>
           <p className="text-sm text-slate-400 mb-6 leading-relaxed">Demeteo is updating your cloned repositories and analyzing codebase strategies.</p>
@@ -37,7 +37,7 @@ function Shell() {
   if (s.bootstrapStep === 'error') {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
-        <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border border-ruby-500/20">
+        <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-ruby-500/20">
           <AlertTriangle className="w-12 h-12 text-ruby-400 mb-4" />
           <h2 className="text-2xl font-heading font-bold text-white mb-2">Re-bootstrap Failed</h2>
           <p className="text-sm text-slate-400 mb-6">An error occurred while re-building the project workspace.</p>
@@ -56,7 +56,7 @@ function Shell() {
       <div className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-[#08090c]">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-emerald-600/10 rounded-full blur-[120px] pointer-events-none" />
         <div className="absolute bottom-1/4 left-1/4 w-[300px] h-[300px] bg-violet-600/10 rounded-full blur-[100px] pointer-events-none" />
-        <div className="glass-panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border border-emerald-500/20">
+        <div className="panel max-w-lg w-full p-8 flex flex-col items-center text-center relative border-emerald-500/20">
           <div className="relative mb-6">
             <div className="w-20 h-20 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
               <div className="w-14 h-14 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
@@ -83,7 +83,7 @@ function Shell() {
     return (
       <div className="flex-1 overflow-y-auto p-8 relative flex items-center justify-center">
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-violet-600/10 rounded-full blur-[120px] pointer-events-none" />
-        <div className="glass-panel max-w-xl w-full p-6 flex flex-col border-white/10">
+        <div className="panel max-w-xl w-full p-6 flex flex-col">
           <div className="mb-6 border-b border-white/5 pb-4">
             <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">STRATEGY UPDATED</h3>
             <h2 className="text-xl font-bold text-white">Approve Detected Worktree Strategy</h2>
@@ -131,8 +131,8 @@ function Shell() {
 
       {/* Repo Selection Modal */}
       {s.isRepoModalOpen && (
-        <Modal onClose={() => s.setIsRepoModalOpen(false)} className="glass-panel w-[500px] border border-white/10 overflow-hidden flex flex-col">
-          <div className="p-4 border-b border-white/5 flex justify-between items-center bg-[#0d0f14]">
+        <Modal onClose={() => s.setIsRepoModalOpen(false)} className="raised w-[500px] overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-white/5 flex justify-between items-center">
             <h3 className="font-heading font-semibold text-white">Select Repositories</h3>
             <button onClick={() => s.setIsRepoModalOpen(false)} className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/5"><X className="w-5 h-5" /></button>
           </div>
@@ -168,7 +168,7 @@ function Shell() {
 
       {/* Dirty Warning Modal */}
       {s.dirtyWarningRepos.length > 0 && (
-        <Modal onClose={() => { s.setDirtyWarningRepos([]); s.setPendingActionAfterConfirm(null); }} className="glass-panel w-[500px] border border-ruby-500/20 overflow-hidden flex flex-col p-6 space-y-4">
+        <Modal onClose={() => { s.setDirtyWarningRepos([]); s.setPendingActionAfterConfirm(null); }} className="raised w-[500px] border-ruby-500/20 overflow-hidden flex flex-col p-6 space-y-4">
           <div className="flex items-center gap-3 text-ruby-400"><AlertTriangle className="w-8 h-8 shrink-0" /><h3 className="font-heading font-bold text-lg text-white">Potential Data Loss Warning</h3></div>
           <p className="text-sm text-slate-300 leading-relaxed">{s.pendingActionAfterConfirm === 'delete' ? 'The workspace has repositories with uncommitted changes or unpushed commits. Deleting the workspace will permanently erase these directories:' : 'You are about to remove the following repositories, but they contain uncommitted changes or unpushed commits on the local server. Removing them will permanently erase these folders:'}</p>
           <div className="bg-black/40 border border-white/5 rounded-lg p-3 max-h-[200px] overflow-y-auto space-y-2">
@@ -192,7 +192,7 @@ function Shell() {
 
       {/* Delete Confirm Modal */}
       {s.showDeleteConfirm && (
-        <Modal onClose={() => s.setShowDeleteConfirm(false)} className="glass-panel w-[450px] border border-ruby-500/20 overflow-hidden flex flex-col p-6 space-y-4">
+        <Modal onClose={() => s.setShowDeleteConfirm(false)} className="raised w-[450px] border-ruby-500/20 overflow-hidden flex flex-col p-6 space-y-4">
           <div className="flex items-center gap-3 text-ruby-400"><Trash2 className="w-7 h-7 shrink-0" /><h3 className="font-heading font-bold text-lg text-white">Delete Workspace</h3></div>
           <p className="text-sm text-slate-300 leading-relaxed">Are you sure you want to delete <span className="text-white font-semibold">{s.projectName}</span>? This will permanently delete the project record and remove all local workspace clones.</p>
           <div className="flex justify-end gap-3 pt-2">

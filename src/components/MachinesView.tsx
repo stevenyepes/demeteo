@@ -310,7 +310,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
         )}
 
         {/* Built-in local machine — always shown, non-editable */}
-        <div className="glass-panel p-4 flex items-start justify-between gap-4 border-l-2 border-l-emerald-500/60 mb-3">
+        <div className="panel p-4 flex items-start justify-between gap-4 border-l-2 border-l-emerald-500/60 mb-3">
           <div className="flex items-start gap-3 min-w-0">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center shrink-0">
               <Monitor className="w-4 h-4 text-emerald-400" />
@@ -334,7 +334,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
             Loading machines…
           </div>
         ) : machines.length === 0 ? (
-          <div className="glass-panel p-8 text-center flex flex-col items-center justify-center">
+          <div className="panel p-8 text-center flex flex-col items-center justify-center">
             <Server className="w-8 h-8 text-slate-500 mb-3" />
             <h3 className="text-base font-heading font-semibold text-white mb-1">No remote machines</h3>
             <p className="text-sm text-slate-400 max-w-md mb-5">
@@ -366,7 +366,7 @@ const MachinesView: React.FC<MachinesViewProps> = ({ onChange }) => {
               return (
                 <div
                   key={m.id}
-                  className="glass-panel p-4 flex items-start justify-between gap-4 border-l-2 border-l-cyan-500/60"
+                  className="panel p-4 flex items-start justify-between gap-4 border-l-2 border-l-cyan-500/60"
                 >
                   <div className="flex items-start gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center shrink-0">

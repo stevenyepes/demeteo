@@ -21,7 +21,7 @@ export function StrategyTab() {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {/* Git Isolation */}
-      <div className="glass-panel p-6 space-y-4">
+      <div className="panel p-6 space-y-4">
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
           <GitBranch className="w-4 h-4 text-violet-400" /> Git Isolation & Strategy
         </h3>
@@ -42,7 +42,7 @@ export function StrategyTab() {
       <HarnessesSection />
 
       {/* Automation Policies */}
-      <div className="glass-panel p-6 space-y-4">
+      <div className="panel p-6 space-y-4">
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
           <Settings className="w-4 h-4 text-cyan-400" /> Automation Policies
         </h3>
@@ -78,7 +78,7 @@ export function StrategyTab() {
       </div>
 
       {/* Default AI Executor */}
-      <div className="glass-panel p-6 space-y-4">
+      <div className="panel p-6 space-y-4">
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
           <Zap className="w-4 h-4 text-violet-400" /> Default AI Executor Settings
         </h3>
@@ -187,7 +187,7 @@ export function StrategyTab() {
       </div>
 
       {/* Artifact Handling */}
-      <div className="glass-panel p-6 space-y-4">
+      <div className="panel p-6 space-y-4">
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-2">
           <FileText className="w-4 h-4 text-cyan-400" /> Artifact Handling
         </h3>
@@ -207,14 +207,14 @@ export function StrategyTab() {
       </div>
 
       {s.prTemplate && (
-        <div className="glass-panel p-6 md:col-span-2 space-y-2">
+        <div className="panel p-6 md:col-span-2 space-y-2">
           <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider">Detected PR Template</h3>
           <div className="w-full bg-black/40 border border-white/5 rounded-lg p-4 font-mono text-xs text-slate-400 max-h-[160px] overflow-y-auto leading-relaxed">{s.prTemplate}</div>
         </div>
       )}
 
       {/* Extra Writable Paths */}
-      <div className="glass-panel p-6 md:col-span-2 space-y-4">
+      <div className="panel p-6 md:col-span-2 space-y-4">
         <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
           <FolderOpen className="w-4 h-4 text-emerald-400" /> Extra Writable Paths
         </h3>
@@ -272,7 +272,7 @@ export function StrategyTab() {
       </div>
 
       {/* Coding Agent Configurations */}
-      <div className="glass-panel p-6 md:col-span-2 space-y-4">
+      <div className="panel p-6 md:col-span-2 space-y-4">
         <div className="flex items-center justify-between border-b border-white/5 pb-2">
           <h3 className="font-heading text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
             <Activity className="w-4 h-4 text-cyan-400" /> Coding Agent Configuration

@@ -232,7 +232,7 @@ export function NewDiscoveryModal({
         role="dialog"
         aria-modal="true"
         aria-label="New discovery"
-        className="glass-panel flex max-h-[85vh] flex-col overflow-hidden"
+        className="raised flex max-h-[85vh] flex-col overflow-hidden"
       >
         <div className="shrink-0 border-b border-white/5 px-5 py-[18px]">
           <p className="mb-1.5 font-heading text-[11px] font-semibold uppercase tracking-[0.15em] text-cyan-400">
@@ -445,7 +445,7 @@ export function NewDiscoveryModal({
           )}
         </div>
 
-        <div className="flex shrink-0 justify-end gap-2.5 border-t border-white/5 bg-[#0d0f14]/90 px-5 py-4">
+        <div className="flex shrink-0 justify-end gap-2.5 border-t border-white/5 px-5 py-4">
           <button
             type="button"
             onClick={() => {

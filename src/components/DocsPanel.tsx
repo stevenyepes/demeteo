@@ -55,13 +55,13 @@ const DocsPanel: React.FC<DocsPanelProps> = ({ isOpen, onClose }) => {
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/70" />
+      <div className="absolute inset-0 bg-black/60" />
       <div
-        className="relative w-full max-w-3xl h-[80vh] glass-panel border border-white/10 overflow-hidden flex flex-col"
+        className="raised relative w-full max-w-3xl h-[80vh] overflow-hidden flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/5 bg-[#0d0f14]/80 shrink-0">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/5 shrink-0">
           <div className="flex items-center gap-2">
             <BookOpen className="w-5 h-5 text-cyan-400" />
             <h2 className="text-sm font-bold font-heading text-white">Documentation</h2>

@@ -254,7 +254,7 @@ describe('card contents', () => {
   it('accents the row with the run tone and skips the row off screen', () => {
     const { card } = renderCard();
 
-    expect(card.className).toContain('glass-panel glass-panel-hover');
+    expect(card.className).toContain('panel panel-hover');
     expect(card.className).toContain('pipeline-card');
     expect(card.firstElementChild?.className).toContain('bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.8)]');
   });

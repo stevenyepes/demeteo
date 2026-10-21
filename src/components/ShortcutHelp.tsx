@@ -9,9 +9,7 @@
 //     calls `event.stopPropagation()` so the global dispatcher in
 //     `useKeyboardShortcuts` does not double-fire.
 //
-//   • A glassmorphism panel grouped by `ShortcutCategory`, drawn with the
-//     AGENTS.md §5 tokens (`rgba(18,22,30,0.75)` surface, `#8b5cf6`
-//     violet accents, backdrop-blur for depth).
+//   • A panel grouped by `ShortcutCategory`.
 //
 //   • A "Quick Reference" callout at the top of the overlay highlighting
 //     the two most useful global shortcuts — `Cmd/Ctrl + K` for the
@@ -21,12 +19,6 @@
 //   • A `?help-open` / `?help-close` / `?help-toggle` CustomEvent bridge
 //     so other components can drive the panel without prop-drilling or a
 //     provider chain. See `ShortcutsContext.tsx` for the symmetric side.
-//
-// Visual design follows AGENTS.md §5:
-//   - background: `#08090c` / `#0d0f14`
-//   - card surface: `rgba(18,22,30,0.75)` + `backdrop-blur`
-//   - accents: violet `#8b5cf6` for active / running indicators, cyan /
-//     emerald for status badges.
 
 import {
   useCallback,
@@ -319,21 +311,16 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
       aria-labelledby="shortcut-help-title"
     >
       <div
-        className="absolute inset-0 bg-[#08090c]/85"
+        className="absolute inset-0 bg-black/60"
         onClick={close}
         data-testid="shortcut-help-backdrop"
       />
       <div
-        className="relative w-full max-w-5xl max-h-[88vh] flex flex-col rounded-2xl border border-white/[0.08] shadow-2xl overflow-hidden"
-        style={{
-          background: 'rgba(18,22,30,0.75)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
-        }}
+        className="raised relative w-full max-w-5xl max-h-[88vh] flex flex-col overflow-hidden"
         onClick={(event) => event.stopPropagation()}
       >
         {/* ── Header ────────────────────────────────────────────── */}
-        <header className="flex items-center justify-between gap-4 px-6 py-4 border-b border-white/5 bg-[#0d0f14]/60 shrink-0">
+        <header className="flex items-center justify-between gap-4 px-6 py-4 border-b border-white/5 shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-violet-500/10 border border-violet-500/30 flex items-center justify-center">
               <Keyboard className="w-5 h-5 text-violet-300" />
@@ -365,7 +352,7 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
 
         {/* ── Body (grouped) ───────────────────────────────────── */}
         <div
-          className="flex-1 overflow-y-auto px-6 py-5 bg-[#0a0c12]/30"
+          className="flex-1 overflow-y-auto px-6 py-5"
           data-testid="shortcut-help-body"
         >
           <QuickReferenceCallout platform={platform} />
@@ -404,7 +391,7 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.ReactElement | nul
         </div>
 
         {/* ── Footer (escape hint) ─────────────────────────────── */}
-        <footer className="px-6 py-3 border-t border-white/5 bg-[#0d0f14]/60 flex items-center justify-between text-xs text-slate-500 shrink-0">
+        <footer className="px-6 py-3 border-t border-white/5 flex items-center justify-between text-xs text-slate-500 shrink-0">
           <span>
             {SHORTCUTS.length} shortcuts ·{' '}
             {SHORTCUT_GROUPS.reduce((acc, group) => acc + group.entries.length, 0)} entries across {SHORTCUT_GROUPS.length} groups

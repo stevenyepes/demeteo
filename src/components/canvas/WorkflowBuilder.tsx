@@ -636,7 +636,7 @@ export function WorkflowBuilder({
         )}
         {showSource && (
           <aside
-            className="flex h-full w-[420px] shrink-0 flex-col border-l border-white/5 bg-[#0d0f14]/80"
+            className="flex h-full w-[420px] shrink-0 flex-col border-l border-white/5 bg-surface-panel"
             data-testid="source-view"
           >
             <div className="flex items-center justify-between border-b border-white/5 px-3 py-2">
@@ -699,12 +699,12 @@ export function WorkflowBuilder({
       </div>
 
       {pendingExit && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60">
           <div
             role="dialog"
             aria-label="Unsaved changes"
             data-testid="dirty-guard"
-            className="w-[420px] rounded-xl border border-slate-700/60 bg-[#0d0f14] p-5 shadow-2xl"
+            className="raised w-[420px] p-5"
           >
             <h2 className="text-sm font-semibold text-slate-100">Unsaved changes</h2>
             <p className="mt-2 text-xs leading-relaxed text-slate-400">

@@ -173,7 +173,7 @@ export function ConfigPanel({
 
   return (
     <div
-      className={`flex h-full w-[62%] min-w-0 flex-col border-l border-white/5 bg-[#0d0f14]/80 backdrop-blur-xl ${className}`}
+      className={`flex h-full w-[62%] min-w-0 flex-col border-l border-white/5 bg-surface-panel ${className}`}
       data-testid="config-panel"
     >
       <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/5 px-5 py-4">

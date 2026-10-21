@@ -134,7 +134,7 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
     <div
       className={[
         'group flex min-w-[200px] max-w-[280px] flex-col gap-2 rounded-xl border px-3.5 py-2.5',
-        'bg-slate-900/70 backdrop-blur-sm transition-shadow',
+        'bg-surface-raised transition-shadow',
         isSkipped ? 'opacity-50' : '',
         // The replay cone reads as a violet "will re-run" ring, distinct from
         // the cyan selection highlight (P2.4). Selection still wins the border.

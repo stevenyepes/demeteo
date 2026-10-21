@@ -63,7 +63,7 @@ export default function ProvidersPage() {
 
       <div className="space-y-4 z-10">
         {providers.length === 0 ? (
-          <div className="glass-panel p-12 text-center flex flex-col items-center justify-center">
+          <div className="panel p-12 text-center flex flex-col items-center justify-center">
             <Globe className="w-12 h-12 text-slate-500 mb-4" />
             <h3 className="text-lg font-heading font-semibold text-white mb-2">No Providers Mapped</h3>
             <p className="text-sm text-slate-400 max-w-md mb-6">Connect your GitHub or GitLab workspace to enable repository cloning, branch management, and automatic pull requests.</p>
@@ -74,7 +74,7 @@ export default function ProvidersPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {providers.map(prov => (
-              <div key={prov.id} className="glass-panel p-5 flex items-start justify-between border-l-2 border-l-cyan-500 hover:border-l-cyan-400 transition-all">
+              <div key={prov.id} className="panel p-5 flex items-start justify-between border-l-2 border-l-cyan-500 hover:border-l-cyan-400 transition-all">
                 <div className="flex gap-4">
                   {prov.avatarUrl ? (
                     <img src={prov.avatarUrl} alt={prov.username} className="w-12 h-12 rounded-full object-cover border border-white/10" />
@@ -116,8 +116,8 @@ export default function ProvidersPage() {
 
       {pendingDelete && (
         <OverlayPortal>
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-          <div className="glass-panel p-6 max-w-md w-full mx-4 border border-amber-500/30">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="raised p-6 max-w-md w-full mx-4 border-amber-500/30">
             <div className="flex items-start gap-3 mb-4">
               <AlertTriangle className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
               <div>

@@ -10,10 +10,7 @@ export interface PullRequestListSkeletonProps {
 }
 
 /**
- * Placeholder rows for the pull-request list. Flat blocks, not `glass-panel`
- * cards, for the reason `PipelineListSkeleton` records: a `backdrop-filter`
- * layer per row is real GPU cost on WebKitGTK, and a surface nobody reads is
- * the wrong place to spend it.
+ * Placeholder rows for the pull-request list.
  *
  * `ROW_HEIGHT_PX` stands in for `PullRequestRow`'s four tiers — a two-line
  * title, the mono context line, the timeline, and the launch footer — rather

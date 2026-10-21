@@ -82,12 +82,12 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, entrie
 
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[15vh]" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/70" />
+      <div className="absolute inset-0 bg-black/60" />
       <div
-        className="relative w-full max-w-xl glass-panel border border-white/10 overflow-hidden"
+        className="raised relative w-full max-w-xl overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center gap-3 px-5 py-3.5 border-b border-white/5 bg-[#0d0f14]/80">
+        <div className="flex items-center gap-3 px-5 py-3.5 border-b border-white/5">
           <Search className="w-5 h-5 text-slate-400 shrink-0" />
           <input
             ref={inputRef}

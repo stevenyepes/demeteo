@@ -38,7 +38,7 @@ export function StoragePanel() {
 
   return (
     <div className="space-y-4">
-      <div className="glass-panel p-6 space-y-4">
+      <div className="panel p-6 space-y-4">
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
           <div>
             <h3 className="text-sm font-heading font-semibold text-white mb-1 flex items-center gap-2">
@@ -133,7 +133,7 @@ export function StoragePanel() {
 
       {view && (
         view.projects.length === 0 ? (
-          <div className="glass-panel p-6 text-sm text-slate-500 italic">No project has a clone to sweep.</div>
+          <div className="panel p-6 text-sm text-slate-500 italic">No project has a clone to sweep.</div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {view.projects.map(project => <StorageProjectCard key={project.projectId} project={project} />)}

@@ -27,7 +27,7 @@ interface CreateZeroBootstrapPanelProps {
 }
 
 /**
- * Animated, glass-panel stepper shown while the wizard creates the
+ * Animated, panel stepper shown while the wizard creates the
  * repo, registers the project row, runs the bootstrap clone + strategy
  * detection, and persists the project settings. Pulsing status dots
  * mark the active phase; completed phases get a green check. A mono
@@ -56,7 +56,7 @@ export function CreateZeroBootstrapPanel({
   const isError = phases.some((p) => p.status === 'error');
 
   return (
-    <div className="glass-panel p-6 border-white/10 flex flex-col gap-4">
+    <div className="panel p-6 flex flex-col gap-4">
       <div>
         <h3 className="font-heading font-semibold text-cyan-400 uppercase tracking-widest text-xs mb-1">
           {isError ? 'Bootstrap failed' : 'Workspace bootstrap'}

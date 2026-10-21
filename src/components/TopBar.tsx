@@ -63,7 +63,7 @@ function TopBar({ connectedProvider }: TopBarProps) {
   return (
     <header
       ref={setHeaderEl}
-      className="h-14 border-b border-white/5 bg-[#0d0f14]/80 backdrop-blur-md grid grid-cols-[minmax(0,1fr)_auto_minmax(min-content,1fr)] items-center gap-4 px-6 z-20 relative shrink-0"
+      className="h-14 border-b border-white/5 bg-surface-sidebar grid grid-cols-[minmax(0,1fr)_auto_minmax(min-content,1fr)] items-center gap-4 px-6 z-20 relative shrink-0"
     >
       <div data-testid="topbar-brand" className="flex items-center gap-4 min-w-0">
         <img src="/icon.png" alt="Demeteo" className="w-8 h-8 rounded-lg shrink-0" />
@@ -82,7 +82,7 @@ function TopBar({ connectedProvider }: TopBarProps) {
         <button
           type="button"
           data-testid="topbar-search"
-          className="flex items-center px-3 py-1.5 glass-panel rounded-md text-sm text-slate-400 w-[clamp(13rem,24vw,28rem)] hover:border-white/20 transition-colors cursor-pointer"
+          className="flex items-center px-3 py-1.5 bg-surface-well border border-hairline rounded-md text-sm text-slate-400 w-[clamp(13rem,24vw,28rem)] hover:border-white/20 transition-colors cursor-pointer"
           onClick={() => uiDispatch({ type: 'SET_COMMAND_PALETTE', open: true })}
         >
           <Search className="w-4 h-4 mr-2 opacity-50" />

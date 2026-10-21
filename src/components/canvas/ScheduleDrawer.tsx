@@ -127,7 +127,7 @@ export function ScheduleDrawer({
 
   return (
     <aside
-      className="absolute right-0 top-0 z-20 flex h-full w-[380px] flex-col border-l border-white/5 bg-[#0d0f14] shadow-2xl"
+      className="absolute right-0 top-0 z-20 flex h-full w-[380px] flex-col border-l border-hairline-raised bg-surface-raised shadow-[var(--shadow-raised)]"
       data-testid="schedule-drawer"
       aria-label="Workflow schedule"
     >

@@ -65,14 +65,14 @@ export function TaskListArtifact({ plan }: { plan: TaskPlan }) {
         // Load-bearing for a rework cycle with no tasks: without this, a
         // decomposition that decided no ticket was warranted renders as a
         // bare empty state instead of explaining why.
-        <div className="glass-panel flex items-start gap-2.5 border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-cyan-200">
+        <div className="panel flex items-start gap-2.5 border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-cyan-200">
           <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-400" />
           <p className="leading-relaxed">{notes}</p>
         </div>
       )}
 
       {issues.length > 0 && (
-        <div className="glass-panel border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
+        <div className="panel border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200">
           <div className="mb-1.5 flex items-center gap-2 font-bold uppercase tracking-wider text-amber-400">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             Plan issues
@@ -90,7 +90,7 @@ export function TaskListArtifact({ plan }: { plan: TaskPlan }) {
           blank. Blank is indistinguishable from a broken viewer, and this one
           is read at a gate where the reviewer's next click is Approve. */}
       {empty && (
-        <div className="glass-panel border border-white/5 p-6 text-center text-xs text-slate-400">
+        <div className="panel p-6 text-center text-xs text-slate-400">
           This decomposition produced no tickets, and left no note explaining why.
         </div>
       )}
@@ -121,7 +121,7 @@ export function TaskListArtifact({ plan }: { plan: TaskPlan }) {
 
 function TaskCard({ index, kind, task }: { index: number; kind: PlanKind; task: PlannedTask }) {
   return (
-    <div className={`glass-panel border-l-2 p-4 ${cycleBorder(kind)}`}>
+    <div className={`panel border-l-2 p-4 ${cycleBorder(kind)}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="shrink-0 font-mono text-[10px] text-slate-500">{index}</span>

@@ -76,7 +76,7 @@ export function AskSection({
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="glass-panel relative overflow-hidden p-4">
+      <div className="panel relative overflow-hidden p-4">
         <div className="flex items-start gap-4">
           <MessageSquare className="mt-1.5 ml-1 h-5 w-5 shrink-0 text-violet-400" aria-hidden="true" />
           <div className="min-w-0 flex-1">

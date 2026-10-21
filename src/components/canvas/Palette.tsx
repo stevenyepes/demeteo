@@ -110,7 +110,7 @@ export function Palette({ entries, onSelect, className = '' }: PaletteProps) {
 
   return (
     <div
-      className={`flex w-56 flex-col gap-2 rounded-xl border border-slate-700/60 bg-slate-900/85 p-2.5 backdrop-blur-sm ${className}`}
+      className={`raised flex w-56 flex-col gap-2 p-2.5 ${className}`}
       data-testid="node-palette"
     >
       <div className="relative">
@@ -201,8 +201,8 @@ export function NodeTypePicker({
       <div
         className={
           anchor
-            ? 'absolute w-64 rounded-xl border border-slate-700/60 bg-slate-900/95 p-2.5 shadow-2xl shadow-black/50 backdrop-blur-sm'
-            : 'absolute left-1/2 top-24 w-80 -translate-x-1/2 rounded-xl border border-slate-700/60 bg-slate-900/95 p-2.5 shadow-2xl shadow-black/50 backdrop-blur-sm'
+            ? 'raised absolute w-64 p-2.5'
+            : 'raised absolute left-1/2 top-24 w-80 -translate-x-1/2 p-2.5'
         }
         style={anchor ? { left: anchor.x, top: anchor.y } : undefined}
         onClick={(evt) => evt.stopPropagation()}

@@ -449,8 +449,8 @@ export function NewTerminalMenu({
               onKeyDown={onMenuKeyDown}
               className={
                 compact
-                  ? 'absolute left-0 mt-1 z-30 w-[440px] max-w-[92vw] rounded-lg border border-white/10 bg-[#0c0d12] shadow-xl overflow-hidden'
-                  : 'relative z-50 w-[440px] max-w-[92vw] rounded-lg border border-white/10 bg-[#0c0d12] shadow-2xl overflow-hidden'
+                  ? 'raised absolute left-0 mt-1 z-30 w-[440px] max-w-[92vw] overflow-hidden'
+                  : 'raised relative z-50 w-[440px] max-w-[92vw] overflow-hidden'
               }
               data-testid="new-terminal-dropdown"
             >

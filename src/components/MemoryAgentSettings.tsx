@@ -106,7 +106,7 @@ const MemoryAgentSettings: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="glass-panel p-6 flex items-center justify-center text-slate-400 text-xs">
+      <div className="panel p-6 flex items-center justify-center text-slate-400 text-xs">
         <RotateCw className="w-4 h-4 animate-spin mr-2" /> Loading…
       </div>
     );
@@ -123,7 +123,7 @@ const MemoryAgentSettings: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <div className="glass-panel p-6">
+      <div className="panel p-6">
         <div className="flex items-start justify-between mb-1">
           <h3 className="text-sm font-heading font-semibold text-white flex items-center gap-2">
             <Brain className="w-4 h-4 text-violet-400" />

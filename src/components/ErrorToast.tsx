@@ -175,7 +175,7 @@ const ErrorToastRow: React.FC<{
 
   return (
     <div
-      className={`pointer-events-auto flex items-start gap-3 rounded-xl border border-white/5 border-l-4 ${meta.leftBar} bg-[rgba(18,22,30,0.95)] backdrop-blur-md pl-3 pr-4 py-3 shadow-2xl min-w-[320px] max-w-[480px]`}
+      className={`raised pointer-events-auto flex items-start gap-3 border-l-4 ${meta.leftBar} pl-3 pr-4 py-3 min-w-[320px] max-w-[480px]`}
       role="alert"
       data-testid={`error-toast-${kind}`}
     >

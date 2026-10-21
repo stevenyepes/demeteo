@@ -5,7 +5,7 @@ import type { AttachedFile } from '../../lib/attachments';
 /**
  * For image/* attachments the bytes are fetched via the `attachment_read`
  * IPC and rendered inline as a `data:<mime>;base64,…` URL. Non-image mimes
- * (pdf / txt / md / json) skip the IPC and show a generic glass metadata
+ * (pdf / txt / md / json) skip the IPC and show a generic metadata
  * panel instead — no inline renderer for those kinds in v1.
  */
 export function AttachmentPreviewModal({
@@ -26,8 +26,7 @@ export function AttachmentPreviewModal({
   return (
     <Modal
       onClose={onClose}
-      backdropClassName="bg-black/70"
-      className="bg-[#0d0f14] border border-white/10 rounded-2xl p-0 max-w-3xl w-full mx-4 shadow-[0_0_40px_rgba(0,0,0,0.5)] overflow-hidden"
+      className="raised p-0 max-w-3xl w-full mx-4 overflow-hidden"
     >
       <div className="px-5 py-3 border-b border-white/5 flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
@@ -49,7 +48,7 @@ export function AttachmentPreviewModal({
           <X className="w-4 h-4" />
         </button>
       </div>
-      <div className="p-5 max-h-[70vh] overflow-auto bg-[#08090c]">
+      <div className="p-5 max-h-[70vh] overflow-auto bg-surface-well">
         {isImage && previewUrl ? (
           <img
             src={previewUrl}
@@ -59,7 +58,7 @@ export function AttachmentPreviewModal({
         ) : (
           <div
             data-testid="attachment-metadata-panel"
-            className="rounded-xl border border-violet-500/10 bg-[rgba(18,22,30,0.75)] backdrop-blur-xl p-6 flex flex-col gap-4"
+            className="nested-card p-6 flex flex-col gap-4"
           >
             <div className="flex items-center gap-3 min-w-0">
               <Paperclip className="w-5 h-5 text-violet-300 shrink-0" />

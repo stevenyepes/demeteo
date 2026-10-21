@@ -356,7 +356,7 @@ export function TerminalWorktreeLocationPicker({
       {menuOpen && (
         <div
           role="menu"
-          className="absolute left-0 mt-1.5 z-30 w-[320px] rounded-xl border border-white/10 bg-[#0c0d12]/95 backdrop-blur-xl p-1.5 shadow-2xl"
+          className="raised absolute left-0 mt-1.5 z-30 w-[320px] p-1.5"
           data-testid="terminal-location-menu"
         >
           <button

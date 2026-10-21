@@ -74,7 +74,7 @@ export function EnvironmentNotReadyPanel({ failure, atBase }: Props) {
   return (
     <section
       data-testid="environment-not-ready"
-      className="glass-panel mt-3 border border-amber-500/25 p-4"
+      className="panel mt-3 border-amber-500/25 p-4"
     >
       <header className="flex items-start gap-2.5">
         <Wrench className="mt-0.5 w-4 h-4 shrink-0 text-amber-400" />

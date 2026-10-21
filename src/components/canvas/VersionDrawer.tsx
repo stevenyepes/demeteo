@@ -229,7 +229,7 @@ export function VersionDrawer({
 
   return (
     <aside
-      className={`flex h-full w-[340px] shrink-0 flex-col border-l border-white/5 bg-[#0d0f14]/80 backdrop-blur-xl ${className}`}
+      className={`flex h-full w-[340px] shrink-0 flex-col border-l border-white/5 bg-surface-panel ${className}`}
       data-testid="version-drawer"
       aria-label="Version history"
     >
