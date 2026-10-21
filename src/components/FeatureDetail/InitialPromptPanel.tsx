@@ -3,7 +3,6 @@ import { MessageSquareText } from 'lucide-react';
 
 import { Disclosure } from '../ui/Disclosure';
 import { PROSE_CH } from '../runLayout';
-import { TONE_TEXT } from '../../lib/runStatus';
 
 const SUMMARY_CHARS = 72;
 
@@ -39,7 +38,7 @@ export function InitialPromptPanel({
         variant={variant}
         open={open}
         onOpenChange={setOpen}
-        icon={<MessageSquareText className={`w-4 h-4 ${TONE_TEXT.violet}`} />}
+        icon={<MessageSquareText className="w-4 h-4 text-slate-400" />}
         meta={
           open ? undefined : (
             <span

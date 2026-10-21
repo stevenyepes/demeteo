@@ -34,7 +34,7 @@ describe('classifyWorkflowBadge', () => {
     });
   });
 
-  // The original bug: a miss rendered a violet badge reading "undefined" as if
+  // The original bug: a miss rendered a badge reading "undefined" as if
   // a real workflow had matched.
   it.each([
     ['undefined', undefined],

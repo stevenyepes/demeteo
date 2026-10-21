@@ -23,7 +23,7 @@ export function StepMetrics({ step, sizeClass }: { step: StepExecution; sizeClas
       )}
       {typeof step.cache_read_input_tokens === 'number' && step.cache_read_input_tokens > 0 && (
         <span
-          className="text-violet-400 whitespace-nowrap"
+          className="text-slate-400 whitespace-nowrap"
           title={`${step.cache_read_input_tokens.toLocaleString()} cache-read tokens (live from last turn)`}
         >
           {formatTokens(step.cache_read_input_tokens)}p cache

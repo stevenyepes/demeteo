@@ -123,7 +123,7 @@ describe('GateView artifact picker wiring', () => {
     const rows = screen
       .getAllByText('implementation-spec.md')
       .map((el) => el.closest('button'))
-      .filter((row) => row?.classList.contains('border-violet-500/30'));
+      .filter((row) => row?.classList.contains('border-accent-edge'));
     expect(rows).toHaveLength(1);
     expect(screen.queryByText('s-gate-review')).not.toBeInTheDocument();
   });
@@ -156,7 +156,7 @@ describe('GateView artifact picker wiring', () => {
     });
 
     const row = screen.getByText('implementation-report.md').closest('button');
-    expect(row).toHaveClass('border-violet-500/30');
+    expect(row).toHaveClass('border-accent-edge');
   });
 
   it('changes the artifactPath the viewer receives when a different predecessor row is selected', async () => {

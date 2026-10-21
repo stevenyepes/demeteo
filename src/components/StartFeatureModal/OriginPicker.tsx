@@ -96,7 +96,7 @@ export function OriginPicker({
       : `Starts from ${startsFrom}, diffed against ${value.diffBase ?? startsFrom}`;
 
   const selectClass =
-    'w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500/50 disabled:opacity-40';
+    'w-full bg-[#050508] border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-accent-ring disabled:opacity-40';
 
   const branchOptions = branches.map((option) => (
     <option key={option.name} value={option.name}>
@@ -110,7 +110,7 @@ export function OriginPicker({
       title="Start point"
       open={open}
       onOpenChange={toggle}
-      icon={<GitBranch className="w-3.5 h-3.5 text-violet-400" />}
+      icon={<GitBranch className="w-3.5 h-3.5 text-slate-400" />}
       meta={
         open ? undefined : (
           <span

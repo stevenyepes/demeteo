@@ -42,10 +42,10 @@ export const ARTIFACT_KIND_LABELS: Record<ArtifactKind, string> = {
 
 export const ARTIFACT_KIND_COLORS: Record<ArtifactKind, string> = {
   markdown: 'text-cyan-400',
-  diff: 'text-violet-400',
+  diff: 'text-slate-400',
   json: 'text-amber-400',
-  'task-list': 'text-violet-400',
-  'ask-canvas': 'text-violet-400',
+  'task-list': 'text-slate-400',
+  'ask-canvas': 'text-slate-400',
   code: 'text-emerald-400',
   text: 'text-slate-400',
   'worktree-ref': 'text-cyan-400',

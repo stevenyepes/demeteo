@@ -168,7 +168,7 @@ describe('SyncPanel', () => {
     mount({ session: session({ status: 'resolving', user_may_intervene: false }) });
 
     expect(pane()).toHaveAttribute('data-sync-state', 'resolving');
-    expect(paneTone()).toBe('violet');
+    expect(paneTone()).toBe('cyan');
     expect(buttons()).toContain('Open the stream');
   });
 

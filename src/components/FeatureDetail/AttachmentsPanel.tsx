@@ -16,7 +16,7 @@ export function AttachmentsPanel({
           wrapping at the width prose wants leaves rows breaking early against a
           band of empty space. `PROSE_CH` belongs to the prompt's body. */}
       <div className="flex flex-col gap-2">
-        <div className="text-xs text-violet-400 font-bold uppercase tracking-widest flex items-center gap-2">
+        <div className="text-xs text-slate-400 font-bold uppercase tracking-widest flex items-center gap-2">
           Attachments
           <span className="text-[10px] text-slate-500 font-mono normal-case tracking-tight">
             {attachments.length} file{attachments.length === 1 ? '' : 's'}

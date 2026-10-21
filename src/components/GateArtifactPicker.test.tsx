@@ -150,7 +150,7 @@ describe('GateArtifactPicker', () => {
     );
 
     const row = screen.getByText('implementation-spec.md').closest('button');
-    expect(row).toHaveClass('border-violet-500/30');
+    expect(row).toHaveClass('border-accent-edge');
   });
 
   // Two steps can declare the same path — a rework cycle rewrites the artifact
@@ -175,7 +175,7 @@ describe('GateArtifactPicker', () => {
 
     const rows = screen.getAllByText('task-list.json').map((el) => el.closest('button'));
     expect(rows).toHaveLength(2);
-    expect(rows.filter((row) => row?.classList.contains('border-violet-500/30'))).toHaveLength(1);
+    expect(rows.filter((row) => row?.classList.contains('border-accent-edge'))).toHaveLength(1);
   });
 
   // A gate copies its predecessor's artifact_paths verbatim so its own card can

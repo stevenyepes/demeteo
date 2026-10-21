@@ -64,7 +64,7 @@ export function ReviewRunOptions({ choice, workflows }: ReviewRunOptionsProps) {
           aria-label="Workflow"
           value={choice.workflowId}
           onChange={(e) => choice.setWorkflowId(e.target.value)}
-          className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+          className="w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white focus:border-accent-ring focus:outline-none"
         >
           <option value="">Default workflow</option>
           {workflows.map((workflow) => (

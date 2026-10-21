@@ -14,6 +14,7 @@ import {
 } from "../lib/attachments";
 import { formatError } from "../lib/errors";
 import { AttachmentChip } from "./AttachmentChip";
+import { Button } from "./ui/Button";
 
 /**
  * A staged attachment kept in local memory until the parent commits it
@@ -495,14 +496,10 @@ export const AttachmentDropzone: React.FC<AttachmentDropzoneProps> = ({
         aria-hidden
       />
       <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={openPicker}
-          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 text-violet-200 text-xs font-medium transition-colors"
-        >
+        <Button size="sm" onClick={openPicker}>
           <UploadCloud className="w-3.5 h-3.5" />
           {label ?? "Add files"}
-        </button>
+        </Button>
         <div className="flex-1 min-w-0 flex items-center gap-2 text-[11px] font-mono text-slate-400">
           <FilePlus2 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
           <span className="truncate">

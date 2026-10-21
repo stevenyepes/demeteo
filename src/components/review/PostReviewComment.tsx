@@ -1,6 +1,7 @@
 import { useCallback, useState, type ReactElement } from 'react';
 import { ExternalLink, MessageSquarePlus } from 'lucide-react';
 
+import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { formatError } from '../../lib/errors';
 import { postPullRequestComment } from '../../lib/pullRequests';
@@ -79,16 +80,14 @@ export function PostReviewComment({
 
   return (
     <div className="space-y-2">
-      <button
-        type="button"
+      <Button
         data-testid="post-review-comment"
         disabled={report.trim().length === 0 || stage.kind === 'posting'}
         onClick={() => setStage({ kind: 'confirming' })}
-        className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <MessageSquarePlus className="h-4 w-4" aria-hidden="true" />
         {stage.kind === 'posting' ? 'Posting…' : BUTTON}
-      </button>
+      </Button>
 
       {stage.kind === 'failed' && (
         <p data-testid="post-review-failed" className="text-xs leading-relaxed text-ruby-400">
@@ -107,21 +106,10 @@ export function PostReviewComment({
             token. It will be visible to everyone with access to the repository.
           </p>
           <div className="mt-6 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setStage({ kind: 'idle' })}
-              className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              data-testid="confirm-post-review-comment"
-              onClick={post}
-              className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-violet-500"
-            >
+            <Button onClick={() => setStage({ kind: 'idle' })}>Cancel</Button>
+            <Button variant="primary" data-testid="confirm-post-review-comment" onClick={post}>
               {CONFIRM_ACTION}
-            </button>
+            </Button>
           </div>
         </Modal>
       )}

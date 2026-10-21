@@ -33,7 +33,7 @@ export function AttachmentPreviewModal({
           <span className="font-mono text-xs text-cyan-300 truncate" title={attachment.source_filename}>
             {attachment.source_filename}
           </span>
-          <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-300">
+          <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-md border border-white/10 bg-white/5 text-slate-300">
             {attachment.mime}
           </span>
           <span className="text-[10px] font-mono text-slate-500">
@@ -61,14 +61,14 @@ export function AttachmentPreviewModal({
             className="nested-card p-6 flex flex-col gap-4"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <Paperclip className="w-5 h-5 text-violet-300 shrink-0" />
+              <Paperclip className="w-5 h-5 text-slate-400 shrink-0" />
               <span
                 className="font-heading text-sm font-bold text-white tracking-wide truncate"
                 title={attachment.source_filename}
               >
                 {attachment.source_filename}
               </span>
-              <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-300 shrink-0">
+              <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-md border border-white/10 bg-white/5 text-slate-300 shrink-0">
                 {attachment.mime}
               </span>
               <span className="text-[10px] font-mono text-slate-500 shrink-0">

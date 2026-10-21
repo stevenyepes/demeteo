@@ -347,7 +347,7 @@ describe('describeSyncPanel', () => {
     const model = panel({ session: session(), drift: null, canSync: true, pending: 'resolve' });
 
     expect(model.state).toBe('resolving');
-    expect(model.tone).toBe('violet');
+    expect(model.tone).toBe('cyan');
     expect(model.live).toBe(true);
     expect(model.showTelemetry).toBe(true);
     expect(intents(model)).toContain('watch');
@@ -418,7 +418,7 @@ describe('describeSyncPanel', () => {
     });
 
     expect(model.state).toBe('resolving');
-    expect(model.tone).toBe('violet');
+    expect(model.tone).toBe('cyan');
     expect(model.live).toBe(true);
     expect(intents(model)).toEqual(['watch']);
   });
@@ -547,7 +547,7 @@ describe('describeSyncPanel', () => {
 
     expect(model.state).toBe('blocked');
     expect(intents(model)).toEqual(['reconcile', 'reset_onto_origin', 'refresh', 'abort']);
-    expect(model.actions.find((action) => action.intent === 'reconcile')?.tone).toBe('violet');
+    expect(model.actions.find((action) => action.intent === 'reconcile')?.tone).toBeUndefined();
     expect(model.actions.find((action) => action.intent === 'reset_onto_origin')?.tone).toBe('ruby');
     expect(model.headline).toMatch(/rewrote/i);
     expect(model.body).toContain('3 commits');
