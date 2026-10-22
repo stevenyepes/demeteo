@@ -30,11 +30,13 @@ import type { WorkflowFlowNode } from '../flowGraph';
 const HANDLE_CLASS = '!h-2 !w-2 !border-slate-600 !bg-slate-800';
 
 /** Card border per run tone — the run-mode equivalent of the timeline's
- *  per-status card tint. */
+ *  per-status card tint. Emerald is deliberately neutral: a finished run is
+ *  every node green at once, which drowns the amber and ruby nodes a reader
+ *  is scanning for. The dot still carries the state. */
 const TONE_CARD: Record<RunStatusTone, string> = {
   cyan: 'border-cyan-500/50 shadow-lg shadow-black/30',
   amber: 'border-amber-500/50 shadow-lg shadow-black/30',
-  emerald: 'border-emerald-500/40 shadow-lg shadow-black/30',
+  emerald: 'border-slate-700/60 shadow-lg shadow-black/30',
   ruby: 'border-rose-500/50 shadow-lg shadow-black/30',
   slate: 'border-slate-700/60 shadow-lg shadow-black/30',
 };
@@ -197,8 +199,8 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
             )}
           </div>
           <div
-            className={`text-[11px] font-medium uppercase tracking-wide ${
-              tone ? TONE_TEXT[tone] : TONE_TEXT[meta.tone]
+            className={`text-[11px] font-medium ${
+              tone === 'emerald' ? 'text-slate-400' : tone ? TONE_TEXT[tone] : TONE_TEXT[meta.tone]
             }`}
           >
             {runMeta ? runMeta.label : meta.label}
@@ -235,7 +237,7 @@ export function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNode>) {
             </span>
           )}
           {typeof run?.costUsd === 'number' && run.costUsd > 0 && (
-            <span className="text-emerald-400">{formatCost(run.costUsd)}</span>
+            <span className="text-slate-300">{formatCost(run.costUsd)}</span>
           )}
           {typeof run?.wallClockSecs === 'number' && run.wallClockSecs > 0 && (
             <span className="text-slate-400">{formatDuration(run.wallClockSecs)}</span>

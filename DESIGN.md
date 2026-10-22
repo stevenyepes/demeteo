@@ -8,10 +8,10 @@ colors:
   accent-ring: "#6e78db"
   accent-edge: "#6972c0"
   accent-tint: "rgb(90 96 194 / 0.16)"
-  cyan-stream: "#06b6d4"
-  cyan-ink: "#22d3ee"
-  emerald-done: "#10b981"
-  emerald-ink: "#34d399"
+  cyan-stream: "oklch(71.5% 0.088 215.2)"
+  cyan-ink: "oklch(78.9% 0.094 211.5)"
+  emerald-done: "oklch(69.6% 0.104 162.5)"
+  emerald-ink: "oklch(76.5% 0.108 163.2)"
   amber-needs-you: "oklch(76.9% 0.188 70.08)"
   amber-ink: "oklch(82.8% 0.189 84.429)"
   ruby-failure: "#ef4444"
@@ -348,8 +348,10 @@ the accent; what violet is left in `src/` is decoration (Drift group 3).
 - **Stream Cyan** (`cyan-stream`): in motion. Running, bootstrapping, verifying, a published PR out for review, an "Asking" or "Interviewing" turn while it runs, and the one shimmer, the indeterminate progress bar. Some cyan still marks nothing in motion (Drift 2.9). 207 palette-class uses.
 - **Cyan Ink** (`cyan-ink`): token-count icons, markdown links, in-motion chip text.
 
+Cyan and emerald are `@theme` scales in `tokens.css` at Tailwind's lightness and about 0.6x its chroma, so they no longer outshout the accent; contrast moved by under 5% and every pairing stays above 6.5:1 on a panel. Amber keeps Tailwind's full chroma, as the one hue meant to pull the eye.
+
 ### Tertiary
-- **Done Emerald** (`emerald-done`): finished well, or healthy (completed, PR ready, merged; `StatusBadge` maps machine `idle`/`active` to it, which §4's "or healthy" covers). It fills no button: approving is the gate's primary action, so it is Signal.
+- **Done Emerald** (`emerald-done`): finished well, or healthy (completed, PR ready, merged; `StatusBadge` maps machine `idle`/`active` to it, which §4's "or healthy" covers). It fills no button: approving is the gate's primary action, so it is Signal. On a workflow-graph node it is the status dot only: a completed node keeps a neutral border and a slate "Completed" label, because a finished run would otherwise turn every node green. Costs and token counts are quantities, not states, and are neutral in the run header and on nodes.
 - **Needs-You Amber** (`amber-needs-you`, amber-500): a human is needed, and in `runStatus.ts` only that: the settled gate, credential and interrupted statuses, plus `REVIEW_READY_META`. `pipelineFilter.ts` derives the "Needs you" band from it. Amber has no token in `tokens.css`; it comes from Tailwind's palette. It is the only hue with its own finite animation (`pulse-attention`, three beats, then lit) and its own card treatment (`ring-1 ring-amber-500/40` on a pipeline card that needs you). Discovery's QuestionCard "Needs you" and the NotificationBell `gate_pending` dot are amber for the same reason.
 - **Ruby** (`ruby-failure`, `@theme --color-ruby-*`): failed or destructive. A full 50–950 scale in `tokens.css` at Tailwind v3's sRGB red values, so `ruby-500` is #ef4444 while v4's own `red-500` is a slightly different OKLCH red. **Ruby Action** (`ruby-action`, ruby-600) fills the `danger` button and steps darker to **Ruby Action Deep** (`ruby-action-deep`, ruby-700) on hover, because white on ruby-500 is under 4.5:1. Rose and raw red are also in use (Drift 2.7).
 

@@ -79,11 +79,13 @@ describe('FeatureHeader telemetry', () => {
     expect(screen.getAllByTestId('metric')).toHaveLength(3);
   });
 
-  it('takes every value colour from the shared tone vocabulary', () => {
+  // Cost and tokens are quantities, not states (AGENTS.md §4), so they stay
+  // neutral; only cache reads is dimmed, as the secondary figure.
+  it('keeps the telemetry values out of the status hues', () => {
     renderHeader();
 
-    expect(metricValue('Cost')).toHaveClass(TONE_TEXT.emerald);
-    expect(metricValue('Tokens')).toHaveClass(TONE_TEXT.cyan);
+    expect(metricValue('Cost')).toHaveClass('text-white');
+    expect(metricValue('Tokens')).toHaveClass('text-white');
     expect(metricValue('Cache Reads')).toHaveClass(TONE_TEXT.slate);
     expect(metricValue('Elapsed')).toHaveClass('text-white');
   });

@@ -32,6 +32,28 @@
   --color-ruby-800: #991b1b;
   --color-ruby-900: #7f1d1d;
   --color-ruby-950: #450a0a;
+
+  /* Emerald (finished well) and cyan (in motion) at Tailwind's lightness but
+     about 0.6x its chroma. Stock, they were the most saturated things on a
+     near-black screen, louder than the accent that marks what to click, and
+     a completed run is mostly green. Lightness is what WCAG contrast reads, so
+     keeping it keeps every pairing that passed before; the hue gap between the
+     two is unchanged, so they stay distinguishable. Amber keeps full chroma:
+     it is the one hue meant to pull the eye. Shades left out fall back to
+     Tailwind's. */
+  --color-emerald-100: oklch(95% 0.032 163);
+  --color-emerald-200: oklch(90.5% 0.058 164.2);
+  --color-emerald-300: oklch(84.5% 0.088 165);
+  --color-emerald-400: oklch(76.5% 0.108 163.2);
+  --color-emerald-500: oklch(69.6% 0.104 162.5);
+  --color-emerald-600: oklch(59.6% 0.09 163.2);
+  --color-emerald-950: oklch(26.2% 0.034 172.6);
+  --color-cyan-200: oklch(91.7% 0.05 205);
+  --color-cyan-300: oklch(86.5% 0.078 207.1);
+  --color-cyan-400: oklch(78.9% 0.094 211.5);
+  --color-cyan-500: oklch(71.5% 0.088 215.2);
+  --color-cyan-600: oklch(60.9% 0.078 221.7);
+  --color-cyan-950: oklch(30.2% 0.036 229.7);
 }
 
 /* The surfaces as Tailwind colours, so a call site writes `bg-surface-panel`
